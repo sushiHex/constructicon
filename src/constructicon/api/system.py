@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,9 @@ from constructicon.runtime.walker import (
     RunResult,
     Walker,
 )
+from constructicon.substrate.effects.git import MergeVerifiedEffect
+from constructicon.substrate.gates.runner import CheckSpec, GateRunner
+from constructicon.substrate.git.authority import GitAuthority, GitWorkspaceCapability
 from constructicon.substrate.journal.projection import ProjectionResult, project_run
 from constructicon.substrate.journal.sqlite import SqliteJournal
 
@@ -53,6 +57,64 @@ DEFAULT_ROOT_GRANTS = EffectiveGrants(
     network="none",
     timeout_s=600,
 )
+
+
+@dataclass(frozen=True)
+class GitWorld:
+    """One assembled git authority: splice these into ``Constructicon``."""
+
+    authority: GitAuthority
+    workspace: GitWorkspaceCapability
+    gates: GateRunner
+    capabilities: dict[str, object]
+    catalog: dict[str, CapabilityDescriptor]
+    effects: dict[str, EffectAdapter]
+
+
+def git_world(
+    *,
+    journal: Journal,
+    repo_path: Path | str,
+    workspaces_root: Path | str,
+    target_ref: str = "refs/heads/main",
+    checks: tuple[CheckSpec, ...] | None = None,
+) -> GitWorld:
+    """Assemble the standard git capabilities (L4 constructs L1, I8):
+    a leased WRITE workspace, a leased gate runner, and the merge_verified
+    effect — all over one protected authority repository."""
+    authority = GitAuthority(repo_path, workspaces_root)
+    workspace = GitWorkspaceCapability(authority, target_ref=target_ref)
+    gates = GateRunner(
+        journal=journal, authority=authority, target_ref=target_ref, checks=checks
+    )
+    capabilities: dict[str, object] = {"git-workspace": workspace, "git-gates": gates}
+    catalog = {
+        "git-workspace": CapabilityDescriptor(
+            capability_id="git-workspace",
+            kind="workspace",
+            revision="1",
+            leased=True,
+            requires_posture=Posture.WRITE,
+        ),
+        "git-gates": CapabilityDescriptor(
+            capability_id="git-gates",
+            kind="gates",
+            # a changed check set is a changed world: stale manifests refuse
+            revision=str(gates.check_set_hash)[:19],
+            leased=True,
+        ),
+    }
+    effects: dict[str, EffectAdapter] = {
+        "merge_verified": MergeVerifiedEffect(journal=journal, authority=authority)
+    }
+    return GitWorld(
+        authority=authority,
+        workspace=workspace,
+        gates=gates,
+        capabilities=capabilities,
+        catalog=catalog,
+        effects=effects,
+    )
 
 
 class Constructicon:

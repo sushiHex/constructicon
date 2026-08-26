@@ -16,19 +16,22 @@ contributing code; humans participate as observer, advisor, and approver.
 
 ## Status
 
-Architecture **frozen**; implementation at **M2** — the vertical slice plus
-crash & resume hardening are green:
+Architecture **frozen**; implementation at **M3** — the vertical slice,
+crash & resume hardening, and git authority are green:
 
 ```
-Graph → validate → ExecutionManifest → activate → claim (fenced lease)
-      → FakeExecutor → checkpoint → idempotent effect → EffectReceipt
-      → crash → reclaim → restore / reconcile → resume / reproduce → project
+Stage → Import → Prepare exact merge → Gate (read-only, real Ruff/Pytest)
+      → journal-minted Attestation → merge_verified → one git ref transaction
+      → Receipt → crash → reconcile from the marker → resume / reproduce
 ```
 
-For every named hard-crash probe — including a real worker process dying via
-`os._exit` — a fresh process reclaims the run with a higher ownership epoch,
-the stale owner is fenced from all later writes, every committed checkpoint is
-restored byte-for-byte, and no external effect ever happens twice.
+The strongest claim is mechanically true and tested: **the only path from
+proposed code to a protected git ref is one exact, attested, idempotent git
+transaction.** Agent workspaces are staging repositories with zero authority
+refs; a moved base is a truthful rejected receipt; forged, absent,
+mismatched, failing, or world-mismatched attestations move nothing; every
+hard-crash probe — including a real worker dying via `os._exit` mid-merge —
+recovers to exactly one install.
 
 The full lifecycle runs with zero credentials:
 

@@ -23,9 +23,15 @@ from typing import Any, Protocol
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 from constructicon.core.address import ExecutionPath, RunId
-from constructicon.core.effect import Attestation, EffectReceipt, EffectRequest
+from constructicon.core.effect import (
+    Attestation,
+    AttestationDraft,
+    EffectReceipt,
+    EffectRequest,
+)
 from constructicon.core.envelope import Envelope
 from constructicon.core.identity import Digest
+from constructicon.core.manifest import CapabilityLease
 from constructicon.core.run import RunLease, RunState, RunStatus
 
 JOURNAL_SCHEMA_VERSION = 1
@@ -150,8 +156,42 @@ class Journal(Protocol):
         """A prepared record without a receipt — the reconcile-first case."""
         ...
 
-    # -- attestations (journal-minted authority, I2)
+    # -- capability leases (physical acquisitions; the walker owns transitions)
 
-    def mint_attestation(self, attestation: Attestation) -> None: ...
+    def record_capability_lease(
+        self, lease: RunLease, capability_lease: CapabilityLease
+    ) -> None:
+        """Fenced, write-once on (lease_id, acquisition_epoch)."""
+        ...
+
+    def transition_capability_lease(
+        self,
+        lease: RunLease,
+        *,
+        lease_id: str,
+        acquisition_epoch: int,
+        expected: frozenset[str],
+        target: str,
+        disposition: str | None = None,
+    ) -> None:
+        """Fenced CAS + event, one transaction; idempotent when already at
+        the target state (mirror of record_completion's identical-repetition
+        rule, so crash-interrupted closure re-runs safely)."""
+        ...
+
+    def capability_leases(self, run_id: RunId) -> list[CapabilityLease]: ...
+
+    # -- attestations (journal-minted authority, I2 — minting is literal)
+
+    def mint_attestation(self, lease: RunLease, draft: AttestationDraft) -> Attestation:
+        """Fenced minting: the journal verifies the run lease, derives
+        created_by_run from it, assigns created_at, computes the
+        content-derived id, and inserts write-once."""
+        ...
+
+    def mint_policy_attestation(self, draft: AttestationDraft) -> Attestation:
+        """Run-less deterministic policies (bootstrap, rollback) — the one
+        explicit path with no lease; never a nullable-lease blur."""
+        ...
 
     def load_attestation(self, attestation_id: str) -> Attestation | None: ...

@@ -382,6 +382,15 @@ def _register_atomic(
                     f"mechanically enforce posture {node_grants.posture.value!r} — "
                     "admission rejects, it never degrades (I1)"
                 )
+        if (
+            descriptor.requires_posture is Posture.WRITE
+            and node_grants.posture is not Posture.WRITE
+        ):
+            comp.faults.append(
+                f"{instance_scope.render()}: capability {capability_id!r} requires "
+                f"WRITE posture; node grants are {node_grants.posture.value!r} — "
+                "isolation is admission logic, it never degrades (I1)"
+            )
         comp.capability_bindings.append(
             CapabilityBinding(
                 scope=instance_scope,
