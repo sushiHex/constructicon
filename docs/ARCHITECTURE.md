@@ -15,12 +15,12 @@ first-class user; humans are observer, advisor, and approver.
 ## Layers
 
 ```
-L4  api        system object · MCP server (front door, M6) · CLI skin ·
-               injection root: constructs L1 implementations, hands them to L2
-L3  sdk        @task, combinators, component/harness registration — sugar
-               compiling to the L2 IR (arrives with M5)
-L2  runtime    graph IR · registry/resolution · validator -> ExecutionManifest ·
-               walker · resume/effects            [depends on L0 contracts only]
+L4  api        system object · typed describe/admission · MCP server (M6) ·
+               CLI skin · injection root: constructs L1, hands it to L2
+L3  sdk        @task · component/flow/harness/loop sugar — process-local
+               authoring carriers compiling immediately to the core IR
+L2  runtime    graph IR · registry/resolution · authoring preflight + validator
+               → ExecutionManifest · walker · resume/effects [L0 only]
 L1  substrate  workspace · executors · gates · channels · journal
 L0  core       every contract in the system, defined once
 ```
@@ -72,6 +72,51 @@ Executors declare an `IsolationProfile`; admission rejects a live execution
 whose executor cannot mechanically satisfy the requested posture — it never
 degrades to "best effort".
 
+## Agent authoring and introspection
+
+M5 adds surfaces, never another workflow representation:
+
+```text
+Python SDK sugar ─┐
+                  ├─→ strict Graph → one validator → ExecutionManifest
+Architect JSON ───┘
+```
+
+`@task` lowers a module-level typed function into a canonical atomic
+`ComponentDef` and an importable async adapter. The adapter's source identity
+covers both the user function and the SDK adapter revision, so a persisted task
+can be activated by a fresh process without receiving an in-memory closure.
+`component`, `flow`, `harness`, and loop sugar emit only `Ref`, `Graph`, and
+`Loop`; `DefinitionBundle` is process-local registration convenience and never
+crosses admission.
+
+Graph JSON is strict (`extra=forbid`, exact schema version, `$`-prefixed ids
+reserved). `system.admit_graph()` accepts JSON, mappings, or canonical Graphs,
+applies bounded authoring preflight, and enters the same validator. Expected
+rejection is typed data:
+
+```text
+AdmissionFault{code, message, path, scope, repair, details}
+AdmissionAccepted{graph, manifest}
+AdmissionRejected{graph?, faults}
+```
+
+Semantic rejection returns the canonical parsed Graph. Constructicon never
+auto-repairs: the caller edits and resubmits. An accepted manifest is an
+inspection preview, not a public execution token; `system.start(graph, inputs)`
+re-admits before running.
+
+`system.describe()` derives one bounded, secret-free authoring contract from an
+immutable `RegistrySnapshot`, the assembled capability catalog and live
+availability, the effective root grants, and shared authoring constants. It
+publishes strict Graph and AdmissionResult schemas, deduplicated port schemas by
+their exact contract hash, component contracts and completeness, capability
+requirements and availability, binding/selector and loop vocabulary, limits,
+and content identities for the snapshot, catalog, and description. Legacy
+components remain usable but are marked honestly as capability-opaque or
+schema-opaque where applicable. See
+[adr/0011](adr/0011-agent-authoring-and-introspection.md).
+
 ## Identity
 
 One law (`constructicon.core.identity`): every hash is a domain-separated
@@ -115,6 +160,12 @@ and appends a `PromotionRecord`; rollback is another pointer move; in-flight
 runs keep their pinned resolution. A *candidate* is a query (any eligible
 unpromoted version), never a channel. `rdeps(name)` answers what a change
 touches before it is changed.
+
+Atomic M5 components may declare required capability aliases and descriptor
+kinds. `None` means a historical capability-opaque definition; `()` means a
+complete declaration with no capabilities. Complete declarations participate
+in the next component-identity version; legacy definitions preserve their
+M1–M4 hashes. Composite capability bindings remain encoded in their Graph body.
 
 ## Journal
 
@@ -171,8 +222,13 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
   manifest compatibility; staging-local `reset_to(GitRef)`; a real Ruff/Pytest
   red→repair→green Git loop installing exactly one attested merge. See
   [adr/0010](adr/0010-loop-execution.md).
-- **M5** — SDK combinators; `system.describe()`; architect-proposed graph
-  admission; agent-repairable errors end-to-end.
+- **M5 (done)** — strict direct Graph JSON; restart-safe `@task`; canonical
+  component/flow/harness/loop sugar; declarative capability contracts with
+  legacy identity compatibility; typed and bounded `system.describe()`;
+  architect-proposed admission with one versioned repair-fault model; SDK,
+  direct, and repaired JSON Graphs proving identical manifest identities; a
+  serialized architect repairing schema and semantic faults and executing
+  successfully. See [adr/0011](adr/0011-agent-authoring-and-introspection.md).
 - **M6** — MCP control plane with idempotency keys and bounded pagination.
 - **M7** — channels (InProcess + Mailbox over the journal) and the panel
   pattern; human advisor and approval round trips.
@@ -196,6 +252,8 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
 | Forgery | A caller-authored all-green result cannot authorize any effect |
 | READ isolation | Shell writes fail physically, or the executor is inadmissible (M3/M8) |
 | Gather | One producer fails → complete producer-status report, never a hang (M2) |
+| Agent authoring | Unknown Graph fields are refused; a serialized architect repairs schema and magnetic ambiguity faults using describe + rejection data only (M5) |
+| SDK identity | A persisted decorated task activates in a fresh process; SDK/direct/repaired Graphs produce one manifest identity (M5) |
 | MCP | Retried mutation with the same idempotency key → one run (M6) |
 | Telemetry | Damaged executor output never reports clean success |
 | Reproduction | Installed code differs from recorded digest → refuse (M2) |
