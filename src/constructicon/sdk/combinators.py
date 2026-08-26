@@ -41,6 +41,8 @@ def component(
     """Build one named composite; roles never add execution semantics."""
 
     if isinstance(body, DefinitionBundle):
+        inputs = body.definition.inputs if inputs is None else inputs
+        outputs = body.definition.outputs if outputs is None else outputs
         body = body.ref()
     if isinstance(body, Graph):
         graph = body
