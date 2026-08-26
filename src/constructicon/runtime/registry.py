@@ -1,16 +1,9 @@
-"""ComponentRegistry (M2): logic over an injected durable store.
+"""ComponentRegistry: immutable definitions, activation, and promotion.
 
 Registration validates implementation identity and appends an immutable
 version; it never moves a pointer. Promotion is a compare-and-swap pointer
 move authorized by a journal-minted attestation; rollback is an ordinary
-promotion of a retained older version. A CANDIDATE is a query, never a
-channel.
-
-Admission consumes an immutable ``RegistrySnapshot``; execution consumes a
-``BoundExecution`` produced by ``activate(manifest)`` — the one path used
-identically by start, resume, and reproduce, which refuses unavailable or
-drifted implementations everywhere (a crash followed by a code update must
-never execute an old run's suffix on new code).
+promotion of a retained older version. A CANDIDATE is a query, never a channel.
 """
 
 from __future__ import annotations
@@ -29,19 +22,14 @@ from constructicon.core.effect import (
     ComponentProofSubject,
 )
 from constructicon.core.envelope import utc_now
-from constructicon.core.errors import AdmissionError, ConstructiconError
+from constructicon.core.errors import AdmissionError, ConstructiconError, JournalDamaged
 from constructicon.core.executor import ExecutorProfile
 from constructicon.core.grants import Posture
 from constructicon.core.graph import Graph, Loop, Ref
 from constructicon.core.identity import Digest, digest
 from constructicon.core.journal import Journal
 from constructicon.core.manifest import SELF_BINDING, ExecutionManifest
-from constructicon.core.registry import (
-    Loadability,
-    RegistrySnapshot,
-    RegistryStore,
-    StoredVersion,
-)
+from constructicon.core.registry import Loadability, RegistrySnapshot, RegistryStore, StoredVersion
 from constructicon.runtime.context import NodeImpl
 
 
@@ -51,13 +39,7 @@ class RegistryError(ConstructiconError):
 
 @dataclass(frozen=True)
 class CapabilityDescriptor:
-    """What the catalog exposes about an injectable capability — never the object.
-
-    ``leased`` declares that injection is a physical acquisition the walker
-    leases, closes, and reconciles (the object must implement
-    ``LeasedCapability``); ``requires_posture`` lets admission refuse a
-    binding whose node grants cannot carry it — isolation is admission
-    logic, never best effort (I1)."""
+    """What the catalog exposes about an injectable capability — never the object."""
 
     capability_id: str
     kind: str
@@ -76,10 +58,8 @@ class BoundVersion:
 
 @dataclass(frozen=True)
 class BoundExecution:
-    """One manifest, activated: every atomic bound, every digest verified."""
-
     manifest: ExecutionManifest
-    bindings: dict[tuple[str, str], BoundVersion]  # (name, hash) -> bound
+    bindings: dict[tuple[str, str], BoundVersion]
 
     def bound(self, name: str, version: Digest) -> BoundVersion:
         return self.bindings[(name, str(version))]
@@ -113,8 +93,6 @@ class InMemoryRegistryStore:
         )
 
     def store_version(self, version: StoredVersion) -> None:
-        from constructicon.core.errors import JournalDamaged
-
         name = version.definition.name
         key = str(version.content_hash)
         existing = self._versions.get(name, {}).get(key)
@@ -130,7 +108,7 @@ class InMemoryRegistryStore:
     def store_promotion(self, record: PromotionRecord) -> PromotionRecord:
         for prior in self._promotions:
             if prior.attestation_id == record.attestation_id:
-                return prior  # one attestation authorizes one move
+                return prior
         current = None
         for prior in self._promotions:
             if prior.component == record.component and prior.channel == "stable":
@@ -148,8 +126,21 @@ class InMemoryRegistryStore:
 
 
 def source_digest_for(impl: NodeImpl) -> Digest | None:
+    """Observe implementation identity without changing historical digests."""
+
     try:
-        return digest("python-source", 1, inspect.getsource(impl))
+        revision = getattr(impl, "__constructicon_adapter_revision__", None)
+        if revision is None:
+            return digest("python-source", 1, inspect.getsource(impl))
+        original = inspect.unwrap(impl)
+        return digest(
+            "python-source",
+            2,
+            {
+                "source": inspect.getsource(original),
+                "adapter_revision": str(revision),
+            },
+        )
     except (OSError, TypeError):
         return None
 
@@ -158,8 +149,6 @@ def source_digest_for(impl: NodeImpl) -> Digest | None:
 class ComponentRegistry:
     store: RegistryStore
     _impls: dict[tuple[str, str], NodeImpl] = field(default_factory=dict)
-
-    # -- registration (identity-validated, never propagating) ---------------
 
     def register(self, definition: ComponentDef, impl: NodeImpl | None = None) -> Digest:
         is_atomic = not isinstance(definition.body, Graph)
@@ -171,19 +160,39 @@ class ComponentRegistry:
             raise RegistryError(
                 f"composite component {definition.name!r} must not carry an implementation"
             )
+        if not is_atomic and definition.capability_requirements is not None:
+            raise RegistryError(
+                f"composite component {definition.name!r} must encode capability "
+                "bindings inside its Graph; outer capability requirements are not "
+                "part of the M5 contract"
+            )
         if is_atomic:
             self._validate_atomic_identity(definition, impl)
         content = definition.content_hash()
-        self.store.store_version(
-            StoredVersion(
-                definition=definition, content_hash=content, registered_at=utc_now()
+        existing = self.store.snapshot().get(definition.name, content)
+        if existing is not None:
+            if existing.definition != definition:
+                raise JournalDamaged(
+                    f"component {definition.name!r}@{content} already exists with "
+                    "different semantics under the same identity"
+                )
+        else:
+            self.store.store_version(
+                StoredVersion(
+                    definition=definition,
+                    content_hash=content,
+                    registered_at=utc_now(),
+                )
             )
-        )
         if impl is not None:
             self._impls[(definition.name, str(content))] = impl
         return content
 
-    def _validate_atomic_identity(self, definition: ComponentDef, impl: NodeImpl | None) -> None:
+    def _validate_atomic_identity(
+        self,
+        definition: ComponentDef,
+        impl: NodeImpl | None,
+    ) -> None:
         body = definition.body
         assert not isinstance(body, Graph) and impl is not None
         faults: list[str] = []
@@ -196,8 +205,8 @@ class ComponentRegistry:
             "component-contract",
             1,
             {
-                "inputs": [p.model_dump(mode="json") for p in definition.inputs],
-                "outputs": [p.model_dump(mode="json") for p in definition.outputs],
+                "inputs": [port.model_dump(mode="json") for port in definition.inputs],
+                "outputs": [port.model_dump(mode="json") for port in definition.outputs],
             },
         )
         if body.contract_hash != expected_contract:
@@ -205,6 +214,32 @@ class ComponentRegistry:
                 f"{definition.name!r}: PythonRef.contract_hash does not match the "
                 "declared ports — recompute it from inputs/outputs"
             )
+        for direction, ports in (("input", definition.inputs), ("output", definition.outputs)):
+            for port in ports:
+                if port.json_schema is None:
+                    continue
+                expected_schema_hash = str(digest("json-schema", 1, port.json_schema))
+                if port.schema_hash != expected_schema_hash:
+                    faults.append(
+                        f"{definition.name!r}: {direction} port {port.name!r} declares "
+                        f"schema_hash {port.schema_hash!r}, expected "
+                        f"{expected_schema_hash!r} for its embedded JSON Schema"
+                    )
+        requirements = definition.capability_requirements
+        if requirements is not None:
+            aliases = [requirement.alias for requirement in requirements]
+            duplicates = sorted({alias for alias in aliases if aliases.count(alias) > 1})
+            if duplicates:
+                faults.append(
+                    f"{definition.name!r}: duplicate capability requirement aliases "
+                    f"{duplicates}"
+                )
+            for requirement in requirements:
+                if not requirement.alias or not requirement.kind:
+                    faults.append(
+                        f"{definition.name!r}: capability requirement alias and kind "
+                        "must be non-empty"
+                    )
         observed = source_digest_for(impl)
         if observed is None:
             faults.append(
@@ -213,8 +248,7 @@ class ComponentRegistry:
             )
         elif body.source_digest is None:
             faults.append(
-                f"{definition.name!r}: PythonRef.source_digest is required; "
-                f"observed {observed}"
+                f"{definition.name!r}: PythonRef.source_digest is required; observed {observed}"
             )
         elif body.source_digest != observed:
             faults.append(
@@ -224,8 +258,6 @@ class ComponentRegistry:
         if faults:
             raise AdmissionError(faults)
 
-    # -- snapshots and binding ----------------------------------------------
-
     def snapshot(self) -> RegistrySnapshot:
         return self.store.snapshot()
 
@@ -233,7 +265,9 @@ class ComponentRegistry:
         body = stored.definition.body
         if isinstance(body, Graph):
             return BoundVersion(
-                stored=stored, impl=None, loadability=Loadability(status="composite")
+                stored=stored,
+                impl=None,
+                loadability=Loadability(status="composite"),
             )
         key = (stored.definition.name, str(stored.content_hash))
         impl = self._impls.get(key)
@@ -285,11 +319,13 @@ class ComponentRegistry:
             target = getattr(target, part, None)
             if target is None:
                 return None, Loadability(
-                    status="missing_qualname", detail=f"{module}:{qualname}"
+                    status="missing_qualname",
+                    detail=f"{module}:{qualname}",
                 )
         if not callable(target):
             return None, Loadability(
-                status="not_callable", detail=f"{module}:{qualname}"
+                status="not_callable",
+                detail=f"{module}:{qualname}",
             )
         return target, None
 
@@ -299,9 +335,6 @@ class ComponentRegistry:
         *,
         catalog: Mapping[str, CapabilityDescriptor],
     ) -> BoundExecution:
-        """The one activation path for start, resume, and reproduce (I4):
-        refuse — never silently substitute — when the world cannot be
-        reproduced exactly."""
         snapshot = self.store.snapshot()
         faults: list[str] = []
         bindings: dict[tuple[str, str], BoundVersion] = {}
@@ -360,8 +393,6 @@ class ComponentRegistry:
             raise AdmissionError(faults)
         return BoundExecution(manifest=manifest, bindings=bindings)
 
-    # -- promotion (CAS, attestation-verified) ------------------------------
-
     def promote(
         self,
         *,
@@ -408,9 +439,6 @@ class ComponentRegistry:
         journal: Journal,
         actor: str = "bootstrap",
     ) -> PromotionRecord | None:
-        """Deterministic bootstrap policy, idempotent for startup re-runs:
-        no pointer -> promote; already stable at this exact version -> None;
-        stable elsewhere -> refuse (never silently replace a pointer)."""
         snapshot = self.store.snapshot()
         stable = snapshot.stable_version(component)
         if stable == version:
@@ -440,10 +468,12 @@ class ComponentRegistry:
         )
 
     def rollback(
-        self, *, component: str, journal: Journal, actor: str
+        self,
+        *,
+        component: str,
+        journal: Journal,
+        actor: str,
     ) -> PromotionRecord:
-        """Rollback is an ordinary promotion of a retained older version —
-        minted by a deterministic policy, moved through the same CAS path."""
         snapshot = self.store.snapshot()
         current = snapshot.stable_version(component)
         if current is None:
@@ -486,34 +516,38 @@ class ComponentRegistry:
         draft = AttestationDraft(
             action="promote",
             subject=ComponentProofSubject(
-                component=component, version=version, baseline_version=baseline
+                component=component,
+                version=version,
+                baseline_version=baseline,
             ),
             checks=(
-                CheckResult(name=policy, status="passed", detail=detail, elapsed_s=0.0),
+                CheckResult(
+                    name=policy,
+                    status="passed",
+                    detail=detail,
+                    elapsed_s=0.0,
+                ),
             ),
             check_set_hash=digest("check-set", 1, {"policy": policy, "v": 1}),
             evidence=(),
             manifest_hash=digest("manifest", 1, {"policy": policy}),
             workspace_id=None,
         )
-        # run-less deterministic policy: the one explicit lease-free mint path
         return journal.mint_policy_attestation(draft)
-
-    # -- queries -------------------------------------------------------------
 
     def stable_version(self, name: str) -> Digest | None:
         return self.store.snapshot().stable_version(name)
 
     def versions(self, name: str) -> list[Digest]:
-        return [Digest(v) for v in self.store.snapshot().order.get(name, ())]
+        return [Digest(version) for version in self.store.snapshot().order.get(name, ())]
 
     def candidates(self, name: str) -> list[Digest]:
         snapshot = self.store.snapshot()
         stable = snapshot.stable.get(name)
         return [
-            Digest(v)
-            for v in snapshot.order.get(name, ())
-            if stable is None or v != stable
+            Digest(version)
+            for version in snapshot.order.get(name, ())
+            if stable is None or version != stable
         ]
 
     def rdeps(self, name: str) -> list[str]:
@@ -523,8 +557,8 @@ class ComponentRegistry:
             for stored in entries.values():
                 body = stored.definition.body
                 if isinstance(body, Graph):
-                    for dep in _refs_in(body):
-                        direct.setdefault(dep, set()).add(owner)
+                    for dependency in _refs_in(body):
+                        direct.setdefault(dependency, set()).add(owner)
         seen: set[str] = set()
         frontier = [name]
         while frontier:
@@ -553,7 +587,9 @@ def _refs_in(graph: Graph) -> list[str]:
 
 
 def _verify_promotion_attestation(
-    attestation: Attestation, component: str, version: Digest
+    attestation: Attestation,
+    component: str,
+    version: Digest,
 ) -> list[str]:
     faults: list[str] = []
     if attestation.action != "promote":

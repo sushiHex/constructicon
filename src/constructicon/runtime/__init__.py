@@ -1,5 +1,6 @@
 """L2 — the graph is the machine. Depends on L0 contracts only (I8)."""
 
+from constructicon.runtime.authoring import admit_authored_graph
 from constructicon.runtime.context import NodeContext, NodeImpl
 from constructicon.runtime.registry import (
     BoundExecution,
@@ -25,5 +26,6 @@ __all__ = [
     "RunResult",
     "Walker",
     "admit",
+    "admit_authored_graph",
     "source_digest_for",
 ]
