@@ -5,6 +5,12 @@ A red gate is NOT an error — it is a CheckResult the loop consumes.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from constructicon.core.admission import AdmissionFault
+
 
 class ConstructiconError(Exception):
     """Base for every framework error."""
@@ -15,11 +21,34 @@ class ContractViolation(ConstructiconError):
 
 
 class AdmissionError(ConstructiconError):
-    """Validation rejected a graph. Itemized, per-fault, repair-naming (I9)."""
+    """Validation rejected a graph or authority transition.
 
-    def __init__(self, faults: list[str]) -> None:
-        self.faults = faults
-        super().__init__("; ".join(faults))
+    M5 makes graph faults typed and machine-repairable. Historical non-graph
+    callers may still provide strings; they cross one explicit compatibility
+    bridge into ``system.admission.legacy`` rather than maintaining a second
+    error representation.
+    """
+
+    def __init__(self, faults: Sequence[AdmissionFault | str]) -> None:
+        from constructicon.core.admission import AdmissionCode, AdmissionFault
+
+        normalized: list[AdmissionFault] = []
+        for fault in faults:
+            if isinstance(fault, AdmissionFault):
+                normalized.append(fault)
+            else:
+                normalized.append(
+                    AdmissionFault(
+                        code=AdmissionCode.LEGACY_ADMISSION,
+                        message=fault,
+                        repair=(
+                            "inspect the message and resubmit through the relevant "
+                            "authority or admission API"
+                        ),
+                    )
+                )
+        self.faults = tuple(normalized)
+        super().__init__("; ".join(fault.message for fault in self.faults))
 
 
 class ExecutorFailed(ConstructiconError):
