@@ -253,7 +253,21 @@ class Constructicon:
     ) -> AdmissionResult:
         """Parse and admit architect-authored Graph JSON without auto-repair."""
 
-        normalized_inputs = json_value(dict(inputs))
+        try:
+            normalized_inputs = json_value(dict(inputs))
+        except (TypeError, ValueError) as exc:
+            return AdmissionRejected(
+                faults=(
+                    AdmissionFault(
+                        code=AdmissionCode.GRAPH_INPUT_INVALID,
+                        message=f"graph inputs are not canonical JSON: {exc}",
+                        repair=(
+                            "submit a JSON object whose keys match declared graph "
+                            "inputs and whose values are JSON-compatible"
+                        ),
+                    ),
+                )
+            )
         if not isinstance(normalized_inputs, dict):
             return AdmissionRejected(
                 faults=(
