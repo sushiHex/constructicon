@@ -58,7 +58,7 @@ class Connection(BaseModel):
 class Graph(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[GRAPH_SCHEMA_VERSION] = GRAPH_SCHEMA_VERSION
+    schema_version: Literal[1] = GRAPH_SCHEMA_VERSION
     name: str
     nodes: tuple[GraphNode, ...]
     connections: tuple[Connection, ...] = ()
