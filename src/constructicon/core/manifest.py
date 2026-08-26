@@ -64,23 +64,33 @@ class CapabilityBinding(BaseModel):
 
 
 class CapabilityLease(BaseModel):
-    """Runtime state of one admitted binding.
+    """Runtime state of one physical capability acquisition.
 
     Lifecycle: RUNNING -> active; PARKED -> suspended (never finalized — parked
-    resources are retained); resume -> active; terminal -> released; LOST ->
-    reconciled, then restored or reaped. The walker owns every transition on
-    every exit path. The manifest records descriptors and grants — never live
-    objects or credentials; the runtime receives real capabilities by
-    injection (I8).
+    resources are retained); resume -> active; terminal -> closed; LOST ->
+    reconciled, then restored or reaped. ``state`` says whether live access
+    exists; ``disposition`` says what happened to the resource when it ended
+    (released = ended cleanly; discarded = provider-owned mutable state
+    destroyed; retained = a durable reference deliberately survives).
+
+    ``lease_id`` is computed from (run, scope, binding); ``acquisition_epoch``
+    is the run ownership epoch that acquired it — a reclaimed run gets a fresh
+    physical acquisition, so a stale worker can only damage its own obsolete
+    one. The walker owns every transition on every exit path. The manifest
+    records descriptors and grants — never live objects or credentials; the
+    runtime receives real capabilities by injection (I8).
     """
 
     model_config = ConfigDict(frozen=True)
 
-    lease_id: str
+    lease_id: str  # digest over (run_id, scope, binding) — computed, never minted
+    acquisition_epoch: int  # run ownership epoch that acquired the resource
+    run_id: str
     binding_id: str
     scope: ScopePath
     lifetime: LeaseLifetime
-    state: Literal["active", "suspended", "released", "lost"]
+    state: Literal["active", "suspended", "closed", "lost"]
+    disposition: Literal["released", "discarded", "retained"] | None = None
     resource_ref: str | None = None
 
 

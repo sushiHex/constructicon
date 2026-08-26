@@ -23,30 +23,68 @@ from __future__ import annotations
 
 from typing import Any, Literal, Protocol
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict
+from pydantic import AwareDatetime, BaseModel, ConfigDict, model_validator
 
 from constructicon.core.address import ExecutionPath, GitSha, RunId
 from constructicon.core.envelope import EvidenceRef
 from constructicon.core.identity import Digest, digest
 
+CheckStatus = Literal[
+    "passed",
+    "failed",
+    "conflict",
+    "timeout",
+    "cancelled",
+    "infrastructure_error",
+]
+
 
 class CheckResult(BaseModel):
+    """One observed check outcome. ``status`` distinguishes a candidate that
+    failed from infrastructure that never ran (I4 — a missing executable is
+    not a failing test); ``ok`` is its boolean shadow, kept in lockstep so
+    M1/M2 attestation JSON (which carried only ``ok``) still loads."""
+
     model_config = ConfigDict(frozen=True)
 
     name: str
-    ok: bool
+    status: CheckStatus
+    # the validator below always sets this from status (or vice versa); the
+    # default only satisfies constructors that pass status alone
+    ok: bool = False
     detail: str
     elapsed_s: float
 
+    @model_validator(mode="before")
+    @classmethod
+    def _sync_status_and_ok(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            status, ok = data.get("status"), data.get("ok")
+            if status is None and ok is not None:
+                data["status"] = "passed" if ok else "failed"
+            elif status is not None and ok is None:
+                data["ok"] = status == "passed"
+            elif status is not None and ok is not None and ok != (status == "passed"):
+                raise ValueError(
+                    f"check {data.get('name')!r}: ok={ok} contradicts status={status!r}"
+                )
+        return data
 
-class GitProofSubject(BaseModel):
+
+class MergeSubject(BaseModel):
+    """The complete identity of one merge: that exact commit into that exact
+    ref. One subject everywhere — prepared merge, attestation, effect
+    request, idempotency, reconcile, receipt."""
+
     model_config = ConfigDict(frozen=True)
 
-    kind: Literal["git"] = "git"
+    kind: Literal["git_merge"] = "git_merge"
     repository: str
-    commit: GitSha
-    base: GitSha | None = None
-    tested_tree: GitSha | None = None
+    target_ref: str  # always fully qualified ("refs/heads/main"), never shorthand
+    candidate: GitSha
+    expected_base: GitSha
+    merge_commit: GitSha
+    tested_tree: GitSha
 
 
 class ComponentProofSubject(BaseModel):
@@ -58,7 +96,28 @@ class ComponentProofSubject(BaseModel):
     baseline_version: Digest | None
 
 
-ProofSubject = GitProofSubject | ComponentProofSubject
+ProofSubject = MergeSubject | ComponentProofSubject
+
+
+class AttestationDraft(BaseModel):
+    """What an attesting caller may author. The journal computes identity and
+    provenance (id, created_by_run, created_at) — minting is literal (I2)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    action: Literal["merge", "promote"]
+    subject: ProofSubject
+    checks: tuple[CheckResult, ...]
+    check_set_hash: Digest  # exact check/evaluator defs + config revisions
+    evidence: tuple[EvidenceRef, ...] = ()
+    manifest_hash: Digest  # the attesting run's sealed world (I12)
+    workspace_id: str | None = None
+
+
+def attestation_id_for(draft: AttestationDraft) -> str:
+    """Content-derived identity — timestamps excluded, never caller-selected."""
+    body = digest("attestation", 1, draft.model_dump(mode="json"))
+    return f"att-{str(body).removeprefix('sha256:')}"
 
 
 class Attestation(BaseModel):
@@ -100,8 +159,14 @@ class EffectProfile(BaseModel):
 
 
 class EffectRequest(BaseModel):
+    """Sealed by the effect boundary: ``run_id`` and ``manifest_hash`` are
+    supplied by the walker from the active run — never by the node — so an
+    adapter can bind authority to the invoking sealed world."""
+
     model_config = ConfigDict(frozen=True)
 
+    run_id: RunId
+    manifest_hash: Digest
     path: ExecutionPath
     kind: str
     subject: dict[str, Any]

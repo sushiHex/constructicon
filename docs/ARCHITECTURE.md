@@ -142,8 +142,15 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
   (never a persisted LOST); dependency blocking with complete
   `DependencyReport`s; canonical JSONL/summary projections; `user_version`
   schema migration from M1.
-- **M3** — git authority: read-only snapshots, WRITE worktree leases,
-  Pytest/Ruff gates, exact-merge-tree attestations, discard-on-failure.
+- **M3 (done)** — git authority: a bare, protected authority repository
+  (deny-all pre-receive; zero protected-ref authority in agent workspaces);
+  staged WRITE workspace leases fenced by ownership epoch; exported
+  read-only snapshots; real Ruff/Pytest gates over the prepared merge
+  commit; one complete typed `MergeSubject`; journal-computed attestations
+  minted from drafts; `merge_verified` installing that exact commit through
+  one git ref transaction (target CAS + idempotency marker ref) with
+  marker-based crash reconciliation; discard-on-failure with
+  reconcile-on-reclaim. See [adr/0009](adr/0009-git-authority.md).
 - **M4** — generic bounded loops with iteration identities and PARKED reasons.
 - **M5** — SDK combinators; `system.describe()`; architect-proposed graph
   admission; agent-repairable errors end-to-end.

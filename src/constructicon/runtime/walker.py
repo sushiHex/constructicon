@@ -42,7 +42,12 @@ from constructicon.core.envelope import Envelope, utc_now
 from constructicon.core.errors import ContractViolation
 from constructicon.core.identity import Digest, digest
 from constructicon.core.journal import Checkpoint, Journal
-from constructicon.core.manifest import SELF_BINDING, CapabilityBinding, ExecutionManifest
+from constructicon.core.manifest import (
+    SELF_BINDING,
+    CapabilityBinding,
+    CapabilityLease,
+    ExecutionManifest,
+)
 from constructicon.core.ports import (
     GraphInputAddress,
     GraphOutputAddress,
@@ -58,6 +63,13 @@ from constructicon.core.run import (
     ProducerStatus,
     RunLease,
     RunStatus,
+)
+from constructicon.core.workspace import (
+    AcquiredCapability,
+    Disposition,
+    LeaseContext,
+    LeasedCapability,
+    StaleAcquisition,
 )
 from constructicon.runtime.context import NodeContext, NodeImpl
 from constructicon.runtime.registry import (
@@ -263,6 +275,8 @@ class Walker:
         else:  # durably RUNNING — reclaimed from an expired owner
             journal.append_event(lease, "RunReclaimed")
 
+        await self._reconcile_stale_leases(bound, lease)
+
         instances = self._instances(bound)
         bindings_by_destination = {
             _address_key(binding.destination): binding
@@ -374,6 +388,73 @@ class Walker:
             payload={"outputs": sorted(outputs)},
         )
         return RunResult(run_id=run_id, status=RunStatus.SUCCEEDED, outputs=outputs)
+
+    # -- capability leases ----------------------------------------------------
+
+    async def _close_acquired(
+        self,
+        lease: RunLease,
+        acquired: list[tuple[LeasedCapability, AcquiredCapability]],
+        disposition: Disposition,
+    ) -> None:
+        """Ordering pinned: physical op first, fenced lease row second."""
+        for capability, acquisition in acquired:
+            closure = await capability.close(acquisition, disposition)
+            self._journal.transition_capability_lease(
+                lease,
+                lease_id=acquisition.lease_id,
+                acquisition_epoch=lease.epoch,
+                expected=frozenset({"active"}),
+                target="closed",
+                disposition=closure.disposition,
+            )
+
+    async def _reconcile_stale_leases(
+        self, bound: BoundExecution, lease: RunLease
+    ) -> None:
+        """A prior epoch's open acquisitions: checkpointed invocation ->
+        release (reap physical leftovers, durable refs stand); uncheckpointed
+        -> discard (the work replays from the pinned base — never adopt a
+        dirty workspace as completed computation)."""
+        journal = self._journal
+        manifest = bound.manifest
+        stale_rows = [
+            row
+            for row in journal.capability_leases(lease.run_id)
+            if row.state == "active" and row.acquisition_epoch < lease.epoch
+        ]
+        if not stale_rows:
+            return
+        by_scope_and_binding = {
+            (binding.scope.segments, binding.binding): binding
+            for binding in manifest.capability_bindings
+        }
+        for row in stale_rows:
+            binding = by_scope_and_binding.get((row.scope.segments, row.binding_id))
+            path = ExecutionPath(scope=row.scope)
+            checkpointed = journal.checkpoint(lease.run_id, path) is not None
+            disposition: Disposition = "release" if checkpointed else "discard"
+            if binding is not None:
+                capability = self._capabilities.get(binding.capability_id)
+                if isinstance(capability, LeasedCapability):
+                    context = LeaseContext(
+                        run_lease=lease,
+                        binding=binding,
+                        path=path,
+                        manifest_hash=manifest.manifest_hash,
+                    )
+                    await capability.reconcile(
+                        context,
+                        (StaleAcquisition(lease=row, disposition=disposition),),
+                    )
+            journal.transition_capability_lease(
+                lease,
+                lease_id=row.lease_id,
+                acquisition_epoch=row.acquisition_epoch,
+                expected=frozenset({"active"}),
+                target="closed",
+                disposition="released" if disposition == "release" else "discarded",
+            )
 
     # -- structure ------------------------------------------------------------
 
@@ -598,6 +679,7 @@ class Walker:
                 "admission should have refused this graph"
             )
         capabilities: dict[str, object] = {}
+        acquired: list[tuple[LeasedCapability, AcquiredCapability]] = []
         for alias_binding in aliases_by_scope.get(instance.scope.segments, ()):  # injected
             capability = self._capabilities.get(alias_binding.capability_id)
             if capability is None:
@@ -605,7 +687,38 @@ class Walker:
                     f"{instance.scope.render()}: admitted capability "
                     f"{alias_binding.capability_id!r} was not injected at assembly"
                 )
-            capabilities[alias_binding.binding] = capability
+            descriptor = self._catalog.get(alias_binding.capability_id)
+            if descriptor is not None and descriptor.leased:
+                if not isinstance(capability, LeasedCapability):
+                    raise ContractViolation(
+                        f"{instance.scope.render()}: capability "
+                        f"{alias_binding.capability_id!r} is declared leased but "
+                        "does not implement LeasedCapability"
+                    )
+                lease_context = LeaseContext(
+                    run_lease=lease,
+                    binding=alias_binding,
+                    path=path,
+                    manifest_hash=manifest.manifest_hash,
+                )
+                acquisition = await capability.acquire(lease_context)
+                journal.record_capability_lease(
+                    lease,
+                    CapabilityLease(
+                        lease_id=acquisition.lease_id,
+                        acquisition_epoch=lease.epoch,
+                        run_id=lease.run_id,
+                        binding_id=alias_binding.binding,
+                        scope=alias_binding.scope,
+                        lifetime=alias_binding.lifetime,
+                        state="active",
+                        resource_ref=acquisition.resource_ref,
+                    ),
+                )
+                capabilities[alias_binding.binding] = acquisition.resource
+                acquired.append((capability, acquisition))
+            else:
+                capabilities[alias_binding.binding] = capability
 
         boundary = self._effect_boundary(manifest, lease, path)
         context = NodeContext(
@@ -616,35 +729,47 @@ class Walker:
             effect=boundary,
         )
 
-        outputs_map: Mapping[str, Any] = await instance.impl(context, node_inputs)
+        try:
+            outputs_map: Mapping[str, Any] = await instance.impl(context, node_inputs)
 
-        declared = {port.name for port in instance.definition.outputs}
-        missing = sorted(declared - set(outputs_map))
-        if missing:
-            raise ContractViolation(
-                f"{instance.scope.render()}: implementation omitted declared outputs "
-                f"{missing} — the contract is validated before any envelope is emitted"
+            declared = {port.name for port in instance.definition.outputs}
+            missing = sorted(declared - set(outputs_map))
+            if missing:
+                raise ContractViolation(
+                    f"{instance.scope.render()}: implementation omitted declared "
+                    f"outputs {missing} — the contract is validated before any "
+                    "envelope is emitted"
+                )
+            envelopes: dict[str, Envelope[Any]] = {
+                name: Envelope(
+                    run_id=lease.run_id,
+                    path=path,
+                    port=name,
+                    created_at=utc_now(),
+                    payload=outputs_map[name],
+                )
+                for name in declared
+            }
+            journal.record_completion(
+                lease,
+                Checkpoint(
+                    run_id=lease.run_id,
+                    path=path,
+                    input_hash=input_hash,
+                    resolved_version=instance.version,
+                    outputs=envelopes,
+                ),
             )
-        envelopes: dict[str, Envelope[Any]] = {
-            name: Envelope(
-                run_id=lease.run_id,
-                path=path,
-                port=name,
-                created_at=utc_now(),
-                payload=outputs_map[name],
-            )
-            for name in declared
-        }
-        journal.record_completion(
-            lease,
-            Checkpoint(
-                run_id=lease.run_id,
-                path=path,
-                input_hash=input_hash,
-                resolved_version=instance.version,
-                outputs=envelopes,
-            ),
-        )
+        except (OwnershipLost, CheckpointConflict):
+            raise  # fenced out: write nothing else — the new owner reconciles
+        except Exception:
+            # node failure: uncheckpointed work replays, so its acquisitions
+            # are discarded — never adopted as completed computation
+            await self._close_acquired(lease, acquired, "discard")
+            raise
+        # completion is durable first; a crash before this close leaves the
+        # rows active and reconcile reaps them with the checkpoint standing
+        await self._close_acquired(lease, acquired, "release")
         return {name: outputs_map[name] for name in declared}
 
     def _effect_boundary(
@@ -661,7 +786,9 @@ class Walker:
         ) -> EffectReceipt:
             key = idempotency_key(manifest.manifest_hash, path, kind, subject)
             existing = journal.receipt_for(key)
-            if existing is not None and existing.status == "committed":
+            if existing is not None and existing.status in ("committed", "rejected"):
+                # a journaled rejected receipt is as final as a committed one:
+                # the same subject can never later succeed (unknown reconciles)
                 journal.append_event(
                     lease, "EffectDeduplicated", path=path, payload={"kind": kind}
                 )
@@ -672,6 +799,8 @@ class Walker:
                     f"no effect adapter for kind {kind!r}; assembled: {sorted(effects)}"
                 )
             request = EffectRequest(
+                run_id=lease.run_id,  # sealed by the boundary, never the node
+                manifest_hash=manifest.manifest_hash,
                 path=path,
                 kind=kind,
                 subject=subject,
@@ -690,7 +819,11 @@ class Walker:
                 # absent externally: safe to execute
             journal.record_effect_prepared(lease, request)
             receipt = await adapter.execute(request)
-            journal.record_effect_outcome(lease, request, receipt, "EffectCommitted")
+            event_kind = {
+                "committed": "EffectCommitted",
+                "rejected": "EffectRejected",
+            }.get(receipt.status, "EffectUnresolved")
+            journal.record_effect_outcome(lease, request, receipt, event_kind)
             return receipt
 
         return boundary

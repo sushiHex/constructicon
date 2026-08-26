@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import importlib
 import inspect
-import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
@@ -25,12 +24,14 @@ from constructicon.core.address import RunId
 from constructicon.core.component import ComponentDef, PromotionRecord
 from constructicon.core.effect import (
     Attestation,
+    AttestationDraft,
     CheckResult,
     ComponentProofSubject,
 )
 from constructicon.core.envelope import utc_now
 from constructicon.core.errors import AdmissionError, ConstructiconError
 from constructicon.core.executor import ExecutorProfile
+from constructicon.core.grants import Posture
 from constructicon.core.graph import Graph, Loop, Ref
 from constructicon.core.identity import Digest, digest
 from constructicon.core.journal import Journal
@@ -50,12 +51,20 @@ class RegistryError(ConstructiconError):
 
 @dataclass(frozen=True)
 class CapabilityDescriptor:
-    """What the catalog exposes about an injectable capability — never the object."""
+    """What the catalog exposes about an injectable capability — never the object.
+
+    ``leased`` declares that injection is a physical acquisition the walker
+    leases, closes, and reconciles (the object must implement
+    ``LeasedCapability``); ``requires_posture`` lets admission refuse a
+    binding whose node grants cannot carry it — isolation is admission
+    logic, never best effort (I1)."""
 
     capability_id: str
     kind: str
     revision: str
     executor_profile: ExecutorProfile | None = None
+    leased: bool = False
+    requires_posture: Posture | None = None
 
 
 @dataclass(frozen=True)
@@ -474,24 +483,21 @@ class ComponentRegistry:
         policy: str,
         detail: str,
     ) -> Attestation:
-        attestation = Attestation(
-            attestation_id=f"att-{uuid.uuid4().hex}",
+        draft = AttestationDraft(
             action="promote",
             subject=ComponentProofSubject(
                 component=component, version=version, baseline_version=baseline
             ),
             checks=(
-                CheckResult(name=policy, ok=True, detail=detail, elapsed_s=0.0),
+                CheckResult(name=policy, status="passed", detail=detail, elapsed_s=0.0),
             ),
             check_set_hash=digest("check-set", 1, {"policy": policy, "v": 1}),
             evidence=(),
             manifest_hash=digest("manifest", 1, {"policy": policy}),
-            created_by_run=None,  # run-less deterministic policy — never fabricated
             workspace_id=None,
-            created_at=utc_now(),
         )
-        journal.mint_attestation(attestation)
-        return attestation
+        # run-less deterministic policy: the one explicit lease-free mint path
+        return journal.mint_policy_attestation(draft)
 
     # -- queries -------------------------------------------------------------
 

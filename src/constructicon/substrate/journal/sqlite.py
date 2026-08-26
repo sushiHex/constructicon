@@ -28,13 +28,20 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from constructicon.core.address import ExecutionPath, RunId
+from constructicon.core.address import ExecutionPath, RunId, ScopePath
 from constructicon.core.component import PromotionRecord
-from constructicon.core.effect import Attestation, EffectReceipt, EffectRequest
+from constructicon.core.effect import (
+    Attestation,
+    AttestationDraft,
+    EffectReceipt,
+    EffectRequest,
+    attestation_id_for,
+)
 from constructicon.core.envelope import utc_now
 from constructicon.core.errors import AdmissionError, ContractViolation, JournalDamaged
 from constructicon.core.identity import Digest, canonical_json, digest
 from constructicon.core.journal import Checkpoint, JournalEvent
+from constructicon.core.manifest import CapabilityLease
 from constructicon.core.registry import RegistrySnapshot, StoredVersion
 from constructicon.core.run import (
     CheckpointConflict,
@@ -44,9 +51,9 @@ from constructicon.core.run import (
     RunStatus,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
-_SCHEMA_V2 = """
+_SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     run_id           TEXT PRIMARY KEY,
     manifest_hash    TEXT NOT NULL,
@@ -112,6 +119,20 @@ CREATE TABLE IF NOT EXISTS promotions (
     actor          TEXT NOT NULL,
     source_run     TEXT,
     created_at     TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS capability_leases (
+    lease_id          TEXT NOT NULL,
+    acquisition_epoch INTEGER NOT NULL,
+    run_id            TEXT NOT NULL,
+    binding_id        TEXT NOT NULL,
+    scope_json        TEXT NOT NULL,
+    lifetime          TEXT NOT NULL,
+    state             TEXT NOT NULL,
+    disposition       TEXT,
+    resource_ref      TEXT,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    PRIMARY KEY (lease_id, acquisition_epoch)
 );
 """
 
@@ -202,20 +223,25 @@ class SqliteJournal:
                 ).fetchone()
                 is not None
             )
-            if version == 0 and has_runs:
-                self._migrate_m1_to_m2(conn)
-            elif version == 0:
-                conn.executescript(_SCHEMA_V2)
-                conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-                conn.commit()
-            elif version == SCHEMA_VERSION:
-                conn.executescript(_SCHEMA_V2)  # idempotent completeness check
-                conn.commit()
-            else:
+            if version > SCHEMA_VERSION:
                 raise JournalDamaged(
                     f"database schema version {version} is newer than this build "
                     f"understands ({SCHEMA_VERSION}); refusing to touch it"
                 )
+            if version == 0 and has_runs:
+                self._migrate_m1_to_m2(conn)  # leaves user_version = 2
+                version = 2
+            elif version == 0:
+                conn.executescript(_SCHEMA)
+                conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+                conn.commit()
+                version = SCHEMA_VERSION
+            if version == 2:
+                self._migrate_m2_to_m3(conn)
+                version = 3
+            if version == SCHEMA_VERSION:
+                conn.executescript(_SCHEMA)  # idempotent completeness check
+                conn.commit()
         finally:
             conn.close()
 
@@ -252,7 +278,7 @@ class SqliteJournal:
                     "UPDATE checkpoints SET identity = ? WHERE run_id = ? AND path_key = ?",
                     (_checkpoint_identity(checkpoint), row["run_id"], row["path_key"]),
                 )
-        conn.executescript(_SCHEMA_V2)  # creates the tables M1 lacked
+        conn.executescript(_SCHEMA)  # creates the tables M1 lacked
         # backfill durable inputs from RunStarted events (M1's archaeology, once)
         for row in conn.execute("SELECT run_id FROM runs").fetchall():
             run_id = row["run_id"]
@@ -277,7 +303,14 @@ class SqliteJournal:
                 "UPDATE runs SET next_event_seq = ? WHERE run_id = ?",
                 (int(seq_row["seq"]), run_id),
             )
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        conn.execute("PRAGMA user_version = 2")
+        conn.commit()
+
+    def _migrate_m2_to_m3(self, conn: sqlite3.Connection) -> None:
+        """Additive: the capability_leases table (physical acquisitions).
+        Idempotent DDL — safe to re-run after a mid-migration crash."""
+        conn.executescript(_SCHEMA)
+        conn.execute("PRAGMA user_version = 3")
         conn.commit()
 
     # -- internal helpers ----------------------------------------------------
@@ -736,27 +769,203 @@ class SqliteJournal:
             ).fetchone()
         return row is not None and row["receipt_json"] is None
 
-    # -- attestations --------------------------------------------------------
+    # -- capability leases ---------------------------------------------------
 
-    def mint_attestation(self, attestation: Attestation) -> None:
+    def record_capability_lease(
+        self, lease: RunLease, capability_lease: CapabilityLease
+    ) -> None:
         with self._txn() as conn:
             existing = conn.execute(
-                "SELECT attestation_json FROM attestations WHERE attestation_id = ?",
-                (attestation.attestation_id,),
+                "SELECT run_id, binding_id, scope_json, lifetime, state,"
+                " disposition, resource_ref FROM capability_leases"
+                " WHERE lease_id = ? AND acquisition_epoch = ?",
+                (capability_lease.lease_id, capability_lease.acquisition_epoch),
             ).fetchone()
-            payload = attestation.model_dump_json()
             if existing is not None:
-                if existing["attestation_json"] == payload:
-                    return
-                raise JournalDamaged(
-                    f"attestation {attestation.attestation_id!r} already minted "
+                stored = CapabilityLease(
+                    lease_id=capability_lease.lease_id,
+                    acquisition_epoch=capability_lease.acquisition_epoch,
+                    run_id=existing["run_id"],
+                    binding_id=existing["binding_id"],
+                    scope=ScopePath.model_validate_json(existing["scope_json"]),
+                    lifetime=existing["lifetime"],
+                    state=existing["state"],
+                    disposition=existing["disposition"],
+                    resource_ref=existing["resource_ref"],
+                )
+                if stored == capability_lease:
+                    return  # idempotent re-acquire after a mid-node crash
+                raise CheckpointConflict(
+                    f"capability lease {capability_lease.lease_id!r} epoch "
+                    f"{capability_lease.acquisition_epoch} already recorded "
                     "with different content"
                 )
+            seq = self._allocate_seq(conn, lease)
+            now = self._now_iso()
             conn.execute(
-                "INSERT INTO attestations (attestation_id, attestation_json)"
-                " VALUES (?, ?)",
-                (attestation.attestation_id, payload),
+                "INSERT INTO capability_leases (lease_id, acquisition_epoch,"
+                " run_id, binding_id, scope_json, lifetime, state, disposition,"
+                " resource_ref, created_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    capability_lease.lease_id,
+                    capability_lease.acquisition_epoch,
+                    capability_lease.run_id,
+                    capability_lease.binding_id,
+                    canonical_json(capability_lease.scope.model_dump(mode="json")),
+                    capability_lease.lifetime,
+                    capability_lease.state,
+                    capability_lease.disposition,
+                    capability_lease.resource_ref,
+                    now,
+                    now,
+                ),
             )
+            self._insert_event(
+                conn,
+                lease.run_id,
+                seq,
+                "LeaseAcquired",
+                None,
+                {
+                    "lease_id": capability_lease.lease_id,
+                    "acquisition_epoch": capability_lease.acquisition_epoch,
+                    "binding": capability_lease.binding_id,
+                    "resource_ref": capability_lease.resource_ref,
+                },
+            )
+        self.fault_probe("lease.after_record_commit")
+
+    def transition_capability_lease(
+        self,
+        lease: RunLease,
+        *,
+        lease_id: str,
+        acquisition_epoch: int,
+        expected: frozenset[str],
+        target: str,
+        disposition: str | None = None,
+    ) -> None:
+        with self._txn() as conn:
+            row = conn.execute(
+                "SELECT state, disposition FROM capability_leases"
+                " WHERE lease_id = ? AND acquisition_epoch = ?",
+                (lease_id, acquisition_epoch),
+            ).fetchone()
+            if row is None:
+                raise ContractViolation(
+                    f"capability lease {lease_id!r} epoch {acquisition_epoch} "
+                    "is not recorded"
+                )
+            if row["state"] == target and row["disposition"] == disposition:
+                return  # idempotent at-target: crash-interrupted closure re-runs
+            if row["state"] not in expected:
+                raise ContractViolation(
+                    f"capability lease {lease_id!r}: transition to {target!r} "
+                    f"expected {sorted(expected)}, found {row['state']!r}"
+                )
+            seq = self._allocate_seq(conn, lease)
+            conn.execute(
+                "UPDATE capability_leases SET state = ?, disposition = ?,"
+                " updated_at = ? WHERE lease_id = ? AND acquisition_epoch = ?",
+                (target, disposition, self._now_iso(), lease_id, acquisition_epoch),
+            )
+            self._insert_event(
+                conn,
+                lease.run_id,
+                seq,
+                "LeaseTransition",
+                None,
+                {
+                    "lease_id": lease_id,
+                    "acquisition_epoch": acquisition_epoch,
+                    "from": row["state"],
+                    "to": target,
+                    "disposition": disposition,
+                },
+            )
+        self.fault_probe("lease.after_transition_commit")
+
+    def capability_leases(self, run_id: RunId) -> list[CapabilityLease]:
+        with self._read() as conn:
+            rows = conn.execute(
+                "SELECT * FROM capability_leases WHERE run_id = ?"
+                " ORDER BY created_at ASC, lease_id ASC",
+                (run_id,),
+            ).fetchall()
+        return [
+            CapabilityLease(
+                lease_id=row["lease_id"],
+                acquisition_epoch=row["acquisition_epoch"],
+                run_id=row["run_id"],
+                binding_id=row["binding_id"],
+                scope=ScopePath.model_validate_json(row["scope_json"]),
+                lifetime=row["lifetime"],
+                state=row["state"],
+                disposition=row["disposition"],
+                resource_ref=row["resource_ref"],
+            )
+            for row in rows
+        ]
+
+    # -- attestations (minting is literal) -----------------------------------
+
+    def mint_attestation(self, lease: RunLease, draft: AttestationDraft) -> Attestation:
+        with self._txn() as conn:
+            fence = conn.execute(
+                "SELECT 1 FROM runs WHERE run_id = ? AND owner_id = ? AND owner_epoch = ?",
+                (lease.run_id, lease.owner_id, lease.epoch),
+            ).fetchone()
+            if fence is None:
+                raise OwnershipLost(
+                    f"run {lease.run_id!r}: attestation minting fenced out"
+                )
+            attestation = Attestation(
+                attestation_id=attestation_id_for(draft),
+                created_by_run=lease.run_id,
+                created_at=self._now(),
+                **draft.model_dump(),
+            )
+            self._insert_attestation(conn, attestation)
+        return attestation
+
+    def mint_policy_attestation(self, draft: AttestationDraft) -> Attestation:
+        with self._txn() as conn:
+            attestation = Attestation(
+                attestation_id=attestation_id_for(draft),
+                created_by_run=None,
+                created_at=self._now(),
+                **draft.model_dump(),
+            )
+            self._insert_attestation(conn, attestation)
+        return attestation
+
+    @staticmethod
+    def _insert_attestation(
+        conn: sqlite3.Connection, attestation: Attestation
+    ) -> None:
+        existing = conn.execute(
+            "SELECT attestation_json FROM attestations WHERE attestation_id = ?",
+            (attestation.attestation_id,),
+        ).fetchone()
+        payload = attestation.model_dump_json()
+        if existing is not None:
+            prior = Attestation.model_validate_json(existing["attestation_json"])
+            # the id is content-derived, so identity means identical drafts;
+            # only provenance timing may differ across a crash-and-retry
+            if prior.model_copy(
+                update={"created_at": attestation.created_at}
+            ) == attestation:
+                return
+            raise JournalDamaged(
+                f"attestation {attestation.attestation_id!r} already minted "
+                "with different content"
+            )
+        conn.execute(
+            "INSERT INTO attestations (attestation_id, attestation_json)"
+            " VALUES (?, ?)",
+            (attestation.attestation_id, payload),
+        )
 
     def load_attestation(self, attestation_id: str) -> Attestation | None:
         with self._read() as conn:

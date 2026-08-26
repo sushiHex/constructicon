@@ -8,7 +8,7 @@ import pytest
 
 from constructicon.api.system import Constructicon
 from constructicon.core.component import PromotionRecord
-from constructicon.core.effect import Attestation, CheckResult, ComponentProofSubject
+from constructicon.core.effect import AttestationDraft, CheckResult, ComponentProofSubject
 from constructicon.core.envelope import utc_now
 from constructicon.core.errors import AdmissionError
 from constructicon.core.graph import Graph, GraphNode, Ref
@@ -36,9 +36,9 @@ def evaluated_promotion(
     system: Constructicon, component: str, version: Digest, baseline: Digest | None
 ) -> PromotionRecord:
     """Mint a valid journal attestation and move the pointer — the evaluated
-    path a real check panel would drive."""
-    attestation = Attestation(
-        attestation_id=f"att-test-{component.replace('/', '-')}-{str(version)[-8:]}",
+    path a real check panel would drive. Minting is literal: the journal
+    computes the id; callers author only drafts."""
+    draft = AttestationDraft(
         action="promote",
         subject=ComponentProofSubject(
             component=component, version=version, baseline_version=baseline
@@ -47,11 +47,9 @@ def evaluated_promotion(
         check_set_hash=digest("check-set", 1, {"policy": "test", "v": 1}),
         evidence=(),
         manifest_hash=digest("manifest", 1, {"test": True}),
-        created_by_run=None,
         workspace_id=None,
-        created_at=utc_now(),
     )
-    system.journal.mint_attestation(attestation)
+    attestation = system.journal.mint_policy_attestation(draft)
     return system.promote(
         component=component,
         version=version,
