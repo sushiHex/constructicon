@@ -16,23 +16,52 @@ contributing code; humans participate as observer, advisor, and approver.
 
 ## Status
 
-Architecture **frozen**; implementation through **M4** is green — the vertical
-slice, crash & resume hardening, git authority, and generic bounded loops:
+Architecture **frozen**; implementation through **M5** is green — the vertical
+slice, crash & resume hardening, git authority, generic bounded loops, and the
+agent-first authoring contract:
 
 ```
-Stage → Import → Prepare exact merge → Gate (read-only, real Ruff/Pytest)
-      → red → repair in a fresh frame-stamped workspace → gate green
-      → journal-minted Attestation → merge_verified → one git ref transaction
-      → Receipt → crash → reconcile / restore by ExecutionPath → resume
+Describe → propose strict Graph JSON → typed rejection → repair → admit
+         → sealed manifest → execute → checkpoint / receipt → resume
 ```
 
-The strongest claim is mechanically true and tested: **the only path from
-proposed code to a protected git ref is one exact, attested, idempotent git
-transaction.** Agent workspaces are staging repositories with zero authority
-refs; a moved base is a truthful rejected receipt; forged, absent,
-mismatched, failing, or world-mismatched attestations move nothing; every
-hard-crash probe — including a real worker dying via `os._exit` mid-merge —
-recovers to exactly one install.
+SDK authoring is the same machine in Python:
+
+```python
+from typing import Annotated
+from pydantic import BaseModel
+from constructicon.sdk import flow, port_type, task
+
+class Issue(BaseModel):
+    title: str
+
+class Brief(BaseModel):
+    title: str
+
+@task("example/triage", output="brief")
+async def triage(
+    issue: Annotated[Issue, port_type("example/Issue")],
+) -> Annotated[Brief, port_type("example/Brief")]:
+    return Brief(title=issue.title)
+
+workflow = flow("example/issue-to-brief", triage)
+```
+
+`@task`, `flow`, `component`, `harness`, and loop sugar produce only the
+canonical `ComponentDef | Ref | Graph | Loop` contracts. `system.describe()`
+publishes the strict Graph and admission schemas, stable component contracts,
+capability requirements and availability, root grants, magnetic binding and
+loop vocabulary, and bounded proposal limits. `system.admit_graph()` returns a
+versioned `AdmissionAccepted | AdmissionRejected` result with itemized repair
+faults; it never silently ignores fields or auto-repairs a proposal.
+
+The strongest authority claim remains mechanically true and tested: **the only
+path from proposed code to a protected git ref is one exact, attested,
+idempotent git transaction.** Agent workspaces are staging repositories with
+zero authority refs; a moved base is a truthful rejected receipt; forged,
+absent, mismatched, failing, or world-mismatched attestations move nothing;
+every hard-crash probe — including a real worker dying via `os._exit` mid-merge
+— recovers to exactly one install.
 
 Loops add no scheduler and no gate-aware kernel object. Admission seals their
 initial bindings, feedback edges, canonical boolean control, exports, and
@@ -53,8 +82,8 @@ uv run verify        # ruff + mypy --strict + import-linter + pytest
 ## Documentation
 
 - [docs/INVARIANTS.md](docs/INVARIANTS.md) — the thirteen laws and the never list
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — layers, IR, manifest, effects,
-  registry, journal, milestones, failure tests
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — layers, IR, authoring,
+  manifest, effects, registry, journal, milestones, failure tests
 - [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) — extension guides (agents first)
 - [docs/designs/SELF_IMPROVEMENT.md](docs/designs/SELF_IMPROVEMENT.md) —
   learning as candidates, never mutations
