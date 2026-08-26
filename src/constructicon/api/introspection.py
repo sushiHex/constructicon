@@ -268,10 +268,15 @@ def _schema_document(
     version: int,
     schema: dict[str, Any],
 ) -> SchemaDocument:
+    normalized = dict(schema)
+    normalized.setdefault(
+        "title",
+        name.rsplit(".", 1)[-1].replace("-", " ").title(),
+    )
     return SchemaDocument(
         name=name,
         version=version,
-        digest=digest("schema-document", version, schema),
-        schema_=schema,
+        digest=digest("schema-document", version, normalized),
+        schema_=normalized,
         generator=f"pydantic-{pydantic.__version__}",
     )
