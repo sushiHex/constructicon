@@ -1,0 +1,38 @@
+"""The identity law: one domain-separated hash for every identity."""
+
+from __future__ import annotations
+
+import pytest
+
+from constructicon.core.identity import Digest, canonical_json, digest
+
+
+def test_digest_is_deterministic() -> None:
+    assert digest("component", 1, {"a": 1, "b": [1, 2]}) == digest(
+        "component", 1, {"b": [1, 2], "a": 1}
+    )
+
+
+def test_domain_separation() -> None:
+    payload = {"same": "payload"}
+    assert digest("component", 1, payload) != digest("graph", 1, payload)
+    assert digest("component", 1, payload) != digest("component", 2, payload)
+
+
+def test_canonical_json_is_sorted_and_compact() -> None:
+    assert canonical_json({"b": 1, "a": [None, True]}) == '{"a":[null,true],"b":1}'
+
+
+def test_canonical_json_rejects_non_finite() -> None:
+    with pytest.raises(ValueError, match="NaN"):
+        canonical_json({"x": float("nan")})
+
+
+def test_digest_form_is_validated() -> None:
+    with pytest.raises(ValueError):
+        Digest("md5:abc")
+    with pytest.raises(ValueError):
+        Digest("sha256:XYZ")
+    value = digest("t", 1, {})
+    assert str(value).startswith("sha256:")
+    assert len(str(value)) == len("sha256:") + 64
