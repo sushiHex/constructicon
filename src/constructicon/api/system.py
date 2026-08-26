@@ -1,47 +1,63 @@
-"""The system object — the injection root (I8) and the one control surface.
+"""The system object — injection root and one agent-shaped control surface.
 
-Every later skin (MCP server first, CLI, HTTP) wraps this object one-to-one and
-adds no new concepts. L4 constructs L1 implementations and injects them into
-the L2 runtime; the runtime never imports concrete substrate modules.
-
-Two ``Constructicon`` instances over the same database files are two workers of
-one system: the second can resume, reproduce, and project the first's runs, and
-the fenced lease decides which of two concurrent claimants wins.
+Every later skin (MCP first, CLI, HTTP) wraps this object one-to-one and adds
+no new concepts. M5 makes the existing machine discoverable and authorable:
+SDK bundles and raw Graph JSON converge on the same strict parser, typed
+admission boundary, validator, and sealed manifest.
 """
 
 from __future__ import annotations
 
 import os
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
+from constructicon.api.introspection import (
+    build_component_description,
+    build_system_description,
+)
 from constructicon.core.address import RunId
+from constructicon.core.admission import (
+    AdmissionAccepted,
+    AdmissionCode,
+    AdmissionFault,
+    AdmissionRejected,
+    AdmissionResult,
+)
 from constructicon.core.component import ComponentDef, PromotionRecord
 from constructicon.core.effect import EffectAdapter
-from constructicon.core.errors import ContractViolation
+from constructicon.core.errors import AdmissionError, ContractViolation
 from constructicon.core.grants import EffectiveGrants, ModelSelection, Posture
 from constructicon.core.graph import Graph
-from constructicon.core.identity import Digest
+from constructicon.core.identity import Digest, canonical_json, digest, json_value
+from constructicon.core.introspection import (
+    AdmissionLimits,
+    ComponentDescription,
+    SystemDescription,
+)
 from constructicon.core.journal import Journal
 from constructicon.core.manifest import ExecutionManifest
 from constructicon.core.registry import RegistryStore
 from constructicon.core.run import RunState
+from constructicon.runtime.authoring import admit_authored_graph
 from constructicon.runtime.context import NodeImpl
 from constructicon.runtime.registry import (
     CapabilityDescriptor,
     ComponentRegistry,
     InMemoryRegistryStore,
 )
-from constructicon.runtime.validator import admit
 from constructicon.runtime.walker import (
     DEFAULT_HEARTBEAT_INTERVAL_S,
     DEFAULT_LEASE_TTL_S,
     RunResult,
     Walker,
 )
+from constructicon.sdk.types import DefinitionBundle
 from constructicon.substrate.effects.git import MergeVerifiedEffect
 from constructicon.substrate.gates.runner import CheckSpec, GateRunner
 from constructicon.substrate.git.authority import GitAuthority, GitWorkspaceCapability
@@ -57,6 +73,7 @@ DEFAULT_ROOT_GRANTS = EffectiveGrants(
     network="none",
     timeout_s=600,
 )
+DEFAULT_ADMISSION_LIMITS = AdmissionLimits()
 
 
 @dataclass(frozen=True)
@@ -79,15 +96,18 @@ def git_world(
     target_ref: str = "refs/heads/main",
     checks: tuple[CheckSpec, ...] | None = None,
 ) -> GitWorld:
-    """Assemble the standard git capabilities (L4 constructs L1, I8):
-    a leased WRITE workspace, a leased gate runner, and the merge_verified
-    effect — all over one protected authority repository."""
     authority = GitAuthority(repo_path, workspaces_root)
     workspace = GitWorkspaceCapability(authority, target_ref=target_ref)
     gates = GateRunner(
-        journal=journal, authority=authority, target_ref=target_ref, checks=checks
+        journal=journal,
+        authority=authority,
+        target_ref=target_ref,
+        checks=checks,
     )
-    capabilities: dict[str, object] = {"git-workspace": workspace, "git-gates": gates}
+    capabilities: dict[str, object] = {
+        "git-workspace": workspace,
+        "git-gates": gates,
+    }
     catalog = {
         "git-workspace": CapabilityDescriptor(
             capability_id="git-workspace",
@@ -99,13 +119,15 @@ def git_world(
         "git-gates": CapabilityDescriptor(
             capability_id="git-gates",
             kind="gates",
-            # a changed check set is a changed world: stale manifests refuse
             revision=str(gates.check_set_hash)[:19],
             leased=True,
         ),
     }
     effects: dict[str, EffectAdapter] = {
-        "merge_verified": MergeVerifiedEffect(journal=journal, authority=authority)
+        "merge_verified": MergeVerifiedEffect(
+            journal=journal,
+            authority=authority,
+        )
     }
     return GitWorld(
         authority=authority,
@@ -127,23 +149,28 @@ class Constructicon:
         catalog: Mapping[str, CapabilityDescriptor] | None = None,
         effects: Mapping[str, EffectAdapter] | None = None,
         root_grants: EffectiveGrants = DEFAULT_ROOT_GRANTS,
+        admission_limits: AdmissionLimits = DEFAULT_ADMISSION_LIMITS,
         owner_id: str | None = None,
         lease_ttl_s: float = DEFAULT_LEASE_TTL_S,
         heartbeat_interval_s: float = DEFAULT_HEARTBEAT_INTERVAL_S,
     ) -> None:
         self.journal = journal
         if store is None:
-            # the SQLite journal implements RegistryStore over the same file;
-            # sharing the file does not merge the concepts (I8)
-            store = journal if isinstance(journal, RegistryStore) else InMemoryRegistryStore()
+            store = (
+                journal
+                if isinstance(journal, RegistryStore)
+                else InMemoryRegistryStore()
+            )
         self.registry = ComponentRegistry(store=store)
         self.owner_id = owner_id or f"worker-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        self._capabilities = dict(capabilities or {})
         self._catalog = dict(catalog or {})
         self._root_grants = root_grants
+        self._admission_limits = admission_limits
         self._walker = Walker(
             registry=self.registry,
             journal=journal,
-            capabilities=capabilities or {},
+            capabilities=self._capabilities,
             catalog=self._catalog,
             effects=effects or {},
             owner_id=self.owner_id,
@@ -153,7 +180,19 @@ class Constructicon:
 
     # -- definitions ---------------------------------------------------------
 
-    def register(self, definition: ComponentDef, impl: NodeImpl | None = None) -> Digest:
+    def register(
+        self,
+        definition: ComponentDef | DefinitionBundle,
+        impl: NodeImpl | None = None,
+    ) -> Digest:
+        if isinstance(definition, DefinitionBundle):
+            if impl is not None:
+                raise TypeError(
+                    "register(bundle) already carries its implementation; do not "
+                    "supply a second impl"
+                )
+            impl = definition.implementation
+            definition = definition.definition
         return self.registry.register(definition, impl)
 
     def promote(
@@ -175,30 +214,113 @@ class Constructicon:
         )
 
     def promote_initial(
-        self, *, component: str, version: Digest, actor: str = "bootstrap"
+        self,
+        *,
+        component: str,
+        version: Digest,
+        actor: str = "bootstrap",
     ) -> PromotionRecord | None:
-        """Idempotent deterministic bootstrap policy: no stable pointer ->
-        promote; already stable at this exact version -> None; stable
-        elsewhere -> refuse. Registration alone never propagates (I12)."""
         return self.registry.promote_initial(
-            component=component, version=version, journal=self.journal, actor=actor
+            component=component,
+            version=version,
+            journal=self.journal,
+            actor=actor,
         )
 
     def rollback(self, *, component: str, actor: str) -> PromotionRecord:
-        """An ordinary promotion of the retained prior stable version."""
         return self.registry.rollback(
-            component=component, journal=self.journal, actor=actor
+            component=component,
+            journal=self.journal,
+            actor=actor,
         )
 
     # -- admission and runs ---------------------------------------------------
 
     def validate(self, graph: Graph, inputs: dict[str, Any]) -> ExecutionManifest:
-        return admit(
+        return admit_authored_graph(
             graph,
             snapshot=self.registry.snapshot(),
             catalog=self._catalog,
             root_grants=self._root_grants,
             inputs=inputs,
+            limits=self._admission_limits,
+        )
+
+    def admit_graph(
+        self,
+        proposal: Graph | Mapping[str, Any] | str,
+        inputs: Mapping[str, Any],
+    ) -> AdmissionResult:
+        """Parse and admit architect-authored Graph JSON without auto-repair."""
+
+        normalized_inputs = json_value(dict(inputs))
+        if not isinstance(normalized_inputs, dict):
+            return AdmissionRejected(
+                faults=(
+                    AdmissionFault(
+                        code=AdmissionCode.GRAPH_INPUT_INVALID,
+                        message="graph inputs must be a JSON object keyed by port name",
+                        repair="submit an object whose keys match declared graph inputs",
+                    ),
+                )
+            )
+
+        graph: Graph | None = None
+        proposal_digest: Digest | None = None
+        try:
+            if isinstance(proposal, Graph):
+                graph = proposal
+                proposal_digest = digest(
+                    "graph-proposal",
+                    1,
+                    graph.model_dump(mode="json"),
+                )
+            elif isinstance(proposal, str):
+                size = len(proposal.encode("utf-8"))
+                if size > self._admission_limits.max_proposal_bytes:
+                    return self._proposal_too_large(size)
+                proposal_digest = digest("graph-proposal", 1, proposal)
+                graph = Graph.model_validate_json(proposal)
+            else:
+                normalized_proposal = json_value(dict(proposal))
+                rendered = canonical_json(normalized_proposal)
+                size = len(rendered.encode("utf-8"))
+                if size > self._admission_limits.max_proposal_bytes:
+                    return self._proposal_too_large(size)
+                proposal_digest = digest("graph-proposal", 1, normalized_proposal)
+                graph = Graph.model_validate(normalized_proposal)
+        except ValidationError as exc:
+            return AdmissionRejected(
+                proposal_digest=proposal_digest,
+                graph=None,
+                faults=self._validation_faults(exc),
+            )
+        except (TypeError, ValueError) as exc:
+            return AdmissionRejected(
+                proposal_digest=proposal_digest,
+                graph=None,
+                faults=(
+                    AdmissionFault(
+                        code=AdmissionCode.GRAPH_SCHEMA_INVALID_VALUE,
+                        message=f"graph proposal is not canonical JSON: {exc}",
+                        repair="submit a JSON object matching the published Graph schema",
+                    ),
+                ),
+            )
+
+        assert graph is not None and proposal_digest is not None
+        try:
+            manifest = self.validate(graph, normalized_inputs)
+        except AdmissionError as exc:
+            return AdmissionRejected(
+                proposal_digest=proposal_digest,
+                graph=graph,
+                faults=exc.faults,
+            )
+        return AdmissionAccepted(
+            proposal_digest=proposal_digest,
+            graph=graph,
+            manifest=manifest,
         )
 
     async def start(
@@ -219,15 +341,17 @@ class Constructicon:
         return await self._walker.resume(run_id)
 
     async def reproduce(
-        self, source_run_id: RunId, *, new_run_id: RunId | None = None
+        self,
+        source_run_id: RunId,
+        *,
+        new_run_id: RunId | None = None,
     ) -> RunResult:
         return await self._walker.reproduce(
-            source_run_id, new_run_id=new_run_id or RunId(f"run-{uuid.uuid4().hex}")
+            source_run_id,
+            new_run_id=new_run_id or RunId(f"run-{uuid.uuid4().hex}"),
         )
 
     def cancel(self, run_id: RunId) -> None:
-        """Durably request cooperative cancellation; the owning walker honors
-        it at the next node boundary and never silently restarts the run."""
         self.journal.request_cancel(run_id)
 
     def run_state(self, run_id: RunId) -> RunState | None:
@@ -241,26 +365,90 @@ class Constructicon:
             )
         return project_run(self.journal, run_id, out_dir)
 
-    # -- introspection (I9) ---------------------------------------------------
+    # -- introspection --------------------------------------------------------
 
-    def describe(self) -> dict[str, Any]:
+    def describe(
+        self,
+        *,
+        component_names: Sequence[str] | None = None,
+        limit: int = 100,
+    ) -> SystemDescription:
         snapshot = self.registry.snapshot()
-        components: dict[str, Any] = {}
-        for name in snapshot.names():
-            stable = snapshot.stable.get(name)
-            order = snapshot.order.get(name, ())
-            components[name] = {
-                "versions": list(order),
-                "stable": stable,
-                "candidates": [v for v in order if v != stable],
-            }
-        return {
-            "components": components,
-            "capabilities": {
-                capability_id: {"kind": descriptor.kind, "revision": descriptor.revision}
-                for capability_id, descriptor in sorted(self._catalog.items())
-            },
-        }
+        return build_system_description(
+            registry=self.registry,
+            snapshot=snapshot,
+            catalog=self._catalog,
+            available_capabilities=frozenset(self._capabilities),
+            root_grants=self._root_grants,
+            limits=self._admission_limits,
+            component_names=component_names,
+            limit=limit,
+        )
+
+    def describe_component(
+        self,
+        name: str,
+        *,
+        version: Digest | None = None,
+    ) -> ComponentDescription:
+        snapshot = self.registry.snapshot()
+        return build_component_description(
+            registry=self.registry,
+            snapshot=snapshot,
+            name=name,
+            version=version,
+        )
 
     def rdeps(self, name: str) -> list[str]:
         return self.registry.rdeps(name)
+
+    def _proposal_too_large(self, observed: int) -> AdmissionRejected:
+        return AdmissionRejected(
+            faults=(
+                AdmissionFault(
+                    code=AdmissionCode.GRAPH_PROPOSAL_LIMIT_EXCEEDED,
+                    message=(
+                        f"graph proposal is {observed} bytes; limit is "
+                        f"{self._admission_limits.max_proposal_bytes}"
+                    ),
+                    repair="submit a smaller graph or reference registered composites",
+                    details={
+                        "observed": observed,
+                        "limit": self._admission_limits.max_proposal_bytes,
+                    },
+                ),
+            )
+        )
+
+    def _validation_faults(self, exc: ValidationError) -> tuple[AdmissionFault, ...]:
+        faults: list[AdmissionFault] = []
+        for error in exc.errors(include_input=False, include_url=False):
+            error_type = str(error.get("type", "value_error"))
+            code = (
+                AdmissionCode.GRAPH_SCHEMA_INVALID_JSON
+                if error_type == "json_invalid"
+                else AdmissionCode.GRAPH_SCHEMA_INVALID_VALUE
+            )
+            path = tuple(
+                item for item in error.get("loc", ()) if isinstance(item, (str, int))
+            )
+            faults.append(
+                AdmissionFault(
+                    code=code,
+                    message=str(error.get("msg", "Graph schema validation failed")),
+                    path=path,
+                    repair=(
+                        "change the value at this path to match the published Graph schema"
+                    ),
+                    details={"error_type": error_type},
+                )
+            )
+        ordered = sorted(
+            faults,
+            key=lambda fault: (
+                tuple(str(item) for item in fault.path),
+                fault.code.value,
+                fault.message,
+            ),
+        )
+        return tuple(ordered[: self._admission_limits.max_faults])
