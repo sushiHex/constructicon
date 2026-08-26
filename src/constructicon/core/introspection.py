@@ -93,6 +93,7 @@ class AdmissionLimits(BaseModel):
     max_nested_graph_depth: PositiveInt = 32
     max_faults: PositiveInt = 100
     max_fault_detail_items: PositiveInt = 25
+    max_description_components: PositiveInt = 100
 
 
 class ReferenceVocabulary(BaseModel):
