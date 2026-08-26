@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Annotated, Any
 
+import pytest
 from pydantic import BaseModel
 
 from constructicon.api.system import Constructicon
@@ -101,6 +102,11 @@ def test_describe_is_bounded_complete_and_secret_free(
     assert "_scripts" not in rendered
 
 
+def test_describe_refuses_an_unbounded_component_request(system: Constructicon) -> None:
+    with pytest.raises(ValueError, match="published maximum"):
+        system.describe(limit=101)
+
+
 def test_missing_declared_capability_is_a_typed_repair(
     system: Constructicon,
 ) -> None:
@@ -138,3 +144,11 @@ def test_raw_graph_json_is_fail_closed(system: Constructicon) -> None:
     assert result.graph is None
     assert result.faults[0].code is AdmissionCode.GRAPH_SCHEMA_INVALID_VALUE
     assert result.faults[0].path == ("invented_semantics",)
+
+
+def test_non_json_inputs_are_typed_rejection_data(system: Constructicon) -> None:
+    graph = Graph(name="input-shape", nodes=())
+    result = system.admit_graph(graph, {"value": object()})
+    assert isinstance(result, AdmissionRejected)
+    assert result.graph is None
+    assert result.faults[0].code is AdmissionCode.GRAPH_INPUT_INVALID
