@@ -1,19 +1,8 @@
-"""Journal contracts (M2): one transactional log, transaction-shaped
-operations, fenced writes, write-once durable facts.
+"""Journal contracts: one transactional log and fenced, write-once facts.
 
-Semantic commits replace call-pairs a caller must remember to combine:
-creation stores the manifest, the PENDING run, and the exact inputs durably in
-one transaction; lifecycle transitions commit the state change and its event
-together; a node completion commits checkpoint + ``NodeCompleted`` in one
-transaction; an effect receipt commits with its event.
-
-Every owner-side write takes the ``RunLease`` and is fenced by
-``owner_id + epoch`` — an operation that matches zero rows raises
-``OwnershipLost`` and the stale worker stops.
-
-Durable facts (runs, manifests, checkpoints, receipts, attestations) are
-write-once: absent → insert; identical → idempotent; contradictory at the
-same identity → ``CheckpointConflict``/``JournalDamaged``.
+M6 extends run creation with optional immutable origin and adds bounded run/event
+reads for the control plane. Commands and approvals remain a separate
+``ControlStore`` contract even when SQLite implements both over one WAL file.
 """
 
 from __future__ import annotations
@@ -23,6 +12,7 @@ from typing import Any, Protocol
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 from constructicon.core.address import ExecutionPath, RunId
+from constructicon.core.control import RunOrigin, RunRecord
 from constructicon.core.effect import (
     Attestation,
     AttestationDraft,
@@ -42,11 +32,11 @@ class JournalEvent(BaseModel):
 
     schema_version: int = JOURNAL_SCHEMA_VERSION
     run_id: RunId
-    seq: int  # per-run monotonic; allocated by the fenced counter in the run row
-    kind: str  # RunStarted / NodeStarted / NodeCompleted / NodeBlocked / ...
+    seq: int
+    kind: str
     path: ExecutionPath | None = None
     created_at: AwareDatetime
-    payload: dict[str, Any] | None = None  # size-capped; large outputs by reference
+    payload: dict[str, Any] | None = None
 
 
 class Checkpoint(BaseModel):
@@ -57,14 +47,10 @@ class Checkpoint(BaseModel):
     input_hash: Digest
     resolved_version: Digest | None
     outputs: dict[str, Envelope[Any]]
-    # no workspace field: lease state belongs to CapabilityLease records,
-    # never to a node-output checkpoint
 
 
 class Journal(Protocol):
-    """The authoritative store. Every mutation is transactional."""
-
-    # -- creation (write-once; a crash after this leaves a resumable PENDING run)
+    """The authoritative execution store. Every mutation is transactional."""
 
     def create_run(
         self,
@@ -74,27 +60,20 @@ class Journal(Protocol):
         manifest_hash: Digest,
         input_hash: Digest,
         inputs: dict[str, Any],
-    ) -> None: ...
-
-    # -- ownership (the fence)
-
-    def claim_run(self, run_id: RunId, *, owner_id: str, ttl_s: float) -> RunLease:
-        """Atomic: accepts PENDING/FAILED/PARKED, accepts RUNNING only with an
-        expired lease; increments the epoch; two concurrent claims produce one
-        winner. Raises OwnershipLost on a live foreign owner."""
+        origin: RunOrigin | None = None,
+    ) -> None:
+        """Manifest + PENDING run + inputs + optional origin, one transaction."""
         ...
 
-    def heartbeat(self, lease: RunLease, *, ttl_s: float) -> RunLease:
-        """Renew the lease. Updates ownership state only — never events."""
-        ...
+    def claim_run(self, run_id: RunId, *, owner_id: str, ttl_s: float) -> RunLease: ...
+
+    def heartbeat(self, lease: RunLease, *, ttl_s: float) -> RunLease: ...
 
     def release_run(self, lease: RunLease) -> None: ...
 
     def request_cancel(self, run_id: RunId) -> None: ...
 
     def cancel_requested(self, run_id: RunId) -> bool: ...
-
-    # -- fenced lifecycle and records
 
     def transition_run(
         self,
@@ -104,9 +83,7 @@ class Journal(Protocol):
         target: RunStatus,
         event_kind: str,
         payload: dict[str, Any] | None = None,
-    ) -> None:
-        """Fenced state change + its event, one transaction."""
-        ...
+    ) -> None: ...
 
     def append_event(
         self,
@@ -117,9 +94,7 @@ class Journal(Protocol):
         payload: dict[str, Any] | None = None,
     ) -> JournalEvent: ...
 
-    def record_completion(self, lease: RunLease, checkpoint: Checkpoint) -> None:
-        """Checkpoint + NodeCompleted event, one transaction; write-once."""
-        ...
+    def record_completion(self, lease: RunLease, checkpoint: Checkpoint) -> None: ...
 
     def record_effect_prepared(self, lease: RunLease, request: EffectRequest) -> None: ...
 
@@ -129,18 +104,30 @@ class Journal(Protocol):
         request: EffectRequest,
         receipt: EffectReceipt,
         event_kind: str,
-    ) -> None:
-        """Receipt + its event (EffectCommitted/EffectReconciled), one
-        transaction; the receipt is write-once."""
-        ...
-
-    # -- reads
+    ) -> None: ...
 
     def run_state(self, run_id: RunId) -> RunState | None: ...
+
+    def run_record(self, run_id: RunId) -> RunRecord | None: ...
+
+    def run_records(
+        self,
+        *,
+        statuses: tuple[RunStatus, ...] | None = None,
+        after: tuple[str, str] | None = None,
+        through: tuple[str, str] | None = None,
+        limit: int = 100,
+    ) -> list[RunRecord]: ...
+
+    def recoverable_runs(self, *, limit: int = 100) -> list[RunId]:
+        """PENDING plus RUNNING whose ownership lease is lost."""
+        ...
 
     def run_manifest_hash(self, run_id: RunId) -> Digest | None: ...
 
     def run_inputs(self, run_id: RunId) -> dict[str, Any] | None: ...
+
+    def run_origin(self, run_id: RunId) -> RunOrigin | None: ...
 
     def load_manifest_json(self, manifest_hash: Digest) -> str | None: ...
 
@@ -148,21 +135,19 @@ class Journal(Protocol):
         self, run_id: RunId, *, after_seq: int = 0, limit: int = 100
     ) -> list[JournalEvent]: ...
 
+    def event(self, run_id: RunId, seq: int) -> JournalEvent | None: ...
+
+    def max_event_seq(self, run_id: RunId) -> int: ...
+
     def checkpoint(self, run_id: RunId, path: ExecutionPath) -> Checkpoint | None: ...
 
     def receipt_for(self, idempotency_key: Digest) -> EffectReceipt | None: ...
 
-    def effect_prepared(self, idempotency_key: Digest) -> bool:
-        """A prepared record without a receipt — the reconcile-first case."""
-        ...
-
-    # -- capability leases (physical acquisitions; the walker owns transitions)
+    def effect_prepared(self, idempotency_key: Digest) -> bool: ...
 
     def record_capability_lease(
         self, lease: RunLease, capability_lease: CapabilityLease
-    ) -> None:
-        """Fenced, write-once on (lease_id, acquisition_epoch)."""
-        ...
+    ) -> None: ...
 
     def transition_capability_lease(
         self,
@@ -173,25 +158,12 @@ class Journal(Protocol):
         expected: frozenset[str],
         target: str,
         disposition: str | None = None,
-    ) -> None:
-        """Fenced CAS + event, one transaction; idempotent when already at
-        the target state (mirror of record_completion's identical-repetition
-        rule, so crash-interrupted closure re-runs safely)."""
-        ...
+    ) -> None: ...
 
     def capability_leases(self, run_id: RunId) -> list[CapabilityLease]: ...
 
-    # -- attestations (journal-minted authority, I2 — minting is literal)
+    def mint_attestation(self, lease: RunLease, draft: AttestationDraft) -> Attestation: ...
 
-    def mint_attestation(self, lease: RunLease, draft: AttestationDraft) -> Attestation:
-        """Fenced minting: the journal verifies the run lease, derives
-        created_by_run from it, assigns created_at, computes the
-        content-derived id, and inserts write-once."""
-        ...
-
-    def mint_policy_attestation(self, draft: AttestationDraft) -> Attestation:
-        """Run-less deterministic policies (bootstrap, rollback) — the one
-        explicit path with no lease; never a nullable-lease blur."""
-        ...
+    def mint_policy_attestation(self, draft: AttestationDraft) -> Attestation: ...
 
     def load_attestation(self, attestation_id: str) -> Attestation | None: ...
