@@ -56,7 +56,10 @@ def list_output() -> list[Item]:
     return [Item(value=1)]
 
 
-def defaulted(item: Item = Item(value=0)) -> Result:
+DEFAULT_ITEM = Item(value=0)
+
+
+def defaulted(item: Item = DEFAULT_ITEM) -> Result:
     return Result(total=item.value)
 
 
