@@ -99,16 +99,19 @@ def build_system_description(
         "constructicon.graph",
         1,
         Graph.model_json_schema(),
+        default_title="Graph",
     )
     admission_schema = _schema_document(
         "constructicon.admission-result",
         1,
         TypeAdapter(AdmissionResult).json_schema(),
+        default_title="Admission Result",
     )
     grant_schema = _schema_document(
         "constructicon.grant-request",
         1,
         GrantRequest.model_json_schema(),
+        default_title="Grant Request",
     )
     grants = GrantVocabulary(
         postures=tuple(posture.value for posture in Posture),
@@ -217,6 +220,7 @@ def _component_description(
             f"port:{port.schema_hash}",
             1,
             port.json_schema,
+            declared_hash=port.schema_hash,
         )
     stored = snapshot.get(definition.name, version)
     if stored is None:
@@ -267,16 +271,18 @@ def _schema_document(
     name: str,
     version: int,
     schema: dict[str, Any],
+    *,
+    default_title: str | None = None,
+    declared_hash: str | None = None,
 ) -> SchemaDocument:
     normalized = dict(schema)
-    normalized.setdefault(
-        "title",
-        name.rsplit(".", 1)[-1].replace("-", " ").title(),
-    )
+    if default_title is not None:
+        normalized.setdefault("title", default_title)
+    schema_hash = declared_hash or str(digest("json-schema", 1, normalized))
     return SchemaDocument(
         name=name,
         version=version,
-        digest=digest("schema-document", version, normalized),
+        schema_hash=schema_hash,
         schema_=normalized,
         generator=f"pydantic-{pydantic.__version__}",
     )
