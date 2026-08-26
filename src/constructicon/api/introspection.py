@@ -46,6 +46,11 @@ def build_system_description(
 ) -> SystemDescription:
     if limit <= 0:
         raise ValueError("describe limit must be positive")
+    if limit > limits.max_description_components:
+        raise ValueError(
+            f"describe limit {limit} exceeds the published maximum "
+            f"{limits.max_description_components}"
+        )
     stable_names = sorted(name for name in snapshot.names() if name in snapshot.stable)
     if component_names is None:
         selected_names = stable_names[:limit]
