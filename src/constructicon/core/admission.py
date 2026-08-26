@@ -58,7 +58,7 @@ class AdmissionFault(BaseModel):
 class AdmissionAccepted(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[1] = ADMISSION_SCHEMA_VERSION
+    schema_version: Literal[1] = 1
     status: Literal["accepted"] = "accepted"
     proposal_digest: Digest
     graph: Graph
@@ -68,7 +68,7 @@ class AdmissionAccepted(BaseModel):
 class AdmissionRejected(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[1] = ADMISSION_SCHEMA_VERSION
+    schema_version: Literal[1] = 1
     status: Literal["rejected"] = "rejected"
     proposal_digest: Digest | None = None
     graph: Graph | None = None
