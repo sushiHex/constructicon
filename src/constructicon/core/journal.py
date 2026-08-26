@@ -1,17 +1,24 @@
-"""Journal contracts: one transactional log, many projections.
+"""Journal contracts (M2): one transactional log, transaction-shaped
+operations, fenced writes, write-once durable facts.
 
-SQLite is authoritative for runs, events, checkpoints, effects, attestations,
-and promotions; JSONL and every rendering are regenerable projections. A node
-completion commits checkpoint + event in one transaction.
+Semantic commits replace call-pairs a caller must remember to combine:
+creation stores the manifest, the PENDING run, and the exact inputs durably in
+one transaction; lifecycle transitions commit the state change and its event
+together; a node completion commits checkpoint + ``NodeCompleted`` in one
+transaction; an effect receipt commits with its event.
 
-One canonical ``InvocationStatus`` enum is used everywhere — runtime, journal,
-API, renderings.
+Every owner-side write takes the ``RunLease`` and is fenced by
+``owner_id + epoch`` — an operation that matches zero rows raises
+``OwnershipLost`` and the stale worker stops.
+
+Durable facts (runs, manifests, checkpoints, receipts, attestations) are
+write-once: absent → insert; identical → idempotent; contradictory at the
+same identity → ``CheckpointConflict``/``JournalDamaged``.
 """
 
 from __future__ import annotations
 
-from enum import StrEnum
-from typing import Any, Literal, Protocol
+from typing import Any, Protocol
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
@@ -19,38 +26,9 @@ from constructicon.core.address import ExecutionPath, RunId
 from constructicon.core.effect import Attestation, EffectReceipt, EffectRequest
 from constructicon.core.envelope import Envelope
 from constructicon.core.identity import Digest
+from constructicon.core.run import RunLease, RunState, RunStatus
 
 JOURNAL_SCHEMA_VERSION = 1
-
-
-class InvocationStatus(StrEnum):
-    QUEUED = "queued"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
-    LOST = "lost"
-    BLOCKED = "blocked_by_dependency"
-    SKIPPED = "skipped_run_terminated"
-    PARKED = "parked"
-
-
-class RunStatus(StrEnum):
-    PENDING = "pending"
-    RUNNING = "running"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
-    PARKED = "parked"
-
-
-ParkedReason = Literal[
-    "awaiting_approval",
-    "awaiting_advisor",
-    "policy_exhausted",
-    "budget_exhausted",
-    "operator_intervention",
-]
 
 
 class JournalEvent(BaseModel):
@@ -58,8 +36,8 @@ class JournalEvent(BaseModel):
 
     schema_version: int = JOURNAL_SCHEMA_VERSION
     run_id: RunId
-    seq: int  # per-run monotonic, allocated by the journal
-    kind: str  # RunStarted / NodeStarted / NodeCompleted / EffectCommitted / ...
+    seq: int  # per-run monotonic; allocated by the fenced counter in the run row
+    kind: str  # RunStarted / NodeStarted / NodeCompleted / NodeBlocked / ...
     path: ExecutionPath | None = None
     created_at: AwareDatetime
     payload: dict[str, Any] | None = None  # size-capped; large outputs by reference
@@ -80,46 +58,91 @@ class Checkpoint(BaseModel):
 class Journal(Protocol):
     """The authoritative store. Every mutation is transactional."""
 
-    def create_run(self, run_id: RunId, manifest_hash: Digest, input_hash: Digest) -> None: ...
+    # -- creation (write-once; a crash after this leaves a resumable PENDING run)
 
-    def set_run_status(self, run_id: RunId, status: RunStatus) -> None: ...
+    def create_run(
+        self,
+        run_id: RunId,
+        *,
+        manifest_json: str,
+        manifest_hash: Digest,
+        input_hash: Digest,
+        inputs: dict[str, Any],
+    ) -> None: ...
 
-    def run_status(self, run_id: RunId) -> RunStatus | None: ...
+    # -- ownership (the fence)
 
-    def run_manifest_hash(self, run_id: RunId) -> Digest | None: ...
+    def claim_run(self, run_id: RunId, *, owner_id: str, ttl_s: float) -> RunLease:
+        """Atomic: accepts PENDING/FAILED/PARKED, accepts RUNNING only with an
+        expired lease; increments the epoch; two concurrent claims produce one
+        winner. Raises OwnershipLost on a live foreign owner."""
+        ...
+
+    def heartbeat(self, lease: RunLease, *, ttl_s: float) -> RunLease:
+        """Renew the lease. Updates ownership state only — never events."""
+        ...
+
+    def release_run(self, lease: RunLease) -> None: ...
+
+    def request_cancel(self, run_id: RunId) -> None: ...
+
+    def cancel_requested(self, run_id: RunId) -> bool: ...
+
+    # -- fenced lifecycle and records
+
+    def transition_run(
+        self,
+        lease: RunLease,
+        *,
+        expected: frozenset[RunStatus],
+        target: RunStatus,
+        event_kind: str,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        """Fenced state change + its event, one transaction."""
+        ...
 
     def append_event(
         self,
-        run_id: RunId,
+        lease: RunLease,
         kind: str,
         *,
         path: ExecutionPath | None = None,
         payload: dict[str, Any] | None = None,
     ) -> JournalEvent: ...
 
+    def record_completion(self, lease: RunLease, checkpoint: Checkpoint) -> None:
+        """Checkpoint + NodeCompleted event, one transaction; write-once."""
+        ...
+
+    def record_effect_prepared(self, lease: RunLease, request: EffectRequest) -> None: ...
+
+    def record_effect_outcome(
+        self,
+        lease: RunLease,
+        request: EffectRequest,
+        receipt: EffectReceipt,
+        event_kind: str,
+    ) -> None:
+        """Receipt + its event (EffectCommitted/EffectReconciled), one
+        transaction; the receipt is write-once."""
+        ...
+
+    # -- reads
+
+    def run_state(self, run_id: RunId) -> RunState | None: ...
+
+    def run_manifest_hash(self, run_id: RunId) -> Digest | None: ...
+
+    def run_inputs(self, run_id: RunId) -> dict[str, Any] | None: ...
+
+    def load_manifest_json(self, manifest_hash: Digest) -> str | None: ...
+
     def events(
         self, run_id: RunId, *, after_seq: int = 0, limit: int = 100
     ) -> list[JournalEvent]: ...
 
-    def record_completion(self, checkpoint: Checkpoint) -> None:
-        """Commit checkpoint + NodeCompleted event in ONE transaction."""
-        ...
-
     def checkpoint(self, run_id: RunId, path: ExecutionPath) -> Checkpoint | None: ...
-
-    def store_manifest(self, manifest_json: str, manifest_hash: Digest) -> None: ...
-
-    def load_manifest_json(self, manifest_hash: Digest) -> str | None: ...
-
-    def mint_attestation(self, attestation: Attestation) -> None: ...
-
-    def load_attestation(self, attestation_id: str) -> Attestation | None: ...
-
-    def record_effect_prepared(self, run_id: RunId, request: EffectRequest) -> None: ...
-
-    def record_effect_receipt(
-        self, run_id: RunId, request: EffectRequest, receipt: EffectReceipt
-    ) -> None: ...
 
     def receipt_for(self, idempotency_key: Digest) -> EffectReceipt | None: ...
 
@@ -127,4 +150,8 @@ class Journal(Protocol):
         """A prepared record without a receipt — the reconcile-first case."""
         ...
 
-    def run_inputs(self, run_id: RunId) -> dict[str, Any] | None: ...
+    # -- attestations (journal-minted authority, I2)
+
+    def mint_attestation(self, attestation: Attestation) -> None: ...
+
+    def load_attestation(self, attestation_id: str) -> Attestation | None: ...

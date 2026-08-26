@@ -19,7 +19,6 @@ from typing import Any
 from constructicon.core.address import ScopePath
 from constructicon.core.component import ComponentDef
 from constructicon.core.errors import AdmissionError
-from constructicon.core.executor import ExecutorProfile
 from constructicon.core.grants import (
     EffectiveGrants,
     GrantRequest,
@@ -29,6 +28,8 @@ from constructicon.core.grants import (
 from constructicon.core.graph import Connection, Graph, GraphNode, Loop, Ref
 from constructicon.core.identity import digest
 from constructicon.core.manifest import (
+    SELF_BINDING,
+    SELF_CAPABILITY,
     CapabilityBinding,
     ComponentResolution,
     ExecutionManifest,
@@ -41,20 +42,8 @@ from constructicon.core.ports import (
     Port,
     PortAddress,
 )
-from constructicon.runtime.registry import ComponentRegistry, RegistryError
-
-SELF_BINDING = "__node__"
-SELF_CAPABILITY = "__node__"
-
-
-@dataclass(frozen=True)
-class CapabilityDescriptor:
-    """What the catalog exposes about an injectable capability — never the object."""
-
-    capability_id: str
-    kind: str
-    revision: str
-    executor_profile: ExecutorProfile | None = None
+from constructicon.core.registry import RegistrySnapshot, StoredVersion
+from constructicon.runtime.registry import CapabilityDescriptor
 
 
 @dataclass(frozen=True)
@@ -65,7 +54,7 @@ class _Source:
 
 @dataclass
 class _Compilation:
-    registry: ComponentRegistry
+    snapshot: RegistrySnapshot
     catalog: dict[str, CapabilityDescriptor]
     faults: list[str] = field(default_factory=list)
     resolutions: list[ComponentResolution] = field(default_factory=list)
@@ -76,12 +65,12 @@ class _Compilation:
 def admit(
     graph: Graph,
     *,
-    registry: ComponentRegistry,
+    snapshot: RegistrySnapshot,
     catalog: dict[str, CapabilityDescriptor],
     root_grants: EffectiveGrants,
     inputs: dict[str, Any],
 ) -> ExecutionManifest:
-    comp = _Compilation(registry=registry, catalog=catalog)
+    comp = _Compilation(snapshot=snapshot, catalog=catalog)
     root_scope = ScopePath(segments=(graph.name,))
 
     input_names = {port.name for port in graph.inputs}
@@ -248,19 +237,17 @@ def _compile_node(
         return {}
 
     if isinstance(body, Ref):
-        try:
-            record = comp.registry.resolve(body)
-        except RegistryError as exc:
-            comp.faults.append(f"{instance_scope.render()}: {exc}")
+        stored = _resolve_ref(comp, body, where=instance_scope)
+        if stored is None:
             return {}
-        definition = record.definition
+        definition = stored.definition
         node_grants = _compile_grants(comp, grants, body.grants, where=instance_scope)
         comp.resolutions.append(
             ComponentResolution(
                 scope=instance_scope,
                 component=definition.name,
                 requested_version=body.version,
-                resolved_version=record.content_hash,
+                resolved_version=stored.content_hash,
                 contract_hash=digest(
                     "component-contract",
                     1,
@@ -269,7 +256,11 @@ def _compile_node(
                         "outputs": [p.model_dump(mode="json") for p in definition.outputs],
                     },
                 ),
-                implementation_digest=None,
+                implementation_digest=(
+                    None
+                    if isinstance(definition.body, Graph)
+                    else definition.body.source_digest
+                ),
             )
         )
         bound_inputs = _bind_node_inputs(
@@ -299,6 +290,45 @@ def _compile_node(
     return _compile_graph(
         comp, body, scope=instance_scope, input_sources=bound_inputs, grants=grants
     )
+
+
+def _resolve_ref(
+    comp: _Compilation, ref: Ref, *, where: ScopePath
+) -> StoredVersion | None:
+    """Resolve a Ref against the admission's one immutable snapshot (I12)."""
+    snapshot = comp.snapshot
+    if ref.component not in snapshot.versions:
+        comp.faults.append(
+            f"{where.render()}: unknown component {ref.component!r}; "
+            f"registered components: {snapshot.names()}"
+        )
+        return None
+    if ref.version is None:
+        stable = snapshot.stable_version(ref.component)
+        if stable is None:
+            registered = list(snapshot.order.get(ref.component, ()))
+            comp.faults.append(
+                f"{where.render()}: component {ref.component!r} has no stable "
+                f"version; registered versions: {registered} — promote one "
+                "(registration never propagates; promotion does)"
+            )
+            return None
+        stored = snapshot.get(ref.component, stable)
+        if stored is None:  # pointer to a missing row is registry damage
+            comp.faults.append(
+                f"{where.render()}: component {ref.component!r} stable pointer "
+                f"{str(stable)!r} names no stored version — registry damage"
+            )
+        return stored
+    stored = snapshot.versions.get(ref.component, {}).get(ref.version)
+    if stored is None:
+        registered = list(snapshot.order.get(ref.component, ()))
+        comp.faults.append(
+            f"{where.render()}: component {ref.component!r} has no version "
+            f"{ref.version!r}; registered versions: {registered}"
+        )
+        return None
+    return stored
 
 
 def _register_atomic(

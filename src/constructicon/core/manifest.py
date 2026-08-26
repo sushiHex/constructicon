@@ -24,6 +24,11 @@ from constructicon.core.ports import PortAddress
 
 MANIFEST_SCHEMA_VERSION = 1
 
+# Every atomic instance carries its sealed grants under this reserved binding
+# name; real capability aliases get their own rows.
+SELF_BINDING = "__node__"
+SELF_CAPABILITY = "__node__"
+
 LeaseLifetime = Literal["invocation", "scope", "run"]
 
 

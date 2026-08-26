@@ -1,7 +1,8 @@
-"""The M1 elegance gate — the only measure of this milestone.
+"""The vertical slice under M2 semantics.
 
-Graph -> validate -> ExecutionManifest -> FakeExecutor -> checkpoint ->
-idempotent effect -> EffectReceipt -> reproduce.
+Graph -> validate -> ExecutionManifest -> activate -> claim -> FakeExecutor ->
+checkpoint -> idempotent effect -> EffectReceipt -> terminal transition ->
+resume/reproduce.
 
 Two statements the fake path must demonstrate:
 1. once validation returns, the walker decides nothing — every decision lives
@@ -12,17 +13,15 @@ Two statements the fake path must demonstrate:
 
 from __future__ import annotations
 
-import sqlite3
-from pathlib import Path
-
 import pytest
 
 from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId
-from constructicon.core.journal import RunStatus
+from constructicon.core.run import RunStatus
 from constructicon.substrate.effects.fake import FakeAnnounceEffect
 from constructicon.substrate.executors.fake import FakeExecutor
-from tests.conftest import pipeline_graph
+from constructicon.substrate.journal.sqlite import SqliteJournal
+from tests.conftest import LEASE_TTL_S, FakeClock, InjectedCrash, pipeline_graph
 
 INPUTS = {"issue": {"title": "retry loop is flaky"}}
 
@@ -47,23 +46,71 @@ async def test_the_vertical_slice(
     assert "NodeStarted" in kinds and "NodeCompleted" in kinds
     assert "EffectCommitted" in kinds
 
+    state = world.journal.run_state(run_id)
+    assert state is not None and state.status is RunStatus.SUCCEEDED
+    assert state.liveness == "not_applicable"
+    assert state.owner_id is None  # the lease was released on the way out
 
-async def test_resume_restores_checkpoints_and_never_repeats_effects(
+
+async def test_resume_of_a_succeeded_run_returns_the_materialized_result(
     world: Constructicon,
     fake_executor: FakeExecutor,
     announce_effect: FakeAnnounceEffect,
 ) -> None:
+    """Crash after the terminal commit, before the caller saw the result: the
+    answer comes back from durable checkpoints alone — no claim, no re-walk,
+    no new events, status untouched."""
     run_id = RunId("run-resume")
     first = await world.start(pipeline_graph(), INPUTS, run_id=run_id)
-
-    executor_calls = len(fake_executor.calls)
-    effect_executions = len(announce_effect.executions)
+    events_before = len(world.journal.events(run_id, limit=200))
 
     resumed = await world.resume(run_id)
+    assert resumed.status is RunStatus.SUCCEEDED
     assert resumed.outputs == first.outputs
-    assert len(fake_executor.calls) == executor_calls  # every node restored
-    assert len(announce_effect.executions) == effect_executions  # no second transition
+    assert len(fake_executor.calls) == 1  # nothing re-executed
+    assert len(announce_effect.executions) == 1  # no second transition
+    assert len(world.journal.events(run_id, limit=200)) == events_before
+
+
+async def test_resume_after_crash_restores_checkpoints_and_never_repeats_effects(
+    world: Constructicon,
+    fake_executor: FakeExecutor,
+    announce_effect: FakeAnnounceEffect,
+    journal: SqliteJournal,
+    clock: FakeClock,
+) -> None:
+    """Die after the announce checkpoint committed; a later worker reclaims the
+    expired lease, restores triage and announce byte-for-byte, and only
+    summarize executes anew."""
+    run_id = RunId("run-crash-resume")
+    completions = 0
+
+    def probe(name: str) -> None:
+        nonlocal completions
+        if name == "completion.after_commit":
+            completions += 1
+            if completions == 2:  # triage committed, announce committed, die
+                raise InjectedCrash(name)
+
+    journal.fault_probe = probe
+    with pytest.raises(InjectedCrash):
+        await world.start(pipeline_graph(), INPUTS, run_id=run_id)
+    journal.fault_probe = lambda name: None
+
+    state = world.journal.run_state(run_id)
+    assert state is not None and state.status is RunStatus.RUNNING
+    assert state.liveness == "live"  # the dead owner's lease has not expired yet
+    clock.advance(LEASE_TTL_S + 1)
+    state = world.journal.run_state(run_id)
+    assert state is not None and state.liveness == "lost"
+
+    resumed = await world.resume(run_id)
+    assert resumed.status is RunStatus.SUCCEEDED
+    assert resumed.outputs["summary"] == {"text": "summary of fix the flaky retry loop"}
+    assert len(fake_executor.calls) == 1  # triage restored, never recomputed
+    assert len(announce_effect.executions) == 1  # no second external transition
     kinds = [event.kind for event in world.journal.events(run_id, limit=200)]
+    assert "RunReclaimed" in kinds
     assert "NodeRestored" in kinds
 
 
@@ -82,55 +129,55 @@ async def test_reproduce_replays_the_sealed_world_without_new_effects(
     assert world.journal.run_manifest_hash(RunId("run-reproduced")) == (
         world.journal.run_manifest_hash(source)
     )
+    kinds = [event.kind for event in world.journal.events(RunId("run-reproduced"), limit=200)]
+    assert "EffectDeduplicated" in kinds
 
 
-async def test_crash_between_effect_and_receipt_reconciles_instead_of_repeating(
-    world: Constructicon,
-    announce_effect: FakeAnnounceEffect,
-    tmp_path: Path,
-) -> None:
-    """Fault injection at the deadliest boundary: the effect succeeded
-    externally, the receipt was lost before commit. Recovery must reconcile,
-    never blindly re-execute."""
-    run_id = RunId("run-crash")
-    await world.start(pipeline_graph(), INPUTS, run_id=run_id)
-    assert len(announce_effect.executions) == 1
-
-    # simulate the crash: erase the receipt (keeping the prepared record) and
-    # the announce node's checkpoint, as if the process died mid-commit
-    with sqlite3.connect(tmp_path / "journal.db") as conn:
-        conn.execute("UPDATE effects SET receipt_json = NULL, receipted_at = NULL")
-        conn.execute(
-            "DELETE FROM checkpoints WHERE path_key LIKE '%announce%' AND run_id = ?",
-            (run_id,),
-        )
-        conn.execute("DELETE FROM checkpoints WHERE path_key LIKE '%summarize%'")
-
-    resumed = await world.resume(run_id)
-    assert resumed.status is RunStatus.SUCCEEDED
-    # the adapter was consulted for reconciliation, not re-executed
-    assert len(announce_effect.executions) == 1
-    kinds = [event.kind for event in world.journal.events(run_id, limit=200)]
-    assert "EffectReconciled" in kinds
-
-
-async def test_failure_marks_the_run_and_resume_completes_it(
+async def test_node_failure_is_contained_and_resume_completes_the_run(
     world: Constructicon,
     fake_executor: FakeExecutor,
 ) -> None:
-    """Crash mid-run: completed nodes are never recomputed on resume."""
+    """A failing node marks the run FAILED at closure — it is execution state,
+    never an exception out of the walker — and resume re-walks it."""
     run_id = RunId("run-failing")
-    # poison the executor script after registration so triage succeeds but the
-    # scripted announce-side effect fails? Simpler: drop the scripted reply so
-    # a later fresh node fails — here we poison summarize via a broken brief.
-    del fake_executor._script["triage"]  # deliberate fault injection
-    with pytest.raises(Exception, match="no scripted reply"):
-        await world.start(pipeline_graph(), INPUTS, run_id=run_id)
-    assert world.journal.run_status(run_id) is RunStatus.FAILED
+    del fake_executor._script["triage"]  # deliberate fault: no scripted reply
+    result = await world.start(pipeline_graph(), INPUTS, run_id=run_id)
+    assert result.status is RunStatus.FAILED
+    assert any("no scripted reply" in error for error in result.failures.values())
+    assert len(result.blocked) == 2  # announce and summarize never ran
+    state = world.journal.run_state(run_id)
+    assert state is not None and state.status is RunStatus.FAILED
 
     fake_executor._script["triage"] = {
         "title": "fix the flaky retry loop",
         "risk": "low",
     }
-    result = await world.resume(run_id)
-    assert result.status is RunStatus.SUCCEEDED
+    resumed = await world.resume(run_id)
+    assert resumed.status is RunStatus.SUCCEEDED
+    kinds = [event.kind for event in world.journal.events(run_id, limit=200)]
+    assert "NodeFailed" in kinds and "NodeBlocked" in kinds and "RunResumed" in kinds
+
+
+async def test_cancel_is_honored_at_the_node_boundary_and_never_restarts(
+    world: Constructicon,
+    fake_executor: FakeExecutor,
+    journal: SqliteJournal,
+) -> None:
+    run_id = RunId("run-cancelled")
+
+    def probe(name: str) -> None:
+        if name == "completion.after_commit":  # after triage: request cancel
+            world.cancel(run_id)
+
+    journal.fault_probe = probe
+    result = await world.start(pipeline_graph(), INPUTS, run_id=run_id)
+    journal.fault_probe = lambda name: None
+    assert result.status is RunStatus.CANCELLED
+    state = world.journal.run_state(run_id)
+    assert state is not None and state.status is RunStatus.CANCELLED
+
+    executor_calls = len(fake_executor.calls)
+    resumed = await world.resume(run_id)  # reports cancelled, never restarts
+    assert resumed.status is RunStatus.CANCELLED
+    assert resumed.outputs == {}
+    assert len(fake_executor.calls) == executor_calls

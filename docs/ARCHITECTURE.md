@@ -133,8 +133,15 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
 - **M1 (done)** — the vertical slice: Graph → validate → ExecutionManifest →
   FakeExecutor → checkpoint → idempotent effect → EffectReceipt → reproduce;
   channel-aware resolution; SQLite journal; itemized admission faults.
-- **M2** — persistent registry; fault injection at every completion boundary;
-  cancellation + lost detection; JSONL projections.
+- **M2 (done)** — crash & resume hardening: fenced run leases with continuous
+  heartbeats; write-once durable facts; persistent registry with immutable
+  snapshots and one activation path (start/resume/reproduce all refuse
+  drift); fault probes at every completion/effect/transition boundary with a
+  unit lane (`InjectedCrash`) and a real `os._exit` subprocess lane over a
+  durable fake external world; cooperative cancellation; read-time liveness
+  (never a persisted LOST); dependency blocking with complete
+  `DependencyReport`s; canonical JSONL/summary projections; `user_version`
+  schema migration from M1.
 - **M3** — git authority: read-only snapshots, WRITE worktree leases,
   Pytest/Ruff gates, exact-merge-tree attestations, discard-on-failure.
 - **M4** — generic bounded loops with iteration identities and PARKED reasons.

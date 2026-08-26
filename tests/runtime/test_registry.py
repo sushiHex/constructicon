@@ -1,30 +1,92 @@
 """Registration never propagates; promotion does — and only with a
-journal-minted attestation (I2, I12)."""
+journal-minted attestation moving the pointer through compare-and-swap
+(I2, I12)."""
 
 from __future__ import annotations
 
 import pytest
 
 from constructicon.api.system import Constructicon
+from constructicon.core.component import PromotionRecord
+from constructicon.core.effect import Attestation, CheckResult, ComponentProofSubject
+from constructicon.core.envelope import utc_now
 from constructicon.core.errors import AdmissionError
-from constructicon.core.graph import Ref
-from constructicon.runtime.registry import RegistryError
+from constructicon.core.graph import Graph, GraphNode, Ref
+from constructicon.core.identity import Digest, digest
 from tests.conftest import BRIEF, ISSUE, atomic, triage_impl
+
+INPUTS = {"issue": {"title": "retry loop is flaky"}}
+
+
+def lone_triage_graph() -> Graph:
+    return Graph(
+        name="lone",
+        nodes=(
+            GraphNode(
+                id="triage",
+                body=Ref(component="test/triage", bind={"executor": "fake-executor"}),
+            ),
+        ),
+        inputs=(ISSUE,),
+        outputs=(BRIEF,),
+    )
+
+
+def evaluated_promotion(
+    system: Constructicon, component: str, version: Digest, baseline: Digest | None
+) -> PromotionRecord:
+    """Mint a valid journal attestation and move the pointer — the evaluated
+    path a real check panel would drive."""
+    attestation = Attestation(
+        attestation_id=f"att-test-{component.replace('/', '-')}-{str(version)[-8:]}",
+        action="promote",
+        subject=ComponentProofSubject(
+            component=component, version=version, baseline_version=baseline
+        ),
+        checks=(CheckResult(name="evaluated", ok=True, detail="test", elapsed_s=0.0),),
+        check_set_hash=digest("check-set", 1, {"policy": "test", "v": 1}),
+        evidence=(),
+        manifest_hash=digest("manifest", 1, {"test": True}),
+        created_by_run=None,
+        workspace_id=None,
+        created_at=utc_now(),
+    )
+    system.journal.mint_attestation(attestation)
+    return system.promote(
+        component=component,
+        version=version,
+        attestation_id=attestation.attestation_id,
+        actor="test",
+    )
 
 
 def test_bare_ref_never_resolves_a_fresh_registration(system: Constructicon) -> None:
     definition, impl = atomic("test/triage", (ISSUE,), (BRIEF,), triage_impl)
     system.register(definition, impl)
-    with pytest.raises(RegistryError, match="no stable version"):
-        system.registry.resolve(Ref(component="test/triage"))
+    assert system.registry.stable_version("test/triage") is None
+    with pytest.raises(AdmissionError, match="no stable version"):
+        system.validate(lone_triage_graph(), INPUTS)
 
 
 def test_promotion_moves_the_pointer(system: Constructicon) -> None:
     definition, impl = atomic("test/triage", (ISSUE,), (BRIEF,), triage_impl)
     version = system.register(definition, impl)
     system.promote_initial(component="test/triage", version=version)
-    record = system.registry.resolve(Ref(component="test/triage"))
-    assert record.content_hash == version
+    assert system.registry.stable_version("test/triage") == version
+
+
+def test_promote_initial_is_idempotent_but_never_replaces(system: Constructicon) -> None:
+    definition, impl = atomic("test/triage", (ISSUE,), (BRIEF,), triage_impl)
+    v1 = system.register(definition, impl)
+    first = system.promote_initial(component="test/triage", version=v1)
+    assert first is not None
+    # startup re-runs: already stable at this exact version -> None, no new row
+    assert system.promote_initial(component="test/triage", version=v1) is None
+
+    changed = definition.model_copy(update={"role": "component"})
+    v2 = system.register(changed, impl)
+    with pytest.raises(AdmissionError, match="already stable"):
+        system.promote_initial(component="test/triage", version=v2)
 
 
 def test_second_registration_stays_a_candidate(system: Constructicon) -> None:
@@ -35,8 +97,8 @@ def test_second_registration_stays_a_candidate(system: Constructicon) -> None:
     changed = definition.model_copy(update={"role": "component"})
     v2 = system.register(changed, impl)
     assert v2 != v1
-    # bare reference still resolves the promoted version, not the newest
-    assert system.registry.resolve(Ref(component="test/triage")).content_hash == v1
+    # the stable channel still names the promoted version, not the newest
+    assert system.registry.stable_version("test/triage") == v1
     # a candidate is a query, never a channel
     assert v2 in system.registry.candidates("test/triage")
 
@@ -59,6 +121,7 @@ def test_mismatched_attestation_subject_is_refused(system: Constructicon) -> Non
     a_version = system.register(a_def, a_impl)
     b_version = system.register(b_def, b_impl)
     promotion = system.promote_initial(component="test/other", version=b_version)
+    assert promotion is not None
     with pytest.raises(AdmissionError, match=r"identity mismatch|subject names"):
         system.promote(
             component="test/triage",
@@ -66,6 +129,50 @@ def test_mismatched_attestation_subject_is_refused(system: Constructicon) -> Non
             attestation_id=promotion.attestation_id,
             actor="attacker",
         )
+
+
+def test_one_attestation_authorizes_one_move(system: Constructicon) -> None:
+    definition, impl = atomic("test/triage", (ISSUE,), (BRIEF,), triage_impl)
+    v1 = system.register(definition, impl)
+    system.promote_initial(component="test/triage", version=v1)
+    changed = definition.model_copy(update={"role": "component"})
+    v2 = system.register(changed, impl)
+
+    record = evaluated_promotion(system, "test/triage", v2, baseline=v1)
+    # a retry with the same attestation returns the existing receipt — the
+    # pointer moves exactly once
+    retried = system.promote(
+        component="test/triage",
+        version=v2,
+        attestation_id=record.attestation_id,
+        actor="test",
+    )
+    assert retried.attestation_id == record.attestation_id
+    history = system.registry.snapshot().history["test/triage"]
+    assert len(history) == 2  # initial + evaluated, never a third
+
+
+def test_stale_baseline_promotion_is_refused_by_cas(system: Constructicon) -> None:
+    definition, impl = atomic("test/triage", (ISSUE,), (BRIEF,), triage_impl)
+    v1 = system.register(definition, impl)
+    system.promote_initial(component="test/triage", version=v1)
+    changed = definition.model_copy(update={"role": "component"})
+    v2 = system.register(changed, impl)
+    evaluated_promotion(system, "test/triage", v2, baseline=v1)
+
+    # a record carrying yesterday's baseline must not move today's pointer
+    stale = PromotionRecord(
+        component="test/triage",
+        channel="stable",
+        from_version=v1,  # stale: stable is v2 now
+        to_version=v1,
+        attestation_id="att-stale-claimant",
+        actor="test",
+        source_run=None,
+        created_at=utc_now(),
+    )
+    with pytest.raises(AdmissionError, match="stable moved"):
+        system.registry.store.store_promotion(stale)
 
 
 def test_rollback_is_a_pointer_move_that_retains_everything(
@@ -76,10 +183,10 @@ def test_rollback_is_a_pointer_move_that_retains_everything(
     system.promote_initial(component="test/triage", version=v1)
     changed = definition.model_copy(update={"role": "component"})
     v2 = system.register(changed, impl)
-    system.promote_initial(component="test/triage", version=v2)
+    evaluated_promotion(system, "test/triage", v2, baseline=v1)
     assert system.registry.stable_version("test/triage") == v2
 
-    system.registry.rollback(component="test/triage", actor="operator", journal=system.journal)
+    system.rollback(component="test/triage", actor="operator")
     assert system.registry.stable_version("test/triage") == v1
     assert set(system.registry.versions("test/triage")) == {v1, v2}
 

@@ -71,7 +71,7 @@ class Attestation(BaseModel):
     check_set_hash: Digest  # exact check/evaluator defs + config revisions
     evidence: tuple[EvidenceRef, ...]
     manifest_hash: Digest  # the attesting run's sealed world (I12)
-    created_by_run: RunId
+    created_by_run: RunId | None  # None for run-less deterministic policies
     workspace_id: str | None
     created_at: AwareDatetime
 
