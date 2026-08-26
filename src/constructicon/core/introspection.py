@@ -138,7 +138,7 @@ class AuthoringVocabulary(BaseModel):
 class SystemDescription(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[1] = DESCRIPTION_SCHEMA_VERSION
+    schema_version: Literal[1] = 1
     graph_schema: SchemaDocument
     admission_schema: SchemaDocument
     components: tuple[ComponentDescription, ...]
