@@ -11,6 +11,8 @@ from pathlib import Path
 import pytest
 
 from constructicon.core.address import GitSha
+from constructicon.core.envelope import GitRef
+from constructicon.core.errors import ContractViolation
 from constructicon.core.identity import digest
 from constructicon.substrate.git.authority import (
     GitAuthority,
@@ -227,3 +229,58 @@ def test_candidate_ref_cleanup_is_cas_checked(
     assert authority.read_ref(ref) == candidate
     assert authority.delete_ref_cas(ref, candidate)
     assert authority.read_ref(ref) is None
+
+
+def test_reset_to_threads_a_prior_candidate_as_the_new_parent(
+    authority: GitAuthority,
+    tmp_path: Path,
+) -> None:
+    first = make_candidate(authority, tmp_path, content=BROKEN_FIX, tag="first")
+    workspace = authority.acquire_write(
+        acquisition_id="acq-second",
+        target_ref="refs/heads/main",
+        candidate_ref="refs/candidates/run-test/acq-second",
+    )
+    # reset is exact: tracked and untracked staging state are discarded
+    Path(workspace.path, "untracked.tmp").write_text("remove me")
+    workspace.reset_to(
+        GitRef(
+            repository=authority.repository_id,
+            commit=first,
+            diff_against=workspace.base,
+        )
+    )
+    assert not Path(workspace.path, "untracked.tmp").exists()
+    Path(workspace.path, "calc.py").write_text(GOOD_FIX)
+    second = workspace.commit_all("second repair")
+    assert authority.parents_of(second) == (first,)
+
+
+def test_reset_to_refuses_cross_repository_missing_and_post_import_targets(
+    authority: GitAuthority,
+    tmp_path: Path,
+) -> None:
+    candidate = make_candidate(authority, tmp_path, tag="source")
+    workspace = authority.acquire_write(
+        acquisition_id="acq-reset-errors",
+        target_ref="refs/heads/main",
+        candidate_ref="refs/candidates/run-test/acq-reset-errors",
+    )
+    with pytest.raises(ContractViolation, match="does not match authority"):
+        workspace.reset_to(
+            GitRef(repository="elsewhere", commit=candidate)
+        )
+    with pytest.raises(ContractViolation):
+        workspace.reset_to(
+            GitRef(
+                repository=authority.repository_id,
+                commit=GitSha("0" * 40),
+            )
+        )
+
+    Path(workspace.path, "calc.py").write_text(GOOD_FIX)
+    workspace.commit_all("already imported")
+    with pytest.raises(ContractViolation, match="before commit_all"):
+        workspace.reset_to(
+            GitRef(repository=authority.repository_id, commit=candidate)
+        )

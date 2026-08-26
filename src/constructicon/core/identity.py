@@ -10,15 +10,10 @@ Canonical JSON: sorted object keys, UTF-8, no insignificant whitespace, no
 NaN/Infinity, explicit null preservation. A digest field never participates in
 its own payload; idempotency keys are computed, never caller-authored.
 
-Domains in use:
-    component:v1        -> ComponentDef.content_hash
-    graph:v1            -> ExecutionManifest.source_graph_hash
-    world:v1            -> ExecutionManifest.world_hash
-    manifest:v1         -> ExecutionManifest.manifest_hash (excludes itself)
-    invocation:v1       -> invocation_id
-    inputs:v1           -> ExecutionManifest.input_hash / Checkpoint.input_hash
-    effect-request:v1   -> EffectReceipt.request_hash
-    idempotency:v1      -> EffectRequest.idempotency_key
+``json_value`` is the one wire normalizer. Values inside the walker and journal
+are JSON values; Pydantic models, enums, and tuples are converted at component
+boundaries so live execution and checkpoint restoration have identical
+semantics.
 """
 
 from __future__ import annotations
@@ -26,11 +21,15 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from typing import Any
+from enum import Enum
+from typing import Any, TypeAlias
 
-from pydantic import RootModel, field_validator
+from pydantic import BaseModel, RootModel, field_validator
 
 _PREFIX = "sha256:"
+
+JsonScalar: TypeAlias = str | int | float | bool | None
+JsonValue: TypeAlias = JsonScalar | list[Any] | dict[str, Any]
 
 
 class Digest(RootModel[str]):
@@ -58,24 +57,45 @@ class Digest(RootModel[str]):
         return NotImplemented
 
 
-def _reject_non_finite(value: Any) -> None:
-    if isinstance(value, float) and not math.isfinite(value):
-        raise ValueError("canonical JSON forbids NaN and Infinity")
-    if isinstance(value, dict):
-        for key, item in value.items():
+def json_value(payload: Any) -> JsonValue:
+    """Normalize a component value into Constructicon's canonical JSON wire form.
+
+    This is deliberately strict: arbitrary Python objects never cross a graph
+    boundary or enter a checkpoint. Domain objects cross as their JSON model,
+    and a consumer reconstructs them explicitly with ``model_validate``.
+    """
+
+    if isinstance(payload, BaseModel):
+        return json_value(payload.model_dump(mode="json"))
+    if isinstance(payload, Enum):
+        return json_value(payload.value)
+    if payload is None or isinstance(payload, (str, int, bool)):
+        return payload
+    if isinstance(payload, float):
+        if not math.isfinite(payload):
+            raise ValueError("canonical JSON forbids NaN and Infinity")
+        return payload
+    if isinstance(payload, dict):
+        normalized: dict[str, JsonValue] = {}
+        for key, item in payload.items():
             if not isinstance(key, str):
                 raise ValueError("canonical JSON object keys must be strings")
-            _reject_non_finite(item)
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            _reject_non_finite(item)
+            normalized[key] = json_value(item)
+        return normalized
+    if isinstance(payload, (list, tuple)):
+        return [json_value(item) for item in payload]
+    raise ValueError(
+        f"value of type {type(payload).__name__} is not a JSON wire value; "
+        "return a Pydantic model or JSON-compatible value"
+    )
 
 
 def canonical_json(payload: Any) -> str:
-    """Serialize a JSON value canonically: sorted keys, compact, UTF-8, finite."""
-    _reject_non_finite(payload)
+    """Serialize a value canonically after applying the one wire normalizer."""
+
+    normalized = json_value(payload)
     return json.dumps(
-        payload,
+        normalized,
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
@@ -85,6 +105,7 @@ def canonical_json(payload: Any) -> str:
 
 def digest(domain: str, schema_version: int, payload: Any) -> Digest:
     """Apply the identity law: one domain-separated hash for every identity."""
+
     material = "\0".join(
         ("constructicon", domain, str(schema_version), canonical_json(payload))
     )

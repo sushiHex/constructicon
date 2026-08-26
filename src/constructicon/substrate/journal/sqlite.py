@@ -41,7 +41,7 @@ from constructicon.core.envelope import utc_now
 from constructicon.core.errors import AdmissionError, ContractViolation, JournalDamaged
 from constructicon.core.identity import Digest, canonical_json, digest
 from constructicon.core.journal import Checkpoint, JournalEvent
-from constructicon.core.manifest import CapabilityLease
+from constructicon.core.manifest import CapabilityLease, parse_manifest_json
 from constructicon.core.registry import RegistrySnapshot, StoredVersion
 from constructicon.core.run import (
     CheckpointConflict,
@@ -51,7 +51,7 @@ from constructicon.core.run import (
     RunStatus,
 )
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -164,6 +164,17 @@ def _checkpoint_identity(checkpoint: Checkpoint) -> str:
     )
 
 
+def _manifest_semantically_equal(left_json: str, right_json: str) -> bool:
+    """Compare historical manifests by declared-schema semantics, never bytes."""
+
+    try:
+        left = parse_manifest_json(left_json)
+        right = parse_manifest_json(right_json)
+    except (ValueError, TypeError):
+        return False
+    return left == right
+
+
 class SqliteJournal:
     """Implements both the ``Journal`` and ``RegistryStore`` contracts over
     one database; sharing the file does not merge the concepts (I8) — the two
@@ -239,6 +250,9 @@ class SqliteJournal:
             if version == 2:
                 self._migrate_m2_to_m3(conn)
                 version = 3
+            if version == 3:
+                self._migrate_m3_to_m4(conn)
+                version = 4
             if version == SCHEMA_VERSION:
                 conn.executescript(_SCHEMA)  # idempotent completeness check
                 conn.commit()
@@ -307,10 +321,64 @@ class SqliteJournal:
         conn.commit()
 
     def _migrate_m2_to_m3(self, conn: sqlite3.Connection) -> None:
-        """Additive: the capability_leases table (physical acquisitions).
-        Idempotent DDL — safe to re-run after a mid-migration crash."""
-        conn.executescript(_SCHEMA)
+        """Add the historical M3 capability lease table (static scope)."""
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS capability_leases (
+                lease_id          TEXT NOT NULL,
+                acquisition_epoch INTEGER NOT NULL,
+                run_id            TEXT NOT NULL,
+                binding_id        TEXT NOT NULL,
+                scope_json        TEXT NOT NULL,
+                lifetime          TEXT NOT NULL,
+                state             TEXT NOT NULL,
+                disposition       TEXT,
+                resource_ref      TEXT,
+                created_at        TEXT NOT NULL,
+                updated_at        TEXT NOT NULL,
+                PRIMARY KEY (lease_id, acquisition_epoch)
+            )"""
+        )
         conn.execute("PRAGMA user_version = 3")
+        conn.commit()
+
+    def _migrate_m3_to_m4(self, conn: sqlite3.Connection) -> None:
+        """Rewrite static lease scopes as frame-aware execution paths in place.
+
+        The historical ``scope_json`` column name is retained to avoid a table
+        rebuild. Its v4 payload is an ``ExecutionPath``. Old lease ids and
+        resource refs remain byte-identical for row-driven reconciliation.
+        """
+
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            "SELECT lease_id, acquisition_epoch, scope_json, lifetime, state,"
+            " disposition FROM capability_leases"
+        ).fetchall()
+        for row in rows:
+            payload = json.loads(row["scope_json"])
+            if isinstance(payload, dict) and "scope" in payload:
+                path = ExecutionPath.model_validate(payload)
+            else:
+                scope = ScopePath.model_validate(payload)
+                path = ExecutionPath(scope=scope)
+            state = "closed" if row["state"] == "suspended" else row["state"]
+            disposition = row["disposition"]
+            if disposition == "retained":
+                disposition = "released"
+            conn.execute(
+                "UPDATE capability_leases SET scope_json = ?, lifetime = ?,"
+                " state = ?, disposition = ? WHERE lease_id = ?"
+                " AND acquisition_epoch = ?",
+                (
+                    canonical_json(path.model_dump(mode="json")),
+                    "invocation",
+                    state,
+                    disposition,
+                    row["lease_id"],
+                    row["acquisition_epoch"],
+                ),
+            )
+        conn.execute("PRAGMA user_version = 4")
         conn.commit()
 
     # -- internal helpers ----------------------------------------------------
@@ -383,9 +451,14 @@ class SqliteJournal:
                     "INSERT INTO manifests (manifest_hash, manifest_json) VALUES (?, ?)",
                     (str(manifest_hash), manifest_json),
                 )
-            elif existing["manifest_json"] != manifest_json:
+            elif (
+                existing["manifest_json"] != manifest_json
+                and not _manifest_semantically_equal(
+                    existing["manifest_json"], manifest_json
+                )
+            ):
                 raise JournalDamaged(
-                    f"manifest {manifest_hash} already stored with different bytes"
+                    f"manifest {manifest_hash} already stored with different semantics"
                 )
             run = conn.execute(
                 "SELECT manifest_hash, input_hash FROM runs WHERE run_id = ?",
@@ -787,7 +860,7 @@ class SqliteJournal:
                     acquisition_epoch=capability_lease.acquisition_epoch,
                     run_id=existing["run_id"],
                     binding_id=existing["binding_id"],
-                    scope=ScopePath.model_validate_json(existing["scope_json"]),
+                    path=ExecutionPath.model_validate_json(existing["scope_json"]),
                     lifetime=existing["lifetime"],
                     state=existing["state"],
                     disposition=existing["disposition"],
@@ -812,7 +885,7 @@ class SqliteJournal:
                     capability_lease.acquisition_epoch,
                     capability_lease.run_id,
                     capability_lease.binding_id,
-                    canonical_json(capability_lease.scope.model_dump(mode="json")),
+                    canonical_json(capability_lease.path.model_dump(mode="json")),
                     capability_lease.lifetime,
                     capability_lease.state,
                     capability_lease.disposition,
@@ -899,7 +972,7 @@ class SqliteJournal:
                 acquisition_epoch=row["acquisition_epoch"],
                 run_id=row["run_id"],
                 binding_id=row["binding_id"],
-                scope=ScopePath.model_validate_json(row["scope_json"]),
+                path=ExecutionPath.model_validate_json(row["scope_json"]),
                 lifetime=row["lifetime"],
                 state=row["state"],
                 disposition=row["disposition"],

@@ -159,6 +159,7 @@ class StagedWriteWorkspace:
         self._staging_dir = staging_dir
         self.candidate_ref = candidate_ref
         self._head: GitSha = base
+        self._imported = False
 
     @property
     def path(self) -> str:
@@ -170,6 +171,43 @@ class StagedWriteWorkspace:
             commit=self._head,
             diff_against=self.base,
         )
+
+    def reset_to(self, ref: GitRef) -> None:
+        """Reset this fresh staging repository to a prior durable candidate.
+
+        The repository identity is checked, the exact commit is fetched and
+        verified, and untracked/ignored files are removed so iteration state is
+        exactly the GitRef — never a shared mutable worktree.
+        """
+        if self._imported:
+            raise ContractViolation(
+                "workspace.reset_to() is only valid before commit_all() imports "
+                "this acquisition's candidate"
+            )
+        if ref.repository != self._authority.repository_id:
+            raise ContractViolation(
+                f"GitRef repository {ref.repository!r} does not match authority "
+                f"{self._authority.repository_id!r}"
+            )
+        authority = self._authority
+        authority._run(
+            "fetch", "--quiet", authority.repository_id, ref.commit, cwd=self._staging_dir
+        )
+        kind = authority._run(
+            "cat-file", "-t", ref.commit, cwd=self._staging_dir
+        ).stdout.strip()
+        if kind != "commit":
+            raise ContractViolation(f"reset target {ref.commit} is a {kind}, not a commit")
+        authority._run("reset", "--hard", ref.commit, cwd=self._staging_dir)
+        authority._run("clean", "-ffdqx", cwd=self._staging_dir)
+        observed = authority._run(
+            "rev-parse", "HEAD", cwd=self._staging_dir
+        ).stdout.strip()
+        if observed != str(ref.commit):
+            raise ContractViolation(
+                f"workspace reset observed HEAD {observed}, expected {ref.commit}"
+            )
+        self._head = ref.commit
 
     def commit_all(self, message: str) -> GitSha:
         authority = self._authority
@@ -193,6 +231,7 @@ class StagedWriteWorkspace:
             staging_dir=self._staging_dir, commit=head, candidate_ref=self.candidate_ref
         )
         self._head = head
+        self._imported = True
         return head
 
 
@@ -515,13 +554,10 @@ class GitAuthority:
 class GitWorkspaceCapability:
     """The leased WRITE-workspace capability (implements ``LeasedCapability``).
 
-    One acquisition = one staging repository at the pinned base. Dispositions:
-    release (node completed) removes the mutable staging; the candidate ref is
-    retained durable evidence — it anchors the commit a checkpointed ``GitRef``
-    names, so resume can re-gate it (candidate-ref GC is future work, ADR
-    0009). Discard (node failed / uncheckpointed replay) removes staging AND
-    CAS-deletes the candidate ref. Suspend retains everything (PARKED
-    resources are never finalized).
+    One invocation gets one staging repository. A later loop iteration may
+    reset that fresh repository to the prior checkpointed ``GitRef``. Release
+    removes mutable staging while retaining the authority-owned candidate ref;
+    discard removes both staging and the uncheckpointed candidate ref.
     """
 
     def __init__(self, authority: GitAuthority, *, target_ref: str) -> None:
@@ -534,7 +570,7 @@ class GitWorkspaceCapability:
 
     async def acquire(self, context: LeaseContext) -> AcquiredCapability:
         run_id = context.run_lease.run_id
-        lease_id = lease_id_for(run_id, context.binding.scope, context.binding.binding)
+        lease_id = lease_id_for(run_id, context.path, context.binding.binding)
         acquisition_id = acquisition_id_for(lease_id, context.run_lease.epoch)
         candidate_ref = self._candidate_ref(run_id, acquisition_id)
         workspace = self._authority.acquire_write(
@@ -560,8 +596,6 @@ class GitWorkspaceCapability:
         self, acquisition: AcquiredCapability, disposition: Disposition
     ) -> LeaseClosure:
         info = json.loads(acquisition.resource_ref)
-        if disposition == "suspend":
-            return LeaseClosure(disposition="retained")
         self._authority.discard_staging(info["acquisition"])
         if disposition == "discard":
             self._discard_candidate(info["candidate_ref"])

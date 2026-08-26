@@ -62,8 +62,10 @@ install path" would be false.
   invocation → reap leftovers, durable refs stand; uncheckpointed →
   discard and replay from the pinned base — never adopt a dirty workspace
   as completed computation. M3 leases are invocation-lifetime only; the
-  candidate ref, not the worktree, carries state across nodes
-  (scope-lifetime sharing arrives with M4's loops).
+  candidate ref, not the worktree, carries state across nodes and loop
+  iterations. M4 confirmed that invocation lifetime is sufficient:
+  `reset_to(GitRef)` reconstructs each iteration from durable data, leaving
+  scope lifetime with no consumer (I6).
 - Gates are ordinary registered components calling the `GateRunner`
   capability; the runner (bound per node with the walker-supplied lease
   context) runs real checks inside the read-only snapshot of the prepared

@@ -1,25 +1,10 @@
-"""The walker — leased, fenced execution of a sealed manifest (I1, I13).
+"""Leased, fenced execution of a sealed manifest (I1, I13).
 
-The walker accepts ONLY an ``ExecutionManifest``. Once admission has returned,
-it never resolves a reference, searches for a port, inherits a grant, chooses a
-capability, interprets a selector string, or decides whether an effect is safe:
-every such decision lives in the manifest or in a deterministic effect adapter.
-
-Ownership: one fenced ``RunLease`` per run, renewed by a continuous heartbeat
-task while nodes and effects are in flight. Every journal write is fenced by
-``owner_id + epoch``; a fenced-out worker raises ``OwnershipLost`` and writes
-nothing else.
-
-Resume re-walks the graph: a durably checkpointed invocation at the same
-``ExecutionPath`` (matching input hash and resolved version) short-circuits;
-work that finished only in memory may replay — nothing preserves output that
-never reached the journal. Effects are at-least-once bounded by idempotency:
-once an effect has a committed receipt, no replay, crash, or retry causes a
-second externally visible transition.
-
-Failure is contained: a failed node marks its dependents BLOCKED with a
-complete ``DependencyReport``; unrelated branches finish; the run's terminal
-status is decided at graph closure.
+The walker accepts only an ``ExecutionManifest``. It never resolves a reference,
+searches for a port, inherits a grant, chooses a capability, interprets an
+authoring selector, or derives loop structure. M4 adds one generic bounded-loop
+unit: the manifest already contains its seeds, feedback, continuation, exports,
+and topologically ordered atomic members.
 """
 
 from __future__ import annotations
@@ -30,7 +15,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from constructicon.core.address import ExecutionPath, RunId, ScopePath
+from constructicon.core.address import ExecutionPath, IterationFrame, RunId, ScopePath
 from constructicon.core.component import ComponentDef
 from constructicon.core.effect import (
     EffectAdapter,
@@ -39,14 +24,18 @@ from constructicon.core.effect import (
     idempotency_key,
 )
 from constructicon.core.envelope import Envelope, utc_now
-from constructicon.core.errors import ContractViolation
-from constructicon.core.identity import Digest, digest
+from constructicon.core.errors import ContractViolation, JournalDamaged
+from constructicon.core.graph import Graph
+from constructicon.core.identity import Digest, digest, json_value
 from constructicon.core.journal import Checkpoint, Journal
 from constructicon.core.manifest import (
     SELF_BINDING,
     CapabilityBinding,
     CapabilityLease,
     ExecutionManifest,
+    LoopResolution,
+    ResolvedPortBinding,
+    parse_manifest_json,
 )
 from constructicon.core.ports import (
     GraphInputAddress,
@@ -60,6 +49,7 @@ from constructicon.core.run import (
     DependencyReport,
     InvocationStatus,
     OwnershipLost,
+    ParkedUnit,
     ProducerStatus,
     RunLease,
     RunStatus,
@@ -87,8 +77,9 @@ class RunResult:
     run_id: RunId
     status: RunStatus
     outputs: dict[str, Any]
-    failures: dict[str, str] = field(default_factory=dict)  # path -> error
+    failures: dict[str, str] = field(default_factory=dict)
     blocked: tuple[DependencyReport, ...] = ()
+    parked: tuple[ParkedUnit, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -97,7 +88,26 @@ class _Instance:
     component: str
     version: Digest
     definition: ComponentDef
-    impl: NodeImpl
+    impl: NodeImpl | None
+
+
+@dataclass(frozen=True)
+class _Unit:
+    scope: ScopePath
+    instance: _Instance | None = None
+    loop: LoopResolution | None = None
+
+
+@dataclass(frozen=True)
+class _LoopHistory:
+    completed_iterations: int
+    terminal_iteration: int | None
+    exhausted: bool
+    final_values: dict[str, Any] | None
+
+
+class _CancelRequested(Exception):
+    pass
 
 
 def _address_key(address: PortAddress) -> str:
@@ -139,43 +149,41 @@ class Walker:
         run_id: RunId,
         inputs: dict[str, Any],
     ) -> RunResult:
+        normalized = json_value(inputs)
+        if not isinstance(normalized, dict):
+            raise ContractViolation("run inputs must be a JSON object")
+        observed_input_hash = digest("inputs", 1, normalized)
+        if observed_input_hash != manifest.input_hash:
+            raise ContractViolation(
+                f"run inputs hash to {observed_input_hash}, but the sealed manifest "
+                f"expects {manifest.input_hash}; re-admit the graph for these inputs"
+            )
         self._journal.create_run(
             run_id,
             manifest_json=manifest.model_dump_json(),
             manifest_hash=manifest.manifest_hash,
             input_hash=manifest.input_hash,
-            inputs=inputs,
+            inputs=normalized,
         )
-        return await self._drive(manifest, run_id=run_id, inputs=inputs)
+        return await self._drive(manifest, run_id=run_id, inputs=normalized)
 
     async def resume(self, run_id: RunId) -> RunResult:
-        """The pinned resume table: PENDING -> claim+start; RUNNING+expired ->
-        reclaim; RUNNING+live -> refuse with owner detail; FAILED/PARKED ->
-        claim + re-walk from checkpoints; SUCCEEDED -> return the materialized
-        result, status untouched; CANCELLED -> report cancelled, never
-        silently restart."""
         journal = self._journal
         state = journal.run_state(run_id)
         if state is None:
             raise ContractViolation(f"unknown run {run_id!r}")
         manifest = self._load_manifest(run_id)
+        inputs = journal.run_inputs(run_id)
+        if inputs is None:
+            raise ContractViolation(f"run {run_id!r} has no recorded inputs")
         if state.status is RunStatus.SUCCEEDED:
-            inputs = journal.run_inputs(run_id)
-            if inputs is None:
-                raise ContractViolation(
-                    f"run {run_id!r} has no recorded inputs to materialize from"
-                )
             outputs = self._materialize(manifest, run_id, inputs)
             return RunResult(run_id=run_id, status=RunStatus.SUCCEEDED, outputs=outputs)
         if state.status is RunStatus.CANCELLED:
             return RunResult(run_id=run_id, status=RunStatus.CANCELLED, outputs={})
-        inputs = journal.run_inputs(run_id)
-        if inputs is None:
-            raise ContractViolation(f"run {run_id!r} has no recorded inputs to resume from")
         return await self._drive(manifest, run_id=run_id, inputs=inputs)
 
     async def reproduce(self, source_run_id: RunId, *, new_run_id: RunId) -> RunResult:
-        """A new run under a past run's exact sealed world."""
         manifest = self._load_manifest(source_run_id)
         inputs = self._journal.run_inputs(source_run_id)
         if inputs is None:
@@ -187,32 +195,45 @@ class Walker:
     # -- lifecycle ------------------------------------------------------------
 
     async def _drive(
-        self, manifest: ExecutionManifest, *, run_id: RunId, inputs: dict[str, Any]
+        self,
+        manifest: ExecutionManifest,
+        *,
+        run_id: RunId,
+        inputs: dict[str, Any],
     ) -> RunResult:
-        # one activation path for start, resume, and reproduce: refuse
-        # unavailable or drifted implementations before claiming anything
         bound = self._registry.activate(manifest, catalog=self._catalog)
         journal = self._journal
         lease = journal.claim_run(
-            run_id, owner_id=self._owner_id, ttl_s=self._lease_ttl_s
+            run_id,
+            owner_id=self._owner_id,
+            ttl_s=self._lease_ttl_s,
         )
         lost: list[OwnershipLost] = []
         heartbeat = asyncio.create_task(self._heartbeat_loop(lease, lost))
         try:
-            result = await self._execute(
-                bound, lease=lease, inputs=inputs, lost=lost
-            )
+            result = await self._execute(bound, lease=lease, inputs=inputs, lost=lost)
+        except asyncio.CancelledError:
+            await self._stop_heartbeat(heartbeat)
+            with contextlib.suppress(OwnershipLost, ContractViolation):
+                journal.transition_run(
+                    lease,
+                    expected=frozenset({RunStatus.RUNNING}),
+                    target=RunStatus.CANCELLED,
+                    event_kind="RunCancelled",
+                    payload={"source": "asyncio"},
+                )
+            self._release_quietly(lease)
+            raise
         except OwnershipLost:
             await self._stop_heartbeat(heartbeat)
-            raise  # fenced out: write nothing else, release included
+            raise
         except Exception:
             await self._stop_heartbeat(heartbeat)
             self._release_quietly(lease)
             raise
         except BaseException:
-            # simulated or genuine process death (InjectedCrash, cancellation):
-            # clean up process-local tasks only — durable state must look
-            # exactly like a crash, so the lease is left to expire
+            # Hard death: durable state must look exactly like a crash. The
+            # ownership lease expires and the next worker reconciles resources.
             await self._stop_heartbeat(heartbeat)
             raise
         await self._stop_heartbeat(heartbeat)
@@ -220,9 +241,6 @@ class Walker:
         return result
 
     async def _heartbeat_loop(self, lease: RunLease, lost: list[OwnershipLost]) -> None:
-        """Continuous renewal while nodes and effects are in flight. Updates
-        ownership state only — never events. The fence fields (owner_id,
-        epoch) never change, so the original lease stays valid for writes."""
         try:
             while True:
                 await asyncio.sleep(self._heartbeat_interval_s)
@@ -240,7 +258,17 @@ class Walker:
         with contextlib.suppress(OwnershipLost):
             self._journal.release_run(lease)
 
-    # -- execution ------------------------------------------------------------
+    def _check_run_control(
+        self,
+        lease: RunLease,
+        lost: list[OwnershipLost],
+    ) -> None:
+        if lost:
+            raise lost[0]
+        if self._journal.cancel_requested(lease.run_id):
+            raise _CancelRequested
+
+    # -- graph execution ------------------------------------------------------
 
     async def _execute(
         self,
@@ -272,88 +300,123 @@ class Walker:
                 target=RunStatus.RUNNING,
                 event_kind="RunResumed",
             )
-        else:  # durably RUNNING — reclaimed from an expired owner
+        else:
             journal.append_event(lease, "RunReclaimed")
 
         await self._reconcile_stale_leases(bound, lease)
 
         instances = self._instances(bound)
-        bindings_by_destination = {
+        instances_by_scope = {instance.scope.segments: instance for instance in instances}
+        bindings = {
             _address_key(binding.destination): binding
             for binding in manifest.resolved_connections
         }
-        grants_by_scope = {
+        grants = {
             binding.scope.segments: binding
             for binding in manifest.capability_bindings
             if binding.binding == SELF_BINDING
         }
-        aliases_by_scope: dict[tuple[str, ...], list[CapabilityBinding]] = {}
+        aliases: dict[tuple[str, ...], list[CapabilityBinding]] = {}
         for binding in manifest.capability_bindings:
             if binding.binding != SELF_BINDING:
-                aliases_by_scope.setdefault(binding.scope.segments, []).append(binding)
-        producer_of = self._producer_index(instances)
+                aliases.setdefault(binding.scope.segments, []).append(binding)
+
+        units = self._root_units(manifest, instances)
+        producer_units = self._unit_producer_index(units)
+        ordered_units = self._ordered_units(units, bindings, producer_units)
 
         root_scope = ScopePath(segments=(manifest.source_graph.name,))
         values: dict[str, Any] = {
             _address_key(GraphInputAddress(scope=root_scope, port=name)): value
             for name, value in inputs.items()
         }
-        status_by_scope: dict[tuple[str, ...], InvocationStatus] = {}
+        status_by_unit: dict[tuple[str, ...], InvocationStatus] = {}
         failures: dict[str, str] = {}
         blocked: list[DependencyReport] = []
+        parked: list[ParkedUnit] = []
 
-        for instance in self._ordered(instances, bindings_by_destination, producer_of):
-            if lost:
-                raise lost[0]
-            if journal.cancel_requested(run_id):
-                journal.transition_run(
-                    lease,
-                    expected=frozenset({RunStatus.RUNNING}),
-                    target=RunStatus.CANCELLED,
-                    event_kind="RunCancelled",
+        try:
+            for unit in ordered_units:
+                # Yield at every scheduler boundary so asyncio cancellation and
+                # durable cancellation converge even when all work restores
+                # synchronously from checkpoints.
+                await asyncio.sleep(0)
+                self._check_run_control(lease, lost)
+                report = self._unit_dependency_report(
+                    unit,
+                    bindings,
+                    producer_units,
+                    status_by_unit,
                 )
-                return RunResult(
-                    run_id=run_id,
-                    status=RunStatus.CANCELLED,
-                    outputs={},
+                if any(
+                    producer.status is not InvocationStatus.COMPLETED
+                    for producer in report.producers
+                ):
+                    status_by_unit[unit.scope.segments] = InvocationStatus.BLOCKED
+                    blocked.append(report)
+                    journal.append_event(
+                        lease,
+                        "NodeBlocked" if unit.instance is not None else "LoopBlocked",
+                        path=ExecutionPath(scope=unit.scope),
+                        payload=report.model_dump(mode="json"),
+                    )
+                    continue
+
+                if unit.instance is not None:
+                    error = await self._execute_or_restore(
+                        manifest,
+                        unit.instance,
+                        path=ExecutionPath(scope=unit.scope),
+                        lease=lease,
+                        values=values,
+                        bindings=bindings,
+                        grants=grants,
+                        aliases=aliases,
+                        lost=lost,
+                    )
+                    if error is None:
+                        status_by_unit[unit.scope.segments] = InvocationStatus.COMPLETED
+                    else:
+                        status_by_unit[unit.scope.segments] = InvocationStatus.FAILED
+                        failures[unit.scope.render()] = error
+                    continue
+
+                if unit.loop is None:
+                    raise ContractViolation("execution unit has neither atomic nor loop body")
+                loop_status = await self._execute_loop(
+                    manifest,
+                    unit.loop,
+                    lease=lease,
+                    outer_values=values,
+                    instances_by_scope=instances_by_scope,
+                    bindings=bindings,
+                    grants=grants,
+                    aliases=aliases,
                     failures=failures,
-                    blocked=tuple(blocked),
+                    blocked=blocked,
+                    parked=parked,
+                    lost=lost,
                 )
-
-            report = self._dependency_report(
-                instance, bindings_by_destination, producer_of, status_by_scope
+                status_by_unit[unit.scope.segments] = loop_status
+        except _CancelRequested:
+            journal.transition_run(
+                lease,
+                expected=frozenset({RunStatus.RUNNING}),
+                target=RunStatus.CANCELLED,
+                event_kind="RunCancelled",
+                payload={"source": "request"},
             )
-            if any(
-                producer.status is not InvocationStatus.COMPLETED
-                for producer in report.producers
-            ):
-                status_by_scope[instance.scope.segments] = InvocationStatus.BLOCKED
-                blocked.append(report)
-                journal.append_event(
-                    lease,
-                    "NodeBlocked",
-                    path=ExecutionPath(scope=instance.scope),
-                    payload=report.model_dump(mode="json"),
-                )
-                continue
-
-            error = await self._execute_or_restore(
-                manifest,
-                instance,
-                lease=lease,
-                values=values,
-                bindings_by_destination=bindings_by_destination,
-                grants_by_scope=grants_by_scope,
-                aliases_by_scope=aliases_by_scope,
+            return RunResult(
+                run_id=run_id,
+                status=RunStatus.CANCELLED,
+                outputs={},
+                failures=failures,
+                blocked=tuple(blocked),
+                parked=tuple(sorted(parked, key=lambda item: item.path.render())),
             )
-            if error is None:
-                status_by_scope[instance.scope.segments] = InvocationStatus.COMPLETED
-            else:
-                status_by_scope[instance.scope.segments] = InvocationStatus.FAILED
-                failures[instance.scope.render()] = error
 
-        # graph closure: the terminal status is decided here, never mid-branch
-        if failures or blocked:
+        parked_sorted = tuple(sorted(parked, key=lambda item: item.path.render()))
+        if failures:
             journal.transition_run(
                 lease,
                 expected=frozenset({RunStatus.RUNNING}),
@@ -362,6 +425,7 @@ class Walker:
                 payload={
                     "failed": sorted(failures),
                     "blocked": [report.destination.render() for report in blocked],
+                    "parked": [item.model_dump(mode="json") for item in parked_sorted],
                 },
             )
             return RunResult(
@@ -370,16 +434,35 @@ class Walker:
                 outputs={},
                 failures=failures,
                 blocked=tuple(blocked),
+                parked=parked_sorted,
             )
 
-        outputs: dict[str, Any] = {}
-        for port in manifest.source_graph.outputs:
-            out_binding = bindings_by_destination.get(
-                _address_key(GraphOutputAddress(scope=root_scope, port=port.name))
+        if parked_sorted:
+            journal.transition_run(
+                lease,
+                expected=frozenset({RunStatus.RUNNING}),
+                target=RunStatus.PARKED,
+                event_kind="RunParked",
+                payload={
+                    "parked": [item.model_dump(mode="json") for item in parked_sorted],
+                    "blocked": [report.destination.render() for report in blocked],
+                },
             )
-            if out_binding is None:
-                continue
-            outputs[port.name] = _collect(values, out_binding.sources, port)
+            return RunResult(
+                run_id=run_id,
+                status=RunStatus.PARKED,
+                outputs={},
+                failures=failures,
+                blocked=tuple(blocked),
+                parked=parked_sorted,
+            )
+
+        if blocked:
+            raise JournalDamaged(
+                "graph closure contains blocked units without any failed or parked root"
+            )
+
+        outputs = self._graph_outputs(manifest, values, bindings)
         journal.transition_run(
             lease,
             expected=frozenset({RunStatus.RUNNING}),
@@ -389,6 +472,363 @@ class Walker:
         )
         return RunResult(run_id=run_id, status=RunStatus.SUCCEEDED, outputs=outputs)
 
+    # -- loop execution -------------------------------------------------------
+
+    async def _execute_loop(
+        self,
+        manifest: ExecutionManifest,
+        loop: LoopResolution,
+        *,
+        lease: RunLease,
+        outer_values: dict[str, Any],
+        instances_by_scope: dict[tuple[str, ...], _Instance],
+        bindings: dict[str, ResolvedPortBinding],
+        grants: dict[tuple[str, ...], CapabilityBinding],
+        aliases: dict[tuple[str, ...], list[CapabilityBinding]],
+        failures: dict[str, str],
+        blocked: list[DependencyReport],
+        parked: list[ParkedUnit],
+        lost: list[OwnershipLost],
+    ) -> InvocationStatus:
+        # Validate the entire durable prefix before any new implementation,
+        # capability, or effect can run.
+        self._inspect_loop_history(
+            loop,
+            run_id=lease.run_id,
+            outer_values=outer_values,
+            instances_by_scope=instances_by_scope,
+            bindings=bindings,
+            require_terminal=False,
+        )
+
+        member_producers = self._member_producer_index(loop, instances_by_scope)
+        previous_values: dict[str, Any] | None = None
+        loop_path = ExecutionPath(scope=loop.scope)
+        executed_any = False
+
+        for iteration in range(loop.max_iterations):
+            await asyncio.sleep(0)
+            self._check_run_control(lease, lost)
+            frame = IterationFrame(loop=loop.scope, index=iteration)
+            iteration_values = self._seed_loop_iteration(
+                loop,
+                iteration=iteration,
+                outer_values=outer_values,
+                previous_values=previous_values,
+            )
+            status_by_member: dict[tuple[str, ...], InvocationStatus] = {}
+            iteration_failed = False
+            restored_only = True
+
+            for member_scope in loop.member_order:
+                await asyncio.sleep(0)
+                self._check_run_control(lease, lost)
+                instance = instances_by_scope.get(member_scope.segments)
+                if instance is None:
+                    raise ContractViolation(
+                        f"loop {loop.scope.render()} names missing member "
+                        f"{member_scope.render()}"
+                    )
+                member_path = ExecutionPath(scope=member_scope, iterations=(frame,))
+                report = self._member_dependency_report(
+                    instance,
+                    frame=frame,
+                    bindings=bindings,
+                    producer_of=member_producers,
+                    status_by_member=status_by_member,
+                )
+
+                # One failed invocation terminates the iteration. Its downstream
+                # members remain BLOCKED; independent later members are SKIPPED.
+                # This preserves a contiguous durable checkpoint prefix, so resume
+                # can never mistake speculative sibling work for a completed body.
+                if iteration_failed:
+                    if any(
+                        producer.status is not InvocationStatus.COMPLETED
+                        for producer in report.producers
+                    ):
+                        status_by_member[member_scope.segments] = InvocationStatus.BLOCKED
+                        blocked.append(report)
+                        self._journal.append_event(
+                            lease,
+                            "NodeBlocked",
+                            path=member_path,
+                            payload=report.model_dump(mode="json"),
+                        )
+                    else:
+                        status_by_member[member_scope.segments] = InvocationStatus.SKIPPED
+                        self._journal.append_event(
+                            lease,
+                            "NodeSkipped",
+                            path=member_path,
+                            payload={"reason": "loop_iteration_failed"},
+                        )
+                    continue
+
+                if any(
+                    producer.status is not InvocationStatus.COMPLETED
+                    for producer in report.producers
+                ):
+                    status_by_member[member_scope.segments] = InvocationStatus.BLOCKED
+                    blocked.append(report)
+                    self._journal.append_event(
+                        lease,
+                        "NodeBlocked",
+                        path=member_path,
+                        payload=report.model_dump(mode="json"),
+                    )
+                    iteration_failed = True
+                    continue
+
+                had_checkpoint = (
+                    self._journal.checkpoint(lease.run_id, member_path) is not None
+                )
+                error = await self._execute_or_restore(
+                    manifest,
+                    instance,
+                    path=member_path,
+                    lease=lease,
+                    values=iteration_values,
+                    bindings=bindings,
+                    grants=grants,
+                    aliases=aliases,
+                    lost=lost,
+                )
+                if not had_checkpoint:
+                    restored_only = False
+                    executed_any = True
+                if error is None:
+                    status_by_member[member_scope.segments] = InvocationStatus.COMPLETED
+                else:
+                    status_by_member[member_scope.segments] = InvocationStatus.FAILED
+                    failures[member_path.render()] = error
+                    iteration_failed = True
+
+            if iteration_failed:
+                return InvocationStatus.FAILED
+
+            try:
+                decision = self._loop_decision(loop, iteration_values)
+            except ContractViolation as exc:
+                failures[loop_path.render()] = f"{type(exc).__name__}: {exc}"
+                self._journal.append_event(
+                    lease,
+                    "LoopFailed",
+                    path=loop_path,
+                    payload={"error": str(exc), "iteration": iteration},
+                )
+                return InvocationStatus.FAILED
+            iteration_path = ExecutionPath(scope=loop.scope, iterations=(frame,))
+            self._journal.append_event(
+                lease,
+                "LoopIterationRestored" if restored_only else "LoopIterationCompleted",
+                path=iteration_path,
+                payload={"continue": decision},
+            )
+            if not decision:
+                self._publish_loop_exports(loop, iteration_values, outer_values)
+                self._journal.append_event(
+                    lease,
+                    "LoopCompleted" if executed_any else "LoopRestored",
+                    path=loop_path,
+                    payload={"iterations": iteration + 1},
+                )
+                return InvocationStatus.COMPLETED
+            previous_values = iteration_values
+
+        parked_unit = ParkedUnit(
+            path=loop_path,
+            reason="policy_exhausted",
+            completed_iterations=loop.max_iterations,
+        )
+        parked.append(parked_unit)
+        self._journal.append_event(
+            lease,
+            "LoopPolicyExhausted" if executed_any else "LoopPolicyReobserved",
+            path=loop_path,
+            payload=parked_unit.model_dump(mode="json"),
+        )
+        return InvocationStatus.PARKED
+
+    def _inspect_loop_history(
+        self,
+        loop: LoopResolution,
+        *,
+        run_id: RunId,
+        outer_values: dict[str, Any],
+        instances_by_scope: dict[tuple[str, ...], _Instance],
+        bindings: dict[str, ResolvedPortBinding],
+        require_terminal: bool,
+    ) -> _LoopHistory:
+        """Validate and replay a contiguous durable iteration prefix.
+
+        A later member checkpoint after a gap, a later iteration after a false
+        decision, or a checkpoint with a contradictory input/version is journal
+        damage. This inspector is used by both resume and materialization.
+        """
+
+        matrix: list[list[Checkpoint | None]] = []
+        for index in range(loop.max_iterations):
+            frame = IterationFrame(loop=loop.scope, index=index)
+            matrix.append(
+                [
+                    self._journal.checkpoint(
+                        run_id,
+                        ExecutionPath(scope=scope, iterations=(frame,)),
+                    )
+                    for scope in loop.member_order
+                ]
+            )
+
+        previous_values: dict[str, Any] | None = None
+        completed = 0
+        for index, checkpoints in enumerate(matrix):
+            present = [checkpoint is not None for checkpoint in checkpoints]
+            if not any(present):
+                if any(any(item is not None for item in later) for later in matrix[index + 1 :]):
+                    raise JournalDamaged(
+                        f"loop {loop.scope.render()} has iteration {index + 1} "
+                        f"checkpoints after an empty iteration {index}"
+                    )
+                if require_terminal:
+                    raise JournalDamaged(
+                        f"successful run has incomplete loop {loop.scope.render()} at "
+                        f"iteration {index}"
+                    )
+                return _LoopHistory(completed, None, False, previous_values)
+
+            missing_seen = False
+            for exists in present:
+                if not exists:
+                    missing_seen = True
+                elif missing_seen:
+                    raise JournalDamaged(
+                        f"loop {loop.scope.render()} iteration {index} contains a "
+                        "member checkpoint after a missing earlier member"
+                    )
+            if not all(present):
+                if any(any(item is not None for item in later) for later in matrix[index + 1 :]):
+                    raise JournalDamaged(
+                        f"loop {loop.scope.render()} has later iteration checkpoints "
+                        f"after partial iteration {index}"
+                    )
+                # Validate the durable prefix within this partial iteration.
+                values = self._seed_loop_iteration(
+                    loop,
+                    iteration=index,
+                    outer_values=outer_values,
+                    previous_values=previous_values,
+                )
+                for member_scope, checkpoint in zip(
+                    loop.member_order,
+                    checkpoints,
+                    strict=True,
+                ):
+                    if checkpoint is None:
+                        break
+                    instance = instances_by_scope[member_scope.segments]
+                    self._restore_checked_checkpoint(instance, checkpoint, values, bindings)
+                if require_terminal:
+                    raise JournalDamaged(
+                        f"successful run has partial loop {loop.scope.render()} "
+                        f"iteration {index}"
+                    )
+                return _LoopHistory(completed, None, False, previous_values)
+
+            values = self._seed_loop_iteration(
+                loop,
+                iteration=index,
+                outer_values=outer_values,
+                previous_values=previous_values,
+            )
+            for member_scope, checkpoint in zip(
+                loop.member_order,
+                checkpoints,
+                strict=True,
+            ):
+                assert checkpoint is not None
+                instance = instances_by_scope[member_scope.segments]
+                self._restore_checked_checkpoint(instance, checkpoint, values, bindings)
+            completed += 1
+            decision = self._loop_decision(loop, values)
+            if not decision:
+                if any(any(item is not None for item in later) for later in matrix[index + 1 :]):
+                    raise JournalDamaged(
+                        f"loop {loop.scope.render()} has checkpoints after terminal "
+                        f"false decision at iteration {index}"
+                    )
+                return _LoopHistory(completed, index, False, values)
+            previous_values = values
+
+        if require_terminal:
+            raise JournalDamaged(
+                f"successful run materialization found exhausted loop "
+                f"{loop.scope.render()} with no false decision"
+            )
+        return _LoopHistory(completed, None, True, previous_values)
+
+    def _seed_loop_iteration(
+        self,
+        loop: LoopResolution,
+        *,
+        iteration: int,
+        outer_values: dict[str, Any],
+        previous_values: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        initial = {
+            binding.destination.port: binding
+            for binding in loop.initial_bindings
+            if isinstance(binding.destination, GraphInputAddress)
+        }
+        feedback = {
+            binding.destination.port: binding
+            for binding in loop.feedback_bindings
+            if isinstance(binding.destination, GraphInputAddress)
+        }
+        values: dict[str, Any] = {}
+        for port in loop.input_ports:
+            use_feedback = iteration > 0 and port.name in feedback
+            binding = feedback.get(port.name) if use_feedback else initial.get(port.name)
+            if binding is None:
+                continue
+            source_values = previous_values if use_feedback else outer_values
+            if source_values is None:
+                raise JournalDamaged(
+                    f"loop {loop.scope.render()} iteration {iteration} has feedback "
+                    "without a previous completed iteration"
+                )
+            value = _collect(source_values, binding.sources, port)
+            values[_address_key(binding.destination)] = value
+        return values
+
+    @staticmethod
+    def _loop_decision(loop: LoopResolution, values: dict[str, Any]) -> bool:
+        key = _address_key(loop.continue_source)
+        if key not in values:
+            raise ContractViolation(
+                f"loop {loop.scope.render()} continuation source {key} is unavailable"
+            )
+        decision = values[key]
+        if type(decision) is not bool:
+            raise ContractViolation(
+                f"loop {loop.scope.render()} continuation must be exactly bool, "
+                f"received {type(decision).__name__}"
+            )
+        return decision
+
+    @staticmethod
+    def _publish_loop_exports(
+        loop: LoopResolution,
+        iteration_values: dict[str, Any],
+        outer_values: dict[str, Any],
+    ) -> None:
+        for export in loop.exports:
+            outer_values[_address_key(export.destination)] = _collect(
+                iteration_values,
+                export.sources,
+                export.port,
+            )
+
     # -- capability leases ----------------------------------------------------
 
     async def _close_acquired(
@@ -397,7 +837,6 @@ class Walker:
         acquired: list[tuple[LeasedCapability, AcquiredCapability]],
         disposition: Disposition,
     ) -> None:
-        """Ordering pinned: physical op first, fenced lease row second."""
         for capability, acquisition in acquired:
             closure = await capability.close(acquisition, disposition)
             self._journal.transition_capability_lease(
@@ -410,12 +849,10 @@ class Walker:
             )
 
     async def _reconcile_stale_leases(
-        self, bound: BoundExecution, lease: RunLease
+        self,
+        bound: BoundExecution,
+        lease: RunLease,
     ) -> None:
-        """A prior epoch's open acquisitions: checkpointed invocation ->
-        release (reap physical leftovers, durable refs stand); uncheckpointed
-        -> discard (the work replays from the pinned base — never adopt a
-        dirty workspace as completed computation)."""
         journal = self._journal
         manifest = bound.manifest
         stale_rows = [
@@ -425,14 +862,13 @@ class Walker:
         ]
         if not stale_rows:
             return
-        by_scope_and_binding = {
+        bindings = {
             (binding.scope.segments, binding.binding): binding
             for binding in manifest.capability_bindings
         }
         for row in stale_rows:
-            binding = by_scope_and_binding.get((row.scope.segments, row.binding_id))
-            path = ExecutionPath(scope=row.scope)
-            checkpointed = journal.checkpoint(lease.run_id, path) is not None
+            binding = bindings.get((row.path.scope.segments, row.binding_id))
+            checkpointed = journal.checkpoint(lease.run_id, row.path) is not None
             disposition: Disposition = "release" if checkpointed else "discard"
             if binding is not None:
                 capability = self._capabilities.get(binding.capability_id)
@@ -440,7 +876,7 @@ class Walker:
                     context = LeaseContext(
                         run_lease=lease,
                         binding=binding,
-                        path=path,
+                        path=row.path,
                         manifest_hash=manifest.manifest_hash,
                     )
                     await capability.reconcile(
@@ -456,7 +892,7 @@ class Walker:
                 disposition="released" if disposition == "release" else "discarded",
             )
 
-    # -- structure ------------------------------------------------------------
+    # -- structure and dependencies ------------------------------------------
 
     def _load_manifest(self, run_id: RunId) -> ExecutionManifest:
         manifest_hash = self._journal.run_manifest_hash(run_id)
@@ -467,15 +903,20 @@ class Walker:
             raise ContractViolation(
                 f"manifest {manifest_hash} for run {run_id!r} is not in the journal"
             )
-        return ExecutionManifest.model_validate_json(manifest_json)
+        try:
+            return parse_manifest_json(manifest_json)
+        except (ValueError, TypeError) as exc:
+            raise JournalDamaged(
+                f"manifest {manifest_hash} for run {run_id!r} is damaged: {exc}"
+            ) from exc
 
     def _instances(self, bound: BoundExecution) -> list[_Instance]:
         instances: list[_Instance] = []
         for resolution in bound.manifest.resolved_components:
             binding = bound.bound(resolution.component, resolution.resolved_version)
             if binding.loadability.status == "composite":
-                continue  # composites flattened at admission; atomics execute
-            if binding.impl is None:  # activation refused these already
+                continue
+            if binding.impl is None:
                 raise ContractViolation(
                     f"{resolution.scope.render()}: activation returned no "
                     "implementation for an atomic component"
@@ -491,201 +932,319 @@ class Walker:
             )
         return instances
 
+    def _materialization_instances(self, manifest: ExecutionManifest) -> list[_Instance]:
+        snapshot = self._registry.snapshot()
+        instances: list[_Instance] = []
+        for resolution in manifest.resolved_components:
+            stored = snapshot.get(resolution.component, resolution.resolved_version)
+            if stored is None:
+                raise JournalDamaged(
+                    f"cannot materialize {resolution.scope.render()}: exact component "
+                    f"{resolution.component}@{resolution.resolved_version} is missing"
+                )
+            if isinstance(stored.definition.body, Graph):
+                continue
+            instances.append(
+                _Instance(
+                    scope=resolution.scope,
+                    component=resolution.component,
+                    version=resolution.resolved_version,
+                    definition=stored.definition,
+                    impl=None,
+                )
+            )
+        return instances
+
     @staticmethod
-    def _producer_index(instances: list[_Instance]) -> dict[str, _Instance]:
-        producer_of: dict[str, _Instance] = {}
-        for instance in instances:
-            level = ScopePath(segments=instance.scope.segments[:-1])
-            node = instance.scope.segments[-1]
-            for port in instance.definition.outputs:
-                address = NodePortAddress(scope=level, node=node, port=port.name)
-                producer_of[_address_key(address)] = instance
-        return producer_of
-
-    def _ordered(
-        self,
+    def _root_units(
+        manifest: ExecutionManifest,
         instances: list[_Instance],
-        bindings_by_destination: dict[str, Any],
-        producer_of: dict[str, _Instance],
-    ) -> list[_Instance]:
-        dependencies: dict[tuple[str, ...], set[tuple[str, ...]]] = {
-            instance.scope.segments: set() for instance in instances
+    ) -> list[_Unit]:
+        member_scopes = {
+            scope.segments
+            for loop in manifest.resolved_loops
+            for scope in loop.member_order
         }
-        for instance in instances:
-            for producer in self._producers(
-                instance, bindings_by_destination, producer_of
-            ):
-                dependencies[instance.scope.segments].add(producer.scope.segments)
+        units = [
+            _Unit(scope=instance.scope, instance=instance)
+            for instance in instances
+            if instance.scope.segments not in member_scopes
+        ]
+        units.extend(_Unit(scope=loop.scope, loop=loop) for loop in manifest.resolved_loops)
+        return units
 
-        by_scope = {instance.scope.segments: instance for instance in instances}
-        ordered: list[_Instance] = []
+    @staticmethod
+    def _atomic_output_address(instance: _Instance, port: Port) -> NodePortAddress:
+        level = ScopePath(segments=instance.scope.segments[:-1])
+        return NodePortAddress(
+            scope=level,
+            node=instance.scope.segments[-1],
+            port=port.name,
+        )
+
+    def _unit_producer_index(self, units: list[_Unit]) -> dict[str, _Unit]:
+        result: dict[str, _Unit] = {}
+        for unit in units:
+            if unit.instance is not None:
+                for port in unit.instance.definition.outputs:
+                    result[_address_key(self._atomic_output_address(unit.instance, port))] = unit
+            elif unit.loop is not None:
+                for export in unit.loop.exports:
+                    result[_address_key(export.destination)] = unit
+        return result
+
+    def _member_producer_index(
+        self,
+        loop: LoopResolution,
+        instances_by_scope: dict[tuple[str, ...], _Instance],
+    ) -> dict[str, _Instance]:
+        result: dict[str, _Instance] = {}
+        for scope in loop.member_order:
+            instance = instances_by_scope[scope.segments]
+            for port in instance.definition.outputs:
+                result[_address_key(self._atomic_output_address(instance, port))] = instance
+        return result
+
+    @staticmethod
+    def _unit_input_bindings(
+        unit: _Unit,
+        bindings: dict[str, ResolvedPortBinding],
+    ) -> list[ResolvedPortBinding]:
+        if unit.loop is not None:
+            return list(unit.loop.initial_bindings)
+        if unit.instance is None:
+            return []
+        level = ScopePath(segments=unit.instance.scope.segments[:-1])
+        node = unit.instance.scope.segments[-1]
+        result: list[ResolvedPortBinding] = []
+        for port in unit.instance.definition.inputs:
+            binding = bindings.get(
+                _address_key(NodePortAddress(scope=level, node=node, port=port.name))
+            )
+            if binding is not None:
+                result.append(binding)
+        return result
+
+    def _ordered_units(
+        self,
+        units: list[_Unit],
+        bindings: dict[str, ResolvedPortBinding],
+        producer_of: dict[str, _Unit],
+    ) -> list[_Unit]:
+        dependencies: dict[tuple[str, ...], set[tuple[str, ...]]] = {
+            unit.scope.segments: set() for unit in units
+        }
+        for unit in units:
+            for binding in self._unit_input_bindings(unit, bindings):
+                for source in binding.sources:
+                    producer = producer_of.get(_address_key(source))
+                    if producer is not None:
+                        dependencies[unit.scope.segments].add(producer.scope.segments)
+        by_scope = {unit.scope.segments: unit for unit in units}
+        ordered: list[_Unit] = []
         placed: set[tuple[str, ...]] = set()
 
-        def place(segments: tuple[str, ...], trail: tuple[tuple[str, ...], ...]) -> None:
-            if segments in placed:
+        def place(scope: tuple[str, ...], trail: tuple[tuple[str, ...], ...]) -> None:
+            if scope in placed:
                 return
-            if segments in trail:
-                raise ContractViolation("manifest contains a dependency cycle")
-            for dependency in sorted(dependencies[segments]):
-                place(dependency, (*trail, segments))
-            placed.add(segments)
-            ordered.append(by_scope[segments])
+            if scope in trail:
+                raise ContractViolation("manifest contains a root dependency cycle")
+            for dependency in sorted(dependencies[scope]):
+                place(dependency, (*trail, scope))
+            placed.add(scope)
+            ordered.append(by_scope[scope])
 
-        for instance in sorted(instances, key=lambda i: i.scope.segments):
-            place(instance.scope.segments, ())
+        for unit in sorted(units, key=lambda item: item.scope.segments):
+            place(unit.scope.segments, ())
         return ordered
 
-    @staticmethod
-    def _producers(
+    def _unit_dependency_report(
+        self,
+        unit: _Unit,
+        bindings: dict[str, ResolvedPortBinding],
+        producer_of: dict[str, _Unit],
+        status_by_unit: dict[tuple[str, ...], InvocationStatus],
+    ) -> DependencyReport:
+        producers: list[ProducerStatus] = []
+        seen: set[tuple[str, ...]] = set()
+        for binding in self._unit_input_bindings(unit, bindings):
+            for source in binding.sources:
+                producer = producer_of.get(_address_key(source))
+                if producer is None or producer.scope.segments in seen:
+                    continue
+                seen.add(producer.scope.segments)
+                producers.append(
+                    ProducerStatus(
+                        path=ExecutionPath(scope=producer.scope),
+                        status=status_by_unit.get(
+                            producer.scope.segments,
+                            InvocationStatus.QUEUED,
+                        ),
+                    )
+                )
+        return DependencyReport(
+            destination=ExecutionPath(scope=unit.scope),
+            producers=tuple(producers),
+        )
+
+    def _member_dependency_report(
+        self,
         instance: _Instance,
-        bindings_by_destination: dict[str, Any],
+        *,
+        frame: IterationFrame,
+        bindings: dict[str, ResolvedPortBinding],
         producer_of: dict[str, _Instance],
-    ) -> list[_Instance]:
-        """Every producer recorded in the manifest bindings for this
-        destination, in deterministic port order, without duplicates."""
+        status_by_member: dict[tuple[str, ...], InvocationStatus],
+    ) -> DependencyReport:
+        producers: list[ProducerStatus] = []
+        seen: set[tuple[str, ...]] = set()
         level = ScopePath(segments=instance.scope.segments[:-1])
         node = instance.scope.segments[-1]
-        producers: list[_Instance] = []
-        seen: set[tuple[str, ...]] = set()
         for port in instance.definition.inputs:
-            binding = bindings_by_destination.get(
+            binding = bindings.get(
                 _address_key(NodePortAddress(scope=level, node=node, port=port.name))
             )
             if binding is None:
                 continue
             for source in binding.sources:
                 producer = producer_of.get(_address_key(source))
-                if producer is not None and producer.scope.segments not in seen:
-                    seen.add(producer.scope.segments)
-                    producers.append(producer)
-        return producers
-
-    def _dependency_report(
-        self,
-        instance: _Instance,
-        bindings_by_destination: dict[str, Any],
-        producer_of: dict[str, _Instance],
-        status_by_scope: dict[tuple[str, ...], InvocationStatus],
-    ) -> DependencyReport:
-        """The complete recorded producer set — completed producers included,
-        never only the failing one."""
-        producers = tuple(
-            ProducerStatus(
-                path=ExecutionPath(scope=producer.scope),
-                status=status_by_scope.get(
-                    producer.scope.segments, InvocationStatus.QUEUED
-                ),
-            )
-            for producer in self._producers(
-                instance, bindings_by_destination, producer_of
-            )
-        )
+                if producer is None or producer.scope.segments in seen:
+                    continue
+                seen.add(producer.scope.segments)
+                producers.append(
+                    ProducerStatus(
+                        path=ExecutionPath(
+                            scope=producer.scope,
+                            iterations=(frame,),
+                        ),
+                        status=status_by_member.get(
+                            producer.scope.segments,
+                            InvocationStatus.QUEUED,
+                        ),
+                    )
+                )
         return DependencyReport(
-            destination=ExecutionPath(scope=instance.scope), producers=producers
+            destination=ExecutionPath(scope=instance.scope, iterations=(frame,)),
+            producers=tuple(producers),
         )
 
-    # -- one node -------------------------------------------------------------
+    # -- one atomic invocation ------------------------------------------------
 
     async def _execute_or_restore(
         self,
         manifest: ExecutionManifest,
         instance: _Instance,
         *,
+        path: ExecutionPath,
         lease: RunLease,
         values: dict[str, Any],
-        bindings_by_destination: dict[str, Any],
-        grants_by_scope: dict[tuple[str, ...], CapabilityBinding],
-        aliases_by_scope: dict[tuple[str, ...], list[CapabilityBinding]],
+        bindings: dict[str, ResolvedPortBinding],
+        grants: dict[tuple[str, ...], CapabilityBinding],
+        aliases: dict[tuple[str, ...], list[CapabilityBinding]],
+        lost: list[OwnershipLost],
     ) -> str | None:
-        """Run or restore one invocation; return an error description on node
-        failure, None on completion. Framework errors propagate — they are
-        never laundered into a node failure."""
-        journal = self._journal
-        level = ScopePath(segments=instance.scope.segments[:-1])
-        node = instance.scope.segments[-1]
-        path = ExecutionPath(scope=instance.scope)
-
-        node_inputs: dict[str, Any] = {}
-        for port in instance.definition.inputs:
-            binding = bindings_by_destination.get(
-                _address_key(NodePortAddress(scope=level, node=node, port=port.name))
-            )
-            if binding is None:
-                if port.cardinality == "optional":
-                    node_inputs[port.name] = None
-                    continue
-                raise ContractViolation(
-                    f"{instance.scope.render()}: input {port.name!r} has no binding in "
-                    "the manifest — admission should have refused this graph"
-                )
-            node_inputs[port.name] = _collect(values, binding.sources, port)
-
+        node_inputs = self._node_inputs(instance, values, bindings)
         input_hash = digest("inputs", 1, node_inputs)
-        checkpoint = journal.checkpoint(lease.run_id, path)
-        if (
-            checkpoint is not None
-            and checkpoint.input_hash == input_hash
-            and checkpoint.resolved_version == instance.version
-        ):
-            journal.append_event(lease, "NodeRestored", path=path)
-            outputs = {port: env.payload for port, env in checkpoint.outputs.items()}
+        checkpoint = self._journal.checkpoint(lease.run_id, path)
+        if checkpoint is not None:
+            if (
+                checkpoint.input_hash != input_hash
+                or checkpoint.resolved_version != instance.version
+            ):
+                raise CheckpointConflict(
+                    f"run {lease.run_id!r} {path.render()}: durable completion "
+                    "contradicts the current input hash or component version; "
+                    "refusing before execution"
+                )
+            self._journal.append_event(lease, "NodeRestored", path=path)
+            outputs = {
+                port: envelope.payload for port, envelope in checkpoint.outputs.items()
+            }
         else:
             try:
                 outputs = await self._invoke(
                     manifest,
                     instance,
-                    lease=lease,
                     path=path,
+                    lease=lease,
                     node_inputs=node_inputs,
                     input_hash=input_hash,
-                    grants_by_scope=grants_by_scope,
-                    aliases_by_scope=aliases_by_scope,
+                    grants=grants,
+                    aliases=aliases,
+                    lost=lost,
                 )
-            except (OwnershipLost, CheckpointConflict):
-                raise  # fencing and journal damage are never node failures
-            except Exception as exc:  # a node failure is execution state (I4)
-                journal.append_event(
+            except (OwnershipLost, CheckpointConflict, _CancelRequested):
+                raise
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._journal.append_event(
                     lease,
                     "NodeFailed",
                     path=path,
                     payload={"error": str(exc), "error_type": type(exc).__name__},
                 )
                 return f"{type(exc).__name__}: {exc}"
-
-        for port in instance.definition.outputs:
-            address = NodePortAddress(scope=level, node=node, port=port.name)
-            values[_address_key(address)] = outputs[port.name]
+        self._publish_atomic_outputs(instance, outputs, values)
         return None
+
+    def _node_inputs(
+        self,
+        instance: _Instance,
+        values: dict[str, Any],
+        bindings: dict[str, ResolvedPortBinding],
+    ) -> dict[str, Any]:
+        level = ScopePath(segments=instance.scope.segments[:-1])
+        node = instance.scope.segments[-1]
+        inputs: dict[str, Any] = {}
+        for port in instance.definition.inputs:
+            binding = bindings.get(
+                _address_key(NodePortAddress(scope=level, node=node, port=port.name))
+            )
+            if binding is None:
+                if port.cardinality == "optional":
+                    inputs[port.name] = None
+                    continue
+                raise ContractViolation(
+                    f"{instance.scope.render()}: input {port.name!r} has no binding "
+                    "in the sealed manifest"
+                )
+            inputs[port.name] = _collect(values, binding.sources, port)
+        return inputs
 
     async def _invoke(
         self,
         manifest: ExecutionManifest,
         instance: _Instance,
         *,
-        lease: RunLease,
         path: ExecutionPath,
+        lease: RunLease,
         node_inputs: dict[str, Any],
         input_hash: Digest,
-        grants_by_scope: dict[tuple[str, ...], CapabilityBinding],
-        aliases_by_scope: dict[tuple[str, ...], list[CapabilityBinding]],
+        grants: dict[tuple[str, ...], CapabilityBinding],
+        aliases: dict[tuple[str, ...], list[CapabilityBinding]],
+        lost: list[OwnershipLost],
     ) -> dict[str, Any]:
-        journal = self._journal
-        journal.append_event(lease, "NodeStarted", path=path)
-
-        self_binding = grants_by_scope.get(instance.scope.segments)
+        self._journal.append_event(lease, "NodeStarted", path=path)
+        self_binding = grants.get(instance.scope.segments)
         if self_binding is None:
             raise ContractViolation(
-                f"{instance.scope.render()}: manifest carries no sealed grants — "
-                "admission should have refused this graph"
+                f"{instance.scope.render()}: manifest carries no sealed grants"
             )
+        if instance.impl is None:
+            raise ContractViolation(
+                f"{instance.scope.render()}: no live implementation is activated"
+            )
+
         capabilities: dict[str, object] = {}
         acquired: list[tuple[LeasedCapability, AcquiredCapability]] = []
-        for alias_binding in aliases_by_scope.get(instance.scope.segments, ()):  # injected
+        for alias_binding in aliases.get(instance.scope.segments, ()):
+            self._check_run_control(lease, lost)
             capability = self._capabilities.get(alias_binding.capability_id)
             if capability is None:
                 raise ContractViolation(
                     f"{instance.scope.render()}: admitted capability "
-                    f"{alias_binding.capability_id!r} was not injected at assembly"
+                    f"{alias_binding.capability_id!r} was not injected"
                 )
             descriptor = self._catalog.get(alias_binding.capability_id)
             if descriptor is not None and descriptor.leased:
@@ -695,22 +1254,23 @@ class Walker:
                         f"{alias_binding.capability_id!r} is declared leased but "
                         "does not implement LeasedCapability"
                     )
-                lease_context = LeaseContext(
-                    run_lease=lease,
-                    binding=alias_binding,
-                    path=path,
-                    manifest_hash=manifest.manifest_hash,
+                acquisition = await capability.acquire(
+                    LeaseContext(
+                        run_lease=lease,
+                        binding=alias_binding,
+                        path=path,
+                        manifest_hash=manifest.manifest_hash,
+                    )
                 )
-                acquisition = await capability.acquire(lease_context)
-                journal.record_capability_lease(
+                self._journal.record_capability_lease(
                     lease,
                     CapabilityLease(
                         lease_id=acquisition.lease_id,
                         acquisition_epoch=lease.epoch,
                         run_id=lease.run_id,
                         binding_id=alias_binding.binding,
-                        scope=alias_binding.scope,
-                        lifetime=alias_binding.lifetime,
+                        path=path,
+                        lifetime="invocation",
                         state="active",
                         resource_ref=acquisition.resource_ref,
                     ),
@@ -720,37 +1280,41 @@ class Walker:
             else:
                 capabilities[alias_binding.binding] = capability
 
-        boundary = self._effect_boundary(manifest, lease, path)
         context = NodeContext(
             run_id=lease.run_id,
             path=path,
             capabilities=capabilities,
             grants=self_binding.effective_grants,
-            effect=boundary,
+            effect=self._effect_boundary(manifest, lease, path, lost),
         )
 
         try:
-            outputs_map: Mapping[str, Any] = await instance.impl(context, node_inputs)
-
-            declared = {port.name for port in instance.definition.outputs}
-            missing = sorted(declared - set(outputs_map))
-            if missing:
+            raw_outputs: Mapping[str, Any] = await instance.impl(context, node_inputs)
+            if not isinstance(raw_outputs, Mapping):
                 raise ContractViolation(
-                    f"{instance.scope.render()}: implementation omitted declared "
-                    f"outputs {missing} — the contract is validated before any "
-                    "envelope is emitted"
+                    f"{instance.scope.render()}: implementation returned "
+                    f"{type(raw_outputs).__name__}, expected a mapping"
                 )
+            declared = {port.name for port in instance.definition.outputs}
+            missing = sorted(declared - set(raw_outputs))
+            extra = sorted(set(raw_outputs) - declared)
+            if missing or extra:
+                raise ContractViolation(
+                    f"{instance.scope.render()}: output contract mismatch; "
+                    f"missing={missing}, extra={extra}"
+                )
+            outputs = {name: json_value(raw_outputs[name]) for name in declared}
             envelopes: dict[str, Envelope[Any]] = {
                 name: Envelope(
                     run_id=lease.run_id,
                     path=path,
                     port=name,
                     created_at=utc_now(),
-                    payload=outputs_map[name],
+                    payload=outputs[name],
                 )
                 for name in declared
             }
-            journal.record_completion(
+            self._journal.record_completion(
                 lease,
                 Checkpoint(
                     run_id=lease.run_id,
@@ -761,19 +1325,61 @@ class Walker:
                 ),
             )
         except (OwnershipLost, CheckpointConflict):
-            raise  # fenced out: write nothing else — the new owner reconciles
-        except Exception:
-            # node failure: uncheckpointed work replays, so its acquisitions
-            # are discarded — never adopted as completed computation
+            raise
+        except (_CancelRequested, asyncio.CancelledError):
             await self._close_acquired(lease, acquired, "discard")
             raise
-        # completion is durable first; a crash before this close leaves the
-        # rows active and reconcile reaps them with the checkpoint standing
+        except Exception:
+            await self._close_acquired(lease, acquired, "discard")
+            raise
         await self._close_acquired(lease, acquired, "release")
-        return {name: outputs_map[name] for name in declared}
+        return outputs
+
+    def _restore_checked_checkpoint(
+        self,
+        instance: _Instance,
+        checkpoint: Checkpoint,
+        values: dict[str, Any],
+        bindings: dict[str, ResolvedPortBinding],
+    ) -> None:
+        expected_inputs = self._node_inputs(instance, values, bindings)
+        expected_hash = digest("inputs", 1, expected_inputs)
+        if (
+            checkpoint.input_hash != expected_hash
+            or checkpoint.resolved_version != instance.version
+        ):
+            raise CheckpointConflict(
+                f"{checkpoint.path.render()}: checkpoint contradicts the reconstructed "
+                "loop input hash or component version"
+            )
+        outputs = {
+            port: envelope.payload for port, envelope in checkpoint.outputs.items()
+        }
+        self._publish_atomic_outputs(instance, outputs, values)
+
+    def _publish_atomic_outputs(
+        self,
+        instance: _Instance,
+        outputs: dict[str, Any],
+        values: dict[str, Any],
+    ) -> None:
+        for port in instance.definition.outputs:
+            if port.name not in outputs:
+                raise JournalDamaged(
+                    f"{instance.scope.render()}: durable outputs omit {port.name!r}"
+                )
+            values[_address_key(self._atomic_output_address(instance, port))] = json_value(
+                outputs[port.name]
+            )
+
+    # -- effects --------------------------------------------------------------
 
     def _effect_boundary(
-        self, manifest: ExecutionManifest, lease: RunLease, path: ExecutionPath
+        self,
+        manifest: ExecutionManifest,
+        lease: RunLease,
+        path: ExecutionPath,
+        lost: list[OwnershipLost],
     ) -> Any:
         journal = self._journal
         effects = self._effects
@@ -784,13 +1390,18 @@ class Walker:
             *,
             attestation_id: str | None = None,
         ) -> EffectReceipt:
-            key = idempotency_key(manifest.manifest_hash, path, kind, subject)
+            self._check_run_control(lease, lost)
+            normalized = json_value(subject)
+            if not isinstance(normalized, dict):
+                raise ContractViolation("effect subject must be a JSON object")
+            key = idempotency_key(manifest.manifest_hash, path, kind, normalized)
             existing = journal.receipt_for(key)
             if existing is not None and existing.status in ("committed", "rejected"):
-                # a journaled rejected receipt is as final as a committed one:
-                # the same subject can never later succeed (unknown reconciles)
                 journal.append_event(
-                    lease, "EffectDeduplicated", path=path, payload={"kind": kind}
+                    lease,
+                    "EffectDeduplicated",
+                    path=path,
+                    payload={"kind": kind},
                 )
                 return existing
             adapter = effects.get(kind)
@@ -799,24 +1410,25 @@ class Walker:
                     f"no effect adapter for kind {kind!r}; assembled: {sorted(effects)}"
                 )
             request = EffectRequest(
-                run_id=lease.run_id,  # sealed by the boundary, never the node
+                run_id=lease.run_id,
                 manifest_hash=manifest.manifest_hash,
                 path=path,
                 kind=kind,
-                subject=subject,
+                subject=normalized,
                 idempotency_key=key,
                 attestation_id=attestation_id,
             )
             if journal.effect_prepared(key):
-                # prepared without a receipt: reconcile before re-executing —
-                # the recovery law
                 reconciled = await adapter.reconcile(request)
                 if reconciled is not None:
                     journal.record_effect_outcome(
-                        lease, request, reconciled, "EffectReconciled"
+                        lease,
+                        request,
+                        reconciled,
+                        "EffectReconciled",
                     )
                     return reconciled
-                # absent externally: safe to execute
+            self._check_run_control(lease, lost)
             journal.record_effect_prepared(lease, request)
             receipt = await adapter.execute(request)
             event_kind = {
@@ -831,52 +1443,92 @@ class Walker:
     # -- materialization ------------------------------------------------------
 
     def _materialize(
-        self, manifest: ExecutionManifest, run_id: RunId, inputs: dict[str, Any]
+        self,
+        manifest: ExecutionManifest,
+        run_id: RunId,
+        inputs: dict[str, Any],
     ) -> dict[str, Any]:
-        """Rebuild a SUCCEEDED run's outputs purely from durable checkpoints —
-        the crash-after-terminal-commit, before-caller-return case."""
-        journal = self._journal
-        root_scope = ScopePath(segments=(manifest.source_graph.name,))
-        values: dict[str, Any] = {
-            _address_key(GraphInputAddress(scope=root_scope, port=name)): value
-            for name, value in inputs.items()
-        }
-        for resolution in manifest.resolved_components:
-            checkpoint = journal.checkpoint(
-                run_id, ExecutionPath(scope=resolution.scope)
-            )
-            if checkpoint is None:
-                continue  # composite scopes checkpoint nothing
-            level = ScopePath(segments=resolution.scope.segments[:-1])
-            node = resolution.scope.segments[-1]
-            for port_name, envelope in checkpoint.outputs.items():
-                address = NodePortAddress(scope=level, node=node, port=port_name)
-                values[_address_key(address)] = envelope.payload
-        bindings_by_destination = {
+        instances = self._materialization_instances(manifest)
+        instances_by_scope = {instance.scope.segments: instance for instance in instances}
+        bindings = {
             _address_key(binding.destination): binding
             for binding in manifest.resolved_connections
         }
+        units = self._root_units(manifest, instances)
+        producers = self._unit_producer_index(units)
+        ordered = self._ordered_units(units, bindings, producers)
+        root_scope = ScopePath(segments=(manifest.source_graph.name,))
+        values: dict[str, Any] = {
+            _address_key(GraphInputAddress(scope=root_scope, port=name)): json_value(value)
+            for name, value in inputs.items()
+        }
+
+        for unit in ordered:
+            if unit.instance is not None:
+                checkpoint = self._journal.checkpoint(
+                    run_id,
+                    ExecutionPath(scope=unit.scope),
+                )
+                if checkpoint is None:
+                    raise JournalDamaged(
+                        f"successful run lacks checkpoint for {unit.scope.render()}"
+                    )
+                self._restore_checked_checkpoint(unit.instance, checkpoint, values, bindings)
+                continue
+            if unit.loop is None:
+                raise JournalDamaged("manifest contains an empty execution unit")
+            history = self._inspect_loop_history(
+                unit.loop,
+                run_id=run_id,
+                outer_values=values,
+                instances_by_scope=instances_by_scope,
+                bindings=bindings,
+                require_terminal=True,
+            )
+            if history.terminal_iteration is None or history.final_values is None:
+                raise JournalDamaged(
+                    f"successful run has no terminal loop state for {unit.scope.render()}"
+                )
+            self._publish_loop_exports(unit.loop, history.final_values, values)
+
+        return self._graph_outputs(manifest, values, bindings)
+
+    @staticmethod
+    def _graph_outputs(
+        manifest: ExecutionManifest,
+        values: dict[str, Any],
+        bindings: dict[str, ResolvedPortBinding],
+    ) -> dict[str, Any]:
+        root_scope = ScopePath(segments=(manifest.source_graph.name,))
         outputs: dict[str, Any] = {}
         for port in manifest.source_graph.outputs:
-            out_binding = bindings_by_destination.get(
+            binding = bindings.get(
                 _address_key(GraphOutputAddress(scope=root_scope, port=port.name))
             )
-            if out_binding is None:
-                continue
-            outputs[port.name] = _collect(values, out_binding.sources, port)
+            if binding is not None:
+                outputs[port.name] = _collect(values, binding.sources, port)
         return outputs
 
 
-def _collect(values: dict[str, Any], sources: tuple[PortAddress, ...], port: Port) -> Any:
-    resolved = []
+def _collect(
+    values: dict[str, Any],
+    sources: tuple[PortAddress, ...],
+    port: Port,
+) -> Any:
+    resolved: list[Any] = []
     for source in sources:
         key = _address_key(source)
         if key not in values:
             raise ContractViolation(
-                f"value for {key} is unavailable — a producer did not complete; "
-                "reaching collection without it is kernel damage"
+                f"value for {key} is unavailable; reaching collection without a "
+                "completed producer is kernel damage"
             )
         resolved.append(values[key])
     if port.cardinality == "many":
         return resolved
+    if len(resolved) != 1:
+        raise ContractViolation(
+            f"port {port.name!r} has cardinality {port.cardinality!r} but "
+            f"{len(resolved)} sources were sealed"
+        )
     return resolved[0]

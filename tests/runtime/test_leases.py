@@ -9,7 +9,9 @@ import pytest
 
 from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId
-from constructicon.core.graph import Graph, GraphNode, Ref
+from constructicon.core.graph import Graph, GraphNode, Loop, Ref
+from constructicon.core.manifest import CONTINUE_SCHEMA_HASH, CONTINUE_TYPE
+from constructicon.core.ports import Port
 from constructicon.core.run import RunStatus
 from constructicon.core.workspace import (
     AcquiredCapability,
@@ -35,6 +37,14 @@ from tests.conftest import (
 
 INPUTS = {"issue": {"title": "lease me"}}
 
+LOOP_STATE = Port(name="state", type_id="lease/State", schema_hash="lease-state-v1")
+LOOP_AGAIN = Port(
+    name="again",
+    type_id=CONTINUE_TYPE,
+    schema_hash=CONTINUE_SCHEMA_HASH,
+    json_schema={"type": "boolean"},
+)
+
 
 @dataclass
 class FakeLeasedCapability:
@@ -46,7 +56,7 @@ class FakeLeasedCapability:
 
     async def acquire(self, context: LeaseContext) -> AcquiredCapability:
         lease_id = lease_id_for(
-            context.run_lease.run_id, context.binding.scope, context.binding.binding
+            context.run_lease.run_id, context.path, context.binding.binding
         )
         acquisition_id = acquisition_id_for(lease_id, context.run_lease.epoch)
         self.acquired.append(acquisition_id)
@@ -91,6 +101,13 @@ async def leased_dying_impl(ctx: NodeContext, inputs: dict) -> dict:
     raise InjectedCrash("simulated process death mid-node")
 
 
+async def leased_loop_impl(ctx: NodeContext, inputs: dict) -> dict:
+    token = ctx.capability("cap")
+    assert isinstance(token, dict) and "token" in token
+    value = int(inputs["state"]["value"]) + 1
+    return {"state": {"value": value}, "again": value < 3}
+
+
 def leased_graph() -> Graph:
     return Graph(
         name="leasing",
@@ -122,6 +139,54 @@ def leased_system(
     definition, _ = atomic("test/leased", (ISSUE,), (SUMMARY,), impl)
     version = system.register(definition, impl)
     system.promote_initial(component="test/leased", version=version)
+    return system, capability
+
+
+def leased_loop_graph() -> Graph:
+    return Graph(
+        name="leased-loop",
+        nodes=(
+            GraphNode(
+                id="repeat",
+                body=Loop(
+                    body=Ref(
+                        component="test/leased-loop",
+                        bind={"cap": "fake-leased"},
+                    ),
+                    feedback={"state": "state"},
+                    continue_from="again",
+                    max_iterations=5,
+                ),
+            ),
+        ),
+        inputs=(LOOP_STATE,),
+        outputs=(LOOP_STATE,),
+    )
+
+
+def leased_loop_system(
+    journal: SqliteJournal,
+) -> tuple[Constructicon, FakeLeasedCapability]:
+    capability = FakeLeasedCapability()
+    system = Constructicon(
+        journal=journal,
+        capabilities={"fake-leased": capability},
+        catalog={
+            "fake-leased": CapabilityDescriptor(
+                capability_id="fake-leased", kind="fake", revision="1", leased=True
+            )
+        },
+        owner_id="loop-worker",
+        lease_ttl_s=LEASE_TTL_S,
+    )
+    definition, _ = atomic(
+        "test/leased-loop",
+        (LOOP_STATE,),
+        (LOOP_STATE, LOOP_AGAIN),
+        leased_loop_impl,
+    )
+    version = system.register(definition, leased_loop_impl)
+    system.promote_initial(component=definition.name, version=version)
     return system, capability
 
 
@@ -221,3 +286,63 @@ async def test_leased_declaration_requires_the_protocol(
     result = await system.start(leased_graph(), INPUTS, run_id=RunId("run-bad-cap"))
     assert result.status is RunStatus.FAILED
     assert any("does not implement" in error for error in result.failures.values())
+
+
+async def test_loop_iterations_have_frame_distinct_lease_identities(
+    journal: SqliteJournal,
+) -> None:
+    system, capability = leased_loop_system(journal)
+
+    result = await system.start(
+        leased_loop_graph(),
+        {"state": {"value": 0}},
+        run_id=RunId("run-leased-loop"),
+    )
+
+    assert result.status is RunStatus.SUCCEEDED
+    rows = journal.capability_leases(RunId("run-leased-loop"))
+    assert len(rows) == 3
+    assert len({row.lease_id for row in rows}) == 3
+    assert sorted(row.path.iterations[0].index for row in rows) == [0, 1, 2]
+    assert all(
+        row.state == "closed" and row.disposition == "released" for row in rows
+    )
+    assert len(capability.acquired) == 3
+
+
+async def test_stale_loop_lease_reconcile_uses_the_frame_checkpoint(
+    journal: SqliteJournal,
+    clock: FakeClock,
+) -> None:
+    first, first_capability = leased_loop_system(journal)
+    fired = False
+
+    def crash_after_first_iteration_member(name: str) -> None:
+        nonlocal fired
+        if name == "completion.after_commit" and not fired:
+            fired = True
+            raise InjectedCrash(name)
+
+    journal.fault_probe = crash_after_first_iteration_member
+    with pytest.raises(InjectedCrash):
+        await first.start(
+            leased_loop_graph(),
+            {"state": {"value": 0}},
+            run_id=RunId("run-loop-stale-lease"),
+        )
+    journal.fault_probe = lambda name: None
+    active = journal.capability_leases(RunId("run-loop-stale-lease"))
+    assert len(active) == 1 and active[0].state == "active"
+    assert active[0].path.iterations[0].index == 0
+
+    clock.advance(LEASE_TTL_S + 1)
+    second, second_capability = leased_loop_system(journal)
+    result = await second.resume(RunId("run-loop-stale-lease"))
+
+    assert result.status is RunStatus.SUCCEEDED
+    assert second_capability.reconciled == [
+        (first_capability.acquired[0], "release")
+    ]
+    rows = journal.capability_leases(RunId("run-loop-stale-lease"))
+    first_row = next(row for row in rows if row.acquisition_epoch == 1)
+    assert first_row.state == "closed" and first_row.disposition == "released"

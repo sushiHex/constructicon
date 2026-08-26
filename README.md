@@ -16,13 +16,14 @@ contributing code; humans participate as observer, advisor, and approver.
 
 ## Status
 
-Architecture **frozen**; implementation at **M3** — the vertical slice,
-crash & resume hardening, and git authority are green:
+Architecture **frozen**; implementation through **M4** is green — the vertical
+slice, crash & resume hardening, git authority, and generic bounded loops:
 
 ```
 Stage → Import → Prepare exact merge → Gate (read-only, real Ruff/Pytest)
+      → red → repair in a fresh frame-stamped workspace → gate green
       → journal-minted Attestation → merge_verified → one git ref transaction
-      → Receipt → crash → reconcile from the marker → resume / reproduce
+      → Receipt → crash → reconcile / restore by ExecutionPath → resume
 ```
 
 The strongest claim is mechanically true and tested: **the only path from
@@ -32,6 +33,15 @@ refs; a moved base is a truthful rejected receipt; forged, absent,
 mismatched, failing, or world-mismatched attestations move nothing; every
 hard-crash probe — including a real worker dying via `os._exit` mid-merge —
 recovers to exactly one install.
+
+Loops add no scheduler and no gate-aware kernel object. Admission seals their
+initial bindings, feedback edges, canonical boolean control, exports, and
+atomic member order. Every iteration is a distinct `ExecutionPath`, so
+checkpoints, effects, and capability leases reuse the existing recovery laws.
+False exports the final completed state; all-true exhaustion becomes
+`PARKED/policy_exhausted` at graph closure. The acceptance path turns a broken
+Git candidate red→repair→green across fresh staging repositories and installs
+one exact verified merge.
 
 The full lifecycle runs with zero credentials:
 

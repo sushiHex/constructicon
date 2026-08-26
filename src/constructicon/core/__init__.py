@@ -85,19 +85,35 @@ from constructicon.core.graph import (
     Loop,
     Ref,
 )
-from constructicon.core.identity import Digest, canonical_json, digest
+from constructicon.core.identity import (
+    Digest,
+    JsonScalar,
+    JsonValue,
+    canonical_json,
+    digest,
+    json_value,
+)
 from constructicon.core.journal import (
     Checkpoint,
     Journal,
     JournalEvent,
 )
 from constructicon.core.manifest import (
+    CONTINUE_SCHEMA,
+    CONTINUE_SCHEMA_HASH,
+    CONTINUE_TYPE,
+    MANIFEST_SCHEMA_VERSION,
     CapabilityBinding,
     CapabilityLease,
     ComponentResolution,
     ExecutionManifest,
     LeaseLifetime,
+    LoopExport,
+    LoopResolution,
     ResolvedPortBinding,
+    manifest_hash_for,
+    manifest_identity_payload,
+    parse_manifest_json,
 )
 from constructicon.core.ports import (
     GraphInputAddress,
@@ -119,6 +135,7 @@ from constructicon.core.run import (
     Liveness,
     OwnershipLost,
     ParkedReason,
+    ParkedUnit,
     ProducerStatus,
     RunLease,
     RunState,
@@ -137,7 +154,11 @@ from constructicon.core.workspace import (
 )
 
 __all__ = [
+    "CONTINUE_SCHEMA",
+    "CONTINUE_SCHEMA_HASH",
+    "CONTINUE_TYPE",
     "GRAPH_SCHEMA_VERSION",
+    "MANIFEST_SCHEMA_VERSION",
     "AcquiredCapability",
     "AdmissionError",
     "ApprovalRecord",
@@ -194,6 +215,8 @@ __all__ = [
     "Journal",
     "JournalDamaged",
     "JournalEvent",
+    "JsonScalar",
+    "JsonValue",
     "LearningProfile",
     "LeaseClosure",
     "LeaseContext",
@@ -203,12 +226,15 @@ __all__ = [
     "Liveness",
     "Loadability",
     "Loop",
+    "LoopExport",
+    "LoopResolution",
     "MergeSubject",
     "ModelSelection",
     "NodeId",
     "NodePortAddress",
     "OwnershipLost",
     "ParkedReason",
+    "ParkedUnit",
     "Port",
     "PortAddress",
     "Posture",
@@ -240,7 +266,11 @@ __all__ = [
     "digest",
     "idempotency_key",
     "invocation_id",
+    "json_value",
     "lease_id_for",
+    "manifest_hash_for",
+    "manifest_identity_payload",
+    "parse_manifest_json",
     "request_hash",
     "utc_now",
 ]

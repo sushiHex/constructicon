@@ -138,7 +138,7 @@ class GateRunner:
         from constructicon.core.workspace import acquisition_id_for, lease_id_for
 
         lease_id = lease_id_for(
-            context.run_lease.run_id, context.binding.scope, context.binding.binding
+            context.run_lease.run_id, context.path, context.binding.binding
         )
         acquisition_id = acquisition_id_for(lease_id, context.run_lease.epoch)
         return AcquiredCapability(
