@@ -1,6 +1,22 @@
-"""L3 — authoring sugar compiling to the graph IR.
+"""L3 — authoring sugar compiling immediately to the canonical Graph IR.
 
-The combinators (@task, flow, harness, loop sugar, the pattern library) arrive
-with M5. The layer exists from the start so the layer contract is complete and
-imports flow strictly downward from day one (I8).
+No SDK object reaches admission or execution. ``@task`` produces a canonical
+atomic ``ComponentDef`` plus its process-local implementation; combinators
+produce only ``Ref``, ``Graph``, and ``Loop`` values wrapped for registration.
 """
+
+from constructicon.sdk.combinators import component, flow, harness, loop
+from constructicon.sdk.task import TASK_ADAPTER_REVISION, task
+from constructicon.sdk.types import DefinitionBundle, PortType, port_type
+
+__all__ = [
+    "TASK_ADAPTER_REVISION",
+    "DefinitionBundle",
+    "PortType",
+    "component",
+    "flow",
+    "harness",
+    "loop",
+    "port_type",
+    "task",
+]
