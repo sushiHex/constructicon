@@ -22,7 +22,7 @@ from constructicon.core.effect import (
     ComponentProofSubject,
 )
 from constructicon.core.envelope import utc_now
-from constructicon.core.errors import AdmissionError, ConstructiconError
+from constructicon.core.errors import AdmissionError, ConstructiconError, JournalDamaged
 from constructicon.core.executor import ExecutorProfile
 from constructicon.core.grants import Posture
 from constructicon.core.graph import Graph, Loop, Ref
@@ -93,8 +93,6 @@ class InMemoryRegistryStore:
         )
 
     def store_version(self, version: StoredVersion) -> None:
-        from constructicon.core.errors import JournalDamaged
-
         name = version.definition.name
         key = str(version.content_hash)
         existing = self._versions.get(name, {}).get(key)
@@ -171,13 +169,21 @@ class ComponentRegistry:
         if is_atomic:
             self._validate_atomic_identity(definition, impl)
         content = definition.content_hash()
-        self.store.store_version(
-            StoredVersion(
-                definition=definition,
-                content_hash=content,
-                registered_at=utc_now(),
+        existing = self.store.snapshot().get(definition.name, content)
+        if existing is not None:
+            if existing.definition != definition:
+                raise JournalDamaged(
+                    f"component {definition.name!r}@{content} already exists with "
+                    "different semantics under the same identity"
+                )
+        else:
+            self.store.store_version(
+                StoredVersion(
+                    definition=definition,
+                    content_hash=content,
+                    registered_at=utc_now(),
+                )
             )
-        )
         if impl is not None:
             self._impls[(definition.name, str(content))] = impl
         return content
