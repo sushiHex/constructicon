@@ -43,7 +43,7 @@ Exactly three constructs, closed under composition:
   ordinary registered components inside the body. A loop executes its body at
   least once, threads feedback into the next iteration, reads `continue_from`
   after each completed iteration, exports the final iteration's non-control
-  outputs, and parks with `policy_exhausted` on exhaustion. (Executes at M4.)
+  outputs, and parks with `policy_exhausted` on exhaustion.
 
 Ports are nominal (`type_id` + schema hash + cardinality `one|optional|many`).
 The magnetic rules, applied once at admission: exact name + exact type; else
@@ -58,9 +58,11 @@ manifest: resolved component versions (`ScopePath`-addressed, so nested
 duplicates stay distinct), explicit resolved connections (typed `PortAddress`
 endpoints — graph inputs, node ports, graph outputs), capability bindings with
 fully concrete `EffectiveGrants` (no `None`, no `"inherit"` survives
-admission; root inheritance is a fault), and three identities: `input_hash`,
-`world_hash`, `manifest_hash`. Composites flatten at admission; boundary
-renames never leak inner names.
+admission; root inheritance is a fault), complete `LoopResolution`s (boundary
+bindings, feedback substitutions, boolean continuation source, explicit
+non-control exports, and topologically ordered atomic members), and three
+identities: `input_hash`, `world_hash`, `manifest_hash`. Composites flatten at
+admission; boundary renames never leak inner names.
 
 **The walker accepts only an `ExecutionManifest`.** After validation it never
 resolves a reference, searches for a port, inherits a grant, chooses a
@@ -124,6 +126,17 @@ re-walks the graph: a checkpoint at the same `ExecutionPath` with matching
 input hash and resolved version restores; the first miss resumes live.
 Reproduce starts a new run under a past run's exact manifest and inputs.
 
+Loops use that same machinery rather than a second scheduler. Every iteration
+adds one `IterationFrame` to each member's `ExecutionPath`; checkpoints,
+effects, leases, and events therefore remain frame-distinct automatically. A
+checkpoint at an invocation either matches and restores or contradicts and
+refuses before any implementation, capability, or effect runs. Continuation is
+the one canonical nominal boolean contract. A false decision exports only the
+manifest-listed non-control values from that completed iteration; all-true
+exhaustion publishes nothing and becomes a typed root PARKED outcome at graph
+closure. Independent siblings still finish; dependents report their producer
+as PARKED. See [adr/0010](adr/0010-loop-execution.md).
+
 One canonical `InvocationStatus` enum serves runtime, journal, API, and
 renderings. Run lifecycle: `PENDING → RUNNING → {SUCCEEDED | FAILED |
 CANCELLED | PARKED}` with machine-readable parked reasons.
@@ -151,7 +164,13 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
   one git ref transaction (target CAS + idempotency marker ref) with
   marker-based crash reconciliation; discard-on-failure with
   reconcile-on-reclaim. See [adr/0009](adr/0009-git-authority.md).
-- **M4** — generic bounded loops with iteration identities and PARKED reasons.
+- **M4 (done)** — generic bounded loops compiled completely into the manifest;
+  frame-aware checkpoints, effects, and invocation leases; strict boolean
+  continuation; feedback and final exports; graph-closure PARKED semantics;
+  convergent resume/materialization; v3→v4 lease migration and historical v1
+  manifest compatibility; staging-local `reset_to(GitRef)`; a real Ruff/Pytest
+  red→repair→green Git loop installing exactly one attested merge. See
+  [adr/0010](adr/0010-loop-execution.md).
 - **M5** — SDK combinators; `system.describe()`; architect-proposed graph
   admission; agent-repairable errors end-to-end.
 - **M6** — MCP control plane with idempotency keys and bounded pagination.
@@ -180,4 +199,5 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
 | MCP | Retried mutation with the same idempotency key → one run (M6) |
 | Telemetry | Damaged executor output never reports clean success |
 | Reproduction | Installed code differs from recorded digest → refuse (M2) |
+| Loops | Contradictory iteration checkpoint, hidden nested loop, or non-boolean control → refuse before new work; exhausted roots report PARKED (M4) |
 | Rollback | Both versions and all evidence retained; in-flight runs keep pins |

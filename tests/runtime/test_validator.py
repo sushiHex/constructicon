@@ -153,7 +153,7 @@ def test_unknown_capability_is_itemized(world: Constructicon) -> None:
         world.validate(broken, INPUTS)
 
 
-def test_loops_are_refused_until_m4(world: Constructicon) -> None:
+def test_loop_contract_faults_are_itemized(world: Constructicon) -> None:
     graph = Graph(
         name="looped",
         nodes=(
@@ -170,8 +170,8 @@ def test_loops_are_refused_until_m4(world: Constructicon) -> None:
         inputs=(BRIEF,),
         outputs=(),
     )
-    with pytest.raises(AdmissionError, match="M4"):
-        world.validate(graph, INPUTS | {"brief": {"title": "x"}})
+    with pytest.raises(AdmissionError, match="continuation output"):
+        world.validate(graph, {"brief": {"title": "x"}})
 
 
 def test_composite_flattens_with_distinct_nested_scopes(world: Constructicon) -> None:

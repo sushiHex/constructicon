@@ -55,6 +55,16 @@ ParkedReason = Literal[
 ]
 
 
+class ParkedUnit(BaseModel):
+    """One root execution unit that exhausted a policy without failing."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    path: ExecutionPath
+    reason: ParkedReason
+    completed_iterations: PositiveInt
+
+
 class RunLease(BaseModel):
     """The authority to write a run. ``owner_id + epoch`` is the fence."""
 

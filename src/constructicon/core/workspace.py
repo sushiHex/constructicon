@@ -1,15 +1,12 @@
-"""Workspace and leased-capability contracts (M3).
+"""Workspace and leased-capability contracts (M3/M4).
 
-The walker owns every ``CapabilityLease`` transition on every exit path, but
-it knows only the verbs on ``LeasedCapability`` — acquire, close, reconcile —
-never git, paths, or what a worktree is. Identity is computed under the one
-identity law: a reclaimed run carries a higher ownership epoch and therefore
-a different ``acquisition_id``, so a stale worker's writes can only land in
-its own obsolete physical acquisition (the journal fence protects SQLite;
-acquisition epochs protect the filesystem).
+The walker owns every ``CapabilityLease`` transition, but knows only acquire,
+close, and reconcile — never git, paths, or worktrees. Lease identity is the
+full dynamic ``ExecutionPath`` so loop iterations cannot collide.
 
-Code crosses between nodes as ``GitRef`` (I5): the workspace views here hand
-out paths for local work and commits for everything durable.
+Code crosses between nodes as ``GitRef`` (I5). A repair iteration receives the
+previous candidate as data and may reset a fresh staging workspace to it; the
+ref, never a shared worktree, carries state across iterations.
 """
 
 from __future__ import annotations
@@ -17,13 +14,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
-from constructicon.core.address import ExecutionPath, GitSha, RunId, ScopePath
+from constructicon.core.address import ExecutionPath, GitSha, RunId
 from constructicon.core.envelope import GitRef
 from constructicon.core.identity import Digest, digest
 from constructicon.core.manifest import CapabilityBinding, CapabilityLease
 from constructicon.core.run import RunLease
 
-Disposition = Literal["release", "discard", "suspend"]
+Disposition = Literal["release", "discard"]
 
 
 @runtime_checkable
@@ -38,16 +35,16 @@ class WorkspaceView(Protocol):
 
 @runtime_checkable
 class WriteWorkspace(WorkspaceView, Protocol):
-    """A staged, physically separate working repository. The candidate
-    crosses onward as a commit, never as files (I5)."""
+    """A staged, physically separate working repository."""
+
+    def reset_to(self, ref: GitRef) -> None: ...
 
     def commit_all(self, message: str) -> GitSha: ...
 
 
 @dataclass(frozen=True)
 class LeaseContext:
-    """Everything a provider may know about one acquisition — supplied by
-    the walker, never by the node."""
+    """Everything a provider may know about one acquisition — walker supplied."""
 
     run_lease: RunLease
     binding: CapabilityBinding
@@ -57,8 +54,7 @@ class LeaseContext:
 
 @dataclass(frozen=True)
 class AcquiredCapability:
-    """One live physical acquisition: the injected resource plus the
-    identities the journal rows carry."""
+    """One live physical acquisition plus its computed identities."""
 
     resource: object
     lease_id: str
@@ -68,26 +64,22 @@ class AcquiredCapability:
 
 @dataclass(frozen=True)
 class LeaseClosure:
-    disposition: Literal["released", "discarded", "retained"]
+    disposition: Literal["released", "discarded"]
     detail: str | None = None
 
 
 @dataclass(frozen=True)
 class LeaseReconciliation:
-    """What post-crash reconciliation did with a run's physical leftovers."""
+    """What post-crash reconciliation did with physical leftovers."""
 
-    reaped: tuple[str, ...] = ()  # resource_refs whose physical state was removed
+    reaped: tuple[str, ...] = ()
     restored: tuple[str, ...] = ()
     detail: str | None = None
 
 
 @dataclass(frozen=True)
 class StaleAcquisition:
-    """One prior-epoch acquisition the walker found still open in the journal.
-    The walker decides the disposition (checkpointed invocation -> "release":
-    reap the physical leftovers, durable refs stand; uncheckpointed ->
-    "discard": the work replays from the pinned base — never adopt a dirty
-    workspace as completed computation); the provider executes it."""
+    """One prior-epoch acquisition and its walker-selected disposition."""
 
     lease: CapabilityLease
     disposition: Disposition
@@ -95,9 +87,7 @@ class StaleAcquisition:
 
 @runtime_checkable
 class LeasedCapability(Protocol):
-    """A capability whose injection is a physical acquisition the walker
-    leases, closes, and reconciles — declared via
-    ``CapabilityDescriptor.leased`` and verified at activation."""
+    """A capability whose injection requires a physical acquisition."""
 
     async def acquire(self, context: LeaseContext) -> AcquiredCapability: ...
 
@@ -110,20 +100,28 @@ class LeasedCapability(Protocol):
     ) -> LeaseReconciliation: ...
 
 
-def lease_id_for(run_id: RunId, scope: ScopePath, binding_id: str) -> str:
-    """Logical lease identity — computed, never minted (one per
-    run/scope/binding across every ownership epoch)."""
+def lease_id_for(run_id: RunId, path: ExecutionPath, binding_id: str) -> str:
+    """Logical lease identity — one per run/invocation/binding.
+
+    Schema version 2 makes the M4 shift from static scope to dynamic path
+    explicit in the identity law.
+    """
+
     body = digest(
         "capability-lease",
-        1,
-        {"run_id": run_id, "scope": list(scope.segments), "binding": binding_id},
+        2,
+        {
+            "run_id": run_id,
+            "path": path.model_dump(mode="json"),
+            "binding": binding_id,
+        },
     )
     return f"lease-{str(body).removeprefix('sha256:')[:32]}"
 
 
 def acquisition_id_for(lease_id: str, owner_epoch: int) -> str:
-    """Physical acquisition identity: one per ownership epoch, so reclaim
-    never reuses a stale owner's paths."""
+    """Physical acquisition identity: one per ownership epoch."""
+
     body = digest(
         "capability-acquisition",
         1,
