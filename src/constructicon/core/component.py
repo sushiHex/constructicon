@@ -20,6 +20,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     SerializerFunctionWrapHandler,
+    field_validator,
     model_serializer,
 )
 
@@ -106,6 +107,21 @@ class ComponentDef(BaseModel):
     # None = legacy/opaque; () = complete declaration of no requirements.
     capability_requirements: tuple[CapabilityRequirement, ...] | None = None
 
+    @field_validator("capability_requirements")
+    @classmethod
+    def _canonical_requirements(
+        cls,
+        value: tuple[CapabilityRequirement, ...] | None,
+    ) -> tuple[CapabilityRequirement, ...] | None:
+        if value is None:
+            return None
+        ordered = tuple(sorted(value, key=lambda item: (item.alias, item.kind)))
+        aliases = [item.alias for item in ordered]
+        duplicates = sorted({alias for alias in aliases if aliases.count(alias) > 1})
+        if duplicates:
+            raise ValueError(f"duplicate capability requirement aliases: {duplicates}")
+        return ordered
+
     @model_serializer(mode="wrap")
     def _serialize(
         self,
@@ -139,10 +155,7 @@ class ComponentDef(BaseModel):
             return digest("component", 1, payload)
         payload["capability_requirements"] = [
             requirement.model_dump(mode="json")
-            for requirement in sorted(
-                self.capability_requirements,
-                key=lambda item: (item.alias, item.kind),
-            )
+            for requirement in self.capability_requirements
         ]
         return digest("component", 2, payload)
 
