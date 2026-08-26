@@ -21,11 +21,7 @@ def loop(
 ) -> Loop:
     """Direct one-to-one sugar over M4's generic ``core.Loop``."""
 
-    normalized: Ref | Graph
-    if isinstance(body, DefinitionBundle):
-        normalized = body.ref()
-    else:
-        normalized = body
+    normalized = body.ref() if isinstance(body, DefinitionBundle) else body
     return Loop(
         body=normalized,
         feedback=dict(feedback),
