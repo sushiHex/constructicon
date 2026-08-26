@@ -461,7 +461,10 @@ def _candidate_list(message: str) -> list[str]:
         except (SyntaxError, ValueError):
             continue
         if isinstance(value, list) and all(isinstance(item, str) for item in value):
-            return value
+            # Validator diagnostics carry fully scoped addresses; Connection.map
+            # authoring selectors are node-local ``node.port`` strings. Return
+            # the exact repair vocabulary rather than an unparseable scope path.
+            return [item.rsplit("/", 1)[-1] for item in value]
     return []
 
 
