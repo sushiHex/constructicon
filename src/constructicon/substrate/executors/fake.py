@@ -21,10 +21,17 @@ from constructicon.core.executor import (
 )
 from constructicon.core.grants import EffectiveGrants, IsolationProfile, Posture
 from constructicon.core.identity import canonical_json
+from constructicon.substrate.external.fake import FakeExternalLedger
 
 
 class FakeExecutor:
-    def __init__(self, script: Mapping[str, Any], *, name: str = "fake") -> None:
+    def __init__(
+        self,
+        script: Mapping[str, Any],
+        *,
+        name: str = "fake",
+        ledger: FakeExternalLedger | None = None,
+    ) -> None:
         self._script = dict(script)
         self._profile = ExecutorProfile(
             name=name,
@@ -37,7 +44,16 @@ class FakeExecutor:
                 network_enforced=True,
             ),
         )
-        self.calls: list[TaskSpec] = []
+        self.ledger = ledger if ledger is not None else FakeExternalLedger()
+
+    @property
+    def calls(self) -> list[TaskSpec]:
+        """Every invocation ever made against this executor's ledger —
+        replayed ones included, in call order."""
+        return [
+            TaskSpec.model_validate_json(task_json)
+            for task_json in self.ledger.executor_calls()
+        ]
 
     @property
     def profile(self) -> ExecutorProfile:
@@ -56,7 +72,7 @@ class FakeExecutor:
         grants: EffectiveGrants,
     ) -> ExecutorOutcome:
         started = time.monotonic()
-        self.calls.append(task)
+        self.ledger.record_executor_call(self._profile.name, task.model_dump_json())
         problems = self.validate_grants(grants)
         if problems:
             return ExecutorFailure(

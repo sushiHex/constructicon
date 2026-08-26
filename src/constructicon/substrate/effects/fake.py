@@ -1,9 +1,11 @@
 """The fake effect boundary — proves the effect law without touching the world.
 
-``executions`` records every real external transition the adapter performed.
-The M1 acceptance test asserts that replay, resume, and reproduce never grow
-it for the same idempotency key: once an effect has a committed receipt, no
-retry causes a second externally visible transition.
+Every REAL external transition is recorded in a ``FakeExternalLedger`` — an
+independently durable second store, so replay/resume/reproduce/crash tests can
+assert against an "outside" the journal cannot retroactively edit. The
+acceptance tests assert that no idempotency key ever grows the ledger twice:
+once an effect has a committed receipt, no retry causes a second externally
+visible transition.
 """
 
 from __future__ import annotations
@@ -14,33 +16,43 @@ from constructicon.core.effect import (
     EffectRequest,
     request_hash,
 )
+from constructicon.substrate.external.fake import FakeExternalLedger
 
 
 class FakeAnnounceEffect:
     """kind="announce" with native idempotency, like a well-behaved external API."""
 
-    def __init__(self) -> None:
-        self.executions: list[EffectRequest] = []
-        self._by_key: dict[str, EffectReceipt] = {}
+    def __init__(self, ledger: FakeExternalLedger | None = None) -> None:
+        self.ledger = ledger if ledger is not None else FakeExternalLedger()
 
     @property
     def profile(self) -> EffectProfile:
         return EffectProfile(kind="announce", recovery="native_idempotency")
 
+    @property
+    def executions(self) -> list[EffectRequest]:
+        """One entry per REAL external transition, in execution order."""
+        return [
+            EffectRequest.model_validate_json(request_json)
+            for request_json in self.ledger.announce_requests()
+        ]
+
     async def execute(self, request: EffectRequest) -> EffectReceipt:
         key = str(request.idempotency_key)
-        existing = self._by_key.get(key)
+        existing = self.ledger.announce_receipt(key)
         if existing is not None:  # native idempotency: same key, same outcome
-            return existing
-        self.executions.append(request)
+            return EffectReceipt.model_validate_json(existing)
         receipt = EffectReceipt(
             request_hash=request_hash(request),
             status="committed",
-            external_reference=f"announce/{len(self.executions)}",
+            external_reference=f"announce/{self.ledger.announce_count() + 1}",
             observed_state={"subject": request.subject},
         )
-        self._by_key[key] = receipt
+        self.ledger.record_announce(
+            key, request.model_dump_json(), receipt.model_dump_json()
+        )
         return receipt
 
     async def reconcile(self, request: EffectRequest) -> EffectReceipt | None:
-        return self._by_key.get(str(request.idempotency_key))
+        existing = self.ledger.announce_receipt(str(request.idempotency_key))
+        return EffectReceipt.model_validate_json(existing) if existing else None

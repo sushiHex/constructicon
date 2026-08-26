@@ -1,8 +1,15 @@
-"""Shared fixtures: a small component world exercising the M1 vertical slice."""
+"""Shared fixtures: a small component world exercising the vertical slice.
+
+M2 additions: a controllable clock (lease expiry without sleeping), the
+``InjectedCrash`` unit-lane crash (a BaseException, so the walker's
+node-failure containment cannot launder simulated process death into FAILED),
+and a deliberately failing component for dependency-blocking tests.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -15,15 +22,35 @@ from constructicon.core.graph import Connection, Graph, GraphNode, Ref
 from constructicon.core.identity import digest
 from constructicon.core.ports import Port
 from constructicon.runtime.context import NodeContext
-from constructicon.runtime.registry import source_digest_for
-from constructicon.runtime.validator import CapabilityDescriptor
+from constructicon.runtime.registry import CapabilityDescriptor, source_digest_for
 from constructicon.substrate.effects.fake import FakeAnnounceEffect
 from constructicon.substrate.executors.fake import FakeExecutor
+from constructicon.substrate.journal.sqlite import SqliteJournal
 
 ISSUE = Port(name="issue", type_id="test/Issue", schema_hash="s1")
 BRIEF = Port(name="brief", type_id="test/Brief", schema_hash="s1")
 ANNOUNCED = Port(name="announced", type_id="test/Announced", schema_hash="s1")
 SUMMARY = Port(name="summary", type_id="test/Summary", schema_hash="s1")
+
+LEASE_TTL_S = 30.0
+TRIAGE_SCRIPT = {"triage": {"title": "fix the flaky retry loop", "risk": "low"}}
+
+
+class InjectedCrash(BaseException):
+    """Simulated process death at a named fault probe (the unit lane)."""
+
+
+class FakeClock:
+    """Deterministic time source; tests advance it past lease expiry."""
+
+    def __init__(self) -> None:
+        self._now = datetime(2026, 1, 1, tzinfo=UTC)
+
+    def now(self) -> datetime:
+        return self._now
+
+    def advance(self, seconds: float) -> None:
+        self._now += timedelta(seconds=seconds)
 
 
 def atomic(
@@ -75,6 +102,15 @@ async def summarize_impl(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping
     return {"summary": {"text": f"summary of {inputs['brief']['title']}"}}
 
 
+async def failing_impl(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[str, Any]:
+    raise RuntimeError("scripted node failure")
+
+
+@pytest.fixture
+def clock() -> FakeClock:
+    return FakeClock()
+
+
 @pytest.fixture
 def announce_effect() -> FakeAnnounceEffect:
     return FakeAnnounceEffect()
@@ -82,17 +118,23 @@ def announce_effect() -> FakeAnnounceEffect:
 
 @pytest.fixture
 def fake_executor() -> FakeExecutor:
-    return FakeExecutor({"triage": {"title": "fix the flaky retry loop", "risk": "low"}})
+    return FakeExecutor(dict(TRIAGE_SCRIPT))
 
 
 @pytest.fixture
-def system(
-    tmp_path: Path, fake_executor: FakeExecutor, announce_effect: FakeAnnounceEffect
-) -> Constructicon:
-    from constructicon.substrate.journal.sqlite import SqliteJournal
+def journal(tmp_path: Path, clock: FakeClock) -> SqliteJournal:
+    return SqliteJournal(tmp_path / "journal.db", now_fn=clock.now)
 
+
+def build_system(
+    journal: SqliteJournal,
+    fake_executor: FakeExecutor,
+    announce_effect: FakeAnnounceEffect,
+    *,
+    owner_id: str,
+) -> Constructicon:
     return Constructicon(
-        journal=SqliteJournal(tmp_path / "journal.db"),
+        journal=journal,
         capabilities={"fake-executor": fake_executor},
         catalog={
             "fake-executor": CapabilityDescriptor(
@@ -103,7 +145,18 @@ def system(
             )
         },
         effects={"announce": announce_effect},
+        owner_id=owner_id,
+        lease_ttl_s=LEASE_TTL_S,
     )
+
+
+@pytest.fixture
+def system(
+    journal: SqliteJournal,
+    fake_executor: FakeExecutor,
+    announce_effect: FakeAnnounceEffect,
+) -> Constructicon:
+    return build_system(journal, fake_executor, announce_effect, owner_id="worker-one")
 
 
 @pytest.fixture

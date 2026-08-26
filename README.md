@@ -16,13 +16,19 @@ contributing code; humans participate as observer, advisor, and approver.
 
 ## Status
 
-Architecture **frozen**; implementation at **M1** — the vertical slice is
-green:
+Architecture **frozen**; implementation at **M2** — the vertical slice plus
+crash & resume hardening are green:
 
 ```
-Graph → validate → ExecutionManifest → FakeExecutor → checkpoint
-      → idempotent effect → EffectReceipt → resume / reproduce
+Graph → validate → ExecutionManifest → activate → claim (fenced lease)
+      → FakeExecutor → checkpoint → idempotent effect → EffectReceipt
+      → crash → reclaim → restore / reconcile → resume / reproduce → project
 ```
+
+For every named hard-crash probe — including a real worker process dying via
+`os._exit` — a fresh process reclaims the run with a higher ownership epoch,
+the stale owner is fenced from all later writes, every committed checkpoint is
+restored byte-for-byte, and no external effect ever happens twice.
 
 The full lifecycle runs with zero credentials:
 
