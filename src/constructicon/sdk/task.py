@@ -229,6 +229,12 @@ def _input_contract(name: str, annotation: Any) -> _PortContract:
     optional_inner = _optional_inner(base)
     if optional_inner is not None:
         contract_annotation, inner_type = _unwrap_annotated(optional_inner)
+        if get_origin(contract_annotation) is list:
+            raise TypeError(
+                f"input {name!r} uses list[T] | None, which has no unambiguous "
+                "magnetic cardinality; use list[T] or model the optional collection "
+                "inside an explicit Pydantic contract"
+            )
         explicit_type = _merge_explicit_types(explicit_type, inner_type)
         cardinality = "optional"
     else:
