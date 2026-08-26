@@ -25,7 +25,7 @@ class SchemaDocument(BaseModel):
 
     name: str
     version: PositiveInt
-    digest: Digest
+    schema_hash: str
     schema_: dict[str, Any]
     generator: str = "pydantic-v2"
 
