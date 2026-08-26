@@ -46,6 +46,12 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 
+[tool.ruff.lint.per-file-ignores]
+# The adapter revision is intentionally attached as function metadata; using
+# setattr here is the truthful cross-layer observation point, not dynamic API
+# dispatch. Runtime reads it without importing the SDK.
+"src/constructicon/sdk/task.py" = ["B010"]
+
 [tool.importlinter]
 root_package = "constructicon"
 include_external_packages = true
