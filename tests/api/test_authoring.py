@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from collections.abc import Mapping
+from typing import Annotated, Any
 
 from pydantic import BaseModel
 
@@ -10,7 +11,9 @@ from constructicon.api.system import Constructicon
 from constructicon.core.admission import AdmissionCode, AdmissionRejected
 from constructicon.core.component import CapabilityRequirement
 from constructicon.core.graph import Graph, GraphNode
+from constructicon.runtime.context import NodeContext
 from constructicon.sdk import port_type, task
+from tests.conftest import atomic
 
 
 class Request(BaseModel):
@@ -32,20 +35,63 @@ async def respond(
     return Reply(text=request.text)
 
 
+@task("authoring/plain", output="reply")
+async def plain(
+    request: Annotated[Request, port_type("authoring/Request")],
+) -> Annotated[Reply, port_type("authoring/Reply")]:
+    return Reply(text=request.text)
+
+
+async def legacy_impl(
+    ctx: NodeContext,
+    inputs: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    return {"reply": inputs["request"]}
+
+
 def test_describe_is_bounded_complete_and_secret_free(
     system: Constructicon,
 ) -> None:
-    version = system.register(respond)
-    system.promote_initial(component=respond.name, version=version)
+    for bundle in (respond, plain):
+        version = system.register(bundle)
+        system.promote_initial(component=bundle.name, version=version)
+    legacy_definition, legacy_implementation = atomic(
+        "authoring/legacy",
+        respond.definition.inputs,
+        respond.definition.outputs,
+        legacy_impl,
+    )
+    legacy_version = system.register(legacy_definition, legacy_implementation)
+    system.promote_initial(component=legacy_definition.name, version=legacy_version)
+
     description = system.describe(limit=100)
     assert description.graph_schema.schema_["title"] == "Graph"
     assert description.admission_schema.schema_
     assert description.grants.root_grants.posture.value == "read"
     assert description.authoring.bindings.ambiguity_policy == "reject"
+
     described = next(item for item in description.components if item.name == respond.name)
     assert described.completeness.capability_bindings is True
     assert described.completeness.port_schemas is True
     assert described.capability_requirements[0].alias == "executor"
+    for port in (*described.inputs, *described.outputs):
+        document = next(
+            schema for schema in description.schemas if schema.schema_hash == port.schema_hash
+        )
+        assert document.schema_ and document.schema_hash == port.schema_hash
+
+    plain_description = next(
+        item for item in description.components if item.name == plain.name
+    )
+    assert plain_description.capability_requirements == ()
+    assert plain_description.completeness.capability_bindings is True
+
+    legacy_description = next(
+        item for item in description.components if item.name == legacy_definition.name
+    )
+    assert legacy_description.capability_requirements == ()
+    assert legacy_description.completeness.capability_bindings is False
+
     capability = next(
         item for item in description.capabilities if item.capability_id == "fake-executor"
     )
