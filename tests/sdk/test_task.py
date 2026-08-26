@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -100,7 +101,7 @@ def test_unsupported_signature_semantics_are_rejected(
     function: Any,
     message: str,
 ) -> None:
-    with pytest.raises(TypeError, match=message.replace("[", r"\[").replace("]", r"\]")):
+    with pytest.raises(TypeError, match=re.escape(message)):
         task(component_name)(function)
 
 
