@@ -29,6 +29,7 @@ from constructicon.substrate.journal.sqlite import SqliteJournal
 
 ISSUE = Port(name="issue", type_id="test/Issue", schema_hash="s1")
 BRIEF = Port(name="brief", type_id="test/Brief", schema_hash="s1")
+REVIEW = Port(name="review", type_id="test/Review", schema_hash="s1")
 ANNOUNCED = Port(name="announced", type_id="test/Announced", schema_hash="s1")
 SUMMARY = Port(name="summary", type_id="test/Summary", schema_hash="s1")
 
@@ -100,6 +101,10 @@ async def announce_impl(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[
 
 async def summarize_impl(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[str, Any]:
     return {"summary": {"text": f"summary of {inputs['brief']['title']}"}}
+
+
+async def review_impl(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[str, Any]:
+    return {"review": {"title": inputs["issue"]["title"]}}
 
 
 async def failing_impl(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[str, Any]:
