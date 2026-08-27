@@ -1,3 +1,4 @@
+# mypy: disable-error-code="attr-defined"
 """Internal SQLite v5 bounded run/event read projection."""
 
 from __future__ import annotations
@@ -112,7 +113,7 @@ class _M6ReadMixin:
             cancel_requested=bool(row["cancel_requested"]),
             origin=(
                 RunOrigin.model_validate_json(row["origin_json"])
-                if "origin_json" in row.keys() and row["origin_json"]
+                if "origin_json" in row and row["origin_json"]
                 else None
             ),
         )

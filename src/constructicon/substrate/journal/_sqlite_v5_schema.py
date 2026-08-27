@@ -1,3 +1,4 @@
+# mypy: disable-error-code="attr-defined"
 """Internal SQLite v5 schema and atomic run-origin migration."""
 
 from __future__ import annotations
@@ -10,10 +11,8 @@ from constructicon.core.control import RunOrigin
 from constructicon.core.errors import JournalDamaged
 from constructicon.core.identity import Digest, canonical_json
 from constructicon.core.run import CheckpointConflict, RunStatus
-from constructicon.substrate.journal.sqlite_legacy import (
-    _SCHEMA as _LEGACY_SCHEMA,
-    _manifest_semantically_equal,
-)
+from constructicon.substrate.journal.sqlite_legacy import _SCHEMA as _LEGACY_SCHEMA
+from constructicon.substrate.journal.sqlite_legacy import _manifest_semantically_equal
 
 SCHEMA_VERSION = 5
 

@@ -6,9 +6,9 @@ no MCP-specific state lives here.
 
 from __future__ import annotations
 
-from datetime import timedelta
+from collections.abc import Callable
+from datetime import datetime, timedelta
 from threading import Lock
-from typing import Callable
 
 from constructicon.core.control import (
     AuthenticatedActor,
@@ -24,7 +24,7 @@ from constructicon.core.identity import Digest, JsonValue
 
 
 class InMemoryControlStore:
-    def __init__(self, *, now_fn: Callable = utc_now) -> None:
+    def __init__(self, *, now_fn: Callable[[], datetime] = utc_now) -> None:
         self._now = now_fn
         self._commands: dict[str, CommandRecord] = {}
         self._approvals: dict[str, ApprovalRecord] = {}

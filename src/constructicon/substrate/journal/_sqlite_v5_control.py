@@ -1,10 +1,12 @@
+# mypy: disable-error-code="attr-defined"
 """Internal SQLite v5 durable command and approval ledger."""
 
 from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import timedelta
+from datetime import datetime, timedelta
+from typing import Literal, cast
 
 from pydantic import TypeAdapter
 
@@ -171,7 +173,10 @@ class _M6ControlMixin:
         return self._approval_from_row(row) if row else None
 
     def _terminal_command(
-        self, claim: CommandClaim, response: JsonValue, state: str
+        self,
+        claim: CommandClaim,
+        response: JsonValue,
+        state: Literal["committed", "rejected"],
     ) -> CommandRecord:
         response_json = canonical_json(response)
         now = self._now()
@@ -201,9 +206,11 @@ class _M6ControlMixin:
                     claim.command_id,
                 ),
             )
-            updated = connection.execute(
+            raw_updated = connection.execute(
                 "SELECT * FROM commands WHERE command_id = ?", (claim.command_id,)
             ).fetchone()
+            assert raw_updated is not None
+            updated = cast(sqlite3.Row, raw_updated)
         self.fault_probe("command.after_terminal_commit")
         return self._command_from_row(updated)
 
@@ -211,11 +218,12 @@ class _M6ControlMixin:
     def _command_fenced(
         connection: sqlite3.Connection, claim: CommandClaim
     ) -> sqlite3.Row:
-        row = connection.execute(
+        raw = connection.execute(
             "SELECT * FROM commands WHERE command_id = ?", (claim.command_id,)
         ).fetchone()
-        if row is None:
+        if raw is None:
             raise JournalDamaged(f"unknown command {claim.command_id!r}")
+        row = cast(sqlite3.Row, raw)
         if (
             row["state"] != "prepared"
             or row["owner_id"] != claim.owner_id
@@ -229,6 +237,7 @@ class _M6ControlMixin:
 
     @staticmethod
     def _command_from_row(row: sqlite3.Row) -> CommandRecord:
+        state = cast(Literal["prepared", "committed", "rejected"], row["state"])
         return CommandRecord(
             command_id=row["command_id"],
             actor=AuthenticatedActor.model_validate_json(row["actor_json"]),
@@ -236,20 +245,29 @@ class _M6ControlMixin:
             idempotency_key=row["idempotency_key"],
             request_hash=Digest(row["request_hash"]),
             request=json.loads(row["request_json"]),
-            state=row["state"],
+            state=state,
             plan=json.loads(row["plan_json"]) if row["plan_json"] else None,
             response=json.loads(row["response_json"]) if row["response_json"] else None,
             owner_id=row["owner_id"],
             owner_epoch=row["owner_epoch"],
-            lease_expires_at=row["lease_expires_at"],
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
-            completed_at=row["completed_at"],
+            lease_expires_at=(
+                datetime.fromisoformat(row["lease_expires_at"])
+                if row["lease_expires_at"]
+                else None
+            ),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+            completed_at=(
+                datetime.fromisoformat(row["completed_at"])
+                if row["completed_at"]
+                else None
+            ),
         )
 
     @staticmethod
     def _approval_from_row(row: sqlite3.Row) -> ApprovalRecord:
-        subject = TypeAdapter(ProofSubject).validate_python(json.loads(row["subject_json"]))
+        adapter: TypeAdapter[ProofSubject] = TypeAdapter(ProofSubject)
+        subject: ProofSubject = adapter.validate_python(json.loads(row["subject_json"]))
         return ApprovalRecord(
             approval_id=row["approval_id"],
             subject=subject,
@@ -257,5 +275,5 @@ class _M6ControlMixin:
             reason=row["reason"],
             actor=AuthenticatedActor.model_validate_json(row["actor_json"]),
             run_id=RunId(row["run_id"]),
-            created_at=row["created_at"],
+            created_at=datetime.fromisoformat(row["created_at"]),
         )

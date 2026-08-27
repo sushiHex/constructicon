@@ -6,9 +6,9 @@ The private mixins are implementation decomposition only; callers see one concre
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
 
 from constructicon.core.envelope import utc_now
 from constructicon.substrate.journal._sqlite_v5_control import _M6ControlMixin
@@ -19,6 +19,11 @@ from constructicon.substrate.journal._sqlite_v5_schema import (
 )
 from constructicon.substrate.journal.sqlite_legacy import (
     SqliteJournal as _LegacySqliteJournal,
+)
+from constructicon.substrate.journal.sqlite_legacy import (
+    _checkpoint_identity,
+    _manifest_semantically_equal,
+    _path_key,
 )
 
 
@@ -31,4 +36,10 @@ class SqliteJournal(
         super().__init__(db_path, now_fn=now_fn)
 
 
-__all__ = ["SCHEMA_VERSION", "SqliteJournal"]
+__all__ = [
+    "SCHEMA_VERSION",
+    "SqliteJournal",
+    "_checkpoint_identity",
+    "_manifest_semantically_equal",
+    "_path_key",
+]
