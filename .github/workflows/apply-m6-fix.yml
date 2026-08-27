@@ -26,6 +26,8 @@ jobs:
           cat .m6-fix/part* | base64 --decode | gzip --decompress > /tmp/m6-fix.patch
           git apply --index /tmp/m6-fix.patch
           uv sync --dev
+          uv run ruff check --fix tests/api/test_control_commands.py
+          git add tests/api/test_control_commands.py
           uv run verify
           git rm -r .m6-fix .github/workflows/apply-m6-fix.yml
           git config user.name "github-actions[bot]"
