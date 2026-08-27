@@ -616,7 +616,7 @@ class ControlPlane:
         self.system.prepare(manifest, run_id=run_id, inputs=run_inputs, origin=origin)
         self.fault_probe("runs_start.after_domain_mutation")
         response = self._submission(claim, run_id, origin)
-        self.store.complete_command(claim, response.model_dump(mode="json"))
+        self._complete_command(claim, response)
         self.run_host.launch(run_id)
         return response
 
@@ -663,7 +663,7 @@ class ControlPlane:
             run_status=latest.status,
             command=CommandMeta(command_id=claim.command_id, replayed=False),
         )
-        self.store.complete_command(claim, response.model_dump(mode="json"))
+        self._complete_command(claim, response)
         return response
 
     async def runs_resume(
@@ -710,7 +710,7 @@ class ControlPlane:
                 "start a reproduction for a new RunId instead",
             )
         response = self._submission(claim, run_id, record.origin)
-        self.store.complete_command(claim, response.model_dump(mode="json"))
+        self._complete_command(claim, response)
         self.run_host.launch(run_id)
         return response
 
@@ -814,7 +814,7 @@ class ControlPlane:
             command=CommandMeta(command_id=claim.command_id, replayed=False),
             detail=self._approval_ref(approval.approval_id),
         )
-        self.store.complete_command(claim, response.model_dump(mode="json"))
+        self._complete_command(claim, response)
         return response
 
     async def registry_promote(
@@ -891,7 +891,7 @@ class ControlPlane:
             command=CommandMeta(command_id=claim.command_id, replayed=False),
             detail=self._component_ref(component, record.to_version),
         )
-        self.store.complete_command(claim, response.model_dump(mode="json"))
+        self._complete_command(claim, response)
         return response
 
     async def registry_rollback(
@@ -983,7 +983,7 @@ class ControlPlane:
             command=CommandMeta(command_id=claim.command_id, replayed=False),
             detail=self._component_ref(component, to_version),
         )
-        self.store.complete_command(claim, response.model_dump(mode="json"))
+        self._complete_command(claim, response)
         return response
 
     # -- clone/counterfactual ---------------------------------------------
@@ -1108,11 +1108,15 @@ class ControlPlane:
         self.system.prepare(manifest, run_id=run_id, inputs=run_inputs, origin=origin)
         self.fault_probe(f"{operation}.after_domain_mutation")
         response = self._submission(claim, run_id, origin)
-        self.store.complete_command(claim, response.model_dump(mode="json"))
+        self._complete_command(claim, response)
         self.run_host.launch(run_id)
         return response
 
     # -- command law ------------------------------------------------------
+
+    def _complete_command(self, claim: CommandClaim, response: BaseModel) -> None:
+        self.store.complete_command(claim, response.model_dump(mode="json"))
+        self.fault_probe(f"{claim.operation}.after_command_completion")
 
     def _begin_command(
         self,
