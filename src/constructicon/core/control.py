@@ -17,6 +17,7 @@ from pydantic import (
     Field,
     NonNegativeInt,
     PositiveInt,
+    computed_field,
     field_validator,
 )
 
@@ -152,7 +153,9 @@ class DetailRef(BaseModel):
 
     uri: str
     media_type: str = "application/json"
-    digest: Digest
+    # M6.1 producers supply a digest. ``None`` is accepted only while the old
+    # URI-only call sites are migrated; DetailResolver refuses to trust it.
+    digest: Digest | None = None
 
 
 class DetailChunk(BaseModel):
@@ -267,6 +270,9 @@ class RunSubmission(BaseModel):
     run_status: RunStatus
     command: CommandMeta
     origin: RunOrigin | None
+    # Transitional input compatibility only; excluded from every serialized
+    # response because status is mutable and addressed by runs_status.
+    status_ref: DetailRef | None = Field(default=None, exclude=True, repr=False)
 
 
 class CancellationResult(BaseModel):
@@ -404,6 +410,61 @@ class CommandSummary(BaseModel):
     updated_at: AwareDatetime
     completed_at: AwareDatetime | None
     detail: DetailRef | None = None
+
+
+class CommandView(BaseModel):
+    """Compatibility carrier whose serialized form remains a bounded summary.
+
+    The existing M6 call site still constructs ``CommandView(record=...)``.
+    M6.1 excludes that full record from serialization and exposes only computed
+    lifecycle fields plus terminal detail. The call site is removed later in this
+    PR, after the interface transition is green.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    record: CommandRecord = Field(exclude=True, repr=False)
+    detail: DetailRef | None = None
+
+    @computed_field
+    @property
+    def command_id(self) -> str:
+        return self.record.command_id
+
+    @computed_field
+    @property
+    def operation(self) -> str:
+        return self.record.operation
+
+    @computed_field
+    @property
+    def state(self) -> Literal["prepared", "committed", "rejected"]:
+        return self.record.state
+
+    @computed_field
+    @property
+    def actor_id(self) -> str:
+        return self.record.actor.actor_id
+
+    @computed_field
+    @property
+    def request_hash(self) -> Digest:
+        return self.record.request_hash
+
+    @computed_field
+    @property
+    def created_at(self) -> AwareDatetime:
+        return self.record.created_at
+
+    @computed_field
+    @property
+    def updated_at(self) -> AwareDatetime:
+        return self.record.updated_at
+
+    @computed_field
+    @property
+    def completed_at(self) -> AwareDatetime | None:
+        return self.record.completed_at
 
 
 def command_id_for(actor_id: str, operation: str, idempotency_key: str) -> str:
