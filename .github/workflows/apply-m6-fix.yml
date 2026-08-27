@@ -18,6 +18,9 @@ jobs:
         with:
           ref: codex/m6-durable-control-plane
           fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
       - name: Apply and verify fixes
         run: |
           cat .m6-fix/part* | base64 --decode | gzip --decompress > /tmp/m6-fix.patch
