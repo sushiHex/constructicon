@@ -25,10 +25,60 @@ jobs:
         run: |
           cat .m6-mcp/chunk* | base64 --decode | gzip --decompress > /tmp/m6-mcp.patch
           git apply --index /tmp/m6-mcp.patch
+          python - <<'PY'
+          from pathlib import Path
+
+          server = Path("src/constructicon/api/mcp/server.py")
+          text = server.read_text()
+          text = text.replace(
+              "        await control.run_host.start()\n",
+              "        control.run_host.recover()\n",
+          )
+          server.write_text(text)
+
+          control = Path("src/constructicon/api/control.py")
+          text = control.read_text()
+          text = text.replace(
+              "from constructicon.core.admission import AdmissionRejected\n",
+              "from constructicon.core.admission import AdmissionAccepted, AdmissionRejected\n",
+          )
+          text = text.replace(
+              "from constructicon.core.manifest import ExecutionManifest\n",
+              "from constructicon.core.introspection import SystemDescription\n"
+              "from constructicon.core.manifest import ExecutionManifest\n",
+          )
+          text = text.replace(
+              "    ) -> BaseModel | ControlRejected:\n"
+              "        denied = self._authorize(actor, READ_SCOPE)\n"
+              "        if denied:\n"
+              "            return denied\n"
+              "        return self.system.describe(component_names=component_names, limit=limit)\n",
+              "    ) -> SystemDescription | ControlRejected:\n"
+              "        denied = self._authorize(actor, READ_SCOPE)\n"
+              "        if denied:\n"
+              "            return denied\n"
+              "        return self.system.describe(component_names=component_names, limit=limit)\n",
+              1,
+          )
+          text = text.replace(
+              "    ) -> BaseModel | ControlRejected:\n"
+              "        denied = self._authorize(actor, READ_SCOPE)\n"
+              "        if denied:\n"
+              "            return denied\n"
+              "        return self.system.admit_graph(proposal, inputs)\n",
+              "    ) -> AdmissionAccepted | AdmissionRejected | ControlRejected:\n"
+              "        denied = self._authorize(actor, READ_SCOPE)\n"
+              "        if denied:\n"
+              "            return denied\n"
+              "        return self.system.admit_graph(proposal, inputs)\n",
+              1,
+          )
+          control.write_text(text)
+          PY
           uv lock
           uv sync --dev
-          uv run ruff check --fix src/constructicon/api/mcp tests/api/mcp
-          git add src/constructicon/api/mcp tests/api/mcp pyproject.toml uv.lock
+          uv run ruff check --fix src/constructicon/api/control.py src/constructicon/api/mcp tests/api/mcp
+          git add src/constructicon/api/control.py src/constructicon/api/mcp tests/api/mcp pyproject.toml uv.lock
           uv run verify
           git rm -r .m6-mcp .github/workflows/apply-m6-mcp.yml
           git config user.name "github-actions[bot]"
