@@ -20,8 +20,8 @@ from constructicon.core.control import (
 from constructicon.core.effect import ApprovalRecord
 from constructicon.core.envelope import utc_now
 from constructicon.core.errors import JournalDamaged
-from constructicon.core.run import OwnershipLost
 from constructicon.core.identity import Digest, JsonValue
+from constructicon.core.run import OwnershipLost
 
 
 class InMemoryControlStore:
