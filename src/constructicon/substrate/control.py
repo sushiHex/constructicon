@@ -20,6 +20,7 @@ from constructicon.core.control import (
 from constructicon.core.effect import ApprovalRecord
 from constructicon.core.envelope import utc_now
 from constructicon.core.errors import JournalDamaged
+from constructicon.core.run import OwnershipLost
 from constructicon.core.identity import Digest, JsonValue
 
 
@@ -28,6 +29,7 @@ class InMemoryControlStore:
         self._now = now_fn
         self._commands: dict[str, CommandRecord] = {}
         self._approvals: dict[str, ApprovalRecord] = {}
+        self._approval_commands: dict[str, str] = {}
         self._lock = Lock()
 
     def claim_command(
@@ -59,7 +61,6 @@ class InMemoryControlStore:
                 if (
                     existing.lease_expires_at is not None
                     and existing.lease_expires_at > now
-                    and existing.owner_id != owner_id
                 ):
                     return CommandClaimResult(status="in_progress", record=existing)
                 epoch = existing.owner_epoch + 1
@@ -147,8 +148,13 @@ class InMemoryControlStore:
             existing = self._approvals.get(approval.approval_id)
             if existing is None:
                 self._approvals[approval.approval_id] = approval
+                self._approval_commands[approval.approval_id] = claim.command_id
                 return approval
-            if existing != approval:
+            if (
+                existing != approval
+                or self._approval_commands.get(approval.approval_id)
+                != claim.command_id
+            ):
                 raise JournalDamaged(
                     f"approval {approval.approval_id!r} was rewritten contradictorily"
                 )
@@ -167,7 +173,7 @@ class InMemoryControlStore:
             or record.owner_id != claim.owner_id
             or record.owner_epoch != claim.epoch
         ):
-            raise JournalDamaged(
+            raise OwnershipLost(
                 f"command {claim.command_id!r} is no longer owned by "
                 f"{claim.owner_id!r} epoch {claim.epoch}"
             )
