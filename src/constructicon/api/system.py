@@ -157,11 +157,7 @@ class Constructicon:
     ) -> None:
         self.journal = journal
         if store is None:
-            store = (
-                journal
-                if isinstance(journal, RegistryStore)
-                else InMemoryRegistryStore()
-            )
+            store = journal if isinstance(journal, RegistryStore) else InMemoryRegistryStore()
         self.registry = ComponentRegistry(store=store)
         self.owner_id = owner_id or f"worker-{os.getpid()}-{uuid.uuid4().hex[:8]}"
         self._capabilities = dict(capabilities or {})
@@ -214,6 +210,25 @@ class Constructicon:
             source_run=source_run,
         )
 
+    def promote(
+        self,
+        *,
+        component: str,
+        version: Digest,
+        attestation_id: str,
+        actor: str,
+        source_run: RunId | None = None,
+    ) -> PromotionRecord:
+        """Compatibility facade; authenticated remote mutations use ControlPlane."""
+
+        return self._promote_version(
+            component=component,
+            version=version,
+            attestation_id=attestation_id,
+            actor=actor,
+            source_run=source_run,
+        )
+
     def promote_initial(
         self,
         *,
@@ -238,6 +253,21 @@ class Constructicon:
         return self.registry.rollback(
             component=component,
             journal=self.journal,
+            actor=actor,
+            expected_stable=expected_stable,
+        )
+
+    def rollback(
+        self,
+        *,
+        component: str,
+        actor: str,
+        expected_stable: Digest | None = None,
+    ) -> PromotionRecord:
+        """Compatibility facade; authenticated remote mutations use ControlPlane."""
+
+        return self._rollback_version(
+            component=component,
             actor=actor,
             expected_stable=expected_stable,
         )
@@ -334,7 +364,7 @@ class Constructicon:
                         message=f"graph proposal is not canonical JSON: {exc}",
                         repair="submit a JSON object matching the published Graph schema",
                     ),
-                ),
+                )
             )
 
         assert graph is not None and proposal_digest is not None
@@ -360,12 +390,19 @@ class Constructicon:
         inputs: dict[str, Any],
         origin: RunOrigin | None = None,
     ) -> None:
-        self._walker.prepare(
-            manifest,
-            run_id=run_id,
-            inputs=inputs,
-            origin=origin,
-        )
+        self._walker.prepare(manifest, run_id=run_id, inputs=inputs, origin=origin)
+
+    def prepare(
+        self,
+        manifest: ExecutionManifest,
+        *,
+        run_id: RunId,
+        inputs: dict[str, Any],
+        origin: RunOrigin | None = None,
+    ) -> None:
+        """Compatibility facade for local assembly and historical tests."""
+
+        self._prepare_run(manifest, run_id=run_id, inputs=inputs, origin=origin)
 
     async def _run_prepared(
         self,
@@ -374,6 +411,14 @@ class Constructicon:
         cancellation: Literal["cancel", "abandon"] = "cancel",
     ) -> RunResult:
         return await self._walker.run_prepared(run_id, cancellation=cancellation)
+
+    async def run_prepared(
+        self,
+        run_id: RunId,
+        *,
+        cancellation: Literal["cancel", "abandon"] = "cancel",
+    ) -> RunResult:
+        return await self._run_prepared(run_id, cancellation=cancellation)
 
     async def _start_direct(
         self,
@@ -389,8 +434,20 @@ class Constructicon:
             inputs=inputs,
         )
 
+    async def start(
+        self,
+        graph: Graph,
+        inputs: dict[str, Any],
+        *,
+        run_id: RunId | None = None,
+    ) -> RunResult:
+        return await self._start_direct(graph, inputs, run_id=run_id)
+
     async def _resume_direct(self, run_id: RunId) -> RunResult:
         return await self._walker.resume(run_id)
+
+    async def resume(self, run_id: RunId) -> RunResult:
+        return await self._resume_direct(run_id)
 
     async def _reproduce_direct(
         self,
@@ -402,6 +459,14 @@ class Constructicon:
             source_run_id,
             new_run_id=new_run_id or RunId(f"run-{uuid.uuid4().hex}"),
         )
+
+    async def reproduce(
+        self,
+        source_run_id: RunId,
+        *,
+        new_run_id: RunId | None = None,
+    ) -> RunResult:
+        return await self._reproduce_direct(source_run_id, new_run_id=new_run_id)
 
     def manifest_for_run(self, run_id: RunId) -> ExecutionManifest:
         return self._walker._load_manifest(run_id)
@@ -418,6 +483,11 @@ class Constructicon:
 
     def _request_cancel(self, run_id: RunId) -> None:
         self.journal.request_cancel(run_id)
+
+    def cancel(self, run_id: RunId) -> None:
+        """Compatibility facade; authenticated remote mutations use ControlPlane."""
+
+        self._request_cancel(run_id)
 
     def run_state(self, run_id: RunId) -> RunState | None:
         return self.journal.run_state(run_id)
