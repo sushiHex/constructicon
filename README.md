@@ -1,60 +1,121 @@
-# constructicon
+# Constructicon
 
-An OS for agentic software-engineering pipelines. One authored graph IR, one
-sealed `ExecutionManifest` per run, scoped capability leases, journal-minted
-attestations, idempotent effects with receipts — and component versions that
-reach dependents only through explicit promotion.
+[![verify](https://github.com/sushiHex/constructicon/actions/workflows/verify.yml/badge.svg)](https://github.com/sushiHex/constructicon/actions/workflows/verify.yml)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-> Authored intent may be ergonomic; executed reality must be explicit.
+**Assemble the plan. Seal the run. Prove what ships.**
 
-Almost every execution concept reduces to four nouns: **Definition** (what may
-be reused) · **Manifest** (what this run will execute) · **Invocation** (where
-one execution occurred) · **Receipt** (what changed outside the run). M6 adds
-four control-plane nouns: **Actor** · **Command** · **Run** · **Reference**.
+Constructicon is an execution and authority layer for agentic software
+engineering. Agents can write code, compose workflows, and operate runs.
+Constructicon compiles that intent into a sealed, crash-safe execution, scopes
+every capability, records every external change, and allows only proven results
+to reach protected Git.
 
-Agents are the first-class user — authoring graphs, operating runs, and
-contributing code; humans participate as observer, advisor, and approver.
+> Authored intent may be ergonomic. Executed reality must be explicit.
 
-## Status
+## Why Constructicon exists
 
-Architecture **frozen**; implementation through **M6** is green — the vertical
-slice, crash and resume hardening, git authority, generic bounded loops,
-agent-first authoring, and a durable authenticated control plane with an
-optional MCP v2 adapter:
+Most agent frameworks focus on generating work: prompts, roles, routing, memory,
+and tool loops. Constructicon focuses on the boundary after generation:
+
+**What exact plan ran, against which component world, what evidence passed, what
+changed, and can the answer survive a crash or retry?**
+
+Constructicon is not another agent persona system or model router. It is the
+deterministic machinery beneath autonomous software work.
+
+| Common agent harness | Constructicon |
+| --- | --- |
+| Interprets a mutable workflow while it runs | Compiles one immutable `ExecutionManifest` before execution |
+| Accepts an agent's claim that checks passed | Mints attestations from checks observed by trusted deterministic code |
+| Gives the worker credentials to push code | Gives agent workspaces zero authority over protected refs |
+| Repeats an effect after an uncertain failure | Reconciles the external world first, then records one receipt |
+| Lets component updates drift into active work | Pins one component world per run and changes future resolution only through explicit promotion |
+| Approves a branch or patch in the abstract | Gates the prepared merge commit and installs that exact commit or nothing |
+
+### The central promise
+
+**The only path from proposed code to a protected Git ref is one exact,
+attested, idempotent Git transaction.**
+
+Gates run against the prepared merge commit into the current base.
+`merge_verified` installs that exact commit. A moved base, missing evidence,
+forged result, mismatched subject, or failed check moves nothing.
+
+## How it works
 
 ```text
-Describe → propose strict Graph JSON → typed rejection → repair → admit
-         → sealed manifest → submit RunId → execute / resume / inspect
-
-Authenticate → Claim → Plan → Apply once → Record → Return
-             → lose response → retry → replay
+Agent, MCP client, or Python SDK
+                |
+                v
+        strict Ref | Graph | Loop
+                |
+                v
+     admission and typed rejection
+                |
+                v
+       sealed ExecutionManifest
+                |
+                v
+ capability-scoped, journaled execution
+                |
+                v
+ CheckResult -> Attestation -> EffectReceipt
+                |
+                v
+       exact verified Git transaction
 ```
 
-Every mutating control operation requires a caller idempotency key. The command
-ledger durably binds actor, operation, key, canonical request, immutable plan,
-and exact terminal response. A retry after plan loss, post-mutation response
-loss, or post-command-commit response loss creates no duplicate run, approval,
-promotion, or rollback.
+Agents may author the work and its structure. They do not get to decide that
+their own work is safe, mint their own proof, or grant themselves more
+authority.
 
-Long-lived work keeps one identity: `RunId`. `RunHost` owns only process-local
-worker coroutines and recovery of PENDING or lost RUNNING runs; the walker
-remains the only graph scheduler. Server shutdown abandons hosted work without
-inventing user cancellation, leaving the durable run resumable.
+### Core guarantees
 
-Counterfactual runs replay the source run's exact component world except for
-explicit exact-version overrides. Effects use a separate simulated identity
-namespace and adapter-owned `simulate()` methods; live effect adapters are never
-called, and mutable capabilities are discard-only. Parent run, overrides,
-effect mode, and capability mode are recorded as `RunOrigin`.
+- **Intent compiles. Execution is sealed.** Admission resolves references,
+  bindings, versions, loops, and grants into one immutable manifest. The walker
+  executes only that manifest.
+- **Authority is physical.** LLMs propose. Deterministic code validates,
+  executes, reconciles, and disposes.
+- **Effects carry proof.** Irreversible actions require a journal-minted
+  attestation for the exact subject and sealed world.
+- **Crashes are normal.** Completed invocations resume from checkpoints.
+  Unknown external outcomes are reconciled before anything is repeated.
+- **Versions do not drift.** Definitions are immutable, runs pin one
+  `world_hash`, and new versions affect future runs only through promotion.
+- **Learning produces candidates, never mutations.** A component cannot rewrite
+  itself, promote itself, or define its own exam.
 
-SDK authoring remains the same machine in Python:
+## Quick start
+
+Constructicon currently targets Python 3.11 or newer and uses
+[`uv`](https://docs.astral.sh/uv/) for development.
+
+```bash
+git clone https://github.com/sushiHex/constructicon.git
+cd constructicon
+uv sync --dev
+uv run verify
+```
+
+`verify` runs the same credential-free gate as CI: Ruff, strict mypy,
+import-linter, and pytest.
+
+### Run a small workflow
+
+Create `demo.py` in the repository root:
 
 ```python
+import asyncio
+from pathlib import Path
 from typing import Annotated
 
 from pydantic import BaseModel
 
+from constructicon.api.system import Constructicon
 from constructicon.sdk import flow, port_type, task
+from constructicon.substrate.journal.sqlite import SqliteJournal
 
 
 class Issue(BaseModel):
@@ -65,75 +126,164 @@ class Brief(BaseModel):
     title: str
 
 
-@task("example/triage", output="brief")
+@task("demo/triage", output="brief")
 async def triage(
-    issue: Annotated[Issue, port_type("example/Issue")],
-) -> Annotated[Brief, port_type("example/Brief")]:
+    issue: Annotated[Issue, port_type("demo/Issue")],
+) -> Annotated[Brief, port_type("demo/Brief")]:
     return Brief(title=issue.title)
 
 
-workflow = flow("example/issue-to-brief", triage)
+async def main() -> None:
+    state_dir = Path(".constructicon")
+    state_dir.mkdir(exist_ok=True)
+
+    system = Constructicon(
+        journal=SqliteJournal(state_dir / "demo.db"),
+    )
+
+    version = system.register(triage)
+    system.promote_initial(component=triage.name, version=version)
+
+    workflow = flow("demo/issue-to-brief", triage)
+    result = await system.start(
+        workflow.definition.body,
+        {"issue": {"title": "Fix the flaky retry"}},
+    )
+
+    print(result.status)
+    print(result.outputs)
+
+
+asyncio.run(main())
 ```
 
-`@task`, `flow`, `component`, `harness`, and loop sugar produce only the
-canonical `ComponentDef | Ref | Graph | Loop` contracts. `system.describe()`
-publishes the strict Graph and admission schemas, stable component contracts,
-capability requirements and availability, root grants, magnetic binding and
-loop vocabulary, and bounded proposal limits. `system.admit_graph()` returns a
-versioned `AdmissionAccepted | AdmissionRejected` result with itemized repair
-faults; it never silently ignores fields or auto-repairs a proposal.
+Run it:
 
-The strongest authority claim remains mechanically true and tested: **the only
-path from proposed code to a protected git ref is one exact, attested,
-idempotent git transaction.** Agent workspaces are staging repositories with
-zero authority refs; a moved base is a truthful rejected receipt; forged,
-absent, mismatched, failing, or world-mismatched attestations move nothing;
-every hard-crash probe — including a real worker dying via `os._exit` mid-merge
-— recovers to exactly one install.
+```bash
+uv run python demo.py
+```
 
-Loops add no scheduler and no gate-aware kernel object. Admission seals their
-initial bindings, feedback edges, canonical boolean control, exports, and
-atomic member order. Every iteration is a distinct `ExecutionPath`, so
-checkpoints, effects, and capability leases reuse the existing recovery laws.
-False exports the final completed state; all-true exhaustion becomes
-`PARKED/policy_exhausted` at graph closure. The acceptance path turns a broken
-Git candidate red→repair→green across fresh staging repositories and installs
-one exact verified merge.
+`@task`, `flow`, `component`, `harness`, and `loop` are authoring sugar only.
+They immediately lower to the same canonical `Ref | Graph | Loop` contracts
+used by strict agent-authored JSON. There is no privileged SDK workflow model
+and no trusted bypass around admission.
 
-## MCP control surface
+## Agent control through MCP
 
-Install the optional adapter:
+Install the optional MCP adapter and start a local stdio control plane:
 
 ```bash
 uv sync --extra mcp --dev
-constructicon-mcp --database .constructicon/constructicon.db
+uv run constructicon-mcp \
+  --database .constructicon/constructicon.db
 ```
 
-- `stdio` receives a fixed actor and scopes from the trusted launching process.
-- Streamable HTTP is authenticated or unavailable: it derives the actor from a
-  verified OAuth bearer token and publishes no caller-controlled identity field.
-- MCP tools delegate once to the transport-neutral `ControlPlane`; they never
-  open SQLite, compute a `RunId`, interpret a cursor, or reconcile a command.
-- Responses are bounded and pageable. Opaque cursors are actor- and query-bound;
-  full immutable records are available through `constructicon://` detail refs.
+The MCP adapter is a thin transport over the same typed `ControlPlane`.
+Mutating operations require caller idempotency keys, bounded responses use
+stable pagination, and full immutable records remain available by reference.
 
-The full lifecycle runs with zero credentials:
+For HTTP, Constructicon is authenticated or unavailable. Actor identity comes
+from a verified OAuth bearer token, never from a caller-controlled tool
+argument.
 
-```bash
-uv sync --dev
-uv run verify        # ruff + mypy --strict + import-linter + pytest
+## What is implemented
+
+Constructicon `0.1.0` is a developer preview. The core architecture is frozen,
+and milestones M1 through M6 are implemented and green:
+
+| Milestone | Capability |
+| --- | --- |
+| M1 | Sealed manifests, checkpoint resume, and idempotent effects |
+| M2 | Persistent registry, crash hardening, cancellation, liveness, and projections |
+| M3 | Protected Git authority, real gates, attestations, and exact verified merge |
+| M4 | Generic bounded repair loops without a second scheduler |
+| M5 | Agent-first JSON authoring, SDK sugar, introspection, and repairable admission |
+| M6 | Durable authenticated control plane, MCP v2 adapter, and counterfactual replay |
+
+Next:
+
+- **M7:** journal-backed channels, panels, and human advisor or approval round
+  trips
+- **M8:** live Claude Code, Codex, and Pi executors once their isolation
+  profiles can be enforced honestly
+- **M9:** self-improvement through evaluated candidates and explicit promotion
+
+The deterministic execution core, Git authority path, Python SDK, and MCP
+control plane exist today. Live coding-agent adapters are intentionally not
+treated as ready until their isolation claims can be mechanically enforced.
+
+## When Constructicon fits
+
+Constructicon is aimed at teams and researchers building agents that can affect
+real repositories and need stronger answers than "the agent said it worked."
+
+It is a good fit when you need:
+
+- restart-safe, long-running software workflows
+- exact provenance for code, checks, versions, and external effects
+- an authority boundary independent of the model or agent provider
+- reproducible and counterfactual runs against a recorded component world
+- machine-shaped APIs with typed, repairable rejection
+- protected Git changes that are exact, attested, and idempotent
+
+It is not a hosted coding-agent product, a prompt framework, or a general model
+router.
+
+## The conceptual kernel
+
+Almost every execution concept reduces to four nouns:
+
+| Noun | Meaning |
+| --- | --- |
+| **Definition** | What may be reused |
+| **Manifest** | What this run will execute |
+| **Invocation** | Where one execution occurred |
+| **Receipt** | What changed outside the run |
+
+Everything else is a policy that transforms or admits these, a transport that
+carries them, a projection that renders them, or a capability leased to execute
+them.
+
+## Architecture
+
+```text
+L4  api        ControlPlane, MCP, system assembly
+L3  sdk        @task, component, flow, harness, loop
+L2  runtime    registry, admission, manifest, walker, resume
+L1  substrate  journal, Git authority, gates, executors, effects
+L0  core       every contract in the system, defined once
 ```
+
+Dependencies point toward contracts. The runtime never imports concrete
+substrate implementations, and the kernel is limited to the standard library
+plus Pydantic. CI enforces both rules.
 
 ## Documentation
 
-- [docs/INVARIANTS.md](docs/INVARIANTS.md) — the thirteen laws and the never list
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — layers, IR, authoring,
-  control plane, manifest, effects, registry, journal, milestones, failure tests
-- [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) — extension guides (agents first)
-- [docs/designs/SELF_IMPROVEMENT.md](docs/designs/SELF_IMPROVEMENT.md) —
-  learning as candidates, never mutations
-- [docs/adr/](docs/adr/) — why things are the way they are
+- [Invariants](docs/INVARIANTS.md): the laws every change must preserve
+- [Architecture](docs/ARCHITECTURE.md): the complete current design and
+  milestone acceptance tests
+- [Contributing](docs/CONTRIBUTING.md): extension guides for agents and humans
+- [Self-improvement design](docs/designs/SELF_IMPROVEMENT.md): learning as
+  candidates, never self-authorized mutation
+- [Architecture decisions](docs/adr/): why the system is shaped this way
+
+## Contributing
+
+Contributions are welcome, especially around real executor integrations,
+failure probes, channel transports, and examples.
+
+Before adding a new concept, read [the invariants](docs/INVARIANTS.md), inspect
+`system.describe()`, and look for an existing contract to compose. The full
+repository gate is one command:
+
+```bash
+uv run verify
+```
+
+The expected standard is simple: if a failure can happen between two durable
+facts, test the crash there.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
