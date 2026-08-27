@@ -11,6 +11,10 @@ dependencies = [
 
 [project.scripts]
 verify = "constructicon._verify:main"
+constructicon-mcp = "constructicon.api.mcp.__main__:main"
+
+[project.optional-dependencies]
+mcp = ["mcp>=2,<3"]
 
 [dependency-groups]
 dev = [
@@ -19,6 +23,7 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "import-linter>=2.0",
+    "mcp>=2,<3",
 ]
 
 [build-system]
@@ -75,6 +80,24 @@ name = "Runtime never imports substrate"
 type = "forbidden"
 source_modules = ["constructicon.runtime"]
 forbidden_modules = ["constructicon.substrate"]
+
+# MCP is an optional L4 transport. No other package may import it.
+[[tool.importlinter.contracts]]
+name = "Only the MCP adapter imports mcp"
+type = "forbidden"
+source_modules = [
+    "constructicon.core",
+    "constructicon.substrate",
+    "constructicon.runtime",
+    "constructicon.sdk",
+    "constructicon.api.control",
+    "constructicon.api.cursor",
+    "constructicon.api.detail",
+    "constructicon.api.introspection",
+    "constructicon.api.run_host",
+    "constructicon.api.system",
+]
+forbidden_modules = ["mcp"]
 
 # Dependency budget: the kernel imports stdlib + pydantic only.
 [[tool.importlinter.contracts]]

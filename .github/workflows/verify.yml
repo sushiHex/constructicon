@@ -15,3 +15,20 @@ jobs:
           python-version: "3.11"
       - run: uv sync --dev
       - run: uv run verify
+      - name: Export PR source for local integration
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: constructicon-m6-source
+          include-hidden-files: true
+          path: |
+            src
+            tests
+            docs
+            examples
+            .github
+            pyproject.toml
+            uv.lock
+            README.md
+            AGENTS.md
+            LICENSE

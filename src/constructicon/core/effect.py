@@ -1,22 +1,8 @@
 """The effect chain (I2, I13): evidence -> authority -> outcome.
 
-ONE mechanism for every externally visible action — merge, open/update PR,
-mailbox send, artifact publish, stable-pointer move, approval, CI trigger:
-
-    CheckResult   what a check observed (a Gate is one producer of
-                  CheckResults; a promotion evaluator is another — "gate"
-                  keeps one meaning)
-    Attestation   trusted deterministic policy authorizes THIS action on THIS
-                  subject; journal-minted, referenced by id, never
-                  caller-supplied
-    EffectReceipt what actually happened
-
-Effects are at-least-once, bounded by idempotency. Every effect adapter
-declares an ``EffectProfile`` — an effect that is neither natively idempotent
-nor reconcilable is not admittable. Recovery law: prepared + no receipt ->
-reconcile externally: found -> record committed receipt; absent -> execute;
-indeterminate -> PARKED/operator_intervention. NEVER blindly repeat an unknown
-external effect — resume recovers the first PR, it never opens a second.
+Every externally visible transition crosses one adapter. M6 adds truthful
+simulation for counterfactual runs: simulated requests have a distinct identity
+namespace and call ``simulate`` only — never ``execute`` or ``reconcile``.
 """
 
 from __future__ import annotations
@@ -26,6 +12,7 @@ from typing import Any, Literal, Protocol
 from pydantic import AwareDatetime, BaseModel, ConfigDict, model_validator
 
 from constructicon.core.address import ExecutionPath, GitSha, RunId
+from constructicon.core.control import AuthenticatedActor
 from constructicon.core.envelope import EvidenceRef
 from constructicon.core.identity import Digest, digest
 
@@ -37,20 +24,16 @@ CheckStatus = Literal[
     "cancelled",
     "infrastructure_error",
 ]
+EffectMode = Literal["live", "simulated"]
 
 
 class CheckResult(BaseModel):
-    """One observed check outcome. ``status`` distinguishes a candidate that
-    failed from infrastructure that never ran (I4 — a missing executable is
-    not a failing test); ``ok`` is its boolean shadow, kept in lockstep so
-    M1/M2 attestation JSON (which carried only ``ok``) still loads."""
+    """One observed check outcome; ``status`` and ``ok`` stay in lockstep."""
 
     model_config = ConfigDict(frozen=True)
 
     name: str
     status: CheckStatus
-    # the validator below always sets this from status (or vice versa); the
-    # default only satisfies constructors that pass status alone
     ok: bool = False
     detail: str
     elapsed_s: float
@@ -72,15 +55,11 @@ class CheckResult(BaseModel):
 
 
 class MergeSubject(BaseModel):
-    """The complete identity of one merge: that exact commit into that exact
-    ref. One subject everywhere — prepared merge, attestation, effect
-    request, idempotency, reconcile, receipt."""
-
     model_config = ConfigDict(frozen=True)
 
     kind: Literal["git_merge"] = "git_merge"
     repository: str
-    target_ref: str  # always fully qualified ("refs/heads/main"), never shorthand
+    target_ref: str
     candidate: GitSha
     expected_base: GitSha
     merge_commit: GitSha
@@ -100,22 +79,18 @@ ProofSubject = MergeSubject | ComponentProofSubject
 
 
 class AttestationDraft(BaseModel):
-    """What an attesting caller may author. The journal computes identity and
-    provenance (id, created_by_run, created_at) — minting is literal (I2)."""
-
     model_config = ConfigDict(frozen=True)
 
     action: Literal["merge", "promote"]
     subject: ProofSubject
     checks: tuple[CheckResult, ...]
-    check_set_hash: Digest  # exact check/evaluator defs + config revisions
+    check_set_hash: Digest
     evidence: tuple[EvidenceRef, ...] = ()
-    manifest_hash: Digest  # the attesting run's sealed world (I12)
+    manifest_hash: Digest
     workspace_id: str | None = None
 
 
 def attestation_id_for(draft: AttestationDraft) -> str:
-    """Content-derived identity — timestamps excluded, never caller-selected."""
     body = digest("attestation", 1, draft.model_dump(mode="json"))
     return f"att-{str(body).removeprefix('sha256:')}"
 
@@ -127,10 +102,10 @@ class Attestation(BaseModel):
     action: Literal["merge", "promote"]
     subject: ProofSubject
     checks: tuple[CheckResult, ...]
-    check_set_hash: Digest  # exact check/evaluator defs + config revisions
+    check_set_hash: Digest
     evidence: tuple[EvidenceRef, ...]
-    manifest_hash: Digest  # the attesting run's sealed world (I12)
-    created_by_run: RunId | None  # None for run-less deterministic policies
+    manifest_hash: Digest
+    created_by_run: RunId | None
     workspace_id: str | None
     created_at: AwareDatetime
 
@@ -140,13 +115,15 @@ class Attestation(BaseModel):
 
 
 class ApprovalRecord(BaseModel):
-    """The discretionary attestation — reserved for authenticated humans."""
+    """One authenticated human decision, write-once and exact-subject bound."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     approval_id: str
     subject: ProofSubject
-    actor: str
+    decision: Literal["approved", "rejected"]
+    reason: str | None = None
+    actor: AuthenticatedActor
     run_id: RunId
     created_at: AwareDatetime
 
@@ -156,13 +133,10 @@ class EffectProfile(BaseModel):
 
     kind: str
     recovery: Literal["native_idempotency", "reconcilable"]
+    simulation: Literal["supported", "unsupported"] = "unsupported"
 
 
 class EffectRequest(BaseModel):
-    """Sealed by the effect boundary: ``run_id`` and ``manifest_hash`` are
-    supplied by the walker from the active run — never by the node — so an
-    adapter can bind authority to the invoking sealed world."""
-
     model_config = ConfigDict(frozen=True)
 
     run_id: RunId
@@ -170,33 +144,39 @@ class EffectRequest(BaseModel):
     path: ExecutionPath
     kind: str
     subject: dict[str, Any]
-    idempotency_key: Digest  # computed only — see idempotency_key()
-    attestation_id: str | None = None  # required for authority-bearing kinds
+    idempotency_key: Digest
+    attestation_id: str | None = None
+    mode: EffectMode = "live"
 
 
 class EffectReceipt(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     request_hash: Digest
-    status: Literal["committed", "rejected", "unknown"]
+    status: Literal["committed", "rejected", "unknown", "simulated"]
     external_reference: str | None
     observed_state: dict[str, Any] | None
 
 
 def idempotency_key(
-    manifest_hash: Digest, path: ExecutionPath, kind: str, subject: dict[str, Any]
+    manifest_hash: Digest,
+    path: ExecutionPath,
+    kind: str,
+    subject: dict[str, Any],
+    *,
+    mode: EffectMode = "live",
 ) -> Digest:
-    """The idempotency key is computed, never caller-authored."""
-    return digest(
-        "idempotency",
-        1,
-        {
-            "manifest_hash": str(manifest_hash),
-            "path": path.model_dump(mode="json"),
-            "kind": kind,
-            "subject": subject,
-        },
-    )
+    """Compute one request identity without changing historical live keys."""
+
+    payload = {
+        "manifest_hash": str(manifest_hash),
+        "path": path.model_dump(mode="json"),
+        "kind": kind,
+        "subject": subject,
+    }
+    if mode == "live":
+        return digest("idempotency", 1, payload)
+    return digest("idempotency-simulated", 1, payload)
 
 
 def request_hash(request: EffectRequest) -> Digest:
@@ -204,13 +184,11 @@ def request_hash(request: EffectRequest) -> Digest:
 
 
 class EffectAdapter(Protocol):
-    """A deterministic boundary for one kind of external transition."""
-
     @property
     def profile(self) -> EffectProfile: ...
 
     async def execute(self, request: EffectRequest) -> EffectReceipt: ...
 
-    async def reconcile(self, request: EffectRequest) -> EffectReceipt | None:
-        """Find the prior external outcome for this request, if any."""
-        ...
+    async def reconcile(self, request: EffectRequest) -> EffectReceipt | None: ...
+
+    async def simulate(self, request: EffectRequest) -> EffectReceipt: ...
