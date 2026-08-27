@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
 from constructicon.api.control import ControlPlane
 from constructicon.api.run_host import RunHost
 from constructicon.core.control import (
@@ -13,16 +16,23 @@ from constructicon.core.control import (
     RunSubmission,
 )
 from constructicon.core.identity import Digest
+from constructicon.core.ports import Port
 from constructicon.core.run import RunStatus
+from constructicon.runtime.context import NodeContext
 from constructicon.substrate.effects.fake import FakeAnnounceEffect
 from constructicon.substrate.journal.sqlite import SqliteJournal
-from tests.conftest import (
-    ISSUE,
-    REVIEW,
-    atomic,
-    pipeline_graph,
-    review_impl,
-)
+from tests.conftest import ISSUE, atomic, pipeline_graph
+
+REVIEW = Port(name="review", type_id="test/Review", schema_hash="s1")
+
+
+async def review_impl(
+    ctx: NodeContext,
+    inputs: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    del ctx
+    return {"review": {"title": inputs["issue"]["title"]}}
+
 
 ACTOR = AuthenticatedActor(
     actor_id="static:counterfactual",
