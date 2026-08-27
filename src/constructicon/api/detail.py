@@ -25,9 +25,7 @@ from constructicon.core.run import RunStatus
 
 DEFAULT_DETAIL_BYTES = 16_000
 MAX_DETAIL_BYTES = 64_000
-IMMUTABLE_RESULT_STATUSES = frozenset(
-    {RunStatus.SUCCEEDED, RunStatus.CANCELLED}
-)
+IMMUTABLE_RESULT_STATUSES = frozenset({RunStatus.SUCCEEDED, RunStatus.CANCELLED})
 
 
 @dataclass(frozen=True)
@@ -94,7 +92,7 @@ class DetailResolver:
     def read(
         self,
         actor: AuthenticatedActor,
-        reference: DetailRef,
+        reference: DetailRef | str,
         *,
         cursor: str | None = None,
         max_bytes: int = DEFAULT_DETAIL_BYTES,
@@ -104,6 +102,20 @@ class DetailResolver:
                 ControlCode.REQUEST_INVALID,
                 f"max_bytes must be between 1 and {MAX_DETAIL_BYTES}; received {max_bytes}",
                 f"choose max_bytes in 1..{MAX_DETAIL_BYTES}",
+            )
+
+        # URI-only reads remain accepted while MCP and the Python facade migrate;
+        # they are immediately converted into an authorized, digest-bound reference.
+        if isinstance(reference, str):
+            generated = self.reference(actor, reference)
+            if isinstance(generated, ControlRejected):
+                return generated
+            reference = generated
+        if reference.digest is None:
+            return self._fault(
+                ControlCode.DETAIL_DIGEST_MISMATCH,
+                f"detail reference {reference.uri!r} carries no immutable digest",
+                "request a fresh DetailRef from the owning status or list operation",
             )
 
         # Resolution performs family-specific authorization and terminality checks
@@ -198,27 +210,28 @@ class DetailResolver:
         try:
             if family == "runs" and len(parts) == 2:
                 run_id = RunId(parts[0])
-                record = self._system.journal.run_record(run_id)
-                if record is None:
+                run_record = self._system.journal.run_record(run_id)
+                if run_record is None:
                     return self._not_found(uri, f"unknown run {run_id!r}")
                 if parts[1] == "manifest":
                     manifest = self._system.manifest_for_run(run_id)
                     return manifest.model_dump(mode="json")
                 if parts[1] == "result":
-                    if record.status not in IMMUTABLE_RESULT_STATUSES:
+                    if run_record.status not in IMMUTABLE_RESULT_STATUSES:
                         return self._not_immutable(
                             uri,
-                            f"run {run_id!r} is still {record.status.value}",
+                            f"run {run_id!r} is still {run_record.status.value}",
                         )
                     outputs: dict[str, JsonValue] = {}
-                    if record.status is RunStatus.SUCCEEDED:
+                    if run_record.status is RunStatus.SUCCEEDED:
                         materialized = json_value(self._system.materialize_run(run_id))
                         if isinstance(materialized, dict):
                             outputs = materialized
                     terminal_events = [
                         event.model_dump(mode="json")
                         for event in self._events(run_id)
-                        if event.kind in {
+                        if event.kind
+                        in {
                             "NodeFailed",
                             "RunFailed",
                             "RunParked",
@@ -227,7 +240,7 @@ class DetailResolver:
                         }
                     ]
                     return {
-                        "run": record.model_dump(mode="json"),
+                        "run": run_record.model_dump(mode="json"),
                         "outputs": outputs,
                         "terminal_events": terminal_events,
                     }
@@ -242,21 +255,21 @@ class DetailResolver:
                 )
 
             if family == "commands" and len(parts) == 1:
-                record = self._store.command(parts[0])
-                if record is None:
+                command_record = self._store.command(parts[0])
+                if command_record is None:
                     return self._not_found(uri, "command does not exist")
-                if not command_visible_to(record, actor):
+                if not command_visible_to(command_record, actor):
                     return self._fault(
                         ControlCode.AUTH_REQUIRED_SCOPE,
                         "command records are visible only to their actor or an administrator",
                         "authenticate as the command actor or request constructicon:admin",
                     )
-                if record.state == "prepared":
+                if command_record.state == "prepared":
                     return self._not_immutable(
                         uri,
-                        f"command {record.command_id!r} is still prepared",
+                        f"command {command_record.command_id!r} is still prepared",
                     )
-                return record.model_dump(mode="json")
+                return command_record.model_dump(mode="json")
 
             if family == "approvals" and len(parts) == 1:
                 approval = self._store.approval(parts[0])
