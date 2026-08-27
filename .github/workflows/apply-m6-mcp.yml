@@ -74,6 +74,20 @@ jobs:
               1,
           )
           control.write_text(text)
+
+          tests = Path("tests/api/mcp/test_server.py")
+          text = tests.read_text()
+          text = text.replace(
+              "    assert isinstance(result.structured_content, dict)\n"
+              "    return result.structured_content\n",
+              "    assert isinstance(result.structured_content, dict)\n"
+              "    payload = result.structured_content\n"
+              "    wrapped = payload.get(\"result\")\n"
+              "    if len(payload) == 1 and isinstance(wrapped, dict):\n"
+              "        return wrapped\n"
+              "    return payload\n",
+          )
+          tests.write_text(text)
           PY
           uv lock
           uv sync --dev
