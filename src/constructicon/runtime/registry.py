@@ -124,6 +124,14 @@ class InMemoryRegistryStore:
         self._promotions.append(record)
         return record
 
+    def promotion_for_attestation(
+        self, attestation_id: str
+    ) -> PromotionRecord | None:
+        return next(
+            (record for record in self._promotions if record.attestation_id == attestation_id),
+            None,
+        )
+
 
 def source_digest_for(impl: NodeImpl) -> Digest | None:
     """Observe implementation identity without changing historical digests."""
@@ -407,6 +415,14 @@ class ComponentRegistry:
         stored = snapshot.get(component, version)
         if stored is None:
             raise RegistryError(f"component {component!r} has no version {version}")
+        prior = self.store.promotion_for_attestation(attestation_id)
+        if prior is not None:
+            if prior.component != component or prior.to_version != version:
+                raise JournalDamaged(
+                    f"attestation {attestation_id!r} already authorized a different "
+                    "promotion receipt"
+                )
+            return prior
         attestation = journal.load_attestation(attestation_id)
         if attestation is None:
             raise AdmissionError(
@@ -417,6 +433,14 @@ class ComponentRegistry:
                 ]
             )
         faults = _verify_promotion_attestation(attestation, component, version)
+        subject = attestation.subject
+        if isinstance(subject, ComponentProofSubject):
+            current = snapshot.stable_version(component)
+            if subject.baseline_version != current:
+                faults.append(
+                    f"promotion baseline moved: attestation binds "
+                    f"{subject.baseline_version}, current stable is {current}"
+                )
         if faults:
             raise AdmissionError(faults)
         record = PromotionRecord(
@@ -473,9 +497,17 @@ class ComponentRegistry:
         component: str,
         journal: Journal,
         actor: str,
+        expected_stable: Digest | None = None,
     ) -> PromotionRecord:
         snapshot = self.store.snapshot()
         current = snapshot.stable_version(component)
+        if expected_stable is not None and current != expected_stable:
+            raise AdmissionError(
+                [
+                    f"rollback of {component!r} refused: expected stable "
+                    f"{expected_stable}, found {current}"
+                ]
+            )
         if current is None:
             raise RegistryError(f"component {component!r} has no stable version to roll back")
         previous: str | None = None

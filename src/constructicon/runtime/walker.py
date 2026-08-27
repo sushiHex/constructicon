@@ -13,12 +13,14 @@ import asyncio
 import contextlib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from constructicon.core.address import ExecutionPath, IterationFrame, RunId, ScopePath
 from constructicon.core.component import ComponentDef
+from constructicon.core.control import RunOrigin
 from constructicon.core.effect import (
     EffectAdapter,
+    EffectMode,
     EffectReceipt,
     EffectRequest,
     idempotency_key,
@@ -142,13 +144,16 @@ class Walker:
 
     # -- entry points ---------------------------------------------------------
 
-    async def start(
+    def prepare(
         self,
         manifest: ExecutionManifest,
         *,
         run_id: RunId,
         inputs: dict[str, Any],
-    ) -> RunResult:
+        origin: RunOrigin | None = None,
+    ) -> None:
+        """Persist one exact PENDING run without beginning graph execution."""
+
         normalized = json_value(inputs)
         if not isinstance(normalized, dict):
             raise ContractViolation("run inputs must be a JSON object")
@@ -164,10 +169,26 @@ class Walker:
             manifest_hash=manifest.manifest_hash,
             input_hash=manifest.input_hash,
             inputs=normalized,
+            origin=origin,
         )
-        return await self._drive(manifest, run_id=run_id, inputs=normalized)
 
-    async def resume(self, run_id: RunId) -> RunResult:
+    async def start(
+        self,
+        manifest: ExecutionManifest,
+        *,
+        run_id: RunId,
+        inputs: dict[str, Any],
+        origin: RunOrigin | None = None,
+    ) -> RunResult:
+        self.prepare(manifest, run_id=run_id, inputs=inputs, origin=origin)
+        return await self.run_prepared(run_id, cancellation="cancel")
+
+    async def run_prepared(
+        self,
+        run_id: RunId,
+        *,
+        cancellation: Literal["cancel", "abandon"] = "cancel",
+    ) -> RunResult:
         journal = self._journal
         state = journal.run_state(run_id)
         if state is None:
@@ -181,16 +202,38 @@ class Walker:
             return RunResult(run_id=run_id, status=RunStatus.SUCCEEDED, outputs=outputs)
         if state.status is RunStatus.CANCELLED:
             return RunResult(run_id=run_id, status=RunStatus.CANCELLED, outputs={})
-        return await self._drive(manifest, run_id=run_id, inputs=inputs)
+        origin = journal.run_origin(run_id)
+        return await self._drive(
+            manifest,
+            run_id=run_id,
+            inputs=inputs,
+            effect_mode=origin.effects if origin else "live",
+            capability_mode=origin.capabilities if origin else "normal",
+            cancellation=cancellation,
+        )
 
-    async def reproduce(self, source_run_id: RunId, *, new_run_id: RunId) -> RunResult:
+    async def resume(self, run_id: RunId) -> RunResult:
+        return await self.run_prepared(run_id, cancellation="cancel")
+
+    async def reproduce(
+        self,
+        source_run_id: RunId,
+        *,
+        new_run_id: RunId,
+        origin: RunOrigin | None = None,
+    ) -> RunResult:
         manifest = self._load_manifest(source_run_id)
         inputs = self._journal.run_inputs(source_run_id)
         if inputs is None:
             raise ContractViolation(
                 f"run {source_run_id!r} has no recorded inputs to reproduce from"
             )
-        return await self.start(manifest, run_id=new_run_id, inputs=inputs)
+        return await self.start(
+            manifest,
+            run_id=new_run_id,
+            inputs=inputs,
+            origin=origin,
+        )
 
     # -- lifecycle ------------------------------------------------------------
 
@@ -200,6 +243,9 @@ class Walker:
         *,
         run_id: RunId,
         inputs: dict[str, Any],
+        effect_mode: EffectMode,
+        capability_mode: Literal["normal", "discard"],
+        cancellation: Literal["cancel", "abandon"],
     ) -> RunResult:
         bound = self._registry.activate(manifest, catalog=self._catalog)
         journal = self._journal
@@ -211,17 +257,25 @@ class Walker:
         lost: list[OwnershipLost] = []
         heartbeat = asyncio.create_task(self._heartbeat_loop(lease, lost))
         try:
-            result = await self._execute(bound, lease=lease, inputs=inputs, lost=lost)
+            result = await self._execute(
+                bound,
+                lease=lease,
+                inputs=inputs,
+                lost=lost,
+                effect_mode=effect_mode,
+                capability_mode=capability_mode,
+            )
         except asyncio.CancelledError:
             await self._stop_heartbeat(heartbeat)
-            with contextlib.suppress(OwnershipLost, ContractViolation):
-                journal.transition_run(
-                    lease,
-                    expected=frozenset({RunStatus.RUNNING}),
-                    target=RunStatus.CANCELLED,
-                    event_kind="RunCancelled",
-                    payload={"source": "asyncio"},
-                )
+            if cancellation == "cancel":
+                with contextlib.suppress(OwnershipLost, ContractViolation):
+                    journal.transition_run(
+                        lease,
+                        expected=frozenset({RunStatus.RUNNING}),
+                        target=RunStatus.CANCELLED,
+                        event_kind="RunCancelled",
+                        payload={"source": "asyncio"},
+                    )
             self._release_quietly(lease)
             raise
         except OwnershipLost:
@@ -277,6 +331,8 @@ class Walker:
         lease: RunLease,
         inputs: dict[str, Any],
         lost: list[OwnershipLost],
+        effect_mode: EffectMode,
+        capability_mode: Literal["normal", "discard"],
     ) -> RunResult:
         journal = self._journal
         manifest = bound.manifest
@@ -303,7 +359,9 @@ class Walker:
         else:
             journal.append_event(lease, "RunReclaimed")
 
-        await self._reconcile_stale_leases(bound, lease)
+        await self._reconcile_stale_leases(
+            bound, lease, capability_mode=capability_mode
+        )
 
         instances = self._instances(bound)
         instances_by_scope = {instance.scope.segments: instance for instance in instances}
@@ -373,6 +431,8 @@ class Walker:
                         grants=grants,
                         aliases=aliases,
                         lost=lost,
+                        effect_mode=effect_mode,
+                        capability_mode=capability_mode,
                     )
                     if error is None:
                         status_by_unit[unit.scope.segments] = InvocationStatus.COMPLETED
@@ -396,6 +456,8 @@ class Walker:
                     blocked=blocked,
                     parked=parked,
                     lost=lost,
+                    effect_mode=effect_mode,
+                    capability_mode=capability_mode,
                 )
                 status_by_unit[unit.scope.segments] = loop_status
         except _CancelRequested:
@@ -489,6 +551,8 @@ class Walker:
         blocked: list[DependencyReport],
         parked: list[ParkedUnit],
         lost: list[OwnershipLost],
+        effect_mode: EffectMode,
+        capability_mode: Literal["normal", "discard"],
     ) -> InvocationStatus:
         # Validate the entire durable prefix before any new implementation,
         # capability, or effect can run.
@@ -593,6 +657,8 @@ class Walker:
                     grants=grants,
                     aliases=aliases,
                     lost=lost,
+                    effect_mode=effect_mode,
+                    capability_mode=capability_mode,
                 )
                 if not had_checkpoint:
                     restored_only = False
@@ -852,6 +918,8 @@ class Walker:
         self,
         bound: BoundExecution,
         lease: RunLease,
+        *,
+        capability_mode: Literal["normal", "discard"],
     ) -> None:
         journal = self._journal
         manifest = bound.manifest
@@ -869,7 +937,11 @@ class Walker:
         for row in stale_rows:
             binding = bindings.get((row.path.scope.segments, row.binding_id))
             checkpointed = journal.checkpoint(lease.run_id, row.path) is not None
-            disposition: Disposition = "release" if checkpointed else "discard"
+            disposition: Disposition = (
+                "discard"
+                if capability_mode == "discard"
+                else "release" if checkpointed else "discard"
+            )
             if binding is not None:
                 capability = self._capabilities.get(binding.capability_id)
                 if isinstance(capability, LeasedCapability):
@@ -1142,6 +1214,8 @@ class Walker:
         grants: dict[tuple[str, ...], CapabilityBinding],
         aliases: dict[tuple[str, ...], list[CapabilityBinding]],
         lost: list[OwnershipLost],
+        effect_mode: EffectMode,
+        capability_mode: Literal["normal", "discard"],
     ) -> str | None:
         node_inputs = self._node_inputs(instance, values, bindings)
         input_hash = digest("inputs", 1, node_inputs)
@@ -1172,6 +1246,8 @@ class Walker:
                     grants=grants,
                     aliases=aliases,
                     lost=lost,
+                    effect_mode=effect_mode,
+                    capability_mode=capability_mode,
                 )
             except (OwnershipLost, CheckpointConflict, _CancelRequested):
                 raise
@@ -1224,6 +1300,8 @@ class Walker:
         grants: dict[tuple[str, ...], CapabilityBinding],
         aliases: dict[tuple[str, ...], list[CapabilityBinding]],
         lost: list[OwnershipLost],
+        effect_mode: EffectMode,
+        capability_mode: Literal["normal", "discard"],
     ) -> dict[str, Any]:
         self._journal.append_event(lease, "NodeStarted", path=path)
         self_binding = grants.get(instance.scope.segments)
@@ -1285,7 +1363,9 @@ class Walker:
             path=path,
             capabilities=capabilities,
             grants=self_binding.effective_grants,
-            effect=self._effect_boundary(manifest, lease, path, lost),
+            effect=self._effect_boundary(
+                manifest, lease, path, lost, mode=effect_mode
+            ),
         )
 
         try:
@@ -1332,7 +1412,11 @@ class Walker:
         except Exception:
             await self._close_acquired(lease, acquired, "discard")
             raise
-        await self._close_acquired(lease, acquired, "release")
+        await self._close_acquired(
+            lease,
+            acquired,
+            "discard" if capability_mode == "discard" else "release",
+        )
         return outputs
 
     def _restore_checked_checkpoint(
@@ -1380,6 +1464,8 @@ class Walker:
         lease: RunLease,
         path: ExecutionPath,
         lost: list[OwnershipLost],
+        *,
+        mode: EffectMode,
     ) -> Any:
         journal = self._journal
         effects = self._effects
@@ -1394,9 +1480,14 @@ class Walker:
             normalized = json_value(subject)
             if not isinstance(normalized, dict):
                 raise ContractViolation("effect subject must be a JSON object")
-            key = idempotency_key(manifest.manifest_hash, path, kind, normalized)
+            key = idempotency_key(
+                manifest.manifest_hash, path, kind, normalized, mode=mode
+            )
             existing = journal.receipt_for(key)
-            if existing is not None and existing.status in ("committed", "rejected"):
+            terminal_statuses = (
+                ("simulated",) if mode == "simulated" else ("committed", "rejected")
+            )
+            if existing is not None and existing.status in terminal_statuses:
                 journal.append_event(
                     lease,
                     "EffectDeduplicated",
@@ -1417,8 +1508,9 @@ class Walker:
                 subject=normalized,
                 idempotency_key=key,
                 attestation_id=attestation_id,
+                mode=mode,
             )
-            if journal.effect_prepared(key):
+            if mode == "live" and journal.effect_prepared(key):
                 reconciled = await adapter.reconcile(request)
                 if reconciled is not None:
                     journal.record_effect_outcome(
@@ -1430,10 +1522,18 @@ class Walker:
                     return reconciled
             self._check_run_control(lease, lost)
             journal.record_effect_prepared(lease, request)
-            receipt = await adapter.execute(request)
+            if mode == "simulated":
+                if adapter.profile.simulation != "supported":
+                    raise ContractViolation(
+                        f"effect {kind!r} does not support counterfactual simulation"
+                    )
+                receipt = await adapter.simulate(request)
+            else:
+                receipt = await adapter.execute(request)
             event_kind = {
                 "committed": "EffectCommitted",
                 "rejected": "EffectRejected",
+                "simulated": "EffectSimulated",
             }.get(receipt.status, "EffectUnresolved")
             journal.record_effect_outcome(lease, request, receipt, event_kind)
             return receipt

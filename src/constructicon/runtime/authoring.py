@@ -18,6 +18,7 @@ from constructicon.core.address import ScopePath
 from constructicon.core.admission import AdmissionCode, AdmissionFault
 from constructicon.core.errors import AdmissionError
 from constructicon.core.grants import EffectiveGrants
+from constructicon.core.control import ResolutionLock
 from constructicon.core.graph import Graph, Loop, Ref
 from constructicon.core.introspection import AdmissionLimits
 from constructicon.core.manifest import ExecutionManifest
@@ -43,6 +44,7 @@ def admit_authored_graph(
     root_grants: EffectiveGrants,
     inputs: dict[str, Any],
     limits: AdmissionLimits,
+    resolution_lock: ResolutionLock | None = None,
 ) -> ExecutionManifest:
     """Admit a canonical Graph, raising only typed graph authoring faults."""
 
@@ -69,6 +71,7 @@ def admit_authored_graph(
             catalog=catalog,
             root_grants=root_grants,
             inputs=inputs,
+            resolution_lock=resolution_lock,
         )
     except AdmissionError as exc:
         typed = [

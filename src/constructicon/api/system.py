@@ -13,7 +13,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import ValidationError
 
@@ -30,6 +30,7 @@ from constructicon.core.admission import (
     AdmissionResult,
 )
 from constructicon.core.component import ComponentDef, PromotionRecord
+from constructicon.core.control import ResolutionLock, RunOrigin
 from constructicon.core.effect import EffectAdapter
 from constructicon.core.errors import AdmissionError, ContractViolation
 from constructicon.core.grants import EffectiveGrants, ModelSelection, Posture
@@ -227,16 +228,29 @@ class Constructicon:
             actor=actor,
         )
 
-    def rollback(self, *, component: str, actor: str) -> PromotionRecord:
+    def rollback(
+        self,
+        *,
+        component: str,
+        actor: str,
+        expected_stable: Digest | None = None,
+    ) -> PromotionRecord:
         return self.registry.rollback(
             component=component,
             journal=self.journal,
             actor=actor,
+            expected_stable=expected_stable,
         )
 
     # -- admission and runs ---------------------------------------------------
 
-    def validate(self, graph: Graph, inputs: dict[str, Any]) -> ExecutionManifest:
+    def validate(
+        self,
+        graph: Graph,
+        inputs: dict[str, Any],
+        *,
+        resolution_lock: ResolutionLock | None = None,
+    ) -> ExecutionManifest:
         return admit_authored_graph(
             graph,
             snapshot=self.registry.snapshot(),
@@ -244,6 +258,7 @@ class Constructicon:
             root_grants=self._root_grants,
             inputs=inputs,
             limits=self._admission_limits,
+            resolution_lock=resolution_lock,
         )
 
     def admit_graph(
@@ -337,6 +352,29 @@ class Constructicon:
             manifest=manifest,
         )
 
+    def prepare(
+        self,
+        manifest: ExecutionManifest,
+        *,
+        run_id: RunId,
+        inputs: dict[str, Any],
+        origin: RunOrigin | None = None,
+    ) -> None:
+        self._walker.prepare(
+            manifest,
+            run_id=run_id,
+            inputs=inputs,
+            origin=origin,
+        )
+
+    async def run_prepared(
+        self,
+        run_id: RunId,
+        *,
+        cancellation: Literal["cancel", "abandon"] = "cancel",
+    ) -> RunResult:
+        return await self._walker.run_prepared(run_id, cancellation=cancellation)
+
     async def start(
         self,
         graph: Graph,
@@ -364,6 +402,19 @@ class Constructicon:
             source_run_id,
             new_run_id=new_run_id or RunId(f"run-{uuid.uuid4().hex}"),
         )
+
+    def manifest_for_run(self, run_id: RunId) -> ExecutionManifest:
+        return self._walker._load_manifest(run_id)
+
+    def inputs_for_run(self, run_id: RunId) -> dict[str, Any]:
+        inputs = self.journal.run_inputs(run_id)
+        if inputs is None:
+            raise ContractViolation(f"run {run_id!r} has no recorded inputs")
+        return inputs
+
+    def materialize_run(self, run_id: RunId) -> dict[str, Any]:
+        manifest = self.manifest_for_run(run_id)
+        return self._walker._materialize(manifest, run_id, self.inputs_for_run(run_id))
 
     def cancel(self, run_id: RunId) -> None:
         self.journal.request_cancel(run_id)

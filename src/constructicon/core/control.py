@@ -20,7 +20,7 @@ from pydantic import (
     field_validator,
 )
 
-from constructicon.core.address import RunId
+from constructicon.core.address import RunId, ScopePath
 from constructicon.core.identity import Digest, JsonValue, digest
 from constructicon.core.run import Liveness, RunStatus
 
@@ -58,6 +58,8 @@ class ControlCode(StrEnum):
     REGISTRY_VERSION_UNKNOWN = "control.registry.version_unknown"
     APPROVAL_INVALID_SUBJECT = "control.approval.invalid_subject"
     REQUEST_INVALID = "control.request.invalid"
+    DETAIL_TOO_LARGE = "control.detail.too_large"
+    COUNTERFACTUAL_OVERRIDE_INVALID = "control.counterfactual.override_invalid"
 
 
 class AuthenticatedActor(BaseModel):
@@ -94,6 +96,38 @@ class AuthenticatedActor(BaseModel):
         return ADMIN_SCOPE in self.scopes or scope in self.scopes
 
 
+class ActorSource(Protocol):
+    """Transport-owned actor derivation; callers never author principals."""
+
+    async def actor(self) -> AuthenticatedActor: ...
+
+
+class ResolutionPin(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    scope: ScopePath
+    component: str
+    version: Digest
+
+
+class ResolutionLock(BaseModel):
+    """One exact source-world lock for contract-compatible counterfactuals."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    source_manifest_hash: Digest
+    pins: tuple[ResolutionPin, ...]
+
+    @field_validator("pins")
+    @classmethod
+    def _unique_scopes(cls, value: tuple[ResolutionPin, ...]) -> tuple[ResolutionPin, ...]:
+        ordered = tuple(sorted(value, key=lambda pin: pin.scope.segments))
+        scopes = [pin.scope.segments for pin in ordered]
+        if len(scopes) != len(set(scopes)):
+            raise ValueError("resolution lock contains duplicate scopes")
+        return ordered
+
+
 class ControlFault(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -117,6 +151,20 @@ class DetailRef(BaseModel):
     uri: str
     media_type: str = "application/json"
     digest: Digest | None = None
+
+
+class DetailChunk(BaseModel):
+    """One exact slice of canonical detail bytes."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    uri: str
+    media_type: str
+    digest: Digest
+    text: str
+    offset: NonNegativeInt
+    total_bytes: NonNegativeInt
+    next_cursor: str | None = None
 
 
 class PageInfo(BaseModel):
@@ -210,7 +258,7 @@ class RunSubmission(BaseModel):
     run_id: RunId
     run_status: RunStatus
     command: CommandMeta
-    origin: RunOrigin
+    origin: RunOrigin | None
     status_ref: DetailRef
 
 
@@ -291,6 +339,14 @@ class VersionPage(BaseModel):
 
     component: str
     items: tuple[VersionSummary, ...]
+    page: PageInfo
+
+
+class NamePage(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: str
+    items: tuple[str, ...]
     page: PageInfo
 
 

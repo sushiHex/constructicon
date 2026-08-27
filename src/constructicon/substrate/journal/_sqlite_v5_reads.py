@@ -56,6 +56,25 @@ class _M6ReadMixin:
             ).fetchall()
         return [self._run_record_from_row(row) for row in rows]
 
+    def latest_run_key(
+        self, *, statuses: tuple[RunStatus, ...] | None = None
+    ) -> tuple[str, str] | None:
+        clauses = ""
+        arguments: list[Any] = []
+        if statuses:
+            placeholders = ",".join("?" for _ in statuses)
+            clauses = f" WHERE status IN ({placeholders})"
+            arguments.extend(status.value for status in statuses)
+        with self._read() as connection:
+            row = connection.execute(
+                "SELECT created_at, run_id FROM runs" + clauses
+                + " ORDER BY created_at DESC, run_id DESC LIMIT 1",
+                tuple(arguments),
+            ).fetchone()
+        if row is None:
+            return None
+        return (str(row["created_at"]), str(row["run_id"]))
+
     def recoverable_runs(self, *, limit: int = 100) -> list[RunId]:
         now = self._now_iso()
         with self._read() as connection:

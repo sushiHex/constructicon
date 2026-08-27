@@ -1149,6 +1149,16 @@ class SqliteJournal:
             )
             return record
 
+    def promotion_for_attestation(
+        self, attestation_id: str
+    ) -> PromotionRecord | None:
+        with self._read() as conn:
+            row = conn.execute(
+                "SELECT * FROM promotions WHERE attestation_id = ?",
+                (attestation_id,),
+            ).fetchone()
+        return _promotion_from_row(row) if row else None
+
 
 def _promotion_from_row(row: sqlite3.Row) -> PromotionRecord:
     return PromotionRecord(

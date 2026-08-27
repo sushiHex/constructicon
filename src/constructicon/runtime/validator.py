@@ -15,6 +15,7 @@ from typing import Any
 
 from constructicon.core.address import NodeId, ScopePath
 from constructicon.core.component import ComponentDef
+from constructicon.core.control import ResolutionLock, ResolutionPin
 from constructicon.core.errors import AdmissionError
 from constructicon.core.grants import (
     EffectiveGrants,
@@ -65,6 +66,8 @@ class _Compilation:
     capability_bindings: list[CapabilityBinding] = field(default_factory=list)
     loops: list[LoopResolution] = field(default_factory=list)
     atomic_scopes: list[ScopePath] = field(default_factory=list)
+    resolution_lock: dict[tuple[str, ...], ResolutionPin] | None = None
+    consumed_pins: set[tuple[str, ...]] = field(default_factory=set)
 
 
 def admit(
@@ -74,6 +77,7 @@ def admit(
     catalog: dict[str, CapabilityDescriptor],
     root_grants: EffectiveGrants,
     inputs: dict[str, Any],
+    resolution_lock: ResolutionLock | None = None,
 ) -> ExecutionManifest:
     """Compile one authored graph under one immutable registry snapshot."""
 
@@ -81,7 +85,15 @@ def admit(
     if not isinstance(normalized_inputs, dict):
         raise AdmissionError(["run inputs must be a JSON object keyed by port name"])
 
-    comp = _Compilation(snapshot=snapshot, catalog=catalog)
+    comp = _Compilation(
+        snapshot=snapshot,
+        catalog=catalog,
+        resolution_lock=(
+            {pin.scope.segments: pin for pin in resolution_lock.pins}
+            if resolution_lock is not None
+            else None
+        ),
+    )
     root_scope = ScopePath(segments=(graph.name,))
 
     _validate_unique_ports(comp, graph.inputs, where=f"{graph.name} graph inputs")
@@ -134,6 +146,16 @@ def admit(
                 sources=tuple(source.address for source in sources),
             )
         )
+
+    if comp.resolution_lock is not None:
+        unused = sorted(set(comp.resolution_lock) - comp.consumed_pins)
+        for scope_segments in unused:
+            pin = comp.resolution_lock[scope_segments]
+            comp.faults.append(
+                f"{'/'.join(scope_segments)}: counterfactual resolution lock pin "
+                f"{pin.component!r}@{pin.version} was not consumed — the override "
+                "changed the source topology or removed a source scope"
+            )
 
     if comp.faults:
         raise AdmissionError(comp.faults)
@@ -610,6 +632,30 @@ def _resolve_ref(
     """Resolve a Ref against the admission's one immutable snapshot (I12)."""
 
     snapshot = comp.snapshot
+    if comp.resolution_lock is not None:
+        pin = comp.resolution_lock.get(where.segments)
+        if pin is None:
+            comp.faults.append(
+                f"{where.render()}: counterfactual resolution lock contains no pin "
+                f"for component {ref.component!r} — topology-changing replay is refused"
+            )
+            return None
+        comp.consumed_pins.add(where.segments)
+        if pin.component != ref.component:
+            comp.faults.append(
+                f"{where.render()}: resolution lock expects component "
+                f"{pin.component!r}, graph resolves {ref.component!r} — topology changed"
+            )
+            return None
+        stored = snapshot.get(pin.component, pin.version)
+        if stored is None:
+            comp.faults.append(
+                f"{where.render()}: resolution lock requires retained exact version "
+                f"{pin.component!r}@{pin.version}, but it is unavailable"
+            )
+            return None
+        return stored
+
     if ref.component not in snapshot.versions:
         comp.faults.append(
             f"{where.render()}: unknown component {ref.component!r}; "

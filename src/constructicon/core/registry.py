@@ -92,3 +92,9 @@ class RegistryStore(Protocol):
         equals ``record.from_version``; one attestation authorizes one move
         (a retry with the same attestation returns the existing record)."""
         ...
+
+    def promotion_for_attestation(
+        self, attestation_id: str
+    ) -> PromotionRecord | None:
+        """Read the exact pointer-move receipt authorized by one attestation."""
+        ...
