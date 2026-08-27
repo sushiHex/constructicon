@@ -427,42 +427,34 @@ class CommandView(BaseModel):
     detail: DetailRef | None = None
 
     @computed_field
-    @property
     def command_id(self) -> str:
         return self.record.command_id
 
     @computed_field
-    @property
     def operation(self) -> str:
         return self.record.operation
 
     @computed_field
-    @property
     def state(self) -> Literal["prepared", "committed", "rejected"]:
         return self.record.state
 
     @computed_field
-    @property
     def actor_id(self) -> str:
         return self.record.actor.actor_id
 
     @computed_field
-    @property
     def request_hash(self) -> Digest:
         return self.record.request_hash
 
     @computed_field
-    @property
     def created_at(self) -> AwareDatetime:
         return self.record.created_at
 
     @computed_field
-    @property
     def updated_at(self) -> AwareDatetime:
         return self.record.updated_at
 
     @computed_field
-    @property
     def completed_at(self) -> AwareDatetime | None:
         return self.record.completed_at
 
