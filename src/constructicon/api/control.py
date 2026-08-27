@@ -17,7 +17,7 @@ from constructicon.api.detail import DetailResolver
 from constructicon.api.run_host import RunHost
 from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId
-from constructicon.core.admission import AdmissionRejected
+from constructicon.core.admission import AdmissionAccepted, AdmissionRejected
 from constructicon.core.control import (
     ADMIN_SCOPE,
     APPROVE_SCOPE,
@@ -61,6 +61,7 @@ from constructicon.core.envelope import utc_now
 from constructicon.core.errors import AdmissionError, ContractViolation, JournalDamaged
 from constructicon.core.graph import Graph
 from constructicon.core.identity import Digest, JsonValue, canonical_json, digest, json_value
+from constructicon.core.introspection import SystemDescription
 from constructicon.core.manifest import ExecutionManifest
 from constructicon.core.run import RunStatus
 
@@ -104,7 +105,7 @@ class ControlPlane:
         *,
         component_names: Sequence[str] | None = None,
         limit: int = 100,
-    ) -> BaseModel | ControlRejected:
+    ) -> SystemDescription | ControlRejected:
         denied = self._authorize(actor, READ_SCOPE)
         if denied:
             return denied
@@ -115,7 +116,7 @@ class ControlPlane:
         actor: AuthenticatedActor,
         proposal: Graph | Mapping[str, Any] | str,
         inputs: Mapping[str, Any],
-    ) -> BaseModel | ControlRejected:
+    ) -> AdmissionAccepted | AdmissionRejected | ControlRejected:
         denied = self._authorize(actor, READ_SCOPE)
         if denied:
             return denied
