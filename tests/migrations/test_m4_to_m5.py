@@ -7,15 +7,8 @@ from pathlib import Path
 
 from constructicon.core.address import RunId
 from constructicon.core.control import RunOrigin
-from constructicon.substrate.effects.fake import FakeAnnounceEffect
-from constructicon.substrate.executors.fake import FakeExecutor
 from constructicon.substrate.journal.sqlite import SCHEMA_VERSION, SqliteJournal
-from tests.conftest import (
-    TRIAGE_SCRIPT,
-    FakeClock,
-    build_system,
-    pipeline_graph,
-)
+from tests.conftest import FakeClock, pipeline_graph
 from tests.migrations.test_m3_to_m4 import _register_pipeline
 
 
@@ -74,4 +67,5 @@ def test_v4_to_v5_adds_control_tables_without_inventing_run_origins(
         origin=origin,
     )
     assert migrated.run_origin(new_run) == origin
-    assert migrated.run_record(new_run).origin == origin
+    new_record = migrated.run_record(new_run)
+    assert new_record is not None and new_record.origin == origin
