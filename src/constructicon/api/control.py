@@ -7,11 +7,10 @@ Authorize -> Claim -> Plan -> Apply once -> Record -> replay after loss.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar, cast
 from urllib.parse import quote
 
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ValidationError
 
 from constructicon.api.cursor import CursorCodec, CursorFault
 from constructicon.api.detail import DetailResolver
@@ -62,7 +61,7 @@ from constructicon.core.envelope import utc_now
 from constructicon.core.errors import AdmissionError, ContractViolation, JournalDamaged
 from constructicon.core.graph import Graph
 from constructicon.core.identity import Digest, JsonValue, canonical_json, digest, json_value
-from constructicon.core.manifest import ExecutionManifest, parse_manifest_json
+from constructicon.core.manifest import ExecutionManifest
 from constructicon.core.run import RunStatus
 
 COMMAND_TTL_S = 30.0
@@ -264,7 +263,11 @@ class ControlPlane:
                 kind=event.kind,
                 path=event.path.render() if event.path else None,
                 created_at=event.created_at,
-                payload=(json_value(event.payload) if event.payload is not None else None),  # type: ignore[arg-type]
+                payload=(
+                    cast(dict[str, JsonValue], json_value(event.payload))
+                    if event.payload is not None
+                    else None
+                ),
                 detail=self._event_ref(run_id, event.seq),
             )
             for event in visible
@@ -581,7 +584,9 @@ class ControlPlane:
         if not isinstance(begun, CommandClaim):
             if isinstance(begun, RunSubmission):
                 self.run_host.launch(begun.run_id)
-            return begun
+            return cast(
+                RunSubmission | AdmissionRejected | ControlRejected, begun
+            )
         claim = begun
         record = self._command_record(claim)
         if record.plan is None:
@@ -630,7 +635,7 @@ class ControlPlane:
             response_types=(CancellationResult, ControlRejected),
         )
         if not isinstance(begun, CommandClaim):
-            return begun
+            return cast(CancellationResult | ControlRejected, begun)
         claim = begun
         record = self.system.journal.run_record(run_id)
         if record is None:
@@ -678,7 +683,7 @@ class ControlPlane:
         if not isinstance(begun, CommandClaim):
             if isinstance(begun, RunSubmission):
                 self.run_host.launch(run_id)
-            return begun
+            return cast(RunSubmission | ControlRejected, begun)
         claim = begun
         record = self.system.journal.run_record(run_id)
         if record is None:
@@ -763,7 +768,7 @@ class ControlPlane:
             response_types=(ApprovalCommandResult, ControlRejected),
         )
         if not isinstance(begun, CommandClaim):
-            return begun
+            return cast(ApprovalCommandResult | ControlRejected, begun)
         claim = begun
         if decision not in {"approved", "rejected"}:
             return self._terminal_control_fault(
@@ -786,7 +791,7 @@ class ControlPlane:
             approval = ApprovalRecord(
                 approval_id=approval_id,
                 subject=subject,
-                decision=decision,  # type: ignore[arg-type]
+                decision=cast(Literal["approved", "rejected"], decision),
                 reason=reason,
                 actor=actor,
                 run_id=run_id,
@@ -833,7 +838,7 @@ class ControlPlane:
             response_types=(PromotionCommandResult, ControlRejected),
         )
         if not isinstance(begun, CommandClaim):
-            return begun
+            return cast(PromotionCommandResult | ControlRejected, begun)
         claim = begun
         if self._command_record(claim).plan is None:
             planned = self._plan_promotion(component, version, attestation_id)
@@ -905,7 +910,7 @@ class ControlPlane:
             response_types=(PromotionCommandResult, ControlRejected),
         )
         if not isinstance(begun, CommandClaim):
-            return begun
+            return cast(PromotionCommandResult | ControlRejected, begun)
         claim = begun
         if self._command_record(claim).plan is None:
             snapshot = self.system.registry.snapshot()
@@ -941,6 +946,8 @@ class ControlPlane:
         plan = self._command_plan(claim)
         target = Digest(self._string(plan, "target"))
         current = self.system.registry.stable_version(component)
+        from_version: Digest | None
+        to_version: Digest
         if current == target:
             from_version = expected_stable
             to_version = target
@@ -1005,7 +1012,7 @@ class ControlPlane:
         if not isinstance(begun, CommandClaim):
             if isinstance(begun, RunSubmission):
                 self.run_host.launch(begun.run_id)
-            return begun
+            return cast(RunSubmission | ControlRejected, begun)
         claim = begun
         if self._command_record(claim).plan is None:
             source_record = self.system.journal.run_record(source_run_id)
@@ -1019,8 +1026,8 @@ class ControlPlane:
             source_manifest = self.system.manifest_for_run(source_run_id)
             source_inputs = self.system.inputs_for_run(source_run_id)
             manifest = source_manifest
-            mode = "live"
-            capability_mode = "normal"
+            mode: Literal["live", "simulated"] = "live"
+            capability_mode: Literal["normal", "discard"] = "normal"
             normalized_overrides: dict[str, Digest] = {}
             if operation == "runs_counterfactual":
                 normalized_overrides = dict(overrides or {})
@@ -1079,8 +1086,8 @@ class ControlPlane:
                 command_id=claim.command_id,
                 source_run_id=source_run_id,
                 overrides=normalized_overrides,
-                effects=mode,  # type: ignore[arg-type]
-                capabilities=capability_mode,  # type: ignore[arg-type]
+                effects=mode,
+                capabilities=capability_mode
             )
             self.store.store_command_plan(
                 claim,

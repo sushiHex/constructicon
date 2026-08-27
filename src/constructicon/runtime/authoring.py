@@ -16,9 +16,9 @@ from typing import Any
 
 from constructicon.core.address import ScopePath
 from constructicon.core.admission import AdmissionCode, AdmissionFault
+from constructicon.core.control import ResolutionLock
 from constructicon.core.errors import AdmissionError
 from constructicon.core.grants import EffectiveGrants
-from constructicon.core.control import ResolutionLock
 from constructicon.core.graph import Graph, Loop, Ref
 from constructicon.core.introspection import AdmissionLimits
 from constructicon.core.manifest import ExecutionManifest

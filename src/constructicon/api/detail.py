@@ -16,7 +16,7 @@ from constructicon.core.control import (
     DetailChunk,
     DetailRef,
 )
-from constructicon.core.identity import Digest, JsonValue, canonical_json, digest, json_value
+from constructicon.core.identity import JsonValue, canonical_json, digest, json_value
 from constructicon.core.run import RunStatus
 
 DEFAULT_DETAIL_BYTES = 16_000
@@ -178,10 +178,10 @@ class DetailResolver:
                     else self._not_found(uri, "event does not exist")
                 )
             if family == "commands" and len(parts) == 1:
-                record = self._store.command(parts[0])
+                command_record = self._store.command(parts[0])
                 return (
-                    record.model_dump(mode="json")
-                    if record is not None
+                    command_record.model_dump(mode="json")
+                    if command_record is not None
                     else self._not_found(uri, "command does not exist")
                 )
             if family == "approvals" and len(parts) == 1:

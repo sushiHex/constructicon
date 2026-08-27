@@ -418,9 +418,11 @@ class ComponentRegistry:
         prior = self.store.promotion_for_attestation(attestation_id)
         if prior is not None:
             if prior.component != component or prior.to_version != version:
-                raise JournalDamaged(
-                    f"attestation {attestation_id!r} already authorized a different "
-                    "promotion receipt"
+                raise AdmissionError(
+                    [
+                        f"attestation {attestation_id!r} subject names a different "
+                        "component/version — promotion identity mismatch"
+                    ]
                 )
             return prior
         attestation = journal.load_attestation(attestation_id)

@@ -49,7 +49,10 @@ class RunHost:
             return False
         task = asyncio.create_task(self._run(run_id), name=f"constructicon:{run_id}")
         self._tasks[run_id] = task
-        task.add_done_callback(lambda completed, rid=run_id: self._finished(rid, completed))
+        def finished(completed: asyncio.Task[RunResult | None]) -> None:
+            self._finished(run_id, completed)
+
+        task.add_done_callback(finished)
         return True
 
     def recover(self, *, limit: int = 100) -> tuple[RunId, ...]:

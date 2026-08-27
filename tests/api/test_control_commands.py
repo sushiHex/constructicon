@@ -8,7 +8,6 @@ from constructicon.api.control import ControlPlane
 from constructicon.api.run_host import RunHost
 from constructicon.core.address import RunId
 from constructicon.core.control import (
-    ADMIN_SCOPE,
     OPERATE_SCOPE,
     READ_SCOPE,
     AuthenticatedActor,
@@ -19,7 +18,6 @@ from constructicon.core.control import (
 from constructicon.core.run import RunStatus
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.conftest import FakeClock, InjectedCrash, pipeline_graph
-
 
 ACTOR = AuthenticatedActor(
     actor_id="static:test-agent",
@@ -112,10 +110,6 @@ async def test_response_loss_after_run_creation_reconciles_from_plan(
     else:  # pragma: no cover
         raise AssertionError("fault probe did not fire")
 
-    command_id = next(
-        record.command_id
-        for record in [journal.command(command_id) for command_id in []]
-    ) if False else None
     # The deterministic planned run exists even though no command response did.
     assert len(journal.run_records(limit=100)) == 1
     clock.advance(31)
