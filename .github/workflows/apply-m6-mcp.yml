@@ -1,0 +1,37 @@
+name: apply M6 MCP adapter
+
+on:
+  push:
+    branches:
+      - codex/m6-durable-control-plane
+    paths:
+      - .github/workflows/apply-m6-mcp.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/m6-durable-control-plane
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+      - name: Apply and verify MCP adapter
+        run: |
+          cat .m6-mcp/part* | base64 --decode | gzip --decompress > /tmp/m6-mcp.patch
+          git apply --index /tmp/m6-mcp.patch
+          uv lock
+          uv sync --dev
+          uv run ruff check --fix src/constructicon/api/mcp tests/api/mcp
+          git add src/constructicon/api/mcp tests/api/mcp pyproject.toml uv.lock
+          uv run verify
+          git rm -r .m6-mcp .github/workflows/apply-m6-mcp.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "M6: add optional MCP v2 control adapter"
+          git push origin HEAD:codex/m6-durable-control-plane
