@@ -101,6 +101,7 @@ class _M6ReadMixin:
             liveness = "live"
         else:
             liveness = "lost"
+        origin_json = row["origin_json"]
         return RunRecord(
             run_id=RunId(row["run_id"]),
             manifest_hash=Digest(row["manifest_hash"]),
@@ -111,11 +112,7 @@ class _M6ReadMixin:
             owner_id=row["owner_id"],
             lease_expires_at=row["lease_expires_at"],
             cancel_requested=bool(row["cancel_requested"]),
-            origin=(
-                RunOrigin.model_validate_json(row["origin_json"])
-                if "origin_json" in row and row["origin_json"]
-                else None
-            ),
+            origin=RunOrigin.model_validate_json(origin_json) if origin_json else None,
         )
 
     @staticmethod
