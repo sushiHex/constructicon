@@ -196,7 +196,7 @@ class Constructicon:
             definition = definition.definition
         return self.registry.register(definition, impl)
 
-    def promote(
+    def _promote_version(
         self,
         *,
         component: str,
@@ -228,7 +228,7 @@ class Constructicon:
             actor=actor,
         )
 
-    def rollback(
+    def _rollback_version(
         self,
         *,
         component: str,
@@ -352,7 +352,7 @@ class Constructicon:
             manifest=manifest,
         )
 
-    def prepare(
+    def _prepare_run(
         self,
         manifest: ExecutionManifest,
         *,
@@ -367,7 +367,7 @@ class Constructicon:
             origin=origin,
         )
 
-    async def run_prepared(
+    async def _run_prepared(
         self,
         run_id: RunId,
         *,
@@ -375,7 +375,7 @@ class Constructicon:
     ) -> RunResult:
         return await self._walker.run_prepared(run_id, cancellation=cancellation)
 
-    async def start(
+    async def _start_direct(
         self,
         graph: Graph,
         inputs: dict[str, Any],
@@ -389,10 +389,10 @@ class Constructicon:
             inputs=inputs,
         )
 
-    async def resume(self, run_id: RunId) -> RunResult:
+    async def _resume_direct(self, run_id: RunId) -> RunResult:
         return await self._walker.resume(run_id)
 
-    async def reproduce(
+    async def _reproduce_direct(
         self,
         source_run_id: RunId,
         *,
@@ -416,7 +416,7 @@ class Constructicon:
         manifest = self.manifest_for_run(run_id)
         return self._walker._materialize(manifest, run_id, self.inputs_for_run(run_id))
 
-    def cancel(self, run_id: RunId) -> None:
+    def _request_cancel(self, run_id: RunId) -> None:
         self.journal.request_cancel(run_id)
 
     def run_state(self, run_id: RunId) -> RunState | None:
