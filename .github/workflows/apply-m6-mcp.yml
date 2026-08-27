@@ -23,7 +23,7 @@ jobs:
           python-version: "3.11"
       - name: Apply and verify MCP adapter
         run: |
-          cat .m6-mcp/part* | base64 --decode | gzip --decompress > /tmp/m6-mcp.patch
+          cat .m6-mcp/chunk* | base64 --decode | gzip --decompress > /tmp/m6-mcp.patch
           git apply --index /tmp/m6-mcp.patch
           uv lock
           uv sync --dev
