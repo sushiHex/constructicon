@@ -9,6 +9,7 @@ from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId
 from constructicon.core.errors import ConstructiconError
 from constructicon.core.run import OwnershipLost, RunStatus
+from constructicon.runtime.walker import RunResult
 
 FailureSink = Callable[[RunId, BaseException], None]
 _RECOVERY_STATUSES = (RunStatus.PENDING, RunStatus.RUNNING)
@@ -18,8 +19,8 @@ class RunHost:
     """Host a bounded set of durable run workers in this process.
 
     The host decides only which durable RunIds currently have a local coroutine.
-    It never inspects a Graph, schedules graph units, or caches run results; the
-    walker and journal remain authoritative for all three.
+    It never inspects a Graph, schedules graph units, or caches durable domain
+    state; the walker and journal remain authoritative for all three.
     """
 
     def __init__(
@@ -37,7 +38,7 @@ class RunHost:
         self._system = system
         self._max_concurrency = max_concurrency
         self._recovery_page_size = recovery_page_size
-        self._tasks: dict[RunId, asyncio.Task[None]] = {}
+        self._tasks: dict[RunId, asyncio.Task[RunResult | None]] = {}
         # A row that failed unexpectedly must remain durable and observable, but
         # this host must not spin on it. A fresh host or explicit operator action
         # can retry after the cause changes.
@@ -61,6 +62,21 @@ class RunHost:
         # One turn makes startup observable without waiting for long-lived work.
         await asyncio.sleep(0)
 
+    def recover(self, *, limit: int | None = None) -> tuple[RunId, ...]:
+        """Compatibility entry point while transports migrate to ``startup``.
+
+        Recovery itself remains pump-owned and fully paged; ``limit`` is ignored
+        deliberately rather than reintroducing the old first-page truncation.
+        """
+
+        del limit
+        if self._closed:
+            raise RuntimeError("RunHost is closed")
+        before = set(self._tasks)
+        self._ensure_pump()
+        self._wake.set()
+        return tuple(sorted(set(self._tasks) - before))
+
     def launch(self, run_id: RunId) -> bool:
         """Ensure the durable run is considered without creating a waiting task."""
 
@@ -79,6 +95,14 @@ class RunHost:
         self._ensure_pump()
         self._wake.set()
         return created
+
+    async def wait(self, run_id: RunId) -> RunResult | None:
+        """Test-transition helper; production callers observe durable status."""
+
+        task = self._tasks.get(run_id)
+        if task is None:
+            return None
+        return await asyncio.shield(task)
 
     async def shutdown(self) -> None:
         """Abandon local work without recording durable cancellation intent."""
@@ -164,22 +188,24 @@ class RunHost:
                 break
         return tuple(selected)
 
-    async def _run(self, run_id: RunId) -> None:
+    async def _run(self, run_id: RunId) -> RunResult | None:
         try:
-            await self._system._run_prepared(run_id, cancellation="abandon")
+            return await self._system._run_prepared(run_id, cancellation="abandon")
         except asyncio.CancelledError:
             raise
         except OwnershipLost:
             # Another host owns the same durable run; the fence is the result.
-            return
+            return None
         except ConstructiconError as exc:
             self._report_failure(run_id, exc)
+            return None
         except Exception as exc:
             self._report_failure(run_id, exc)
+            return None
         # Deliberately do not catch BaseException. Hard-death signals remain task
         # failures and the durable run stays reclaimable after lease expiry.
 
-    def _finished(self, run_id: RunId, task: asyncio.Task[None]) -> None:
+    def _finished(self, run_id: RunId, task: asyncio.Task[RunResult | None]) -> None:
         current = self._tasks.get(run_id)
         if current is task:
             self._tasks.pop(run_id, None)
