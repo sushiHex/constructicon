@@ -65,7 +65,15 @@ class Journal(Protocol):
         """Manifest + PENDING run + inputs + optional origin, one transaction."""
         ...
 
-    def claim_run(self, run_id: RunId, *, owner_id: str, ttl_s: float) -> RunLease: ...
+    def claim_run(
+        self,
+        run_id: RunId,
+        *,
+        owner_id: str,
+        ttl_s: float,
+        expected_event_seq: int | None = None,
+        expected_statuses: frozenset[RunStatus] | None = None,
+    ) -> RunLease: ...
 
     def heartbeat(self, lease: RunLease, *, ttl_s: float) -> RunLease: ...
 
@@ -142,6 +150,10 @@ class Journal(Protocol):
     ) -> list[JournalEvent]: ...
 
     def event(self, run_id: RunId, seq: int) -> JournalEvent | None: ...
+
+    def latest_terminal_event(self, run_id: RunId) -> JournalEvent | None:
+        """Return the newest terminal-attempt event with one bounded store read."""
+        ...
 
     def max_event_seq(self, run_id: RunId) -> int: ...
 

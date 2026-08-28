@@ -96,6 +96,14 @@ class OwnershipLost(ConstructiconError):
     The stale worker must stop and write nothing else."""
 
 
+class RunAttemptSuperseded(ConstructiconError):
+    """The durable run changed after a host selected one exact attempt.
+
+    This is an admission fence, not ownership loss: no lease was mutated and
+    the host must rescan durable state before deciding whether to try again.
+    """
+
+
 class CheckpointConflict(ConstructiconError):
     """A durable fact was re-written contradictorily at the same identity.
 

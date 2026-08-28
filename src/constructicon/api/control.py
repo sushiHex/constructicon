@@ -8,12 +8,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal, TypeVar, cast
-from urllib.parse import quote
 
 from pydantic import BaseModel, ValidationError
 
 from constructicon.api.cursor import CursorCodec, CursorFault
-from constructicon.api.detail import DetailResolver
+from constructicon.api.detail import DetailAddress, DetailResolver
 from constructicon.api.run_host import RunHost
 from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId
@@ -30,7 +29,7 @@ from constructicon.core.control import (
     CommandClaim,
     CommandMeta,
     CommandRecord,
-    CommandView,
+    CommandSummary,
     ComponentComparison,
     ControlCode,
     ControlFault,
@@ -68,6 +67,10 @@ from constructicon.core.run import RunStatus
 COMMAND_TTL_S = 30.0
 DEFAULT_PAGE_SIZE = 25
 MAX_PAGE_SIZE = 100
+_NEW_RUN_LAUNCH_STATUSES = frozenset({RunStatus.PENDING, RunStatus.RUNNING})
+_RESUME_LAUNCH_STATUSES = frozenset(
+    {RunStatus.PENDING, RunStatus.RUNNING, RunStatus.FAILED, RunStatus.PARKED}
+)
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -135,7 +138,7 @@ class ControlPlane:
                 f"unknown run {run_id!r}",
                 "use a RunId returned by runs_start, runs_reproduce, or runs_counterfactual",
             )
-        return self._run_summary(record)
+        return self._run_summary(actor, record)
 
     def runs_list(
         self,
@@ -193,7 +196,7 @@ class ControlPlane:
                 last_key=[last.created_at.isoformat(), str(last.run_id)],
             )
         return RunPage(
-            items=tuple(self._run_summary(record) for record in visible),
+            items=tuple(self._run_summary(actor, record) for record in visible),
             page=PageInfo(
                 next_cursor=next_cursor,
                 snapshot_digest=digest(
@@ -269,7 +272,9 @@ class ControlPlane:
                     if event.payload is not None
                     else None
                 ),
-                detail=self._event_ref(run_id, event.seq),
+                detail=self._required_detail_ref(
+                    actor, DetailAddress.event(run_id, event.seq)
+                ),
             )
             for event in visible
         )
@@ -313,12 +318,12 @@ class ControlPlane:
             status=record.status,
             outputs=outputs,
             failures=dict(list(sorted(failures.items()))[:20]),
-            detail=self._result_ref(run_id),
+            detail=self._optional_detail_ref(actor, DetailAddress.result(run_id)),
         )
 
     def commands_status(
         self, actor: AuthenticatedActor, command_id: str
-    ) -> CommandView | ControlRejected:
+    ) -> CommandSummary | ControlRejected:
         denied = self._authorize(actor, READ_SCOPE)
         if denied:
             return denied
@@ -335,7 +340,19 @@ class ControlPlane:
                 "command records are visible only to their actor or an administrator",
                 "authenticate as the command actor or request constructicon:admin",
             )
-        return CommandView(record=record, detail=self._command_ref(command_id))
+        return CommandSummary(
+            command_id=record.command_id,
+            operation=record.operation,
+            state=record.state,
+            actor_id=record.actor.actor_id,
+            request_hash=record.request_hash,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+            completed_at=record.completed_at,
+            detail=self._optional_detail_ref(
+                actor, DetailAddress.command(command_id)
+            ),
+        )
 
     def registry_versions(
         self,
@@ -404,7 +421,9 @@ class ControlPlane:
                     version=version,
                     stable=version_text == stable,
                     registered_at=stored.registered_at,
-                    detail=self._component_ref(component, version),
+                    detail=self._required_detail_ref(
+                        actor, DetailAddress.component(component, version)
+                    ),
                 )
             )
         return VersionPage(
@@ -548,7 +567,7 @@ class ControlPlane:
     def details_read(
         self,
         actor: AuthenticatedActor,
-        uri: str,
+        reference: DetailRef,
         *,
         cursor: str | None = None,
         max_bytes: int = 16_000,
@@ -556,7 +575,30 @@ class ControlPlane:
         denied = self._authorize(actor, READ_SCOPE)
         if denied:
             return denied
-        return self.details.read(actor, uri, cursor=cursor, max_bytes=max_bytes)
+        if not isinstance(reference, DetailRef):
+            return self._fault(
+                ControlCode.REQUEST_INVALID,
+                "details_read requires a digest-bound DetailRef",
+                "pass the complete reference returned by a status or list operation",
+            )
+        return self.details.read(actor, reference, cursor=cursor, max_bytes=max_bytes)
+
+    def resource_read(
+        self,
+        actor: AuthenticatedActor,
+        uri: str,
+        *,
+        max_bytes: int = 64_000,
+    ) -> DetailChunk | ControlRejected:
+        """Mint and read a resource URI inside the transport-neutral authority."""
+
+        denied = self._authorize(actor, READ_SCOPE)
+        if denied:
+            return denied
+        reference = self.details.reference(actor, uri)
+        if isinstance(reference, ControlRejected):
+            return reference
+        return self.details.read(actor, reference, max_bytes=max_bytes)
 
     # -- mutations ---------------------------------------------------------
 
@@ -584,7 +626,7 @@ class ControlPlane:
         )
         if not isinstance(begun, CommandClaim):
             if isinstance(begun, RunSubmission):
-                self.run_host.launch(begun.run_id)
+                self._launch_new_run(begun.run_id)
             return cast(
                 RunSubmission | AdmissionRejected | ControlRejected, begun
             )
@@ -617,7 +659,7 @@ class ControlPlane:
         self.fault_probe("runs_start.after_domain_mutation")
         response = self._submission(claim, run_id, origin)
         self._complete_command(claim, response)
-        self.run_host.launch(run_id)
+        self._launch_new_run(run_id)
         return response
 
     async def runs_cancel(
@@ -683,7 +725,7 @@ class ControlPlane:
         )
         if not isinstance(begun, CommandClaim):
             if isinstance(begun, RunSubmission):
-                self.run_host.launch(run_id)
+                self._launch_replayed_resume(begun)
             return cast(RunSubmission | ControlRejected, begun)
         claim = begun
         record = self.system.journal.run_record(run_id)
@@ -694,7 +736,14 @@ class ControlPlane:
                 f"unknown run {run_id!r}",
                 "use a RunId returned by a Constructicon run mutation",
             )
-        self._ensure_plan(claim, {"run_id": str(run_id)})
+        self._ensure_plan(
+            claim,
+            {
+                "run_id": str(run_id),
+                "baseline_event_seq": self.system.journal.max_event_seq(run_id),
+            },
+        )
+        plan = self._command_plan(claim)
         if record.status is RunStatus.RUNNING and record.liveness == "live":
             return self._terminal_control_fault(
                 claim,
@@ -711,7 +760,17 @@ class ControlPlane:
             )
         response = self._submission(claim, run_id, record.origin)
         self._complete_command(claim, response)
-        self.run_host.launch(run_id)
+        baseline_event_seq = self._optional_nonnegative_int(
+            plan, "baseline_event_seq"
+        )
+        self._launch_resume(
+            run_id,
+            expected_event_seq=(
+                baseline_event_seq
+                if baseline_event_seq is not None
+                else self.system.journal.max_event_seq(run_id)
+            ),
+        )
         return response
 
     async def runs_reproduce(
@@ -812,7 +871,9 @@ class ControlPlane:
             approval_id=approval.approval_id,
             decision=approval.decision,
             command=CommandMeta(command_id=claim.command_id, replayed=False),
-            detail=self._approval_ref(approval.approval_id),
+            detail=self._required_detail_ref(
+                actor, DetailAddress.approval(approval.approval_id)
+            ),
         )
         self._complete_command(claim, response)
         return response
@@ -889,7 +950,9 @@ class ControlPlane:
             from_version=record.from_version,
             to_version=record.to_version,
             command=CommandMeta(command_id=claim.command_id, replayed=False),
-            detail=self._component_ref(component, record.to_version),
+            detail=self._required_detail_ref(
+                actor, DetailAddress.component(component, record.to_version)
+            ),
         )
         self._complete_command(claim, response)
         return response
@@ -981,7 +1044,9 @@ class ControlPlane:
             from_version=from_version,
             to_version=to_version,
             command=CommandMeta(command_id=claim.command_id, replayed=False),
-            detail=self._component_ref(component, to_version),
+            detail=self._required_detail_ref(
+                actor, DetailAddress.component(component, to_version)
+            ),
         )
         self._complete_command(claim, response)
         return response
@@ -1012,7 +1077,7 @@ class ControlPlane:
         )
         if not isinstance(begun, CommandClaim):
             if isinstance(begun, RunSubmission):
-                self.run_host.launch(begun.run_id)
+                self._launch_new_run(begun.run_id)
             return cast(RunSubmission | ControlRejected, begun)
         claim = begun
         if self._command_record(claim).plan is None:
@@ -1109,7 +1174,7 @@ class ControlPlane:
         self.fault_probe(f"{operation}.after_domain_mutation")
         response = self._submission(claim, run_id, origin)
         self._complete_command(claim, response)
-        self.run_host.launch(run_id)
+        self._launch_new_run(run_id)
         return response
 
     # -- command law ------------------------------------------------------
@@ -1167,7 +1232,9 @@ class ControlPlane:
         if result.status == "replayed":
             if result.record is None or result.record.response is None:
                 raise JournalDamaged("terminal command has no stored response")
-            decoded = self._decode_response(result.record.response, response_types)
+            decoded = self._decode_response(
+                result.record.response, response_types, actor
+            )
             return self._mark_replayed(decoded)
         if result.claim is None:
             raise JournalDamaged("claimed command returned no fence")
@@ -1212,6 +1279,59 @@ class ControlPlane:
 
     # -- helpers ----------------------------------------------------------
 
+    def _launch_new_run(self, run_id: RunId) -> None:
+        """Host a new/replayed submission only while it remains recoverable work.
+
+        A replay after a completed FAILED/PARKED attempt returns the stored
+        response without silently turning the original command into a resume.
+        The event fence also prevents queued intent from starting after another
+        owner has advanced the run.
+        """
+
+        record = self.system.journal.run_record(run_id)
+        if record is None:
+            raise JournalDamaged(f"submitted run {run_id!r} disappeared")
+        if record.status not in _NEW_RUN_LAUNCH_STATUSES:
+            return
+        self.run_host.launch(
+            run_id,
+            expected_event_seq=self.system.journal.max_event_seq(run_id),
+            allowed_statuses=_NEW_RUN_LAUNCH_STATUSES,
+        )
+
+    def _launch_resume(
+        self,
+        run_id: RunId,
+        *,
+        expected_event_seq: int,
+    ) -> None:
+        self.run_host.launch(
+            run_id,
+            expected_event_seq=expected_event_seq,
+            allowed_statuses=_RESUME_LAUNCH_STATUSES,
+        )
+
+    def _launch_replayed_resume(self, submission: RunSubmission) -> None:
+        record = self.store.command(submission.command.command_id)
+        if record is None:
+            raise JournalDamaged(
+                f"replayed command {submission.command.command_id!r} disappeared"
+            )
+        if not isinstance(record.plan, dict):
+            raise JournalDamaged(
+                f"replayed command {submission.command.command_id!r} has no object plan"
+            )
+        # Legacy resume plans did not persist an attempt fence. They can safely
+        # recover PENDING/lost-RUNNING work, but FAILED/PARKED is ambiguous: a
+        # prior attempt may already have consumed the command's resume intent.
+        if "baseline_event_seq" not in record.plan:
+            self._launch_new_run(submission.run_id)
+            return
+        baseline = self._optional_nonnegative_int(record.plan, "baseline_event_seq")
+        if baseline is None:  # guarded by the membership check above
+            raise JournalDamaged("resume attempt fence disappeared while reading")
+        self._launch_resume(submission.run_id, expected_event_seq=baseline)
+
     def _submission(
         self,
         claim: CommandClaim,
@@ -1226,7 +1346,6 @@ class ControlPlane:
             run_status=record.status,
             command=CommandMeta(command_id=claim.command_id, replayed=False),
             origin=origin,
-            status_ref=DetailRef(uri=f"constructicon://runs/{quote(str(run_id), safe='')}/result"),
         )
 
     def _plan_promotion(
@@ -1276,7 +1395,7 @@ class ControlPlane:
             "baseline": str(current) if current else None,
         }
 
-    def _run_summary(self, record: Any) -> RunSummary:
+    def _run_summary(self, actor: AuthenticatedActor, record: Any) -> RunSummary:
         run_id = record.run_id
         return RunSummary(
             run_id=run_id,
@@ -1286,8 +1405,12 @@ class ControlPlane:
             manifest_hash=record.manifest_hash,
             input_hash=record.input_hash,
             origin=record.origin,
-            manifest_ref=self._manifest_ref(run_id),
-            result_ref=self._result_ref(run_id),
+            manifest_ref=self._required_detail_ref(
+                actor, DetailAddress.manifest(run_id)
+            ),
+            result_ref=self._optional_detail_ref(
+                actor, DetailAddress.result(run_id)
+            ),
         )
 
     @staticmethod
@@ -1311,6 +1434,19 @@ class ControlPlane:
         value = mapping.get(key)
         if not isinstance(value, str):
             raise JournalDamaged(f"command plan field {key!r} is not a string")
+        return value
+
+    @staticmethod
+    def _optional_nonnegative_int(
+        mapping: Mapping[str, Any], key: str
+    ) -> int | None:
+        if key not in mapping:
+            return None
+        value = mapping[key]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise JournalDamaged(
+                f"command plan field {key!r} is not a non-negative integer"
+            )
         return value
 
     @staticmethod
@@ -1370,10 +1506,11 @@ class ControlPlane:
             "restart the query without a cursor",
         )
 
-    @staticmethod
     def _decode_response(
+        self,
         value: JsonValue,
         models: tuple[type[BaseModel], ...],
+        actor: AuthenticatedActor,
     ) -> BaseModel:
         failures: list[str] = []
         for model in models:
@@ -1381,9 +1518,65 @@ class ControlPlane:
                 return model.model_validate(value)
             except ValidationError as exc:
                 failures.append(f"{model.__name__}: {exc.error_count()}")
+        for model in models:
+            upgraded = self._normalize_legacy_response(value, model, actor)
+            if upgraded is None:
+                continue
+            try:
+                return model.model_validate(upgraded)
+            except ValidationError as exc:
+                failures.append(
+                    f"{model.__name__} normalized: {exc.error_count()}"
+                )
         raise JournalDamaged(
             f"stored command response matches none of the operation models: {failures}"
         )
+
+    def _normalize_legacy_response(
+        self,
+        value: JsonValue,
+        model: type[BaseModel],
+        actor: AuthenticatedActor,
+    ) -> dict[str, JsonValue] | None:
+        """Upgrade durable v1 responses without rewriting their ledger row."""
+
+        if not isinstance(value, dict) or value.get("schema_version") not in {1, 2}:
+            return None
+        supported = {
+            RunSubmission,
+            CancellationResult,
+            ApprovalCommandResult,
+            PromotionCommandResult,
+            ControlRejected,
+        }
+        if model not in supported:
+            return None
+        upgraded = dict(value)
+        upgraded["schema_version"] = 2
+        if model is RunSubmission:
+            # v1 exposed a mutable URI-only status_ref. Status lives at
+            # runs_status in v2, so replay intentionally drops that field.
+            upgraded.pop("status_ref", None)
+        elif model is ApprovalCommandResult:
+            approval_id = upgraded.get("approval_id")
+            if not isinstance(approval_id, str):
+                return None
+            upgraded["detail"] = self._required_detail_ref(
+                actor, DetailAddress.approval(approval_id)
+            ).model_dump(mode="json")
+        elif model is PromotionCommandResult:
+            component = upgraded.get("component")
+            to_version = upgraded.get("to_version")
+            if not isinstance(component, str) or not isinstance(to_version, str):
+                return None
+            try:
+                version = Digest(to_version)
+            except ValidationError:
+                return None
+            upgraded["detail"] = self._required_detail_ref(
+                actor, DetailAddress.component(component, version)
+            ).model_dump(mode="json")
+        return upgraded
 
     @staticmethod
     def _mark_replayed(value: BaseModel) -> BaseModel:
@@ -1414,33 +1607,24 @@ class ControlPlane:
             )
         )
 
-    @staticmethod
-    def _manifest_ref(run_id: RunId) -> DetailRef:
-        return DetailRef(uri=f"constructicon://runs/{quote(str(run_id), safe='')}/manifest")
-
-    @staticmethod
-    def _result_ref(run_id: RunId) -> DetailRef:
-        return DetailRef(uri=f"constructicon://runs/{quote(str(run_id), safe='')}/result")
-
-    @staticmethod
-    def _event_ref(run_id: RunId, seq: int) -> DetailRef:
-        return DetailRef(
-            uri=f"constructicon://runs/{quote(str(run_id), safe='')}/events/{seq}"
-        )
-
-    @staticmethod
-    def _command_ref(command_id: str) -> DetailRef:
-        return DetailRef(uri=f"constructicon://commands/{quote(command_id, safe='')}")
-
-    @staticmethod
-    def _approval_ref(approval_id: str) -> DetailRef:
-        return DetailRef(uri=f"constructicon://approvals/{quote(approval_id, safe='')}")
-
-    @staticmethod
-    def _component_ref(component: str, version: Digest) -> DetailRef:
-        return DetailRef(
-            uri=(
-                f"constructicon://components/{quote(component, safe='')}/"
-                f"{quote(str(version), safe='')}"
+    def _required_detail_ref(
+        self,
+        actor: AuthenticatedActor,
+        uri: str,
+    ) -> DetailRef:
+        reference = self.details.reference(actor, uri)
+        if isinstance(reference, ControlRejected):
+            fault = reference.faults[0]
+            raise JournalDamaged(
+                f"required detail {uri!r} could not be minted: "
+                f"{fault.code.value}: {fault.message}"
             )
-        )
+        return reference
+
+    def _optional_detail_ref(
+        self,
+        actor: AuthenticatedActor,
+        uri: str,
+    ) -> DetailRef | None:
+        reference = self.details.reference(actor, uri)
+        return reference if isinstance(reference, DetailRef) else None

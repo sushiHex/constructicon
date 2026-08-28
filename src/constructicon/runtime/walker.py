@@ -188,6 +188,8 @@ class Walker:
         run_id: RunId,
         *,
         cancellation: Literal["cancel", "abandon"] = "cancel",
+        expected_event_seq: int | None = None,
+        expected_statuses: frozenset[RunStatus] | None = None,
     ) -> RunResult:
         journal = self._journal
         state = journal.run_state(run_id)
@@ -197,10 +199,11 @@ class Walker:
         inputs = journal.run_inputs(run_id)
         if inputs is None:
             raise ContractViolation(f"run {run_id!r} has no recorded inputs")
-        if state.status is RunStatus.SUCCEEDED:
+        fenced_attempt = expected_event_seq is not None or expected_statuses is not None
+        if state.status is RunStatus.SUCCEEDED and not fenced_attempt:
             outputs = self._materialize(manifest, run_id, inputs)
             return RunResult(run_id=run_id, status=RunStatus.SUCCEEDED, outputs=outputs)
-        if state.status is RunStatus.CANCELLED:
+        if state.status is RunStatus.CANCELLED and not fenced_attempt:
             return RunResult(run_id=run_id, status=RunStatus.CANCELLED, outputs={})
         origin = journal.run_origin(run_id)
         return await self._drive(
@@ -210,6 +213,8 @@ class Walker:
             effect_mode=origin.effects if origin else "live",
             capability_mode=origin.capabilities if origin else "normal",
             cancellation=cancellation,
+            expected_event_seq=expected_event_seq,
+            expected_statuses=expected_statuses,
         )
 
     async def resume(self, run_id: RunId) -> RunResult:
@@ -246,6 +251,8 @@ class Walker:
         effect_mode: EffectMode,
         capability_mode: Literal["normal", "discard"],
         cancellation: Literal["cancel", "abandon"],
+        expected_event_seq: int | None,
+        expected_statuses: frozenset[RunStatus] | None,
     ) -> RunResult:
         bound = self._registry.activate(manifest, catalog=self._catalog)
         journal = self._journal
@@ -253,6 +260,8 @@ class Walker:
             run_id,
             owner_id=self._owner_id,
             ttl_s=self._lease_ttl_s,
+            expected_event_seq=expected_event_seq,
+            expected_statuses=expected_statuses,
         )
         lost: list[OwnershipLost] = []
         heartbeat = asyncio.create_task(self._heartbeat_loop(lease, lost))

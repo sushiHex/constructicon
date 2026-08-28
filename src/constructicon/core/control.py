@@ -17,6 +17,7 @@ from pydantic import (
     Field,
     NonNegativeInt,
     PositiveInt,
+    field_serializer,
     field_validator,
 )
 
@@ -27,7 +28,7 @@ from constructicon.core.run import Liveness, RunStatus
 if TYPE_CHECKING:
     from constructicon.core.effect import ApprovalRecord
 
-CONTROL_SCHEMA_VERSION = 1
+CONTROL_SCHEMA_VERSION = 2
 IDEMPOTENCY_KEY_MAX_LENGTH = 200
 
 READ_SCOPE = "constructicon:read"
@@ -48,6 +49,8 @@ class ControlCode(StrEnum):
     CURSOR_INVALID = "control.cursor.invalid"
     CURSOR_QUERY_MISMATCH = "control.cursor.query_mismatch"
     DETAIL_NOT_FOUND = "control.detail.not_found"
+    DETAIL_NOT_IMMUTABLE = "control.detail.not_immutable"
+    DETAIL_DIGEST_MISMATCH = "control.detail.digest_mismatch"
     RUN_UNKNOWN = "control.run.unknown"
     RUN_LIVE_OWNER = "control.run.live_owner"
     RUN_TERMINAL = "control.run.terminal"
@@ -91,6 +94,12 @@ class AuthenticatedActor(BaseModel):
         if unknown:
             raise ValueError(f"unknown Constructicon scopes: {unknown}")
         return value
+
+    @field_serializer("scopes")
+    def _serialize_scopes(self, value: frozenset[str]) -> list[str]:
+        """Keep actor-bearing durable records and detail digests process-stable."""
+
+        return sorted(value)
 
     def allows(self, scope: str) -> bool:
         return ADMIN_SCOPE in self.scopes or scope in self.scopes
@@ -140,7 +149,7 @@ class ControlFault(BaseModel):
 class ControlRejected(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     status: Literal["rejected"] = "rejected"
     faults: tuple[ControlFault, ...]
 
@@ -149,8 +158,8 @@ class DetailRef(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     uri: str
-    media_type: str = "application/json"
-    digest: Digest | None = None
+    media_type: Literal["application/json"] = "application/json"
+    digest: Digest
 
 
 class DetailChunk(BaseModel):
@@ -159,7 +168,7 @@ class DetailChunk(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     uri: str
-    media_type: str
+    media_type: Literal["application/json"]
     digest: Digest
     text: str
     offset: NonNegativeInt
@@ -204,6 +213,12 @@ class CommandRecord(BaseModel):
     created_at: AwareDatetime
     updated_at: AwareDatetime
     completed_at: AwareDatetime | None
+
+
+def command_visible_to(record: CommandRecord, actor: AuthenticatedActor) -> bool:
+    """One command visibility law shared by status, detail, and transport resources."""
+
+    return record.actor.actor_id == actor.actor_id or actor.allows(ADMIN_SCOPE)
 
 
 class CommandClaimResult(BaseModel):
@@ -253,19 +268,18 @@ class RunRecord(BaseModel):
 class RunSubmission(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     status: Literal["submitted"] = "submitted"
     run_id: RunId
     run_status: RunStatus
     command: CommandMeta
     origin: RunOrigin | None
-    status_ref: DetailRef
 
 
 class CancellationResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     status: Literal["cancel_requested", "already_terminal"]
     run_id: RunId
     run_status: RunStatus
@@ -283,7 +297,7 @@ class RunSummary(BaseModel):
     input_hash: Digest
     origin: RunOrigin | None
     manifest_ref: DetailRef
-    result_ref: DetailRef
+    result_ref: DetailRef | None = None
 
 
 class RunPage(BaseModel):
@@ -321,7 +335,7 @@ class RunResultPreview(BaseModel):
     status: RunStatus
     outputs: dict[str, JsonValue] = Field(default_factory=dict)
     failures: dict[str, str] = Field(default_factory=dict)
-    detail: DetailRef
+    detail: DetailRef | None = None
 
 
 class VersionSummary(BaseModel):
@@ -363,7 +377,7 @@ class ComponentComparison(BaseModel):
 class ApprovalCommandResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     status: Literal["recorded"] = "recorded"
     approval_id: str
     decision: Literal["approved", "rejected"]
@@ -374,7 +388,7 @@ class ApprovalCommandResult(BaseModel):
 class PromotionCommandResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     status: Literal["promoted", "rolled_back"]
     component: str
     from_version: Digest | None
@@ -383,11 +397,20 @@ class PromotionCommandResult(BaseModel):
     detail: DetailRef
 
 
-class CommandView(BaseModel):
+class CommandSummary(BaseModel):
+    """Bounded command lifecycle; complete request/plan/response live by reference."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    record: CommandRecord
-    detail: DetailRef
+    command_id: str
+    operation: str
+    state: Literal["prepared", "committed", "rejected"]
+    actor_id: str
+    request_hash: Digest
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+    completed_at: AwareDatetime | None
+    detail: DetailRef | None = None
 
 
 def command_id_for(actor_id: str, operation: str, idempotency_key: str) -> str:
