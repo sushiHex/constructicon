@@ -30,10 +30,8 @@ from constructicon.core.control import (
     CommandMeta,
     CommandRecord,
     ControlCode,
-    ControlFault,
     ControlRejected,
     ControlStore,
-    DetailRef,
     PromotionCommandResult,
     RegistrationCommandResult,
     ResolutionLock,
@@ -592,7 +590,9 @@ class _CommandExecutor:
             approval_id=approval.approval_id,
             decision=approval.decision,
             command=CommandMeta(command_id=claim.command_id, replayed=False),
-            detail=self._required_detail_ref(actor, DetailAddress.approval(approval.approval_id)),
+            detail=self._details.required_reference(
+                actor, DetailAddress.approval(approval.approval_id)
+            ),
         )
         self._complete_command(claim, response)
         return response
@@ -664,7 +664,7 @@ class _CommandExecutor:
             component=stored.definition.name,
             version=stored.content_hash,
             command=CommandMeta(command_id=claim.command_id, replayed=False),
-            detail=self._required_detail_ref(
+            detail=self._details.required_reference(
                 actor,
                 DetailAddress.component(stored.definition.name, stored.content_hash),
             ),
@@ -741,7 +741,7 @@ class _CommandExecutor:
             from_version=record.from_version,
             to_version=record.to_version,
             command=CommandMeta(command_id=claim.command_id, replayed=False),
-            detail=self._required_detail_ref(
+            detail=self._details.required_reference(
                 actor,
                 DetailAddress.component(record.component, record.to_version),
             ),
@@ -836,7 +836,7 @@ class _CommandExecutor:
             from_version=record.from_version,
             to_version=record.to_version,
             command=CommandMeta(command_id=claim.command_id, replayed=False),
-            detail=self._required_detail_ref(
+            detail=self._details.required_reference(
                 actor, DetailAddress.component(plan.component, record.to_version)
             ),
         )
@@ -900,7 +900,7 @@ class _CommandExecutor:
             from_version=applied.from_version,
             to_version=applied.to_version,
             command=CommandMeta(command_id=claim.command_id, replayed=False),
-            detail=self._required_detail_ref(
+            detail=self._details.required_reference(
                 actor, DetailAddress.component(plan.component, applied.to_version)
             ),
         )
@@ -1606,7 +1606,7 @@ class _CommandExecutor:
         if isinstance(response, ApprovalCommandResult):
             if not isinstance(plan, _ApprovalPlan):
                 raise JournalDamaged("approval response has the wrong plan")
-            expected_detail = self._required_detail_ref(
+            expected_detail = self._details.required_reference(
                 record.actor,
                 DetailAddress.approval(plan.approval.approval_id),
             )
@@ -1631,7 +1631,7 @@ class _CommandExecutor:
                 or response.component != plan.definition.name
                 or response.version != plan.content_hash
                 or response.detail
-                != self._required_detail_ref(
+                != self._details.required_reference(
                     record.actor,
                     DetailAddress.component(plan.definition.name, plan.content_hash),
                 )
@@ -1659,7 +1659,7 @@ class _CommandExecutor:
                 or receipt.to_version != target
                 or receipt.attestation_id != attestation_id
                 or response.detail
-                != self._required_detail_ref(
+                != self._details.required_reference(
                     record.actor,
                     DetailAddress.component(component, target),
                 )
@@ -2169,7 +2169,7 @@ class _CommandExecutor:
             approval_id = upgraded.get("approval_id")
             if not isinstance(approval_id, str):
                 return None
-            upgraded["detail"] = self._required_detail_ref(
+            upgraded["detail"] = self._details.required_reference(
                 actor, DetailAddress.approval(approval_id)
             ).model_dump(mode="json")
         elif model is PromotionCommandResult:
@@ -2181,7 +2181,7 @@ class _CommandExecutor:
                 version = Digest(to_version)
             except ValidationError:
                 return None
-            upgraded["detail"] = self._required_detail_ref(
+            upgraded["detail"] = self._details.required_reference(
                 actor, DetailAddress.component(component, version)
             ).model_dump(mode="json")
         return upgraded
@@ -2202,34 +2202,4 @@ class _CommandExecutor:
         repair: str,
         details: dict[str, JsonValue] | None = None,
     ) -> ControlRejected:
-        return ControlRejected(
-            faults=(
-                ControlFault(
-                    code=code,
-                    message=message,
-                    repair=repair,
-                    details=details or {},
-                ),
-            )
-        )
-
-    def _required_detail_ref(
-        self,
-        actor: AuthenticatedActor,
-        uri: str,
-    ) -> DetailRef:
-        reference = self._details.reference(actor, uri)
-        if isinstance(reference, ControlRejected):
-            fault = reference.faults[0]
-            raise JournalDamaged(
-                f"required detail {uri!r} could not be minted: {fault.code.value}: {fault.message}"
-            )
-        return reference
-
-    def _optional_detail_ref(
-        self,
-        actor: AuthenticatedActor,
-        uri: str,
-    ) -> DetailRef | None:
-        reference = self._details.reference(actor, uri)
-        return reference if isinstance(reference, DetailRef) else None
+        return ControlRejected.one_fault(code, message, repair, details)

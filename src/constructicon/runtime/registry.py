@@ -178,7 +178,7 @@ class InMemoryRegistryStore:
         with self._lock:
             for _, prior in self._promotions:
                 if prior.attestation_id == record.attestation_id:
-                    if _same_promotion_identity(prior, record):
+                    if prior.same_identity_as(record):
                         return prior
                     raise JournalDamaged(
                         f"attestation {record.attestation_id!r} names contradictory "
@@ -212,17 +212,6 @@ class InMemoryRegistryStore:
                 ),
                 None,
             )
-
-
-def _same_promotion_identity(left: PromotionRecord, right: PromotionRecord) -> bool:
-    return (
-        left.component == right.component
-        and left.channel == right.channel
-        and left.from_version == right.from_version
-        and left.to_version == right.to_version
-        and left.attestation_id == right.attestation_id
-        and left.source_run == right.source_run
-    )
 
 
 def source_digest_for(impl: NodeImpl) -> Digest | None:

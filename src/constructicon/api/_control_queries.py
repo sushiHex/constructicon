@@ -19,7 +19,6 @@ from constructicon.core.control import (
     CommandSummary,
     ComponentComparison,
     ControlCode,
-    ControlFault,
     ControlRejected,
     ControlStore,
     DetailChunk,
@@ -34,7 +33,6 @@ from constructicon.core.control import (
     VersionPage,
     VersionSummary,
 )
-from constructicon.core.errors import JournalDamaged
 from constructicon.core.graph import Graph
 from constructicon.core.identity import Digest, JsonValue, canonical_json, digest, json_value
 from constructicon.core.introspection import SystemDescription
@@ -251,7 +249,7 @@ class _ControlQueries:
                     if event.payload is not None
                     else None
                 ),
-                detail=self._required_detail_ref(
+                detail=self._details.required_reference(
                     actor,
                     DetailAddress.event(run_id, event.seq),
                 ),
@@ -302,7 +300,7 @@ class _ControlQueries:
             status=record.status,
             outputs=outputs,
             failures=dict(list(sorted(failures.items()))[:20]),
-            detail=self._optional_detail_ref(actor, DetailAddress.result(run_id)),
+            detail=self._details.optional_reference(actor, DetailAddress.result(run_id)),
         )
 
     def commands_status(
@@ -335,7 +333,7 @@ class _ControlQueries:
             created_at=record.created_at,
             updated_at=record.updated_at,
             completed_at=record.completed_at,
-            detail=self._optional_detail_ref(
+            detail=self._details.optional_reference(
                 actor,
                 DetailAddress.command(command_id),
             ),
@@ -407,7 +405,7 @@ class _ControlQueries:
                 version=Digest(version_text),
                 stable=version_text == stable,
                 registered_at=snapshot.versions[component][version_text].registered_at,
-                detail=self._required_detail_ref(
+                detail=self._details.required_reference(
                     actor,
                     DetailAddress.component(component, Digest(version_text)),
                 ),
@@ -608,11 +606,11 @@ class _ControlQueries:
             manifest_hash=record.manifest_hash,
             input_hash=record.input_hash,
             origin=record.origin,
-            manifest_ref=self._required_detail_ref(
+            manifest_ref=self._details.required_reference(
                 actor,
                 DetailAddress.manifest(run_id),
             ),
-            result_ref=self._optional_detail_ref(
+            result_ref=self._details.optional_reference(
                 actor,
                 DetailAddress.result(run_id),
             ),
@@ -700,34 +698,4 @@ class _ControlQueries:
         repair: str,
         details: dict[str, JsonValue] | None = None,
     ) -> ControlRejected:
-        return ControlRejected(
-            faults=(
-                ControlFault(
-                    code=code,
-                    message=message,
-                    repair=repair,
-                    details=details or {},
-                ),
-            )
-        )
-
-    def _required_detail_ref(
-        self,
-        actor: AuthenticatedActor,
-        uri: str,
-    ) -> DetailRef:
-        reference = self._details.reference(actor, uri)
-        if isinstance(reference, ControlRejected):
-            fault = reference.faults[0]
-            raise JournalDamaged(
-                f"required detail {uri!r} could not be minted: {fault.code.value}: {fault.message}"
-            )
-        return reference
-
-    def _optional_detail_ref(
-        self,
-        actor: AuthenticatedActor,
-        uri: str,
-    ) -> DetailRef | None:
-        reference = self._details.reference(actor, uri)
-        return reference if isinstance(reference, DetailRef) else None
+        return ControlRejected.one_fault(code, message, repair, details)

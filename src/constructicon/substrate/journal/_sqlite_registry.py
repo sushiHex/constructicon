@@ -128,7 +128,7 @@ class _SqliteRegistryMixin:
             ).fetchone()
             if prior is not None:
                 existing = _promotion_from_row(prior)
-                if _same_promotion_identity(existing, record):
+                if existing.same_identity_as(record):
                     return existing
                 raise JournalDamaged(
                     f"attestation {record.attestation_id!r} names contradictory promotion receipts"
@@ -184,15 +184,4 @@ def _promotion_from_row(row: sqlite3.Row) -> PromotionRecord:
         actor=row["actor"],
         source_run=RunId(row["source_run"]) if row["source_run"] else None,
         created_at=row["created_at"],
-    )
-
-
-def _same_promotion_identity(left: PromotionRecord, right: PromotionRecord) -> bool:
-    return (
-        left.component == right.component
-        and left.channel == right.channel
-        and left.from_version == right.from_version
-        and left.to_version == right.to_version
-        and left.attestation_id == right.attestation_id
-        and left.source_run == right.source_run
     )

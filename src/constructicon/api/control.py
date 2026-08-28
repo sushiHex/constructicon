@@ -31,7 +31,6 @@ from constructicon.core.control import (
     CommandSummary,
     ComponentComparison,
     ControlCode,
-    ControlFault,
     ControlRejected,
     ControlStore,
     DetailChunk,
@@ -277,16 +276,7 @@ class ControlPlane:
         repair: str,
         details: dict[str, JsonValue] | None = None,
     ) -> ControlRejected:
-        return ControlRejected(
-            faults=(
-                ControlFault(
-                    code=code,
-                    message=message,
-                    repair=repair,
-                    details=details or {},
-                ),
-            )
-        )
+        return ControlRejected.one_fault(code, message, repair, details)
 
     def whoami(self, actor: AuthenticatedActor) -> AuthenticatedActor:
         return self._queries.whoami(actor)

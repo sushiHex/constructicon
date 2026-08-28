@@ -186,3 +186,15 @@ class PromotionRecord(BaseModel):
     actor: str
     source_run: RunId | None
     created_at: AwareDatetime
+
+    def same_identity_as(self, other: PromotionRecord) -> bool:
+        """Compare the immutable authority edge, excluding report metadata."""
+
+        return (
+            self.component == other.component
+            and self.channel == other.channel
+            and self.from_version == other.from_version
+            and self.to_version == other.to_version
+            and self.attestation_id == other.attestation_id
+            and self.source_run == other.source_run
+        )

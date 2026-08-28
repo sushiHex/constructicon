@@ -8,7 +8,7 @@ mutation, long-lived runs, stable pages, and immutable detail references.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol, Self
 
 from pydantic import (
     AwareDatetime,
@@ -149,6 +149,27 @@ class ControlRejected(BaseModel):
     schema_version: Literal[3] = 3
     status: Literal["rejected"] = "rejected"
     faults: tuple[ControlFault, ...]
+
+    @classmethod
+    def one_fault(
+        cls,
+        code: ControlCode,
+        message: str,
+        repair: str,
+        details: dict[str, JsonValue] | None = None,
+    ) -> Self:
+        """Construct the common exact-one-fault control refusal."""
+
+        return cls(
+            faults=(
+                ControlFault(
+                    code=code,
+                    message=message,
+                    repair=repair,
+                    details=details or {},
+                ),
+            )
+        )
 
 
 class DetailRef(BaseModel):

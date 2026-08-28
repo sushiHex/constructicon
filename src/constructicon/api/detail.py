@@ -11,14 +11,13 @@ from constructicon.core.address import RunId
 from constructicon.core.control import (
     AuthenticatedActor,
     ControlCode,
-    ControlFault,
     ControlRejected,
     ControlStore,
     DetailChunk,
     DetailRef,
     command_visible_to,
 )
-from constructicon.core.errors import ContractViolation
+from constructicon.core.errors import ContractViolation, JournalDamaged
 from constructicon.core.identity import Digest, JsonValue, canonical_json, digest, json_value
 from constructicon.core.journal import Journal
 from constructicon.core.run import RunStatus
@@ -104,6 +103,23 @@ class DetailResolver:
             uri=canonical_uri,
             digest=digest("detail", 1, normalized),
         )
+
+    def required_reference(self, actor: AuthenticatedActor, uri: str) -> DetailRef:
+        """Mint a detail reference whose absence would contradict its owner."""
+
+        reference = self.reference(actor, uri)
+        if isinstance(reference, ControlRejected):
+            fault = reference.faults[0]
+            raise JournalDamaged(
+                f"required detail {uri!r} could not be minted: {fault.code.value}: {fault.message}"
+            )
+        return reference
+
+    def optional_reference(self, actor: AuthenticatedActor, uri: str) -> DetailRef | None:
+        """Mint a detail reference when the addressed immutable fact exists."""
+
+        reference = self.reference(actor, uri)
+        return reference if isinstance(reference, DetailRef) else None
 
     def read(
         self,
@@ -390,16 +406,7 @@ class DetailResolver:
         repair: str,
         details: dict[str, JsonValue] | None = None,
     ) -> ControlRejected:
-        return ControlRejected(
-            faults=(
-                ControlFault(
-                    code=code,
-                    message=message,
-                    repair=repair,
-                    details=details or {},
-                ),
-            )
-        )
+        return ControlRejected.one_fault(code, message, repair, details)
 
     @classmethod
     def _not_found(cls, uri: str, message: str) -> ControlRejected:
