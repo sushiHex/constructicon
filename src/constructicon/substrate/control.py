@@ -173,7 +173,9 @@ class InMemoryControlStore:
                             or (record.created_at.isoformat(), record.command_id) > after
                         )
                     ),
-                    key=lambda record: (record.created_at, record.command_id),
+                    # Order by the SAME key the bounds compare on, or a mixed
+                    # UTC offset would sort differently from the durable store.
+                    key=lambda record: (record.created_at.isoformat(), record.command_id),
                 )
             )
         return records[:limit]

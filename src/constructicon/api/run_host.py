@@ -483,10 +483,13 @@ class RunHost:
         # failures and the durable run stays reclaimable after lease expiry.
 
     def _finished(self, run_id: RunId, task: _WorkerTask) -> None:
-        current = self._tasks.get(run_id)
-        if current is task:
-            self._tasks.pop(run_id, None)
-        self._explicit_tasks.pop(run_id, None)
+        # Only the worker still recorded here retires this RunId. A superseding
+        # attempt owns the explicit resume fence from the moment ``_start`` records
+        # it, so an older worker's completion must never erase it — ``OwnershipLost``
+        # would then find no intent to requeue and drop the resume command.
+        if self._tasks.get(run_id) is task:
+            del self._tasks[run_id]
+            self._explicit_tasks.pop(run_id, None)
         if not task.cancelled():
             exc = task.exception()
             if exc is not None and not isinstance(exc, Exception):

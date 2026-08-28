@@ -30,7 +30,6 @@ from constructicon.core.run import (
 )
 from constructicon.substrate.journal._sqlite_base import (
     _checkpoint_identity,
-    _manifest_semantically_equal,
     _path_key,
 )
 
@@ -83,57 +82,6 @@ class _SqliteExecutionMixin:
             created_at=created_at,
             payload=payload,
         )
-
-    def create_run(
-        self,
-        run_id: RunId,
-        *,
-        manifest_json: str,
-        manifest_hash: Digest,
-        input_hash: Digest,
-        inputs: dict[str, Any],
-    ) -> None:
-        with self._txn() as conn:
-            existing = conn.execute(
-                "SELECT manifest_json FROM manifests WHERE manifest_hash = ?",
-                (str(manifest_hash),),
-            ).fetchone()
-            if existing is None:
-                conn.execute(
-                    "INSERT INTO manifests (manifest_hash, manifest_json) VALUES (?, ?)",
-                    (str(manifest_hash), manifest_json),
-                )
-            elif existing["manifest_json"] != manifest_json and not _manifest_semantically_equal(
-                existing["manifest_json"], manifest_json
-            ):
-                raise JournalDamaged(
-                    f"manifest {manifest_hash} already stored with different semantics"
-                )
-            run = conn.execute(
-                "SELECT manifest_hash, input_hash FROM runs WHERE run_id = ?",
-                (run_id,),
-            ).fetchone()
-            if run is not None:
-                if run["manifest_hash"] == str(manifest_hash) and run["input_hash"] == str(
-                    input_hash
-                ):
-                    return  # idempotent
-                raise CheckpointConflict(
-                    f"run {run_id!r} already exists with a different manifest/inputs"
-                )
-            conn.execute(
-                "INSERT INTO runs (run_id, manifest_hash, input_hash, inputs_json,"
-                " status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    run_id,
-                    str(manifest_hash),
-                    str(input_hash),
-                    canonical_json(inputs),
-                    RunStatus.PENDING.value,
-                    self._now_iso(),
-                ),
-            )
-        self.fault_probe("create.after_commit")
 
     def claim_run(
         self,

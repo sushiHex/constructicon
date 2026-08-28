@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import sqlite3
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -19,6 +22,8 @@ from constructicon.core.control import (
     ApprovalCommandResult,
     AuthenticatedActor,
     CancellationResult,
+    ControlCode,
+    ControlRejected,
     PromotionCommandResult,
     RegistrationCommandResult,
     RunSubmission,
@@ -29,6 +34,7 @@ from constructicon.core.effect import (
     CheckResult,
     ComponentProofSubject,
 )
+from constructicon.core.errors import JournalDamaged
 from constructicon.core.identity import Digest, canonical_json, digest
 from constructicon.core.run import RunStatus
 from constructicon.sdk.types import DefinitionBundle
@@ -768,3 +774,160 @@ async def test_resume_recovers_each_response_loss_seam_with_one_attempt(
     await asyncio.sleep(0)
     await control_a.shutdown()
     await control_b.shutdown()
+
+
+def _stored_plan_kind(journal: SqliteJournal, command_id: str) -> str:
+    command = journal.command(command_id)
+    assert command is not None and isinstance(command.plan, dict)
+    plan = command.plan["plan"]
+    assert isinstance(plan, dict)
+    return str(plan["kind"])
+
+
+def _rewrite_terminal_fault_code(
+    db_path: Path,
+    command_id: str,
+    code: ControlCode,
+) -> None:
+    with sqlite3.connect(db_path) as connection:
+        row = connection.execute(
+            "SELECT response_json FROM commands WHERE command_id = ?",
+            (command_id,),
+        ).fetchone()
+        assert row is not None and isinstance(row[0], str)
+        payload = json.loads(row[0])
+        assert isinstance(payload, dict)
+        faults = payload.get("faults")
+        assert isinstance(faults, list) and len(faults) == 1
+        fault = faults[0]
+        assert isinstance(fault, dict)
+        fault["code"] = code.value
+        connection.execute(
+            "UPDATE commands SET response_json = ? WHERE command_id = ?",
+            (json.dumps(payload, sort_keys=True, separators=(",", ":")), command_id),
+        )
+
+
+async def test_resume_rejected_after_its_domain_plan_replays(
+    world: Any,
+    journal: SqliteJournal,
+    clock: FakeClock,
+) -> None:
+    """Refusing at apply time is lawful: the domain plan is already durable.
+
+    ``runs_resume`` commits its ``resume`` plan before it can observe a live
+    owner, so the rejection lands over a domain plan rather than over a
+    rejection plan. Replay must return that recorded refusal, not a fault.
+    """
+
+    run_id = _prepare_live_run(world, journal, "resume-rejected-after-plan")
+    key = "resume-rejected-after-plan"
+    command_id = command_id_for(RUN_ACTOR.actor_id, "runs_resume", key)
+    control = _fresh_control(world, journal, "control-resume-rejected")
+
+    rejected = await control.runs_resume(RUN_ACTOR, run_id=run_id, idempotency_key=key)
+    assert isinstance(rejected, ControlRejected)
+    assert [fault.code for fault in rejected.faults] == [ControlCode.RUN_LIVE_OWNER]
+    assert _stored_plan_kind(journal, command_id) == "resume"
+
+    stored = _terminal_response_bytes(journal, "runs_resume")
+    clock.advance(31)
+    replay = await _fresh_control(world, journal, "control-resume-replay").runs_resume(
+        RUN_ACTOR,
+        run_id=run_id,
+        idempotency_key=key,
+    )
+    assert replay == rejected
+    assert _terminal_response_bytes(journal, "runs_resume") == stored
+    await control.shutdown()
+
+
+async def test_initial_promotion_rejected_after_its_domain_plan_replays(
+    world: Any,
+    journal: SqliteJournal,
+    clock: FakeClock,
+) -> None:
+    """The same law across a second command family: stable moved after planning."""
+
+    definition, implementation = atomic(
+        "control/bootstrap-rejected-after-plan",
+        (ISSUE,),
+        (BRIEF,),
+        triage_impl,
+    )
+    planned_version = world._register(definition, implementation)
+    other_version = world._register(definition.model_copy(update={"role": "component"}))
+    key = "bootstrap-rejected-after-plan"
+    command_id = command_id_for(LOCAL_ADMIN.actor_id, "registry_promote_initial", key)
+    control_a = _fresh_control(
+        world,
+        journal,
+        "control-bootstrap-rejected-a",
+        fault_probe=_crash_at("registry_promote_initial", "after_plan"),
+        run_host=cast(RunHost, _PassiveHost()),
+    )
+    with pytest.raises(InjectedCrash):
+        await control_a.registry_promote_initial(
+            LOCAL_ADMIN,
+            component=definition.name,
+            version=planned_version,
+            idempotency_key=key,
+        )
+    assert _stored_plan_kind(journal, command_id) == "initial_promotion"
+
+    # The world moves stable elsewhere while the planned command is unfinished.
+    world._promote_initial(component=definition.name, version=other_version)
+    clock.advance(31)
+    control_b = _fresh_control(
+        world,
+        journal,
+        "control-bootstrap-rejected-b",
+        run_host=cast(RunHost, _PassiveHost()),
+    )
+    rejected = await control_b.registry_promote_initial(
+        LOCAL_ADMIN,
+        component=definition.name,
+        version=planned_version,
+        idempotency_key=key,
+    )
+    assert isinstance(rejected, ControlRejected)
+    assert [fault.code for fault in rejected.faults] == [ControlCode.REGISTRY_STABLE_MOVED]
+    assert _stored_plan_kind(journal, command_id) == "initial_promotion"
+
+    stored = _terminal_response_bytes(journal, "registry_promote_initial")
+    replay = await control_b.registry_promote_initial(
+        LOCAL_ADMIN,
+        component=definition.name,
+        version=planned_version,
+        idempotency_key=key,
+    )
+    assert replay == rejected
+    assert _terminal_response_bytes(journal, "registry_promote_initial") == stored
+    assert world._registry.stable_version(definition.name) == other_version
+    await control_a.shutdown()
+    await control_b.shutdown()
+
+
+async def test_domain_plan_replay_refuses_an_unlawful_rejection_family(
+    world: Any,
+    journal: SqliteJournal,
+    tmp_path: Path,
+) -> None:
+    """Apply-time refusal support must not turn off relational validation."""
+
+    run_id = _prepare_live_run(world, journal, "resume-damaged-rejection")
+    key = "resume-damaged-rejection"
+    command_id = command_id_for(RUN_ACTOR.actor_id, "runs_resume", key)
+    control = _fresh_control(world, journal, "control-resume-damaged")
+    rejected = await control.runs_resume(RUN_ACTOR, run_id=run_id, idempotency_key=key)
+    assert isinstance(rejected, ControlRejected)
+    assert _stored_plan_kind(journal, command_id) == "resume"
+
+    _rewrite_terminal_fault_code(
+        tmp_path / "journal.db",
+        command_id,
+        ControlCode.REGISTRY_STABLE_MOVED,
+    )
+    with pytest.raises(JournalDamaged, match="not lawful"):
+        await control.runs_resume(RUN_ACTOR, run_id=run_id, idempotency_key=key)
+    await control.shutdown()

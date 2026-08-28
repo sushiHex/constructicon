@@ -914,3 +914,72 @@ async def test_hard_death_remains_visible_and_fresh_host_reclaims_after_expiry()
     system.blockers[run_id].set()
     await first.shutdown()
     await second.shutdown()
+
+
+async def test_older_worker_completion_cannot_retire_a_superseding_explicit_intent() -> None:
+    """A stale done-callback must not retire the live attempt's resume fence.
+
+    With spare capacity a superseding worker starts while the previous one is
+    still unwinding, so the older callback fires last. If it retired the
+    RunId's explicit intent, the live worker's `OwnershipLost` would find
+    nothing to requeue and the resume command would silently never take effect
+    — `FAILED` is not a recoverable status, so nothing else would revive it.
+    """
+
+    clock = AsyncClock()
+    run_id = RunId("run-stale-callback-keeps-explicit-intent")
+    journal = FakeJournal([record(str(run_id), clock, created_offset=0, status=RunStatus.FAILED)])
+    system = FakeSystem(journal, clock)
+    system.terminal_once[run_id] = RunStatus.FAILED
+    system.terminal_persisted[run_id] = asyncio.Event()
+    system.terminal_release[run_id] = asyncio.Event()
+    host = host_for(system, max_concurrency=2)
+
+    assert (
+        host.launch(
+            run_id,
+            expected_event_seq=0,
+            allowed_statuses=frozenset({RunStatus.FAILED}),
+        )
+        == "queued"
+    )
+    await system.terminal_persisted[run_id].wait()
+    # The unwinding worker still holds its lease; let it expire so capacity,
+    # not ownership, is what gates the superseding attempt.
+    clock.advance(31)
+
+    # The superseding attempt starts on spare capacity while the first unwinds.
+    system.ownership_loss_ready[run_id] = asyncio.Event()
+    system.ownership_loss_release[run_id] = asyncio.Event()
+    assert (
+        host.launch(
+            run_id,
+            expected_event_seq=1,
+            allowed_statuses=frozenset({RunStatus.FAILED}),
+        )
+        == "queued"
+    )
+    await system.ownership_loss_ready[run_id].wait()
+
+    # Only now does the older worker finish, and its done-callback must have
+    # actually run before the live worker loses its claim.
+    system.terminal_release[run_id].set()
+    await eventually(
+        lambda: journal.records[run_id].owner_id is None,
+        "the older worker never released its lease",
+    )
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert len(system.started) == 2 and host.active_run_ids == (run_id,)
+
+    system.ownership_loss_release[run_id].set()
+    await eventually(
+        lambda: clock.sleeper_count == 1,
+        "a stale completion erased the superseding explicit resume intent",
+    )
+    clock.advance(0.1)
+    await eventually(
+        lambda: len(system.started) == 3,
+        "the retained explicit resume intent was never retried",
+    )
+    await host.shutdown()

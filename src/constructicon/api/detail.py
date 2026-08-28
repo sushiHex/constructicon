@@ -197,9 +197,10 @@ class DetailResolver:
                 "detail cursor offset is outside the document",
                 "restart this detail read without a cursor",
             )
-        try:
-            raw[:offset].decode("utf-8")
-        except UnicodeDecodeError:
+        # A UTF-8 continuation byte is 0b10xxxxxx, so the byte AT the offset
+        # decides the boundary in O(1). Decoding the whole prefix would make
+        # paging one document quadratic in its size.
+        if offset < len(raw) and (raw[offset] & 0xC0) == 0x80:
             return self._fault(
                 ControlCode.CURSOR_INVALID,
                 "detail cursor offset is not a UTF-8 code-point boundary",

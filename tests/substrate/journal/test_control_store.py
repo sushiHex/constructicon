@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -265,3 +265,60 @@ def test_sqlite_reopen_preserves_canonical_models(
 def test_command_identity_remains_actor_operation_key_derived() -> None:
     assert command_id_for(ACTOR.actor_id, "runs_resume", "same-key").startswith("cmd-")
     assert digest("control-request", 1, REQUEST) == REQUEST_HASH
+
+
+class OffsetClock:
+    """Rising instants whose ISO text falls — a legal aware-datetime stream."""
+
+    def __init__(self) -> None:
+        self._instant = datetime(2026, 1, 1, 10, tzinfo=UTC)
+        self._calls = 0
+
+    def now(self) -> datetime:
+        self._instant += timedelta(minutes=30)
+        self._calls += 1
+        # Claim and completion each read the clock, so flip the offset every
+        # second call: consecutive commands then disagree on instant vs text.
+        zone = UTC if (self._calls - 1) // 2 % 2 == 0 else timezone(timedelta(hours=-5))
+        return self._instant.astimezone(zone)
+
+
+@pytest.mark.parametrize("kind", ("memory", "sqlite"))
+def test_committed_paging_orders_on_the_key_it_bounds_on(
+    kind: str,
+    tmp_path: Path,
+) -> None:
+    """Both stores page committed commands in one order: the ISO text key.
+
+    `after` and `through` are compared as ISO text, so ordering by the
+    underlying instant instead would let a record fall between two watermarks
+    and never be delivered — the run host would silently never launch its
+    resume.
+    """
+
+    clock = OffsetClock()
+    store: ControlStore = (
+        InMemoryControlStore(now_fn=clock.now)
+        if kind == "memory"
+        else SqliteJournal(tmp_path / "offsets.db", now_fn=clock.now)
+    )
+    for index in range(6):
+        claimed = _claim(store, owner="owner", key=f"resume-offset-{index}")
+        assert claimed.claim is not None
+        store.complete_command(claimed.claim, {"index": index})
+    through = store.latest_command_key(operation="runs_resume")
+    assert through is not None
+
+    delivered: list[tuple[str, str]] = []
+    after: tuple[str, str] | None = None
+    for _ in range(6):
+        page = store.committed_commands(
+            operation="runs_resume", after=after, through=through, limit=2
+        )
+        if not page:
+            break
+        delivered.extend((record.created_at.isoformat(), record.command_id) for record in page)
+        after = delivered[-1]
+
+    assert delivered == sorted(delivered)
+    assert len(delivered) == len(set(delivered)) == 6

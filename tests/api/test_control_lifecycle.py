@@ -241,3 +241,57 @@ async def test_every_mutation_authorizes_before_startup_or_claim(
     assert host.startup_calls == 0
     assert journal.latest_command_key(operation=operation) is None
     await control.shutdown()
+
+
+async def test_cancelled_mutation_releases_its_slot_without_the_lifecycle_lock(
+    world: Any,
+    journal: SqliteJournal,
+) -> None:
+    """Mutation accounting must survive cancellation under a contended lock.
+
+    The release runs in a `finally` that may execute while the caller's task is
+    already cancelled. If it awaited the lifecycle lock there, acquisition would
+    never complete, `_mutations_idle` would stay clear, and every later shutdown
+    would wait on it forever.
+    """
+
+    host = HostProbe()
+    host.release.set()
+    control = _control(world, journal, host)
+    in_flight = asyncio.Event()
+    never = asyncio.Event()
+
+    async def blocks_forever(actor: AuthenticatedActor, **kwargs: Any) -> None:
+        in_flight.set()
+        await never.wait()
+
+    control._commands.runs_cancel = blocks_forever  # type: ignore[method-assign]
+    mutation = asyncio.create_task(
+        control.runs_cancel(
+            OPERATE_ACTOR,
+            run_id=RunId("run-cancelled-in-flight"),
+            idempotency_key="cancelled-in-flight",
+        )
+    )
+    await in_flight.wait()
+
+    holding = asyncio.Event()
+    releasing = asyncio.Event()
+
+    async def hold_lifecycle_lock() -> None:
+        async with control._lifecycle_lock:
+            holding.set()
+            await releasing.wait()
+
+    holder = asyncio.create_task(hold_lifecycle_lock())
+    await holding.wait()
+    mutation.cancel()
+    _, pending = await asyncio.wait({mutation}, timeout=2)
+    assert not pending, "the mutation release must not await the lifecycle lock"
+    with pytest.raises(asyncio.CancelledError):
+        await mutation
+
+    releasing.set()
+    await holder
+    await asyncio.wait_for(control.shutdown(), timeout=5)
+    assert host.shutdown_calls == 1

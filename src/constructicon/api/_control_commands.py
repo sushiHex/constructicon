@@ -1109,14 +1109,6 @@ class _CommandExecutor:
             raise JournalDamaged("claimed command returned no fence")
         return result.claim
 
-    def _ensure_plan(self, claim: CommandClaim, plan: JsonValue) -> JsonValue:
-        record = self._command_record(claim)
-        if record.plan is None:
-            self._store.store_command_plan(claim, plan)
-            self._fault_probe(f"{claim.operation}.after_plan")
-            return plan
-        return record.plan
-
     def _terminal_rejection(self, claim: CommandClaim, response: T) -> T:
         session = _CommandSession(self, claim)
         record = session.record
@@ -1466,20 +1458,28 @@ class _CommandExecutor:
                 requested = ComponentDef.model_validate(request.get("definition"))
             except ValidationError as exc:
                 raise JournalDamaged("registration request has an invalid definition") from exc
-            if requested != plan.definition or plan.content_hash != plan.definition.content_hash():
+            if requested != plan.definition:
                 raise JournalDamaged("registration plan contradicts its canonical request")
             existing = self._registry.snapshot().get(
                 plan.definition.name,
                 plan.content_hash,
             )
             if plan.row_origin == "existing":
+                # A reused identity binds to the durable row that already carries
+                # it, never to a re-derivation. A retained version keeps the
+                # identity it was written under, so recomputing here would make
+                # every row registered under an older hash law unreplayable.
                 if (
                     existing is None
                     or existing.definition != plan.definition
                     or existing.registered_at != plan.candidate_timestamp
                 ):
                     raise JournalDamaged("registration plan contradicts its existing row")
-            elif plan.candidate_timestamp != record.created_at:
+                return
+            # A new row, by contrast, may only claim a definition-derived identity.
+            if plan.content_hash != plan.definition.content_hash():
+                raise JournalDamaged("new registration identity is not definition-derived")
+            if plan.candidate_timestamp != record.created_at:
                 raise JournalDamaged("new registration timestamp is not command-derived")
             return
 
@@ -1561,16 +1561,7 @@ class _CommandExecutor:
         plan = self._load_stored_plan(claim, record.plan)
         self._validate_command_plan(claim, plan)
         if isinstance(response, (AdmissionRejected, ControlRejected)):
-            if not isinstance(plan, (_AdmissionRejectPlan, _ControlRejectPlan)):
-                raise JournalDamaged("rejected response has no matching rejection plan")
-            if (
-                plan.command_id != record.command_id
-                or plan.request_hash != record.request_hash
-                or plan.response != response
-            ):
-                raise JournalDamaged("rejected response contradicts its claimed command")
-            if isinstance(plan, _ControlRejectPlan) and plan.operation != record.operation:
-                raise JournalDamaged("control rejection operation contradicts its command")
+            self._validate_terminal_rejection(record, plan, response)
             return
 
         command = getattr(response, "command", None)
@@ -1688,11 +1679,47 @@ class _CommandExecutor:
             return
         raise JournalDamaged("terminal response uses an unknown schema family")
 
-    def _command_plan(self, claim: CommandClaim) -> dict[str, Any]:
-        record = self._command_record(claim)
-        if not isinstance(record.plan, dict):
-            raise JournalDamaged(f"command {claim.command_id!r} has no object plan")
-        return record.plan
+    @staticmethod
+    def _validate_terminal_rejection(
+        record: CommandRecord,
+        plan: _CommandPlan,
+        response: AdmissionRejected | ControlRejected,
+    ) -> None:
+        """Bind a refusal to the only plan families that can lawfully emit it."""
+
+        if isinstance(plan, _AdmissionRejectPlan):
+            if record.operation != "runs_start" or response != plan.response:
+                raise JournalDamaged("admission rejection contradicts its claimed command")
+            return
+        if isinstance(plan, _ControlRejectPlan):
+            if response != plan.response:
+                raise JournalDamaged("control rejection contradicts its claimed command")
+            return
+        if not isinstance(response, ControlRejected) or len(response.faults) != 1:
+            raise JournalDamaged("domain plan carries an invalid terminal rejection")
+
+        code = response.faults[0].code
+        if record.operation == "runs_resume" and isinstance(plan, _ResumePlan):
+            lawful = {
+                ControlCode.RUN_LIVE_OWNER,
+                ControlCode.RUN_TERMINAL,
+                ControlCode.RUN_NOT_RESUMABLE,
+            }
+        elif (
+            record.operation,
+            type(plan),
+        ) in {
+            ("registry_promote_initial", _InitialPromotionPlan),
+            ("registry_promote", _PromotionPlan),
+            ("registry_rollback", _RollbackPlan),
+        }:
+            lawful = {ControlCode.REGISTRY_STABLE_MOVED}
+        else:
+            lawful = set()
+        if code not in lawful:
+            raise JournalDamaged(
+                f"{record.operation!r} rejection is not lawful for its durable domain plan"
+            )
 
     # -- helpers ----------------------------------------------------------
 

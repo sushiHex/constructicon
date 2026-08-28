@@ -8,26 +8,41 @@ from constructicon.api.control import ControlPlane
 from constructicon.api.run_host import RunHost
 from constructicon.core.address import RunId
 from constructicon.core.control import (
+    ADMIN_SCOPE,
     OPERATE_SCOPE,
     READ_SCOPE,
     AuthenticatedActor,
     ControlCode,
     ControlRejected,
+    RegistrationCommandResult,
     RunSubmission,
 )
+from constructicon.core.envelope import utc_now
+from constructicon.core.identity import digest
+from constructicon.core.registry import StoredVersion
 from constructicon.core.run import RunStatus
+from constructicon.sdk.types import DefinitionBundle
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.conftest import (
+    BRIEF,
+    ISSUE,
     FakeClock,
     InjectedCrash,
+    atomic,
     await_attempt_terminal,
     pipeline_graph,
+    triage_impl,
 )
 
 ACTOR = AuthenticatedActor(
     actor_id="static:test-agent",
     auth_method="static",
     scopes=frozenset({READ_SCOPE, OPERATE_SCOPE}),
+)
+ADMIN = AuthenticatedActor(
+    actor_id="static:test-admin",
+    auth_method="static",
+    scopes=frozenset({READ_SCOPE, ADMIN_SCOPE}),
 )
 
 
@@ -172,3 +187,56 @@ def test_scope_is_checked_before_command_claim(world, journal: SqliteJournal) ->
     )
     assert isinstance(rejected, ControlRejected)
     assert rejected.faults[0].code is ControlCode.AUTH_REQUIRED_SCOPE
+
+
+async def test_registration_reuses_a_row_retained_under_a_superseded_identity_law(
+    world,
+    journal: SqliteJournal,
+) -> None:
+    """A retained version keeps the identity it was written under.
+
+    `content_hash` is a law, and laws move — this milestone's own
+    `change_surfaces` serializer moved one. Re-registering a definition whose
+    durable row predates the change must bind to that row, not recompute a
+    fresh identity and declare the journal damaged.
+    """
+
+    definition, implementation = atomic(
+        "control/superseded-identity",
+        (ISSUE,),
+        (BRIEF,),
+        triage_impl,
+    )
+    superseded = digest("component", 1, {"identity-law": "superseded"})
+    assert superseded != definition.content_hash()
+    world._registry.store.store_version(
+        StoredVersion(
+            definition=definition,
+            content_hash=superseded,
+            registered_at=utc_now(),
+        )
+    )
+    control = ControlPlane(
+        system=world,
+        store=journal,
+        run_host=RunHost(world, journal=journal, max_concurrency=1),
+        owner_id="control-superseded-identity",
+    )
+    bundle = DefinitionBundle(definition, implementation)
+
+    registered = await control.registry_register(
+        ADMIN,
+        definition=bundle,
+        idempotency_key="superseded-identity",
+    )
+    assert isinstance(registered, RegistrationCommandResult)
+    assert registered.version == superseded
+
+    replay = await control.registry_register(
+        ADMIN,
+        definition=bundle,
+        idempotency_key="superseded-identity",
+    )
+    assert isinstance(replay, RegistrationCommandResult)
+    assert replay.version == superseded and replay.command.replayed
+    await control.shutdown()

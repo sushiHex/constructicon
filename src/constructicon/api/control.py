@@ -100,7 +100,7 @@ def _facade_mutation(
             try:
                 return await operation(control, actor, *args, **kwargs)
             finally:
-                await control._release_mutation()
+                control._release_mutation()
 
         return cast(
             "Callable[Concatenate[ControlPlane, AuthenticatedActor, P], Awaitable[R]]",
@@ -228,13 +228,16 @@ class ControlPlane:
             self._active_mutations += 1
             self._mutations_idle.clear()
 
-    async def _release_mutation(self) -> None:
-        async with self._lifecycle_lock:
-            if self._active_mutations <= 0:
-                raise RuntimeError("ControlPlane mutation accounting underflow")
-            self._active_mutations -= 1
-            if self._active_mutations == 0:
-                self._mutations_idle.set()
+    def _release_mutation(self) -> None:
+        # Deliberately synchronous: this runs in a ``finally`` that may execute
+        # while the caller's task is already cancelled. Awaiting the lifecycle
+        # lock there could raise before the decrement and strand
+        # ``_mutations_idle``, hanging every later shutdown forever.
+        if self._active_mutations <= 0:
+            raise RuntimeError("ControlPlane mutation accounting underflow")
+        self._active_mutations -= 1
+        if self._active_mutations == 0:
+            self._mutations_idle.set()
 
     async def _require_mutations_open(self) -> None:
         async with self._lifecycle_lock:

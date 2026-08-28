@@ -122,6 +122,28 @@ def test_registry_revision_advances_only_for_new_durable_facts(
     assert revision_store.snapshot().revision == after_promotion
 
 
+def test_nonstable_promotion_fact_never_moves_the_stable_pointer(
+    revision_store: RegistryStore,
+) -> None:
+    """The in-memory and SQLite stores reconstruct the same channel semantics."""
+
+    first = _version("revision/channel-parity", 0)
+    second = _version("revision/channel-parity", 1)
+    revision_store.store_version(first)
+    revision_store.store_version(second)
+    revision_store.store_promotion(_promotion(first.definition.name, None, first, 1))
+    revision_store.store_promotion(
+        _promotion(first.definition.name, first, second, 2).model_copy(
+            update={"channel": "candidate"}
+        )
+    )
+
+    snapshot = revision_store.snapshot()
+    assert snapshot.revision == RegistryRevision(registration_seq=2, promotion_seq=2)
+    assert snapshot.stable_version(first.definition.name) == first.content_hash
+    assert snapshot.history[first.definition.name] == ((None, str(first.content_hash)),)
+
+
 def test_sqlite_registry_revision_cuts_survive_reopen(tmp_path: Path) -> None:
     path = tmp_path / "registry-reopen.db"
     first_store = SqliteJournal(path)

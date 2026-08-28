@@ -132,7 +132,9 @@ class InMemoryRegistryStore:
             stable: dict[str, str] = {}
             history: dict[str, list[tuple[str | None, str]]] = {}
             for seq, record in self._promotions:
-                if seq > selected.promotion_seq:
+                # Mirror the durable store exactly: only the ``stable`` channel
+                # moves the pointer or contributes to promotion history.
+                if seq > selected.promotion_seq or record.channel != "stable":
                     continue
                 retained = versions.get(record.component, {})
                 before = str(record.from_version) if record.from_version else None

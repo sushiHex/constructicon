@@ -38,10 +38,8 @@ import shutil
 import stat
 import subprocess
 import tarfile
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from types import TracebackType
 
 from pydantic import BaseModel, ConfigDict
 
@@ -368,8 +366,7 @@ class GitAuthority:
         return ReadSnapshot(repository=self.repository_id, commit=commit, _path=str(dest))
 
     def discard_snapshot(self, snapshot: ReadSnapshot) -> None:
-        _set_write_bits(Path(snapshot.path), writable=True)
-        _remove_tree(Path(snapshot.path))
+        _remove_tree(Path(snapshot.path), best_effort=True)
 
     def content_digest(self, path: Path | str) -> Digest:
         """Deterministic content identity of a tree on disk — the post-gate
@@ -430,7 +427,7 @@ class GitAuthority:
     def discard_staging(self, acquisition_id: str) -> bool:
         staging = self._root / "staging" / acquisition_id
         if staging.exists():
-            _remove_tree(staging)
+            _remove_tree(staging, best_effort=True)
             return True
         return False
 
@@ -646,16 +643,18 @@ def _set_write_bits(root: Path, *, writable: bool) -> None:
             os.chmod(path, mode & ~(stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH))
 
 
-def _remove_tree(root: Path) -> None:
-    """Remove a completed Git tree even when Windows retained read-only bits."""
+def _remove_tree(root: Path, *, best_effort: bool = False) -> None:
+    """Remove a completed Git tree even when Windows retained read-only bits.
 
-    def make_writable_and_retry(
-        function: Callable[[str], object],
-        path: str,
-        error: tuple[type[BaseException], BaseException, TracebackType | None],
-    ) -> None:
-        del error
-        os.chmod(path, stat.S_IWRITE)
-        function(path)
+    Clearing the bits up front is the whole job — a removal-time retry hook
+    would only rediscover lazily what ``_set_write_bits`` already knows.
+    ``best_effort`` keeps the discard paths' ``ignore_errors`` contract: a tree
+    another process still holds open must never make cleanup a caller fault.
+    """
 
-    shutil.rmtree(root, onerror=make_writable_and_retry)
+    try:
+        _set_write_bits(root, writable=True)
+    except OSError:
+        if not best_effort:
+            raise
+    shutil.rmtree(root, ignore_errors=best_effort)
