@@ -30,8 +30,10 @@ later decision. Add a successor document, ADR, or explicit implementation record
 | Milestone | Record | Provenance | Status |
 | --- | --- | --- | --- |
 | M1 | [Vertical slice](milestones/M1-vertical-slice-recovered-record.md) | Recovered from the frozen milestone line and merged PR #1 | Historical implementation record; original standalone plan not recovered |
-| M2 | [Crash and resume hardening](milestones/M2-crash-resume-hardening.md) | Exact conversation plan | Historical plan; final implementation details are recorded by PR #2 and current architecture |
-| M3 | [Git authority rev 1](milestones/M3-git-authority-rev1.md) | Exact recovered document | Historical implementation plan |
+| M2 | [Crash and resume hardening (pre-review draft)](milestones/M2-crash-resume-hardening.md) | Exact conversation plan | Superseded by rev 2 after the APPROVE WITH REDLINES review (seven redlines) |
+| M2 | [Crash and resume hardening rev 2](milestones/M2-crash-resume-hardening-rev2.md) | Exact conversation plan (approved), contributed verbatim by the implementing session | Implementation baseline for PR #2 |
+| M3 | [Git authority rev 1](milestones/M3-git-authority-rev1.md) | Exact recovered document | Superseded by rev 2 (blocking redlines: staging-repository boundary; complete MergeSubject) |
+| M3 | [Git authority rev 2](milestones/M3-git-authority-rev2.md) | Exact conversation plan (approved), contributed verbatim by the implementing session | Implementation baseline for PR #3 |
 | M4 | [Generic bounded loops rev 2](milestones/M4-generic-bounded-loops-rev2.md) | Exact recovered document | Historical implementation plan |
 | M5 | [Recovered authoring and introspection rev 2](milestones/M5-agent-first-authoring-introspection-recovered-rev2.md) | High-confidence reconstruction, explicitly labeled in the document | Latest recovered full plan; exact lost prose was not recoverable |
 | M5 | [Rev 3 implementation record](milestones/M5-rev3-implementation-record.md) | Merged PR #5 scope and acceptance record | Complements the recovered plan; not a reconstruction of missing prose |
@@ -52,6 +54,11 @@ later decision. Add a successor document, ADR, or explicit implementation record
   semantic milestone.
 - **M1** has no recovered standalone plan. The archive says so rather than
   inventing one.
+- **M2 and M3** each had a pre-review draft and an approved rev 2: the drafts
+  archived above predate the external reviews (M2's seven redlines; M3's two
+  blocking redlines) that reshaped both milestones. The approved rev 2 texts
+  were not recoverable at archival time and were later contributed verbatim
+  by the session that authored and implemented them (PR #2, PR #3).
 - **M5 rev 3** disappeared from the visible conversation before archival. The
   recovered rev 2 document and merged PR #5 implementation record preserve the
   recoverable substance without pretending the lost wording is exact.
