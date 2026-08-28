@@ -48,6 +48,7 @@ the eventual code differs.
 | M6.1 | [Control-plane hardening and compression](milestones/M6.1-control-plane-hardening-and-compression.md) | Exact recovered document | Corrective plan; includes PR A hardening and PR B compression |
 | M6.2 | [Internal compression scope](milestones/M6.2-internal-compression-extracted-scope.md) | Exact extraction from the M6.1 parent plan | Discoverability copy; parent plan remains authoritative for this historical scope |
 | M6.2 | [Durable control-plane closeout and internal compression rev 2](milestones/M6.2-internal-compression-rev2.md) | Current successor reconciled against `main` at `7f33724` after PRs #9–#11 | Approved implementation baseline; result recorded below |
+| M7 | [Channels and panel rev 1](milestones/M7-channels-and-panel-rev1.md) | First full successor plan derived from current authority and the frozen M7 milestone line | Review draft; not approved for implementation |
 
 ## Handoffs
 
