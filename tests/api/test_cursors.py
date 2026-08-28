@@ -96,11 +96,13 @@ def test_detail_chunks_reconstruct_canonical_bytes(world, journal: SqliteJournal
     run_id = _prepare(world, "detail")
     control = ControlPlane(system=world, store=journal)
     uri = f"constructicon://runs/{run_id}/manifest"
+    reference = control.details.reference(ALICE, uri)
+    assert not isinstance(reference, ControlRejected)
     pieces: list[str] = []
     cursor: str | None = None
     digest_text = None
     while True:
-        chunk = control.details_read(ALICE, uri, cursor=cursor, max_bytes=97)
+        chunk = control.details_read(ALICE, reference, cursor=cursor, max_bytes=97)
         assert not isinstance(chunk, ControlRejected)
         pieces.append(chunk.text)
         digest_text = str(chunk.digest)

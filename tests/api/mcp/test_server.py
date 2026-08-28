@@ -6,6 +6,7 @@ import asyncio
 from typing import Any
 
 from mcp import Client
+from mcp.types import TextResourceContents
 from tests.conftest import pipeline_graph
 
 from constructicon.api.control import ControlPlane
@@ -89,6 +90,19 @@ async def test_retried_mcp_start_returns_one_run_and_stored_response(world) -> N
         assert first["command"]["replayed"] is False
         assert second["command"]["replayed"] is True
 
+        command = _structured(
+            await client.call_tool(
+                "commands_status", {"command_id": first["command"]["command_id"]}
+            )
+        )
+        assert command["command_id"] == first["command"]["command_id"]
+        assert command["state"] == "committed"
+        assert command["actor_id"] == actor.actor_id
+        assert command["detail"]["digest"].startswith("sha256:")
+        assert "record" not in command
+        assert "request" not in command
+        assert "response" not in command
+
         for _ in range(100):
             status = _structured(
                 await client.call_tool("runs_status", {"run_id": first["run_id"]})
@@ -98,6 +112,22 @@ async def test_retried_mcp_start_returns_one_run_and_stored_response(world) -> N
             if status["status"] in {"succeeded", "failed", "cancelled", "parked"}:
                 break
             await asyncio.sleep(0.01)
+
+        manifest_chunk = _structured(
+            await client.call_tool(
+                "details_read",
+                {"reference": status["manifest_ref"], "max_bytes": 64_000},
+            )
+        )
+        assert manifest_chunk["uri"] == status["manifest_ref"]["uri"]
+        assert manifest_chunk["digest"] == status["manifest_ref"]["digest"]
+
+        resource = await client.read_resource(
+            f"constructicon://runs/{first['run_id']}/manifest"
+        )
+        assert len(resource.contents) == 1
+        assert isinstance(resource.contents[0], TextResourceContents)
+        assert "manifest_hash" in resource.contents[0].text
 
     assert len(system.journal.run_records(limit=100)) == 1
 

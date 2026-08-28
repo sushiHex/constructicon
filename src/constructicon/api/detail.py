@@ -20,12 +20,18 @@ from constructicon.core.control import (
 )
 from constructicon.core.errors import ContractViolation
 from constructicon.core.identity import Digest, JsonValue, canonical_json, digest, json_value
-from constructicon.core.journal import JournalEvent
 from constructicon.core.run import RunStatus
 
 DEFAULT_DETAIL_BYTES = 16_000
+MIN_DETAIL_BYTES = 4
 MAX_DETAIL_BYTES = 64_000
-IMMUTABLE_RESULT_STATUSES = frozenset({RunStatus.SUCCEEDED, RunStatus.CANCELLED})
+TERMINAL_EVENT_STATUSES = {
+    "RunSucceeded": RunStatus.SUCCEEDED,
+    "RunFailed": RunStatus.FAILED,
+    "RunParked": RunStatus.PARKED,
+    "RunCancelled": RunStatus.CANCELLED,
+}
+IMMUTABLE_RESULT_STATUSES = frozenset(TERMINAL_EVENT_STATUSES.values())
 
 
 @dataclass(frozen=True)
@@ -37,8 +43,9 @@ class DetailAddress:
         return f"constructicon://runs/{quote(str(run_id), safe='')}/manifest"
 
     @staticmethod
-    def result(run_id: RunId) -> str:
-        return f"constructicon://runs/{quote(str(run_id), safe='')}/result"
+    def result(run_id: RunId, terminal_seq: int | None = None) -> str:
+        base = f"constructicon://runs/{quote(str(run_id), safe='')}/result"
+        return base if terminal_seq is None else f"{base}/{terminal_seq}"
 
     @staticmethod
     def event(run_id: RunId, seq: int) -> str:
@@ -83,11 +90,17 @@ class DetailResolver:
         actor: AuthenticatedActor,
         uri: str,
     ) -> DetailRef | ControlRejected:
-        resolved = self._resolve(actor, uri)
+        canonical_uri = self._canonical_uri(uri)
+        if isinstance(canonical_uri, ControlRejected):
+            return canonical_uri
+        resolved = self._resolve(actor, canonical_uri)
         if isinstance(resolved, ControlRejected):
             return resolved
         normalized = json_value(resolved)
-        return DetailRef(uri=uri, digest=digest("detail", 1, normalized))
+        return DetailRef(
+            uri=canonical_uri,
+            digest=digest("detail", 1, normalized),
+        )
 
     def read(
         self,
@@ -97,15 +110,18 @@ class DetailResolver:
         cursor: str | None = None,
         max_bytes: int = DEFAULT_DETAIL_BYTES,
     ) -> DetailChunk | ControlRejected:
-        if max_bytes <= 0 or max_bytes > MAX_DETAIL_BYTES:
+        if max_bytes < MIN_DETAIL_BYTES or max_bytes > MAX_DETAIL_BYTES:
             return self._fault(
                 ControlCode.REQUEST_INVALID,
-                f"max_bytes must be between 1 and {MAX_DETAIL_BYTES}; received {max_bytes}",
-                f"choose max_bytes in 1..{MAX_DETAIL_BYTES}",
+                (
+                    f"max_bytes must be between {MIN_DETAIL_BYTES} and "
+                    f"{MAX_DETAIL_BYTES}; received {max_bytes}"
+                ),
+                f"choose max_bytes in {MIN_DETAIL_BYTES}..{MAX_DETAIL_BYTES}",
             )
 
-        # URI-only reads remain accepted while MCP and the Python facade migrate;
-        # they are immediately converted into an authorized, digest-bound reference.
+        # URI-only reads remain accepted by the resolver for internal resource
+        # adapters. Public control surfaces require a typed, digest-bound ref.
         if isinstance(reference, str):
             generated = self.reference(actor, reference)
             if isinstance(generated, ControlRejected):
@@ -118,9 +134,14 @@ class DetailResolver:
                 "request a fresh DetailRef from the owning status or list operation",
             )
 
+        canonical_uri = self._canonical_uri(reference.uri)
+        if isinstance(canonical_uri, ControlRejected):
+            return canonical_uri
+
         # Resolution performs family-specific authorization and terminality checks
-        # before any payload is serialized.
-        resolved = self._resolve(actor, reference.uri)
+        # before any payload is serialized. A result alias is pinned before this
+        # point so the digest always names one immutable attempt.
+        resolved = self._resolve(actor, canonical_uri)
         if isinstance(resolved, ControlRejected):
             return resolved
         normalized = json_value(resolved)
@@ -129,7 +150,7 @@ class DetailResolver:
             return self._fault(
                 ControlCode.DETAIL_DIGEST_MISMATCH,
                 (
-                    f"detail {reference.uri!r} hashes to {observed_digest}, "
+                    f"detail {canonical_uri!r} hashes to {observed_digest}, "
                     f"not the supplied {reference.digest}"
                 ),
                 "request a fresh DetailRef from the owning status or list operation",
@@ -141,7 +162,7 @@ class DetailResolver:
 
         rendered = canonical_json(normalized)
         raw = rendered.encode("utf-8")
-        query: JsonValue = {"uri": reference.uri, "digest": str(reference.digest)}
+        query: JsonValue = {"uri": canonical_uri, "digest": str(reference.digest)}
         offset = 0
         if cursor is not None:
             try:
@@ -188,14 +209,53 @@ class DetailResolver:
                 last_key=end,
             )
         return DetailChunk(
-            uri=reference.uri,
-            media_type=reference.media_type,
+            uri=canonical_uri,
+            media_type="application/json",
             digest=reference.digest,
             text=text,
             offset=offset,
             total_bytes=len(raw),
             next_cursor=next_cursor,
         )
+
+    def _canonical_uri(self, uri: str) -> str | ControlRejected:
+        """Pin the mutable result alias to its current terminal attempt."""
+
+        parsed = urlparse(uri)
+        parts = [unquote(part) for part in parsed.path.split("/") if part]
+        if parsed.scheme != "constructicon" or parsed.netloc != "runs":
+            return uri
+        if len(parts) != 2 or parts[1] != "result":
+            return uri
+
+        try:
+            run_id = RunId(parts[0])
+        except (ValueError, TypeError, ContractViolation) as exc:
+            return self._not_found(uri, f"invalid detail URI: {exc}")
+        run_record = self._system.journal.run_record(run_id)
+        if run_record is None:
+            return self._not_found(uri, f"unknown run {run_id!r}")
+        if run_record.status not in IMMUTABLE_RESULT_STATUSES:
+            return self._not_immutable(
+                uri,
+                f"run {run_id!r} is still {run_record.status.value}",
+            )
+        terminal_event = self._system.journal.latest_terminal_event(run_id)
+        if terminal_event is None:
+            return self._not_immutable(
+                uri,
+                f"run {run_id!r} has no terminal event",
+            )
+        terminal_status = TERMINAL_EVENT_STATUSES.get(terminal_event.kind)
+        if terminal_status is not run_record.status:
+            return self._not_immutable(
+                uri,
+                (
+                    f"run {run_id!r} status {run_record.status.value} is not bound "
+                    f"to terminal event {terminal_event.seq} ({terminal_event.kind})"
+                ),
+            )
+        return DetailAddress.result(run_id, terminal_event.seq)
 
     def _resolve(
         self,
@@ -216,34 +276,39 @@ class DetailResolver:
                 if parts[1] == "manifest":
                     manifest = self._system.manifest_for_run(run_id)
                     return manifest.model_dump(mode="json")
-                if parts[1] == "result":
-                    if run_record.status not in IMMUTABLE_RESULT_STATUSES:
-                        return self._not_immutable(
-                            uri,
-                            f"run {run_id!r} is still {run_record.status.value}",
-                        )
-                    outputs: dict[str, JsonValue] = {}
-                    if run_record.status is RunStatus.SUCCEEDED:
-                        materialized = json_value(self._system.materialize_run(run_id))
-                        if isinstance(materialized, dict):
-                            outputs = materialized
-                    terminal_events = [
-                        event.model_dump(mode="json")
-                        for event in self._events(run_id)
-                        if event.kind
-                        in {
-                            "NodeFailed",
-                            "RunFailed",
-                            "RunParked",
-                            "RunCancelled",
-                            "RunSucceeded",
-                        }
-                    ]
-                    return {
-                        "run": run_record.model_dump(mode="json"),
-                        "outputs": outputs,
-                        "terminal_events": terminal_events,
-                    }
+
+            if family == "runs" and len(parts) == 3 and parts[1] == "result":
+                run_id = RunId(parts[0])
+                terminal_event = self._system.journal.event(run_id, int(parts[2]))
+                if terminal_event is None:
+                    return self._not_found(uri, "terminal event does not exist")
+                terminal_status = TERMINAL_EVENT_STATUSES.get(terminal_event.kind)
+                if terminal_status is None:
+                    return self._not_found(uri, "event is not a terminal run event")
+                run_record = self._system.journal.run_record(run_id)
+                if run_record is None:
+                    return self._not_found(uri, f"unknown run {run_id!r}")
+                outputs: dict[str, JsonValue] = {}
+                if terminal_status is RunStatus.SUCCEEDED:
+                    materialized = json_value(self._system.materialize_run(run_id))
+                    if isinstance(materialized, dict):
+                        outputs = materialized
+                return {
+                    "run": {
+                        "run_id": str(run_record.run_id),
+                        "manifest_hash": str(run_record.manifest_hash),
+                        "input_hash": str(run_record.input_hash),
+                        "status": terminal_status.value,
+                        "created_at": run_record.created_at.isoformat(),
+                        "origin": (
+                            run_record.origin.model_dump(mode="json")
+                            if run_record.origin is not None
+                            else None
+                        ),
+                    },
+                    "outputs": outputs,
+                    "terminal_event": terminal_event.model_dump(mode="json"),
+                }
 
             if family == "runs" and len(parts) == 3 and parts[1] == "events":
                 run_id = RunId(parts[0])
@@ -292,7 +357,7 @@ class DetailResolver:
                 version = Digest(version_text)
                 stored = self._system.registry.snapshot().get(name, version)
                 return (
-                    stored.model_dump(mode="json")
+                    self._component_detail(stored.model_dump(mode="json"))
                     if stored is not None
                     else self._not_found(uri, "component version does not exist")
                 )
@@ -300,15 +365,29 @@ class DetailResolver:
             return self._not_found(uri, f"invalid detail URI: {exc}")
         return self._not_found(uri, "detail URI is not recognized")
 
-    def _events(self, run_id: RunId) -> list[JournalEvent]:
-        events: list[JournalEvent] = []
-        after = 0
-        while True:
-            page = self._system.journal.events(run_id, after_seq=after, limit=1_000)
-            if not page:
-                return events
-            events.extend(page)
-            after = page[-1].seq
+    @staticmethod
+    def _component_detail(value: JsonValue) -> JsonValue:
+        """Canonicalize unordered metadata without changing component identity."""
+
+        if not isinstance(value, dict):
+            return value
+        definition = value.get("definition")
+        if not isinstance(definition, dict):
+            return value
+        metadata = definition.get("metadata")
+        if not isinstance(metadata, dict):
+            return value
+        labels = metadata.get("labels")
+        if isinstance(labels, list) and all(isinstance(item, str) for item in labels):
+            metadata["labels"] = sorted(labels)
+        learning = metadata.get("learning")
+        if isinstance(learning, dict):
+            surfaces = learning.get("change_surfaces")
+            if isinstance(surfaces, list) and all(
+                isinstance(item, str) for item in surfaces
+            ):
+                learning["change_surfaces"] = sorted(surfaces)
+        return value
 
     @staticmethod
     def _fault(

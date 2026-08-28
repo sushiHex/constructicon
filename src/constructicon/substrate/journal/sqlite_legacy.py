@@ -46,6 +46,7 @@ from constructicon.core.registry import RegistrySnapshot, StoredVersion
 from constructicon.core.run import (
     CheckpointConflict,
     OwnershipLost,
+    RunAttemptSuperseded,
     RunLease,
     RunState,
     RunStatus,
@@ -489,20 +490,45 @@ class SqliteJournal:
 
     # -- ownership -----------------------------------------------------------
 
-    def claim_run(self, run_id: RunId, *, owner_id: str, ttl_s: float) -> RunLease:
+    def claim_run(
+        self,
+        run_id: RunId,
+        *,
+        owner_id: str,
+        ttl_s: float,
+        expected_event_seq: int | None = None,
+        expected_statuses: frozenset[RunStatus] | None = None,
+    ) -> RunLease:
         from datetime import timedelta
 
         now = self._now()
         expires = now + timedelta(seconds=ttl_s)
         with self._txn() as conn:
             row = conn.execute(
-                "SELECT status, owner_id, owner_epoch, lease_expires_at FROM runs"
-                " WHERE run_id = ?",
+                "SELECT status, owner_id, owner_epoch, lease_expires_at,"
+                " next_event_seq FROM runs WHERE run_id = ?",
                 (run_id,),
             ).fetchone()
             if row is None:
                 raise ContractViolation(f"unknown run {run_id!r}")
             status = RunStatus(row["status"])
+            event_seq = int(row["next_event_seq"])
+            mismatches: list[str] = []
+            if expected_event_seq is not None and event_seq != expected_event_seq:
+                mismatches.append(
+                    f"event sequence expected {expected_event_seq}, observed {event_seq}"
+                )
+            if expected_statuses is not None and status not in expected_statuses:
+                expected = ", ".join(
+                    item.value for item in sorted(expected_statuses, key=lambda item: item.value)
+                )
+                mismatches.append(
+                    f"status expected one of [{expected}], observed {status.value}"
+                )
+            if mismatches:
+                raise RunAttemptSuperseded(
+                    f"run {run_id!r} changed before claim: {'; '.join(mismatches)}"
+                )
             if status in (RunStatus.SUCCEEDED, RunStatus.CANCELLED):
                 raise ContractViolation(
                     f"run {run_id!r} is terminally {status.value}; nothing to claim"

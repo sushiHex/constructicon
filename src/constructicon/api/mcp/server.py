@@ -24,10 +24,11 @@ from constructicon.core.control import (
     ApprovalCommandResult,
     AuthenticatedActor,
     CancellationResult,
-    CommandView,
+    CommandSummary,
     ComponentComparison,
     ControlRejected,
     DetailChunk,
+    DetailRef,
     EventPage,
     NamePage,
     PromotionCommandResult,
@@ -61,7 +62,7 @@ def create_mcp_server(
     @asynccontextmanager
     async def lifespan(server: MCPServer[None]) -> AsyncIterator[None]:
         del server
-        control.run_host.recover()
+        await control.run_host.startup()
         try:
             yield None
         finally:
@@ -137,7 +138,7 @@ def create_mcp_server(
         return control.runs_result(await actor(), RunId(run_id))
 
     @server.tool(description="Read one durable command and its stored result.")
-    async def commands_status(command_id: str) -> CommandView | ControlRejected:
+    async def commands_status(command_id: str) -> CommandSummary | ControlRejected:
         return control.commands_status(await actor(), command_id)
 
     @server.tool(description="Page retained versions of one component.")
@@ -180,12 +181,12 @@ def create_mcp_server(
 
     @server.tool(description="Read one bounded chunk of an immutable detail reference.")
     async def details_read(
-        uri: str,
+        reference: DetailRef,
         cursor: str | None = None,
         max_bytes: int = 16_000,
     ) -> DetailChunk | ControlRejected:
         return control.details_read(
-            await actor(), uri, cursor=cursor, max_bytes=max_bytes
+            await actor(), reference, cursor=cursor, max_bytes=max_bytes
         )
 
     @server.tool(description="Submit a durable run and return its RunId immediately.")
@@ -303,7 +304,9 @@ def _register_detail_resources(
     actor_source: ActorSource,
 ) -> None:
     async def chunk(uri: str) -> str:
-        result = control.details_read(await actor_source.actor(), uri, max_bytes=64_000)
+        result = control.resource_read(
+            await actor_source.actor(), uri, max_bytes=64_000
+        )
         return result.model_dump_json()
 
     @server.resource(

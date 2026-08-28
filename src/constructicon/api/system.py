@@ -44,7 +44,7 @@ from constructicon.core.introspection import (
 from constructicon.core.journal import Journal
 from constructicon.core.manifest import ExecutionManifest
 from constructicon.core.registry import RegistryStore
-from constructicon.core.run import RunState
+from constructicon.core.run import RunState, RunStatus
 from constructicon.runtime.authoring import admit_authored_graph
 from constructicon.runtime.context import NodeImpl
 from constructicon.runtime.registry import (
@@ -409,16 +409,30 @@ class Constructicon:
         run_id: RunId,
         *,
         cancellation: Literal["cancel", "abandon"] = "cancel",
+        expected_event_seq: int | None = None,
+        expected_statuses: frozenset[RunStatus] | None = None,
     ) -> RunResult:
-        return await self._walker.run_prepared(run_id, cancellation=cancellation)
+        return await self._walker.run_prepared(
+            run_id,
+            cancellation=cancellation,
+            expected_event_seq=expected_event_seq,
+            expected_statuses=expected_statuses,
+        )
 
     async def run_prepared(
         self,
         run_id: RunId,
         *,
         cancellation: Literal["cancel", "abandon"] = "cancel",
+        expected_event_seq: int | None = None,
+        expected_statuses: frozenset[RunStatus] | None = None,
     ) -> RunResult:
-        return await self._run_prepared(run_id, cancellation=cancellation)
+        return await self._run_prepared(
+            run_id,
+            cancellation=cancellation,
+            expected_event_seq=expected_event_seq,
+            expected_statuses=expected_statuses,
+        )
 
     async def _start_direct(
         self,

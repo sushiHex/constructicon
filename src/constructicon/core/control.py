@@ -17,7 +17,7 @@ from pydantic import (
     Field,
     NonNegativeInt,
     PositiveInt,
-    computed_field,
+    field_serializer,
     field_validator,
 )
 
@@ -95,6 +95,12 @@ class AuthenticatedActor(BaseModel):
             raise ValueError(f"unknown Constructicon scopes: {unknown}")
         return value
 
+    @field_serializer("scopes")
+    def _serialize_scopes(self, value: frozenset[str]) -> list[str]:
+        """Keep actor-bearing durable records and detail digests process-stable."""
+
+        return sorted(value)
+
     def allows(self, scope: str) -> bool:
         return ADMIN_SCOPE in self.scopes or scope in self.scopes
 
@@ -152,10 +158,8 @@ class DetailRef(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     uri: str
-    media_type: str = "application/json"
-    # M6.1 producers supply a digest. ``None`` is accepted only while the old
-    # URI-only call sites are migrated; DetailResolver refuses to trust it.
-    digest: Digest | None = None
+    media_type: Literal["application/json"] = "application/json"
+    digest: Digest
 
 
 class DetailChunk(BaseModel):
@@ -164,7 +168,7 @@ class DetailChunk(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     uri: str
-    media_type: str
+    media_type: Literal["application/json"]
     digest: Digest
     text: str
     offset: NonNegativeInt
@@ -270,9 +274,6 @@ class RunSubmission(BaseModel):
     run_status: RunStatus
     command: CommandMeta
     origin: RunOrigin | None
-    # Transitional input compatibility only; excluded from every serialized
-    # response because status is mutable and addressed by runs_status.
-    status_ref: DetailRef | None = Field(default=None, exclude=True, repr=False)
 
 
 class CancellationResult(BaseModel):
@@ -410,53 +411,6 @@ class CommandSummary(BaseModel):
     updated_at: AwareDatetime
     completed_at: AwareDatetime | None
     detail: DetailRef | None = None
-
-
-class CommandView(BaseModel):
-    """Compatibility carrier whose serialized form remains a bounded summary.
-
-    The existing M6 call site still constructs ``CommandView(record=...)``.
-    M6.1 excludes that full record from serialization and exposes only computed
-    lifecycle fields plus terminal detail. The call site is removed later in this
-    PR, after the interface transition is green.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    record: CommandRecord = Field(exclude=True, repr=False)
-    detail: DetailRef | None = None
-
-    @computed_field
-    def command_id(self) -> str:
-        return self.record.command_id
-
-    @computed_field
-    def operation(self) -> str:
-        return self.record.operation
-
-    @computed_field
-    def state(self) -> Literal["prepared", "committed", "rejected"]:
-        return self.record.state
-
-    @computed_field
-    def actor_id(self) -> str:
-        return self.record.actor.actor_id
-
-    @computed_field
-    def request_hash(self) -> Digest:
-        return self.record.request_hash
-
-    @computed_field
-    def created_at(self) -> AwareDatetime:
-        return self.record.created_at
-
-    @computed_field
-    def updated_at(self) -> AwareDatetime:
-        return self.record.updated_at
-
-    @computed_field
-    def completed_at(self) -> AwareDatetime | None:
-        return self.record.completed_at
 
 
 def command_id_for(actor_id: str, operation: str, idempotency_key: str) -> str:

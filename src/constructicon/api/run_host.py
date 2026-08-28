@@ -3,16 +3,34 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId
+from constructicon.core.control import RunRecord
 from constructicon.core.errors import ConstructiconError
-from constructicon.core.run import OwnershipLost, RunStatus
+from constructicon.core.run import OwnershipLost, RunAttemptSuperseded, RunStatus
 from constructicon.runtime.walker import RunResult
 
 FailureSink = Callable[[RunId, BaseException], None]
+Clock = Callable[[], datetime]
+Sleeper = Callable[[float], Coroutine[Any, Any, None]]
 _RECOVERY_STATUSES = (RunStatus.PENDING, RunStatus.RUNNING)
+_RECOVERY_STATUS_SET = frozenset(_RECOVERY_STATUSES)
+_RESUMABLE_STATUSES = frozenset(
+    {RunStatus.PENDING, RunStatus.RUNNING, RunStatus.FAILED, RunStatus.PARKED}
+)
+_WorkerTask = asyncio.Task[RunResult | None]
+_LaunchFuture = asyncio.Future[_WorkerTask | None]
+
+
+@dataclass(frozen=True)
+class _LaunchIntent:
+    expected_event_seq: int | None
+    allowed_statuses: frozenset[RunStatus]
 
 
 class RunHost:
@@ -30,15 +48,29 @@ class RunHost:
         max_concurrency: int = 4,
         on_failure: FailureSink | None = None,
         recovery_page_size: int = 100,
+        claim_retry_s: float = 0.1,
+        now_fn: Clock | None = None,
+        sleep_fn: Sleeper = asyncio.sleep,
     ) -> None:
         if max_concurrency <= 0:
             raise ValueError("RunHost max_concurrency must be positive")
         if recovery_page_size <= 0:
             raise ValueError("RunHost recovery_page_size must be positive")
+        if claim_retry_s <= 0:
+            raise ValueError("RunHost claim_retry_s must be positive")
         self._system = system
         self._max_concurrency = max_concurrency
         self._recovery_page_size = recovery_page_size
-        self._tasks: dict[RunId, asyncio.Task[RunResult | None]] = {}
+        self._claim_retry_s = claim_retry_s
+        self._now = now_fn or (lambda: datetime.now(UTC))
+        self._sleep = sleep_fn
+        self._tasks: dict[RunId, _WorkerTask] = {}
+        # Explicit launches are process-local scheduling intent. Keeping RunIds,
+        # rather than creating semaphore-waiting tasks, bounds local coroutines.
+        self._requested: dict[RunId, _LaunchIntent] = {}
+        self._explicit_tasks: dict[RunId, _LaunchIntent] = {}
+        self._claim_retry_at: dict[RunId, datetime] = {}
+        self._launch_waiters: dict[RunId, set[_LaunchFuture]] = {}
         # A row that failed unexpectedly must remain durable and observable, but
         # this host must not spin on it. A fresh host or explicit operator action
         # can retry after the cause changes.
@@ -47,62 +79,131 @@ class RunHost:
         self._closed = False
         self._wake = asyncio.Event()
         self._pump_task: asyncio.Task[None] | None = None
+        self._scan_waiters: set[asyncio.Future[None]] = set()
+        self._pump_failure: BaseException | None = None
 
     @property
     def active_run_ids(self) -> tuple[RunId, ...]:
         return tuple(sorted(self._tasks))
 
+    @property
+    def pump_failure(self) -> BaseException | None:
+        """The most recent recovery-loop failure, if one stopped the pump."""
+
+        return self._pump_failure
+
     async def startup(self) -> None:
-        """Begin bounded recovery of every PENDING or lost RUNNING row."""
+        """Start recovery and await one complete, observable recovery scan."""
 
         if self._closed:
             raise RuntimeError("RunHost is closed")
+        scanned = asyncio.get_running_loop().create_future()
+        self._scan_waiters.add(scanned)
         self._ensure_pump()
         self._wake.set()
-        # One turn makes startup observable without waiting for long-lived work.
-        await asyncio.sleep(0)
+        try:
+            await scanned
+        finally:
+            self._scan_waiters.discard(scanned)
 
-    def recover(self, *, limit: int | None = None) -> tuple[RunId, ...]:
-        """Compatibility entry point while transports migrate to ``startup``.
+    def recover(self, *, limit: int | None = None) -> None:
+        """Fire-and-signal compatibility shim; use :meth:`startup` to observe it.
 
-        Recovery itself remains pump-owned and fully paged; ``limit`` is ignored
-        deliberately rather than reintroducing the old first-page truncation.
+        Recovery is pump-owned and fully paged. A synchronous method cannot
+        truthfully report which workers an asynchronous scan launched, so this
+        shim deliberately has no result. ``limit`` remains accepted only for
+        source compatibility and never truncates the durable snapshot.
         """
 
         del limit
         if self._closed:
             raise RuntimeError("RunHost is closed")
-        before = set(self._tasks)
         self._ensure_pump()
         self._wake.set()
-        return tuple(sorted(set(self._tasks) - before))
 
-    def launch(self, run_id: RunId) -> bool:
-        """Ensure the durable run is considered without creating a waiting task."""
+    def launch(
+        self,
+        run_id: RunId,
+        *,
+        expected_event_seq: int | None = None,
+        allowed_statuses: frozenset[RunStatus] | None = None,
+    ) -> bool:
+        """Queue explicit local scheduling intent without creating a waiter task.
+
+        The return value reports whether new intent was accepted, not whether a
+        worker happened to fit synchronously. The pump validates durable status
+        and ownership before starting it.
+        """
 
         if self._closed:
             raise RuntimeError("RunHost is closed")
+        intent = _LaunchIntent(
+            expected_event_seq=expected_event_seq,
+            allowed_statuses=(
+                _RESUMABLE_STATUSES if allowed_statuses is None else allowed_statuses
+            ),
+        )
         current = self._tasks.get(run_id)
+        queued = self._requested.get(run_id)
+        if queued is not None:
+            accepted = self._supersedes(intent, queued)
+            if accepted:
+                self._requested[run_id] = intent
+                self._deferred.discard(run_id)
+                self._claim_retry_at.pop(run_id, None)
+            # A prior scan may have failed after retaining this exact intent.
+            # Duplicate delivery must be enough to revive the process-local pump.
+            self._ensure_pump()
+            self._wake.set()
+            return accepted
         if current is not None and not current.done():
-            return False
+            inflight = self._explicit_tasks.get(run_id)
+            accepted = inflight is None or self._supersedes(intent, inflight)
+            if accepted:
+                # Keep the newer attempt behind the still-unwinding worker. Its
+                # durable baseline will be checked after the callback frees capacity.
+                self._requested[run_id] = intent
+                self._deferred.discard(run_id)
+                self._claim_retry_at.pop(run_id, None)
+            self._ensure_pump()
+            self._wake.set()
+            return accepted
         self._deferred.discard(run_id)
-        created = False
-        if len(self._tasks) < self._max_concurrency:
-            self._start(run_id)
-            created = True
-        # If capacity is full, the run remains PENDING in the journal. The pump
-        # will discover it after a worker exits; no semaphore-waiting task piles up.
+        self._claim_retry_at.pop(run_id, None)
+        self._requested[run_id] = intent
         self._ensure_pump()
         self._wake.set()
-        return created
+        return True
 
     async def wait(self, run_id: RunId) -> RunResult | None:
         """Test-transition helper; production callers observe durable status."""
 
-        task = self._tasks.get(run_id)
-        if task is None:
-            return None
-        return await asyncio.shield(task)
+        while True:
+            task = self._tasks.get(run_id)
+            if task is None and run_id in self._requested:
+                # Waiting is an explicit observation point and must not hang on
+                # retained intent merely because a prior pump task died.
+                self._ensure_pump()
+                self._wake.set()
+                launched: _LaunchFuture = asyncio.get_running_loop().create_future()
+                self._launch_waiters.setdefault(run_id, set()).add(launched)
+                try:
+                    task = await launched
+                finally:
+                    waiters = self._launch_waiters.get(run_id)
+                    if waiters is not None:
+                        waiters.discard(launched)
+                        if not waiters:
+                            self._launch_waiters.pop(run_id, None)
+            if task is None:
+                return None
+            result = await asyncio.shield(task)
+            current = self._tasks.get(run_id)
+            if run_id not in self._requested and (current is None or current is task):
+                return result
+            # Let the task's completion callback remove the old worker before
+            # waiting for preserved or superseding explicit intent.
+            await asyncio.sleep(0)
 
     async def shutdown(self) -> None:
         """Abandon local work without recording durable cancellation intent."""
@@ -120,51 +221,103 @@ class RunHost:
             return_exceptions=True,
         )
         self._tasks.clear()
+        self._requested.clear()
+        self._explicit_tasks.clear()
+        self._claim_retry_at.clear()
+        self._resolve_launch_waiters(None)
+        self._cancel_scan_waiters()
         self._pump_task = None
 
     def _ensure_pump(self) -> None:
-        if self._pump_task is None or self._pump_task.done():
-            self._pump_task = asyncio.create_task(
-                self._pump(),
-                name="constructicon:run-host",
-            )
+        if self._pump_task is not None and not self._pump_task.done():
+            return
+        self._pump_failure = None
+        pump = asyncio.create_task(self._pump(), name="constructicon:run-host")
+        self._pump_task = pump
+        pump.add_done_callback(self._pump_finished)
 
-    def _start(self, run_id: RunId) -> None:
-        task = asyncio.create_task(self._run(run_id), name=f"constructicon:{run_id}")
+    def _start(
+        self,
+        run_id: RunId,
+        *,
+        intent: _LaunchIntent,
+        explicit: bool,
+    ) -> None:
+        task = asyncio.create_task(
+            self._run(run_id, intent),
+            name=f"constructicon:{run_id}",
+        )
         self._tasks[run_id] = task
+        self._requested.pop(run_id, None)
+        if explicit:
+            self._explicit_tasks[run_id] = intent
+        self._resolve_launch_waiters(task, run_id=run_id)
         task.add_done_callback(lambda completed: self._finished(run_id, completed))
 
     async def _pump(self) -> None:
-        try:
-            while not self._closed:
-                self._wake.clear()
-                capacity = self._max_concurrency - len(self._tasks)
-                if capacity > 0:
-                    for run_id in self._recoverable_batch(capacity):
-                        self._start(run_id)
-                if self._closed:
-                    return
-                if len(self._tasks) < self._max_concurrency:
-                    # A just-started worker may complete before the callback wakes
-                    # us. Yield once, then rescan the durable snapshot.
-                    await asyncio.sleep(0)
-                    if self._recoverable_batch(1):
-                        self._wake.set()
-                        continue
-                await self._wake.wait()
-        except asyncio.CancelledError:
-            raise
+        while not self._closed:
+            self._wake.clear()
+            next_expiry = self._fill_capacity()
+            self._complete_scan_waiters()
+            if self._closed:
+                return
+            await self._wait_for_work(next_expiry)
 
-    def _recoverable_batch(self, limit: int) -> tuple[RunId, ...]:
-        """Page the full recovery snapshot, skipping this host's deferred rows."""
+    def _fill_capacity(self) -> datetime | None:
+        capacity = self._max_concurrency - len(self._tasks)
+        if capacity <= 0:
+            return None
+
+        next_expiry: datetime | None = None
+        now = self._now()
+        for run_id, intent in sorted(self._requested.items()):
+            record = self._system.journal.run_record(run_id)
+            if record is None or record.status not in intent.allowed_statuses:
+                self._requested.pop(run_id, None)
+                self._claim_retry_at.pop(run_id, None)
+                self._resolve_launch_waiters(None, run_id=run_id)
+                continue
+            if (
+                intent.expected_event_seq is not None
+                and self._system.journal.max_event_seq(run_id)
+                != intent.expected_event_seq
+            ):
+                self._requested.pop(run_id, None)
+                self._claim_retry_at.pop(run_id, None)
+                self._resolve_launch_waiters(None, run_id=run_id)
+                continue
+            ready_at = self._ready_at(record, now)
+            if ready_at is not None:
+                next_expiry = self._earlier(next_expiry, ready_at)
+                continue
+            self._claim_retry_at.pop(run_id, None)
+            self._start(run_id, intent=intent, explicit=True)
+            capacity -= 1
+            if capacity == 0:
+                return next_expiry
+
+        recovered, recovery_expiry = self._recoverable_batch(capacity, now=now)
+        next_expiry = self._earlier(next_expiry, recovery_expiry)
+        for run_id, intent in recovered:
+            self._start(run_id, intent=intent, explicit=False)
+        return next_expiry
+
+    def _recoverable_batch(
+        self,
+        limit: int,
+        *,
+        now: datetime,
+    ) -> tuple[tuple[tuple[RunId, _LaunchIntent], ...], datetime | None]:
+        """Page until capacity is filled or the complete snapshot is exhausted."""
 
         if limit <= 0:
-            return ()
+            return (), None
         through = self._system.journal.latest_run_key(statuses=_RECOVERY_STATUSES)
         if through is None:
-            return ()
+            return (), None
         after: tuple[str, str] | None = None
-        selected: list[RunId] = []
+        selected: list[tuple[RunId, _LaunchIntent]] = []
+        next_expiry: datetime | None = None
         while len(selected) < limit:
             records = self._system.journal.run_records(
                 statuses=_RECOVERY_STATUSES,
@@ -176,25 +329,91 @@ class RunHost:
                 break
             for record in records:
                 after = (record.created_at.isoformat(), str(record.run_id))
-                if record.run_id in self._tasks or record.run_id in self._deferred:
-                    continue
-                if record.status is RunStatus.PENDING or (
-                    record.status is RunStatus.RUNNING and record.liveness == "lost"
+                if (
+                    record.run_id in self._tasks
+                    or record.run_id in self._requested
+                    or record.run_id in self._deferred
                 ):
-                    selected.append(record.run_id)
-                    if len(selected) == limit:
-                        break
+                    continue
+                ready_at = self._ready_at(record, now)
+                if ready_at is not None:
+                    next_expiry = self._earlier(next_expiry, ready_at)
+                    continue
+                self._claim_retry_at.pop(record.run_id, None)
+                selected.append(
+                    (
+                        record.run_id,
+                        _LaunchIntent(
+                            expected_event_seq=self._system.journal.max_event_seq(
+                                record.run_id
+                            ),
+                            allowed_statuses=_RECOVERY_STATUS_SET,
+                        ),
+                    )
+                )
+                if len(selected) == limit:
+                    break
             if len(records) < self._recovery_page_size:
                 break
-        return tuple(selected)
+        return tuple(selected), next_expiry
 
-    async def _run(self, run_id: RunId) -> RunResult | None:
+    async def _wait_for_work(self, next_expiry: datetime | None) -> None:
+        if self._wake.is_set():
+            return
+        if next_expiry is None:
+            await self._wake.wait()
+            return
+        delay = max(0.0, (next_expiry - self._now()).total_seconds())
+        if delay == 0:
+            await asyncio.sleep(0)
+            return
+
+        wake = asyncio.create_task(self._wake.wait(), name="constructicon:run-host-wake")
+        timer: asyncio.Task[None] = asyncio.create_task(
+            self._sleep(delay),
+            name="constructicon:run-host-lease-expiry",
+        )
+        pending: set[asyncio.Task[object]] = {wake, timer}
         try:
-            return await self._system._run_prepared(run_id, cancellation="abandon")
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for completed in done:
+                completed.result()
+        finally:
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    async def _run(
+        self,
+        run_id: RunId,
+        intent: _LaunchIntent,
+    ) -> RunResult | None:
+        try:
+            return await self._system._run_prepared(
+                run_id,
+                cancellation="abandon",
+                expected_event_seq=intent.expected_event_seq,
+                expected_statuses=intent.allowed_statuses,
+            )
         except asyncio.CancelledError:
             raise
+        except RunAttemptSuperseded:
+            # The exact selected attempt no longer exists. This is neither a
+            # worker failure nor ownership loss, and must never revive old intent.
+            return None
         except OwnershipLost:
-            # Another host owns the same durable run; the fence is the result.
+            self._claim_retry_at[run_id] = self._now() + timedelta(
+                seconds=self._claim_retry_s
+            )
+            # Preserve explicit FAILED/PARKED resume intent across a claim race.
+            # Ordinary PENDING/RUNNING recovery remains discoverable in the journal.
+            if run_id in self._explicit_tasks and not self._closed:
+                explicit_intent = self._explicit_tasks.get(run_id)
+                queued = self._requested.get(run_id)
+                if explicit_intent is not None and (
+                    queued is None or self._supersedes(explicit_intent, queued)
+                ):
+                    self._requested[run_id] = explicit_intent
             return None
         except ConstructiconError as exc:
             self._report_failure(run_id, exc)
@@ -205,15 +424,124 @@ class RunHost:
         # Deliberately do not catch BaseException. Hard-death signals remain task
         # failures and the durable run stays reclaimable after lease expiry.
 
-    def _finished(self, run_id: RunId, task: asyncio.Task[RunResult | None]) -> None:
+    def _finished(self, run_id: RunId, task: _WorkerTask) -> None:
         current = self._tasks.get(run_id)
         if current is task:
             self._tasks.pop(run_id, None)
+        self._explicit_tasks.pop(run_id, None)
         if not task.cancelled():
             exc = task.exception()
             if exc is not None and not isinstance(exc, Exception):
                 self._report_failure(run_id, exc)
         self._wake.set()
+
+    def _pump_finished(self, task: asyncio.Task[None]) -> None:
+        if self._pump_task is not task or task.cancelled():
+            return
+        exc = task.exception()
+        if exc is None:
+            if self._closed:
+                return
+            exc = RuntimeError("Constructicon run-host recovery pump stopped unexpectedly")
+        self._pump_failure = exc
+        self._fail_scan_waiters(exc)
+        self._fail_launch_waiters(exc)
+        task.get_loop().call_exception_handler(
+            {
+                "message": "Constructicon run-host recovery pump failed",
+                "exception": exc,
+            }
+        )
+
+    def _complete_scan_waiters(self) -> None:
+        waiters = tuple(self._scan_waiters)
+        self._scan_waiters.clear()
+        for waiter in waiters:
+            if not waiter.done():
+                waiter.set_result(None)
+
+    def _fail_scan_waiters(self, exc: BaseException) -> None:
+        waiters = tuple(self._scan_waiters)
+        self._scan_waiters.clear()
+        for waiter in waiters:
+            if not waiter.done():
+                waiter.set_exception(exc)
+
+    def _cancel_scan_waiters(self) -> None:
+        waiters = tuple(self._scan_waiters)
+        self._scan_waiters.clear()
+        for waiter in waiters:
+            if not waiter.done():
+                waiter.cancel()
+
+    def _resolve_launch_waiters(
+        self,
+        task: _WorkerTask | None,
+        *,
+        run_id: RunId | None = None,
+    ) -> None:
+        run_ids = (run_id,) if run_id is not None else tuple(self._launch_waiters)
+        for queued_run_id in run_ids:
+            waiters = self._launch_waiters.pop(queued_run_id, set())
+            for waiter in waiters:
+                if not waiter.done():
+                    waiter.set_result(task)
+
+    def _fail_launch_waiters(self, exc: BaseException) -> None:
+        waiters = tuple(
+            waiter
+            for run_waiters in self._launch_waiters.values()
+            for waiter in run_waiters
+        )
+        self._launch_waiters.clear()
+        for waiter in waiters:
+            if not waiter.done():
+                waiter.set_exception(exc)
+
+    def _ready_at(self, record: RunRecord, now: datetime) -> datetime | None:
+        deadlines = [
+            deadline
+            for deadline in (
+                self._claim_retry_at.get(record.run_id),
+                (
+                    record.lease_expires_at
+                    if record.owner_id is not None
+                    and record.lease_expires_at is not None
+                    else None
+                ),
+            )
+            if deadline is not None and deadline > now
+        ]
+        return max(deadlines) if deadlines else None
+
+    @staticmethod
+    def _earlier(left: datetime | None, right: datetime | None) -> datetime | None:
+        if right is None:
+            return left
+        if left is None or right < left:
+            return right
+        return left
+
+    @staticmethod
+    def _supersedes(incoming: _LaunchIntent, existing: _LaunchIntent) -> bool:
+        """Order attempt-bound intent without letting an unbound retry weaken it."""
+
+        if incoming == existing:
+            return False
+        incoming_seq = incoming.expected_event_seq
+        existing_seq = existing.expected_event_seq
+        if incoming_seq is None:
+            return (
+                existing_seq is None
+                and incoming.allowed_statuses > existing.allowed_statuses
+            )
+        if existing_seq is None:
+            return True
+        if incoming_seq != existing_seq:
+            return incoming_seq > existing_seq
+        # At one exact baseline, broaden the admissible durable observation only.
+        # A stale restrictive delivery must never replace a legitimate resume.
+        return incoming.allowed_statuses > existing.allowed_statuses
 
     def _report_failure(self, run_id: RunId, exc: BaseException) -> None:
         self._deferred.add(run_id)

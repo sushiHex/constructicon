@@ -100,6 +100,21 @@ class _M6ReadMixin:
             ).fetchone()
         return self._event_from_row(row) if row else None
 
+    def latest_terminal_event(self, run_id: RunId) -> JournalEvent | None:
+        with self._read() as connection:
+            row = connection.execute(
+                "SELECT * FROM events WHERE run_id = ? AND kind IN (?, ?, ?, ?)"
+                " ORDER BY seq DESC LIMIT 1",
+                (
+                    run_id,
+                    "RunSucceeded",
+                    "RunFailed",
+                    "RunParked",
+                    "RunCancelled",
+                ),
+            ).fetchone()
+        return self._event_from_row(row) if row else None
+
     def max_event_seq(self, run_id: RunId) -> int:
         with self._read() as connection:
             row = connection.execute(
