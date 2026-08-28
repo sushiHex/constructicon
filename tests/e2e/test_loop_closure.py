@@ -90,8 +90,8 @@ def register(
     impl: Any,
 ) -> None:
     definition, implementation = atomic(name, inputs, outputs, impl)
-    version = system.register(definition, implementation)
-    system.promote_initial(component=name, version=version)
+    version = system._register(definition, implementation)
+    system._promote_initial(component=name, version=version)
 
 
 def loop_node(node_id: str, component: str, state: Port, maximum: int) -> GraphNode:
@@ -140,7 +140,7 @@ async def test_multiple_parked_roots_are_reported_and_siblings_finish(
         outputs=(),
     )
 
-    result = await system.start(
+    result = await system._start_direct(
         graph,
         {"a_state": {"value": 0}, "b_state": {"value": 0}},
         run_id=RunId("multi-park"),
@@ -155,7 +155,7 @@ async def test_multiple_parked_roots_are_reported_and_siblings_finish(
     assert len(result.blocked) == 1
     assert result.blocked[0].destination.scope.segments[-1] == "dependent"
     assert result.blocked[0].producers[0].status is InvocationStatus.PARKED
-    kinds = [event.kind for event in system.journal.events(RunId("multi-park"), limit=300)]
+    kinds = [event.kind for event in system._journal.events(RunId("multi-park"), limit=300)]
     assert "NodeCompleted" in kinds  # independent sibling finished
     assert "RunParked" in kinds
 
@@ -178,7 +178,7 @@ async def test_failure_wins_over_parking_but_parking_detail_survives(
         ),
         inputs=(A_STATE,),
     )
-    result = await system.start(
+    result = await system._start_direct(
         graph,
         {"a_state": {"value": 0}},
         run_id=RunId("fail-and-park"),
@@ -187,7 +187,7 @@ async def test_failure_wins_over_parking_but_parking_detail_survives(
     assert result.parked and result.parked[0].reason == "policy_exhausted"
     run_failed = next(
         event
-        for event in system.journal.events(RunId("fail-and-park"), limit=200)
+        for event in system._journal.events(RunId("fail-and-park"), limit=200)
         if event.kind == "RunFailed"
     )
     assert run_failed.payload and run_failed.payload["parked"]
@@ -208,7 +208,7 @@ async def test_durable_cancel_between_iterations_transitions_to_cancelled(
     )
     run_id = RunId("cancel-loop")
     task = asyncio.create_task(
-        system.start(
+        system._start_direct(
             Graph(
                 name="cancel-loop",
                 nodes=(loop_node("repeat", "loop/cancellable", A_STATE, 10),),
@@ -219,7 +219,7 @@ async def test_durable_cancel_between_iterations_transitions_to_cancelled(
         )
     )
     await asyncio.wait_for(CANCEL_STARTED.wait(), timeout=2)
-    system.cancel(run_id)
+    system._request_cancel(run_id)
     result = await asyncio.wait_for(task, timeout=2)
     assert result.status is RunStatus.CANCELLED
     state = system.run_state(run_id)
@@ -242,7 +242,7 @@ async def test_asyncio_task_cancel_uses_the_same_durable_state(
     )
     run_id = RunId("async-cancel-loop")
     task = asyncio.create_task(
-        system.start(
+        system._start_direct(
             Graph(
                 name="async-cancel-loop",
                 nodes=(

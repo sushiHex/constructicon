@@ -35,7 +35,7 @@ async def test_the_gated_merge_slice(
     authority = world.authority
     base_before = authority.resolve_ref("refs/heads/main")
 
-    result = await system.start(build_graph(), GOAL_INPUT, run_id=RunId("run-slice"))
+    result = await system._start_direct(build_graph(), GOAL_INPUT, run_id=RunId("run-slice"))
 
     assert result.status is RunStatus.SUCCEEDED
     merged = result.outputs["merged"]
@@ -46,12 +46,12 @@ async def test_the_gated_merge_slice(
     parents = authority.parents_of(installed)
     assert parents[0] == base_before
     attestation_events = [
-        event.kind for event in system.journal.events(RunId("run-slice"), limit=200)
+        event.kind for event in system._journal.events(RunId("run-slice"), limit=200)
     ]
     assert "EffectCommitted" in attestation_events
     assert "LeaseAcquired" in attestation_events
     # every acquisition closed cleanly
-    leases = system.journal.capability_leases(RunId("run-slice"))
+    leases = system._journal.capability_leases(RunId("run-slice"))
     assert leases and all(lease.state == "closed" for lease in leases)
     assert {lease.disposition for lease in leases} == {"released"}
     # the staging workspaces are gone; only durable git state remains
@@ -66,7 +66,7 @@ async def test_failing_gates_refuse_the_merge_via_evidence(
     authority = world.authority
     before = authority.resolve_ref("refs/heads/main")
 
-    result = await system.start(
+    result = await system._start_direct(
         build_graph(),
         {"goal": {"title": "break the tests", "content": BROKEN_FIX}},
         run_id=RunId("run-red"),
@@ -75,7 +75,7 @@ async def test_failing_gates_refuse_the_merge_via_evidence(
     assert any("checks failing" in error for error in result.failures.values())
     assert authority.resolve_ref("refs/heads/main") == before  # nothing installed
     # the failing attestation exists as evidence; it authorizes nothing
-    kinds = [event.kind for event in system.journal.events(RunId("run-red"), limit=200)]
+    kinds = [event.kind for event in system._journal.events(RunId("run-red"), limit=200)]
     assert "NodeFailed" in kinds and "EffectCommitted" not in kinds
 
 
@@ -96,7 +96,7 @@ async def test_merge_conflict_flows_as_data(
             )
 
     journal.fault_probe = probe
-    result = await system.start(build_graph(), GOAL_INPUT, run_id=RunId("run-conflict"))
+    result = await system._start_direct(build_graph(), GOAL_INPUT, run_id=RunId("run-conflict"))
     journal.fault_probe = lambda name: None
     assert result.status is RunStatus.FAILED
     assert any("no merge subject" in error for error in result.failures.values())
@@ -122,7 +122,7 @@ async def test_base_moved_after_gates_is_a_truthful_rejection(
                 )
 
     journal.fault_probe = probe
-    result = await system.start(build_graph(), GOAL_INPUT, run_id=RunId("run-moved"))
+    result = await system._start_direct(build_graph(), GOAL_INPUT, run_id=RunId("run-moved"))
     journal.fault_probe = lambda name: None
 
     assert result.status is RunStatus.SUCCEEDED  # rejection is data, not a crash
@@ -130,7 +130,7 @@ async def test_base_moved_after_gates_is_a_truthful_rejection(
     assert merged["status"] == "rejected"
     observed = merged["observed"]
     assert observed["expected_base"] != observed["found_base"]
-    kinds = [event.kind for event in system.journal.events(RunId("run-moved"), limit=200)]
+    kinds = [event.kind for event in system._journal.events(RunId("run-moved"), limit=200)]
     assert "EffectRejected" in kinds
     # nothing installed: main is the moved base, not a merge commit
     assert str(authority.resolve_ref("refs/heads/main")) == observed["found_base"]
@@ -142,18 +142,18 @@ async def test_rejected_is_final_and_reproduce_never_reinstalls(
     system, world = git_system(tmp_path, journal)
     authority = world.authority
 
-    first = await system.start(build_graph(), GOAL_INPUT, run_id=RunId("run-one"))
+    first = await system._start_direct(build_graph(), GOAL_INPUT, run_id=RunId("run-one"))
     assert first.outputs["merged"]["status"] == "committed"
     installed = authority.resolve_ref("refs/heads/main")
 
     # reproduce re-walks against the moved world: the candidate is already
     # reachable from the target, so it reports already-integrated and never
     # double-installs (same-subject dedup is pinned in the crash lanes)
-    reproduced = await system.reproduce(RunId("run-one"), new_run_id=RunId("run-two"))
+    reproduced = await system._reproduce_direct(RunId("run-one"), new_run_id=RunId("run-two"))
     assert reproduced.status is RunStatus.SUCCEEDED
     assert reproduced.outputs["merged"]["status"] == "already_integrated"
     assert authority.resolve_ref("refs/heads/main") == installed
-    kinds = [event.kind for event in system.journal.events(RunId("run-two"), limit=200)]
+    kinds = [event.kind for event in system._journal.events(RunId("run-two"), limit=200)]
     assert "EffectCommitted" not in kinds and "EffectRejected" not in kinds
 
 
@@ -163,14 +163,14 @@ async def test_discard_on_failure_removes_staging_and_candidate_ref(
     system, world = git_system(tmp_path, journal, propose=failing_propose_impl)
     authority = world.authority
 
-    result = await system.start(
+    result = await system._start_direct(
         build_graph(),
         {"goal": {"title": "doomed", "content": GOOD_FIX}},
         run_id=RunId("run-doomed"),
     )
     assert result.status is RunStatus.FAILED
     assert "proposer died" in str(result.failures)
-    leases = system.journal.capability_leases(RunId("run-doomed"))
+    leases = system._journal.capability_leases(RunId("run-doomed"))
     workspace_leases = [lease for lease in leases if lease.binding_id == "workspace"]
     assert workspace_leases and all(
         lease.state == "closed" and lease.disposition == "discarded"

@@ -4,28 +4,27 @@ from __future__ import annotations
 
 import base64
 import binascii
-import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from constructicon.core.control import ControlCode
 from constructicon.core.identity import Digest, JsonValue, canonical_json, digest, json_value
 
-CURSOR_SCHEMA_VERSION = 1
+CURSOR_SCHEMA_VERSION = 2
 
 
 class CursorPayload(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    schema_version: int
+    schema_version: Literal[2]
     actor_id: str
     kind: str
     query_hash: Digest
     upper_bound: JsonValue
     last_key: JsonValue | None
-    check: Digest
+    checksum: Digest
 
 
 @dataclass(frozen=True)
@@ -58,7 +57,7 @@ class CursorCodec:
         }
         payload = {
             **body,
-            "check": str(digest("control-cursor", CURSOR_SCHEMA_VERSION, body)),
+            "checksum": str(digest("control-cursor", CURSOR_SCHEMA_VERSION, body)),
         }
         encoded = base64.urlsafe_b64encode(canonical_json(payload).encode("utf-8"))
         return encoded.decode("ascii").rstrip("=")
@@ -73,21 +72,18 @@ class CursorCodec:
     ) -> CursorPayload:
         try:
             padded = value + "=" * (-len(value) % 4)
-            raw = base64.urlsafe_b64decode(padded.encode("ascii"))
-            data: Any = json.loads(raw.decode("utf-8"))
-            payload = CursorPayload.model_validate(data)
+            raw = base64.b64decode(
+                padded.encode("ascii"),
+                altchars=b"-_",
+                validate=True,
+            )
+            payload = CursorPayload.model_validate_json(raw)
         except (ValueError, UnicodeError, binascii.Error, ValidationError) as exc:
             raise CursorFault(
                 ControlCode.CURSOR_INVALID,
                 f"cursor is malformed or unsupported: {exc}",
                 "restart the query without a cursor",
             ) from exc
-        if payload.schema_version != CURSOR_SCHEMA_VERSION:
-            raise CursorFault(
-                ControlCode.CURSOR_INVALID,
-                f"cursor schema {payload.schema_version} is unsupported",
-                "restart the query without a cursor",
-            )
         body = {
             "schema_version": payload.schema_version,
             "actor_id": payload.actor_id,
@@ -96,11 +92,11 @@ class CursorCodec:
             "upper_bound": payload.upper_bound,
             "last_key": payload.last_key,
         }
-        expected_check = digest("control-cursor", CURSOR_SCHEMA_VERSION, body)
-        if payload.check != expected_check:
+        expected_checksum = digest("control-cursor", CURSOR_SCHEMA_VERSION, body)
+        if payload.checksum != expected_checksum:
             raise CursorFault(
                 ControlCode.CURSOR_INVALID,
-                "cursor self-check failed",
+                "cursor checksum failed accidental-corruption detection",
                 "restart the query without a cursor",
             )
         expected_query = digest("control-cursor-query", 1, query)

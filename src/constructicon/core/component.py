@@ -20,6 +20,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     SerializerFunctionWrapHandler,
+    field_serializer,
     field_validator,
     model_serializer,
 )
@@ -72,6 +73,15 @@ class LearningProfile(BaseModel):
     impact_scope: Literal["component", "reverse_dependencies"] = "reverse_dependencies"
     requires_human_stable_approval: bool = True
 
+    @field_serializer("change_surfaces")
+    def _serialize_change_surfaces(
+        self,
+        value: frozenset[Literal["prompt", "policy", "graph", "code", "model_artifact"]],
+    ) -> list[str]:
+        """Canonical component bytes must not depend on hash iteration order."""
+
+        return sorted(value)
+
 
 class ComponentLineage(BaseModel):
     """Provenance — recorded beside the definition, NOT in content_hash."""
@@ -90,6 +100,12 @@ class ComponentMetadata(BaseModel):
     learning: LearningProfile | None = None
     lineage: ComponentLineage | None = None
     labels: frozenset[str] = frozenset()
+
+    @field_serializer("labels")
+    def _serialize_labels(self, value: frozenset[str]) -> list[str]:
+        """Canonical component bytes must not depend on hash iteration order."""
+
+        return sorted(value)
 
 
 ComponentRole = Literal["node", "component", "harness", "workflow"]
@@ -145,17 +161,14 @@ class ComponentDef(BaseModel):
             "inputs": [port.model_dump(mode="json") for port in self.inputs],
             "outputs": [port.model_dump(mode="json") for port in self.outputs],
             "learning": (
-                self.metadata.learning.model_dump(mode="json")
-                if self.metadata.learning
-                else None
+                self.metadata.learning.model_dump(mode="json") if self.metadata.learning else None
             ),
         }
         if self.capability_requirements is None:
             # Preserve the exact identity law of M1-M4 definitions.
             return digest("component", 1, payload)
         payload["capability_requirements"] = [
-            requirement.model_dump(mode="json")
-            for requirement in self.capability_requirements
+            requirement.model_dump(mode="json") for requirement in self.capability_requirements
         ]
         return digest("component", 2, payload)
 

@@ -32,7 +32,7 @@ def main() -> None:
             os._exit(CRASH_EXIT_CODE)
 
     journal.fault_probe = die_after_second_iteration
-    result = asyncio.run(system.start(loop_graph(), INPUTS, run_id=run_id))
+    result = asyncio.run(system._start_direct(loop_graph(), INPUTS, run_id=run_id))
     print(result.status.value)
 
 

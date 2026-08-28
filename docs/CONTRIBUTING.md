@@ -36,7 +36,8 @@ changing a shared definition. Compose before you drop a tier (I10).
 - Architect JSON enters through `system.admit_graph()`. It is strict and bounded;
   rejection is a versioned `AdmissionRejected` with itemized repair data. Never
   add automatic repair or a trusted-SDK bypass. Public execution calls
-  `system.start(graph, inputs)`, which admits again.
+  `ControlPlane.runs_start(actor, proposal=graph, inputs=..., idempotency_key=...)`,
+  which admits again while creating the durable command and run.
 
 ## Adding a control operation (L0/L4)
 
@@ -63,6 +64,19 @@ Retrying the same actor, operation, key, and request must create exactly one
 domain fact. Reusing the key with different arguments must be a typed conflict
 and perform nothing.
 
+Registration and first promotion are local control operations, not setup
+bypasses. Assemble an empty `Constructicon` and `ControlPlane`, call
+`startup()`, then use `registry_register` and `registry_promote_initial` with a
+launcher-minted static admin actor and caller keys. Definitions must carry a
+restart-importable `PythonRef`; process-local implementation caches are never
+recovery authority. These two methods must not be exposed by transports. Finish
+with `shutdown()`.
+
+Keep `api/control.py` as the small public facade. Command claiming, plans,
+reconciliation, and terminal responses belong in `_control_commands.py`;
+authorized pages and cursor continuations belong in `_control_queries.py`;
+immutable detail parsing/chunking stays in `detail.py`.
+
 `RunHost` is not a scheduler. It owns only process-local run worker coroutines,
 a concurrency ceiling, PENDING/lost-RUNNING recovery, and abandon-on-shutdown.
 The walker remains the only scheduler of graph units.
@@ -71,6 +85,11 @@ The walker remains the only scheduler of graph units.
 
 The optional MCP package lives under `constructicon.api.mcp`; no other module may
 import `mcp`.
+
+The installed `pyproject.toml` metadata owns the package version.
+`constructicon.__version__` derives from it and the MCP server imports that
+value. The base wheel must import without MCP; the CLI alone gives concise
+`constructicon[mcp]` guidance when the top-level optional dependency is absent.
 
 - The handler derives `AuthenticatedActor` from its `ActorSource`, delegates
   once to `ControlPlane`, and returns the typed result.
@@ -140,6 +159,16 @@ Implement `constructicon.core.effect.EffectAdapter`:
 
 Typed envelopes only (I5); message identities derive from invocation ids;
 durable sends commit through the journal transaction or the effect boundary.
+
+## Changing SQLite persistence (L1)
+
+`SqliteJournal` is one schema-5 WAL store assembled from private responsibility
+modules: `_sqlite_base`, `_sqlite_schema`, `_sqlite_execution`,
+`_sqlite_registry`, `_sqlite_control`, and `_sqlite_queries`. A Python module
+move is not a data migration. Preserve SQL shape, transaction boundaries,
+write-once equality, epoch fences, fault-probe positions, canonical bytes, and
+all source-schema fixtures. Name migration tests by schema endpoints, not the
+milestone that introduced them.
 
 ## Kernel changes (L0/L2)
 

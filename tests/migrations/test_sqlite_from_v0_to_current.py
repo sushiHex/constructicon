@@ -1,4 +1,4 @@
-"""An exact M1-schema database migrates in place and loses nothing (M2 §6).
+"""An exact schema-v0 database migrates to current and loses nothing.
 
 The fixture builds the M1 schema verbatim (copied from the merged M1
 ``sqlite.py``) with a completed and a failed run, opens it with the M2 store
@@ -191,8 +191,8 @@ def migrated_world(
         atomic("test/announce", (BRIEF,), (ANNOUNCED,), announce_impl),
         atomic("test/summarize", (BRIEF,), (SUMMARY,), summarize_impl),
     ):
-        version = system.register(definition, impl)
-        system.promote_initial(component=definition.name, version=version)
+        version = system._register(definition, impl)
+        system._promote_initial(component=definition.name, version=version)
     return system, journal, executor
 
 
@@ -224,13 +224,13 @@ async def test_m1_database_migrates_and_loses_nothing(
     assert journal.run_inputs(FAILED) == INPUTS
 
     # the succeeded M1 run materializes from its checkpoints, untouched
-    done = await system.resume(DONE)
+    done = await system._resume_direct(DONE)
     assert done.status is RunStatus.SUCCEEDED
     assert done.outputs["summary"] == {"text": "summary of fix the flaky retry loop"}
     assert len(executor.calls) == 0
 
     # the failed M1 run resumes: triage restored, the rest executes
-    resumed = await system.resume(FAILED)
+    resumed = await system._resume_direct(FAILED)
     assert resumed.status is RunStatus.SUCCEEDED
     assert len(executor.calls) == 0  # triage's M1 checkpoint was restored
     assert len(announce_effect.executions) == 1

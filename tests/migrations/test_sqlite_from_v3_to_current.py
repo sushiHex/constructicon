@@ -1,4 +1,4 @@
-"""M4 persistence: frame-aware leases and v1 manifest reproduction survive upgrade."""
+"""Schema-v3 persistence survives upgrade to the current schema."""
 
 from __future__ import annotations
 
@@ -108,8 +108,8 @@ def _register_pipeline(
         atomic("test/announce", (BRIEF,), (ANNOUNCED,), announce_impl),
         atomic("test/summarize", (BRIEF,), (SUMMARY,), summarize_impl),
     ):
-        version = system.register(definition, impl)
-        system.promote_initial(component=definition.name, version=version)
+        version = system._register(definition, impl)
+        system._promote_initial(component=definition.name, version=version)
     return system, executor, effect
 
 
@@ -153,11 +153,11 @@ async def test_v1_stored_manifest_resumes_and_reproduces_after_upgrade(
 
     journal.fault_probe = crash_after_first_completion
     with pytest.raises(InjectedCrash):
-        await system.resume(run_id)
+        await system._resume_direct(run_id)
     journal.fault_probe = lambda name: None
     clock.advance(LEASE_TTL_S + 1)
 
-    resumed = await system.resume(run_id)
+    resumed = await system._resume_direct(run_id)
     assert resumed.status is RunStatus.SUCCEEDED
     assert len(executor.calls) == 1  # triage checkpoint restored after the crash
     assert len(effect.executions) == 1
@@ -165,7 +165,7 @@ async def test_v1_stored_manifest_resumes_and_reproduces_after_upgrade(
     # Reproduction reserializes the v1 model with additive defaults. The
     # existing manifest row omits resolved_loops; semantic comparison accepts
     # the equivalent bytes and refuses any real identity change.
-    reproduced = await system.reproduce(
+    reproduced = await system._reproduce_direct(
         run_id,
         new_run_id=RunId("legacy-v1-reproduced"),
     )

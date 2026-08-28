@@ -155,17 +155,17 @@ class Constructicon:
         lease_ttl_s: float = DEFAULT_LEASE_TTL_S,
         heartbeat_interval_s: float = DEFAULT_HEARTBEAT_INTERVAL_S,
     ) -> None:
-        self.journal = journal
+        self._journal = journal
         if store is None:
             store = journal if isinstance(journal, RegistryStore) else InMemoryRegistryStore()
-        self.registry = ComponentRegistry(store=store)
+        self._registry = ComponentRegistry(store=store)
         self.owner_id = owner_id or f"worker-{os.getpid()}-{uuid.uuid4().hex[:8]}"
         self._capabilities = dict(capabilities or {})
         self._catalog = dict(catalog or {})
         self._root_grants = root_grants
         self._admission_limits = admission_limits
         self._walker = Walker(
-            registry=self.registry,
+            registry=self._registry,
             journal=journal,
             capabilities=self._capabilities,
             catalog=self._catalog,
@@ -177,7 +177,7 @@ class Constructicon:
 
     # -- definitions ---------------------------------------------------------
 
-    def register(
+    def _register(
         self,
         definition: ComponentDef | DefinitionBundle,
         impl: NodeImpl | None = None,
@@ -190,7 +190,7 @@ class Constructicon:
                 )
             impl = definition.implementation
             definition = definition.definition
-        return self.registry.register(definition, impl)
+        return self._registry.register(definition, impl)
 
     def _promote_version(
         self,
@@ -201,45 +201,26 @@ class Constructicon:
         actor: str,
         source_run: RunId | None = None,
     ) -> PromotionRecord:
-        return self.registry.promote(
+        return self._registry.promote(
             component=component,
             version=version,
             attestation_id=attestation_id,
             actor=actor,
-            journal=self.journal,
+            journal=self._journal,
             source_run=source_run,
         )
 
-    def promote(
-        self,
-        *,
-        component: str,
-        version: Digest,
-        attestation_id: str,
-        actor: str,
-        source_run: RunId | None = None,
-    ) -> PromotionRecord:
-        """Compatibility facade; authenticated remote mutations use ControlPlane."""
-
-        return self._promote_version(
-            component=component,
-            version=version,
-            attestation_id=attestation_id,
-            actor=actor,
-            source_run=source_run,
-        )
-
-    def promote_initial(
+    def _promote_initial(
         self,
         *,
         component: str,
         version: Digest,
         actor: str = "bootstrap",
     ) -> PromotionRecord | None:
-        return self.registry.promote_initial(
+        return self._registry.promote_initial(
             component=component,
             version=version,
-            journal=self.journal,
+            journal=self._journal,
             actor=actor,
         )
 
@@ -250,24 +231,9 @@ class Constructicon:
         actor: str,
         expected_stable: Digest | None = None,
     ) -> PromotionRecord:
-        return self.registry.rollback(
+        return self._registry.rollback(
             component=component,
-            journal=self.journal,
-            actor=actor,
-            expected_stable=expected_stable,
-        )
-
-    def rollback(
-        self,
-        *,
-        component: str,
-        actor: str,
-        expected_stable: Digest | None = None,
-    ) -> PromotionRecord:
-        """Compatibility facade; authenticated remote mutations use ControlPlane."""
-
-        return self._rollback_version(
-            component=component,
+            journal=self._journal,
             actor=actor,
             expected_stable=expected_stable,
         )
@@ -283,7 +249,7 @@ class Constructicon:
     ) -> ExecutionManifest:
         return admit_authored_graph(
             graph,
-            snapshot=self.registry.snapshot(),
+            snapshot=self._registry.snapshot(),
             catalog=self._catalog,
             root_grants=self._root_grants,
             inputs=inputs,
@@ -364,7 +330,7 @@ class Constructicon:
                         message=f"graph proposal is not canonical JSON: {exc}",
                         repair="submit a JSON object matching the published Graph schema",
                     ),
-                )
+                ),
             )
 
         assert graph is not None and proposal_digest is not None
@@ -392,18 +358,6 @@ class Constructicon:
     ) -> None:
         self._walker.prepare(manifest, run_id=run_id, inputs=inputs, origin=origin)
 
-    def prepare(
-        self,
-        manifest: ExecutionManifest,
-        *,
-        run_id: RunId,
-        inputs: dict[str, Any],
-        origin: RunOrigin | None = None,
-    ) -> None:
-        """Compatibility facade for local assembly and historical tests."""
-
-        self._prepare_run(manifest, run_id=run_id, inputs=inputs, origin=origin)
-
     async def _run_prepared(
         self,
         run_id: RunId,
@@ -411,27 +365,14 @@ class Constructicon:
         cancellation: Literal["cancel", "abandon"] = "cancel",
         expected_event_seq: int | None = None,
         expected_statuses: frozenset[RunStatus] | None = None,
+        resume_command_id: str | None = None,
     ) -> RunResult:
         return await self._walker.run_prepared(
             run_id,
             cancellation=cancellation,
             expected_event_seq=expected_event_seq,
             expected_statuses=expected_statuses,
-        )
-
-    async def run_prepared(
-        self,
-        run_id: RunId,
-        *,
-        cancellation: Literal["cancel", "abandon"] = "cancel",
-        expected_event_seq: int | None = None,
-        expected_statuses: frozenset[RunStatus] | None = None,
-    ) -> RunResult:
-        return await self._run_prepared(
-            run_id,
-            cancellation=cancellation,
-            expected_event_seq=expected_event_seq,
-            expected_statuses=expected_statuses,
+            resume_command_id=resume_command_id,
         )
 
     async def _start_direct(
@@ -448,20 +389,8 @@ class Constructicon:
             inputs=inputs,
         )
 
-    async def start(
-        self,
-        graph: Graph,
-        inputs: dict[str, Any],
-        *,
-        run_id: RunId | None = None,
-    ) -> RunResult:
-        return await self._start_direct(graph, inputs, run_id=run_id)
-
     async def _resume_direct(self, run_id: RunId) -> RunResult:
         return await self._walker.resume(run_id)
-
-    async def resume(self, run_id: RunId) -> RunResult:
-        return await self._resume_direct(run_id)
 
     async def _reproduce_direct(
         self,
@@ -474,45 +403,31 @@ class Constructicon:
             new_run_id=new_run_id or RunId(f"run-{uuid.uuid4().hex}"),
         )
 
-    async def reproduce(
-        self,
-        source_run_id: RunId,
-        *,
-        new_run_id: RunId | None = None,
-    ) -> RunResult:
-        return await self._reproduce_direct(source_run_id, new_run_id=new_run_id)
-
     def manifest_for_run(self, run_id: RunId) -> ExecutionManifest:
-        return self._walker._load_manifest(run_id)
+        return self._walker.load_manifest(run_id)
 
     def inputs_for_run(self, run_id: RunId) -> dict[str, Any]:
-        inputs = self.journal.run_inputs(run_id)
+        inputs = self._journal.run_inputs(run_id)
         if inputs is None:
             raise ContractViolation(f"run {run_id!r} has no recorded inputs")
         return inputs
 
     def materialize_run(self, run_id: RunId) -> dict[str, Any]:
-        manifest = self.manifest_for_run(run_id)
-        return self._walker._materialize(manifest, run_id, self.inputs_for_run(run_id))
+        return self._walker.materialize_run(run_id)
 
     def _request_cancel(self, run_id: RunId) -> None:
-        self.journal.request_cancel(run_id)
-
-    def cancel(self, run_id: RunId) -> None:
-        """Compatibility facade; authenticated remote mutations use ControlPlane."""
-
-        self._request_cancel(run_id)
+        self._journal.request_cancel(run_id)
 
     def run_state(self, run_id: RunId) -> RunState | None:
-        return self.journal.run_state(run_id)
+        return self._journal.run_state(run_id)
 
     def project_run(self, run_id: RunId, out_dir: Path) -> ProjectionResult:
-        if not isinstance(self.journal, SqliteJournal):
+        if not isinstance(self._journal, SqliteJournal):
             raise ContractViolation(
                 "projections regenerate from the SQLite journal; this system "
-                f"was assembled with {type(self.journal).__name__}"
+                f"was assembled with {type(self._journal).__name__}"
             )
-        return project_run(self.journal, run_id, out_dir)
+        return project_run(self._journal, run_id, out_dir)
 
     # -- introspection --------------------------------------------------------
 
@@ -522,9 +437,9 @@ class Constructicon:
         component_names: Sequence[str] | None = None,
         limit: int = 100,
     ) -> SystemDescription:
-        snapshot = self.registry.snapshot()
+        snapshot = self._registry.snapshot()
         return build_system_description(
-            registry=self.registry,
+            registry=self._registry,
             snapshot=snapshot,
             catalog=self._catalog,
             available_capabilities=frozenset(self._capabilities),
@@ -540,16 +455,16 @@ class Constructicon:
         *,
         version: Digest | None = None,
     ) -> ComponentDescription:
-        snapshot = self.registry.snapshot()
+        snapshot = self._registry.snapshot()
         return build_component_description(
-            registry=self.registry,
+            registry=self._registry,
             snapshot=snapshot,
             name=name,
             version=version,
         )
 
     def rdeps(self, name: str) -> list[str]:
-        return self.registry.rdeps(name)
+        return self._registry.rdeps(name)
 
     def _proposal_too_large(self, observed: int) -> AdmissionRejected:
         return AdmissionRejected(
@@ -578,17 +493,13 @@ class Constructicon:
                 if error_type == "json_invalid"
                 else AdmissionCode.GRAPH_SCHEMA_INVALID_VALUE
             )
-            path = tuple(
-                item for item in error.get("loc", ()) if isinstance(item, (str, int))
-            )
+            path = tuple(item for item in error.get("loc", ()) if isinstance(item, (str, int)))
             faults.append(
                 AdmissionFault(
                     code=code,
                     message=str(error.get("msg", "Graph schema validation failed")),
                     path=path,
-                    repair=(
-                        "change the value at this path to match the published Graph schema"
-                    ),
+                    repair=("change the value at this path to match the published Graph schema"),
                     details={"error_type": error_type},
                 )
             )

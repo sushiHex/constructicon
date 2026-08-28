@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
@@ -48,9 +49,9 @@ BROKEN_FIX = "def add(a: int, b: int) -> int:\n    return a - b\n"  # tests go r
 
 # fast checks for the tiny fixture package (full defaults probe tool versions)
 FAST_CHECKS = (
-    CheckSpec("ruff", ("python", "-m", "ruff", "check", "--no-cache", "."), 60.0),
+    CheckSpec("ruff", (sys.executable, "-m", "ruff", "check", "--no-cache", "."), 60.0),
     CheckSpec(
-        "pytest", ("python", "-m", "pytest", "-q", "-p", "no:cacheprovider"), 120.0
+        "pytest", (sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"), 120.0
     ),
 )
 
@@ -222,6 +223,6 @@ def build_git_system(
         atomic("git/gate", (CANDIDATE,), (EVALUATION,), gate_impl),
         atomic("git/merge", (EVALUATION,), (MERGED,), merge_impl),
     ):
-        version = system.register(definition, impl)
-        system.promote_initial(component=definition.name, version=version)
+        version = system._register(definition, impl)
+        system._promote_initial(component=definition.name, version=version)
     return system, world

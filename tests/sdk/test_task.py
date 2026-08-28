@@ -111,8 +111,8 @@ def test_unsupported_signature_semantics_are_rejected(
 async def test_registered_task_executes_through_the_ordinary_walker(
     system: Constructicon,
 ) -> None:
-    version = system.register(echo)
-    system.promote_initial(component=echo.name, version=version)
+    version = system._register(echo)
+    system._promote_initial(component=echo.name, version=version)
     definition = echo.definition
     graph = Graph(
         name="sdk-echo-run",
@@ -120,7 +120,7 @@ async def test_registered_task_executes_through_the_ordinary_walker(
         inputs=definition.inputs,
         outputs=definition.outputs,
     )
-    result = await system.start(
+    result = await system._start_direct(
         graph,
         {"value": EchoInput(text="hello").model_dump(mode="json")},
         run_id=RunId("sdk-echo"),
@@ -157,8 +157,8 @@ def test_persisted_task_activates_and_runs_in_a_fresh_process(tmp_path: Path) ->
     database = tmp_path / "reload.db"
     journal = SqliteJournal(database)
     system = Constructicon(journal=journal)
-    version = system.register(echo)
-    system.promote_initial(component=echo.name, version=version)
+    version = system._register(echo)
+    system._promote_initial(component=echo.name, version=version)
     graph = Graph(
         name="fresh-process-echo",
         nodes=(GraphNode(id="echo", body=echo.ref()),),
@@ -176,7 +176,7 @@ from tests.sdk.fixture_tasks import echo
 journal = SqliteJournal({str(database)!r})
 system = Constructicon(journal=journal)
 graph = Graph.model_validate_json({graph.model_dump_json()!r})
-result = asyncio.run(system.start(
+result = asyncio.run(system._start_direct(
     graph,
     {{"value": {{"text": "fresh"}}}},
     run_id=RunId("fresh-process-task"),

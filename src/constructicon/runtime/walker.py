@@ -190,6 +190,7 @@ class Walker:
         cancellation: Literal["cancel", "abandon"] = "cancel",
         expected_event_seq: int | None = None,
         expected_statuses: frozenset[RunStatus] | None = None,
+        resume_command_id: str | None = None,
     ) -> RunResult:
         journal = self._journal
         state = journal.run_state(run_id)
@@ -215,6 +216,7 @@ class Walker:
             cancellation=cancellation,
             expected_event_seq=expected_event_seq,
             expected_statuses=expected_statuses,
+            resume_command_id=resume_command_id,
         )
 
     async def resume(self, run_id: RunId) -> RunResult:
@@ -253,6 +255,7 @@ class Walker:
         cancellation: Literal["cancel", "abandon"],
         expected_event_seq: int | None,
         expected_statuses: frozenset[RunStatus] | None,
+        resume_command_id: str | None,
     ) -> RunResult:
         bound = self._registry.activate(manifest, catalog=self._catalog)
         journal = self._journal
@@ -273,6 +276,7 @@ class Walker:
                 lost=lost,
                 effect_mode=effect_mode,
                 capability_mode=capability_mode,
+                resume_command_id=resume_command_id,
             )
         except asyncio.CancelledError:
             await self._stop_heartbeat(heartbeat)
@@ -342,6 +346,7 @@ class Walker:
         lost: list[OwnershipLost],
         effect_mode: EffectMode,
         capability_mode: Literal["normal", "discard"],
+        resume_command_id: str | None,
     ) -> RunResult:
         journal = self._journal
         manifest = bound.manifest
@@ -356,7 +361,14 @@ class Walker:
                 expected=frozenset({RunStatus.PENDING}),
                 target=RunStatus.RUNNING,
                 event_kind="RunStarted",
-                payload={"inputs": inputs},
+                payload={
+                    "inputs": inputs,
+                    **(
+                        {"resume_command_id": resume_command_id}
+                        if resume_command_id is not None
+                        else {}
+                    ),
+                },
             )
         elif state.status in (RunStatus.FAILED, RunStatus.PARKED):
             journal.transition_run(
@@ -364,19 +376,29 @@ class Walker:
                 expected=frozenset({RunStatus.FAILED, RunStatus.PARKED}),
                 target=RunStatus.RUNNING,
                 event_kind="RunResumed",
+                payload=(
+                    {"resume_command_id": resume_command_id}
+                    if resume_command_id is not None
+                    else None
+                ),
             )
         else:
-            journal.append_event(lease, "RunReclaimed")
+            journal.append_event(
+                lease,
+                "RunReclaimed",
+                payload=(
+                    {"resume_command_id": resume_command_id}
+                    if resume_command_id is not None
+                    else None
+                ),
+            )
 
-        await self._reconcile_stale_leases(
-            bound, lease, capability_mode=capability_mode
-        )
+        await self._reconcile_stale_leases(bound, lease, capability_mode=capability_mode)
 
         instances = self._instances(bound)
         instances_by_scope = {instance.scope.segments: instance for instance in instances}
         bindings = {
-            _address_key(binding.destination): binding
-            for binding in manifest.resolved_connections
+            _address_key(binding.destination): binding for binding in manifest.resolved_connections
         }
         grants = {
             binding.scope.segments: binding
@@ -599,8 +621,7 @@ class Walker:
                 instance = instances_by_scope.get(member_scope.segments)
                 if instance is None:
                     raise ContractViolation(
-                        f"loop {loop.scope.render()} names missing member "
-                        f"{member_scope.render()}"
+                        f"loop {loop.scope.render()} names missing member {member_scope.render()}"
                     )
                 member_path = ExecutionPath(scope=member_scope, iterations=(frame,))
                 report = self._member_dependency_report(
@@ -653,9 +674,7 @@ class Walker:
                     iteration_failed = True
                     continue
 
-                had_checkpoint = (
-                    self._journal.checkpoint(lease.run_id, member_path) is not None
-                )
+                had_checkpoint = self._journal.checkpoint(lease.run_id, member_path) is not None
                 error = await self._execute_or_restore(
                     manifest,
                     instance,
@@ -805,8 +824,7 @@ class Walker:
                     self._restore_checked_checkpoint(instance, checkpoint, values, bindings)
                 if require_terminal:
                     raise JournalDamaged(
-                        f"successful run has partial loop {loop.scope.render()} "
-                        f"iteration {index}"
+                        f"successful run has partial loop {loop.scope.render()} iteration {index}"
                     )
                 return _LoopHistory(completed, None, False, previous_values)
 
@@ -949,7 +967,9 @@ class Walker:
             disposition: Disposition = (
                 "discard"
                 if capability_mode == "discard"
-                else "release" if checkpointed else "discard"
+                else "release"
+                if checkpointed
+                else "discard"
             )
             if binding is not None:
                 capability = self._capabilities.get(binding.capability_id)
@@ -990,6 +1010,20 @@ class Walker:
             raise JournalDamaged(
                 f"manifest {manifest_hash} for run {run_id!r} is damaged: {exc}"
             ) from exc
+
+    def load_manifest(self, run_id: RunId) -> ExecutionManifest:
+        """Load and version-validate one current or historical durable manifest."""
+
+        return self._load_manifest(run_id)
+
+    def materialize_run(self, run_id: RunId) -> dict[str, Any]:
+        """Materialize one run from durable manifest, inputs, and checkpoints."""
+
+        manifest = self._load_manifest(run_id)
+        inputs = self._journal.run_inputs(run_id)
+        if inputs is None:
+            raise ContractViolation(f"run {run_id!r} has no recorded inputs")
+        return self._materialize(manifest, run_id, inputs)
 
     def _instances(self, bound: BoundExecution) -> list[_Instance]:
         instances: list[_Instance] = []
@@ -1042,9 +1076,7 @@ class Walker:
         instances: list[_Instance],
     ) -> list[_Unit]:
         member_scopes = {
-            scope.segments
-            for loop in manifest.resolved_loops
-            for scope in loop.member_order
+            scope.segments for loop in manifest.resolved_loops for scope in loop.member_order
         }
         units = [
             _Unit(scope=instance.scope, instance=instance)
@@ -1240,9 +1272,7 @@ class Walker:
                     "refusing before execution"
                 )
             self._journal.append_event(lease, "NodeRestored", path=path)
-            outputs = {
-                port: envelope.payload for port, envelope in checkpoint.outputs.items()
-            }
+            outputs = {port: envelope.payload for port, envelope in checkpoint.outputs.items()}
         else:
             try:
                 outputs = await self._invoke(
@@ -1315,9 +1345,7 @@ class Walker:
         self._journal.append_event(lease, "NodeStarted", path=path)
         self_binding = grants.get(instance.scope.segments)
         if self_binding is None:
-            raise ContractViolation(
-                f"{instance.scope.render()}: manifest carries no sealed grants"
-            )
+            raise ContractViolation(f"{instance.scope.render()}: manifest carries no sealed grants")
         if instance.impl is None:
             raise ContractViolation(
                 f"{instance.scope.render()}: no live implementation is activated"
@@ -1372,9 +1400,7 @@ class Walker:
             path=path,
             capabilities=capabilities,
             grants=self_binding.effective_grants,
-            effect=self._effect_boundary(
-                manifest, lease, path, lost, mode=effect_mode
-            ),
+            effect=self._effect_boundary(manifest, lease, path, lost, mode=effect_mode),
         )
 
         try:
@@ -1445,9 +1471,7 @@ class Walker:
                 f"{checkpoint.path.render()}: checkpoint contradicts the reconstructed "
                 "loop input hash or component version"
             )
-        outputs = {
-            port: envelope.payload for port, envelope in checkpoint.outputs.items()
-        }
+        outputs = {port: envelope.payload for port, envelope in checkpoint.outputs.items()}
         self._publish_atomic_outputs(instance, outputs, values)
 
     def _publish_atomic_outputs(
@@ -1489,13 +1513,9 @@ class Walker:
             normalized = json_value(subject)
             if not isinstance(normalized, dict):
                 raise ContractViolation("effect subject must be a JSON object")
-            key = idempotency_key(
-                manifest.manifest_hash, path, kind, normalized, mode=mode
-            )
+            key = idempotency_key(manifest.manifest_hash, path, kind, normalized, mode=mode)
             existing = journal.receipt_for(key)
-            terminal_statuses = (
-                ("simulated",) if mode == "simulated" else ("committed", "rejected")
-            )
+            terminal_statuses = ("simulated",) if mode == "simulated" else ("committed", "rejected")
             if existing is not None and existing.status in terminal_statuses:
                 journal.append_event(
                     lease,
@@ -1560,8 +1580,7 @@ class Walker:
         instances = self._materialization_instances(manifest)
         instances_by_scope = {instance.scope.segments: instance for instance in instances}
         bindings = {
-            _address_key(binding.destination): binding
-            for binding in manifest.resolved_connections
+            _address_key(binding.destination): binding for binding in manifest.resolved_connections
         }
         units = self._root_units(manifest, instances)
         producers = self._unit_producer_index(units)

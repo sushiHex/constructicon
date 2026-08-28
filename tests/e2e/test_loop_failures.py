@@ -61,8 +61,8 @@ def register(
     impl: Any,
 ) -> None:
     definition, implementation = atomic(name, inputs, outputs, impl)
-    version = system.register(definition, implementation)
-    system.promote_initial(component=name, version=version)
+    version = system._register(definition, implementation)
+    system._promote_initial(component=name, version=version)
 
 
 def failure_graph(system: Constructicon) -> Graph:
@@ -93,8 +93,8 @@ def failure_graph(system: Constructicon) -> Graph:
         inputs=body.inputs,
         outputs=body.outputs,
     )
-    version = system.register(component)
-    system.promote_initial(component=component.name, version=version)
+    version = system._register(component)
+    system._promote_initial(component=component.name, version=version)
     return Graph(
         name="failed-loop",
         nodes=(
@@ -124,12 +124,12 @@ async def test_failed_member_blocks_downstream_and_skips_independent_tail(
     graph = failure_graph(system)
     run_id = RunId("failed-loop")
 
-    first = await system.start(graph, {"state": {"value": 0}}, run_id=run_id)
+    first = await system._start_direct(graph, {"state": {"value": 0}}, run_id=run_id)
     assert first.status is RunStatus.FAILED
     assert FAIL_CALLS == 1
     assert SIDE_CALLS == 0
     assert DECIDE_CALLS == 0
-    events = system.journal.events(run_id, limit=200)
+    events = system._journal.events(run_id, limit=200)
     assert any(event.kind == "NodeSkipped" for event in events)
     assert any(event.kind == "NodeBlocked" for event in events)
 
@@ -137,14 +137,14 @@ async def test_failed_member_blocks_downstream_and_skips_independent_tail(
     frame = IterationFrame(loop=loop_scope, index=0)
     body_root = loop_scope.child("body").child("$body")
     for member in ("explode", "side", "decide"):
-        assert system.journal.checkpoint(
+        assert system._journal.checkpoint(
             run_id,
             ExecutionPath(scope=body_root.child(member), iterations=(frame,)),
         ) is None
 
     # A failed run may be resumed. The missing first invocation replays, but no
     # sparse later checkpoint is ever mistaken for a valid iteration prefix.
-    second = await system.resume(run_id)
+    second = await system._resume_direct(run_id)
     assert second.status is RunStatus.FAILED
     assert FAIL_CALLS == 2
     assert SIDE_CALLS == 0

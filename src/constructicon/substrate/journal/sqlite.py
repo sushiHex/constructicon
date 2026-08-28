@@ -1,4 +1,4 @@
-"""SQLite v5: one WAL store implementing Journal, RegistryStore, ControlStore.
+"""One WAL store implementing Journal, RegistryStore, and ControlStore.
 
 The private mixins are implementation decomposition only; callers see one concrete
 ``SqliteJournal`` and the concepts remain separate L0 protocols.
@@ -11,28 +11,31 @@ from datetime import datetime
 from pathlib import Path
 
 from constructicon.core.envelope import utc_now
-from constructicon.substrate.journal._sqlite_v5_control import _M6ControlMixin
-from constructicon.substrate.journal._sqlite_v5_reads import _M6ReadMixin
-from constructicon.substrate.journal._sqlite_v5_schema import (
-    SCHEMA_VERSION,
-    _M6SchemaMixin,
-)
-from constructicon.substrate.journal.sqlite_legacy import (
-    SqliteJournal as _LegacySqliteJournal,
-)
-from constructicon.substrate.journal.sqlite_legacy import (
+from constructicon.substrate.journal._sqlite_base import (
     _checkpoint_identity,
     _manifest_semantically_equal,
     _path_key,
+    _SqliteBase,
+)
+from constructicon.substrate.journal._sqlite_control import _SqliteControlMixin
+from constructicon.substrate.journal._sqlite_execution import _SqliteExecutionMixin
+from constructicon.substrate.journal._sqlite_queries import _SqliteQueriesMixin
+from constructicon.substrate.journal._sqlite_registry import _SqliteRegistryMixin
+from constructicon.substrate.journal._sqlite_schema import (
+    SCHEMA_VERSION,
+    _SqliteSchemaMixin,
 )
 
 
 class SqliteJournal(
-    _M6ControlMixin, _M6ReadMixin, _M6SchemaMixin, _LegacySqliteJournal
+    _SqliteControlMixin,
+    _SqliteQueriesMixin,
+    _SqliteSchemaMixin,
+    _SqliteExecutionMixin,
+    _SqliteRegistryMixin,
+    _SqliteBase,
 ):
-    def __init__(
-        self, db_path: Path | str, *, now_fn: Callable[[], datetime] = utc_now
-    ) -> None:
+    def __init__(self, db_path: Path | str, *, now_fn: Callable[[], datetime] = utc_now) -> None:
         super().__init__(db_path, now_fn=now_fn)
 
 

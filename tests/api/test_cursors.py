@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 
 from constructicon.api.control import ControlPlane
 from constructicon.api.run_host import RunHost
 from constructicon.core.address import RunId
+from constructicon.core.component import PromotionRecord
 from constructicon.core.control import (
     READ_SCOPE,
     AuthenticatedActor,
@@ -16,7 +18,7 @@ from constructicon.core.control import (
 from constructicon.core.identity import canonical_json, digest
 from constructicon.core.run import RunStatus
 from constructicon.substrate.journal.sqlite import SqliteJournal
-from tests.conftest import pipeline_graph
+from tests.conftest import ISSUE, REVIEW, atomic, pipeline_graph, review_impl
 
 ALICE = AuthenticatedActor(
     actor_id="static:alice",
@@ -34,7 +36,7 @@ def _prepare(world, suffix: str) -> RunId:
     inputs = {"issue": {"title": suffix}}
     manifest = world.validate(pipeline_graph(), inputs)
     run_id = RunId(f"run-{suffix}")
-    world.prepare(manifest, run_id=run_id, inputs=inputs)
+    world._prepare_run(manifest, run_id=run_id, inputs=inputs)
     return run_id
 
 
@@ -44,7 +46,7 @@ def test_run_cursor_excludes_later_rows_and_is_actor_bound(
 ) -> None:
     _prepare(world, "a")
     _prepare(world, "b")
-    control = ControlPlane(system=world, store=journal, run_host=RunHost(world))
+    control = ControlPlane(system=world, store=journal, run_host=RunHost(world, journal=journal))
     first = control.runs_list(ALICE, limit=1)
     assert not isinstance(first, ControlRejected)
     assert [str(item.run_id) for item in first.items] == ["run-a"]
@@ -80,9 +82,7 @@ def test_event_cursor_is_snapshot_stable(world, journal: SqliteJournal) -> None:
     through = first.through_seq
 
     journal.append_event(lease, "ThreeAfterSnapshot")
-    second = control.runs_events(
-        ALICE, run_id, limit=10, cursor=first.page.next_cursor
-    )
+    second = control.runs_events(ALICE, run_id, limit=10, cursor=first.page.next_cursor)
     assert not isinstance(second, ControlRejected)
     assert second.through_seq == through
     assert "ThreeAfterSnapshot" not in [event.kind for event in second.items]
@@ -92,12 +92,63 @@ def test_event_cursor_is_snapshot_stable(world, journal: SqliteJournal) -> None:
     assert "ThreeAfterSnapshot" in [event.kind for event in fresh.items]
 
 
+def test_registry_candidate_cursor_pins_registration_and_promotion_cut(
+    world,
+    journal: SqliteJournal,
+) -> None:
+    definition, implementation = atomic(
+        "cursor/revision",
+        (ISSUE,),
+        (REVIEW,),
+        review_impl,
+    )
+    v1 = world._register(definition, implementation)
+    world._promote_initial(component=definition.name, version=v1)
+    v2 = world._register(definition.model_copy(update={"role": "component"}), implementation)
+    v3 = world._register(definition.model_copy(update={"role": "harness"}), implementation)
+    control = ControlPlane(system=world, store=journal)
+
+    first = control.registry_candidates(ALICE, definition.name, limit=1)
+    assert not isinstance(first, ControlRejected)
+    assert [item.version for item in first.items] == [v2]
+    assert first.page.next_cursor is not None
+
+    journal.store_promotion(
+        PromotionRecord(
+            component=definition.name,
+            channel="stable",
+            from_version=v1,
+            to_version=v2,
+            attestation_id="att-cursor-revision",
+            actor="static:test",
+            source_run=None,
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+    )
+    v4 = world._register(definition.model_copy(update={"role": "workflow"}), implementation)
+
+    second = control.registry_candidates(
+        ALICE,
+        definition.name,
+        cursor=first.page.next_cursor,
+        limit=10,
+    )
+    assert not isinstance(second, ControlRejected)
+    assert [item.version for item in second.items] == [v3]
+    assert second.page.snapshot_digest == first.page.snapshot_digest
+
+    fresh = control.registry_candidates(ALICE, definition.name, limit=10)
+    assert not isinstance(fresh, ControlRejected)
+    assert [item.version for item in fresh.items] == [v1, v3, v4]
+    assert fresh.page.snapshot_digest != first.page.snapshot_digest
+
+
 def test_detail_chunks_reconstruct_canonical_bytes(world, journal: SqliteJournal) -> None:
     run_id = _prepare(world, "detail")
     control = ControlPlane(system=world, store=journal)
-    uri = f"constructicon://runs/{run_id}/manifest"
-    reference = control.details.reference(ALICE, uri)
-    assert not isinstance(reference, ControlRejected)
+    summary = control.runs_status(ALICE, run_id)
+    assert not isinstance(summary, ControlRejected)
+    reference = summary.manifest_ref
     pieces: list[str] = []
     cursor: str | None = None
     digest_text = None

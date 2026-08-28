@@ -90,6 +90,8 @@ source_modules = [
     "constructicon.substrate",
     "constructicon.runtime",
     "constructicon.sdk",
+    "constructicon.api._control_commands",
+    "constructicon.api._control_queries",
     "constructicon.api.control",
     "constructicon.api.cursor",
     "constructicon.api.detail",

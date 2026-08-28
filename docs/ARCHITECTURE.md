@@ -17,8 +17,8 @@ first-class user; humans are observer, advisor, and approver.
 ## Layers
 
 ```
-L4  api        system object · typed describe/admission · MCP server (M6) ·
-               CLI skin · injection root: constructs L1, hands it to L2
+L4  api        ControlPlane · typed describe/admission · MCP server · CLI skin ·
+               injection root: constructs L1, hands it to L2
 L3  sdk        @task · component/flow/harness/loop sugar — process-local
                authoring carriers compiling immediately to the core IR
 L2  runtime    graph IR · registry/resolution · authoring preflight + validator
@@ -105,8 +105,8 @@ AdmissionRejected{graph?, faults}
 
 Semantic rejection returns the canonical parsed Graph. Constructicon never
 auto-repairs: the caller edits and resubmits. An accepted manifest is an
-inspection preview, not a public execution token; `system.start(graph, inputs)`
-re-admits before running.
+inspection preview, not a public execution token; `ControlPlane.runs_start()`
+re-admits the Graph while creating its durable command and run.
 
 `system.describe()` derives one bounded, secret-free authoring contract from an
 immutable `RegistrySnapshot`, the assembled capability catalog and live
@@ -169,6 +169,67 @@ complete declaration with no capabilities. Complete declarations participate
 in the next component-identity version; legacy definitions preserve their
 M1–M4 hashes. Composite capability bindings remain encoded in their Graph body.
 
+Every `RegistrySnapshot` identifies one coherent vector cut:
+
+```text
+RegistryRevision{registration_seq, promotion_seq}
+```
+
+The SQLite store reconstructs that exact cut from its append-only registration
+and promotion sequences; the memory store implements the same contract. Version,
+candidate, reverse-dependency, comparison, and description reads use one
+snapshot. A continuation cursor carries the vector, so later registrations and
+promotions cannot drift into an older page. A future or incoherent vector is a
+refusal, never a best-effort reconstruction.
+
+## Durable control plane
+
+`ControlPlane` is the only public mutation gateway. Its two private delegation
+collaborators have disjoint responsibilities:
+
+```text
+_CommandExecutor   ten mutations; claim, immutable plan, apply/reconcile, record
+_ControlQueries    authorized bounded reads and page continuations
+```
+
+Every mutation follows one command law:
+
+```text
+authorize → lifecycle admission → claim → plan → apply once → record → replay
+```
+
+The caller supplies a bounded idempotency key; actor, operation, key, canonical
+request hash, plan, domain receipt, and terminal response are related and
+validated. Response loss after the plan, domain fact, or command completion
+cannot duplicate a run, attempt, approval, registration, promotion, rollback,
+or cancellation. Historical v1/v2 responses replay as control schema 3 in
+memory without rewriting their durable bytes.
+
+Local component registration and initial promotion use the same command law.
+They require a launcher-minted static actor with admin scope and are absent from
+MCP. `Constructicon` exposes neither public mutation wrappers nor mutable
+journal/registry handles. See [ADR 0012](adr/0012-durable-control-plane-and-mcp.md)
+and [ADR 0013](adr/0013-local-assembly-through-command-law.md).
+
+`ControlPlane` also owns the race-safe process lifecycle:
+
+```text
+new → starting → started → stopping → stopped
+```
+
+Authorized first mutations join the same full startup as explicit launchers;
+unauthorized calls start nothing. Shutdown admits no new commands, waits for
+already-admitted command orchestration to reach a durable terminal response,
+then abandons workers without inventing user cancellation. `RunHost` owns only
+bounded process-local workers and recovery scans; the walker remains the sole
+graph scheduler. A resume command is receipted by the exact attempt transition
+carrying its `resume_command_id`, not by status polling or an unrelated event.
+
+Opaque cursor schema 2 binds actor, endpoint, canonical query, calibrated
+checksum, snapshot bound, and continuation key. The checksum detects accidental
+corruption; it grants no authority. Run/event pages use immutable upper bounds,
+registry pages use `RegistryRevision`, and detail chunks remain digest-bound.
+
 ## Journal
 
 One transactional log, many projections. SQLite (stdlib, WAL) is authoritative
@@ -178,6 +239,21 @@ JSONL, summaries, and renderings are regenerable projections (M2+). Resume
 re-walks the graph: a checkpoint at the same `ExecutionPath` with matching
 input hash and resolved version restores; the first miss resumes live.
 Reproduce starts a new run under a past run's exact manifest and inputs.
+
+One public `SqliteJournal` implements the separate L0 `Journal`,
+`RegistryStore`, and `ControlStore` contracts over one schema-5 WAL database.
+Its private modules are named by enduring responsibility:
+
+```text
+_sqlite_base       connections, transactions, clock, fault hook
+_sqlite_schema     creation and explicitly versioned migrations
+_sqlite_execution  runs, events, checkpoints, effects, leases, attestations
+_sqlite_registry   registrations, promotions, coherent snapshots
+_sqlite_control    commands and approvals
+_sqlite_queries    bounded read projections
+```
+
+This is implementation decomposition, not multiple stores and not schema 6.
 
 Loops use that same machinery rather than a second scheduler. Every iteration
 adds one `IterationFrame` to each member's `ExecutionPath`; checkpoints,
@@ -231,7 +307,13 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
   direct, and repaired JSON Graphs proving identical manifest identities; a
   serialized architect repairing schema and semantic faults and executing
   successfully. See [adr/0011](adr/0011-agent-authoring-and-introspection.md).
-- **M6** — MCP control plane with idempotency keys and bounded pagination.
+- **M6 (done)** — one authenticated durable command law for ten mutations;
+  keyed local assembly; race-safe `ControlPlane`/`RunHost` lifecycle; committed
+  resume handoff recovery; schema-3 control responses; revision-vector registry
+  snapshots; schema-2 snapshot cursors and digest-bound details; counterfactual
+  simulation; optional stdio/OAuth MCP adapter; and schema-5 SQLite decomposed
+  by permanent responsibility. See [ADR 0012](adr/0012-durable-control-plane-and-mcp.md)
+  and [ADR 0013](adr/0013-local-assembly-through-command-law.md).
 - **M7** — channels (InProcess + Mailbox over the journal) and the panel
   pattern; human advisor and approval round trips.
 - **M8** — live CLI executors (ClaudeCode, Codex, Pi) once isolation profiles
@@ -256,7 +338,10 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
 | Gather | One producer fails → complete producer-status report, never a hang (M2) |
 | Agent authoring | Unknown Graph fields are refused; a serialized architect repairs schema and magnetic ambiguity faults using describe + rejection data only (M5) |
 | SDK identity | A persisted decorated task activates in a fresh process; SDK/direct/repaired Graphs produce one manifest identity (M5) |
-| MCP | Retried mutation with the same idempotency key → one run (M6) |
+| Command law | Response loss after plan, domain fact, or completion across all ten mutations → one exact fact and response (M6) |
+| Control lifecycle | Startup/shutdown and mutation/shutdown races → no orphan pump, command after close, or invented cancellation (M6) |
+| Registry pages | Registration or promotion between pages → old vector cut unchanged; fresh query sees the new revision (M6) |
+| MCP | Actor-derived handler delegates once; local assembly and mutable services have no transport route (M6) |
 | Telemetry | Damaged executor output never reports clean success |
 | Reproduction | Installed code differs from recorded digest → refuse (M2) |
 | Loops | Contradictory iteration checkpoint, hidden nested loop, or non-boolean control → refuse before new work; exhausted roots report PARKED (M4) |

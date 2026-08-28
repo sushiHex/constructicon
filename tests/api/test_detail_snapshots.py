@@ -21,6 +21,7 @@ from constructicon.core.control import (
 from constructicon.core.graph import Ref
 from constructicon.core.identity import digest
 from constructicon.core.run import RunLease, RunStatus
+from constructicon.runtime.registry import ComponentRegistry
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.conftest import pipeline_graph, triage_impl
 
@@ -41,12 +42,18 @@ def _prepare(world, suffix: str) -> RunId:
     inputs = {"issue": {"title": suffix}}
     manifest = world.validate(pipeline_graph(), inputs)
     run_id = RunId(f"run-detail-{suffix}")
-    world.prepare(manifest, run_id=run_id, inputs=inputs)
+    world._prepare_run(manifest, run_id=run_id, inputs=inputs)
     return run_id
 
 
 def _resolver(world, journal: SqliteJournal) -> DetailResolver:
-    return DetailResolver(system=world, store=journal, cursors=CursorCodec())
+    return DetailResolver(
+        system=world,
+        store=journal,
+        cursors=CursorCodec(),
+        journal=journal,
+        registry=ComponentRegistry(store=journal),
+    )
 
 
 def _terminalize(
@@ -98,7 +105,7 @@ async def test_every_terminal_outcome_has_attempt_bound_result_detail(
     run_id = _prepare(world, status.value)
     lease = None
     if status is RunStatus.SUCCEEDED:
-        result = await world.run_prepared(run_id)
+        result = await world._run_prepared(run_id)
         assert result.status is status
     else:
         lease = _terminalize(journal, run_id, status)
@@ -340,9 +347,9 @@ def test_component_detail_sorts_unordered_metadata(
     world,
     journal: SqliteJournal,
 ) -> None:
-    stable = world.registry.snapshot().stable_version("test/triage")
+    stable = world._registry.snapshot().stable_version("test/triage")
     assert stable is not None
-    source = world.registry.snapshot().get("test/triage", stable)
+    source = world._registry.snapshot().get("test/triage", stable)
     assert source is not None
     learning = LearningProfile(
         change_surfaces=frozenset({"prompt", "model_artifact", "code"}),
@@ -359,7 +366,7 @@ def test_component_detail_sorts_unordered_metadata(
             ),
         }
     )
-    version = world.register(definition, triage_impl)
+    version = world._register(definition, triage_impl)
     resolver = _resolver(world, journal)
     reference = resolver.reference(
         ACTOR,

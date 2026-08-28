@@ -31,8 +31,8 @@ def diamond_world(world: Constructicon) -> Constructicon:
         atomic("test/failer", (ISSUE,), (BRIEF,), failing_impl),
         atomic("test/collect", (GATHER,), (COLLECTED,), collect_impl),
     ):
-        version = world.register(definition, impl)
-        world.promote_initial(component=definition.name, version=version)
+        version = world._register(definition, impl)
+        world._promote_initial(component=definition.name, version=version)
     return world
 
 
@@ -70,7 +70,7 @@ async def test_blocked_report_names_the_complete_producer_set(
 ) -> None:
     diamond_world(world)
     run_id = RunId("run-diamond")
-    result = await world.start(diamond_graph(), INPUTS, run_id=run_id)
+    result = await world._start_direct(diamond_graph(), INPUTS, run_id=run_id)
 
     assert result.status is RunStatus.FAILED
     assert list(result.failures) == ["diamond/failer"]
@@ -86,12 +86,12 @@ async def test_blocked_report_names_the_complete_producer_set(
         "diamond/failer": InvocationStatus.FAILED,
     }
 
-    kinds = {event.kind for event in world.journal.events(run_id, limit=200)}
+    kinds = {event.kind for event in world._journal.events(run_id, limit=200)}
     assert {"NodeFailed", "NodeBlocked", "RunFailed"} <= kinds
     # the unrelated branch finished: summarize completed despite the failure
     completed_paths = {
         event.path.render()
-        for event in world.journal.events(run_id, limit=200)
+        for event in world._journal.events(run_id, limit=200)
         if event.kind == "NodeCompleted" and event.path is not None
     }
     assert "diamond/summarize" in completed_paths
@@ -102,10 +102,10 @@ async def test_blocked_event_payload_is_the_typed_report(
 ) -> None:
     diamond_world(world)
     run_id = RunId("run-diamond-payload")
-    await world.start(diamond_graph(), INPUTS, run_id=run_id)
+    await world._start_direct(diamond_graph(), INPUTS, run_id=run_id)
     blocked_events = [
         event
-        for event in world.journal.events(run_id, limit=200)
+        for event in world._journal.events(run_id, limit=200)
         if event.kind == "NodeBlocked"
     ]
     assert len(blocked_events) == 1

@@ -137,8 +137,8 @@ def leased_system(
         lease_ttl_s=LEASE_TTL_S,
     )
     definition, _ = atomic("test/leased", (ISSUE,), (SUMMARY,), impl)
-    version = system.register(definition, impl)
-    system.promote_initial(component="test/leased", version=version)
+    version = system._register(definition, impl)
+    system._promote_initial(component="test/leased", version=version)
     return system, capability
 
 
@@ -185,27 +185,27 @@ def leased_loop_system(
         (LOOP_STATE, LOOP_AGAIN),
         leased_loop_impl,
     )
-    version = system.register(definition, leased_loop_impl)
-    system.promote_initial(component=definition.name, version=version)
+    version = system._register(definition, leased_loop_impl)
+    system._promote_initial(component=definition.name, version=version)
     return system, capability
 
 
 async def test_success_releases_the_lease(journal: SqliteJournal) -> None:
     system, capability = leased_system(journal, leased_ok_impl)
-    result = await system.start(leased_graph(), INPUTS, run_id=RunId("run-ok"))
+    result = await system._start_direct(leased_graph(), INPUTS, run_id=RunId("run-ok"))
     assert result.status is RunStatus.SUCCEEDED
     assert len(capability.acquired) == 1
     assert capability.closed == [(capability.acquired[0], "release")]
-    rows = system.journal.capability_leases(RunId("run-ok"))
+    rows = system._journal.capability_leases(RunId("run-ok"))
     assert [(r.state, r.disposition) for r in rows] == [("closed", "released")]
 
 
 async def test_node_failure_discards_the_lease(journal: SqliteJournal) -> None:
     system, capability = leased_system(journal, leased_failing_impl)
-    result = await system.start(leased_graph(), INPUTS, run_id=RunId("run-fail"))
+    result = await system._start_direct(leased_graph(), INPUTS, run_id=RunId("run-fail"))
     assert result.status is RunStatus.FAILED
     assert capability.closed == [(capability.acquired[0], "discard")]
-    rows = system.journal.capability_leases(RunId("run-fail"))
+    rows = system._journal.capability_leases(RunId("run-fail"))
     assert [(r.state, r.disposition) for r in rows] == [("closed", "discarded")]
 
 
@@ -216,7 +216,7 @@ async def test_crash_leaves_the_lease_for_reconciliation(
     the uncheckpointed acquisition and acquires a fresh one."""
     system, capability = leased_system(journal, leased_dying_impl)
     with pytest.raises(InjectedCrash):
-        await system.start(leased_graph(), INPUTS, run_id=RunId("run-dead"))
+        await system._start_direct(leased_graph(), INPUTS, run_id=RunId("run-dead"))
     rows = journal.capability_leases(RunId("run-dead"))
     assert [(r.state, r.disposition) for r in rows] == [("active", None)]
     assert capability.closed == []  # death runs no cleanup
@@ -228,7 +228,7 @@ async def test_crash_leaves_the_lease_for_reconciliation(
     # system sharing the store)
     healthy, healthy_capability = leased_system(journal, leased_dying_impl)
     with pytest.raises(InjectedCrash):
-        await healthy.resume(RunId("run-dead"))
+        await healthy._resume_direct(RunId("run-dead"))
     rows = journal.capability_leases(RunId("run-dead"))
     # the first epoch's acquisition was reconciled and discarded before replay
     first_epoch_rows = [r for r in rows if r.acquisition_epoch == 1]
@@ -253,12 +253,12 @@ async def test_crash_after_completion_releases_on_reconcile(
 
     journal.fault_probe = armed
     with pytest.raises(InjectedCrash):
-        await system.start(leased_graph(), INPUTS, run_id=RunId("run-late"))
+        await system._start_direct(leased_graph(), INPUTS, run_id=RunId("run-late"))
     journal.fault_probe = lambda name: None
     clock.advance(LEASE_TTL_S + 1)
 
     second, second_capability = leased_system(journal, leased_ok_impl)
-    result = await second.resume(RunId("run-late"))
+    result = await second._resume_direct(RunId("run-late"))
     assert result.status is RunStatus.SUCCEEDED
     assert second_capability.reconciled == [(capability.acquired[0], "release")]
     assert second_capability.acquired == []  # restored, never re-acquired
@@ -281,9 +281,9 @@ async def test_leased_declaration_requires_the_protocol(
         lease_ttl_s=LEASE_TTL_S,
     )
     definition, _ = atomic("test/leased", (ISSUE,), (SUMMARY,), leased_ok_impl)
-    version = system.register(definition, leased_ok_impl)
-    system.promote_initial(component="test/leased", version=version)
-    result = await system.start(leased_graph(), INPUTS, run_id=RunId("run-bad-cap"))
+    version = system._register(definition, leased_ok_impl)
+    system._promote_initial(component="test/leased", version=version)
+    result = await system._start_direct(leased_graph(), INPUTS, run_id=RunId("run-bad-cap"))
     assert result.status is RunStatus.FAILED
     assert any("does not implement" in error for error in result.failures.values())
 
@@ -293,7 +293,7 @@ async def test_loop_iterations_have_frame_distinct_lease_identities(
 ) -> None:
     system, capability = leased_loop_system(journal)
 
-    result = await system.start(
+    result = await system._start_direct(
         leased_loop_graph(),
         {"state": {"value": 0}},
         run_id=RunId("run-leased-loop"),
@@ -325,7 +325,7 @@ async def test_stale_loop_lease_reconcile_uses_the_frame_checkpoint(
 
     journal.fault_probe = crash_after_first_iteration_member
     with pytest.raises(InjectedCrash):
-        await first.start(
+        await first._start_direct(
             leased_loop_graph(),
             {"state": {"value": 0}},
             run_id=RunId("run-loop-stale-lease"),
@@ -337,7 +337,7 @@ async def test_stale_loop_lease_reconcile_uses_the_frame_checkpoint(
 
     clock.advance(LEASE_TTL_S + 1)
     second, second_capability = leased_loop_system(journal)
-    result = await second.resume(RunId("run-loop-stale-lease"))
+    result = await second._resume_direct(RunId("run-loop-stale-lease"))
 
     assert result.status is RunStatus.SUCCEEDED
     assert second_capability.reconciled == [

@@ -64,8 +64,8 @@ def make_system(journal: SqliteJournal, **kwargs: object) -> Constructicon:
         **kwargs,  # type: ignore[arg-type]
     )
     definition, impl = atomic("test/triage", (ISSUE,), (BRIEF,), triage_impl)
-    version = system.register(definition, impl)
-    system.promote_initial(component="test/triage", version=version)
+    version = system._register(definition, impl)
+    system._promote_initial(component="test/triage", version=version)
     return system
 
 

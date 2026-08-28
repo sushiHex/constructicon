@@ -54,7 +54,7 @@ async def test_fresh_process_restores_completed_loop_iterations(
     )
     journal._now = lambda: utc_now() + timedelta(hours=1)
 
-    result = await system.resume(run_id)
+    result = await system._resume_direct(run_id)
 
     assert result.status is RunStatus.SUCCEEDED
     assert result.outputs == {"state": {"value": 3}}

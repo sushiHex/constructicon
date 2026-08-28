@@ -1,5 +1,5 @@
 # mypy: disable-error-code="attr-defined"
-"""Internal SQLite v5 durable command and approval ledger."""
+"""Durable command-law and approval ledgers."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from constructicon.core.identity import Digest, JsonValue, canonical_json
 from constructicon.core.run import OwnershipLost
 
 
-class _M6ControlMixin:
+class _SqliteControlMixin:
     def claim_command(
         self,
         *,
@@ -136,6 +136,47 @@ class _M6ControlMixin:
             ).fetchone()
         return self._command_from_row(row) if row else None
 
+    def latest_command_key(self, *, operation: str) -> tuple[str, str] | None:
+        with self._read() as connection:
+            row = connection.execute(
+                "SELECT created_at, command_id FROM commands WHERE operation = ?"
+                " ORDER BY created_at DESC, command_id DESC LIMIT 1",
+                (operation,),
+            ).fetchone()
+        if row is None:
+            return None
+        return (str(row["created_at"]), str(row["command_id"]))
+
+    def committed_commands(
+        self,
+        *,
+        operation: str,
+        after: tuple[str, str] | None,
+        through: tuple[str, str],
+        limit: int,
+    ) -> tuple[CommandRecord, ...]:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        clauses = [
+            "operation = ?",
+            "state = 'committed'",
+            "completed_at IS NOT NULL",
+            "(created_at < ? OR (created_at = ? AND command_id <= ?))",
+        ]
+        params: list[object] = [operation, through[0], through[0], through[1]]
+        if after is not None:
+            clauses.append("(created_at > ? OR (created_at = ? AND command_id > ?))")
+            params.extend((after[0], after[0], after[1]))
+        params.append(limit)
+        with self._read() as connection:
+            rows = connection.execute(
+                "SELECT * FROM commands WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY created_at, command_id LIMIT ?",
+                tuple(params),
+            ).fetchall()
+        return tuple(self._command_from_row(row) for row in rows)
+
     def store_approval(self, claim: CommandClaim, approval: ApprovalRecord) -> ApprovalRecord:
         with self._txn() as connection:
             self._command_fenced(connection, claim)
@@ -215,9 +256,7 @@ class _M6ControlMixin:
         return self._command_from_row(updated)
 
     @staticmethod
-    def _command_fenced(
-        connection: sqlite3.Connection, claim: CommandClaim
-    ) -> sqlite3.Row:
+    def _command_fenced(connection: sqlite3.Connection, claim: CommandClaim) -> sqlite3.Row:
         raw = connection.execute(
             "SELECT * FROM commands WHERE command_id = ?", (claim.command_id,)
         ).fetchone()
@@ -251,16 +290,12 @@ class _M6ControlMixin:
             owner_id=row["owner_id"],
             owner_epoch=row["owner_epoch"],
             lease_expires_at=(
-                datetime.fromisoformat(row["lease_expires_at"])
-                if row["lease_expires_at"]
-                else None
+                datetime.fromisoformat(row["lease_expires_at"]) if row["lease_expires_at"] else None
             ),
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
             completed_at=(
-                datetime.fromisoformat(row["completed_at"])
-                if row["completed_at"]
-                else None
+                datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None
             ),
         )
 

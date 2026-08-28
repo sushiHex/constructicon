@@ -55,7 +55,7 @@ def test_legacy_component_reregistration_is_semantic_not_byte_exact(
         connection.commit()
 
     system = Constructicon(journal=journal)
-    observed = system.register(definition, implementation)
+    observed = system._register(definition, implementation)
     assert observed == version
     assert isinstance(observed, Digest)
     with sqlite3.connect(database) as connection:

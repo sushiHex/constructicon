@@ -104,18 +104,15 @@ import-linter, and pytest.
 
 ### Run a small workflow
 
-Create `demo.py` in the repository root:
+Definitions must be importable after restart. Create `demo_component.py` in the
+repository root:
 
 ```python
-import asyncio
-from pathlib import Path
 from typing import Annotated
 
 from pydantic import BaseModel
 
-from constructicon.api.system import Constructicon
-from constructicon.sdk import flow, port_type, task
-from constructicon.substrate.journal.sqlite import SqliteJournal
+from constructicon.sdk import port_type, task
 
 
 class Issue(BaseModel):
@@ -131,27 +128,69 @@ async def triage(
     issue: Annotated[Issue, port_type("demo/Issue")],
 ) -> Annotated[Brief, port_type("demo/Brief")]:
     return Brief(title=issue.title)
+```
+
+Then create `demo.py`:
+
+```python
+import asyncio
+from pathlib import Path
+
+from constructicon.api.control import ControlPlane
+from constructicon.api.system import Constructicon
+from constructicon.core.control import (
+    ADMIN_SCOPE,
+    OPERATE_SCOPE,
+    READ_SCOPE,
+    AuthenticatedActor,
+    PromotionCommandResult,
+    RegistrationCommandResult,
+    RunSubmission,
+)
+from constructicon.sdk import flow
+from constructicon.substrate.journal.sqlite import SqliteJournal
+from demo_component import triage
 
 
 async def main() -> None:
     state_dir = Path(".constructicon")
     state_dir.mkdir(exist_ok=True)
 
-    system = Constructicon(
-        journal=SqliteJournal(state_dir / "demo.db"),
+    journal = SqliteJournal(state_dir / "demo.db")
+    system = Constructicon(journal=journal)
+    control = ControlPlane(system=system, store=journal)
+    launcher = AuthenticatedActor(
+        actor_id="static:demo-launcher",
+        auth_method="static",
+        scopes=frozenset({READ_SCOPE, OPERATE_SCOPE, ADMIN_SCOPE}),
     )
+    await control.startup()
+    try:
+        registered = await control.registry_register(
+            launcher,
+            definition=triage,
+            idempotency_key="demo-register-triage-v1",
+        )
+        assert isinstance(registered, RegistrationCommandResult)
+        promoted = await control.registry_promote_initial(
+            launcher,
+            component=registered.component,
+            version=registered.version,
+            idempotency_key="demo-promote-triage-v1",
+        )
+        assert isinstance(promoted, PromotionCommandResult)
 
-    version = system.register(triage)
-    system.promote_initial(component=triage.name, version=version)
-
-    workflow = flow("demo/issue-to-brief", triage)
-    result = await system.start(
-        workflow.definition.body,
-        {"issue": {"title": "Fix the flaky retry"}},
-    )
-
-    print(result.status)
-    print(result.outputs)
+        workflow = flow("demo/issue-to-brief", triage)
+        submitted = await control.runs_start(
+            launcher,
+            proposal=workflow.definition.body,
+            inputs={"issue": {"title": "Fix the flaky retry"}},
+            idempotency_key="demo-run-1",
+        )
+        assert isinstance(submitted, RunSubmission)
+        print(submitted.run_id, submitted.run_status)
+    finally:
+        await control.shutdown()
 
 
 asyncio.run(main())
@@ -180,7 +219,9 @@ uv run constructicon-mcp \
 
 The MCP adapter is a thin transport over the same typed `ControlPlane`.
 Mutating operations require caller idempotency keys, bounded responses use
-stable pagination, and full immutable records remain available by reference.
+revision-pinned pagination, and full immutable records remain available by
+reference. Local registration and initial promotion are intentionally Python
+launcher operations, not MCP tools.
 
 For HTTP, Constructicon is authenticated or unavailable. Actor identity comes
 from a verified OAuth bearer token, never from a caller-controlled tool
@@ -198,7 +239,7 @@ and milestones M1 through M6 are implemented and green:
 | M3 | Protected Git authority, real gates, attestations, and exact verified merge |
 | M4 | Generic bounded repair loops without a second scheduler |
 | M5 | Agent-first JSON authoring, SDK sugar, introspection, and repairable admission |
-| M6 | Durable authenticated control plane, MCP v2 adapter, and counterfactual replay |
+| M6 | Durable authenticated command law, race-safe hosting, revision-pinned reads, MCP v2 adapter, and counterfactual replay |
 
 Next:
 

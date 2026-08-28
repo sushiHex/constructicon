@@ -76,18 +76,18 @@ async def test_recovery_matrix(
 
     journal.fault_probe = armed
     with pytest.raises(InjectedCrash):
-        await world.start(pipeline_graph(), INPUTS, run_id=run_id)
+        await world._start_direct(pipeline_graph(), INPUTS, run_id=run_id)
     journal.fault_probe = lambda name: None
 
     clock.advance(LEASE_TTL_S + 1)
-    result = await world.resume(run_id)
+    result = await world._resume_direct(run_id)
 
     assert result.status is RunStatus.SUCCEEDED
     assert result.outputs["summary"] == EXPECTED_SUMMARY
     assert result.outputs["announced"] == {"reference": "announce/1"}
     assert len(fake_executor.calls) == executor_calls
     assert len(announce_effect.executions) == 1  # the law, at every crash point
-    kinds = [event.kind for event in world.journal.events(run_id, limit=200)]
+    kinds = [event.kind for event in world._journal.events(run_id, limit=200)]
     assert ("NodeRestored" in kinds) == restored
     assert effect_event in kinds
 
@@ -113,17 +113,17 @@ async def test_crash_after_terminal_commit_returns_the_result_untouched(
 
     journal.fault_probe = armed
     with pytest.raises(InjectedCrash):
-        await world.start(pipeline_graph(), INPUTS, run_id=run_id)
+        await world._start_direct(pipeline_graph(), INPUTS, run_id=run_id)
     journal.fault_probe = lambda name: None
 
     clock.advance(LEASE_TTL_S + 1)
-    events_before = len(world.journal.events(run_id, limit=200))
-    result = await world.resume(run_id)
+    events_before = len(world._journal.events(run_id, limit=200))
+    result = await world._resume_direct(run_id)
     assert result.status is RunStatus.SUCCEEDED
     assert result.outputs["summary"] == EXPECTED_SUMMARY
     assert len(fake_executor.calls) == 1
     assert len(announce_effect.executions) == 1
-    assert len(world.journal.events(run_id, limit=200)) == events_before
+    assert len(world._journal.events(run_id, limit=200)) == events_before
 
 
 async def test_reclaim_requires_expiry_and_fences_the_loser(
@@ -147,7 +147,7 @@ async def test_reclaim_requires_expiry_and_fences_the_loser(
 
     journal.fault_probe = armed
     with pytest.raises(InjectedCrash):
-        await world.start(pipeline_graph(), INPUTS, run_id=run_id)
+        await world._start_direct(pipeline_graph(), INPUTS, run_id=run_id)
     journal.fault_probe = lambda name: None
 
     second_journal = SqliteJournal(tmp_path / "journal.db", now_fn=clock.now)
@@ -158,9 +158,9 @@ async def test_reclaim_requires_expiry_and_fences_the_loser(
         owner_id="worker-two",
     )
     with pytest.raises(OwnershipLost, match="worker-one"):
-        await second.resume(run_id)
+        await second._resume_direct(run_id)
 
     clock.advance(LEASE_TTL_S + 1)
-    result = await second.resume(run_id)
+    result = await second._resume_direct(run_id)
     assert result.status is RunStatus.SUCCEEDED
     assert len(announce_effect.executions) == 1

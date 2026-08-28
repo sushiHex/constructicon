@@ -101,6 +101,6 @@ def build_loop_worker_system(
         (STATE, AGAIN),
         hard_step_impl,
     )
-    version = system.register(definition, impl)
-    system.promote_initial(component=definition.name, version=version)
+    version = system._register(definition, impl)
+    system._promote_initial(component=definition.name, version=version)
     return system, journal

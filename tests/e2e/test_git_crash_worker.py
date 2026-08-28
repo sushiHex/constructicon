@@ -51,7 +51,7 @@ async def test_a_fresh_process_recovers_the_install_from_the_marker(
     assert state is not None and state.status is RunStatus.RUNNING
     assert state.liveness == "lost"
 
-    result = await system.resume(RunId(run_id))
+    result = await system._resume_direct(RunId(run_id))
     assert result.status is RunStatus.SUCCEEDED
     merged = result.outputs["merged"]
     assert merged["status"] == "committed"

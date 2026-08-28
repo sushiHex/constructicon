@@ -13,4 +13,9 @@ Layers (imports flow strictly toward ``core``):
 - ``constructicon.api`` — the system object; assembles substrate into runtime.
 """
 
-__version__ = "0.1.0"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("constructicon")
+except PackageNotFoundError:
+    __version__ = "0+unknown"

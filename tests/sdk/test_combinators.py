@@ -54,8 +54,8 @@ async def refine(
 
 def test_flow_is_exactly_the_hand_authored_graph(system: Constructicon) -> None:
     for bundle in (triage, summarize):
-        version = system.register(bundle)
-        system.promote_initial(component=bundle.name, version=version)
+        version = system._register(bundle)
+        system._promote_initial(component=bundle.name, version=version)
 
     authored = flow("sdk/pipeline", triage, summarize)
     direct = Graph(

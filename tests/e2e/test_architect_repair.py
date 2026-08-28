@@ -91,8 +91,8 @@ async def test_architect_repairs_json_and_executes(
     system: Constructicon,
 ) -> None:
     for bundle in (left, right, select):
-        version = system.register(bundle)
-        system.promote_initial(component=bundle.name, version=version)
+        version = system._register(bundle)
+        system._promote_initial(component=bundle.name, version=version)
 
     architect = ScriptedArchitect(system.describe().model_dump_json())
 
@@ -136,7 +136,7 @@ async def test_architect_repairs_json_and_executes(
     direct_manifest = system.validate(direct, {})
     assert accepted.manifest.manifest_hash == direct_manifest.manifest_hash
 
-    result = await system.start(
+    result = await system._start_direct(
         accepted.graph,
         {},
         run_id=RunId("architect-repair"),

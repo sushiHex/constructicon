@@ -24,7 +24,9 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import cast
 
 from pydantic import BaseModel, ConfigDict
 
@@ -289,8 +291,19 @@ class BoundGateRunner:
 
 
 def with_suppress_kill(pid: int) -> None:
+    if os.name == "nt":
+        with contextlib.suppress(OSError):
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True,
+                check=False,
+            )
+        return
+    getpgid = cast(Callable[[int], int], os.__dict__["getpgid"])
+    killpg = cast(Callable[[int, int], None], os.__dict__["killpg"])
+    sigkill = cast(int, signal.__dict__["SIGKILL"])
     with contextlib.suppress(ProcessLookupError, PermissionError):
-        os.killpg(os.getpgid(pid), signal.SIGKILL)
+        killpg(getpgid(pid), sigkill)
 
 
 def _bounded(text: str) -> str:

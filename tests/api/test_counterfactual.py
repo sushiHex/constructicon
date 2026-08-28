@@ -17,11 +17,10 @@ from constructicon.core.control import (
 )
 from constructicon.core.identity import Digest
 from constructicon.core.ports import Port
-from constructicon.core.run import RunStatus
 from constructicon.runtime.context import NodeContext
 from constructicon.substrate.effects.fake import FakeAnnounceEffect
 from constructicon.substrate.journal.sqlite import SqliteJournal
-from tests.conftest import ISSUE, atomic, pipeline_graph
+from tests.conftest import ISSUE, atomic, await_attempt_terminal, pipeline_graph
 
 REVIEW = Port(name="review", type_id="test/Review", schema_hash="s1")
 
@@ -43,7 +42,7 @@ ACTOR = AuthenticatedActor(
 
 async def _source_run(
     control: ControlPlane,
-    host: RunHost,
+    journal: SqliteJournal,
     *,
     key: str,
 ) -> RunSubmission:
@@ -54,8 +53,8 @@ async def _source_run(
         idempotency_key=key,
     )
     assert isinstance(source, RunSubmission)
-    live_result = await host.wait(source.run_id)
-    assert live_result is not None and live_result.status is RunStatus.SUCCEEDED
+    terminal = await await_attempt_terminal(journal, source.run_id, baseline_event_seq=0)
+    assert terminal.kind == "RunSucceeded"
     return source
 
 
@@ -64,9 +63,9 @@ async def test_counterfactual_uses_distinct_simulated_effect_identity(
     journal: SqliteJournal,
     announce_effect: FakeAnnounceEffect,
 ) -> None:
-    host = RunHost(world)
+    host = RunHost(world, journal=journal)
     control = ControlPlane(system=world, store=journal, run_host=host)
-    source = await _source_run(control, host, key="source")
+    source = await _source_run(control, journal, key="source")
     assert len(announce_effect.executions) == 1
 
     replay = await control.runs_counterfactual(
@@ -76,9 +75,8 @@ async def test_counterfactual_uses_distinct_simulated_effect_identity(
         idempotency_key="counterfactual",
     )
     assert isinstance(replay, RunSubmission)
-    simulated_result = await host.wait(replay.run_id)
-    assert simulated_result is not None
-    assert simulated_result.status is RunStatus.SUCCEEDED
+    terminal = await await_attempt_terminal(journal, replay.run_id, baseline_event_seq=0)
+    assert terminal.kind == "RunSucceeded"
     assert len(announce_effect.executions) == 1
     assert len(announce_effect.simulations) == 1
     assert (
@@ -104,9 +102,9 @@ async def test_counterfactual_refuses_component_absent_from_source_world(
     journal: SqliteJournal,
     announce_effect: FakeAnnounceEffect,
 ) -> None:
-    host = RunHost(world)
+    host = RunHost(world, journal=journal)
     control = ControlPlane(system=world, store=journal, run_host=host)
-    source = await _source_run(control, host, key="source-missing-component")
+    source = await _source_run(control, journal, key="source-missing-component")
     before_runs = len(journal.run_records(limit=100))
 
     rejected = await control.runs_counterfactual(
@@ -127,9 +125,9 @@ async def test_counterfactual_refuses_unretained_exact_version(
     journal: SqliteJournal,
     announce_effect: FakeAnnounceEffect,
 ) -> None:
-    host = RunHost(world)
+    host = RunHost(world, journal=journal)
     control = ControlPlane(system=world, store=journal, run_host=host)
-    source = await _source_run(control, host, key="source-missing-version")
+    source = await _source_run(control, journal, key="source-missing-version")
     before_runs = len(journal.run_records(limit=100))
 
     rejected = await control.runs_counterfactual(
@@ -150,11 +148,11 @@ async def test_counterfactual_refuses_contract_incompatible_retained_override(
     journal: SqliteJournal,
     announce_effect: FakeAnnounceEffect,
 ) -> None:
-    host = RunHost(world)
+    host = RunHost(world, journal=journal)
     control = ControlPlane(system=world, store=journal, run_host=host)
-    source = await _source_run(control, host, key="source-contract-mismatch")
+    source = await _source_run(control, journal, key="source-contract-mismatch")
     incompatible, impl = atomic("test/triage", (ISSUE,), (REVIEW,), review_impl)
-    incompatible_version = world.register(incompatible, impl)
+    incompatible_version = world._register(incompatible, impl)
     before_runs = len(journal.run_records(limit=100))
 
     rejected = await control.runs_counterfactual(

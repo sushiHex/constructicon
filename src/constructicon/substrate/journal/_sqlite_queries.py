@@ -1,5 +1,5 @@
 # mypy: disable-error-code="attr-defined"
-"""Internal SQLite v5 bounded run/event read projection."""
+"""Bounded durable run and event query projection."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from constructicon.core.journal import JournalEvent
 from constructicon.core.run import RunStatus
 
 
-class _M6ReadMixin:
+class _SqliteQueriesMixin:
     def run_record(self, run_id: RunId) -> RunRecord | None:
         with self._read() as connection:
             row = connection.execute(
@@ -67,7 +67,8 @@ class _M6ReadMixin:
             arguments.extend(status.value for status in statuses)
         with self._read() as connection:
             row = connection.execute(
-                "SELECT created_at, run_id FROM runs" + clauses
+                "SELECT created_at, run_id FROM runs"
+                + clauses
                 + " ORDER BY created_at DESC, run_id DESC LIMIT 1",
                 tuple(arguments),
             ).fetchone()
@@ -156,9 +157,7 @@ class _M6ReadMixin:
             seq=row["seq"],
             kind=row["kind"],
             path=(
-                ExecutionPath.model_validate_json(row["path_json"])
-                if row["path_json"]
-                else None
+                ExecutionPath.model_validate_json(row["path_json"]) if row["path_json"] else None
             ),
             created_at=row["created_at"],
             payload=json.loads(row["payload"]) if row["payload"] else None,

@@ -20,7 +20,9 @@ from constructicon.core.control import (
 )
 from constructicon.core.errors import ContractViolation
 from constructicon.core.identity import Digest, JsonValue, canonical_json, digest, json_value
+from constructicon.core.journal import Journal
 from constructicon.core.run import RunStatus
+from constructicon.runtime.registry import ComponentRegistry
 
 DEFAULT_DETAIL_BYTES = 16_000
 MIN_DETAIL_BYTES = 4
@@ -65,10 +67,7 @@ class DetailAddress:
 
     @staticmethod
     def component(name: str, version: Digest) -> str:
-        return (
-            f"constructicon://components/{quote(name, safe='')}/"
-            f"{quote(str(version), safe='')}"
-        )
+        return f"constructicon://components/{quote(name, safe='')}/{quote(str(version), safe='')}"
 
 
 class DetailResolver:
@@ -80,10 +79,14 @@ class DetailResolver:
         system: Constructicon,
         store: ControlStore,
         cursors: CursorCodec,
+        journal: Journal,
+        registry: ComponentRegistry,
     ) -> None:
         self._system = system
         self._store = store
         self._cursors = cursors
+        self._journal = journal
+        self._registry = registry
 
     def reference(
         self,
@@ -174,9 +177,15 @@ class DetailResolver:
                 )
             except CursorFault as exc:
                 return self._fault(exc.code, exc.message, exc.repair)
-            if payload.upper_bound != len(raw) or not isinstance(payload.last_key, int):
+            if (
+                not isinstance(payload.upper_bound, int)
+                or isinstance(payload.upper_bound, bool)
+                or payload.upper_bound != len(raw)
+                or not isinstance(payload.last_key, int)
+                or isinstance(payload.last_key, bool)
+            ):
                 return self._fault(
-                    ControlCode.CURSOR_QUERY_MISMATCH,
+                    ControlCode.CURSOR_INVALID,
                     "detail cursor no longer matches the referenced immutable bytes",
                     "restart this detail read without a cursor using the same DetailRef",
                 )
@@ -186,6 +195,14 @@ class DetailResolver:
             return self._fault(
                 ControlCode.CURSOR_INVALID,
                 "detail cursor offset is outside the document",
+                "restart this detail read without a cursor",
+            )
+        try:
+            raw[:offset].decode("utf-8")
+        except UnicodeDecodeError:
+            return self._fault(
+                ControlCode.CURSOR_INVALID,
+                "detail cursor offset is not a UTF-8 code-point boundary",
                 "restart this detail read without a cursor",
             )
 
@@ -232,7 +249,7 @@ class DetailResolver:
             run_id = RunId(parts[0])
         except (ValueError, TypeError, ContractViolation) as exc:
             return self._not_found(uri, f"invalid detail URI: {exc}")
-        run_record = self._system.journal.run_record(run_id)
+        run_record = self._journal.run_record(run_id)
         if run_record is None:
             return self._not_found(uri, f"unknown run {run_id!r}")
         if run_record.status not in IMMUTABLE_RESULT_STATUSES:
@@ -240,7 +257,7 @@ class DetailResolver:
                 uri,
                 f"run {run_id!r} is still {run_record.status.value}",
             )
-        terminal_event = self._system.journal.latest_terminal_event(run_id)
+        terminal_event = self._journal.latest_terminal_event(run_id)
         if terminal_event is None:
             return self._not_immutable(
                 uri,
@@ -270,7 +287,7 @@ class DetailResolver:
         try:
             if family == "runs" and len(parts) == 2:
                 run_id = RunId(parts[0])
-                run_record = self._system.journal.run_record(run_id)
+                run_record = self._journal.run_record(run_id)
                 if run_record is None:
                     return self._not_found(uri, f"unknown run {run_id!r}")
                 if parts[1] == "manifest":
@@ -279,13 +296,13 @@ class DetailResolver:
 
             if family == "runs" and len(parts) == 3 and parts[1] == "result":
                 run_id = RunId(parts[0])
-                terminal_event = self._system.journal.event(run_id, int(parts[2]))
+                terminal_event = self._journal.event(run_id, int(parts[2]))
                 if terminal_event is None:
                     return self._not_found(uri, "terminal event does not exist")
                 terminal_status = TERMINAL_EVENT_STATUSES.get(terminal_event.kind)
                 if terminal_status is None:
                     return self._not_found(uri, "event is not a terminal run event")
-                run_record = self._system.journal.run_record(run_id)
+                run_record = self._journal.run_record(run_id)
                 if run_record is None:
                     return self._not_found(uri, f"unknown run {run_id!r}")
                 outputs: dict[str, JsonValue] = {}
@@ -312,7 +329,7 @@ class DetailResolver:
 
             if family == "runs" and len(parts) == 3 and parts[1] == "events":
                 run_id = RunId(parts[0])
-                event = self._system.journal.event(run_id, int(parts[2]))
+                event = self._journal.event(run_id, int(parts[2]))
                 return (
                     event.model_dump(mode="json")
                     if event is not None
@@ -345,7 +362,7 @@ class DetailResolver:
                 )
 
             if family == "attestations" and len(parts) == 1:
-                attestation = self._system.journal.load_attestation(parts[0])
+                attestation = self._journal.load_attestation(parts[0])
                 return (
                     attestation.model_dump(mode="json")
                     if attestation is not None
@@ -355,39 +372,15 @@ class DetailResolver:
             if family == "components" and len(parts) == 2:
                 name, version_text = parts
                 version = Digest(version_text)
-                stored = self._system.registry.snapshot().get(name, version)
+                stored = self._registry.snapshot().get(name, version)
                 return (
-                    self._component_detail(stored.model_dump(mode="json"))
+                    stored.model_dump(mode="json")
                     if stored is not None
                     else self._not_found(uri, "component version does not exist")
                 )
         except (ValueError, TypeError, ContractViolation) as exc:
             return self._not_found(uri, f"invalid detail URI: {exc}")
         return self._not_found(uri, "detail URI is not recognized")
-
-    @staticmethod
-    def _component_detail(value: JsonValue) -> JsonValue:
-        """Canonicalize unordered metadata without changing component identity."""
-
-        if not isinstance(value, dict):
-            return value
-        definition = value.get("definition")
-        if not isinstance(definition, dict):
-            return value
-        metadata = definition.get("metadata")
-        if not isinstance(metadata, dict):
-            return value
-        labels = metadata.get("labels")
-        if isinstance(labels, list) and all(isinstance(item, str) for item in labels):
-            metadata["labels"] = sorted(labels)
-        learning = metadata.get("learning")
-        if isinstance(learning, dict):
-            surfaces = learning.get("change_surfaces")
-            if isinstance(surfaces, list) and all(
-                isinstance(item, str) for item in surfaces
-            ):
-                learning["change_surfaces"] = sorted(surfaces)
-        return value
 
     @staticmethod
     def _fault(

@@ -176,8 +176,8 @@ def register_repair_components(system: Constructicon) -> None:
             repair_and_gate_impl,
         ),
     ):
-        version = system.register(definition, impl)
-        system.promote_initial(component=definition.name, version=version)
+        version = system._register(definition, impl)
+        system._promote_initial(component=definition.name, version=version)
 
 
 async def test_git_repair_loop_turns_red_green_and_installs_once(
@@ -191,7 +191,7 @@ async def test_git_repair_loop_turns_red_green_and_installs_once(
     register_repair_components(system)
     base = world.authority.resolve_ref("refs/heads/main")
 
-    result = await system.start(
+    result = await system._start_direct(
         repair_graph(),
         {"goal": {"title": "repair", "content": BROKEN_FIX}},
         run_id=RunId("run-git-repair-loop"),
@@ -245,7 +245,7 @@ async def test_git_repair_loop_resume_restores_completed_iteration(
 
     journal.fault_probe = crash_after_first_repair
     with pytest.raises(InjectedCrash):
-        await first.start(
+        await first._start_direct(
             repair_graph(),
             {"goal": {"title": "repair", "content": BROKEN_FIX}},
             run_id=RunId("run-git-repair-resume"),
@@ -256,7 +256,7 @@ async def test_git_repair_loop_resume_restores_completed_iteration(
     clock.advance(LEASE_TTL_S + 1)
     second, world = build_git_system(tmp_path, journal, owner_id="second-worker")
     register_repair_components(second)
-    result = await second.resume(RunId("run-git-repair-resume"))
+    result = await second._resume_direct(RunId("run-git-repair-resume"))
 
     assert result.status is RunStatus.SUCCEEDED
     assert REPAIR_CALLS == ["still-red", "green"]
@@ -284,11 +284,11 @@ async def test_never_healing_git_loop_parks_without_installing(
         (CANDIDATE, EVALUATION, AGAIN),
         never_heal_impl,
     )
-    version = system.register(definition, implementation)
-    system.promote_initial(component=definition.name, version=version)
+    version = system._register(definition, implementation)
+    system._promote_initial(component=definition.name, version=version)
     before = world.authority.resolve_ref("refs/heads/main")
 
-    result = await system.start(
+    result = await system._start_direct(
         repair_graph("git/never-heal", max_iterations=2),
         {"goal": {"title": "remain red", "content": BROKEN_FIX}},
         run_id=RunId("run-git-repair-parked"),

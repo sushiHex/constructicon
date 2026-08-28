@@ -33,7 +33,7 @@ async def test_m3_stored_manifest_resumes_and_reproduces_after_upgrade(
 ) -> None:
     manifest, raw_m3 = as_m3_manifest(world)
     run_id = RunId("run-m3-manifest")
-    world.journal.create_run(
+    world._journal.create_run(
         run_id,
         manifest_json=raw_m3,
         manifest_hash=manifest.manifest_hash,
@@ -41,11 +41,11 @@ async def test_m3_stored_manifest_resumes_and_reproduces_after_upgrade(
         inputs=INPUTS,
     )
 
-    resumed = await world.resume(run_id)
+    resumed = await world._resume_direct(run_id)
     assert resumed.status is RunStatus.SUCCEEDED
     assert resumed.outputs["summary"]["text"].startswith("summary of")
 
-    reproduced = await world.reproduce(
+    reproduced = await world._reproduce_direct(
         run_id,
         new_run_id=RunId("run-m3-manifest-copy"),
     )

@@ -207,7 +207,9 @@ def test_snapshot_is_physically_read_only_and_content_verified(
     mode = os.stat(calc).st_mode
     assert mode & 0o222 == 0  # write bits gone on files
     assert os.stat(snapshot.path).st_mode & 0o222 == 0  # and directories
-    if os.geteuid() != 0:  # root bypasses permission bits; CI runs unprivileged
+    # Root and Windows ACLs can bypass or reinterpret POSIX write bits.
+    geteuid = getattr(os, "geteuid", lambda: 1)
+    if os.name != "nt" and geteuid() != 0:
         with pytest.raises(PermissionError):
             calc.write_text("mutate")
         with pytest.raises(PermissionError):

@@ -1,0 +1,733 @@
+"""Private authorization-aware bounded control-plane queries (M6.2)."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from typing import Any, cast
+
+from pydantic import ValidationError
+
+from constructicon.api.cursor import CursorCodec, CursorFault
+from constructicon.api.detail import DetailAddress, DetailResolver
+from constructicon.api.system import Constructicon
+from constructicon.core.address import RunId
+from constructicon.core.admission import AdmissionAccepted, AdmissionRejected
+from constructicon.core.control import (
+    ADMIN_SCOPE,
+    READ_SCOPE,
+    AuthenticatedActor,
+    CommandSummary,
+    ComponentComparison,
+    ControlCode,
+    ControlFault,
+    ControlRejected,
+    ControlStore,
+    DetailChunk,
+    DetailRef,
+    EventPage,
+    EventSummary,
+    NamePage,
+    PageInfo,
+    RunPage,
+    RunResultPreview,
+    RunSummary,
+    VersionPage,
+    VersionSummary,
+)
+from constructicon.core.errors import JournalDamaged
+from constructicon.core.graph import Graph
+from constructicon.core.identity import Digest, JsonValue, canonical_json, digest, json_value
+from constructicon.core.introspection import SystemDescription
+from constructicon.core.journal import Journal
+from constructicon.core.registry import (
+    InvalidRegistryRevision,
+    RegistryRevision,
+    RegistrySnapshot,
+    registry_snapshot_digest,
+)
+from constructicon.core.run import RunStatus
+from constructicon.runtime.registry import ComponentRegistry
+
+DEFAULT_PAGE_SIZE = 25
+MAX_PAGE_SIZE = 100
+
+
+class _ControlQueries:
+    def __init__(
+        self,
+        *,
+        system: Constructicon,
+        store: ControlStore,
+        journal: Journal,
+        registry: ComponentRegistry,
+        cursors: CursorCodec,
+        details: DetailResolver,
+    ) -> None:
+        self._system = system
+        self._store = store
+        self._journal = journal
+        self._registry = registry
+        self._cursors = cursors
+        self._details = details
+
+    def whoami(self, actor: AuthenticatedActor) -> AuthenticatedActor:
+        return actor
+
+    def system_describe(
+        self,
+        actor: AuthenticatedActor,
+        *,
+        component_names: Sequence[str] | None = None,
+        limit: int = 100,
+    ) -> SystemDescription | ControlRejected:
+        denied = self._authorize(actor)
+        return denied or self._system.describe(
+            component_names=component_names,
+            limit=limit,
+        )
+
+    def graphs_validate(
+        self,
+        actor: AuthenticatedActor,
+        proposal: Graph | Mapping[str, Any] | str,
+        inputs: Mapping[str, Any],
+    ) -> AdmissionAccepted | AdmissionRejected | ControlRejected:
+        denied = self._authorize(actor)
+        return denied or self._system.admit_graph(proposal, inputs)
+
+    def runs_status(
+        self,
+        actor: AuthenticatedActor,
+        run_id: RunId,
+    ) -> RunSummary | ControlRejected:
+        denied = self._authorize(actor)
+        if denied:
+            return denied
+        record = self._journal.run_record(run_id)
+        if record is None:
+            return self._fault(
+                ControlCode.RUN_UNKNOWN,
+                f"unknown run {run_id!r}",
+                "use a RunId returned by a Constructicon run mutation",
+            )
+        return self._run_summary(actor, record)
+
+    def runs_list(
+        self,
+        actor: AuthenticatedActor,
+        *,
+        statuses: tuple[RunStatus, ...] | None = None,
+        cursor: str | None = None,
+        limit: int = DEFAULT_PAGE_SIZE,
+    ) -> RunPage | ControlRejected:
+        denied = self._authorize(actor)
+        invalid = self._limit_fault(limit)
+        if denied or invalid:
+            return denied or cast(ControlRejected, invalid)
+        query: JsonValue = {"statuses": [status.value for status in statuses] if statuses else None}
+        after: tuple[str, str] | None = None
+        if cursor is None:
+            upper = self._journal.latest_run_key(statuses=statuses)
+        else:
+            decoded = self._decode_cursor(actor, cursor, kind="runs", query=query)
+            if isinstance(decoded, ControlRejected):
+                return decoded
+            upper = self._pair(decoded.upper_bound)
+            after = self._pair(decoded.last_key)
+            current_max = self._journal.latest_run_key(statuses=None)
+            if (
+                upper is None
+                or after is None
+                or after > upper
+                or current_max is None
+                or upper > current_max
+            ):
+                return self._cursor_shape_fault()
+        if upper is None:
+            return RunPage(
+                items=(),
+                page=PageInfo(
+                    next_cursor=None,
+                    snapshot_digest=digest("run-page", 1, {"query": query, "upper": None}),
+                    count=0,
+                ),
+            )
+        records = self._journal.run_records(
+            statuses=statuses,
+            after=after,
+            through=upper,
+            limit=limit + 1,
+        )
+        visible = records[:limit]
+        next_cursor = None
+        if len(records) > limit and visible:
+            last = visible[-1]
+            next_cursor = self._cursors.encode(
+                actor_id=actor.actor_id,
+                kind="runs",
+                query=query,
+                upper_bound=list(upper),
+                last_key=[last.created_at.isoformat(), str(last.run_id)],
+            )
+        return RunPage(
+            items=tuple(self._run_summary(actor, record) for record in visible),
+            page=PageInfo(
+                next_cursor=next_cursor,
+                snapshot_digest=digest("run-page", 1, {"query": query, "upper": list(upper)}),
+                count=len(visible),
+            ),
+        )
+
+    def runs_events(
+        self,
+        actor: AuthenticatedActor,
+        run_id: RunId,
+        *,
+        cursor: str | None = None,
+        limit: int = DEFAULT_PAGE_SIZE,
+    ) -> EventPage | ControlRejected:
+        denied = self._authorize(actor)
+        invalid = self._limit_fault(limit)
+        if denied or invalid:
+            return denied or cast(ControlRejected, invalid)
+        if self._journal.run_record(run_id) is None:
+            return self._fault(
+                ControlCode.RUN_UNKNOWN,
+                f"unknown run {run_id!r}",
+                "use a RunId returned by a Constructicon run mutation",
+            )
+        query: JsonValue = {"run_id": str(run_id)}
+        if cursor is None:
+            through = self._journal.max_event_seq(run_id)
+            after_seq = 0
+        else:
+            decoded = self._decode_cursor(
+                actor,
+                cursor,
+                kind="run-events",
+                query=query,
+            )
+            if isinstance(decoded, ControlRejected):
+                return decoded
+            if (
+                not isinstance(decoded.upper_bound, int)
+                or isinstance(decoded.upper_bound, bool)
+                or not isinstance(decoded.last_key, int)
+                or isinstance(decoded.last_key, bool)
+            ):
+                return self._cursor_shape_fault()
+            through = decoded.upper_bound
+            after_seq = decoded.last_key
+            if not 0 <= after_seq <= through <= self._journal.max_event_seq(run_id):
+                return self._cursor_shape_fault()
+        events = [
+            event
+            for event in self._journal.events(
+                run_id,
+                after_seq=after_seq,
+                limit=limit + 1,
+            )
+            if event.seq <= through
+        ]
+        visible = events[:limit]
+        next_cursor = None
+        if len(events) > limit and visible:
+            next_cursor = self._cursors.encode(
+                actor_id=actor.actor_id,
+                kind="run-events",
+                query=query,
+                upper_bound=through,
+                last_key=visible[-1].seq,
+            )
+        items = tuple(
+            EventSummary(
+                run_id=event.run_id,
+                seq=event.seq,
+                kind=event.kind,
+                path=event.path.render() if event.path else None,
+                created_at=event.created_at,
+                payload=(
+                    cast(dict[str, JsonValue], json_value(event.payload))
+                    if event.payload is not None
+                    else None
+                ),
+                detail=self._required_detail_ref(
+                    actor,
+                    DetailAddress.event(run_id, event.seq),
+                ),
+            )
+            for event in visible
+        )
+        return EventPage(
+            run_id=run_id,
+            items=items,
+            through_seq=through,
+            page=PageInfo(
+                next_cursor=next_cursor,
+                snapshot_digest=digest(
+                    "event-page",
+                    1,
+                    {"run_id": str(run_id), "through": through},
+                ),
+                count=len(items),
+            ),
+        )
+
+    def runs_result(
+        self,
+        actor: AuthenticatedActor,
+        run_id: RunId,
+    ) -> RunResultPreview | ControlRejected:
+        denied = self._authorize(actor)
+        if denied:
+            return denied
+        record = self._journal.run_record(run_id)
+        if record is None:
+            return self._fault(
+                ControlCode.RUN_UNKNOWN,
+                f"unknown run {run_id!r}",
+                "use a RunId returned by a Constructicon run mutation",
+            )
+        outputs: dict[str, JsonValue] = {}
+        if record.status is RunStatus.SUCCEEDED:
+            materialized = json_value(self._system.materialize_run(run_id))
+            if isinstance(materialized, dict):
+                outputs = self._bounded_mapping(materialized)
+        failures: dict[str, str] = {}
+        for event in self._journal.events(run_id, after_seq=0, limit=1_000):
+            if event.kind == "NodeFailed" and event.path and event.payload:
+                failures[event.path.render()] = str(event.payload.get("error", "failed"))
+        return RunResultPreview(
+            run_id=run_id,
+            status=record.status,
+            outputs=outputs,
+            failures=dict(list(sorted(failures.items()))[:20]),
+            detail=self._optional_detail_ref(actor, DetailAddress.result(run_id)),
+        )
+
+    def commands_status(
+        self,
+        actor: AuthenticatedActor,
+        command_id: str,
+    ) -> CommandSummary | ControlRejected:
+        denied = self._authorize(actor)
+        if denied:
+            return denied
+        record = self._store.command(command_id)
+        if record is None:
+            return self._fault(
+                ControlCode.COMMAND_UNKNOWN,
+                f"unknown command {command_id!r}",
+                "use a command_id returned by a mutating control operation",
+            )
+        if record.actor.actor_id != actor.actor_id and not actor.allows(ADMIN_SCOPE):
+            return self._fault(
+                ControlCode.AUTH_REQUIRED_SCOPE,
+                "command records are visible only to their actor or an administrator",
+                "authenticate as the command actor or request constructicon:admin",
+            )
+        return CommandSummary(
+            command_id=record.command_id,
+            operation=record.operation,
+            state=record.state,
+            actor_id=record.actor.actor_id,
+            request_hash=record.request_hash,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+            completed_at=record.completed_at,
+            detail=self._optional_detail_ref(
+                actor,
+                DetailAddress.command(command_id),
+            ),
+        )
+
+    def registry_versions(
+        self,
+        actor: AuthenticatedActor,
+        component: str,
+        *,
+        candidates_only: bool = False,
+        cursor: str | None = None,
+        limit: int = DEFAULT_PAGE_SIZE,
+    ) -> VersionPage | ControlRejected:
+        denied = self._authorize(actor)
+        invalid = self._limit_fault(limit)
+        if denied or invalid:
+            return denied or cast(ControlRejected, invalid)
+        query: JsonValue = {
+            "component": component,
+            "candidates_only": candidates_only,
+        }
+        if cursor is None:
+            snapshot = self._registry.snapshot()
+            offset = 0
+        else:
+            decoded = self._decode_cursor(
+                actor,
+                cursor,
+                kind="registry-versions",
+                query=query,
+            )
+            if isinstance(decoded, ControlRejected):
+                return decoded
+            loaded = self._registry_cursor_snapshot(decoded.upper_bound)
+            if isinstance(loaded, ControlRejected):
+                return loaded
+            snapshot = loaded
+            offset = decoded.last_key
+            if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+                return self._cursor_shape_fault()
+        if component not in snapshot.versions:
+            return self._fault(
+                ControlCode.REGISTRY_VERSION_UNKNOWN,
+                f"unknown component {component!r}",
+                "choose a component returned by system_describe",
+            )
+        versions = list(snapshot.order.get(component, ()))
+        if candidates_only:
+            stable = snapshot.stable.get(component)
+            versions = [version for version in versions if version != stable]
+        if offset > len(versions):
+            return self._cursor_shape_fault()
+        visible_hashes = versions[offset : offset + limit]
+        next_offset = offset + len(visible_hashes)
+        next_cursor = None
+        if next_offset < len(versions):
+            next_cursor = self._cursors.encode(
+                actor_id=actor.actor_id,
+                kind="registry-versions",
+                query=query,
+                upper_bound=snapshot.revision.model_dump(mode="json"),
+                last_key=next_offset,
+            )
+        stable = snapshot.stable.get(component)
+        items = tuple(
+            VersionSummary(
+                component=component,
+                version=Digest(version_text),
+                stable=version_text == stable,
+                registered_at=snapshot.versions[component][version_text].registered_at,
+                detail=self._required_detail_ref(
+                    actor,
+                    DetailAddress.component(component, Digest(version_text)),
+                ),
+            )
+            for version_text in visible_hashes
+        )
+        return VersionPage(
+            component=component,
+            items=items,
+            page=PageInfo(
+                next_cursor=next_cursor,
+                snapshot_digest=registry_snapshot_digest(snapshot),
+                count=len(items),
+            ),
+        )
+
+    def registry_candidates(
+        self,
+        actor: AuthenticatedActor,
+        component: str,
+        *,
+        cursor: str | None = None,
+        limit: int = DEFAULT_PAGE_SIZE,
+    ) -> VersionPage | ControlRejected:
+        return self.registry_versions(
+            actor,
+            component,
+            candidates_only=True,
+            cursor=cursor,
+            limit=limit,
+        )
+
+    def registry_rdeps(
+        self,
+        actor: AuthenticatedActor,
+        component: str,
+        *,
+        cursor: str | None = None,
+        limit: int = DEFAULT_PAGE_SIZE,
+    ) -> NamePage | ControlRejected:
+        denied = self._authorize(actor)
+        invalid = self._limit_fault(limit)
+        if denied or invalid:
+            return denied or cast(ControlRejected, invalid)
+        query: JsonValue = {"component": component}
+        if cursor is None:
+            snapshot = self._registry.snapshot()
+            offset = 0
+        else:
+            decoded = self._decode_cursor(
+                actor,
+                cursor,
+                kind="registry-rdeps",
+                query=query,
+            )
+            if isinstance(decoded, ControlRejected):
+                return decoded
+            loaded = self._registry_cursor_snapshot(decoded.upper_bound)
+            if isinstance(loaded, ControlRejected):
+                return loaded
+            snapshot = loaded
+            offset = decoded.last_key
+            if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+                return self._cursor_shape_fault()
+        names = self._registry.rdeps(component, snapshot=snapshot)
+        if offset > len(names):
+            return self._cursor_shape_fault()
+        visible = names[offset : offset + limit]
+        next_offset = offset + len(visible)
+        next_cursor = None
+        if next_offset < len(names):
+            next_cursor = self._cursors.encode(
+                actor_id=actor.actor_id,
+                kind="registry-rdeps",
+                query=query,
+                upper_bound=snapshot.revision.model_dump(mode="json"),
+                last_key=next_offset,
+            )
+        return NamePage(
+            kind="reverse_dependencies",
+            items=tuple(visible),
+            page=PageInfo(
+                next_cursor=next_cursor,
+                snapshot_digest=registry_snapshot_digest(snapshot),
+                count=len(visible),
+            ),
+        )
+
+    def registry_compare(
+        self,
+        actor: AuthenticatedActor,
+        component: str,
+        left: Digest,
+        right: Digest,
+    ) -> ComponentComparison | ControlRejected:
+        denied = self._authorize(actor)
+        if denied:
+            return denied
+        snapshot = self._registry.snapshot()
+        left_stored = snapshot.get(component, left)
+        right_stored = snapshot.get(component, right)
+        if left_stored is None or right_stored is None:
+            return self._fault(
+                ControlCode.REGISTRY_VERSION_UNKNOWN,
+                f"comparison requires two retained versions of {component!r}",
+                "choose exact versions returned by registry_versions",
+            )
+        a = left_stored.definition
+        b = right_stored.definition
+        pairs = {
+            "role": (a.role, b.role),
+            "body_kind": (
+                "composite" if isinstance(a.body, Graph) else "atomic",
+                "composite" if isinstance(b.body, Graph) else "atomic",
+            ),
+            "inputs": (
+                [port.model_dump(mode="json") for port in a.inputs],
+                [port.model_dump(mode="json") for port in b.inputs],
+            ),
+            "outputs": (
+                [port.model_dump(mode="json") for port in a.outputs],
+                [port.model_dump(mode="json") for port in b.outputs],
+            ),
+            "capability_requirements": (
+                [item.model_dump(mode="json") for item in (a.capability_requirements or ())],
+                [item.model_dump(mode="json") for item in (b.capability_requirements or ())],
+            ),
+            "learning": (
+                a.metadata.learning.model_dump(mode="json") if a.metadata.learning else None,
+                b.metadata.learning.model_dump(mode="json") if b.metadata.learning else None,
+            ),
+            "implementation_digest": (
+                None if isinstance(a.body, Graph) else str(a.body.source_digest),
+                None if isinstance(b.body, Graph) else str(b.body.source_digest),
+            ),
+        }
+        changes: dict[str, JsonValue] = {}
+        for name, (before, after) in pairs.items():
+            if before != after:
+                changes[name] = {
+                    "before": json_value(before),
+                    "after": json_value(after),
+                }
+        return ComponentComparison(
+            component=component,
+            left=left,
+            right=right,
+            changes=changes,
+            reverse_dependencies=tuple(self._registry.rdeps(component, snapshot=snapshot)),
+        )
+
+    def details_read(
+        self,
+        actor: AuthenticatedActor,
+        reference: DetailRef,
+        *,
+        cursor: str | None = None,
+        max_bytes: int = 16_000,
+    ) -> DetailChunk | ControlRejected:
+        denied = self._authorize(actor)
+        if denied:
+            return denied
+        if not isinstance(reference, DetailRef):
+            return self._fault(
+                ControlCode.REQUEST_INVALID,
+                "details_read requires a digest-bound DetailRef",
+                "pass the complete reference returned by a status or list operation",
+            )
+        return self._details.read(
+            actor,
+            reference,
+            cursor=cursor,
+            max_bytes=max_bytes,
+        )
+
+    def resource_read(
+        self,
+        actor: AuthenticatedActor,
+        uri: str,
+        *,
+        max_bytes: int = 64_000,
+    ) -> DetailChunk | ControlRejected:
+        denied = self._authorize(actor)
+        if denied:
+            return denied
+        reference = self._details.reference(actor, uri)
+        if isinstance(reference, ControlRejected):
+            return reference
+        return self._details.read(actor, reference, max_bytes=max_bytes)
+
+    def _run_summary(self, actor: AuthenticatedActor, record: Any) -> RunSummary:
+        run_id = record.run_id
+        return RunSummary(
+            run_id=run_id,
+            status=record.status,
+            liveness=record.liveness,
+            created_at=record.created_at,
+            manifest_hash=record.manifest_hash,
+            input_hash=record.input_hash,
+            origin=record.origin,
+            manifest_ref=self._required_detail_ref(
+                actor,
+                DetailAddress.manifest(run_id),
+            ),
+            result_ref=self._optional_detail_ref(
+                actor,
+                DetailAddress.result(run_id),
+            ),
+        )
+
+    @staticmethod
+    def _bounded_mapping(value: dict[str, JsonValue]) -> dict[str, JsonValue]:
+        result: dict[str, JsonValue] = {}
+        for key in sorted(value)[:20]:
+            item = value[key]
+            result[key] = item if len(canonical_json(item)) <= 2_000 else {"truncated": True}
+        return result
+
+    @staticmethod
+    def _pair(value: JsonValue | None) -> tuple[str, str] | None:
+        if (
+            isinstance(value, list)
+            and len(value) == 2
+            and all(isinstance(item, str) for item in value)
+        ):
+            return (value[0], value[1])
+        return None
+
+    def _authorize(self, actor: AuthenticatedActor) -> ControlRejected | None:
+        if actor.allows(READ_SCOPE):
+            return None
+        return self._fault(
+            ControlCode.AUTH_REQUIRED_SCOPE,
+            f"actor {actor.actor_id!r} lacks required scope {READ_SCOPE!r}",
+            f"authenticate with {READ_SCOPE} or constructicon:admin",
+            {"required_scope": READ_SCOPE},
+        )
+
+    def _limit_fault(self, limit: int) -> ControlRejected | None:
+        if 1 <= limit <= MAX_PAGE_SIZE:
+            return None
+        return self._fault(
+            ControlCode.REQUEST_INVALID,
+            f"page limit must be in 1..{MAX_PAGE_SIZE}; received {limit}",
+            f"choose a limit in 1..{MAX_PAGE_SIZE}",
+        )
+
+    def _decode_cursor(
+        self,
+        actor: AuthenticatedActor,
+        cursor: str,
+        *,
+        kind: str,
+        query: JsonValue,
+    ) -> Any | ControlRejected:
+        try:
+            return self._cursors.decode(
+                cursor,
+                actor_id=actor.actor_id,
+                kind=kind,
+                query=query,
+            )
+        except CursorFault as exc:
+            return self._fault(exc.code, exc.message, exc.repair)
+
+    def _cursor_shape_fault(self) -> ControlRejected:
+        return self._fault(
+            ControlCode.CURSOR_INVALID,
+            "cursor continuation shape is invalid",
+            "restart the query without a cursor",
+        )
+
+    def _registry_cursor_snapshot(
+        self,
+        upper_bound: JsonValue,
+    ) -> RegistrySnapshot | ControlRejected:
+        try:
+            return self._registry.snapshot(RegistryRevision.model_validate(upper_bound))
+        except (ValidationError, InvalidRegistryRevision) as exc:
+            return self._fault(
+                ControlCode.CURSOR_INVALID,
+                f"registry cursor revision is invalid: {exc}",
+                "restart the query without a cursor",
+            )
+
+    @staticmethod
+    def _fault(
+        code: ControlCode,
+        message: str,
+        repair: str,
+        details: dict[str, JsonValue] | None = None,
+    ) -> ControlRejected:
+        return ControlRejected(
+            faults=(
+                ControlFault(
+                    code=code,
+                    message=message,
+                    repair=repair,
+                    details=details or {},
+                ),
+            )
+        )
+
+    def _required_detail_ref(
+        self,
+        actor: AuthenticatedActor,
+        uri: str,
+    ) -> DetailRef:
+        reference = self._details.reference(actor, uri)
+        if isinstance(reference, ControlRejected):
+            fault = reference.faults[0]
+            raise JournalDamaged(
+                f"required detail {uri!r} could not be minted: {fault.code.value}: {fault.message}"
+            )
+        return reference
+
+    def _optional_detail_ref(
+        self,
+        actor: AuthenticatedActor,
+        uri: str,
+    ) -> DetailRef | None:
+        reference = self._details.reference(actor, uri)
+        return reference if isinstance(reference, DetailRef) else None

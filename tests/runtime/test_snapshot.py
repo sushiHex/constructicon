@@ -15,7 +15,7 @@ def test_admission_resolves_one_pre_mutation_world(world: Constructicon) -> None
     from constructicon.api.system import DEFAULT_ROOT_GRANTS
     from tests.conftest import BRIEF, ISSUE, atomic, triage_impl
 
-    snapshot = world.registry.snapshot()
+    snapshot = world._registry.snapshot()
     v1 = snapshot.stable_version("test/triage")
     assert v1 is not None
 
@@ -30,11 +30,11 @@ def test_admission_resolves_one_pre_mutation_world(world: Constructicon) -> None
     # the world moves mid-compilation: a new triage version becomes stable
     definition, impl = atomic("test/triage", (ISSUE,), (BRIEF,), triage_impl)
     changed = definition.model_copy(update={"role": "component"})
-    v2 = world.register(changed, impl)
+    v2 = world._register(changed, impl)
     from tests.runtime.test_registry import evaluated_promotion
 
     evaluated_promotion(world, "test/triage", v2, baseline=v1)
-    assert world.registry.stable_version("test/triage") == v2
+    assert world._registry.stable_version("test/triage") == v2
 
     # the held snapshot still resolves the OLD coherent world
     second = admit(
@@ -56,14 +56,14 @@ def test_admission_resolves_one_pre_mutation_world(world: Constructicon) -> None
 
 
 def test_snapshot_is_detached_from_later_store_reads(world: Constructicon) -> None:
-    snapshot = world.registry.snapshot()
+    snapshot = world._registry.snapshot()
     names_before = snapshot.names()
     from tests.conftest import BRIEF, ISSUE, atomic, summarize_impl
 
     definition, impl = atomic("test/late", (ISSUE,), (BRIEF,), summarize_impl)
-    world.register(definition, impl)
+    world._register(definition, impl)
     assert snapshot.names() == names_before
-    assert "test/late" in world.registry.snapshot().names()
+    assert "test/late" in world._registry.snapshot().names()
 
 
 def test_manifest_records_implementation_digests(world: Constructicon) -> None:

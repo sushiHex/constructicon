@@ -41,7 +41,7 @@ async def drifted_summarize(ctx: NodeContext, inputs: dict) -> dict:
 
 def test_activation_binds_a_complete_world(world: Constructicon) -> None:
     manifest = world.validate(pipeline_graph(), INPUTS)
-    bound = world.registry.activate(manifest, catalog=world._catalog)
+    bound = world._registry.activate(manifest, catalog=world._catalog)
     atomics = [r for r in manifest.resolved_components]
     assert all(
         bound.bound(r.component, r.resolved_version).impl is not None for r in atomics
@@ -60,14 +60,14 @@ def test_activation_refuses_a_missing_capability_or_revision(
 ) -> None:
     manifest = world.validate(pipeline_graph(), INPUTS)
     with pytest.raises(AdmissionError, match="not assembled"):
-        world.registry.activate(manifest, catalog={})
+        world._registry.activate(manifest, catalog={})
     bumped = {
         "fake-executor": CapabilityDescriptor(
             capability_id="fake-executor", kind="executor", revision="2"
         )
     }
     with pytest.raises(AdmissionError, match="revision '2' differs"):
-        world.registry.activate(manifest, catalog=bumped)
+        world._registry.activate(manifest, catalog=bumped)
 
 
 def test_activation_refuses_implementation_drift(world: Constructicon) -> None:
@@ -79,9 +79,9 @@ def test_activation_refuses_implementation_drift(world: Constructicon) -> None:
     )
     # the host's installed implementation changed after admission
     drifted: NodeImpl = drifted_summarize
-    world.registry._impls[("test/summarize", str(version))] = drifted
+    world._registry._impls[("test/summarize", str(version))] = drifted
     with pytest.raises(AdmissionError, match=r"drift|differs from the manifest"):
-        world.registry.activate(manifest, catalog=world._catalog)
+        world._registry.activate(manifest, catalog=world._catalog)
 
 
 async def test_resume_refuses_drift_after_a_crash(
@@ -99,17 +99,17 @@ async def test_resume_refuses_drift_after_a_crash(
 
     journal.fault_probe = probe
     with pytest.raises(InjectedCrash):
-        await world.start(pipeline_graph(), INPUTS, run_id=run_id)
+        await world._start_direct(pipeline_graph(), INPUTS, run_id=run_id)
     journal.fault_probe = lambda name: None
     clock.advance(LEASE_TTL_S + 1)
 
-    version = world.registry.stable_version("test/summarize")
+    version = world._registry.stable_version("test/summarize")
     assert version is not None
     drifted: NodeImpl = drifted_summarize
-    world.registry._impls[("test/summarize", str(version))] = drifted
+    world._registry._impls[("test/summarize", str(version))] = drifted
     with pytest.raises(AdmissionError, match=r"drift|differs from the manifest"):
-        await world.resume(run_id)
-    state = world.journal.run_state(run_id)
+        await world._resume_direct(run_id)
+    state = world._journal.run_state(run_id)
     assert state is not None and state.status is RunStatus.RUNNING  # untouched
 
 
@@ -117,19 +117,19 @@ async def test_reproduce_refuses_drift_too(
     world: Constructicon, clock: FakeClock, tmp_path: Path
 ) -> None:
     source = RunId("run-repro-src")
-    await world.start(pipeline_graph(), INPUTS, run_id=source)
+    await world._start_direct(pipeline_graph(), INPUTS, run_id=source)
 
     # a second worker over the same files, with a drifted in-process impl
     second_journal = SqliteJournal(tmp_path / "journal.db", now_fn=clock.now)
     second = build_system(
         second_journal, FakeExecutor({}), FakeAnnounceEffect(), owner_id="worker-two"
     )
-    version = second.registry.stable_version("test/summarize")
+    version = second._registry.stable_version("test/summarize")
     assert version is not None
     drifted: NodeImpl = drifted_summarize
-    second.registry._impls[("test/summarize", str(version))] = drifted
+    second._registry._impls[("test/summarize", str(version))] = drifted
     with pytest.raises(AdmissionError, match=r"drift|differs from the manifest"):
-        await second.reproduce(source, new_run_id=RunId("run-repro-new"))
+        await second._reproduce_direct(source, new_run_id=RunId("run-repro-new"))
 
 
 async def test_a_second_worker_resumes_from_durable_state_alone(
@@ -149,7 +149,7 @@ async def test_a_second_worker_resumes_from_durable_state_alone(
 
     journal.fault_probe = probe
     with pytest.raises(InjectedCrash):
-        await world.start(pipeline_graph(), INPUTS, run_id=run_id)
+        await world._start_direct(pipeline_graph(), INPUTS, run_id=run_id)
     journal.fault_probe = lambda name: None
     clock.advance(LEASE_TTL_S + 1)
 
@@ -162,15 +162,15 @@ async def test_a_second_worker_resumes_from_durable_state_alone(
         announce_effect,  # the same external world
         owner_id="worker-two",
     )
-    result = await second.resume(run_id)
+    result = await second._resume_direct(run_id)
     assert result.status is RunStatus.SUCCEEDED
     assert result.outputs["summary"] == {"text": "summary of fix the flaky retry loop"}
     assert len(announce_effect.executions) == 1
 
 
 def test_loadability_reports_are_typed_and_host_local(world: Constructicon) -> None:
-    snapshot = world.registry.snapshot()
-    fresh = ComponentRegistry(store=world.registry.store)  # empty impl cache
+    snapshot = world._registry.snapshot()
+    fresh = ComponentRegistry(store=world._registry.store)  # empty impl cache
     stored = snapshot.versions["test/summarize"]
     bound = fresh.bind(next(iter(stored.values())))
     assert bound.loadability.status == "loadable"  # importable module qualname

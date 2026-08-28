@@ -8,6 +8,7 @@ and a deliberately failing component for dependency-blocking tests.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -16,16 +17,21 @@ from typing import Any
 import pytest
 
 from constructicon.api.system import Constructicon
+from constructicon.core.address import RunId
 from constructicon.core.component import ComponentDef, PythonRef
 from constructicon.core.executor import Executor, TaskSpec
 from constructicon.core.graph import Connection, Graph, GraphNode, Ref
 from constructicon.core.identity import digest
+from constructicon.core.journal import Journal, JournalEvent
 from constructicon.core.ports import Port
 from constructicon.runtime.context import NodeContext
 from constructicon.runtime.registry import CapabilityDescriptor, source_digest_for
 from constructicon.substrate.effects.fake import FakeAnnounceEffect
 from constructicon.substrate.executors.fake import FakeExecutor
 from constructicon.substrate.journal.sqlite import SqliteJournal
+
+_ATTEMPT_EVENTS = frozenset({"RunStarted", "RunResumed", "RunReclaimed"})
+_TERMINAL_EVENTS = frozenset({"RunSucceeded", "RunFailed", "RunParked", "RunCancelled"})
 
 ISSUE = Port(name="issue", type_id="test/Issue", schema_hash="s1")
 BRIEF = Port(name="brief", type_id="test/Brief", schema_hash="s1")
@@ -52,6 +58,39 @@ class FakeClock:
 
     def advance(self, seconds: float) -> None:
         self._now += timedelta(seconds=seconds)
+
+
+async def await_attempt_terminal(
+    journal: Journal,
+    run_id: RunId,
+    *,
+    baseline_event_seq: int,
+    expected_resume_command_id: str | None = None,
+    timeout_s: float = 5.0,
+) -> JournalEvent:
+    """Test-only latch for one exact durable attempt and its terminal event."""
+
+    transition: JournalEvent | None = None
+    after = baseline_event_seq
+    async with asyncio.timeout(timeout_s):
+        while True:
+            events = journal.events(run_id, after_seq=after, limit=100)
+            for event in events:
+                after = event.seq
+                if transition is None:
+                    if event.kind not in _ATTEMPT_EVENTS:
+                        continue
+                    actual_command_id = (event.payload or {}).get("resume_command_id")
+                    if actual_command_id != expected_resume_command_id:
+                        raise AssertionError(
+                            "attempt transition carried the wrong resume command: "
+                            f"expected {expected_resume_command_id!r}, got {actual_command_id!r}"
+                        )
+                    transition = event
+                    continue
+                if event.kind in _TERMINAL_EVENTS:
+                    return event
+            await asyncio.sleep(0)
 
 
 def atomic(
@@ -87,9 +126,7 @@ async def triage_impl(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[st
     executor = ctx.capability("executor")
     assert isinstance(executor, FakeExecutor)
     typed: Executor = executor
-    outcome = await typed.execute(
-        TaskSpec(instruction="triage"), workspace=None, grants=ctx.grants
-    )
+    outcome = await typed.execute(TaskSpec(instruction="triage"), workspace=None, grants=ctx.grants)
     assert outcome.status == "success", outcome
     return {"brief": outcome.output}
 
@@ -172,8 +209,8 @@ def world(system: Constructicon) -> Constructicon:
         atomic("test/announce", (BRIEF,), (ANNOUNCED,), announce_impl),
         atomic("test/summarize", (BRIEF,), (SUMMARY,), summarize_impl),
     ):
-        version = system.register(definition, impl)
-        system.promote_initial(component=definition.name, version=version)
+        version = system._register(definition, impl)
+        system._promote_initial(component=definition.name, version=version)
     return system
 
 
