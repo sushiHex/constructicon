@@ -23,7 +23,7 @@ later decision. Add a successor document, ADR, or explicit implementation record
 | Record | Provenance | Status |
 | --- | --- | --- |
 | [System Design v6](system-design/system-design-v6.md) | Exact recovered document | Historical; superseded by v12 |
-| [System Design v12](system-design/system-design-v12-frozen.md) | Exact recovered document | Frozen planning baseline; M0 resolved here |
+| [System Design v12](system-design/system-design-v12-frozen/) | Exact recovered document, split only at original section boundaries | Frozen planning baseline; M0 resolved here |
 
 ## Milestone plans
 
@@ -63,6 +63,6 @@ later decision. Add a successor document, ADR, or explicit implementation record
 ## Integrity
 
 [`MANIFEST.sha256`](MANIFEST.sha256) records the SHA-256 digest of every archived
-Markdown document. A historical plan should change only through an explicit
-correction that also updates the manifest and explains why preservation required
-it.
+Markdown document, including every System Design v12 source part. A historical
+plan should change only through an explicit correction that also updates the
+manifest and explains why preservation required it.
