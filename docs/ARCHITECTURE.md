@@ -3,6 +3,8 @@
 Current truth only. The invariants live in [INVARIANTS.md](INVARIANTS.md);
 history and adjudication live in [adr/](adr/); the self-improvement design
 lives in [designs/SELF_IMPROVEMENT.md](designs/SELF_IMPROVEMENT.md).
+Historical, non-normative planning records live in
+[plans/](plans/README.md).
 
 Constructicon is an OS for agentic software-engineering pipelines. One authored
 graph IR; one sealed `ExecutionManifest` per run; scoped capability leases;

@@ -264,6 +264,8 @@ plus Pydantic. CI enforces both rules.
 - [Architecture](docs/ARCHITECTURE.md): the complete current design and
   milestone acceptance tests
 - [Contributing](docs/CONTRIBUTING.md): extension guides for agents and humans
+- [Historical planning archive](docs/plans/README.md): non-normative plans,
+  recovered records, and implementation handoffs
 - [Self-improvement design](docs/designs/SELF_IMPROVEMENT.md): learning as
   candidates, never self-authorized mutation
 - [Architecture decisions](docs/adr/): why the system is shaped this way
