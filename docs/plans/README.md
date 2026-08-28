@@ -66,3 +66,9 @@ later decision. Add a successor document, ADR, or explicit implementation record
 Markdown document, including every System Design v12 source part. A historical
 plan should change only through an explicit correction that also updates the
 manifest and explains why preservation required it.
+
+Verify the committed archive from this directory:
+
+```bash
+sha256sum --check MANIFEST.sha256
+```
