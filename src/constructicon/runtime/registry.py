@@ -12,6 +12,9 @@ import importlib
 import inspect
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
+from threading import RLock
+from typing import Literal
 
 from constructicon.core.address import RunId
 from constructicon.core.component import ComponentDef, PromotionRecord
@@ -20,6 +23,7 @@ from constructicon.core.effect import (
     AttestationDraft,
     CheckResult,
     ComponentProofSubject,
+    attestation_id_for,
 )
 from constructicon.core.envelope import utc_now
 from constructicon.core.errors import AdmissionError, ConstructiconError, JournalDamaged
@@ -29,7 +33,14 @@ from constructicon.core.graph import Graph, Loop, Ref
 from constructicon.core.identity import Digest, digest
 from constructicon.core.journal import Journal
 from constructicon.core.manifest import SELF_BINDING, ExecutionManifest
-from constructicon.core.registry import Loadability, RegistrySnapshot, RegistryStore, StoredVersion
+from constructicon.core.registry import (
+    InvalidRegistryRevision,
+    Loadability,
+    RegistryRevision,
+    RegistrySnapshot,
+    RegistryStore,
+    StoredVersion,
+)
 from constructicon.runtime.context import NodeImpl
 
 
@@ -65,72 +76,142 @@ class BoundExecution:
         return self.bindings[(name, str(version))]
 
 
+@dataclass(frozen=True)
+class PlannedRegistration:
+    stored: StoredVersion
+    row_origin: Literal["existing", "canonical_new"]
+
+
+@dataclass(frozen=True)
+class PlannedPolicyPromotion:
+    component: str
+    baseline: Digest | None
+    target: Digest
+    draft: AttestationDraft
+    attestation_id: str
+
+
 class InMemoryRegistryStore:
     """The I6 test double — same contract, no durability."""
 
     def __init__(self) -> None:
         self._versions: dict[str, dict[str, StoredVersion]] = {}
         self._order: dict[str, list[str]] = {}
-        self._promotions: list[PromotionRecord] = []
+        self._version_seq: dict[tuple[str, str], int] = {}
+        self._promotions: list[tuple[int, PromotionRecord]] = []
+        self._registration_seq = 0
+        self._promotion_seq = 0
+        self._lock = RLock()
 
-    def snapshot(self) -> RegistrySnapshot:
-        stable: dict[str, str] = {}
-        history: dict[str, list[tuple[str | None, str]]] = {}
-        for record in self._promotions:
-            if record.channel == "stable":
-                stable[record.component] = str(record.to_version)
-                history.setdefault(record.component, []).append(
-                    (
-                        str(record.from_version) if record.from_version else None,
-                        str(record.to_version),
-                    )
+    def snapshot(
+        self,
+        revision: RegistryRevision | None = None,
+    ) -> RegistrySnapshot:
+        with self._lock:
+            current = RegistryRevision(
+                registration_seq=self._registration_seq,
+                promotion_seq=self._promotion_seq,
+            )
+            selected = revision or current
+            if (
+                selected.registration_seq > current.registration_seq
+                or selected.promotion_seq > current.promotion_seq
+            ):
+                raise InvalidRegistryRevision(
+                    f"future registry revision {selected.model_dump()} exceeds "
+                    f"current {current.model_dump()}"
                 )
-        return RegistrySnapshot(
-            versions={name: dict(entries) for name, entries in self._versions.items()},
-            order={name: tuple(hashes) for name, hashes in self._order.items()},
-            stable=stable,
-            history={name: tuple(pairs) for name, pairs in history.items()},
-        )
+            versions: dict[str, dict[str, StoredVersion]] = {}
+            order: dict[str, list[str]] = {}
+            for name, hashes in self._order.items():
+                for key in hashes:
+                    if self._version_seq[(name, key)] > selected.registration_seq:
+                        continue
+                    versions.setdefault(name, {})[key] = self._versions[name][key]
+                    order.setdefault(name, []).append(key)
+            stable: dict[str, str] = {}
+            history: dict[str, list[tuple[str | None, str]]] = {}
+            for seq, record in self._promotions:
+                # Mirror the durable store exactly: only the ``stable`` channel
+                # moves the pointer or contributes to promotion history.
+                if seq > selected.promotion_seq or record.channel != "stable":
+                    continue
+                retained = versions.get(record.component, {})
+                before = str(record.from_version) if record.from_version else None
+                target = str(record.to_version)
+                if target not in retained or (before is not None and before not in retained):
+                    raise InvalidRegistryRevision(
+                        "registry revision exposes promotion endpoints outside its registration cut"
+                    )
+                current_stable = stable.get(record.component)
+                if current_stable != before:
+                    raise InvalidRegistryRevision(
+                        "registry revision contains a discontinuous promotion history"
+                    )
+                stable[record.component] = target
+                history.setdefault(record.component, []).append((before, target))
+            return RegistrySnapshot(
+                revision=selected,
+                versions=versions,
+                order={name: tuple(hashes) for name, hashes in order.items()},
+                stable=stable,
+                history={name: tuple(pairs) for name, pairs in history.items()},
+            )
 
     def store_version(self, version: StoredVersion) -> None:
-        name = version.definition.name
-        key = str(version.content_hash)
-        existing = self._versions.get(name, {}).get(key)
-        if existing is not None:
-            if existing.definition == version.definition:
-                return
-            raise JournalDamaged(
-                f"component {name!r}@{key} already stored with a different definition"
-            )
-        self._versions.setdefault(name, {})[key] = version
-        self._order.setdefault(name, []).append(key)
+        with self._lock:
+            name = version.definition.name
+            key = str(version.content_hash)
+            existing = self._versions.get(name, {}).get(key)
+            if existing is not None:
+                if existing.definition == version.definition:
+                    return
+                raise JournalDamaged(
+                    f"component {name!r}@{key} already stored with a different definition"
+                )
+            self._registration_seq += 1
+            self._versions.setdefault(name, {})[key] = version
+            self._order.setdefault(name, []).append(key)
+            self._version_seq[(name, key)] = self._registration_seq
 
     def store_promotion(self, record: PromotionRecord) -> PromotionRecord:
-        for prior in self._promotions:
-            if prior.attestation_id == record.attestation_id:
-                return prior
-        current = None
-        for prior in self._promotions:
-            if prior.component == record.component and prior.channel == "stable":
-                current = str(prior.to_version)
-        expected = str(record.from_version) if record.from_version else None
-        if current != expected:
-            raise AdmissionError(
-                [
-                    f"promotion of {record.component!r} refused: stable moved — "
-                    f"expected {expected!r}, found {current!r} (compare-and-swap)"
-                ]
-            )
-        self._promotions.append(record)
-        return record
+        with self._lock:
+            for _, prior in self._promotions:
+                if prior.attestation_id == record.attestation_id:
+                    if prior.same_identity_as(record):
+                        return prior
+                    raise JournalDamaged(
+                        f"attestation {record.attestation_id!r} names contradictory "
+                        "promotion receipts"
+                    )
+            current = None
+            for _, prior in self._promotions:
+                if prior.component == record.component and prior.channel == "stable":
+                    current = str(prior.to_version)
+            expected = str(record.from_version) if record.from_version else None
+            if current != expected:
+                raise AdmissionError(
+                    [
+                        f"promotion of {record.component!r} refused: stable moved — "
+                        f"expected {expected!r}, found {current!r} (compare-and-swap)"
+                    ]
+                )
+            if self._versions.get(record.component, {}).get(str(record.to_version)) is None:
+                raise JournalDamaged("promotion target is not retained")
+            self._promotion_seq += 1
+            self._promotions.append((self._promotion_seq, record))
+            return record
 
-    def promotion_for_attestation(
-        self, attestation_id: str
-    ) -> PromotionRecord | None:
-        return next(
-            (record for record in self._promotions if record.attestation_id == attestation_id),
-            None,
-        )
+    def promotion_for_attestation(self, attestation_id: str) -> PromotionRecord | None:
+        with self._lock:
+            return next(
+                (
+                    record
+                    for _, record in self._promotions
+                    if record.attestation_id == attestation_id
+                ),
+                None,
+            )
 
 
 def source_digest_for(impl: NodeImpl) -> Digest | None:
@@ -159,11 +240,28 @@ class ComponentRegistry:
     _impls: dict[tuple[str, str], NodeImpl] = field(default_factory=dict)
 
     def register(self, definition: ComponentDef, impl: NodeImpl | None = None) -> Digest:
+        planned = self.plan_registration(
+            definition,
+            impl=impl,
+            registered_at=utc_now(),
+        )
+        if planned.row_origin == "canonical_new":
+            self.store.store_version(planned.stored)
+        content = planned.stored.content_hash
+        if impl is not None:
+            self._impls[(definition.name, str(content))] = impl
+        return content
+
+    def plan_registration(
+        self,
+        definition: ComponentDef,
+        *,
+        impl: NodeImpl | None,
+        registered_at: datetime,
+    ) -> PlannedRegistration:
+        """Validate one restart-safe definition and derive its exact durable row."""
+
         is_atomic = not isinstance(definition.body, Graph)
-        if is_atomic and impl is None:
-            raise RegistryError(
-                f"atomic component {definition.name!r} requires an implementation"
-            )
         if not is_atomic and impl is not None:
             raise RegistryError(
                 f"composite component {definition.name!r} must not carry an implementation"
@@ -175,26 +273,81 @@ class ComponentRegistry:
                 "part of the M5 contract"
             )
         if is_atomic:
-            self._validate_atomic_identity(definition, impl)
-        content = definition.content_hash()
-        existing = self.store.snapshot().get(definition.name, content)
-        if existing is not None:
-            if existing.definition != definition:
-                raise JournalDamaged(
-                    f"component {definition.name!r}@{content} already exists with "
-                    "different semantics under the same identity"
+            body = definition.body
+            assert not isinstance(body, Graph)
+            if body.module == "__main__":
+                raise RegistryError(
+                    f"atomic component {definition.name!r} uses __main__; "
+                    "persisted implementations must be cold-importable"
                 )
-        else:
-            self.store.store_version(
-                StoredVersion(
-                    definition=definition,
-                    content_hash=content,
-                    registered_at=utc_now(),
+            loaded, loadability = self._load(body.module, body.qualname)
+            if loaded is None:
+                detail = loadability.detail if loadability is not None else "unknown"
+                raise RegistryError(
+                    f"atomic component {definition.name!r} is not cold-importable: {detail}"
                 )
+            if impl is not None and loaded is not impl:
+                raise RegistryError(
+                    f"atomic component {definition.name!r} implementation does not equal "
+                    f"its recorded target {body.module}:{body.qualname}"
+                )
+            self._validate_atomic_identity(definition, loaded)
+
+        snapshot = self.store.snapshot()
+        semantic_matches = [
+            stored
+            for stored in snapshot.versions.get(definition.name, {}).values()
+            if stored.definition == definition
+        ]
+        identities = {str(stored.content_hash) for stored in semantic_matches}
+        if len(identities) > 1:
+            raise JournalDamaged(
+                f"component {definition.name!r} has one semantic definition under "
+                f"multiple retained identities: {sorted(identities)}"
             )
-        if impl is not None:
-            self._impls[(definition.name, str(content))] = impl
-        return content
+        if semantic_matches:
+            return PlannedRegistration(semantic_matches[0], "existing")
+
+        content = definition.content_hash()
+        collision = snapshot.get(definition.name, content)
+        if collision is not None and collision.definition != definition:
+            raise JournalDamaged(
+                f"component {definition.name!r}@{content} already exists with "
+                "different semantics under the same identity"
+            )
+        return PlannedRegistration(
+            StoredVersion(
+                definition=definition,
+                content_hash=content,
+                registered_at=registered_at,
+            ),
+            "canonical_new",
+        )
+
+    def apply_registration(self, plan: PlannedRegistration) -> StoredVersion:
+        """Apply or reconcile one planned immutable registration fact."""
+
+        existing = self.store.snapshot().get(
+            plan.stored.definition.name,
+            plan.stored.content_hash,
+        )
+        if existing is not None:
+            if existing.definition != plan.stored.definition:
+                raise JournalDamaged(
+                    f"component {plan.stored.definition.name!r}@"
+                    f"{plan.stored.content_hash} contradicts its planned definition"
+                )
+            return existing
+        if plan.row_origin == "existing":
+            raise JournalDamaged("an existing registration row disappeared")
+        self.store.store_version(plan.stored)
+        stored = self.store.snapshot().get(
+            plan.stored.definition.name,
+            plan.stored.content_hash,
+        )
+        if stored is None or stored.definition != plan.stored.definition:
+            raise JournalDamaged("planned registration did not produce its exact row")
+        return stored
 
     def _validate_atomic_identity(
         self,
@@ -239,8 +392,7 @@ class ComponentRegistry:
             duplicates = sorted({alias for alias in aliases if aliases.count(alias) > 1})
             if duplicates:
                 faults.append(
-                    f"{definition.name!r}: duplicate capability requirement aliases "
-                    f"{duplicates}"
+                    f"{definition.name!r}: duplicate capability requirement aliases {duplicates}"
                 )
             for requirement in requirements:
                 if not requirement.alias or not requirement.kind:
@@ -266,8 +418,11 @@ class ComponentRegistry:
         if faults:
             raise AdmissionError(faults)
 
-    def snapshot(self) -> RegistrySnapshot:
-        return self.store.snapshot()
+    def snapshot(
+        self,
+        revision: RegistryRevision | None = None,
+    ) -> RegistrySnapshot:
+        return self.store.snapshot(revision)
 
     def bind(self, stored: StoredVersion) -> BoundVersion:
         body = stored.definition.body
@@ -368,7 +523,9 @@ class ComponentRegistry:
                     + (
                         f": expected {load.expected_digest}, observed {load.observed_digest}"
                         if load.status == "implementation_drift"
-                        else f": {load.detail}" if load.detail else ""
+                        else f": {load.detail}"
+                        if load.detail
+                        else ""
                     )
                     + ") — activation refuses rather than substituting"
                 )
@@ -537,6 +694,86 @@ class ComponentRegistry:
             journal=journal,
         )
 
+    def plan_initial_promotion(
+        self,
+        *,
+        component: str,
+        version: Digest,
+    ) -> PlannedPolicyPromotion:
+        snapshot = self.store.snapshot()
+        if snapshot.get(component, version) is None:
+            raise RegistryError(f"component {component!r} has no version {version}")
+        draft = self._policy_attestation_draft(
+            component=component,
+            version=version,
+            baseline=None,
+            policy="bootstrap-initial",
+            detail="freshly registered version with a validated contract",
+        )
+        return PlannedPolicyPromotion(
+            component=component,
+            baseline=None,
+            target=version,
+            draft=draft,
+            attestation_id=attestation_id_for(draft),
+        )
+
+    def plan_rollback(
+        self,
+        *,
+        component: str,
+        expected_stable: Digest | None,
+    ) -> PlannedPolicyPromotion:
+        snapshot = self.store.snapshot()
+        current = snapshot.stable_version(component)
+        if expected_stable is not None and current != expected_stable:
+            raise AdmissionError(
+                [
+                    f"rollback of {component!r} refused: expected stable "
+                    f"{expected_stable}, found {current}"
+                ]
+            )
+        if current is None:
+            raise RegistryError(f"component {component!r} has no stable version to roll back")
+        previous: str | None = None
+        for from_version, to_version in reversed(snapshot.history.get(component, ())):
+            if to_version == str(current):
+                previous = from_version
+                break
+        if previous is None:
+            raise RegistryError(
+                f"component {component!r} has no earlier stable version to roll back to"
+            )
+        return self.plan_rollback_edge(
+            component=component,
+            baseline=current,
+            target=Digest(previous),
+        )
+
+    def plan_rollback_edge(
+        self,
+        *,
+        component: str,
+        baseline: Digest,
+        target: Digest,
+    ) -> PlannedPolicyPromotion:
+        if self.store.snapshot().get(component, target) is None:
+            raise RegistryError(f"component {component!r} has no retained rollback target {target}")
+        draft = self._policy_attestation_draft(
+            component=component,
+            version=target,
+            baseline=baseline,
+            policy="rollback",
+            detail=f"pointer move back from {baseline} to retained {target}",
+        )
+        return PlannedPolicyPromotion(
+            component=component,
+            baseline=baseline,
+            target=target,
+            draft=draft,
+            attestation_id=attestation_id_for(draft),
+        )
+
     def _mint_policy_attestation(
         self,
         journal: Journal,
@@ -547,7 +784,25 @@ class ComponentRegistry:
         policy: str,
         detail: str,
     ) -> Attestation:
-        draft = AttestationDraft(
+        draft = self._policy_attestation_draft(
+            component=component,
+            version=version,
+            baseline=baseline,
+            policy=policy,
+            detail=detail,
+        )
+        return journal.mint_policy_attestation(draft)
+
+    @staticmethod
+    def _policy_attestation_draft(
+        *,
+        component: str,
+        version: Digest,
+        baseline: Digest | None,
+        policy: str,
+        detail: str,
+    ) -> AttestationDraft:
+        return AttestationDraft(
             action="promote",
             subject=ComponentProofSubject(
                 component=component,
@@ -567,7 +822,6 @@ class ComponentRegistry:
             manifest_hash=digest("manifest", 1, {"policy": policy}),
             workspace_id=None,
         )
-        return journal.mint_policy_attestation(draft)
 
     def stable_version(self, name: str) -> Digest | None:
         return self.store.snapshot().stable_version(name)
@@ -584,8 +838,16 @@ class ComponentRegistry:
             if stable is None or version != stable
         ]
 
-    def rdeps(self, name: str) -> list[str]:
-        snapshot = self.store.snapshot()
+    def rdeps(
+        self,
+        name: str,
+        *,
+        snapshot: RegistrySnapshot | None = None,
+        revision: RegistryRevision | None = None,
+    ) -> list[str]:
+        if snapshot is not None and revision is not None:
+            raise ValueError("supply a registry snapshot or revision, not both")
+        snapshot = snapshot or self.store.snapshot(revision)
         direct: dict[str, set[str]] = {}
         for owner, entries in snapshot.versions.items():
             for stored in entries.values():

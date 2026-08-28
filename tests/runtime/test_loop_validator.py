@@ -47,8 +47,8 @@ def register_atomic(
     impl: Any = step_impl,
 ) -> None:
     definition, implementation = atomic(name, inputs, outputs, impl)
-    version = system.register(definition, implementation)
-    system.promote_initial(component=name, version=version)
+    version = system._register(definition, implementation)
+    system._promote_initial(component=name, version=version)
 
 
 def basic_loop(component: str, *, feedback: dict[str, str] | None = None) -> Graph:
@@ -200,8 +200,8 @@ def test_nested_loop_hidden_inside_a_composite_is_refused(system: Constructicon)
         inputs=(STATE,),
         outputs=(STATE,),
     )
-    version = system.register(composite)
-    system.promote_initial(component=composite.name, version=version)
+    version = system._register(composite)
+    system._promote_initial(component=composite.name, version=version)
     outer = basic_loop("loop/inner-composite")
     with pytest.raises(AdmissionError, match="nested Loop arrives with a later milestone"):
         system.validate(outer, {"state": {"value": 0}})
@@ -222,8 +222,8 @@ def test_direct_composite_body_has_ordered_atomic_members(system: Constructicon)
         inputs=body.inputs,
         outputs=body.outputs,
     )
-    version = system.register(composite)
-    system.promote_initial(component=composite.name, version=version)
+    version = system._register(composite)
+    system._promote_initial(component=composite.name, version=version)
     manifest = system.validate(
         basic_loop("loop/composite"),
         {"state": {"value": 0}},

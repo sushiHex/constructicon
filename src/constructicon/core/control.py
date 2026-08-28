@@ -8,7 +8,7 @@ mutation, long-lived runs, stable pages, and immutable detail references.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol, Self
 
 from pydantic import (
     AwareDatetime,
@@ -28,7 +28,7 @@ from constructicon.core.run import Liveness, RunStatus
 if TYPE_CHECKING:
     from constructicon.core.effect import ApprovalRecord
 
-CONTROL_SCHEMA_VERSION = 2
+CONTROL_SCHEMA_VERSION = 3
 IDEMPOTENCY_KEY_MAX_LENGTH = 200
 
 READ_SCOPE = "constructicon:read"
@@ -36,12 +36,11 @@ OPERATE_SCOPE = "constructicon:operate"
 APPROVE_SCOPE = "constructicon:approve"
 PROMOTE_SCOPE = "constructicon:promote"
 ADMIN_SCOPE = "constructicon:admin"
-CONTROL_SCOPES = frozenset(
-    {READ_SCOPE, OPERATE_SCOPE, APPROVE_SCOPE, PROMOTE_SCOPE, ADMIN_SCOPE}
-)
+CONTROL_SCOPES = frozenset({READ_SCOPE, OPERATE_SCOPE, APPROVE_SCOPE, PROMOTE_SCOPE, ADMIN_SCOPE})
 
 
 class ControlCode(StrEnum):
+    AUTH_LOCAL_STATIC_REQUIRED = "control.auth.local_static_required"
     AUTH_REQUIRED_SCOPE = "control.auth.required_scope"
     IDEMPOTENCY_CONFLICT = "control.idempotency.conflict"
     COMMAND_IN_PROGRESS = "control.command.in_progress"
@@ -56,12 +55,10 @@ class ControlCode(StrEnum):
     RUN_TERMINAL = "control.run.terminal"
     RUN_NOT_RESUMABLE = "control.run.not_resumable"
     COUNTERFACTUAL_LOCK_MISMATCH = "control.counterfactual.lock_mismatch"
-    COUNTERFACTUAL_EFFECT_UNSUPPORTED = "control.counterfactual.effect_unsupported"
     REGISTRY_STABLE_MOVED = "control.registry.stable_moved"
     REGISTRY_VERSION_UNKNOWN = "control.registry.version_unknown"
     APPROVAL_INVALID_SUBJECT = "control.approval.invalid_subject"
     REQUEST_INVALID = "control.request.invalid"
-    DETAIL_TOO_LARGE = "control.detail.too_large"
     COUNTERFACTUAL_OVERRIDE_INVALID = "control.counterfactual.override_invalid"
 
 
@@ -149,9 +146,30 @@ class ControlFault(BaseModel):
 class ControlRejected(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[2] = 2
+    schema_version: Literal[3] = 3
     status: Literal["rejected"] = "rejected"
     faults: tuple[ControlFault, ...]
+
+    @classmethod
+    def one_fault(
+        cls,
+        code: ControlCode,
+        message: str,
+        repair: str,
+        details: dict[str, JsonValue] | None = None,
+    ) -> Self:
+        """Construct the common exact-one-fault control refusal."""
+
+        return cls(
+            faults=(
+                ControlFault(
+                    code=code,
+                    message=message,
+                    repair=repair,
+                    details=details or {},
+                ),
+            )
+        )
 
 
 class DetailRef(BaseModel):
@@ -268,7 +286,7 @@ class RunRecord(BaseModel):
 class RunSubmission(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[2] = 2
+    schema_version: Literal[3] = 3
     status: Literal["submitted"] = "submitted"
     run_id: RunId
     run_status: RunStatus
@@ -279,7 +297,7 @@ class RunSubmission(BaseModel):
 class CancellationResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[2] = 2
+    schema_version: Literal[3] = 3
     status: Literal["cancel_requested", "already_terminal"]
     run_id: RunId
     run_status: RunStatus
@@ -377,7 +395,7 @@ class ComponentComparison(BaseModel):
 class ApprovalCommandResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[2] = 2
+    schema_version: Literal[3] = 3
     status: Literal["recorded"] = "recorded"
     approval_id: str
     decision: Literal["approved", "rejected"]
@@ -388,11 +406,22 @@ class ApprovalCommandResult(BaseModel):
 class PromotionCommandResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[2] = 2
+    schema_version: Literal[3] = 3
     status: Literal["promoted", "rolled_back"]
     component: str
     from_version: Digest | None
     to_version: Digest
+    command: CommandMeta
+    detail: DetailRef
+
+
+class RegistrationCommandResult(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    schema_version: Literal[3] = 3
+    status: Literal["registered"] = "registered"
+    component: str
+    version: Digest
     command: CommandMeta
     detail: DetailRef
 
@@ -444,9 +473,7 @@ def validate_idempotency_key(value: str) -> str:
     if not value or value.strip() != value:
         raise ValueError("idempotency_key must be non-empty and canonical")
     if len(value) > IDEMPOTENCY_KEY_MAX_LENGTH:
-        raise ValueError(
-            f"idempotency_key exceeds {IDEMPOTENCY_KEY_MAX_LENGTH} characters"
-        )
+        raise ValueError(f"idempotency_key exceeds {IDEMPOTENCY_KEY_MAX_LENGTH} characters")
     return value
 
 
@@ -472,6 +499,17 @@ class ControlStore(Protocol):
     def reject_command(self, claim: CommandClaim, response: JsonValue) -> CommandRecord: ...
 
     def command(self, command_id: str) -> CommandRecord | None: ...
+
+    def latest_command_key(self, *, operation: str) -> tuple[str, str] | None: ...
+
+    def committed_commands(
+        self,
+        *,
+        operation: str,
+        after: tuple[str, str] | None,
+        through: tuple[str, str],
+        limit: PositiveInt,
+    ) -> tuple[CommandRecord, ...]: ...
 
     def store_approval(self, claim: CommandClaim, approval: ApprovalRecord) -> ApprovalRecord: ...
 

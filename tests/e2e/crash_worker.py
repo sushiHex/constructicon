@@ -62,8 +62,8 @@ def build_worker_system(
         atomic("test/announce", (BRIEF,), (ANNOUNCED,), announce_impl),
         atomic("test/summarize", (BRIEF,), (SUMMARY,), summarize_impl),
     ):
-        version = system.register(definition, impl)  # write-once: idempotent
-        system.promote_initial(component=definition.name, version=version)
+        version = system._register(definition, impl)  # write-once: idempotent
+        system._promote_initial(component=definition.name, version=version)
     return system, journal
 
 
@@ -81,7 +81,7 @@ def main() -> None:
             os._exit(CRASH_EXIT_CODE)  # real, immediate process death
 
     journal.fault_probe = die
-    result = asyncio.run(system.start(pipeline_graph(), INPUTS, run_id=run_id))
+    result = asyncio.run(system._start_direct(pipeline_graph(), INPUTS, run_id=run_id))
     print(result.status.value)
 
 

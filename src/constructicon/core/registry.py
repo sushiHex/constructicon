@@ -17,10 +17,21 @@ from __future__ import annotations
 
 from typing import Literal, Protocol, runtime_checkable
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict
+from pydantic import AwareDatetime, BaseModel, ConfigDict, NonNegativeInt
 
 from constructicon.core.component import ComponentDef, PromotionRecord
-from constructicon.core.identity import Digest
+from constructicon.core.identity import Digest, digest
+
+
+class InvalidRegistryRevision(ValueError):
+    """A structurally valid requested registry cut is future or incoherent."""
+
+
+class RegistryRevision(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    registration_seq: NonNegativeInt
+    promotion_seq: NonNegativeInt
 
 
 class StoredVersion(BaseModel):
@@ -34,7 +45,9 @@ class StoredVersion(BaseModel):
 class RegistrySnapshot(BaseModel):
     """Detached and immutable: the component world one admission sees."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    revision: RegistryRevision
 
     versions: dict[str, dict[str, StoredVersion]]  # name -> hash -> version
     order: dict[str, tuple[str, ...]]  # name -> registration order (hashes)
@@ -52,6 +65,10 @@ class RegistrySnapshot(BaseModel):
 
     def names(self) -> list[str]:
         return sorted(self.versions)
+
+
+def registry_snapshot_digest(snapshot: RegistrySnapshot) -> Digest:
+    return digest("registry-snapshot", 2, snapshot.model_dump(mode="json"))
 
 
 class Loadability(BaseModel):
@@ -80,7 +97,10 @@ class RegistryStore(Protocol):
     components row IS the registration receipt, a promotions row IS the
     pointer-move receipt (no synthetic run events)."""
 
-    def snapshot(self) -> RegistrySnapshot: ...
+    def snapshot(
+        self,
+        revision: RegistryRevision | None = None,
+    ) -> RegistrySnapshot: ...
 
     def store_version(self, version: StoredVersion) -> None:
         """Write-once: absent -> insert; identical -> idempotent;
@@ -93,8 +113,6 @@ class RegistryStore(Protocol):
         (a retry with the same attestation returns the existing record)."""
         ...
 
-    def promotion_for_attestation(
-        self, attestation_id: str
-    ) -> PromotionRecord | None:
+    def promotion_for_attestation(self, attestation_id: str) -> PromotionRecord | None:
         """Read the exact pointer-move receipt authorized by one attestation."""
         ...

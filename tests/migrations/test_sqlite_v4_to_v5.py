@@ -9,7 +9,7 @@ from constructicon.core.address import RunId
 from constructicon.core.control import RunOrigin
 from constructicon.substrate.journal.sqlite import SCHEMA_VERSION, SqliteJournal
 from tests.conftest import FakeClock, pipeline_graph
-from tests.migrations.test_m3_to_m4 import _register_pipeline
+from tests.migrations.test_sqlite_from_v3_to_current import _register_pipeline
 
 
 def test_v4_to_v5_adds_control_tables_without_inventing_run_origins(

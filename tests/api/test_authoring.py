@@ -54,16 +54,16 @@ def test_describe_is_bounded_complete_and_secret_free(
     system: Constructicon,
 ) -> None:
     for bundle in (respond, plain):
-        version = system.register(bundle)
-        system.promote_initial(component=bundle.name, version=version)
+        version = system._register(bundle)
+        system._promote_initial(component=bundle.name, version=version)
     legacy_definition, legacy_implementation = atomic(
         "authoring/legacy",
         respond.definition.inputs,
         respond.definition.outputs,
         legacy_impl,
     )
-    legacy_version = system.register(legacy_definition, legacy_implementation)
-    system.promote_initial(component=legacy_definition.name, version=legacy_version)
+    legacy_version = system._register(legacy_definition, legacy_implementation)
+    system._promote_initial(component=legacy_definition.name, version=legacy_version)
 
     description = system.describe(limit=100)
     assert description.graph_schema.schema_["title"] == "Graph"
@@ -110,8 +110,8 @@ def test_describe_refuses_an_unbounded_component_request(system: Constructicon) 
 def test_missing_declared_capability_is_a_typed_repair(
     system: Constructicon,
 ) -> None:
-    version = system.register(respond)
-    system.promote_initial(component=respond.name, version=version)
+    version = system._register(respond)
+    system._promote_initial(component=respond.name, version=version)
     graph = Graph(
         name="missing-capability",
         nodes=(GraphNode(id="respond", body=respond.ref()),),

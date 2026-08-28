@@ -25,7 +25,7 @@ async def test_projection_is_byte_stable_across_regeneration_and_processes(
     world: Constructicon, clock: FakeClock, tmp_path: Path
 ) -> None:
     run_id = RunId("run-project")
-    await world.start(pipeline_graph(), INPUTS, run_id=run_id)
+    await world._start_direct(pipeline_graph(), INPUTS, run_id=run_id)
 
     first_dir = tmp_path / "first"
     second_dir = tmp_path / "second"
@@ -54,7 +54,7 @@ async def test_summary_projects_durable_state_only(
     world: Constructicon, tmp_path: Path
 ) -> None:
     run_id = RunId("run-project-summary")
-    await world.start(pipeline_graph(), INPUTS, run_id=run_id)
+    await world._start_direct(pipeline_graph(), INPUTS, run_id=run_id)
     result = world.project_run(run_id, tmp_path / "out")
 
     summary = json.loads((tmp_path / "out" / "summary.json").read_text())

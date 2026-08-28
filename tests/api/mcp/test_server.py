@@ -28,13 +28,13 @@ def _structured(result: Any) -> dict[str, Any]:
     return payload
 
 
-async def test_mcp_lists_typed_tools_without_caller_auth_arguments(system) -> None:
+async def test_mcp_lists_typed_tools_without_caller_auth_arguments(system, journal) -> None:
     actor = AuthenticatedActor(
         actor_id="static:test-agent",
         auth_method="static",
         scopes=frozenset({READ_SCOPE, OPERATE_SCOPE}),
     )
-    control = ControlPlane(system=system, store=system.journal)
+    control = ControlPlane(system=system, store=journal)
     server = create_mcp_server(control, StaticActorSource(actor))
 
     async with Client(server, raise_exceptions=True) as client:
@@ -67,14 +67,14 @@ async def test_mcp_lists_typed_tools_without_caller_auth_arguments(system) -> No
         assert described["schema_version"] == 1
 
 
-async def test_retried_mcp_start_returns_one_run_and_stored_response(world) -> None:
+async def test_retried_mcp_start_returns_one_run_and_stored_response(world, journal) -> None:
     system = world
     actor = AuthenticatedActor(
         actor_id="static:mcp-operator",
         auth_method="static",
         scopes=frozenset({READ_SCOPE, OPERATE_SCOPE}),
     )
-    control = ControlPlane(system=system, store=system.journal)
+    control = ControlPlane(system=system, store=journal)
     server = create_mcp_server(control, StaticActorSource(actor))
     graph = pipeline_graph()
     arguments = {
@@ -129,17 +129,17 @@ async def test_retried_mcp_start_returns_one_run_and_stored_response(world) -> N
         assert isinstance(resource.contents[0], TextResourceContents)
         assert "manifest_hash" in resource.contents[0].text
 
-    assert len(system.journal.run_records(limit=100)) == 1
+    assert len(journal.run_records(limit=100)) == 1
 
 
-async def test_graph_schema_errors_remain_constructicon_repair_data(system) -> None:
+async def test_graph_schema_errors_remain_constructicon_repair_data(system, journal) -> None:
     actor = AuthenticatedActor(
         actor_id="static:mcp-reader",
         auth_method="static",
         scopes=frozenset({READ_SCOPE}),
     )
     server = create_mcp_server(
-        ControlPlane(system=system, store=system.journal),
+        ControlPlane(system=system, store=journal),
         StaticActorSource(actor),
     )
     async with Client(server, raise_exceptions=True) as client:

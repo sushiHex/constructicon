@@ -29,7 +29,7 @@ from constructicon.core.introspection import (
     SystemDescription,
 )
 from constructicon.core.manifest import CONTINUE_SCHEMA_HASH, CONTINUE_TYPE
-from constructicon.core.registry import RegistrySnapshot
+from constructicon.core.registry import RegistrySnapshot, registry_snapshot_digest
 from constructicon.runtime.registry import CapabilityDescriptor, ComponentRegistry
 
 
@@ -60,8 +60,7 @@ def build_system_description(
         unknown = sorted(name for name in requested if name not in snapshot.versions)
         if unknown:
             raise ContractViolation(
-                f"describe requested unknown components {unknown}; available: "
-                f"{snapshot.names()}"
+                f"describe requested unknown components {unknown}; available: {snapshot.names()}"
             )
         selected_names = list(requested[:limit])
         truncated = len(requested) > limit
@@ -133,16 +132,7 @@ def build_system_description(
         ),
         limits=limits,
     )
-    registry_digest = digest(
-        "registry-snapshot",
-        1,
-        {
-            "versions": {
-                name: list(snapshot.order.get(name, ())) for name in snapshot.names()
-            },
-            "stable": dict(sorted(snapshot.stable.items())),
-        },
-    )
+    registry_digest = registry_snapshot_digest(snapshot)
     catalog_digest = digest(
         "capability-catalog",
         1,
@@ -156,9 +146,7 @@ def build_system_description(
                     item.requires_posture.value if item.requires_posture else None
                 ),
                 "executor_profile": (
-                    item.executor_profile.model_dump(mode="json")
-                    if item.executor_profile
-                    else None
+                    item.executor_profile.model_dump(mode="json") if item.executor_profile else None
                 ),
                 "available": item.available,
             }
@@ -245,8 +233,7 @@ def _component_description(
         capability_requirements=tuple(requirements or ()),
         completeness=ContractCompleteness(
             port_schemas=all(
-                port.json_schema is not None
-                for port in (*definition.inputs, *definition.outputs)
+                port.json_schema is not None for port in (*definition.inputs, *definition.outputs)
             ),
             capability_bindings=requirements is not None,
         ),

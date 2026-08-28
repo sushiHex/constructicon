@@ -109,8 +109,8 @@ def register(
     inputs: tuple[Port, ...] = (STATE,),
 ) -> None:
     definition, implementation = atomic(name, inputs, (STATE, AGAIN), impl)
-    version = system.register(definition, implementation)
-    system.promote_initial(component=name, version=version)
+    version = system._register(definition, implementation)
+    system._promote_initial(component=name, version=version)
 
 
 def make_system(
@@ -159,7 +159,7 @@ async def test_loop_executes_until_false_and_exports_final_values(tmp_path: Path
     system, journal = make_system(tmp_path)
     register(system, "loop/step", step_impl)
 
-    result = await system.start(
+    result = await system._start_direct(
         loop_graph("loop/step"),
         {"state": {"value": 0}},
         run_id=RunId("run-loop"),
@@ -180,7 +180,7 @@ async def test_loop_executes_until_false_and_exports_final_values(tmp_path: Path
 async def test_false_on_first_iteration_still_executes_once(tmp_path: Path) -> None:
     system, _ = make_system(tmp_path)
     register(system, "loop/once", one_step_impl)
-    result = await system.start(
+    result = await system._start_direct(
         loop_graph("loop/once"),
         {"state": {"value": 0}},
         run_id=RunId("run-once"),
@@ -192,7 +192,7 @@ async def test_false_on_first_iteration_still_executes_once(tmp_path: Path) -> N
 async def test_exhaustion_parks_without_exporting_partial_state(tmp_path: Path) -> None:
     system, _ = make_system(tmp_path)
     register(system, "loop/always", always_impl)
-    result = await system.start(
+    result = await system._start_direct(
         loop_graph("loop/always", max_iterations=2),
         {"state": {"value": 0}},
         run_id=RunId("run-parked"),
@@ -207,7 +207,7 @@ async def test_exhaustion_parks_without_exporting_partial_state(tmp_path: Path) 
 async def test_false_on_final_allowed_iteration_succeeds(tmp_path: Path) -> None:
     system, _ = make_system(tmp_path)
     register(system, "loop/final", final_iteration_impl)
-    result = await system.start(
+    result = await system._start_direct(
         loop_graph("loop/final", max_iterations=3),
         {"state": {"value": 0}},
         run_id=RunId("run-final"),
@@ -233,7 +233,7 @@ async def test_resume_restores_completed_iteration_and_replays_only_missing_work
 
     journal.fault_probe = probe
     with pytest.raises(InjectedCrash):
-        await system.start(
+        await system._start_direct(
             loop_graph("loop/step"),
             {"state": {"value": 0}},
             run_id=RunId("run-resume-loop"),
@@ -243,7 +243,7 @@ async def test_resume_restores_completed_iteration_and_replays_only_missing_work
 
     second, _ = make_system(tmp_path, clock=clock)
     register(second, "loop/step", step_impl)
-    result = await second.resume(RunId("run-resume-loop"))
+    result = await second._resume_direct(RunId("run-resume-loop"))
 
     assert result.status is RunStatus.SUCCEEDED
     assert result.outputs["state"] == {"value": 3}
@@ -256,7 +256,7 @@ async def test_effect_keys_are_frame_distinct(tmp_path: Path) -> None:
     effect = FakeAnnounceEffect()
     system, _ = make_system(tmp_path, effect=effect)
     register(system, "loop/effect-step", effect_step_impl)
-    result = await system.start(
+    result = await system._start_direct(
         loop_graph("loop/effect-step"),
         {"state": {"value": 0}},
         run_id=RunId("run-loop-effects"),
@@ -282,7 +282,7 @@ async def test_effect_replay_deduplicates_within_the_same_iteration_frame(
 
     journal.fault_probe = crash_before_first_checkpoint_commit
     with pytest.raises(InjectedCrash):
-        await system.start(
+        await system._start_direct(
             loop_graph("loop/effect-replay"),
             {"state": {"value": 0}},
             run_id=RunId("run-loop-effect-replay"),
@@ -290,7 +290,7 @@ async def test_effect_replay_deduplicates_within_the_same_iteration_frame(
     journal.fault_probe = lambda name: None
     clock.advance(31.0)
 
-    result = await system.resume(RunId("run-loop-effect-replay"))
+    result = await system._resume_direct(RunId("run-loop-effect-replay"))
 
     assert result.status is RunStatus.SUCCEEDED
     assert result.outputs == {"state": {"value": 3}}
@@ -310,7 +310,7 @@ async def test_optional_invariant_input_without_source_is_none(tmp_path: Path) -
         optional_impl,
         inputs=(STATE, OPTIONAL_NOTE),
     )
-    result = await system.start(
+    result = await system._start_direct(
         loop_graph("loop/optional"),
         {"state": {"value": 0}},
         run_id=RunId("run-optional"),
@@ -329,8 +329,8 @@ async def test_wrong_continuation_schema_is_rejected(tmp_path: Path) -> None:
     definition, implementation = atomic(
         "loop/wrong-control", (STATE,), (STATE, wrong), step_impl
     )
-    version = system.register(definition, implementation)
-    system.promote_initial(component=definition.name, version=version)
+    version = system._register(definition, implementation)
+    system._promote_initial(component=definition.name, version=version)
     with pytest.raises(AdmissionError, match="continuation output"):
         system.validate(loop_graph("loop/wrong-control"), {"state": {"value": 0}})
 
@@ -383,8 +383,8 @@ def _register_exact(
     impl: Any,
 ) -> None:
     definition, implementation = atomic(name, inputs, outputs, impl)
-    version = system.register(definition, implementation)
-    system.promote_initial(component=name, version=version)
+    version = system._register(definition, implementation)
+    system._promote_initial(component=name, version=version)
 
 
 def _parked_loop(
@@ -418,7 +418,7 @@ async def test_multiple_independent_loops_report_every_parked_root(tmp_path: Pat
         inputs=(A_STATE, B_STATE),
     )
 
-    result = await system.start(
+    result = await system._start_direct(
         graph,
         {"state_a": {"value": 0}, "state_b": {"value": 0}},
         run_id=RunId("run-two-parks"),
@@ -454,7 +454,7 @@ async def test_dependent_is_blocked_on_parked_producer_without_failing_run(
         outputs=(SINK,),
     )
 
-    result = await system.start(
+    result = await system._start_direct(
         graph,
         {"state_a": {"value": 0}},
         run_id=RunId("run-park-blocks"),
@@ -487,7 +487,7 @@ async def test_failure_precedes_park_at_graph_closure_but_retains_park_detail(
         inputs=(A_STATE, TRIGGER),
     )
 
-    result = await system.start(
+    result = await system._start_direct(
         graph,
         {"state_a": {"value": 0}, "trigger": {}},
         run_id=RunId("run-fail-and-park"),
@@ -515,7 +515,7 @@ async def test_asyncio_cancellation_inside_loop_becomes_durable_cancelled(
     WAIT_EVENTS["release"] = asyncio.Event()
 
     task = asyncio.create_task(
-        system.start(
+        system._start_direct(
             loop_graph("loop/wait", max_iterations=3),
             {"state": {"value": 0}},
             run_id=RunId("run-loop-cancel"),

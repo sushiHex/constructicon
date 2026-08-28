@@ -28,7 +28,7 @@ def main() -> None:
             os._exit(CRASH_EXIT_CODE)  # real, immediate process death
 
     journal.fault_probe = die
-    result = asyncio.run(system.start(build_graph(), GOAL_INPUT, run_id=run_id))
+    result = asyncio.run(system._start_direct(build_graph(), GOAL_INPUT, run_id=run_id))
     print(result.status.value)
 
 

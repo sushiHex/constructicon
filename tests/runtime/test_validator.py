@@ -47,8 +47,8 @@ def test_ambiguity_is_an_itemized_error_never_a_rebind(world: Constructicon) -> 
     graph = pipeline_graph()
     # a second producer of test/Brief converts a valid graph into an error
     clone_def, clone_impl = atomic("test/triage-b", (ISSUE,), (BRIEF,), summarize_impl)
-    version = world.register(clone_def, clone_impl)
-    world.promote_initial(component="test/triage-b", version=version)
+    version = world._register(clone_def, clone_impl)
+    world._promote_initial(component="test/triage-b", version=version)
     ambiguous = Graph(
         name=graph.name,
         nodes=(
@@ -70,11 +70,11 @@ def test_gather_records_the_complete_producer_set(world: Constructicon) -> None:
         name="briefs", type_id="test/Brief", schema_hash="s1", cardinality="many"
     )
     collect_def, collect_impl = atomic("test/collect", (gather_port,), (SUMMARY,), summarize_impl)
-    version = world.register(collect_def, collect_impl)
-    world.promote_initial(component="test/collect", version=version)
+    version = world._register(collect_def, collect_impl)
+    world._promote_initial(component="test/collect", version=version)
     clone_def, clone_impl = atomic("test/triage-b", (ISSUE,), (BRIEF,), summarize_impl)
-    v2 = world.register(clone_def, clone_impl)
-    world.promote_initial(component="test/triage-b", version=v2)
+    v2 = world._register(clone_def, clone_impl)
+    world._promote_initial(component="test/triage-b", version=v2)
     graph = Graph(
         name="gathering",
         nodes=(
@@ -183,8 +183,8 @@ def test_composite_flattens_with_distinct_nested_scopes(world: Constructicon) ->
         inputs=(ISSUE,),
         outputs=inner.outputs,
     )
-    version = world.register(composite)
-    world.promote_initial(component="test/pipeline", version=version)
+    version = world._register(composite)
+    world._promote_initial(component="test/pipeline", version=version)
     outer = Graph(
         name="outer",
         nodes=(GraphNode(id="pipeline", body=Ref(component="test/pipeline")),),

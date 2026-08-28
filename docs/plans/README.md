@@ -47,13 +47,14 @@ the eventual code differs.
 | M6 | [Durable control plane rev 2](milestones/M6-durable-control-plane-rev2-polished.md) | Exact polished document | Implementation baseline for M6 |
 | M6.1 | [Control-plane hardening and compression](milestones/M6.1-control-plane-hardening-and-compression.md) | Exact recovered document | Corrective plan; includes PR A hardening and PR B compression |
 | M6.2 | [Internal compression scope](milestones/M6.2-internal-compression-extracted-scope.md) | Exact extraction from the M6.1 parent plan | Discoverability copy; parent plan remains authoritative for this historical scope |
-| M6.2 | [Durable control-plane closeout and internal compression rev 2](milestones/M6.2-internal-compression-rev2.md) | Current successor reconciled against `main` at `7f33724` after PRs #9–#11 | Review draft; implementation begins only after explicit approval |
+| M6.2 | [Durable control-plane closeout and internal compression rev 2](milestones/M6.2-internal-compression-rev2.md) | Current successor reconciled against `main` at `7f33724` after PRs #9–#11 | Approved implementation baseline; result recorded below |
 
 ## Handoffs
 
 | Record | Purpose |
 | --- | --- |
 | [M6.1 / M6.2 implementation handoff](handoffs/M6.1-M6.2-implementation-handoff.md) | Preserves an earlier artifact-based implementation handoff and its exact base/checksum assumptions; historical only |
+| [M6.2 implementation record](handoffs/M6.2-implementation-record.md) | Records the completed rev-2 scope, compatibility boundary, strengthened failure proof, and integrated-session sequencing |
 
 ## Completeness and recovery notes
 

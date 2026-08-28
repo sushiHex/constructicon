@@ -6,14 +6,9 @@ import argparse
 import importlib
 import inspect
 from pathlib import Path
-from typing import Any, cast
-
-from mcp.server.auth.provider import TokenVerifier
-from mcp.server.auth.settings import AuthSettings
+from typing import TYPE_CHECKING, Any, cast
 
 from constructicon.api.control import ControlPlane
-from constructicon.api.mcp.auth import OAuthActorSource, StaticActorSource
-from constructicon.api.mcp.server import create_mcp_server
 from constructicon.api.system import Constructicon
 from constructicon.core.control import (
     ADMIN_SCOPE,
@@ -24,6 +19,9 @@ from constructicon.core.control import (
     AuthenticatedActor,
 )
 from constructicon.substrate.journal.sqlite import SqliteJournal
+
+if TYPE_CHECKING:
+    from mcp.server.auth.provider import TokenVerifier
 
 DEFAULT_SCOPES = (READ_SCOPE, OPERATE_SCOPE, APPROVE_SCOPE, PROMOTE_SCOPE)
 
@@ -77,10 +75,23 @@ def _load_token_verifier(reference: str) -> TokenVerifier:
     value = target() if inspect.isclass(target) else target
     if not callable(getattr(value, "verify_token", None)):
         raise TypeError(f"{reference!r} does not yield a TokenVerifier")
-    return cast(TokenVerifier, value)
+    return cast("TokenVerifier", value)
 
 
 def main() -> None:
+    try:
+        from mcp.server.auth.settings import AuthSettings
+
+        from constructicon.api.mcp.auth import OAuthActorSource, StaticActorSource
+        from constructicon.api.mcp.server import create_mcp_server
+    except ModuleNotFoundError as exc:
+        if exc.name == "mcp":
+            raise SystemExit(
+                "constructicon-mcp requires the optional MCP dependencies; "
+                "install constructicon[mcp]"
+            ) from None
+        raise
+
     args = _parser().parse_args()
     args.database.parent.mkdir(parents=True, exist_ok=True)
     journal = SqliteJournal(args.database)

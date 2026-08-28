@@ -92,14 +92,14 @@ def _schema_v1_with_uri_only_detail(payload: dict[str, Any]) -> None:
 def _prepare_run(world: Any, run_id: RunId) -> None:
     inputs = {"issue": {"title": str(run_id)}}
     manifest = world.validate(pipeline_graph(), inputs)
-    world.prepare(manifest, run_id=run_id, inputs=inputs)
+    world._prepare_run(manifest, run_id=run_id, inputs=inputs)
 
 
 def _candidate(world: Any, component: str) -> tuple[Digest, str]:
     definition, impl = atomic(component, (ISSUE,), (BRIEF,), triage_impl)
-    baseline = world.register(definition, impl)
-    world.promote_initial(component=component, version=baseline)
-    candidate = world.register(definition.model_copy(update={"role": "component"}), impl)
+    baseline = world._register(definition, impl)
+    world._promote_initial(component=component, version=baseline)
+    candidate = world._register(definition.model_copy(update={"role": "component"}), impl)
     draft = AttestationDraft(
         action="promote",
         subject=ComponentProofSubject(
@@ -120,16 +120,16 @@ def _candidate(world: Any, component: str) -> tuple[Digest, str]:
         manifest_hash=digest("manifest", 1, {"fixture": component}),
         workspace_id=None,
     )
-    attestation = world.journal.mint_policy_attestation(draft)
+    attestation = world._journal.mint_policy_attestation(draft)
     return candidate, attestation.attestation_id
 
 
-async def test_sqlite_replays_v1_run_submission_as_v2(
+async def test_sqlite_replays_v1_run_submission_as_v3(
     world: Any,
     journal: SqliteJournal,
     tmp_path: Path,
 ) -> None:
-    host = RunHost(world, max_concurrency=1)
+    host = RunHost(world, journal=journal, max_concurrency=1)
     control = ControlPlane(system=world, store=journal, run_host=host)
     proposal = pipeline_graph()
     inputs = {"issue": {"title": "v1-start"}}
@@ -154,14 +154,14 @@ async def test_sqlite_replays_v1_run_submission_as_v2(
     )
 
     assert isinstance(replay, RunSubmission)
-    assert replay.schema_version == 2
+    assert replay.schema_version == 3
     assert replay.run_id == first.run_id
     assert replay.command.replayed is True
     assert "status_ref" not in replay.model_dump(mode="json")
     await host.shutdown()
 
 
-async def test_sqlite_replays_v1_cancellation_as_v2(
+async def test_sqlite_replays_v1_cancellation_as_v3(
     world: Any,
     journal: SqliteJournal,
     tmp_path: Path,
@@ -169,22 +169,16 @@ async def test_sqlite_replays_v1_cancellation_as_v2(
     run_id = RunId("run-v1-cancel")
     _prepare_run(world, run_id)
     control = ControlPlane(system=world, store=journal)
-    first = await control.runs_cancel(
-        ACTOR, run_id=run_id, idempotency_key="v1-cancel"
-    )
+    first = await control.runs_cancel(ACTOR, run_id=run_id, idempotency_key="v1-cancel")
     assert isinstance(first, CancellationResult)
 
-    _rewrite_response(
-        tmp_path / "journal.db", first.command.command_id, _schema_v1
-    )
-    replay = await control.runs_cancel(
-        ACTOR, run_id=run_id, idempotency_key="v1-cancel"
-    )
+    _rewrite_response(tmp_path / "journal.db", first.command.command_id, _schema_v1)
+    replay = await control.runs_cancel(ACTOR, run_id=run_id, idempotency_key="v1-cancel")
 
     assert isinstance(replay, CancellationResult)
-    assert replay.schema_version == 2
+    assert replay.schema_version == 3
     assert replay.command.replayed is True
-    await control.run_host.shutdown()
+    await control.shutdown()
 
 
 async def test_sqlite_replays_v1_approval_with_digest_bound_detail(
@@ -194,7 +188,7 @@ async def test_sqlite_replays_v1_approval_with_digest_bound_detail(
 ) -> None:
     run_id = RunId("run-v1-approval")
     _prepare_run(world, run_id)
-    stable = world.registry.stable_version("test/triage")
+    stable = world._registry.stable_version("test/triage")
     assert stable is not None
     subject = ComponentProofSubject(
         component="test/triage",
@@ -227,12 +221,12 @@ async def test_sqlite_replays_v1_approval_with_digest_bound_detail(
     )
 
     assert isinstance(replay, ApprovalCommandResult)
-    assert replay.schema_version == 2
+    assert replay.schema_version == 3
     assert replay.command.replayed is True
     assert replay.detail.digest is not None
     chunk = control.details_read(ACTOR, replay.detail)
     assert not isinstance(chunk, ControlRejected)
-    await control.run_host.shutdown()
+    await control.shutdown()
 
 
 async def test_sqlite_replays_v1_promotion_with_digest_bound_detail(
@@ -266,12 +260,12 @@ async def test_sqlite_replays_v1_promotion_with_digest_bound_detail(
     )
 
     assert isinstance(replay, PromotionCommandResult)
-    assert replay.schema_version == 2
+    assert replay.schema_version == 3
     assert replay.command.replayed is True
     assert replay.detail.digest is not None
     chunk = control.details_read(ACTOR, replay.detail)
     assert not isinstance(chunk, ControlRejected)
-    await control.run_host.shutdown()
+    await control.shutdown()
 
 
 async def test_damaged_v1_promotion_digest_surfaces_as_journal_damage(
@@ -308,31 +302,27 @@ async def test_damaged_v1_promotion_digest_surfaces_as_journal_damage(
             attestation_id=attestation_id,
             idempotency_key="v1-damaged-promotion",
         )
-    await control.run_host.shutdown()
+    await control.shutdown()
 
 
-async def test_sqlite_replays_v1_control_rejection_as_v2(
+async def test_sqlite_replays_v1_control_rejection_as_v3(
     world: Any,
     journal: SqliteJournal,
     tmp_path: Path,
 ) -> None:
     control = ControlPlane(system=world, store=journal)
     run_id = RunId("run-v1-unknown")
-    first = await control.runs_cancel(
-        ACTOR, run_id=run_id, idempotency_key="v1-rejection"
-    )
+    first = await control.runs_cancel(ACTOR, run_id=run_id, idempotency_key="v1-rejection")
     assert isinstance(first, ControlRejected)
     command_id = command_id_for(ACTOR.actor_id, "runs_cancel", "v1-rejection")
 
     _rewrite_response(tmp_path / "journal.db", command_id, _schema_v1)
-    replay = await control.runs_cancel(
-        ACTOR, run_id=run_id, idempotency_key="v1-rejection"
-    )
+    replay = await control.runs_cancel(ACTOR, run_id=run_id, idempotency_key="v1-rejection")
 
     assert isinstance(replay, ControlRejected)
-    assert replay.schema_version == 2
+    assert replay.schema_version == 3
     assert replay.faults == first.faults
-    await control.run_host.shutdown()
+    await control.shutdown()
 
 
 def test_actor_scope_serialization_is_canonical_and_hash_safe() -> None:

@@ -24,7 +24,12 @@ from constructicon.core.errors import JournalDamaged
 from constructicon.core.run import RunStatus
 from constructicon.runtime.walker import RunResult
 from constructicon.substrate.journal.sqlite import SqliteJournal
-from tests.conftest import FakeClock, InjectedCrash, pipeline_graph
+from tests.conftest import (
+    FakeClock,
+    InjectedCrash,
+    await_attempt_terminal,
+    pipeline_graph,
+)
 
 ACTOR = AuthenticatedActor(
     actor_id="static:attempt-fence",
@@ -47,7 +52,7 @@ def _prepare_terminal(
     inputs = {"issue": {"title": suffix}}
     manifest = world.validate(pipeline_graph(), inputs)
     run_id = RunId(f"run-attempt-{suffix}")
-    world.prepare(manifest, run_id=run_id, inputs=inputs)
+    world._prepare_run(manifest, run_id=run_id, inputs=inputs)
     lease = journal.claim_run(run_id, owner_id=f"initial-{suffix}", ttl_s=30)
     journal.transition_run(
         lease,
@@ -81,6 +86,7 @@ def _install_terminal_worker(
         cancellation: str,
         expected_event_seq: int | None = None,
         expected_statuses: frozenset[RunStatus] | None = None,
+        resume_command_id: str | None = None,
     ) -> RunResult:
         assert cancellation == "abandon"
         attempt_number = len(attempts) + 1
@@ -96,14 +102,11 @@ def _install_terminal_worker(
         assert claimed is not None
         journal.transition_run(
             lease,
-            expected=frozenset(
-                {RunStatus.PENDING, RunStatus.FAILED, RunStatus.PARKED}
-            ),
+            expected=frozenset({RunStatus.PENDING, RunStatus.FAILED, RunStatus.PARKED}),
             target=RunStatus.RUNNING,
-            event_kind=(
-                "RunStarted"
-                if claimed.status is RunStatus.PENDING
-                else "RunResumed"
+            event_kind=("RunStarted" if claimed.status is RunStatus.PENDING else "RunResumed"),
+            payload=(
+                {"resume_command_id": resume_command_id} if resume_command_id is not None else None
             ),
         )
         journal.transition_run(
@@ -136,7 +139,12 @@ def _remove_attempt_fence(db_path: Path, command_id: str) -> None:
         assert row is not None and isinstance(row[0], str)
         plan = json.loads(row[0])
         assert isinstance(plan, dict)
-        plan.pop("baseline_event_seq")
+        if "schema_version" in plan:
+            typed = plan.get("plan")
+            assert isinstance(typed, dict)
+            plan = {"run_id": typed["run_id"]}
+        else:
+            plan.pop("baseline_event_seq", None)
         connection.execute(
             "UPDATE commands SET plan_json = ? WHERE command_id = ?",
             (json.dumps(plan, sort_keys=True, separators=(",", ":")), command_id),
@@ -151,7 +159,9 @@ def _damage_attempt_fence(db_path: Path, command_id: str) -> None:
         assert row is not None and isinstance(row[0], str)
         plan = json.loads(row[0])
         assert isinstance(plan, dict)
-        plan["baseline_event_seq"] = "damaged"
+        target = plan.get("plan") if "schema_version" in plan else plan
+        assert isinstance(target, dict)
+        target["baseline_event_seq"] = "damaged"
         connection.execute(
             "UPDATE commands SET plan_json = ? WHERE command_id = ?",
             (json.dumps(plan, sort_keys=True, separators=(",", ":")), command_id),
@@ -174,11 +184,10 @@ async def test_same_resume_command_replay_never_starts_a_second_attempt(
         suffix=f"resume-{status.value}",
         status=status,
     )
-    attempts = _install_terminal_worker(
-        monkeypatch, world, journal, terminal_status=status
-    )
-    host = RunHost(world, max_concurrency=1)
+    attempts = _install_terminal_worker(monkeypatch, world, journal, terminal_status=status)
+    host = RunHost(world, journal=journal, max_concurrency=1)
     control = ControlPlane(system=world, store=journal, run_host=host)
+    baseline = journal.max_event_seq(run_id)
 
     first = await control.runs_resume(
         ACTOR,
@@ -186,8 +195,13 @@ async def test_same_resume_command_replay_never_starts_a_second_attempt(
         idempotency_key=f"resume-{status.value}",
     )
     assert isinstance(first, RunSubmission)
-    first_result = await host.wait(run_id)
-    assert first_result is not None and first_result.status is status
+    terminal = await await_attempt_terminal(
+        journal,
+        run_id,
+        baseline_event_seq=baseline,
+        expected_resume_command_id=first.command.command_id,
+    )
+    assert terminal.kind == TERMINAL_KINDS[status]
     events_after_first = _attempt_events(journal, run_id)
     if legacy_plan:
         _remove_attempt_fence(tmp_path / "journal.db", first.command.command_id)
@@ -221,14 +235,20 @@ async def test_resume_replay_after_completed_response_loss_starts_once(
     attempts = _install_terminal_worker(
         monkeypatch, world, journal, terminal_status=RunStatus.FAILED
     )
-    host = RunHost(world, max_concurrency=1)
-    control = ControlPlane(system=world, store=journal, run_host=host)
+    host = RunHost(world, journal=journal, max_concurrency=1)
+    armed = True
 
     def crash(name: str) -> None:
-        if name == "runs_resume.after_command_completion":
+        if armed and name == "runs_resume.after_command_completion":
             raise InjectedCrash(name)
 
-    control.fault_probe = crash
+    control = ControlPlane(
+        system=world,
+        store=journal,
+        run_host=host,
+        fault_probe=crash,
+    )
+    baseline = journal.max_event_seq(run_id)
     with pytest.raises(InjectedCrash):
         await control.runs_resume(
             ACTOR,
@@ -236,7 +256,7 @@ async def test_resume_replay_after_completed_response_loss_starts_once(
             idempotency_key="resume-response-loss",
         )
 
-    control.fault_probe = lambda name: None
+    armed = False
     replay = await control.runs_resume(
         ACTOR,
         run_id=run_id,
@@ -244,8 +264,13 @@ async def test_resume_replay_after_completed_response_loss_starts_once(
     )
     assert isinstance(replay, RunSubmission)
     assert replay.command.replayed is True
-    result = await host.wait(run_id)
-    assert result is not None and result.status is RunStatus.FAILED
+    terminal = await await_attempt_terminal(
+        journal,
+        run_id,
+        baseline_event_seq=baseline,
+        expected_resume_command_id=replay.command.command_id,
+    )
+    assert terminal.kind == "RunFailed"
     assert attempts == [run_id]
     await host.shutdown()
 
@@ -266,20 +291,21 @@ async def test_prepared_legacy_resume_plan_recovers_with_a_current_attempt_fence
     attempts = _install_terminal_worker(
         monkeypatch, world, journal, terminal_status=RunStatus.FAILED
     )
-    abandoned_host = RunHost(world, max_concurrency=1)
+    abandoned_host = RunHost(world, journal=journal, max_concurrency=1)
+
+    def crash(name: str) -> None:
+        if name == "runs_resume.after_plan":
+            raise InjectedCrash(name)
+
     abandoned = ControlPlane(
         system=world,
         store=journal,
         run_host=abandoned_host,
         owner_id="legacy-resume-a",
         command_ttl_s=30,
+        fault_probe=crash,
     )
-
-    def crash(name: str) -> None:
-        if name == "runs_resume.after_plan":
-            raise InjectedCrash(name)
-
-    abandoned.fault_probe = crash
+    baseline = journal.max_event_seq(run_id)
     with pytest.raises(InjectedCrash):
         await abandoned.runs_resume(
             ACTOR,
@@ -287,13 +313,11 @@ async def test_prepared_legacy_resume_plan_recovers_with_a_current_attempt_fence
             idempotency_key="legacy-prepared-resume",
         )
 
-    command_id = command_id_for(
-        ACTOR.actor_id, "runs_resume", "legacy-prepared-resume"
-    )
+    command_id = command_id_for(ACTOR.actor_id, "runs_resume", "legacy-prepared-resume")
     _remove_attempt_fence(tmp_path / "journal.db", command_id)
 
     clock.advance(31)
-    recovered_host = RunHost(world, max_concurrency=1)
+    recovered_host = RunHost(world, journal=journal, max_concurrency=1)
     recovered = ControlPlane(
         system=world,
         store=journal,
@@ -307,8 +331,13 @@ async def test_prepared_legacy_resume_plan_recovers_with_a_current_attempt_fence
         idempotency_key="legacy-prepared-resume",
     )
     assert isinstance(response, RunSubmission)
-    result = await recovered_host.wait(run_id)
-    assert result is not None and result.status is RunStatus.FAILED
+    terminal = await await_attempt_terminal(
+        journal,
+        run_id,
+        baseline_event_seq=baseline,
+        expected_resume_command_id=response.command.command_id,
+    )
+    assert terminal.kind == "RunFailed"
     assert attempts == [run_id]
     await abandoned_host.shutdown()
     await recovered_host.shutdown()
@@ -325,26 +354,29 @@ async def test_damaged_committed_resume_fence_is_never_treated_as_legacy(
         suffix="damaged-committed-resume",
         status=RunStatus.FAILED,
     )
-    host = RunHost(world, max_concurrency=1)
-    control = ControlPlane(system=world, store=journal, run_host=host)
+    host = RunHost(world, journal=journal, max_concurrency=1)
+    armed = True
 
     def crash(name: str) -> None:
-        if name == "runs_resume.after_command_completion":
+        if armed and name == "runs_resume.after_command_completion":
             raise InjectedCrash(name)
 
-    control.fault_probe = crash
+    control = ControlPlane(
+        system=world,
+        store=journal,
+        run_host=host,
+        fault_probe=crash,
+    )
     with pytest.raises(InjectedCrash):
         await control.runs_resume(
             ACTOR,
             run_id=run_id,
             idempotency_key="damaged-committed-resume",
         )
-    command_id = command_id_for(
-        ACTOR.actor_id, "runs_resume", "damaged-committed-resume"
-    )
+    command_id = command_id_for(ACTOR.actor_id, "runs_resume", "damaged-committed-resume")
     _damage_attempt_fence(tmp_path / "journal.db", command_id)
 
-    control.fault_probe = lambda name: None
+    armed = False
     with pytest.raises(JournalDamaged):
         await control.runs_resume(
             ACTOR,
@@ -362,7 +394,7 @@ async def test_start_replay_after_failed_attempt_does_not_implicitly_resume(
     attempts = _install_terminal_worker(
         monkeypatch, world, journal, terminal_status=RunStatus.FAILED
     )
-    host = RunHost(world, max_concurrency=1)
+    host = RunHost(world, journal=journal, max_concurrency=1)
     control = ControlPlane(system=world, store=journal, run_host=host)
     inputs = {"issue": {"title": "start-fails-once"}}
 
@@ -373,8 +405,8 @@ async def test_start_replay_after_failed_attempt_does_not_implicitly_resume(
         idempotency_key="start-fails-once",
     )
     assert isinstance(first, RunSubmission)
-    result = await host.wait(first.run_id)
-    assert result is not None and result.status is RunStatus.FAILED
+    terminal = await await_attempt_terminal(journal, first.run_id, baseline_event_seq=0)
+    assert terminal.kind == "RunFailed"
     events_after_first = _attempt_events(journal, first.run_id)
 
     replay = await control.runs_start(

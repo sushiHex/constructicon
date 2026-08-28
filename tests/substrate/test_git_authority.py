@@ -207,7 +207,9 @@ def test_snapshot_is_physically_read_only_and_content_verified(
     mode = os.stat(calc).st_mode
     assert mode & 0o222 == 0  # write bits gone on files
     assert os.stat(snapshot.path).st_mode & 0o222 == 0  # and directories
-    if os.geteuid() != 0:  # root bypasses permission bits; CI runs unprivileged
+    # Root and Windows ACLs can bypass or reinterpret POSIX write bits.
+    geteuid = getattr(os, "geteuid", lambda: 1)
+    if os.name != "nt" and geteuid() != 0:
         with pytest.raises(PermissionError):
             calc.write_text("mutate")
         with pytest.raises(PermissionError):
@@ -284,3 +286,29 @@ def test_reset_to_refuses_cross_repository_missing_and_post_import_targets(
         workspace.reset_to(
             GitRef(repository=authority.repository_id, commit=candidate)
         )
+
+
+def test_discarding_an_already_removed_tree_is_never_a_caller_fault(
+    authority: GitAuthority,
+    tmp_path: Path,
+) -> None:
+    """Cleanup is best-effort by contract: a discard reports, it never raises.
+
+    A crash-and-retry, a second discard, or a tree another process still holds
+    open must all leave the caller with a plain answer rather than an
+    exception it has no way to act on.
+    """
+
+    base = authority.resolve_ref("refs/heads/main")
+    snapshot = authority.read_snapshot(base)
+    authority.discard_snapshot(snapshot)
+    assert not Path(snapshot.path).exists()
+    authority.discard_snapshot(snapshot)  # idempotent, not an error
+
+    authority.acquire_write(
+        acquisition_id="acq-discard",
+        target_ref="refs/heads/main",
+        candidate_ref="refs/candidates/run-test/acq-discard",
+    )
+    assert authority.discard_staging("acq-discard") is True
+    assert authority.discard_staging("acq-discard") is False

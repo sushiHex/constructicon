@@ -58,10 +58,7 @@ class InMemoryControlStore:
                     return CommandClaimResult(status="conflict", record=existing)
                 if existing.state in ("committed", "rejected"):
                     return CommandClaimResult(status="replayed", record=existing)
-                if (
-                    existing.lease_expires_at is not None
-                    and existing.lease_expires_at > now
-                ):
+                if existing.lease_expires_at is not None and existing.lease_expires_at > now:
                     return CommandClaimResult(status="in_progress", record=existing)
                 epoch = existing.owner_epoch + 1
                 expires_at = now + timedelta(seconds=ttl_s)
@@ -142,6 +139,47 @@ class InMemoryControlStore:
         with self._lock:
             return self._commands.get(command_id)
 
+    def latest_command_key(self, *, operation: str) -> tuple[str, str] | None:
+        with self._lock:
+            keys = [
+                (record.created_at.isoformat(), record.command_id)
+                for record in self._commands.values()
+                if record.operation == operation
+            ]
+        return max(keys) if keys else None
+
+    def committed_commands(
+        self,
+        *,
+        operation: str,
+        after: tuple[str, str] | None,
+        through: tuple[str, str],
+        limit: int,
+    ) -> tuple[CommandRecord, ...]:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        with self._lock:
+            records = tuple(
+                sorted(
+                    (
+                        record
+                        for record in self._commands.values()
+                        if record.operation == operation
+                        and record.state == "committed"
+                        and record.completed_at is not None
+                        and (record.created_at.isoformat(), record.command_id) <= through
+                        and (
+                            after is None
+                            or (record.created_at.isoformat(), record.command_id) > after
+                        )
+                    ),
+                    # Order by the SAME key the bounds compare on, or a mixed
+                    # UTC offset would sort differently from the durable store.
+                    key=lambda record: (record.created_at.isoformat(), record.command_id),
+                )
+            )
+        return records[:limit]
+
     def store_approval(self, claim: CommandClaim, approval: ApprovalRecord) -> ApprovalRecord:
         with self._lock:
             self._fenced(claim)
@@ -152,8 +190,7 @@ class InMemoryControlStore:
                 return approval
             if (
                 existing != approval
-                or self._approval_commands.get(approval.approval_id)
-                != claim.command_id
+                or self._approval_commands.get(approval.approval_id) != claim.command_id
             ):
                 raise JournalDamaged(
                     f"approval {approval.approval_id!r} was rewritten contradictorily"

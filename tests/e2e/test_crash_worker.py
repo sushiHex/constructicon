@@ -75,7 +75,7 @@ async def test_a_fresh_process_recovers_from_durable_state_alone(
     assert state is not None and state.status is RunStatus.RUNNING
     assert state.liveness == "lost"  # durably RUNNING; the lease looks expired
 
-    result = await system.resume(RunId(run_id))
+    result = await system._resume_direct(RunId(run_id))
     assert result.status is RunStatus.SUCCEEDED
     assert result.outputs["summary"] == {"text": "summary of fix the flaky retry loop"}
     assert result.outputs["announced"] == {"reference": "announce/1"}

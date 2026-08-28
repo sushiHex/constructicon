@@ -64,8 +64,8 @@ def register_loop_component(system: Constructicon, *, bad: bool = False) -> str:
     impl = non_bool_impl if bad else advance_impl
     name = "loop/non-bool" if bad else "loop/advance"
     definition, _ = atomic(name, (STATE, LIMIT), (STATE, CONTINUE), impl)
-    version = system.register(definition, impl)
-    system.promote_initial(component=name, version=version)
+    version = system._register(definition, impl)
+    system._promote_initial(component=name, version=version)
     return name
 
 
@@ -122,7 +122,7 @@ async def test_loop_stops_on_false_and_exports_the_final_iteration(
 ) -> None:
     ADVANCE_CALLS.clear()
     component = register_loop_component(system)
-    result = await system.start(
+    result = await system._start_direct(
         loop_graph(component, max_iterations=5),
         {"seed": {"count": 0}, "limit": 3},
         run_id=RunId("loop-green"),
@@ -133,7 +133,7 @@ async def test_loop_stops_on_false_and_exports_the_final_iteration(
     assert ADVANCE_CALLS == [1, 2, 3]
     completed = [
         event
-        for event in system.journal.events(RunId("loop-green"), limit=200)
+        for event in system._journal.events(RunId("loop-green"), limit=200)
         if event.kind == "NodeCompleted"
     ]
     assert [event.path.iterations[0].index for event in completed if event.path] == [0, 1, 2]
@@ -144,7 +144,7 @@ async def test_false_on_the_last_allowed_iteration_is_success(
 ) -> None:
     ADVANCE_CALLS.clear()
     component = register_loop_component(system)
-    result = await system.start(
+    result = await system._start_direct(
         loop_graph(component, max_iterations=2),
         {"seed": {"count": 0}, "limit": 2},
         run_id=RunId("loop-last-false"),
@@ -162,7 +162,7 @@ async def test_policy_exhaustion_parks_and_resume_restores_every_iteration(
     graph = loop_graph(component, max_iterations=2)
     inputs = {"seed": {"count": 0}, "limit": 10}
 
-    first = await system.start(graph, inputs, run_id=RunId("loop-parked"))
+    first = await system._start_direct(graph, inputs, run_id=RunId("loop-parked"))
     assert first.status is RunStatus.PARKED
     assert first.outputs == {}
     assert len(first.parked) == 1
@@ -170,11 +170,11 @@ async def test_policy_exhaustion_parks_and_resume_restores_every_iteration(
     assert first.parked[0].completed_iterations == 2
     assert ADVANCE_CALLS == [1, 2]
 
-    second = await system.resume(RunId("loop-parked"))
+    second = await system._resume_direct(RunId("loop-parked"))
     assert second.status is RunStatus.PARKED
     assert ADVANCE_CALLS == [1, 2]  # both frame-specific checkpoints restored
     kinds = [
-        event.kind for event in system.journal.events(RunId("loop-parked"), limit=300)
+        event.kind for event in system._journal.events(RunId("loop-parked"), limit=300)
     ]
     assert kinds.count("RunParked") == 2
     assert kinds.count("NodeRestored") == 2
@@ -197,7 +197,7 @@ async def test_crash_after_iteration_checkpoint_resumes_without_reexecution(
 
     journal.fault_probe = crash_after_first_completion
     with pytest.raises(InjectedCrash):
-        await system.start(
+        await system._start_direct(
             loop_graph(component, max_iterations=5),
             {"seed": {"count": 0}, "limit": 3},
             run_id=RunId("loop-crash"),
@@ -205,7 +205,7 @@ async def test_crash_after_iteration_checkpoint_resumes_without_reexecution(
     journal.fault_probe = lambda name: None
     clock.advance(31)
 
-    result = await system.resume(RunId("loop-crash"))
+    result = await system._resume_direct(RunId("loop-crash"))
     assert result.status is RunStatus.SUCCEEDED
     assert result.outputs["state"]["count"] == 3
     assert ADVANCE_CALLS == [1, 2, 3]
@@ -217,7 +217,7 @@ async def test_crash_after_iteration_checkpoint_resumes_without_reexecution(
 
 async def test_runtime_continuation_is_exactly_bool(system: Constructicon) -> None:
     component = register_loop_component(system, bad=True)
-    result = await system.start(
+    result = await system._start_direct(
         loop_graph(component, max_iterations=2),
         {"seed": {"count": 0}, "limit": 2},
         run_id=RunId("loop-bad-control"),
@@ -240,8 +240,8 @@ def test_continuation_contract_requires_the_canonical_boolean_schema(
         (STATE, wrong_continue),
         advance_impl,
     )
-    version = system.register(definition, impl)
-    system.promote_initial(component=definition.name, version=version)
+    version = system._register(definition, impl)
+    system._promote_initial(component=definition.name, version=version)
     with pytest.raises(AdmissionError, match="must be exactly"):
         system.validate(
             loop_graph(definition.name, max_iterations=2),
@@ -259,8 +259,8 @@ def test_feedback_requires_the_exact_schema_and_single_cardinality(
         (wrong_state, CONTINUE),
         advance_impl,
     )
-    version = system.register(definition, impl)
-    system.promote_initial(component=definition.name, version=version)
+    version = system._register(definition, impl)
+    system._promote_initial(component=definition.name, version=version)
     with pytest.raises(AdmissionError, match="exact nominal contract"):
         system.validate(
             loop_graph(definition.name, max_iterations=2),
@@ -279,8 +279,8 @@ def test_feedback_requires_the_exact_schema_and_single_cardinality(
         (many_state, CONTINUE),
         advance_impl,
     )
-    many_version = system.register(definition_many, impl_many)
-    system.promote_initial(component=definition_many.name, version=many_version)
+    many_version = system._register(definition_many, impl_many)
+    system._promote_initial(component=definition_many.name, version=many_version)
     with pytest.raises(AdmissionError, match="cardinality 'one' on both"):
         system.validate(
             loop_graph(definition_many.name, max_iterations=2),
@@ -307,8 +307,8 @@ async def test_direct_composite_body_uses_the_same_loop_boundary(
         inputs=(STATE, LIMIT),
         outputs=(STATE, CONTINUE),
     )
-    version = system.register(composite)
-    system.promote_initial(component=composite.name, version=version)
+    version = system._register(composite)
+    system._promote_initial(component=composite.name, version=version)
 
     manifest = system.validate(
         loop_graph(composite.name, max_iterations=4),
@@ -318,7 +318,7 @@ async def test_direct_composite_body_uses_the_same_loop_boundary(
         "bounded-counter/counter/body/$body/advance"
     ]
 
-    result = await system.start(
+    result = await system._start_direct(
         loop_graph(composite.name, max_iterations=4),
         {"seed": {"count": 0}, "limit": 2},
         run_id=RunId("loop-composite"),
@@ -356,8 +356,8 @@ def test_nested_loop_hidden_behind_composite_ref_is_rejected(
         inputs=(STATE, LIMIT),
         outputs=(STATE, CONTINUE),
     )
-    version = system.register(composite)
-    system.promote_initial(component=composite.name, version=version)
+    version = system._register(composite)
+    system._promote_initial(component=composite.name, version=version)
 
     with pytest.raises(AdmissionError, match="nested Loop"):
         system.validate(
@@ -379,8 +379,8 @@ def test_loop_control_value_is_private_and_cannot_bind_downstream(
         (STATE,),
         control_sink_impl,
     )
-    sink_version = system.register(sink_def, sink_impl)
-    system.promote_initial(component=sink_def.name, version=sink_version)
+    sink_version = system._register(sink_def, sink_impl)
+    system._promote_initial(component=sink_def.name, version=sink_version)
     graph = Graph(
         name="control-is-private",
         nodes=(
@@ -424,7 +424,7 @@ async def test_contradictory_iteration_checkpoint_refuses_before_reexecution(
 
     journal.fault_probe = crash_after_first_completion
     with pytest.raises(InjectedCrash):
-        await system.start(
+        await system._start_direct(
             loop_graph(component, max_iterations=3),
             {"seed": {"count": 0}, "limit": 2},
             run_id=run_id,
@@ -451,7 +451,7 @@ async def test_contradictory_iteration_checkpoint_refuses_before_reexecution(
 
     clock.advance(31)
     with pytest.raises(CheckpointConflict, match="contradicts"):
-        await system.resume(run_id)
+        await system._resume_direct(run_id)
     assert ADVANCE_CALLS == [1]
 
 
@@ -462,7 +462,7 @@ async def test_checkpoint_after_terminal_false_is_journal_damage(
     ADVANCE_CALLS.clear()
     component = register_loop_component(system)
     run_id = RunId("loop-checkpoint-after-false")
-    result = await system.start(
+    result = await system._start_direct(
         loop_graph(component, max_iterations=2),
         {"seed": {"count": 0}, "limit": 1},
         run_id=run_id,
@@ -490,4 +490,4 @@ async def test_checkpoint_after_terminal_false_is_journal_damage(
         )
 
     with pytest.raises(JournalDamaged, match="after terminal false"):
-        await system.resume(run_id)
+        await system._resume_direct(run_id)

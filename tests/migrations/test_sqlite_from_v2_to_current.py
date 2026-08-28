@@ -1,5 +1,4 @@
-"""A v2 (M2-era) database migrates additively to v3: the capability_leases
-table appears; nothing else moves (M3 §6)."""
+"""A schema-v2 database migrates additively to the current schema."""
 
 from __future__ import annotations
 

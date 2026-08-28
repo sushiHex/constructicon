@@ -6,16 +6,19 @@ import asyncio
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId
-from constructicon.core.control import RunRecord
+from constructicon.core.control import CommandRecord, ControlStore, RunRecord
 from constructicon.core.errors import ConstructiconError
+from constructicon.core.journal import Journal
 from constructicon.core.run import OwnershipLost, RunAttemptSuperseded, RunStatus
 from constructicon.runtime.walker import RunResult
 
 FailureSink = Callable[[RunId, BaseException], None]
+ResumeDecoder = Callable[[CommandRecord], tuple[RunId, int, str] | None]
+LaunchDisposition = Literal["queued", "coalesced_exact", "superseded"]
 Clock = Callable[[], datetime]
 Sleeper = Callable[[float], Coroutine[Any, Any, None]]
 _RECOVERY_STATUSES = (RunStatus.PENDING, RunStatus.RUNNING)
@@ -24,13 +27,13 @@ _RESUMABLE_STATUSES = frozenset(
     {RunStatus.PENDING, RunStatus.RUNNING, RunStatus.FAILED, RunStatus.PARKED}
 )
 _WorkerTask = asyncio.Task[RunResult | None]
-_LaunchFuture = asyncio.Future[_WorkerTask | None]
 
 
 @dataclass(frozen=True)
 class _LaunchIntent:
     expected_event_seq: int | None
     allowed_statuses: frozenset[RunStatus]
+    resume_command_id: str | None = None
 
 
 class RunHost:
@@ -45,9 +48,12 @@ class RunHost:
         self,
         system: Constructicon,
         *,
+        journal: Journal,
         max_concurrency: int = 4,
         on_failure: FailureSink | None = None,
         recovery_page_size: int = 100,
+        resume_pages_per_tick: int = 4,
+        resume_retry_s: float = 0.25,
         claim_retry_s: float = 0.1,
         now_fn: Clock | None = None,
         sleep_fn: Sleeper = asyncio.sleep,
@@ -58,10 +64,17 @@ class RunHost:
             raise ValueError("RunHost recovery_page_size must be positive")
         if claim_retry_s <= 0:
             raise ValueError("RunHost claim_retry_s must be positive")
+        if resume_pages_per_tick <= 0:
+            raise ValueError("RunHost resume_pages_per_tick must be positive")
+        if resume_retry_s <= 0:
+            raise ValueError("RunHost resume_retry_s must be positive")
         self._system = system
+        self._journal = journal
         self._max_concurrency = max_concurrency
         self._recovery_page_size = recovery_page_size
         self._claim_retry_s = claim_retry_s
+        self._resume_pages_per_tick = resume_pages_per_tick
+        self._resume_retry_s = resume_retry_s
         self._now = now_fn or (lambda: datetime.now(UTC))
         self._sleep = sleep_fn
         self._tasks: dict[RunId, _WorkerTask] = {}
@@ -70,7 +83,6 @@ class RunHost:
         self._requested: dict[RunId, _LaunchIntent] = {}
         self._explicit_tasks: dict[RunId, _LaunchIntent] = {}
         self._claim_retry_at: dict[RunId, datetime] = {}
-        self._launch_waiters: dict[RunId, set[_LaunchFuture]] = {}
         # A row that failed unexpectedly must remain durable and observable, but
         # this host must not spin on it. A fresh host or explicit operator action
         # can retry after the cause changes.
@@ -81,6 +93,20 @@ class RunHost:
         self._pump_task: asyncio.Task[None] | None = None
         self._scan_waiters: set[asyncio.Future[None]] = set()
         self._pump_failure: BaseException | None = None
+        self._control_store: ControlStore | None = None
+        self._resume_decoder: ResumeDecoder | None = None
+        self._resume_through: tuple[str, str] | None = None
+        self._resume_after: tuple[str, str] | None = None
+
+    def _configure_committed_resumes(
+        self,
+        store: ControlStore,
+        decoder: ResumeDecoder,
+    ) -> None:
+        if self._pump_task is not None:
+            raise RuntimeError("committed resume recovery must be configured before startup")
+        self._control_store = store
+        self._resume_decoder = decoder
 
     @property
     def active_run_ids(self) -> tuple[RunId, ...]:
@@ -127,7 +153,8 @@ class RunHost:
         *,
         expected_event_seq: int | None = None,
         allowed_statuses: frozenset[RunStatus] | None = None,
-    ) -> bool:
+        resume_command_id: str | None = None,
+    ) -> LaunchDisposition:
         """Queue explicit local scheduling intent without creating a waiter task.
 
         The return value reports whether new intent was accepted, not whether a
@@ -142,10 +169,15 @@ class RunHost:
             allowed_statuses=(
                 _RESUMABLE_STATUSES if allowed_statuses is None else allowed_statuses
             ),
+            resume_command_id=resume_command_id,
         )
         current = self._tasks.get(run_id)
         queued = self._requested.get(run_id)
         if queued is not None:
+            if queued == intent:
+                self._ensure_pump()
+                self._wake.set()
+                return "coalesced_exact"
             accepted = self._supersedes(intent, queued)
             if accepted:
                 self._requested[run_id] = intent
@@ -155,9 +187,11 @@ class RunHost:
             # Duplicate delivery must be enough to revive the process-local pump.
             self._ensure_pump()
             self._wake.set()
-            return accepted
+            return "queued" if accepted else "superseded"
         if current is not None and not current.done():
             inflight = self._explicit_tasks.get(run_id)
+            if inflight == intent:
+                return "coalesced_exact"
             accepted = inflight is None or self._supersedes(intent, inflight)
             if accepted:
                 # Keep the newer attempt behind the still-unwinding worker. Its
@@ -167,48 +201,29 @@ class RunHost:
                 self._claim_retry_at.pop(run_id, None)
             self._ensure_pump()
             self._wake.set()
-            return accepted
+            return "queued" if accepted else "superseded"
         self._deferred.discard(run_id)
         self._claim_retry_at.pop(run_id, None)
         self._requested[run_id] = intent
         self._ensure_pump()
         self._wake.set()
-        return True
-
-    async def wait(self, run_id: RunId) -> RunResult | None:
-        """Test-transition helper; production callers observe durable status."""
-
-        while True:
-            task = self._tasks.get(run_id)
-            if task is None and run_id in self._requested:
-                # Waiting is an explicit observation point and must not hang on
-                # retained intent merely because a prior pump task died.
-                self._ensure_pump()
-                self._wake.set()
-                launched: _LaunchFuture = asyncio.get_running_loop().create_future()
-                self._launch_waiters.setdefault(run_id, set()).add(launched)
-                try:
-                    task = await launched
-                finally:
-                    waiters = self._launch_waiters.get(run_id)
-                    if waiters is not None:
-                        waiters.discard(launched)
-                        if not waiters:
-                            self._launch_waiters.pop(run_id, None)
-            if task is None:
-                return None
-            result = await asyncio.shield(task)
-            current = self._tasks.get(run_id)
-            if run_id not in self._requested and (current is None or current is task):
-                return result
-            # Let the task's completion callback remove the old worker before
-            # waiting for preserved or superseding explicit intent.
-            await asyncio.sleep(0)
+        return "queued"
 
     async def shutdown(self) -> None:
         """Abandon local work without recording durable cancellation intent."""
 
         self._closed = True
+        await self._abandon_local_state()
+
+    async def abort_startup(self) -> None:
+        """Reset a partial startup without permanently closing this host."""
+
+        if self._closed:
+            raise RuntimeError("RunHost is closed")
+        await self._abandon_local_state()
+        self._pump_failure = None
+
+    async def _abandon_local_state(self) -> None:
         pump = self._pump_task
         if pump is not None and not pump.done():
             pump.cancel()
@@ -224,7 +239,10 @@ class RunHost:
         self._requested.clear()
         self._explicit_tasks.clear()
         self._claim_retry_at.clear()
-        self._resolve_launch_waiters(None)
+        self._deferred.clear()
+        self._resume_through = None
+        self._resume_after = None
+        self._wake.clear()
         self._cancel_scan_waiters()
         self._pump_task = None
 
@@ -251,17 +269,63 @@ class RunHost:
         self._requested.pop(run_id, None)
         if explicit:
             self._explicit_tasks[run_id] = intent
-        self._resolve_launch_waiters(task, run_id=run_id)
         task.add_done_callback(lambda completed: self._finished(run_id, completed))
 
     async def _pump(self) -> None:
         while not self._closed:
             self._wake.clear()
-            next_expiry = self._fill_capacity()
+            resume_expiry = self._scan_committed_resumes()
+            next_expiry = self._earlier(self._fill_capacity(), resume_expiry)
             self._complete_scan_waiters()
             if self._closed:
                 return
             await self._wait_for_work(next_expiry)
+
+    def _scan_committed_resumes(self) -> datetime | None:
+        store = self._control_store
+        decoder = self._resume_decoder
+        if store is None or decoder is None:
+            return None
+        if self._resume_through is None:
+            self._resume_through = store.latest_command_key(operation="runs_resume")
+            self._resume_after = None
+            if self._resume_through is None:
+                return self._now() + timedelta(seconds=self._resume_retry_s)
+        through = self._resume_through
+        assert through is not None
+        for _ in range(self._resume_pages_per_tick):
+            records = store.committed_commands(
+                operation="runs_resume",
+                after=self._resume_after,
+                through=through,
+                limit=self._recovery_page_size,
+            )
+            if not records:
+                self._resume_through = None
+                self._resume_after = None
+                break
+            for record in records:
+                self._resume_after = (
+                    record.created_at.isoformat(),
+                    record.command_id,
+                )
+                decoded = decoder(record)
+                if decoded is None:
+                    continue
+                run_id, baseline, command_id = decoded
+                self.launch(
+                    run_id,
+                    expected_event_seq=baseline,
+                    allowed_statuses=_RESUMABLE_STATUSES,
+                    resume_command_id=command_id,
+                )
+            if len(records) < self._recovery_page_size or (
+                self._resume_after is not None and self._resume_after >= through
+            ):
+                self._resume_through = None
+                self._resume_after = None
+                break
+        return self._now() + timedelta(seconds=self._resume_retry_s)
 
     def _fill_capacity(self) -> datetime | None:
         capacity = self._max_concurrency - len(self._tasks)
@@ -271,20 +335,17 @@ class RunHost:
         next_expiry: datetime | None = None
         now = self._now()
         for run_id, intent in sorted(self._requested.items()):
-            record = self._system.journal.run_record(run_id)
+            record = self._journal.run_record(run_id)
             if record is None or record.status not in intent.allowed_statuses:
                 self._requested.pop(run_id, None)
                 self._claim_retry_at.pop(run_id, None)
-                self._resolve_launch_waiters(None, run_id=run_id)
                 continue
             if (
                 intent.expected_event_seq is not None
-                and self._system.journal.max_event_seq(run_id)
-                != intent.expected_event_seq
+                and self._journal.max_event_seq(run_id) != intent.expected_event_seq
             ):
                 self._requested.pop(run_id, None)
                 self._claim_retry_at.pop(run_id, None)
-                self._resolve_launch_waiters(None, run_id=run_id)
                 continue
             ready_at = self._ready_at(record, now)
             if ready_at is not None:
@@ -312,14 +373,14 @@ class RunHost:
 
         if limit <= 0:
             return (), None
-        through = self._system.journal.latest_run_key(statuses=_RECOVERY_STATUSES)
+        through = self._journal.latest_run_key(statuses=_RECOVERY_STATUSES)
         if through is None:
             return (), None
         after: tuple[str, str] | None = None
         selected: list[tuple[RunId, _LaunchIntent]] = []
         next_expiry: datetime | None = None
         while len(selected) < limit:
-            records = self._system.journal.run_records(
+            records = self._journal.run_records(
                 statuses=_RECOVERY_STATUSES,
                 after=after,
                 through=through,
@@ -344,9 +405,7 @@ class RunHost:
                     (
                         record.run_id,
                         _LaunchIntent(
-                            expected_event_seq=self._system.journal.max_event_seq(
-                                record.run_id
-                            ),
+                            expected_event_seq=self._journal.max_event_seq(record.run_id),
                             allowed_statuses=_RECOVERY_STATUS_SET,
                         ),
                     )
@@ -394,6 +453,7 @@ class RunHost:
                 cancellation="abandon",
                 expected_event_seq=intent.expected_event_seq,
                 expected_statuses=intent.allowed_statuses,
+                resume_command_id=intent.resume_command_id,
             )
         except asyncio.CancelledError:
             raise
@@ -402,9 +462,7 @@ class RunHost:
             # worker failure nor ownership loss, and must never revive old intent.
             return None
         except OwnershipLost:
-            self._claim_retry_at[run_id] = self._now() + timedelta(
-                seconds=self._claim_retry_s
-            )
+            self._claim_retry_at[run_id] = self._now() + timedelta(seconds=self._claim_retry_s)
             # Preserve explicit FAILED/PARKED resume intent across a claim race.
             # Ordinary PENDING/RUNNING recovery remains discoverable in the journal.
             if run_id in self._explicit_tasks and not self._closed:
@@ -425,10 +483,13 @@ class RunHost:
         # failures and the durable run stays reclaimable after lease expiry.
 
     def _finished(self, run_id: RunId, task: _WorkerTask) -> None:
-        current = self._tasks.get(run_id)
-        if current is task:
-            self._tasks.pop(run_id, None)
-        self._explicit_tasks.pop(run_id, None)
+        # Only the worker still recorded here retires this RunId. A superseding
+        # attempt owns the explicit resume fence from the moment ``_start`` records
+        # it, so an older worker's completion must never erase it — ``OwnershipLost``
+        # would then find no intent to requeue and drop the resume command.
+        if self._tasks.get(run_id) is task:
+            del self._tasks[run_id]
+            self._explicit_tasks.pop(run_id, None)
         if not task.cancelled():
             exc = task.exception()
             if exc is not None and not isinstance(exc, Exception):
@@ -445,7 +506,6 @@ class RunHost:
             exc = RuntimeError("Constructicon run-host recovery pump stopped unexpectedly")
         self._pump_failure = exc
         self._fail_scan_waiters(exc)
-        self._fail_launch_waiters(exc)
         task.get_loop().call_exception_handler(
             {
                 "message": "Constructicon run-host recovery pump failed",
@@ -474,30 +534,6 @@ class RunHost:
             if not waiter.done():
                 waiter.cancel()
 
-    def _resolve_launch_waiters(
-        self,
-        task: _WorkerTask | None,
-        *,
-        run_id: RunId | None = None,
-    ) -> None:
-        run_ids = (run_id,) if run_id is not None else tuple(self._launch_waiters)
-        for queued_run_id in run_ids:
-            waiters = self._launch_waiters.pop(queued_run_id, set())
-            for waiter in waiters:
-                if not waiter.done():
-                    waiter.set_result(task)
-
-    def _fail_launch_waiters(self, exc: BaseException) -> None:
-        waiters = tuple(
-            waiter
-            for run_waiters in self._launch_waiters.values()
-            for waiter in run_waiters
-        )
-        self._launch_waiters.clear()
-        for waiter in waiters:
-            if not waiter.done():
-                waiter.set_exception(exc)
-
     def _ready_at(self, record: RunRecord, now: datetime) -> datetime | None:
         deadlines = [
             deadline
@@ -505,8 +541,7 @@ class RunHost:
                 self._claim_retry_at.get(record.run_id),
                 (
                     record.lease_expires_at
-                    if record.owner_id is not None
-                    and record.lease_expires_at is not None
+                    if record.owner_id is not None and record.lease_expires_at is not None
                     else None
                 ),
             )
@@ -531,14 +566,15 @@ class RunHost:
         incoming_seq = incoming.expected_event_seq
         existing_seq = existing.expected_event_seq
         if incoming_seq is None:
-            return (
-                existing_seq is None
-                and incoming.allowed_statuses > existing.allowed_statuses
-            )
+            return existing_seq is None and incoming.allowed_statuses > existing.allowed_statuses
         if existing_seq is None:
             return True
         if incoming_seq != existing_seq:
             return incoming_seq > existing_seq
+        if incoming.resume_command_id != existing.resume_command_id:
+            # At one fence an explicit command may replace ordinary recovery,
+            # but the first distinct command-bound intent wins.
+            return incoming.resume_command_id is not None and existing.resume_command_id is None
         # At one exact baseline, broaden the admissible durable observation only.
         # A stale restrictive delivery must never replace a legitimate resume.
         return incoming.allowed_statuses > existing.allowed_statuses

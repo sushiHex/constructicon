@@ -292,15 +292,20 @@ class GitAuthority:
         env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
         env.update(_PINNED_ENV)
         directory = self._repo if cwd == "AUTHORITY" else cwd
-        result = subprocess.run(  # never a shell; messages via stdin
+        raw_result = subprocess.run(  # never a shell; messages via exact bytes
             ["git", *args],
             cwd=directory,
             env=env,
-            input=input_text,
+            input=input_text.encode("utf-8") if input_text is not None else None,
             capture_output=True,
-            text=True,
             check=False,
             timeout=60,
+        )
+        result = subprocess.CompletedProcess(
+            args=raw_result.args,
+            returncode=raw_result.returncode,
+            stdout=raw_result.stdout.decode("utf-8", errors="replace"),
+            stderr=raw_result.stderr.decode("utf-8", errors="replace"),
         )
         if check and result.returncode != 0:
             raise ContractViolation(
@@ -361,8 +366,7 @@ class GitAuthority:
         return ReadSnapshot(repository=self.repository_id, commit=commit, _path=str(dest))
 
     def discard_snapshot(self, snapshot: ReadSnapshot) -> None:
-        _set_write_bits(Path(snapshot.path), writable=True)
-        shutil.rmtree(snapshot.path, ignore_errors=True)
+        _remove_tree(Path(snapshot.path), best_effort=True)
 
     def content_digest(self, path: Path | str) -> Digest:
         """Deterministic content identity of a tree on disk — the post-gate
@@ -388,7 +392,7 @@ class GitAuthority:
         base = self.resolve_ref(target_ref)
         staging = self._root / "staging" / acquisition_id
         if staging.exists():  # crash-and-retry within one epoch: start clean
-            shutil.rmtree(staging)
+            _remove_tree(staging)
         staging.mkdir(parents=True)
         self._run("init", "--quiet", "--initial-branch", "work", cwd=staging)
         self._run("fetch", "--quiet", str(self._repo), base, cwd=staging)
@@ -423,7 +427,7 @@ class GitAuthority:
     def discard_staging(self, acquisition_id: str) -> bool:
         staging = self._root / "staging" / acquisition_id
         if staging.exists():
-            shutil.rmtree(staging, ignore_errors=True)
+            _remove_tree(staging, best_effort=True)
             return True
         return False
 
@@ -637,3 +641,20 @@ def _set_write_bits(root: Path, *, writable: bool) -> None:
             os.chmod(path, mode | stat.S_IWUSR)
         else:
             os.chmod(path, mode & ~(stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH))
+
+
+def _remove_tree(root: Path, *, best_effort: bool = False) -> None:
+    """Remove a completed Git tree even when Windows retained read-only bits.
+
+    Clearing the bits up front is the whole job — a removal-time retry hook
+    would only rediscover lazily what ``_set_write_bits`` already knows.
+    ``best_effort`` keeps the discard paths' ``ignore_errors`` contract: a tree
+    another process still holds open must never make cleanup a caller fault.
+    """
+
+    try:
+        _set_write_bits(root, writable=True)
+    except OSError:
+        if not best_effort:
+            raise
+    shutil.rmtree(root, ignore_errors=best_effort)

@@ -170,16 +170,15 @@ class FakeSystem:
         cancellation: str,
         expected_event_seq: int | None = None,
         expected_statuses: frozenset[RunStatus] | None = None,
+        resume_command_id: str | None = None,
     ) -> RunResult:
         assert cancellation == "abandon"
+        del resume_command_id
         self.attempted.append(run_id)
         durable = self.journal.records[run_id]
         if (
-            expected_event_seq is not None
-            and self.journal.event_seqs[run_id] != expected_event_seq
-        ) or (
-            expected_statuses is not None and durable.status not in expected_statuses
-        ):
+            expected_event_seq is not None and self.journal.event_seqs[run_id] != expected_event_seq
+        ) or (expected_statuses is not None and durable.status not in expected_statuses):
             raise RunAttemptSuperseded("scripted atomic attempt fence")
         self.started.append(run_id)
         self.running += 1
@@ -251,9 +250,7 @@ def record(
 ) -> RunRecord:
     run_id = RunId(name)
     lease_expires_at = (
-        clock.now() + timedelta(seconds=lease_seconds)
-        if lease_seconds is not None
-        else None
+        clock.now() + timedelta(seconds=lease_seconds) if lease_seconds is not None else None
     )
     if status is RunStatus.RUNNING:
         liveness = "live" if owner_id is not None and lease_seconds else "lost"
@@ -280,6 +277,7 @@ def host_for(
 ) -> RunHost:
     return RunHost(
         cast(Constructicon, system),
+        journal=cast(Any, system.journal),
         max_concurrency=max_concurrency,
         recovery_page_size=recovery_page_size,
         on_failure=on_failure,
@@ -314,9 +312,9 @@ async def test_capacity_full_explicit_resume_is_retained_without_waiter_tasks(
     system.blockers[resumed] = asyncio.Event()
     host = host_for(system)
 
-    assert host.launch(first) is True
-    assert host.launch(resumed) is True
-    assert host.launch(resumed) is False
+    assert host.launch(first) == "queued"
+    assert host.launch(resumed) == "queued"
+    assert host.launch(resumed) == "coalesced_exact"
     await eventually(lambda: system.started == [first], "first worker did not start")
     assert host.active_run_ids == (first,)
     assert system.max_running == 1
@@ -376,9 +374,7 @@ async def test_explicit_resume_retries_an_ownership_race_after_lease_expiry(
 ) -> None:
     clock = AsyncClock()
     run_id = RunId(f"run-raced-{status.value}")
-    journal = FakeJournal(
-        [record(str(run_id), clock, created_offset=0, status=status)]
-    )
+    journal = FakeJournal([record(str(run_id), clock, created_offset=0, status=status)])
     system = FakeSystem(journal, clock)
     system.lose_once.add(run_id)
     system.blockers[run_id] = asyncio.Event()
@@ -389,7 +385,6 @@ async def test_explicit_resume_retries_an_ownership_race_after_lease_expiry(
         expected_event_seq=0,
         allowed_statuses=frozenset({status}),
     )
-    waited = asyncio.create_task(host.wait(run_id))
     await eventually(lambda: system.started == [run_id], "first resume did not attempt")
     await eventually(lambda: clock.sleeper_count == 1, "lost claim did not arm retry")
     clock.advance(30)
@@ -398,17 +393,17 @@ async def test_explicit_resume_retries_an_ownership_race_after_lease_expiry(
         "explicit resume disappeared after OwnershipLost",
     )
     system.blockers[run_id].set()
-    result = await waited
-    assert result is not None and result.status is RunStatus.SUCCEEDED
+    await eventually(
+        lambda: journal.records[run_id].status is RunStatus.SUCCEEDED,
+        "retried resume did not finish",
+    )
     await host.shutdown()
 
 
 async def test_ownership_loss_without_owner_projection_uses_bounded_backoff() -> None:
     clock = AsyncClock()
     run_id = RunId("run-raced-without-owner")
-    journal = FakeJournal(
-        [record(str(run_id), clock, created_offset=0, status=RunStatus.FAILED)]
-    )
+    journal = FakeJournal([record(str(run_id), clock, created_offset=0, status=RunStatus.FAILED)])
     system = FakeSystem(journal, clock)
     system.lose_unowned_once.add(run_id)
     system.blockers[run_id] = asyncio.Event()
@@ -436,38 +431,42 @@ async def test_ownership_loss_without_owner_projection_uses_bounded_backoff() ->
 async def test_attempt_baseline_mismatch_discards_intent_without_launching() -> None:
     clock = AsyncClock()
     run_id = RunId("run-stale-attempt")
-    journal = FakeJournal(
-        [record(str(run_id), clock, created_offset=0, status=RunStatus.FAILED)]
-    )
+    journal = FakeJournal([record(str(run_id), clock, created_offset=0, status=RunStatus.FAILED)])
     journal.event_seqs[run_id] = 4
     system = FakeSystem(journal, clock)
     host = host_for(system)
 
-    assert host.launch(
-        run_id,
-        expected_event_seq=3,
-        allowed_statuses=frozenset({RunStatus.FAILED}),
+    assert (
+        host.launch(
+            run_id,
+            expected_event_seq=3,
+            allowed_statuses=frozenset({RunStatus.FAILED}),
+        )
+        == "queued"
     )
-    assert await host.wait(run_id) is None
+    await eventually(lambda: journal.max_event_calls == 1, "stale intent was not checked")
     assert system.started == []
     assert journal.max_event_calls == 1
 
-    assert host.launch(
-        run_id,
-        expected_event_seq=4,
-        allowed_statuses=frozenset({RunStatus.FAILED}),
+    assert (
+        host.launch(
+            run_id,
+            expected_event_seq=4,
+            allowed_statuses=frozenset({RunStatus.FAILED}),
+        )
+        == "queued"
     )
-    result = await host.wait(run_id)
-    assert result is not None and result.status is RunStatus.SUCCEEDED
+    await eventually(
+        lambda: journal.records[run_id].status is RunStatus.SUCCEEDED,
+        "current intent did not finish",
+    )
     await host.shutdown()
 
 
 async def test_atomic_explicit_fence_closes_preflight_to_claim_race() -> None:
     clock = AsyncClock()
     run_id = RunId("run-explicit-atomic-fence")
-    journal = FakeJournal(
-        [record(str(run_id), clock, created_offset=0, status=RunStatus.FAILED)]
-    )
+    journal = FakeJournal([record(str(run_id), clock, created_offset=0, status=RunStatus.FAILED)])
     journal.event_seqs[run_id] = 7
 
     def advance_attempt(selected_run_id: RunId) -> None:
@@ -486,7 +485,7 @@ async def test_atomic_explicit_fence_closes_preflight_to_claim_race() -> None:
         expected_event_seq=7,
         allowed_statuses=frozenset({RunStatus.FAILED}),
     )
-    assert await host.wait(run_id) is None
+    await eventually(lambda: system.attempted == [run_id], "superseded worker was not attempted")
     assert system.attempted == [run_id]
     assert system.started == []
     assert failures == []
@@ -522,9 +521,7 @@ async def test_atomic_recovery_fence_cannot_resume_newly_failed_attempt() -> Non
 async def test_duplicate_launch_restarts_failed_pump_and_retains_exact_intent() -> None:
     clock = AsyncClock()
     run_id = RunId("run-retry-dead-pump")
-    journal = FakeJournal(
-        [record(str(run_id), clock, created_offset=0, status=RunStatus.PARKED)]
-    )
+    journal = FakeJournal([record(str(run_id), clock, created_offset=0, status=RunStatus.PARKED)])
     failure = RuntimeError("transient run-record read failure")
     journal.run_record_failures.append(failure)
     system = FakeSystem(journal, clock)
@@ -534,20 +531,28 @@ async def test_duplicate_launch_restarts_failed_pump_and_retains_exact_intent() 
     previous_handler = loop.get_exception_handler()
     loop.set_exception_handler(lambda _loop, context: contexts.append(context))
     try:
-        assert host.launch(
-            run_id,
-            expected_event_seq=0,
-            allowed_statuses=frozenset({RunStatus.PARKED}),
+        assert (
+            host.launch(
+                run_id,
+                expected_event_seq=0,
+                allowed_statuses=frozenset({RunStatus.PARKED}),
+            )
+            == "queued"
         )
         await eventually(lambda: host.pump_failure is failure, "pump did not fail")
 
-        assert host.launch(
-            run_id,
-            expected_event_seq=0,
-            allowed_statuses=frozenset({RunStatus.PARKED}),
-        ) is False
-        result = await asyncio.wait_for(host.wait(run_id), timeout=1)
-        assert result is not None and result.status is RunStatus.SUCCEEDED
+        assert (
+            host.launch(
+                run_id,
+                expected_event_seq=0,
+                allowed_statuses=frozenset({RunStatus.PARKED}),
+            )
+            == "coalesced_exact"
+        )
+        await eventually(
+            lambda: journal.records[run_id].status is RunStatus.SUCCEEDED,
+            "duplicate delivery did not revive the pump",
+        )
         assert system.started == [run_id]
         assert contexts and contexts[-1]["exception"] is failure
     finally:
@@ -555,12 +560,10 @@ async def test_duplicate_launch_restarts_failed_pump_and_retains_exact_intent() 
         await host.shutdown()
 
 
-async def test_wait_restarts_failed_pump_for_retained_intent() -> None:
+async def test_duplicate_delivery_restarts_failed_pump_for_retained_intent() -> None:
     clock = AsyncClock()
     run_id = RunId("run-wait-restarts-pump")
-    journal = FakeJournal(
-        [record(str(run_id), clock, created_offset=0, status=RunStatus.FAILED)]
-    )
+    journal = FakeJournal([record(str(run_id), clock, created_offset=0, status=RunStatus.FAILED)])
     failure = RuntimeError("transient queued-intent read failure")
     journal.run_record_failures.append(failure)
     system = FakeSystem(journal, clock)
@@ -575,8 +578,18 @@ async def test_wait_restarts_failed_pump_for_retained_intent() -> None:
             allowed_statuses=frozenset({RunStatus.FAILED}),
         )
         await eventually(lambda: host.pump_failure is failure, "pump did not fail")
-        result = await asyncio.wait_for(host.wait(run_id), timeout=1)
-        assert result is not None and result.status is RunStatus.SUCCEEDED
+        assert (
+            host.launch(
+                run_id,
+                expected_event_seq=0,
+                allowed_statuses=frozenset({RunStatus.FAILED}),
+            )
+            == "coalesced_exact"
+        )
+        await eventually(
+            lambda: journal.records[run_id].status is RunStatus.SUCCEEDED,
+            "duplicate delivery did not revive the pump",
+        )
         assert system.started == [run_id]
     finally:
         loop.set_exception_handler(previous_handler)
@@ -597,29 +610,36 @@ async def test_new_resume_intent_survives_terminal_persist_before_worker_callbac
     system.blockers[run_id] = asyncio.Event()
     host = host_for(system)
 
-    assert host.launch(
-        run_id,
-        expected_event_seq=0,
-        allowed_statuses=frozenset({RunStatus.PENDING}),
+    assert (
+        host.launch(
+            run_id,
+            expected_event_seq=0,
+            allowed_statuses=frozenset({RunStatus.PENDING}),
+        )
+        == "queued"
     )
     await system.terminal_persisted[run_id].wait()
     terminal_seq = journal.event_seqs[run_id]
     assert journal.records[run_id].status is terminal_status
 
-    assert host.launch(
-        run_id,
-        expected_event_seq=terminal_seq,
-        allowed_statuses=frozenset({terminal_status}),
+    assert (
+        host.launch(
+            run_id,
+            expected_event_seq=terminal_seq,
+            allowed_statuses=frozenset({terminal_status}),
+        )
+        == "queued"
     )
-    waited = asyncio.create_task(host.wait(run_id))
     system.terminal_release[run_id].set()
     await eventually(
         lambda: system.started == [run_id, run_id],
         "post-terminal resume intent was dropped behind the unwinding worker",
     )
     system.blockers[run_id].set()
-    result = await waited
-    assert result is not None and result.status is RunStatus.SUCCEEDED
+    await eventually(
+        lambda: journal.records[run_id].status is RunStatus.SUCCEEDED,
+        "post-terminal resume did not finish",
+    )
     await host.shutdown()
 
 
@@ -640,24 +660,33 @@ async def test_newer_queued_intent_supersedes_stale_status_restriction() -> None
 
     host.launch(active)
     await eventually(lambda: system.started == [active], "capacity holder did not start")
-    assert host.launch(
-        target,
-        expected_event_seq=0,
-        allowed_statuses=frozenset({RunStatus.PENDING}),
+    assert (
+        host.launch(
+            target,
+            expected_event_seq=0,
+            allowed_statuses=frozenset({RunStatus.PENDING}),
+        )
+        == "queued"
     )
 
     journal.event_seqs[target] = 2
     journal.update(target, status=RunStatus.FAILED)
-    assert host.launch(
-        target,
-        expected_event_seq=2,
-        allowed_statuses=frozenset({RunStatus.FAILED}),
+    assert (
+        host.launch(
+            target,
+            expected_event_seq=2,
+            allowed_statuses=frozenset({RunStatus.FAILED}),
+        )
+        == "queued"
     )
-    assert host.launch(
-        target,
-        expected_event_seq=2,
-        allowed_statuses=frozenset({RunStatus.PENDING}),
-    ) is False
+    assert (
+        host.launch(
+            target,
+            expected_event_seq=2,
+            allowed_statuses=frozenset({RunStatus.PENDING}),
+        )
+        == "superseded"
+    )
     system.blockers[active].set()
     await eventually(
         lambda: system.started == [active, target],
@@ -685,15 +714,21 @@ async def test_unguarded_same_baseline_intent_can_expand_but_not_replace_statuse
 
     host.launch(active)
     await eventually(lambda: system.started == [active], "capacity holder did not start")
-    assert host.launch(target, allowed_statuses=frozenset({RunStatus.FAILED}))
-    assert host.launch(
-        target,
-        allowed_statuses=frozenset({RunStatus.FAILED, RunStatus.PARKED}),
+    assert host.launch(target, allowed_statuses=frozenset({RunStatus.FAILED})) == "queued"
+    assert (
+        host.launch(
+            target,
+            allowed_statuses=frozenset({RunStatus.FAILED, RunStatus.PARKED}),
+        )
+        == "queued"
     )
-    assert host.launch(
-        target,
-        allowed_statuses=frozenset({RunStatus.PENDING}),
-    ) is False
+    assert (
+        host.launch(
+            target,
+            allowed_statuses=frozenset({RunStatus.PENDING}),
+        )
+        == "superseded"
+    )
 
     system.blockers[active].set()
     await eventually(
@@ -707,30 +742,33 @@ async def test_unguarded_same_baseline_intent_can_expand_but_not_replace_statuse
 async def test_ownership_loss_cannot_overwrite_newer_queued_attempt_intent() -> None:
     clock = AsyncClock()
     run_id = RunId("run-newer-intent-survives-old-ownership-loss")
-    journal = FakeJournal(
-        [record(str(run_id), clock, created_offset=0, status=RunStatus.FAILED)]
-    )
+    journal = FakeJournal([record(str(run_id), clock, created_offset=0, status=RunStatus.FAILED)])
     system = FakeSystem(journal, clock)
     system.ownership_loss_ready[run_id] = asyncio.Event()
     system.ownership_loss_release[run_id] = asyncio.Event()
     system.blockers[run_id] = asyncio.Event()
     host = host_for(system)
 
-    assert host.launch(
-        run_id,
-        expected_event_seq=0,
-        allowed_statuses=frozenset({RunStatus.FAILED}),
+    assert (
+        host.launch(
+            run_id,
+            expected_event_seq=0,
+            allowed_statuses=frozenset({RunStatus.FAILED}),
+        )
+        == "queued"
     )
     await system.ownership_loss_ready[run_id].wait()
 
     journal.event_seqs[run_id] = 1
     journal.update(run_id, status=RunStatus.PARKED)
-    assert host.launch(
-        run_id,
-        expected_event_seq=1,
-        allowed_statuses=frozenset({RunStatus.PARKED}),
+    assert (
+        host.launch(
+            run_id,
+            expected_event_seq=1,
+            allowed_statuses=frozenset({RunStatus.PARKED}),
+        )
+        == "queued"
     )
-    waited = asyncio.create_task(host.wait(run_id))
     system.ownership_loss_release[run_id].set()
     await eventually(lambda: clock.sleeper_count == 1, "claim backoff was not armed")
     clock.advance(0.1)
@@ -739,8 +777,10 @@ async def test_ownership_loss_cannot_overwrite_newer_queued_attempt_intent() -> 
         "old OwnershipLost overwrote the newer queued intent",
     )
     system.blockers[run_id].set()
-    result = await waited
-    assert result is not None and result.status is RunStatus.SUCCEEDED
+    await eventually(
+        lambda: journal.records[run_id].status is RunStatus.SUCCEEDED,
+        "newer queued attempt did not finish",
+    )
     await host.shutdown()
 
 
@@ -874,3 +914,72 @@ async def test_hard_death_remains_visible_and_fresh_host_reclaims_after_expiry()
     system.blockers[run_id].set()
     await first.shutdown()
     await second.shutdown()
+
+
+async def test_older_worker_completion_cannot_retire_a_superseding_explicit_intent() -> None:
+    """A stale done-callback must not retire the live attempt's resume fence.
+
+    With spare capacity a superseding worker starts while the previous one is
+    still unwinding, so the older callback fires last. If it retired the
+    RunId's explicit intent, the live worker's `OwnershipLost` would find
+    nothing to requeue and the resume command would silently never take effect
+    — `FAILED` is not a recoverable status, so nothing else would revive it.
+    """
+
+    clock = AsyncClock()
+    run_id = RunId("run-stale-callback-keeps-explicit-intent")
+    journal = FakeJournal([record(str(run_id), clock, created_offset=0, status=RunStatus.FAILED)])
+    system = FakeSystem(journal, clock)
+    system.terminal_once[run_id] = RunStatus.FAILED
+    system.terminal_persisted[run_id] = asyncio.Event()
+    system.terminal_release[run_id] = asyncio.Event()
+    host = host_for(system, max_concurrency=2)
+
+    assert (
+        host.launch(
+            run_id,
+            expected_event_seq=0,
+            allowed_statuses=frozenset({RunStatus.FAILED}),
+        )
+        == "queued"
+    )
+    await system.terminal_persisted[run_id].wait()
+    # The unwinding worker still holds its lease; let it expire so capacity,
+    # not ownership, is what gates the superseding attempt.
+    clock.advance(31)
+
+    # The superseding attempt starts on spare capacity while the first unwinds.
+    system.ownership_loss_ready[run_id] = asyncio.Event()
+    system.ownership_loss_release[run_id] = asyncio.Event()
+    assert (
+        host.launch(
+            run_id,
+            expected_event_seq=1,
+            allowed_statuses=frozenset({RunStatus.FAILED}),
+        )
+        == "queued"
+    )
+    await system.ownership_loss_ready[run_id].wait()
+
+    # Only now does the older worker finish, and its done-callback must have
+    # actually run before the live worker loses its claim.
+    system.terminal_release[run_id].set()
+    await eventually(
+        lambda: journal.records[run_id].owner_id is None,
+        "the older worker never released its lease",
+    )
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert len(system.started) == 2 and host.active_run_ids == (run_id,)
+
+    system.ownership_loss_release[run_id].set()
+    await eventually(
+        lambda: clock.sleeper_count == 1,
+        "a stale completion erased the superseding explicit resume intent",
+    )
+    clock.advance(0.1)
+    await eventually(
+        lambda: len(system.started) == 3,
+        "the retained explicit resume intent was never retried",
+    )
+    await host.shutdown()

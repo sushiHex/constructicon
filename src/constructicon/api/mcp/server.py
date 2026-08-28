@@ -16,6 +16,7 @@ from mcp.server import MCPServer
 from mcp.server.auth.provider import TokenVerifier
 from mcp.server.auth.settings import AuthSettings
 
+from constructicon import __version__
 from constructicon.api.control import ControlPlane
 from constructicon.core.address import RunId
 from constructicon.core.admission import AdmissionAccepted, AdmissionRejected
@@ -44,7 +45,7 @@ from constructicon.core.introspection import SystemDescription
 from constructicon.core.run import RunStatus
 
 MCP_SERVER_NAME = "constructicon"
-MCP_SERVER_VERSION = "0.1.0"
+MCP_SERVER_VERSION = __version__
 
 
 def create_mcp_server(
@@ -62,11 +63,11 @@ def create_mcp_server(
     @asynccontextmanager
     async def lifespan(server: MCPServer[None]) -> AsyncIterator[None]:
         del server
-        await control.run_host.startup()
+        await control.startup()
         try:
             yield None
         finally:
-            await control.run_host.shutdown()
+            await control.shutdown()
 
     server = MCPServer[None](
         MCP_SERVER_NAME,
@@ -92,9 +93,7 @@ def create_mcp_server(
         component_names: list[str] | None = None,
         limit: int = 100,
     ) -> SystemDescription | ControlRejected:
-        return control.system_describe(
-            await actor(), component_names=component_names, limit=limit
-        )
+        return control.system_describe(await actor(), component_names=component_names, limit=limit)
 
     @server.tool(
         description=(
@@ -115,9 +114,7 @@ def create_mcp_server(
         limit: int = 25,
     ) -> RunPage | ControlRejected:
         normalized = tuple(statuses) if statuses is not None else None
-        return control.runs_list(
-            await actor(), statuses=normalized, cursor=cursor, limit=limit
-        )
+        return control.runs_list(await actor(), statuses=normalized, cursor=cursor, limit=limit)
 
     @server.tool(description="Read one durable run's status and liveness.")
     async def runs_status(run_id: str) -> RunSummary | ControlRejected:
@@ -129,9 +126,7 @@ def create_mcp_server(
         cursor: str | None = None,
         limit: int = 25,
     ) -> EventPage | ControlRejected:
-        return control.runs_events(
-            await actor(), RunId(run_id), cursor=cursor, limit=limit
-        )
+        return control.runs_events(await actor(), RunId(run_id), cursor=cursor, limit=limit)
 
     @server.tool(description="Read one bounded run-result preview plus full-detail reference.")
     async def runs_result(run_id: str) -> RunResultPreview | ControlRejected:
@@ -147,9 +142,7 @@ def create_mcp_server(
         cursor: str | None = None,
         limit: int = 25,
     ) -> VersionPage | ControlRejected:
-        return control.registry_versions(
-            await actor(), component, cursor=cursor, limit=limit
-        )
+        return control.registry_versions(await actor(), component, cursor=cursor, limit=limit)
 
     @server.tool(description="Page unpromoted retained versions of one component.")
     async def registry_candidates(
@@ -157,9 +150,7 @@ def create_mcp_server(
         cursor: str | None = None,
         limit: int = 25,
     ) -> VersionPage | ControlRejected:
-        return control.registry_candidates(
-            await actor(), component, cursor=cursor, limit=limit
-        )
+        return control.registry_candidates(await actor(), component, cursor=cursor, limit=limit)
 
     @server.tool(description="Page the reverse-dependency closure for one component.")
     async def registry_rdeps(
@@ -167,9 +158,7 @@ def create_mcp_server(
         cursor: str | None = None,
         limit: int = 25,
     ) -> NamePage | ControlRejected:
-        return control.registry_rdeps(
-            await actor(), component, cursor=cursor, limit=limit
-        )
+        return control.registry_rdeps(await actor(), component, cursor=cursor, limit=limit)
 
     @server.tool(description="Compare two exact retained component versions and their impact.")
     async def registry_compare(
@@ -185,9 +174,7 @@ def create_mcp_server(
         cursor: str | None = None,
         max_bytes: int = 16_000,
     ) -> DetailChunk | ControlRejected:
-        return control.details_read(
-            await actor(), reference, cursor=cursor, max_bytes=max_bytes
-        )
+        return control.details_read(await actor(), reference, cursor=cursor, max_bytes=max_bytes)
 
     @server.tool(description="Submit a durable run and return its RunId immediately.")
     async def runs_start(
@@ -304,9 +291,7 @@ def _register_detail_resources(
     actor_source: ActorSource,
 ) -> None:
     async def chunk(uri: str) -> str:
-        result = control.resource_read(
-            await actor_source.actor(), uri, max_bytes=64_000
-        )
+        result = control.resource_read(await actor_source.actor(), uri, max_bytes=64_000)
         return result.model_dump_json()
 
     @server.resource(

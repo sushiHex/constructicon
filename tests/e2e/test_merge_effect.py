@@ -174,14 +174,14 @@ async def test_crash_seams_install_exactly_once(
 
     journal.fault_probe = armed
     with pytest.raises(InjectedCrash):
-        await system.start(build_graph(), GOAL_INPUT, run_id=run_id)
+        await system._start_direct(build_graph(), GOAL_INPUT, run_id=run_id)
     journal.fault_probe = lambda name: None
     clock.advance(LEASE_TTL_S + 1)
 
-    result = await system.resume(run_id)
+    result = await system._resume_direct(run_id)
     assert result.status is RunStatus.SUCCEEDED
     assert result.outputs["merged"]["status"] == "committed"
-    kinds = [event.kind for event in system.journal.events(run_id, limit=200)]
+    kinds = [event.kind for event in system._journal.events(run_id, limit=200)]
     assert expected_event in kinds
 
     # exactly one install ever: main is one merge commit above the seed base
@@ -211,14 +211,14 @@ async def test_stale_owner_workspace_is_never_the_new_owners(
 
     journal.fault_probe = armed
     with pytest.raises(InjectedCrash):
-        await system.start(build_graph(), GOAL_INPUT, run_id=run_id)
+        await system._start_direct(build_graph(), GOAL_INPUT, run_id=run_id)
     journal.fault_probe = lambda name: None
     assert seen_dirs  # the crashed epoch left its staging repo behind
     clock.advance(LEASE_TTL_S + 1)
 
-    result = await system.resume(run_id)
+    result = await system._resume_direct(run_id)
     assert result.status is RunStatus.SUCCEEDED
-    rows = system.journal.capability_leases(run_id)
+    rows = system._journal.capability_leases(run_id)
     epochs = {row.acquisition_epoch for row in rows}
     assert len(epochs) == 2  # one acquisition per ownership epoch
     stale = [row for row in rows if row.acquisition_epoch == min(epochs)]
