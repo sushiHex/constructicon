@@ -123,9 +123,11 @@ class ChannelSendIntent(BaseModel):
     interaction: Literal["advice", "approval"]
     recipient_actor_id: str | None
     contract: ChannelContract
+    reply_contract: ChannelContract
     run_id: RunId
     path: ExecutionPath
     port: str
+    reply_port: str
     payload: JsonValue
 
 class ChannelMessage(BaseModel):
@@ -139,6 +141,8 @@ class ChannelMessage(BaseModel):
     recipient_actor_id: str | None
     sender_actor_id: str | None
     contract: ChannelContract
+    reply_contract: ChannelContract | None
+    reply_port: str | None
     envelope: Envelope[JsonValue]
 
 class ChannelRevision(BaseModel):
@@ -161,13 +165,21 @@ class ChannelProfile(BaseModel):
     max_batch: PositiveInt
 ```
 
+`contract` and `port` always type the message's **own** envelope. A request
+additionally pins the exchange's other half in `reply_contract`/`reply_port`, so
+both halves are sealed values on the request rather than something the control
+plane infers from a lane, an interaction, or live channel configuration.
+
 Validation pins the two legal shapes:
 
 - a request has no `reply_to` or sender actor, names the configured recipient
-  actor, and carries the originating run/path/port;
+  actor, carries the originating run/path/port, and sets both `reply_contract`
+  and `reply_port`;
 - a reply names exactly one request, has the authenticated sender actor, inherits
-  the request's run/path, uses the request-pinned reply contract, and never lets
-  the caller select its target.
+  the request's run/path, leaves `reply_contract`/`reply_port` unset, and has its
+  own `contract` and `envelope.port` equal to the request's pinned
+  `reply_contract` and `reply_port` — it never lets the caller select its target
+  or its type.
 
 The request message identity is:
 
@@ -187,9 +199,13 @@ One invocation may therefore send at most one request per bound channel, lane,
 and port. More messages require explicit ports or more invocations/loop frames;
 there is no unstable ordinal or caller-authored idempotency token.
 
-The reply id is `digest("channel-reply", 1, {"request_id": ..., "port": ...})`.
-The request pins that reply port and contract. Payload bytes do not participate
-in either id, but they are part of exact retry equality.
+The reply id is
+`digest("channel-reply", 1, {"request_id": ..., "port": request.reply_port})`,
+so it is derivable from the stored request alone — a waiting component computes
+the id it is parked on without consulting channel configuration. Payload bytes,
+`reply_contract`, and `reply_port` do not participate in either id, but all
+three are part of exact retry equality: a second send under one message id whose
+pinned reply half differs is a contradictory intent, not an idempotent retry.
 
 Wall-clock time is deliberately absent from `ChannelSendIntent`. The trusted
 transport stamps `Envelope.created_at` once, when it first appends the message;
@@ -201,10 +217,13 @@ storage and a typed conflict at an external control boundary.
 
 Add `ChannelSendSubject` to the existing `ProofSubject` union and add `send` to
 the attestation action union. It binds message id, channel id/revision, lane,
-interaction, recipient, run id, execution path, port, contract, and payload
-digest. The adapter recomputes the message id from those values. `interaction`
-is sealed authority metadata: it determines whether the reply must pass the
-advice command or the approval command and its corresponding scope. Trusted
+interaction, recipient, run id, execution path, port, contract, reply port,
+reply contract, and payload digest. Sealing both halves is what makes the
+reply's admissible type authority rather than configuration: an actor who could
+vary `reply_contract` after the fact could change what the parked run is
+required to accept. The adapter recomputes the message id from those values.
+`interaction` is sealed authority metadata: it determines whether the reply must
+pass the advice command or the approval command and its corresponding scope. Trusted
 deterministic runtime code checks the sealed binding and mints the attestation;
 component code and external callers can never author one.
 
@@ -364,6 +383,11 @@ class ParkedUnit(BaseModel):
     reason: ParkedReason
     completed_iterations: PositiveInt | None = None
     waiting_on: Digest | None = None
+
+class ParkedWait(BaseModel):
+    run_id: RunId
+    event_seq: NonNegativeInt
+    requests: tuple[Digest, ...]
 ```
 
 Validation requires `completed_iterations` only for `policy_exhausted` and
@@ -379,11 +403,42 @@ process open while a human thinks.
 
 An authenticated reply or request-bound approval stores its durable fact first,
 then creates a process-local wake intent for that PARKED run at the exact event
-fence observed in its immutable command plan. Generalize M6's committed resume
-handoff scanner to committed wake-producing command plans. The periodic bounded
-scan reconstructs a lost handoff after process death. The exact next attempt
-transition records the triggering command id; duplicate discoveries coalesce at
-the existing run/event fence.
+fence observed in its immutable command plan. That in-process handoff is an
+optimization and never the authority: recovery must not require the producing
+command to have reached `committed`.
+
+Recovery therefore scans durable **domain** facts, not command state. A parked
+unit already names what it waits on in `waiting_on`, and the reply is an
+immutable channel row; both are durable before the command that wrote them
+completes. Add one bounded `Journal.parked_waits` projection, implemented with
+in-memory/SQLite parity, that pages current PARKED run rows and their latest
+exact `RunParked` event into `ParkedWait(run_id, event_seq, requests)`. It is a
+read over existing rows, not a table, outbox, or new authority. A PARKED row
+without one well-formed latest parking event is journal damage and fails closed.
+
+A periodic bounded scan — the same paged, per-tick-capped shape M6 uses for
+committed resumes — checks each projected request for its deterministic stored
+reply and wakes the run at the projection's event fence when it finds one.
+Scanning PARKED facts, rather than watermarking replies, also closes the race in
+which a fast reply is stored after a component's absence check but just before
+the walker records the park. Keying on the reply row covers advice and
+request-bound approval alike, since both produce one.
+
+This closes the seam a committed-command scanner cannot see. A process death
+after the reply's domain transaction but before command completion — the
+required `after_domain_mutation` fault probe, where the command is still
+`prepared` — leaves a durable reply and a PARKED run, so any host reconstructs
+the wake. Nothing depends on the original caller retrying its idempotency key,
+and it costs no wake outbox and no second durable structure.
+
+PARKED deliberately does not join the ordinary recovery statuses. A parked run
+is waiting on a human, not on a lost worker; only an observed reply may wake it.
+Generalize RunHost's process-local launch cause to distinguish the existing M6
+resume command from an M7 channel reply. M6 continues to serialize the exact
+legacy `resume_command_id`; an M7 transition records `reply_message_id`, the
+immutable domain fact the scan actually observed. The first cause admitted at
+one event fence wins, and duplicate discoveries of that exact cause coalesce.
+No command lookup is needed to reconstruct a reply wake.
 
 If the run was manually resumed, cancelled, completed, or advanced before the
 wake applies, the reply remains a valid immutable fact and the wake reports
@@ -535,7 +590,9 @@ No runtime parking, panel, MCP, or human command is added in PR A.
 - manifest-bound NodeContext channel facade and proof-carrying send;
 - truthful counterfactual simulation;
 - generalized `ParkedUnit` and typed invocation parking;
-- committed wake handoff recovery generalized from M6 resume scanning;
+- `Journal.parked_waits` parity projection and wake recovery: the in-process
+  handoff plus the bounded PARKED-run scan that reconstructs it from the stored
+  reply alone, independent of command state;
 - crash seams and hard-death tests.
 
 No external reply API or SDK panel is added in PR B.
@@ -579,9 +636,12 @@ not share a commit with a schema or authority change.
 
 - a node with no sealed channel binding cannot send;
 - a caller cannot select actor, recipient, lane, channel id, run id, path,
-  contract, request id, reply id, or wake fence;
+  contract, reply contract, reply port, request id, reply id, or wake fence;
 - wrong actor, wrong scope, wrong request kind, wrong reply contract, wrong
-  subject, and cross-run reply are refused before mutation;
+  reply port, wrong subject, and cross-run reply are refused before mutation;
+- a reply is typed only by the request's sealed `reply_contract`/`reply_port`; a
+  second send under one message id whose pinned reply half differs is a
+  contradictory intent, not an idempotent retry;
 - a caller-authored ChannelSendSubject or attestation cannot authorize send;
 - counterfactual send records only a simulated receipt and no channel row;
 - malformed reply payload never becomes a successful typed component output;
@@ -598,6 +658,12 @@ not share a commit with a schema or authority change.
   a typed terminal result;
 - process death after committed reply but before local launch is recovered by
   another host;
+- process death after the reply's domain transaction but before its command
+  completes — the command still `prepared` — is recovered by another host from
+  the PARKED run and the stored reply alone, with no caller retry;
+- a reply stored in the absence-check/parking race is found by the later PARKED
+  scan, and the resumed event records its exact `reply_message_id` without
+  rewriting M6 `resume_command_id` payloads;
 - reply/manual-resume and reply/cancel races never revive an older fence;
 - shutdown abandons local workers while the PARKED run and messages remain.
 
