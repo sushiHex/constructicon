@@ -1,4 +1,4 @@
-a4f3e6d4f93e399102cd91ae1eac2e5cbf9b8d6df4ee49930dd940a821e8c49e  README.md
+72cdf8459320a001de606c13509378e8e8ebc1340e6d66458bbacd452b63894a  README.md
 68691a4e27a9db231f34af862c7cb7a5d01a81ff0825d73b3c498d1b2eb9544d  handoffs/M6.1-M6.2-implementation-handoff.md
 3f01e089728c0b4452b018715308cd12bf3ccf67720b48c7f794a3e7defbdb8f  milestones/M1-vertical-slice-recovered-record.md
 a283c93a225ac9332b1304e05fc1e33b4e1a205fcee2598e0e5f59b545c5ff87  milestones/M2-crash-resume-hardening.md
@@ -12,6 +12,7 @@ a2bc7ef5d7bfe6e99037f1de5fab592b10a9aa789ca037276aa33fe874a10fe7  milestones/M3-
 e9669d516996ea5a2290c015390e15d3d1fc556c0c4423f614176c0254b510ee  milestones/M6-durable-control-plane-rev2-polished.md
 8ba987e2d56b03471db9f673d484a1a4f8de7ea8079788ab337f256328837036  milestones/M6.1-control-plane-hardening-and-compression.md
 f7278cedd087cfa21a52d9447d8dd78b59fa68f2683e83738927c801e65c2b6d  milestones/M6.2-internal-compression-extracted-scope.md
+731ce9d74b3a4a5436afd391ef2df22af8555873f0fe2da4150d8dff2ca992c6  milestones/M6.2-internal-compression-rev2.md
 1b3bafad3f246b5cf2b84ea8af9ab4f5de971dcfd38ef7c849dc97706f5dbc4e  system-design/system-design-v12-frozen/00-context-and-decisions.md
 d45c68aa610cc7f1402db894f01eac16b7b254096ec0ffcda840d612c1e09cf2  system-design/system-design-v12-frozen/01-invariants-and-layers.md
 192e9f132c428e207863b24b2a44a49d12480d2e0a8631c20301efa404dc0cca  system-design/system-design-v12-frozen/02-core-contracts.md

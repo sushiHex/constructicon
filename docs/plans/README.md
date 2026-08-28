@@ -18,6 +18,12 @@ When records disagree, use this order:
 Plans are immutable records. Do not edit an old plan to make it agree with a
 later decision. Add a successor document, ADR, or explicit implementation record.
 
+Review drafts and approved plans are committed before implementation so a fresh
+session can recover the exact intent. Their status is written in the document and
+index; a draft is not approved merely because it is present here. After approval,
+preserve the plan as written and add a successor or implementation record when
+the eventual code differs.
+
 ## System-design lineage
 
 | Record | Provenance | Status |
@@ -41,6 +47,7 @@ later decision. Add a successor document, ADR, or explicit implementation record
 | M6 | [Durable control plane rev 2](milestones/M6-durable-control-plane-rev2-polished.md) | Exact polished document | Implementation baseline for M6 |
 | M6.1 | [Control-plane hardening and compression](milestones/M6.1-control-plane-hardening-and-compression.md) | Exact recovered document | Corrective plan; includes PR A hardening and PR B compression |
 | M6.2 | [Internal compression scope](milestones/M6.2-internal-compression-extracted-scope.md) | Exact extraction from the M6.1 parent plan | Discoverability copy; parent plan remains authoritative for this historical scope |
+| M6.2 | [Durable control-plane closeout and internal compression rev 2](milestones/M6.2-internal-compression-rev2.md) | Current successor reconciled against `main` at `7f33724` after PRs #9–#11 | Review draft; implementation begins only after explicit approval |
 
 ## Handoffs
 
@@ -63,16 +70,19 @@ later decision. Add a successor document, ADR, or explicit implementation record
   recovered rev 2 document and merged PR #5 implementation record preserve the
   recoverable substance without pretending the lost wording is exact.
 - **M6.2** was planned as PR B inside M6.1, not as an independent milestone
-  document. The extracted scope exists only to make that plan easy to find.
+  document. The extracted scope exists only to make that historical plan easy to
+  find. The rev 2 successor records current code truth and does not turn the old
+  implementation handoff into evidence.
 - PR descriptions remain useful implementation summaries, but the documents here
   preserve the deeper planning record beside the code they governed.
 
 ## Integrity
 
-[`MANIFEST.sha256`](MANIFEST.sha256) records the SHA-256 digest of every archived
-Markdown document, including every System Design v12 source part. A historical
-plan should change only through an explicit correction that also updates the
-manifest and explains why preservation required it.
+[`MANIFEST.sha256`](MANIFEST.sha256) records the SHA-256 digest of every planning
+Markdown document, including current review drafts and every System Design v12
+source part. An approved or historical plan should change only through an
+explicit correction that also updates the manifest and explains why preservation
+required it.
 
 Verify the committed archive from this directory:
 
