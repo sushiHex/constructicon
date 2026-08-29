@@ -20,16 +20,20 @@ from pydantic import (
     PositiveInt,
     SerializerFunctionWrapHandler,
     model_serializer,
+    model_validator,
 )
 
 from constructicon.core.address import ExecutionPath, RunId, ScopePath
-from constructicon.core.channel import ChannelEndpoint
+from constructicon.core.channel import ChannelBinding
 from constructicon.core.grants import EffectiveGrants
 from constructicon.core.graph import Graph
 from constructicon.core.identity import Digest, digest
 from constructicon.core.ports import NodePortAddress, Port, PortAddress
 
 MANIFEST_SCHEMA_VERSION = 2
+# A manifest that binds a channel is not readable by a pre-M7 build, so it
+# says so. One that binds none stays byte- and version-identical to today.
+MANIFEST_CHANNEL_SCHEMA_VERSION = 3
 
 # The one continuation contract. A matching label with any other schema is not
 # a continuation port; admission rejects it rather than trusting a name.
@@ -76,22 +80,22 @@ class CapabilityBinding(BaseModel):
     revision: str
     effective_grants: EffectiveGrants  # fully concrete — no None/"inherit" (I13)
     lifetime: LeaseLifetime = "invocation"
-    # None = this binding addresses no channel endpoint.
-    endpoint: ChannelEndpoint | None = None
+    # None = this binding addresses no channel.
+    channel: ChannelBinding | None = None
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         """Keep the additive nullable field absent in legacy durable bytes.
 
         Capability bindings participate in manifest identity, so a binding with
-        no endpoint must serialize exactly as it did before M7.
+        no channel must serialize exactly as it did before M7.
         """
 
         data = handler(self)
         if not isinstance(data, dict):
             raise TypeError("CapabilityBinding serializer expected an object")
-        if self.endpoint is None:
-            data.pop("endpoint", None)
+        if self.channel is None:
+            data.pop("channel", None)
         return data
 
 
@@ -163,6 +167,32 @@ class ExecutionManifest(BaseModel):
     world_hash: Digest  # the transitive component resolution
     manifest_hash: Digest  # identity of this sealed manifest (excludes itself)
 
+    @model_validator(mode="after")
+    def _declared_version_matches_what_it_carries(self) -> ExecutionManifest:
+        """The version states what a reader must understand, not who wrote it.
+
+        A manifest binding a channel needs a reader that understands channel
+        bindings, so it declares schema 3; one binding none stays schema 2 and
+        remains readable by every pre-M7 build. This mirrors how
+        ``ComponentDef.content_hash`` already picks its identity law from its
+        own content.
+        """
+
+        binds_channel = any(
+            binding.channel is not None for binding in self.capability_bindings
+        )
+        if binds_channel and self.schema_version < MANIFEST_CHANNEL_SCHEMA_VERSION:
+            raise ValueError(
+                "a manifest binding a channel must declare schema version "
+                f"{MANIFEST_CHANNEL_SCHEMA_VERSION}"
+            )
+        if not binds_channel and self.schema_version >= MANIFEST_CHANNEL_SCHEMA_VERSION:
+            raise ValueError(
+                f"schema version {self.schema_version} claims a channel binding "
+                "this manifest does not carry"
+            )
+        return self
+
 
 def manifest_identity_payload(manifest: ExecutionManifest) -> dict[str, Any]:
     """Return exactly the fields covered by ``manifest_hash`` for its schema.
@@ -216,10 +246,11 @@ def parse_manifest_json(raw: str) -> ExecutionManifest:
     if not isinstance(data, dict):
         raise ValueError("manifest JSON must be an object")
     version = data.get("schema_version", 1)
-    if version not in (1, MANIFEST_SCHEMA_VERSION):
+    supported = (1, MANIFEST_SCHEMA_VERSION, MANIFEST_CHANNEL_SCHEMA_VERSION)
+    if version not in supported:
         raise ValueError(
             f"manifest schema version {version!r} is unsupported; "
-            f"supported versions are 1 and {MANIFEST_SCHEMA_VERSION}"
+            f"supported versions are {', '.join(str(item) for item in supported)}"
         )
     if version == 1 and data.get("resolved_loops") not in (None, [], ()):
         raise ValueError(

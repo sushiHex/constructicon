@@ -59,7 +59,18 @@ class _ChannelModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
 
-class ChannelEndpoint(_ChannelModel):
+class _ManifestModel(BaseModel):
+    """A channel fact that lives inside the manifest.
+
+    Deliberately not ``strict``: ``parse_manifest_json`` validates a persisted
+    manifest in Python mode, where a ``Digest`` arrives as a plain string. The
+    manifest's own contracts are frozen and closed, and these match them.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class ChannelEndpoint(_ManifestModel):
     """Where an admitted channel binding sends, and under whose authority.
 
     Routing is process assembly's to decide (I1) and execution's to consume as
@@ -74,7 +85,24 @@ class ChannelEndpoint(_ChannelModel):
     recipient_actor_id: str | None
 
 
-class ChannelContract(_ChannelModel):
+class ChannelBinding(_ManifestModel):
+    """One admitted channel exchange: where it sends and exactly what crosses.
+
+    Admission compiles this from assembly's endpoint plus the component's one
+    declared input and output, so no part of the message is chosen at call
+    time. Pinned source is not pinned behavior — a component that could name
+    its own port on replay could derive a second request id and append a
+    second message, which no equality fence would catch.
+    """
+
+    endpoint: ChannelEndpoint
+    port: str
+    contract: ChannelContract
+    reply_port: str
+    reply_contract: ChannelContract
+
+
+class ChannelContract(_ManifestModel):
     """Nominal type identity of one message payload (I5).
 
     Exactly the repo's nominal identity pair, so a contract can be read

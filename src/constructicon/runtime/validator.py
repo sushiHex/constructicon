@@ -14,6 +14,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from constructicon.core.address import NodeId, ScopePath
+from constructicon.core.channel import (
+    ChannelBinding,
+    ChannelContract,
+    ChannelEndpoint,
+)
 from constructicon.core.component import ComponentDef
 from constructicon.core.control import ResolutionLock, ResolutionPin
 from constructicon.core.errors import AdmissionError
@@ -28,6 +33,7 @@ from constructicon.core.identity import digest, json_value
 from constructicon.core.manifest import (
     CONTINUE_SCHEMA_HASH,
     CONTINUE_TYPE,
+    MANIFEST_CHANNEL_SCHEMA_VERSION,
     MANIFEST_SCHEMA_VERSION,
     SELF_BINDING,
     SELF_CAPABILITY,
@@ -189,8 +195,13 @@ def admit(
     # Construct once with a temporary well-formed digest, then compute the real
     # identity through the schema-aware helper. This keeps one identity law.
     temporary_hash = digest("manifest-placeholder", 1, {})
+    # The version states what a reader must understand. Only a manifest that
+    # actually binds a channel needs an M7-aware reader.
+    binds_channel = any(binding.channel is not None for binding in comp.capability_bindings)
     manifest = ExecutionManifest(
-        schema_version=MANIFEST_SCHEMA_VERSION,
+        schema_version=(
+            MANIFEST_CHANNEL_SCHEMA_VERSION if binds_channel else MANIFEST_SCHEMA_VERSION
+        ),
         source_graph=graph,
         source_graph_hash=graph_hash,
         resolved_components=tuple(comp.resolutions),
@@ -690,6 +701,47 @@ def _resolve_ref(
     return stored
 
 
+def _compiled_channel(
+    comp: _Compilation,
+    definition: ComponentDef,
+    instance_scope: ScopePath,
+    *,
+    alias: str,
+    capability_id: str,
+    endpoint: ChannelEndpoint | None,
+) -> ChannelBinding | None:
+    """Compile the one exchange a channel-bound component may carry.
+
+    The request/reply pair is admitted here and never chosen at call time.
+    Pinned source is not pinned behavior: a component free to name its own port
+    on replay could derive a second request id and append a second message,
+    which no equality fence would catch.
+
+    A component needing more ports composes around a one-exchange component
+    rather than teaching admission to guess which pair is the exchange (I10).
+    """
+
+    if endpoint is None:
+        return None
+    if len(definition.inputs) != 1 or len(definition.outputs) != 1:
+        comp.faults.append(
+            f"{instance_scope.render()}: binding {alias!r} addresses channel "
+            f"{capability_id!r}, so {definition.name!r} must declare exactly one "
+            "input (the request) and one output (the reply); it declares "
+            f"{len(definition.inputs)} and {len(definition.outputs)} — compose "
+            "around a one-exchange component instead"
+        )
+        return None
+    request, reply = definition.inputs[0], definition.outputs[0]
+    return ChannelBinding(
+        endpoint=endpoint,
+        port=request.name,
+        contract=ChannelContract(type_id=request.type_id, schema_hash=request.schema_hash),
+        reply_port=reply.name,
+        reply_contract=ChannelContract(type_id=reply.type_id, schema_hash=reply.schema_hash),
+    )
+
+
 def _register_atomic(
     comp: _Compilation,
     node: GraphNode,
@@ -759,7 +811,14 @@ def _register_atomic(
                 revision=descriptor.revision,
                 effective_grants=node_grants,
                 lifetime="invocation",
-                endpoint=descriptor.endpoint,
+                channel=_compiled_channel(
+                    comp,
+                    definition,
+                    instance_scope,
+                    alias=alias,
+                    capability_id=capability_id,
+                    endpoint=descriptor.endpoint,
+                ),
             )
         )
     comp.atomic_scopes.append(instance_scope)
