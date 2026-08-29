@@ -14,9 +14,16 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, PositiveInt
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    PositiveInt,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+)
 
 from constructicon.core.address import ExecutionPath, RunId, ScopePath
+from constructicon.core.channel import ChannelEndpoint
 from constructicon.core.grants import EffectiveGrants
 from constructicon.core.graph import Graph
 from constructicon.core.identity import Digest, digest
@@ -69,6 +76,23 @@ class CapabilityBinding(BaseModel):
     revision: str
     effective_grants: EffectiveGrants  # fully concrete — no None/"inherit" (I13)
     lifetime: LeaseLifetime = "invocation"
+    # None = this binding addresses no channel endpoint.
+    endpoint: ChannelEndpoint | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """Keep the additive nullable field absent in legacy durable bytes.
+
+        Capability bindings participate in manifest identity, so a binding with
+        no endpoint must serialize exactly as it did before M7.
+        """
+
+        data = handler(self)
+        if not isinstance(data, dict):
+            raise TypeError("CapabilityBinding serializer expected an object")
+        if self.endpoint is None:
+            data.pop("endpoint", None)
+        return data
 
 
 class LoopExport(BaseModel):

@@ -759,6 +759,7 @@ def _register_atomic(
                 revision=descriptor.revision,
                 effective_grants=node_grants,
                 lifetime="invocation",
+                endpoint=descriptor.endpoint,
             )
         )
     comp.atomic_scopes.append(instance_scope)

@@ -59,6 +59,21 @@ class _ChannelModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
 
+class ChannelEndpoint(_ChannelModel):
+    """Where an admitted channel binding sends, and under whose authority.
+
+    Routing is process assembly's to decide (I1) and execution's to consume as
+    a sealed fact (I13), so it is compiled into the manifest rather than read
+    off a live object. Two hosts that assemble the same manifest with different
+    routing therefore produce different manifest identities and are caught,
+    instead of silently deriving a second message under a changed lane.
+    """
+
+    lane: str
+    interaction: ChannelInteraction
+    recipient_actor_id: str | None
+
+
 class ChannelContract(_ChannelModel):
     """Nominal type identity of one message payload (I5).
 
