@@ -54,6 +54,8 @@ class RunStatus(StrEnum):
     PARKED = "parked"
 
 
+ChannelWaitReason = Literal["awaiting_advisor", "awaiting_approval"]
+
 ParkedReason = Literal[
     "awaiting_approval",
     "awaiting_advisor",
@@ -135,6 +137,23 @@ class OwnershipLost(ConstructiconError):
     """A fenced write matched zero rows: a higher epoch owns this run.
 
     The stale worker must stop and write nothing else."""
+
+
+class InvocationParked(ConstructiconError):
+    """One invocation is waiting on a durable request — not failing.
+
+    Raised by a component that has already sent or reconciled its request and
+    found no reply yet. It names the exact request, so the walker records
+    ordinary parking facts and recovery can later observe a reply against that
+    same id. The walker never checkpoints an output that does not exist, and
+    the invocation's capabilities are discarded rather than held open while a
+    human thinks.
+    """
+
+    def __init__(self, request_id: Digest, *, reason: ChannelWaitReason) -> None:
+        self.request_id = request_id
+        self.reason: ChannelWaitReason = reason
+        super().__init__(f"invocation is waiting on channel request {request_id}")
 
 
 class RunAttemptSuperseded(ConstructiconError):
