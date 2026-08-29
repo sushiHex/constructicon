@@ -20,6 +20,7 @@ from constructicon.core.address import (
 )
 from constructicon.core.channel import (
     Channel,
+    ChannelAckConflict,
     ChannelContract,
     ChannelReplyConflict,
     ChannelRevision,
@@ -41,11 +42,11 @@ SCOPE = ScopePath(segments=("review",))
 PATH = ExecutionPath(scope=SCOPE)
 REQUEST_CONTRACT = ChannelContract(
     type_id="test/AdviceRequest",
-    schema_hash=digest("schema", 1, {"advice": "request"}),
+    schema_hash="advice-request-v1",
 )
 REPLY_CONTRACT = ChannelContract(
     type_id="test/AdviceResponse",
-    schema_hash=digest("schema", 1, {"advice": "response"}),
+    schema_hash="advice-response-v1",
 )
 ATTESTATION = "att-channel-contract"
 
@@ -203,7 +204,7 @@ def test_a_second_different_reply_is_refused_as_a_lost_race(channel: Channel) ->
     with pytest.raises(ChannelReplyConflict, match="already carries a different reply"):
         channel.reply(
             request_id=request.message_id,
-            actor_id="static:other-advisor",
+            actor_id=ADVISOR,
             payload={"advice": "hold"},
             command_id="cmd-reply-2",
         )
@@ -433,7 +434,7 @@ def test_two_hosts_replying_concurrently_admit_one_exact_reply(
     with pytest.raises(ChannelReplyConflict, match="already carries a different reply"):
         second.reply(
             request_id=request.message_id,
-            actor_id="static:other-advisor",
+            actor_id=ADVISOR,
             payload={"advice": "hold"},
             command_id="cmd-host-b",
         )
@@ -655,3 +656,97 @@ def test_a_delivery_reports_the_durable_sequence_not_its_page_position(
     )
     assert [delivery.message for delivery in page] == [mine]
     assert page[0].message_seq == 2  # second in history, first in this page
+
+
+def test_only_the_sealed_recipient_may_answer_an_addressed_request(
+    channel: Channel,
+) -> None:
+    """One reply per request, so an interloper could lock the recipient out."""
+
+    request = channel.append_request(_intent(), ATTESTATION)
+    with pytest.raises(ContractViolation, match="may not answer it"):
+        channel.reply(
+            request_id=request.message_id,
+            actor_id="static:interloper",
+            payload={"advice": "mine now"},
+            command_id="cmd-interloper",
+        )
+    assert channel.reply_for(request.message_id) is None  # still answerable
+
+    reply = channel.reply(
+        request_id=request.message_id,
+        actor_id=ADVISOR,
+        payload={"advice": "ship"},
+        command_id="cmd-reply-1",
+    )
+    assert reply.sender_actor_id == ADVISOR
+
+
+def test_an_unaddressed_request_admits_any_authenticated_actor(
+    channel: Channel,
+) -> None:
+    """Only an explicitly unassigned request is open to whoever picks it up."""
+
+    request = channel.append_request(_intent(recipient=None), ATTESTATION)
+    reply = channel.reply(
+        request_id=request.message_id,
+        actor_id="static:whoever",
+        payload={"advice": "ship"},
+        command_id="cmd-open",
+    )
+    assert reply.sender_actor_id == "static:whoever"
+
+
+def test_a_stale_message_id_on_an_intent_is_refused_at_the_transport(
+    channel: Channel,
+) -> None:
+    """`model_copy` skips validators, so the transport re-derives the id itself."""
+
+    forged = _intent().model_copy(update={"lane": "other-lane"})
+    with pytest.raises(ContractViolation, match="derive"):
+        channel.append_request(forged, ATTESTATION)
+
+
+def test_a_revision_may_not_acknowledge_a_message_it_excludes(
+    channel: Channel,
+) -> None:
+    """Bounds alone do not make a cut real; it must be causally coherent."""
+
+    first = channel.append_request(_intent(), ATTESTATION)
+    second = channel.append_request(_intent(port="second-request"), ATTESTATION)
+    channel.acknowledge(
+        message_id=second.message_id,
+        actor_id=ADVISOR,
+        command_id="cmd-ack-second",
+    )
+    current = channel.latest_revision(ADVISOR)
+    torn = ChannelRevision(message_seq=1, ack_seq=current.ack_seq)
+    assert first.message_id != second.message_id
+    with pytest.raises(InvalidChannelRevision, match="does not include"):
+        channel.inbox(actor_id=ADVISOR, revision=torn, after=None, limit=10)
+
+
+def test_a_second_command_may_not_claim_an_existing_acknowledgement(
+    channel: Channel,
+) -> None:
+    """One delivery fact, one owning command: else one command addresses two."""
+
+    first = channel.append_request(_intent(), ATTESTATION)
+    second = channel.append_request(_intent(port="second-request"), ATTESTATION)
+    channel.acknowledge(
+        message_id=first.message_id,
+        actor_id=ADVISOR,
+        command_id="cmd-one",
+    )
+    with pytest.raises(ChannelAckConflict, match="may not claim it"):
+        channel.acknowledge(
+            message_id=first.message_id,
+            actor_id=ADVISOR,
+            command_id="cmd-two",
+        )
+    # ...and cmd-two therefore never became free to address a second message.
+    channel.acknowledge(
+        message_id=second.message_id,
+        actor_id=ADVISOR,
+        command_id="cmd-two",
+    )

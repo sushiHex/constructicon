@@ -44,6 +44,10 @@ class InvalidChannelRevision(ValueError):
 class ChannelReplyConflict(ConstructiconError):
     """A request already carries a different reply — a lost race, not damage."""
 
+
+class ChannelAckConflict(ConstructiconError):
+    """This delivery fact belongs to another command — a duplicate, not damage."""
+
 ChannelInteraction = Literal["advice", "approval"]
 ChannelMessageKind = Literal["request", "reply"]
 ChannelDurability = Literal["process", "sqlite_wal"]
@@ -56,10 +60,15 @@ class _ChannelModel(BaseModel):
 
 
 class ChannelContract(_ChannelModel):
-    """Nominal type identity of one message payload (I5)."""
+    """Nominal type identity of one message payload (I5).
+
+    Exactly the repo's nominal identity pair, so a contract can be read
+    straight off a declared ``Port``: ``schema_hash`` is a schema revision
+    string, not a content digest.
+    """
 
     type_id: str
-    schema_hash: Digest
+    schema_hash: str
 
 
 class ChannelSendIntent(_ChannelModel):
@@ -247,6 +256,22 @@ def message_for_intent(
     original fact, rather than inventing a second one.
     """
 
+    derived = request_message_id(
+        run_id=intent.run_id,
+        path=intent.path,
+        channel_id=intent.channel_id,
+        channel_revision=intent.channel_revision,
+        lane=intent.lane,
+        interaction=intent.interaction,
+        port=intent.port,
+    )
+    if derived != intent.message_id:
+        # `model_copy(update=...)` and `model_construct` skip validators, so an
+        # intent can reach a transport carrying a stale id for changed routing.
+        raise ContractViolation(
+            f"channel send intent carries id {intent.message_id}, "
+            f"but its own fields derive {derived}"
+        )
     return ChannelMessage(
         message_id=intent.message_id,
         channel_id=intent.channel_id,
@@ -276,12 +301,22 @@ def message_for_reply(
     payload: JsonValue,
     created_at: datetime,
 ) -> ChannelMessage:
-    """The one reply message a request admits, typed by what the request pinned."""
+    """The one reply message a request admits, typed by what the request pinned.
+
+    Only the sealed recipient may answer an addressed request. One reply per
+    request is a hard constraint, so an unchecked actor who learned a request
+    id could answer first and lock the intended recipient out permanently.
+    """
 
     if request.kind != "request":
         raise ContractViolation("only a channel request can be replied to")
     if request.reply_contract is None or request.reply_port is None:
         raise ContractViolation("channel request does not pin a reply contract and port")
+    if request.recipient_actor_id is not None and actor_id != request.recipient_actor_id:
+        raise ContractViolation(
+            f"channel request {request.message_id} is addressed to "
+            f"{request.recipient_actor_id!r}; actor {actor_id!r} may not answer it"
+        )
     return ChannelMessage(
         message_id=reply_message_id(
             request_id=request.message_id,

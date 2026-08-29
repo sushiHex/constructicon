@@ -14,6 +14,7 @@ from threading import Lock
 from constructicon.core.channel import (
     MAX_INBOX_BATCH,
     ChannelAck,
+    ChannelAckConflict,
     ChannelDelivery,
     ChannelMessage,
     ChannelProfile,
@@ -52,6 +53,7 @@ class InProcessChannel:
         self._messages: list[ChannelMessage] = []
         self._acks: list[ChannelAck] = []
         self._by_id: dict[str, ChannelMessage] = {}
+        self._seq_by_id: dict[str, int] = {}
         self._attestations: dict[str, str] = {}
         self._ack_by_key: dict[tuple[str, str], ChannelAck] = {}
         self._ack_commands: dict[str, tuple[str, str]] = {}
@@ -181,6 +183,16 @@ class InProcessChannel:
                 raise InvalidChannelRevision(
                     f"channel revision {revision.model_dump()} is ahead of retained history"
                 )
+            # An acknowledgement cannot exist in a snapshot that omits the message
+            # it acknowledges, so bounds alone do not make a cut real.
+            if any(
+                self._seq_by_id[str(ack.message_id)] > revision.message_seq
+                for ack in self._acks[: revision.ack_seq]
+            ):
+                raise InvalidChannelRevision(
+                    f"channel revision {revision.model_dump()} acknowledges a message "
+                    "it does not include"
+                )
             acknowledged = {
                 (str(ack.message_id), ack.actor_id)
                 for ack in self._acks[: revision.ack_seq]
@@ -205,6 +217,7 @@ class InProcessChannel:
     def _append(self, message: ChannelMessage) -> None:
         self._messages.append(message)
         self._by_id[str(message.message_id)] = message
+        self._seq_by_id[str(message.message_id)] = len(self._messages)
 
     def _ack_key(
         self,
@@ -233,6 +246,11 @@ class InProcessChannel:
         key = self._ack_key(message_id, actor_id, command_id)
         stored = self._ack_by_key.get(key)
         if stored is not None:
+            if self._ack_commands.get(command_id) != key:
+                raise ChannelAckConflict(
+                    f"message {message_id} is already acknowledged for {actor_id!r} "
+                    f"by another command; {command_id!r} may not claim it"
+                )
             return stored
         ack = ChannelAck(message_id=message_id, actor_id=actor_id, acked_at=self._now())
         self._acks.append(ack)

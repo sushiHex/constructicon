@@ -15,6 +15,7 @@ from datetime import datetime
 
 from constructicon.core.channel import (
     ChannelAck,
+    ChannelAckConflict,
     ChannelContract,
     ChannelDelivery,
     ChannelMessage,
@@ -187,12 +188,22 @@ class _SqliteChannelsMixin:
         params.append(limit)
         with self._read() as connection, _snapshot(connection):
             current = _current_revision(connection, channel_id)
-            if (
-                revision.message_seq > current.message_seq
-                or revision.ack_seq > current.ack_seq
-            ):
+            if revision.message_seq > current.message_seq or revision.ack_seq > current.ack_seq:
                 raise InvalidChannelRevision(
                     f"channel revision {revision.model_dump()} is ahead of retained history"
+                )
+            # An acknowledgement cannot exist in a snapshot that omits the message
+            # it acknowledges, so bounds alone do not make a cut real.
+            incoherent = connection.execute(
+                "SELECT 1 FROM channel_acks AS acks"
+                " JOIN channel_messages AS messages ON messages.message_id = acks.message_id"
+                " WHERE acks.ack_seq <= ? AND messages.message_seq > ? LIMIT 1",
+                (revision.ack_seq, revision.message_seq),
+            ).fetchone()
+            if incoherent is not None:
+                raise InvalidChannelRevision(
+                    f"channel revision {revision.model_dump()} acknowledges a message "
+                    "it does not include"
                 )
             rows = connection.execute(
                 "SELECT * FROM channel_messages WHERE "
@@ -277,11 +288,11 @@ def _insert_message(
             canonical_json(message.envelope.path.model_dump(mode="json")),
             message.envelope.port,
             message.contract.type_id,
-            str(message.contract.schema_hash),
+            message.contract.schema_hash,
             message.reply_port,
             message.reply_contract.type_id if message.reply_contract is not None else None,
             (
-                str(message.reply_contract.schema_hash)
+                message.reply_contract.schema_hash
                 if message.reply_contract is not None
                 else None
             ),
@@ -312,6 +323,11 @@ def _acknowledge(
         (str(message_id), actor_id),
     ).fetchone()
     if stored is not None:
+        if stored["command_id"] != command_id:
+            raise ChannelAckConflict(
+                f"message {message_id} is already acknowledged for {actor_id!r} "
+                f"by another command; {command_id!r} may not claim it"
+            )
         return _ack_from_row(stored)
     connection.execute(
         "INSERT INTO channel_acks (message_id, actor_id, command_id, acked_at)"
@@ -337,7 +353,7 @@ def _message_from_row(row: sqlite3.Row) -> ChannelMessage:
     reply_type_id = row["reply_type_id"]
     reply_schema_hash = row["reply_schema_hash"]
     reply_contract = (
-        ChannelContract(type_id=reply_type_id, schema_hash=Digest(reply_schema_hash))
+        ChannelContract(type_id=reply_type_id, schema_hash=reply_schema_hash)
         if reply_type_id is not None and reply_schema_hash is not None
         else None
     )
@@ -352,7 +368,7 @@ def _message_from_row(row: sqlite3.Row) -> ChannelMessage:
         sender_actor_id=row["sender_actor_id"],
         contract=ChannelContract(
             type_id=row["type_id"],
-            schema_hash=Digest(row["schema_hash"]),
+            schema_hash=row["schema_hash"],
         ),
         reply_contract=reply_contract,
         reply_port=row["reply_port"],
