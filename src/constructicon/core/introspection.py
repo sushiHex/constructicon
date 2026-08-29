@@ -11,7 +11,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, NonNegativeInt, PositiveInt
 
-from constructicon.core.channel import ChannelProfile
+from constructicon.core.channel import ChannelEndpoint, ChannelProfile
 from constructicon.core.component import CapabilityRequirement, ComponentRole
 from constructicon.core.executor import ExecutorProfile
 from constructicon.core.grants import EffectiveGrants, Posture
@@ -75,6 +75,7 @@ class CapabilityDescription(BaseModel):
     requires_posture: Posture | None
     executor_profile: ExecutorProfile | None
     channel_profile: ChannelProfile | None
+    channel_endpoint: ChannelEndpoint | None
     available: bool
 
 

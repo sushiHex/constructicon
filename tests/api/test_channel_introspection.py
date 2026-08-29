@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from constructicon.api.system import Constructicon
+from constructicon.core.channel import ChannelEndpoint
 from constructicon.runtime.registry import CapabilityDescriptor
 from constructicon.substrate.channels.in_process import InProcessChannel
 from constructicon.substrate.channels.mailbox import MailboxChannel
@@ -20,6 +21,7 @@ def _system(
     announce_effect: FakeAnnounceEffect,
     *,
     mailbox_batch: int = 100,
+    lane: str = "review",
 ) -> Constructicon:
     mailbox = MailboxChannel(journal, channel_id=MAILBOX_ID, max_batch=mailbox_batch)
     in_process = InProcessChannel(channel_id=IN_PROCESS_ID)
@@ -42,6 +44,11 @@ def _system(
                 kind="channel.mailbox",
                 revision="1",
                 channel_profile=mailbox.profile,
+                endpoint=ChannelEndpoint(
+                    lane=lane,
+                    interaction="advice",
+                    recipient_actor_id="static:advisor",
+                ),
             ),
             IN_PROCESS_ID: CapabilityDescriptor(
                 capability_id=IN_PROCESS_ID,
@@ -95,3 +102,39 @@ def test_the_catalog_digest_covers_a_changed_channel_guarantee(
     ).describe(limit=100)
     assert narrowed.catalog_digest != first.catalog_digest
     assert narrowed.description_digest != first.description_digest
+
+
+def test_describe_publishes_which_participant_each_channel_addresses(
+    journal: SqliteJournal,
+    fake_executor: FakeExecutor,
+    announce_effect: FakeAnnounceEffect,
+) -> None:
+    """Four near-identical ids are useless if none says whom it reaches."""
+
+    description = _system(journal, fake_executor, announce_effect).describe(limit=100)
+    published = {item.capability_id: item for item in description.capabilities}
+
+    endpoint = published[MAILBOX_ID].channel_endpoint
+    assert endpoint is not None
+    assert endpoint.lane == "review"
+    assert endpoint.interaction == "advice"
+    assert endpoint.recipient_actor_id == "static:advisor"
+    assert published[IN_PROCESS_ID].channel_endpoint is None
+    assert published["fake-executor"].channel_endpoint is None
+
+
+def test_the_catalog_digest_covers_a_rerouted_endpoint(
+    journal: SqliteJournal,
+    fake_executor: FakeExecutor,
+    announce_effect: FakeAnnounceEffect,
+) -> None:
+    """Rerouting a channel must be visible in the published catalog identity."""
+
+    first = _system(journal, fake_executor, announce_effect).describe(limit=100)
+    rerouted = _system(
+        journal,
+        fake_executor,
+        announce_effect,
+        lane="escalation",
+    ).describe(limit=100)
+    assert rerouted.catalog_digest != first.catalog_digest

@@ -95,6 +95,7 @@ def build_system_description(
             requires_posture=descriptor.requires_posture,
             executor_profile=descriptor.executor_profile,
             channel_profile=descriptor.channel_profile,
+            channel_endpoint=descriptor.endpoint,
             available=capability_id in available_capabilities,
         )
         for capability_id, descriptor in sorted(catalog.items())
@@ -151,6 +152,11 @@ def build_system_description(
                 ),
                 "channel_profile": (
                     item.channel_profile.model_dump(mode="json") if item.channel_profile else None
+                ),
+                "channel_endpoint": (
+                    item.channel_endpoint.model_dump(mode="json")
+                    if item.channel_endpoint
+                    else None
                 ),
                 "available": item.available,
             }

@@ -557,6 +557,17 @@ class ComponentRegistry:
                     f"revision {descriptor.revision!r} differs from the admitted "
                     f"{binding.revision!r}"
                 )
+            elif descriptor.endpoint != (
+                binding.channel.endpoint if binding.channel is not None else None
+            ):
+                # A revision is only a string. Without this, one process could
+                # assemble a different lane or recipient under the same revision
+                # and the sealed routing would never actually be tested.
+                faults.append(
+                    f"{binding.scope.render()}: capability {binding.capability_id!r} "
+                    "addresses a different channel endpoint than the manifest "
+                    "admitted — refuse, never substitute"
+                )
         if faults:
             raise AdmissionError(faults)
         return BoundExecution(manifest=manifest, bindings=bindings)
