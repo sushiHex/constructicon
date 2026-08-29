@@ -12,6 +12,7 @@ from typing import Any, Literal, Protocol
 from pydantic import AwareDatetime, BaseModel, ConfigDict, model_validator
 
 from constructicon.core.address import ExecutionPath, GitSha, RunId
+from constructicon.core.channel import ChannelContract, ChannelInteraction
 from constructicon.core.control import AuthenticatedActor
 from constructicon.core.envelope import EvidenceRef
 from constructicon.core.identity import Digest, digest
@@ -75,13 +76,41 @@ class ComponentProofSubject(BaseModel):
     baseline_version: Digest | None
 
 
-ProofSubject = MergeSubject | ComponentProofSubject
+class ChannelSendSubject(BaseModel):
+    """Every value a channel adapter could otherwise redirect or substitute.
+
+    Both halves of the exchange are sealed here. An actor able to vary
+    ``reply_contract`` after the fact could change what the parked run is
+    required to accept, so the reply's admissible type is authority, not
+    configuration.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["channel_send"] = "channel_send"
+    message_id: Digest
+    channel_id: str
+    channel_revision: str
+    lane: str
+    interaction: ChannelInteraction
+    recipient_actor_id: str | None
+    run_id: RunId
+    path: ExecutionPath
+    port: str
+    contract: ChannelContract
+    reply_port: str
+    reply_contract: ChannelContract
+    payload_digest: Digest
+
+
+ProofSubject = MergeSubject | ComponentProofSubject | ChannelSendSubject
+EffectAction = Literal["merge", "promote", "send"]
 
 
 class AttestationDraft(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    action: Literal["merge", "promote"]
+    action: EffectAction
     subject: ProofSubject
     checks: tuple[CheckResult, ...]
     check_set_hash: Digest
@@ -99,7 +128,7 @@ class Attestation(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     attestation_id: str
-    action: Literal["merge", "promote"]
+    action: EffectAction
     subject: ProofSubject
     checks: tuple[CheckResult, ...]
     check_set_hash: Digest

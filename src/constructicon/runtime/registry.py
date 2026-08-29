@@ -17,6 +17,7 @@ from threading import RLock
 from typing import Literal
 
 from constructicon.core.address import RunId
+from constructicon.core.channel import ChannelProfile
 from constructicon.core.component import ComponentDef, PromotionRecord
 from constructicon.core.effect import (
     Attestation,
@@ -56,6 +57,7 @@ class CapabilityDescriptor:
     kind: str
     revision: str
     executor_profile: ExecutorProfile | None = None
+    channel_profile: ChannelProfile | None = None
     leased: bool = False
     requires_posture: Posture | None = None
 
