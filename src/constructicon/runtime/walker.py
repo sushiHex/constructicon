@@ -16,19 +16,29 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from constructicon.core.address import ExecutionPath, IterationFrame, RunId, ScopePath
+from constructicon.core.channel import (
+    CHANNEL_SEND_EFFECT,
+    Channel,
+    ChannelBinding,
+    ChannelSendIntent,
+    request_message_id,
+)
 from constructicon.core.component import ComponentDef
 from constructicon.core.control import RunOrigin
 from constructicon.core.effect import (
+    AttestationDraft,
+    CheckResult,
     EffectAdapter,
     EffectMode,
     EffectReceipt,
     EffectRequest,
+    channel_send_subject,
     idempotency_key,
 )
 from constructicon.core.envelope import Envelope, utc_now
 from constructicon.core.errors import ContractViolation, JournalDamaged
 from constructicon.core.graph import Graph
-from constructicon.core.identity import Digest, digest, json_value
+from constructicon.core.identity import Digest, JsonValue, digest, json_value
 from constructicon.core.journal import Checkpoint, Journal
 from constructicon.core.manifest import (
     SELF_BINDING,
@@ -47,6 +57,7 @@ from constructicon.core.ports import (
     PortAddress,
 )
 from constructicon.core.run import (
+    ChannelWaitReason,
     CheckpointConflict,
     DependencyReport,
     InvocationParked,
@@ -73,6 +84,100 @@ from constructicon.runtime.registry import (
 
 DEFAULT_LEASE_TTL_S = 30.0
 DEFAULT_HEARTBEAT_INTERVAL_S = 10.0
+
+
+_WAIT_REASON: dict[str, ChannelWaitReason] = {
+    "advice": "awaiting_advisor",
+    "approval": "awaiting_approval",
+}
+
+
+@dataclass(frozen=True)
+class _BoundChannel:
+    """One admitted channel exchange, bound to one invocation.
+
+    Every field of the message is already decided: routing came from the sealed
+    endpoint, the ports and contracts were compiled at admission, and the
+    address comes from the invocation. The component supplies a payload.
+    """
+
+    binding: ChannelBinding
+    channel_id: str
+    channel_revision: str
+    channel: Channel
+    journal: Journal
+    lease: RunLease
+    manifest_hash: Digest
+    path: ExecutionPath
+    effect: Any
+
+    async def ask(self, payload: Any) -> JsonValue:
+        intent = self._intent(payload)
+        attestation = self.journal.mint_attestation(
+            self.lease,
+            AttestationDraft(
+                action="send",
+                subject=channel_send_subject(intent),
+                checks=(
+                    CheckResult(
+                        name="channel-binding-sealed",
+                        status="passed",
+                        detail=(
+                            "trusted runtime derived this message from an admitted "
+                            "binding and its compiled exchange"
+                        ),
+                        elapsed_s=0.0,
+                    ),
+                ),
+                check_set_hash=digest("check-set", 1, {"policy": "channel-send", "v": 1}),
+                manifest_hash=self.manifest_hash,
+            ),
+        )
+        await self.effect(
+            CHANNEL_SEND_EFFECT,
+            intent.model_dump(mode="json"),
+            attestation_id=attestation.attestation_id,
+        )
+        reply = self.channel.reply_for(intent.message_id)
+        if reply is None:
+            raise InvocationParked(
+                intent.message_id,
+                reason=_WAIT_REASON[self.binding.endpoint.interaction],
+            )
+        if reply.contract != self.binding.reply_contract:
+            # A malformed reply is a typed component-boundary failure; it never
+            # becomes a successful output (I4).
+            raise ContractViolation(
+                f"reply to {intent.message_id} carries contract {reply.contract} "
+                f"where the request pinned {self.binding.reply_contract}"
+            )
+        return reply.envelope.payload
+
+    def _intent(self, payload: Any) -> ChannelSendIntent:
+        endpoint = self.binding.endpoint
+        return ChannelSendIntent(
+            message_id=request_message_id(
+                run_id=self.lease.run_id,
+                path=self.path,
+                channel_id=self.channel_id,
+                channel_revision=self.channel_revision,
+                lane=endpoint.lane,
+                interaction=endpoint.interaction,
+                port=self.binding.port,
+            ),
+            channel_id=self.channel_id,
+            channel_revision=self.channel_revision,
+            lane=endpoint.lane,
+            interaction=endpoint.interaction,
+            recipient_actor_id=endpoint.recipient_actor_id,
+            contract=self.binding.contract,
+            reply_contract=self.binding.reply_contract,
+            run_id=self.lease.run_id,
+            path=self.path,
+            port=self.binding.port,
+            reply_port=self.binding.reply_port,
+            payload=json_value(payload),
+        )
 
 
 @dataclass(frozen=True)
@@ -1387,7 +1492,9 @@ class Walker:
             )
 
         capabilities: dict[str, object] = {}
+        channels: dict[str, _BoundChannel] = {}
         acquired: list[tuple[LeasedCapability, AcquiredCapability]] = []
+        boundary = self._effect_boundary(manifest, lease, path, lost, mode=effect_mode)
         for alias_binding in aliases.get(instance.scope.segments, ()):
             self._check_run_control(lease, lost)
             capability = self._capabilities.get(alias_binding.capability_id)
@@ -1429,13 +1536,32 @@ class Walker:
                 acquired.append((capability, acquisition))
             else:
                 capabilities[alias_binding.binding] = capability
+            if alias_binding.channel is not None:
+                if not isinstance(capability, Channel):
+                    raise ContractViolation(
+                        f"{instance.scope.render()}: capability "
+                        f"{alias_binding.capability_id!r} is admitted as a channel but "
+                        "does not implement the Channel contract"
+                    )
+                channels[alias_binding.binding] = _BoundChannel(
+                    binding=alias_binding.channel,
+                    channel_id=alias_binding.capability_id,
+                    channel_revision=alias_binding.revision,
+                    channel=capability,
+                    journal=self._journal,
+                    lease=lease,
+                    manifest_hash=manifest.manifest_hash,
+                    path=path,
+                    effect=boundary,
+                )
 
         context = NodeContext(
             run_id=lease.run_id,
             path=path,
             capabilities=capabilities,
             grants=self_binding.effective_grants,
-            effect=self._effect_boundary(manifest, lease, path, lost, mode=effect_mode),
+            effect=boundary,
+            channels=channels,
         )
 
         try:

@@ -18,7 +18,7 @@ removes history from runtime recovery.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, Protocol
+from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import (
     AwareDatetime,
@@ -52,6 +52,7 @@ ChannelInteraction = Literal["advice", "approval"]
 ChannelMessageKind = Literal["request", "reply"]
 ChannelDurability = Literal["process", "sqlite_wal"]
 
+CHANNEL_SEND_EFFECT = "channel_send"
 MAX_INBOX_BATCH = 100
 
 
@@ -385,6 +386,7 @@ def message_for_reply(
     )
 
 
+@runtime_checkable
 class Channel(Protocol):
     """One transport contract, defined by observable behavior rather than SQLite.
 

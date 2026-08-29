@@ -12,7 +12,11 @@ from typing import Any, Literal, Protocol
 from pydantic import AwareDatetime, BaseModel, ConfigDict, model_validator
 
 from constructicon.core.address import ExecutionPath, GitSha, RunId
-from constructicon.core.channel import ChannelContract, ChannelInteraction
+from constructicon.core.channel import (
+    ChannelContract,
+    ChannelInteraction,
+    ChannelSendIntent,
+)
 from constructicon.core.control import AuthenticatedActor
 from constructicon.core.envelope import EvidenceRef
 from constructicon.core.identity import Digest, digest
@@ -101,6 +105,31 @@ class ChannelSendSubject(BaseModel):
     reply_port: str
     reply_contract: ChannelContract
     payload_digest: Digest
+
+
+def channel_send_subject(intent: ChannelSendIntent) -> ChannelSendSubject:
+    """Seal every value a channel adapter could redirect or substitute.
+
+    Trusted runtime code mints an attestation over this; the adapter recomputes
+    it from the intent it was handed and refuses any difference. Component code
+    can never author one.
+    """
+
+    return ChannelSendSubject(
+        message_id=intent.message_id,
+        channel_id=intent.channel_id,
+        channel_revision=intent.channel_revision,
+        lane=intent.lane,
+        interaction=intent.interaction,
+        recipient_actor_id=intent.recipient_actor_id,
+        run_id=intent.run_id,
+        path=intent.path,
+        port=intent.port,
+        contract=intent.contract,
+        reply_port=intent.reply_port,
+        reply_contract=intent.reply_contract,
+        payload_digest=digest("channel-payload", 1, intent.payload),
+    )
 
 
 ProofSubject = MergeSubject | ComponentProofSubject | ChannelSendSubject
