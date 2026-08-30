@@ -172,6 +172,36 @@ class _SqliteChannelsMixin:
                 raise ContractViolation(f"no channel message {message_id} to acknowledge")
             return _acknowledge(connection, message_id, actor_id, command_id, self._now_iso())
 
+    def channel_actor_revision(self, *, actor_id: str) -> ChannelRevision:
+        """One cut over everything addressed to this actor, across channels.
+
+        A transport's cut is per channel so unrelated traffic cannot advance
+        it. An actor's inbox is a different query with a different bound: it
+        spans channels, so its cut is the whole retained history.
+        """
+
+        del actor_id  # the cut bounds history; the query filters the actor
+        with self._read() as connection, _snapshot(connection):
+            return _current_revision(connection, channel_id=None)
+
+    def channel_actor_inbox(
+        self,
+        *,
+        actor_id: str,
+        revision: ChannelRevision,
+        after: tuple[int, str] | None,
+        limit: int,
+    ) -> tuple[ChannelDelivery, ...]:
+        """Every retained message addressed to this actor, at one cut."""
+
+        return self._inbox(
+            channel_id=None,
+            actor_id=actor_id,
+            revision=revision,
+            after=after,
+            limit=limit,
+        )
+
     def channel_revision(self, *, channel_id: str) -> ChannelRevision:
         with self._read() as connection, _snapshot(connection):
             return _current_revision(connection, channel_id)
@@ -185,20 +215,37 @@ class _SqliteChannelsMixin:
         after: tuple[int, str] | None,
         limit: int,
     ) -> tuple[ChannelDelivery, ...]:
+        return self._inbox(
+            channel_id=channel_id,
+            actor_id=actor_id,
+            revision=revision,
+            after=after,
+            limit=limit,
+        )
+
+    def _inbox(
+        self,
+        *,
+        channel_id: str | None,
+        actor_id: str,
+        revision: ChannelRevision,
+        after: tuple[int, str] | None,
+        limit: int,
+    ) -> tuple[ChannelDelivery, ...]:
         if limit <= 0:
             raise ValueError("limit must be positive")
-        clauses = [
-            "channel_id = ?",
-            "recipient_actor_id = ?",
-            "message_seq <= ?",
-        ]
-        params: list[object] = [channel_id, actor_id, revision.message_seq]
+        clauses = ["recipient_actor_id = ?", "message_seq <= ?"]
+        params: list[object] = [actor_id, revision.message_seq]
+        if channel_id is not None:
+            clauses.insert(0, "channel_id = ?")
+            params.insert(0, channel_id)
         if after is not None:
             clauses.append("(message_seq > ? OR (message_seq = ? AND message_id > ?))")
             params.extend((after[0], after[0], after[1]))
         params.append(limit)
         with self._read() as connection, _snapshot(connection):
             current = _current_revision(connection, channel_id)
+
             if revision.message_seq > current.message_seq or revision.ack_seq > current.ack_seq:
                 raise InvalidChannelRevision(
                     f"channel revision {revision.model_dump()} is ahead of retained history"
@@ -262,18 +309,29 @@ def _snapshot(connection: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
     connection.execute("COMMIT")
 
 
-def _current_revision(connection: sqlite3.Connection, channel_id: str) -> ChannelRevision:
-    """The cut for ONE channel, so an unrelated channel cannot advance it."""
+def _current_revision(
+    connection: sqlite3.Connection,
+    channel_id: str | None,
+) -> ChannelRevision:
+    """The cut for one channel, or for all retained history when unscoped.
 
+    Scoping matters for a transport: an unrelated channel must not advance a
+    channel's cut. An actor's cross-channel inbox is bounded by the whole
+    history instead, because that is the history it reads.
+    """
+
+    where = "" if channel_id is None else " WHERE channel_id = ?"
+    params: tuple[str, ...] = () if channel_id is None else (channel_id,)
     messages = connection.execute(
-        "SELECT COALESCE(MAX(message_seq), 0) FROM channel_messages WHERE channel_id = ?",
-        (channel_id,),
+        f"SELECT COALESCE(MAX(message_seq), 0) FROM channel_messages{where}",
+        params,
     ).fetchone()[0]
+    ack_where = "" if channel_id is None else " WHERE messages.channel_id = ?"
     acks = connection.execute(
         "SELECT COALESCE(MAX(acks.ack_seq), 0) FROM channel_acks AS acks"
         " JOIN channel_messages AS messages ON messages.message_id = acks.message_id"
-        " WHERE messages.channel_id = ?",
-        (channel_id,),
+        f"{ack_where}",
+        params,
     ).fetchone()[0]
     return ChannelRevision(message_seq=int(messages), ack_seq=int(acks))
 

@@ -33,10 +33,23 @@ IDEMPOTENCY_KEY_MAX_LENGTH = 200
 
 READ_SCOPE = "constructicon:read"
 OPERATE_SCOPE = "constructicon:operate"
+ADVISE_SCOPE = "constructicon:advise"
 APPROVE_SCOPE = "constructicon:approve"
 PROMOTE_SCOPE = "constructicon:promote"
 ADMIN_SCOPE = "constructicon:admin"
-CONTROL_SCOPES = frozenset({READ_SCOPE, OPERATE_SCOPE, APPROVE_SCOPE, PROMOTE_SCOPE, ADMIN_SCOPE})
+CONTROL_SCOPES = frozenset(
+    {
+        READ_SCOPE,
+        OPERATE_SCOPE,
+        ADVISE_SCOPE,
+        APPROVE_SCOPE,
+        PROMOTE_SCOPE,
+        ADMIN_SCOPE,
+    }
+)
+# Advising is not approving. Which one a message needs is sealed on the request
+# as its interaction, never chosen by whoever answers it.
+INTERACTION_SCOPES = {"advice": ADVISE_SCOPE, "approval": APPROVE_SCOPE}
 
 
 class ControlCode(StrEnum):
@@ -364,6 +377,40 @@ class VersionSummary(BaseModel):
     stable: bool
     registered_at: AwareDatetime
     detail: DetailRef
+
+
+class ChannelMessageSummary(BaseModel):
+    """One retained message as one actor sees it, payload by reference."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    message_id: Digest
+    message_seq: NonNegativeInt
+    channel_id: str
+    lane: str
+    interaction: Literal["advice", "approval"]
+    kind: Literal["request", "reply"]
+    reply_to: Digest | None
+    run_id: RunId
+    port: str
+    type_id: str
+    schema_hash: str
+    created_at: AwareDatetime
+    acknowledged: bool
+    detail: DetailRef
+
+    @property
+    def cursor_key(self) -> tuple[int, str]:
+        """The exact continuation key ``Channel.inbox(after=...)`` accepts."""
+
+        return (self.message_seq, str(self.message_id))
+
+
+class ChannelMessagePage(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    items: tuple[ChannelMessageSummary, ...]
+    page: PageInfo
 
 
 class VersionPage(BaseModel):
