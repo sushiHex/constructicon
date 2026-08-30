@@ -306,7 +306,7 @@ input hash and resolved version restores; the first miss resumes live.
 Reproduce starts a new run under a past run's exact manifest and inputs.
 
 One public `SqliteJournal` implements the separate L0 `Journal`,
-`RegistryStore`, and `ControlStore` contracts over one schema-5 WAL database.
+`RegistryStore`, and `ControlStore` contracts over one schema-6 WAL database.
 Its private modules are named by enduring responsibility:
 
 ```text
@@ -315,10 +315,11 @@ _sqlite_schema     creation and explicitly versioned migrations
 _sqlite_execution  runs, events, checkpoints, effects, leases, attestations
 _sqlite_registry   registrations, promotions, coherent snapshots
 _sqlite_control    commands and approvals
+_sqlite_channels   channel messages and acknowledgements
 _sqlite_queries    bounded read projections
 ```
 
-This is implementation decomposition, not multiple stores and not schema 6.
+This is implementation decomposition, not multiple stores.
 
 Loops use that same machinery rather than a second scheduler. Every iteration
 adds one `IterationFrame` to each member's `ExecutionPath`; checkpoints,

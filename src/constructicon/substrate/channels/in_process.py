@@ -26,6 +26,7 @@ from constructicon.core.channel import (
     message_for_reply,
     reply_message_id,
     same_message,
+    validated_reply,
 )
 from constructicon.core.envelope import utc_now
 from constructicon.core.errors import ContractViolation, JournalDamaged
@@ -96,7 +97,7 @@ class InProcessChannel:
 
     def reply_for(self, request_id: Digest) -> ChannelMessage | None:
         with self._lock:
-            return next(
+            stored = next(
                 (
                     message
                     for message in self._messages
@@ -104,6 +105,12 @@ class InProcessChannel:
                 ),
                 None,
             )
+            if stored is None:
+                return None
+            request = self._by_id.get(str(request_id))
+            if request is None:
+                raise JournalDamaged(f"reply names request {request_id}, which is not stored")
+            return validated_reply(request, stored)
 
     def reply(
         self,

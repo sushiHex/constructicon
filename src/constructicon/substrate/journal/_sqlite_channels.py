@@ -27,6 +27,7 @@ from constructicon.core.channel import (
     message_for_reply,
     reply_message_id,
     same_message,
+    validated_reply,
 )
 from constructicon.core.envelope import Envelope
 from constructicon.core.errors import ContractViolation, JournalDamaged
@@ -90,7 +91,15 @@ class _SqliteChannelsMixin:
                 "SELECT * FROM channel_messages WHERE reply_to = ? AND channel_id = ?",
                 (str(request_id), channel_id),
             ).fetchone()
-        return _message_from_row(row) if row is not None else None
+            if row is None:
+                return None
+            request_row = connection.execute(
+                "SELECT * FROM channel_messages WHERE message_id = ? AND channel_id = ?",
+                (str(request_id), channel_id),
+            ).fetchone()
+        if request_row is None:
+            raise JournalDamaged(f"reply names request {request_id}, which is not stored")
+        return validated_reply(_message_from_row(request_row), _message_from_row(row))
 
     def channel_reply(
         self,

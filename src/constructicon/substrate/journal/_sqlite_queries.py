@@ -11,11 +11,15 @@ from typing import Any
 from pydantic import ValidationError
 
 from constructicon.core.address import ExecutionPath, RunId
+from constructicon.core.channel import reply_message_id
 from constructicon.core.control import RunOrigin, RunRecord
 from constructicon.core.errors import JournalDamaged
 from constructicon.core.identity import Digest
 from constructicon.core.journal import JournalEvent
 from constructicon.core.run import ParkedUnit, ParkedWait, RunStatus
+
+# Comfortably under every SQLite build's SQLITE_MAX_VARIABLE_NUMBER, old and new.
+_MAX_SQL_VARIABLES = 900
 
 
 class _SqliteQueriesMixin:
@@ -179,18 +183,42 @@ class _SqliteQueriesMixin:
 
         One bounded read over immutable rows. The reply is the durable fact a
         wake observes, so nothing here consults command state.
+
+        Requests are deduplicated and chunked: one placeholder per request would
+        exceed SQLite's bind-variable ceiling on a page of runs that each park
+        many units, and that exception would escape into the recovery pump.
         """
 
-        if not requests:
+        unique = list(dict.fromkeys(str(request) for request in requests))
+        if not unique:
             return {}
-        placeholders = ",".join("?" for _ in requests)
+        answered: dict[Digest, Digest] = {}
         with self._read() as connection:
-            rows = connection.execute(
-                "SELECT reply_to, message_id FROM channel_messages"
-                f" WHERE kind = 'reply' AND reply_to IN ({placeholders})",
-                tuple(str(request) for request in requests),
-            ).fetchall()
-        return {Digest(row["reply_to"]): Digest(row["message_id"]) for row in rows}
+            for start in range(0, len(unique), _MAX_SQL_VARIABLES):
+                chunk = unique[start : start + _MAX_SQL_VARIABLES]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = connection.execute(
+                    "SELECT reply.reply_to AS request_id, reply.message_id AS reply_id,"
+                    " request.reply_port AS reply_port FROM channel_messages AS reply"
+                    " JOIN channel_messages AS request"
+                    " ON request.message_id = reply.reply_to"
+                    f" WHERE reply.kind = 'reply' AND reply.reply_to IN ({placeholders})",
+                    tuple(chunk),
+                ).fetchall()
+                for row in rows:
+                    request_id = Digest(row["request_id"])
+                    reply_id = Digest(row["reply_id"])
+                    if row["reply_port"] is None or reply_id != reply_message_id(
+                        request_id=request_id,
+                        reply_port=row["reply_port"],
+                    ):
+                        # A `reply_to` pointer is not a relationship. Waking on
+                        # an unverified one could hand a run another's payload.
+                        raise JournalDamaged(
+                            f"reply {reply_id} does not derive from request {request_id}"
+                        )
+                    answered[request_id] = reply_id
+        return answered
 
     def max_event_seq(self, run_id: RunId) -> int:
         with self._read() as connection:
