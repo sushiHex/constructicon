@@ -7,6 +7,7 @@ reads for the control plane. Commands and approvals remain a separate
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, Protocol
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict
@@ -163,6 +164,10 @@ class Journal(Protocol):
         limit: int = 100,
     ) -> list[ParkedWait]:
         """Bounded page of PARKED runs and the requests that would wake them."""
+        ...
+
+    def answered_requests(self, requests: Sequence[Digest]) -> dict[Digest, Digest]:
+        """Map each request that already has a stored reply to that reply's id."""
         ...
 
     def max_event_seq(self, run_id: RunId) -> int: ...

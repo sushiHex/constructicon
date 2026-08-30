@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
@@ -13,8 +13,14 @@ from constructicon.api.run_host import RunHost
 from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId
 from constructicon.core.control import RunRecord
-from constructicon.core.identity import digest
-from constructicon.core.run import OwnershipLost, RunAttemptSuperseded, RunStatus
+from constructicon.core.identity import Digest, digest
+from constructicon.core.run import (
+    AttemptCause,
+    OwnershipLost,
+    ParkedWait,
+    RunAttemptSuperseded,
+    RunStatus,
+)
 from constructicon.runtime.walker import RunResult
 
 
@@ -60,6 +66,10 @@ class FakeJournal:
     def __init__(self, records: list[RunRecord]) -> None:
         self.records = {record.run_id: record for record in records}
         self.event_seqs = {record.run_id: 0 for record in records}
+        # The wake surface: what each PARKED run waits on, and which of those
+        # requests already carry a reply.
+        self.parked: dict[RunId, tuple[Digest, ...]] = {}
+        self.replies: dict[Digest, Digest] = {}
         self.latest_calls = 0
         self.page_calls = 0
         self.record_calls = 0
@@ -80,6 +90,35 @@ class FakeJournal:
         if self.after_max_event_seq is not None:
             self.after_max_event_seq(run_id)
         return current
+
+    def parked_waits(
+        self,
+        *,
+        after: tuple[str, str] | None = None,
+        through: tuple[str, str] | None = None,
+        limit: int = 100,
+    ) -> list[ParkedWait]:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        records = self._filtered(statuses=(RunStatus.PARKED,))
+        if after is not None:
+            records = [record for record in records if self._key(record) > after]
+        if through is not None:
+            records = [record for record in records if self._key(record) <= through]
+        return [
+            ParkedWait(
+                run_id=record.run_id,
+                created_at=record.created_at,
+                event_seq=self.event_seqs[record.run_id],
+                requests=self.parked.get(record.run_id, ()),
+            )
+            for record in records[:limit]
+        ]
+
+    def answered_requests(self, requests: Sequence[Digest]) -> dict[Digest, Digest]:
+        return {
+            request: self.replies[request] for request in requests if request in self.replies
+        }
 
     def latest_run_key(
         self,
@@ -150,6 +189,7 @@ class FakeSystem:
         self.clock = clock
         self.attempted: list[RunId] = []
         self.started: list[RunId] = []
+        self.causes: dict[RunId, AttemptCause | None] = {}
         self.blockers: dict[RunId, asyncio.Event] = {}
         self.lose_once: set[RunId] = set()
         self.lose_unowned_once: set[RunId] = set()
@@ -170,10 +210,10 @@ class FakeSystem:
         cancellation: str,
         expected_event_seq: int | None = None,
         expected_statuses: frozenset[RunStatus] | None = None,
-        resume_command_id: str | None = None,
+        cause: AttemptCause | None = None,
     ) -> RunResult:
         assert cancellation == "abandon"
-        del resume_command_id
+        self.causes[run_id] = cause
         self.attempted.append(run_id)
         durable = self.journal.records[run_id]
         if (

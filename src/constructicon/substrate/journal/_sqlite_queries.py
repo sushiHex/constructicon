@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Sequence
 from typing import Any
 
 from pydantic import ValidationError
@@ -164,6 +165,7 @@ class _SqliteQueriesMixin:
             waits.append(
                 ParkedWait(
                     run_id=record.run_id,
+                    created_at=record.created_at,
                     event_seq=event.seq,
                     requests=tuple(
                         unit.waiting_on for unit in parsed if unit.waiting_on is not None
@@ -171,6 +173,24 @@ class _SqliteQueriesMixin:
                 )
             )
         return waits
+
+    def answered_requests(self, requests: Sequence[Digest]) -> dict[Digest, Digest]:
+        """Map each request that already has a stored reply to that reply's id.
+
+        One bounded read over immutable rows. The reply is the durable fact a
+        wake observes, so nothing here consults command state.
+        """
+
+        if not requests:
+            return {}
+        placeholders = ",".join("?" for _ in requests)
+        with self._read() as connection:
+            rows = connection.execute(
+                "SELECT reply_to, message_id FROM channel_messages"
+                f" WHERE kind = 'reply' AND reply_to IN ({placeholders})",
+                tuple(str(request) for request in requests),
+            ).fetchall()
+        return {Digest(row["reply_to"]): Digest(row["message_id"]) for row in rows}
 
     def max_event_seq(self, run_id: RunId) -> int:
         with self._read() as connection:

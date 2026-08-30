@@ -58,7 +58,7 @@ from constructicon.core.registry import (
     RegistryStore,
     StoredVersion,
 )
-from constructicon.core.run import RunStatus
+from constructicon.core.run import AttemptCause, RunStatus
 from constructicon.runtime.registry import (
     ComponentRegistry,
     PlannedRegistration,
@@ -1754,7 +1754,7 @@ class _CommandExecutor:
             run_id,
             expected_event_seq=expected_event_seq,
             allowed_statuses=_RESUME_LAUNCH_STATUSES,
-            resume_command_id=command_id,
+            cause=AttemptCause(kind="resume_command", id=command_id),
         )
 
     def _launch_replayed_resume(self, submission: RunSubmission) -> None:

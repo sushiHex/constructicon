@@ -12,7 +12,7 @@ import pytest
 
 from constructicon.api.control import ControlPlane
 from constructicon.api.run_host import RunHost
-from constructicon.core.address import RunId
+from constructicon.core.address import ExecutionPath, RunId, ScopePath
 from constructicon.core.control import (
     OPERATE_SCOPE,
     READ_SCOPE,
@@ -21,7 +21,7 @@ from constructicon.core.control import (
     command_id_for,
 )
 from constructicon.core.errors import JournalDamaged
-from constructicon.core.run import RunStatus
+from constructicon.core.run import AttemptCause, ParkedUnit, RunStatus
 from constructicon.runtime.walker import RunResult
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.conftest import (
@@ -36,6 +36,15 @@ ACTOR = AuthenticatedActor(
     auth_method="static",
     scopes=frozenset({READ_SCOPE, OPERATE_SCOPE}),
 )
+_POLICY_EXHAUSTED = ParkedUnit(
+    path=ExecutionPath(scope=ScopePath(segments=("triage",))),
+    reason="policy_exhausted",
+    completed_iterations=1,
+)
+_PARKED_UNITS: dict[RunStatus, dict[str, Any]] = {
+    RunStatus.FAILED: {},
+    RunStatus.PARKED: {"parked": [_POLICY_EXHAUSTED.model_dump(mode="json")], "blocked": []},
+}
 TERMINAL_KINDS = {
     RunStatus.FAILED: "RunFailed",
     RunStatus.PARKED: "RunParked",
@@ -65,7 +74,7 @@ def _prepare_terminal(
         expected=frozenset({RunStatus.RUNNING}),
         target=status,
         event_kind=TERMINAL_KINDS[status],
-        payload={"attempt": "initial"},
+        payload={"attempt": "initial", **_PARKED_UNITS[status]},
     )
     journal.release_run(lease)
     return run_id
@@ -86,7 +95,7 @@ def _install_terminal_worker(
         cancellation: str,
         expected_event_seq: int | None = None,
         expected_statuses: frozenset[RunStatus] | None = None,
-        resume_command_id: str | None = None,
+        cause: AttemptCause | None = None,
     ) -> RunResult:
         assert cancellation == "abandon"
         attempt_number = len(attempts) + 1
@@ -106,7 +115,7 @@ def _install_terminal_worker(
             target=RunStatus.RUNNING,
             event_kind=("RunStarted" if claimed.status is RunStatus.PENDING else "RunResumed"),
             payload=(
-                {"resume_command_id": resume_command_id} if resume_command_id is not None else None
+                cause.payload() if cause is not None else None
             ),
         )
         journal.transition_run(
@@ -114,7 +123,9 @@ def _install_terminal_worker(
             expected=frozenset({RunStatus.RUNNING}),
             target=terminal_status,
             event_kind=TERMINAL_KINDS[terminal_status],
-            payload={"attempt": attempt_number},
+            # A real park always records its units; a bare RunParked is a shape
+            # the walker never writes.
+            payload={"attempt": attempt_number, **_PARKED_UNITS[terminal_status]},
         )
         journal.release_run(lease)
         return RunResult(run_id=run_id, status=terminal_status, outputs={})

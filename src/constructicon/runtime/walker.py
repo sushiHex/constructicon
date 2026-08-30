@@ -57,6 +57,7 @@ from constructicon.core.ports import (
     PortAddress,
 )
 from constructicon.core.run import (
+    AttemptCause,
     ChannelWaitReason,
     CheckpointConflict,
     DependencyReport,
@@ -296,7 +297,7 @@ class Walker:
         cancellation: Literal["cancel", "abandon"] = "cancel",
         expected_event_seq: int | None = None,
         expected_statuses: frozenset[RunStatus] | None = None,
-        resume_command_id: str | None = None,
+        cause: AttemptCause | None = None,
     ) -> RunResult:
         journal = self._journal
         state = journal.run_state(run_id)
@@ -322,7 +323,7 @@ class Walker:
             cancellation=cancellation,
             expected_event_seq=expected_event_seq,
             expected_statuses=expected_statuses,
-            resume_command_id=resume_command_id,
+            cause=cause,
         )
 
     async def resume(self, run_id: RunId) -> RunResult:
@@ -361,7 +362,7 @@ class Walker:
         cancellation: Literal["cancel", "abandon"],
         expected_event_seq: int | None,
         expected_statuses: frozenset[RunStatus] | None,
-        resume_command_id: str | None,
+        cause: AttemptCause | None,
     ) -> RunResult:
         bound = self._registry.activate(manifest, catalog=self._catalog)
         journal = self._journal
@@ -382,7 +383,7 @@ class Walker:
                 lost=lost,
                 effect_mode=effect_mode,
                 capability_mode=capability_mode,
-                resume_command_id=resume_command_id,
+                cause=cause,
             )
         except asyncio.CancelledError:
             await self._stop_heartbeat(heartbeat)
@@ -452,7 +453,7 @@ class Walker:
         lost: list[OwnershipLost],
         effect_mode: EffectMode,
         capability_mode: Literal["normal", "discard"],
-        resume_command_id: str | None,
+        cause: AttemptCause | None,
     ) -> RunResult:
         journal = self._journal
         manifest = bound.manifest
@@ -469,11 +470,7 @@ class Walker:
                 event_kind="RunStarted",
                 payload={
                     "inputs": inputs,
-                    **(
-                        {"resume_command_id": resume_command_id}
-                        if resume_command_id is not None
-                        else {}
-                    ),
+                    **(cause.payload() if cause is not None else {}),
                 },
             )
         elif state.status in (RunStatus.FAILED, RunStatus.PARKED):
@@ -482,21 +479,13 @@ class Walker:
                 expected=frozenset({RunStatus.FAILED, RunStatus.PARKED}),
                 target=RunStatus.RUNNING,
                 event_kind="RunResumed",
-                payload=(
-                    {"resume_command_id": resume_command_id}
-                    if resume_command_id is not None
-                    else None
-                ),
+                payload=cause.payload() if cause is not None else None,
             )
         else:
             journal.append_event(
                 lease,
                 "RunReclaimed",
-                payload=(
-                    {"resume_command_id": resume_command_id}
-                    if resume_command_id is not None
-                    else None
-                ),
+                payload=cause.payload() if cause is not None else None,
             )
 
         await self._reconcile_stale_leases(bound, lease, capability_mode=capability_mode)
