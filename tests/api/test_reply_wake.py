@@ -136,3 +136,42 @@ async def test_a_parked_run_with_no_wait_is_never_woken() -> None:
     await asyncio.sleep(0)
     assert system.started == []
     await host.shutdown()
+
+
+async def test_a_wait_beyond_one_ticks_page_budget_is_still_woken() -> None:
+    """The cut must persist across ticks, or a later page is never examined.
+
+    With more PARKED runs than one tick can page, restarting the scan every
+    tick would examine the same bounded prefix forever and strand every wait
+    behind it.
+    """
+
+    clock = AsyncClock()
+    # Two pages' worth of unanswered waits, then the one that has a reply.
+    unanswered = [
+        record(f"run-wait-{index:03d}", clock, created_offset=index, status=RunStatus.PARKED)
+        for index in range(4)
+    ]
+    answered = record("run-wait-999", clock, created_offset=99, status=RunStatus.PARKED)
+    journal = FakeJournal([*unanswered, answered])
+    for index, item in enumerate(unanswered):
+        journal.parked[item.run_id] = (digest("channel-message", 1, {"n": index}),)
+    journal.parked[answered.run_id] = (REQUEST,)
+    journal.replies[REQUEST] = REPLY
+
+    system = FakeSystem(journal, clock)
+    system.blockers[answered.run_id] = asyncio.Event()
+    # One row per page, two pages per tick: the answered wait sits on page five.
+    host = host_for(system, recovery_page_size=1)
+    host._resume_pages_per_tick = 2
+    await host.startup()
+
+    for _ in range(200):
+        if system.started == [answered.run_id]:
+            break
+        host._wake.set()  # each tick pages two more rows and keeps its cut
+        await asyncio.sleep(0)
+    else:
+        raise AssertionError("a wait past the per-tick page budget was never examined")
+    system.blockers[answered.run_id].set()
+    await host.shutdown()

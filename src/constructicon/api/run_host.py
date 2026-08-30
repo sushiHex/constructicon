@@ -102,6 +102,8 @@ class RunHost:
         self._resume_decoder: ResumeDecoder | None = None
         self._resume_through: tuple[str, str] | None = None
         self._resume_after: tuple[str, str] | None = None
+        self._wait_through: tuple[str, str] | None = None
+        self._wait_after: tuple[str, str] | None = None
 
     def _configure_committed_resumes(
         self,
@@ -247,6 +249,8 @@ class RunHost:
         self._deferred.clear()
         self._resume_through = None
         self._resume_after = None
+        self._wait_through = None
+        self._wait_after = None
         self._wake.clear()
         self._cancel_scan_waiters()
         self._pump_task = None
@@ -347,25 +351,36 @@ class RunHost:
         observed reply may wake it. Scanning parking facts rather than
         watermarking replies also closes the race where a fast reply lands
         after a component's absence check but just before the park is recorded.
+
+        The cut persists across ticks. Restarting it every tick would cap the
+        scan at one bounded prefix, so a wait beyond `recovery_page_size *
+        resume_pages_per_tick` unanswered rows would never be examined and its
+        run would stay PARKED forever.
         """
 
-        through = self._journal.latest_run_key(statuses=(RunStatus.PARKED,))
-        if through is None:
-            return None
-        after: tuple[str, str] | None = None
+        if self._wait_through is None:
+            self._wait_through = self._journal.latest_run_key(statuses=(RunStatus.PARKED,))
+            self._wait_after = None
+            if self._wait_through is None:
+                return self._now() + timedelta(seconds=self._resume_retry_s)
+        through = self._wait_through
         for _ in range(self._resume_pages_per_tick):
             waits = self._journal.parked_waits(
-                after=after,
+                after=self._wait_after,
                 through=through,
                 limit=self._recovery_page_size,
             )
             if not waits:
+                self._wait_through = None
+                self._wait_after = None
                 break
             answered = self._journal.answered_requests(
                 [request for wait in waits for request in wait.requests]
             )
             for wait in waits:
-                after = wait.key
+                # Advance the cut BEFORE acting, so the next tick resumes past
+                # this row rather than re-reading the same bounded prefix.
+                self._wait_after = wait.key
                 reply = next(
                     (answered[request] for request in wait.requests if request in answered),
                     None,
@@ -378,7 +393,11 @@ class RunHost:
                     allowed_statuses=frozenset({RunStatus.PARKED}),
                     cause=AttemptCause(kind="channel_reply", id=str(reply)),
                 )
-            if len(waits) < self._recovery_page_size or (after is not None and after >= through):
+            if len(waits) < self._recovery_page_size or (
+                self._wait_after is not None and self._wait_after >= through
+            ):
+                self._wait_through = None
+                self._wait_after = None
                 break
         return self._now() + timedelta(seconds=self._resume_retry_s)
 

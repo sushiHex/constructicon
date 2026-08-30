@@ -810,7 +810,9 @@ async def test_ownership_loss_cannot_overwrite_newer_queued_attempt_intent() -> 
         == "queued"
     )
     system.ownership_loss_release[run_id].set()
-    await eventually(lambda: clock.sleeper_count == 1, "claim backoff was not armed")
+    # Assert the backoff itself, not a sleeper count: a PARKED run also arms the
+    # wake scan's timer, so counting sleepers no longer isolates this condition.
+    await eventually(lambda: run_id in host._claim_retry_at, "claim backoff was not armed")
     clock.advance(0.1)
     await eventually(
         lambda: system.started == [run_id, run_id],
