@@ -178,6 +178,27 @@ consumer of that suite is not admittable (I6).
 - publish a `ChannelProfile` whose `durability` is the truth about this
   transport — a process-local history says `process` and loses state honestly.
 
+## Adding a component that waits on a channel (L2/L3, M7)
+
+An atomic component that requires a channel capability must declare **exactly
+one input and one output**. Admission compiles that pair into the manifest as
+the exchange the binding may carry, so the component never names a port and
+nothing about the message is chosen at call time. A component needing more ports
+composes around a one-exchange component (I10); admission rejects the alternative
+with an itemized fault rather than guessing which pair is the exchange.
+
+- the whole round trip is `await ctx.channel(alias).ask(payload)`; the payload is
+  the only thing the component supplies;
+- `ask` raises `InvocationParked` when no reply is stored yet. Let it propagate:
+  waiting is not failing, and the walker records the parking facts. Never catch
+  it to return a placeholder output;
+- return the reply as the declared output port. A reply cannot arrive into an
+  input, because a non-optional input must already be bound before the
+  invocation starts — on wake the component reruns and reads the stored reply;
+- assembly, not the graph, decides routing. Give each participant its own
+  capability id whose descriptor carries the `ChannelEndpoint`; changing one is a
+  manifest identity change and activation refuses a mismatched live endpoint.
+
 ## Changing SQLite persistence (L1)
 
 `SqliteJournal` is one schema-6 WAL store assembled from private responsibility

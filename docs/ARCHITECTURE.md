@@ -255,7 +255,44 @@ claims a component consumed the payload. `UNIQUE(reply_to)` admits one reply per
 request, so concurrent repliers yield one exact reply and a typed conflict.
 Inbox pages are taken at one `ChannelRevision(message_seq, ack_seq)` vector cut
 ordered by durable sequence, so tied observation times still order totally and a
-later write cannot shift an older page. See
+later write cannot shift an older page.
+
+Routing is a manifest fact, not a live-object detail. Assembly supplies a
+`ChannelEndpoint` (lane, interaction, recipient) on a capability descriptor;
+admission compiles it into the scoped `CapabilityBinding` together with the one
+request/reply pair it may carry, taken from the component's single declared
+input and output. Capability bindings participate in manifest identity, so two
+hosts that assemble one manifest with different routing disagree on
+`manifest_hash` instead of silently deriving a second message — and activation
+compares the live endpoint against the sealed one, because a revision is only a
+string. A manifest that binds a channel declares schema 3; one that binds none
+stays schema 2 and byte-identical.
+
+Nothing about the message is therefore chosen at call time. A component holds
+only `await ctx.channel(alias).ask(payload)`, and pinned source is not pinned
+behavior: a component free to name its own port could branch differently on a
+second host and append a second request.
+
+## Parking and waking
+
+Waiting is not failing. A component that has sent or reconciled its request and
+found no reply raises `InvocationParked` naming that request; the walker records
+ordinary parking facts and checkpoints nothing, because there is no output yet
+and a checkpoint would make the next attempt skip the wait. No workspace, lease,
+or coroutine stays open while a human thinks.
+
+Recovery reads durable domain facts, never command state. `Journal.parked_waits`
+projects current PARKED runs and their latest exact `RunParked` event; a bounded
+scan asks which of those requests already carry a reply and wakes the run at the
+projection's event fence. A death after a reply's domain transaction but before
+its command completes therefore still produces the wake, with no command lookup
+and no wake outbox. Scanning parking facts rather than watermarking replies also
+closes the race where a fast reply lands just before the park is recorded.
+
+PARKED never joins the ordinary recovery statuses: a parked run waits on a
+human, not on a lost worker, so only an observed reply may wake it. One
+`AttemptCause` names why an attempt started — M6's committed resume command or
+M7's stored reply — and M6 keeps its exact legacy key. See
 [ADR 0014](adr/0014-channel-identity-and-delivery.md).
 
 ## Journal
@@ -372,6 +409,7 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
 | MCP | Actor-derived handler delegates once; local assembly and mutable services have no transport route (M6) |
 | Message channels | One derived id survives process death: a reconstructed send appends no second message and invents no new time; a second differing reply is a typed conflict (M7) |
 | Channel cuts | A send or ack between pages → old vector cut unchanged; a future revision is refused (M7) |
+| Channel parking | A death at any send seam yields one message; a stored reply wakes the PARKED run with no command lookup (M7) |
 | Telemetry | Damaged executor output never reports clean success |
 | Reproduction | Installed code differs from recorded digest → refuse (M2) |
 | Loops | Contradictory iteration checkpoint, hidden nested loop, or non-boolean control → refuse before new work; exhausted roots report PARKED (M4) |
