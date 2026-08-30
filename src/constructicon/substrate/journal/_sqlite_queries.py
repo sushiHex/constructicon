@@ -7,11 +7,14 @@ import json
 import sqlite3
 from typing import Any
 
+from pydantic import ValidationError
+
 from constructicon.core.address import ExecutionPath, RunId
 from constructicon.core.control import RunOrigin, RunRecord
+from constructicon.core.errors import JournalDamaged
 from constructicon.core.identity import Digest
 from constructicon.core.journal import JournalEvent
-from constructicon.core.run import RunStatus
+from constructicon.core.run import ParkedUnit, ParkedWait, RunStatus
 
 
 class _SqliteQueriesMixin:
@@ -115,6 +118,59 @@ class _SqliteQueriesMixin:
                 ),
             ).fetchone()
         return self._event_from_row(row) if row else None
+
+    def parked_waits(
+        self,
+        *,
+        after: tuple[str, str] | None = None,
+        through: tuple[str, str] | None = None,
+        limit: int = 100,
+    ) -> list[ParkedWait]:
+        """Every PARKED run and the exact requests a reply would wake it at.
+
+        A projection over rows that already exist — the PARKED run and its
+        latest parking event — never a table, an outbox, or a second authority.
+        Recovery reads this instead of command state, so a wake survives a
+        death after the reply's domain transaction but before its command
+        completes. A PARKED row without one well-formed latest parking event
+        is damage and fails closed rather than silently waking nothing.
+        """
+
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        waits: list[ParkedWait] = []
+        for record in self.run_records(
+            statuses=(RunStatus.PARKED,),
+            after=after,
+            through=through,
+            limit=limit,
+        ):
+            event = self.latest_terminal_event(record.run_id)
+            if event is None or event.kind != "RunParked":
+                raise JournalDamaged(
+                    f"PARKED run {record.run_id!r} has no latest RunParked event"
+                )
+            units = (event.payload or {}).get("parked")
+            if not isinstance(units, list):
+                raise JournalDamaged(
+                    f"RunParked event for {record.run_id!r} carries no parked units"
+                )
+            try:
+                parsed = [ParkedUnit.model_validate(unit) for unit in units]
+            except ValidationError as exc:
+                raise JournalDamaged(
+                    f"RunParked event for {record.run_id!r} has invalid parked units: {exc}"
+                ) from exc
+            waits.append(
+                ParkedWait(
+                    run_id=record.run_id,
+                    event_seq=event.seq,
+                    requests=tuple(
+                        unit.waiting_on for unit in parsed if unit.waiting_on is not None
+                    ),
+                )
+            )
+        return waits
 
     def max_event_seq(self, run_id: RunId) -> int:
         with self._read() as connection:

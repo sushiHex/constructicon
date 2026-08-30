@@ -1,5 +1,5 @@
 # mypy: disable-error-code="attr-defined"
-"""SQLite schema ownership and atomic migrations through schema 5."""
+"""SQLite schema ownership and atomic migrations through schema 6."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from constructicon.substrate.journal._sqlite_base import (
     _manifest_semantically_equal,
 )
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _V5_SCHEMA = """
 CREATE TABLE IF NOT EXISTS commands (
@@ -40,30 +40,70 @@ CREATE TABLE IF NOT EXISTS run_origins (
 );
 """
 
+# Append-only channel facts. A message is never updated or deleted, and an
+# acknowledgement is a delivery fact that never hides history from recovery.
+# ``UNIQUE(reply_to)`` is what enforces one reply per request; SQLite allows
+# many NULLs, so requests are unconstrained by it.
+_V6_SCHEMA = """
+CREATE TABLE IF NOT EXISTS channel_messages (
+    message_seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id         TEXT NOT NULL UNIQUE,
+    channel_id         TEXT NOT NULL,
+    lane               TEXT NOT NULL,
+    interaction        TEXT NOT NULL,
+    kind               TEXT NOT NULL,
+    reply_to           TEXT,
+    recipient_actor_id TEXT,
+    sender_actor_id    TEXT,
+    run_id             TEXT NOT NULL,
+    path_json          TEXT NOT NULL,
+    port               TEXT NOT NULL,
+    type_id            TEXT NOT NULL,
+    schema_hash        TEXT NOT NULL,
+    reply_port         TEXT,
+    reply_type_id      TEXT,
+    reply_schema_hash  TEXT,
+    envelope_json      TEXT NOT NULL,
+    attestation_id     TEXT,
+    UNIQUE(reply_to)
+);
+CREATE TABLE IF NOT EXISTS channel_acks (
+    ack_seq    INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id TEXT NOT NULL,
+    actor_id   TEXT NOT NULL,
+    command_id TEXT NOT NULL UNIQUE,
+    acked_at   TEXT NOT NULL,
+    UNIQUE(message_id, actor_id)
+);
+"""
+
 
 class _SqliteSchemaMixin:
     def _migrate(self) -> None:
         connection = self._connect()
         try:
-            connection.execute("PRAGMA journal_mode=WAL")
+            # Refuse BEFORE any pragma writes: "refusing to touch it" must be
+            # literally true, and journal_mode is itself a durable change.
             version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+            if version > SCHEMA_VERSION:
+                raise JournalDamaged(
+                    f"database schema version {version} is newer than this build "
+                    f"understands ({SCHEMA_VERSION}); refusing to touch it"
+                )
+            connection.execute("PRAGMA journal_mode=WAL")
             has_runs = (
                 connection.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='runs'"
                 ).fetchone()
                 is not None
             )
-            if version > SCHEMA_VERSION:
-                raise JournalDamaged(
-                    f"database schema version {version} is newer than this build "
-                    f"understands ({SCHEMA_VERSION}); refusing to touch it"
-                )
             if version == 0 and has_runs:
                 self._migrate_m1_to_m2(connection)
                 version = 2
             elif version == 0:
                 connection.executescript(_SCHEMA)
                 connection.executescript(_V5_SCHEMA)
+                connection.executescript(_V6_SCHEMA)
                 connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
                 connection.commit()
                 return
@@ -76,9 +116,13 @@ class _SqliteSchemaMixin:
             if version == 4:
                 self._migrate_m4_to_m5(connection)
                 version = 5
+            if version == 5:
+                self._migrate_m5_to_m6(connection)
+                version = 6
             if version == SCHEMA_VERSION:
                 connection.executescript(_SCHEMA)
                 connection.executescript(_V5_SCHEMA)
+                connection.executescript(_V6_SCHEMA)
                 connection.commit()
         finally:
             connection.close()
@@ -88,6 +132,19 @@ class _SqliteSchemaMixin:
         connection.execute("BEGIN IMMEDIATE")
         connection.executescript(_V5_SCHEMA)
         connection.execute("PRAGMA user_version = 5")
+        connection.commit()
+
+    @staticmethod
+    def _migrate_m5_to_m6(connection: sqlite3.Connection) -> None:
+        """Additive only: two empty channel tables and a version bump.
+
+        No run, command, approval, effect, event, manifest, component, or
+        promotion row is read or rewritten.
+        """
+
+        connection.execute("BEGIN IMMEDIATE")
+        connection.executescript(_V6_SCHEMA)
+        connection.execute("PRAGMA user_version = 6")
         connection.commit()
 
     def create_run(

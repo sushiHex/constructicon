@@ -16,19 +16,29 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from constructicon.core.address import ExecutionPath, IterationFrame, RunId, ScopePath
+from constructicon.core.channel import (
+    CHANNEL_SEND_EFFECT,
+    Channel,
+    ChannelBinding,
+    ChannelSendIntent,
+    request_message_id,
+)
 from constructicon.core.component import ComponentDef
 from constructicon.core.control import RunOrigin
 from constructicon.core.effect import (
+    AttestationDraft,
+    CheckResult,
     EffectAdapter,
     EffectMode,
     EffectReceipt,
     EffectRequest,
+    channel_send_subject,
     idempotency_key,
 )
 from constructicon.core.envelope import Envelope, utc_now
 from constructicon.core.errors import ContractViolation, JournalDamaged
 from constructicon.core.graph import Graph
-from constructicon.core.identity import Digest, digest, json_value
+from constructicon.core.identity import Digest, JsonValue, digest, json_value
 from constructicon.core.journal import Checkpoint, Journal
 from constructicon.core.manifest import (
     SELF_BINDING,
@@ -47,8 +57,10 @@ from constructicon.core.ports import (
     PortAddress,
 )
 from constructicon.core.run import (
+    ChannelWaitReason,
     CheckpointConflict,
     DependencyReport,
+    InvocationParked,
     InvocationStatus,
     OwnershipLost,
     ParkedUnit,
@@ -72,6 +84,100 @@ from constructicon.runtime.registry import (
 
 DEFAULT_LEASE_TTL_S = 30.0
 DEFAULT_HEARTBEAT_INTERVAL_S = 10.0
+
+
+_WAIT_REASON: dict[str, ChannelWaitReason] = {
+    "advice": "awaiting_advisor",
+    "approval": "awaiting_approval",
+}
+
+
+@dataclass(frozen=True)
+class _BoundChannel:
+    """One admitted channel exchange, bound to one invocation.
+
+    Every field of the message is already decided: routing came from the sealed
+    endpoint, the ports and contracts were compiled at admission, and the
+    address comes from the invocation. The component supplies a payload.
+    """
+
+    binding: ChannelBinding
+    channel_id: str
+    channel_revision: str
+    channel: Channel
+    journal: Journal
+    lease: RunLease
+    manifest_hash: Digest
+    path: ExecutionPath
+    effect: Any
+
+    async def ask(self, payload: Any) -> JsonValue:
+        intent = self._intent(payload)
+        attestation = self.journal.mint_attestation(
+            self.lease,
+            AttestationDraft(
+                action="send",
+                subject=channel_send_subject(intent),
+                checks=(
+                    CheckResult(
+                        name="channel-binding-sealed",
+                        status="passed",
+                        detail=(
+                            "trusted runtime derived this message from an admitted "
+                            "binding and its compiled exchange"
+                        ),
+                        elapsed_s=0.0,
+                    ),
+                ),
+                check_set_hash=digest("check-set", 1, {"policy": "channel-send", "v": 1}),
+                manifest_hash=self.manifest_hash,
+            ),
+        )
+        await self.effect(
+            CHANNEL_SEND_EFFECT,
+            intent.model_dump(mode="json"),
+            attestation_id=attestation.attestation_id,
+        )
+        reply = self.channel.reply_for(intent.message_id)
+        if reply is None:
+            raise InvocationParked(
+                intent.message_id,
+                reason=_WAIT_REASON[self.binding.endpoint.interaction],
+            )
+        if reply.contract != self.binding.reply_contract:
+            # A malformed reply is a typed component-boundary failure; it never
+            # becomes a successful output (I4).
+            raise ContractViolation(
+                f"reply to {intent.message_id} carries contract {reply.contract} "
+                f"where the request pinned {self.binding.reply_contract}"
+            )
+        return reply.envelope.payload
+
+    def _intent(self, payload: Any) -> ChannelSendIntent:
+        endpoint = self.binding.endpoint
+        return ChannelSendIntent(
+            message_id=request_message_id(
+                run_id=self.lease.run_id,
+                path=self.path,
+                channel_id=self.channel_id,
+                channel_revision=self.channel_revision,
+                lane=endpoint.lane,
+                interaction=endpoint.interaction,
+                port=self.binding.port,
+            ),
+            channel_id=self.channel_id,
+            channel_revision=self.channel_revision,
+            lane=endpoint.lane,
+            interaction=endpoint.interaction,
+            recipient_actor_id=endpoint.recipient_actor_id,
+            contract=self.binding.contract,
+            reply_contract=self.binding.reply_contract,
+            run_id=self.lease.run_id,
+            path=self.path,
+            port=self.binding.port,
+            reply_port=self.binding.reply_port,
+            payload=json_value(payload),
+        )
 
 
 @dataclass(frozen=True)
@@ -452,7 +558,7 @@ class Walker:
                     continue
 
                 if unit.instance is not None:
-                    error = await self._execute_or_restore(
+                    outcome = await self._execute_or_restore(
                         manifest,
                         unit.instance,
                         path=ExecutionPath(scope=unit.scope),
@@ -465,11 +571,14 @@ class Walker:
                         effect_mode=effect_mode,
                         capability_mode=capability_mode,
                     )
-                    if error is None:
+                    if outcome is None:
                         status_by_unit[unit.scope.segments] = InvocationStatus.COMPLETED
+                    elif isinstance(outcome, ParkedUnit):
+                        status_by_unit[unit.scope.segments] = InvocationStatus.PARKED
+                        parked.append(outcome)
                     else:
                         status_by_unit[unit.scope.segments] = InvocationStatus.FAILED
-                        failures[unit.scope.render()] = error
+                        failures[unit.scope.render()] = outcome
                     continue
 
                 if unit.loop is None:
@@ -675,7 +784,7 @@ class Walker:
                     continue
 
                 had_checkpoint = self._journal.checkpoint(lease.run_id, member_path) is not None
-                error = await self._execute_or_restore(
+                outcome = await self._execute_or_restore(
                     manifest,
                     instance,
                     path=member_path,
@@ -691,11 +800,24 @@ class Walker:
                 if not had_checkpoint:
                     restored_only = False
                     executed_any = True
-                if error is None:
+                if outcome is None:
                     status_by_member[member_scope.segments] = InvocationStatus.COMPLETED
+                elif isinstance(outcome, ParkedUnit):
+                    # A waiting member parks its whole loop: the member holds no
+                    # checkpoint, so the next attempt re-invokes it, observes the
+                    # reply, and continues from the members that did complete.
+                    status_by_member[member_scope.segments] = InvocationStatus.PARKED
+                    parked.append(outcome)
+                    self._journal.append_event(
+                        lease,
+                        "LoopParked",
+                        path=loop_path,
+                        payload=outcome.model_dump(mode="json"),
+                    )
+                    return InvocationStatus.PARKED
                 else:
                     status_by_member[member_scope.segments] = InvocationStatus.FAILED
-                    failures[member_path.render()] = error
+                    failures[member_path.render()] = outcome
                     iteration_failed = True
 
             if iteration_failed:
@@ -1257,7 +1379,9 @@ class Walker:
         lost: list[OwnershipLost],
         effect_mode: EffectMode,
         capability_mode: Literal["normal", "discard"],
-    ) -> str | None:
+    ) -> ParkedUnit | str | None:
+        """One atomic unit's outcome: completed (None), parked, or failed."""
+
         node_inputs = self._node_inputs(instance, values, bindings)
         input_hash = digest("inputs", 1, node_inputs)
         checkpoint = self._journal.checkpoint(lease.run_id, path)
@@ -1292,6 +1416,22 @@ class Walker:
                 raise
             except asyncio.CancelledError:
                 raise
+            except InvocationParked as waiting:
+                # Waiting is not failing. Record the wait and checkpoint nothing:
+                # there is no output yet, and the reply may arrive in another
+                # process entirely.
+                unit = ParkedUnit(
+                    path=path,
+                    reason=waiting.reason,
+                    waiting_on=waiting.request_id,
+                )
+                self._journal.append_event(
+                    lease,
+                    "NodeParked",
+                    path=path,
+                    payload=unit.model_dump(mode="json"),
+                )
+                return unit
             except Exception as exc:
                 self._journal.append_event(
                     lease,
@@ -1352,7 +1492,9 @@ class Walker:
             )
 
         capabilities: dict[str, object] = {}
+        channels: dict[str, _BoundChannel] = {}
         acquired: list[tuple[LeasedCapability, AcquiredCapability]] = []
+        boundary = self._effect_boundary(manifest, lease, path, lost, mode=effect_mode)
         for alias_binding in aliases.get(instance.scope.segments, ()):
             self._check_run_control(lease, lost)
             capability = self._capabilities.get(alias_binding.capability_id)
@@ -1394,13 +1536,32 @@ class Walker:
                 acquired.append((capability, acquisition))
             else:
                 capabilities[alias_binding.binding] = capability
+            if alias_binding.channel is not None:
+                if not isinstance(capability, Channel):
+                    raise ContractViolation(
+                        f"{instance.scope.render()}: capability "
+                        f"{alias_binding.capability_id!r} is admitted as a channel but "
+                        "does not implement the Channel contract"
+                    )
+                channels[alias_binding.binding] = _BoundChannel(
+                    binding=alias_binding.channel,
+                    channel_id=alias_binding.capability_id,
+                    channel_revision=alias_binding.revision,
+                    channel=capability,
+                    journal=self._journal,
+                    lease=lease,
+                    manifest_hash=manifest.manifest_hash,
+                    path=path,
+                    effect=boundary,
+                )
 
         context = NodeContext(
             run_id=lease.run_id,
             path=path,
             capabilities=capabilities,
             grants=self_binding.effective_grants,
-            effect=self._effect_boundary(manifest, lease, path, lost, mode=effect_mode),
+            effect=boundary,
+            channels=channels,
         )
 
         try:

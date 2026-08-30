@@ -17,6 +17,7 @@ from constructicon.substrate.journal._sqlite_base import (
     _path_key,
     _SqliteBase,
 )
+from constructicon.substrate.journal._sqlite_channels import _SqliteChannelsMixin
 from constructicon.substrate.journal._sqlite_control import _SqliteControlMixin
 from constructicon.substrate.journal._sqlite_execution import _SqliteExecutionMixin
 from constructicon.substrate.journal._sqlite_queries import _SqliteQueriesMixin
@@ -28,6 +29,7 @@ from constructicon.substrate.journal._sqlite_schema import (
 
 
 class SqliteJournal(
+    _SqliteChannelsMixin,
     _SqliteControlMixin,
     _SqliteQueriesMixin,
     _SqliteSchemaMixin,

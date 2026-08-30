@@ -230,11 +230,39 @@ checksum, snapshot bound, and continuation key. The checksum detects accidental
 corruption; it grants no authority. Run/event pages use immutable upper bounds,
 registry pages use `RegistryRevision`, and detail chunks remain digest-bound.
 
+## Channels
+
+A channel makes a participant on another rhythm an ordinary typed participant in
+a run. One L0 `Channel` contract has two transports: `InProcessChannel` for
+same-process composition and contract tests, and `MailboxChannel`, which
+persists in the one authoritative journal database so a message and the run
+parked on it survive or fail together. Neither owns a second database, broker,
+or schema manager, and `describe()` publishes each transport's honest
+`ChannelProfile`.
+
+Identity is derived, never authored. A request id comes from
+`invocation_id(run_id, path)` plus the sealed channel binding, lane, interaction,
+and port; a reply id comes from the request it answers. One invocation therefore
+sends at most one request per bound channel, lane, and port, and a send
+reconstructed after process death recomputes the same id rather than appending a
+second message. A request pins both halves of the exchange: `contract`/`port`
+type its own envelope, while `reply_contract`/`reply_port` are sealed values
+saying what reply is admissible.
+
+History is retained and delivery is honestly at-least-once. Nothing is deleted
+or dequeued; an acknowledgement is a delivery fact about one actor and never
+claims a component consumed the payload. `UNIQUE(reply_to)` admits one reply per
+request, so concurrent repliers yield one exact reply and a typed conflict.
+Inbox pages are taken at one `ChannelRevision(message_seq, ack_seq)` vector cut
+ordered by durable sequence, so tied observation times still order totally and a
+later write cannot shift an older page. See
+[ADR 0014](adr/0014-channel-identity-and-delivery.md).
+
 ## Journal
 
 One transactional log, many projections. SQLite (stdlib, WAL) is authoritative
-for runs, events (per-run monotonic sequence), checkpoints, attestations, and
-effect records; node completion commits checkpoint + event in one transaction.
+for runs, events (per-run monotonic sequence), checkpoints, attestations,
+channel messages/acks, and effect records; node completion commits checkpoint + event in one transaction.
 JSONL, summaries, and renderings are regenerable projections (M2+). Resume
 re-walks the graph: a checkpoint at the same `ExecutionPath` with matching
 input hash and resolved version restores; the first miss resumes live.
@@ -342,6 +370,8 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
 | Control lifecycle | Startup/shutdown and mutation/shutdown races → no orphan pump, command after close, or invented cancellation (M6) |
 | Registry pages | Registration or promotion between pages → old vector cut unchanged; fresh query sees the new revision (M6) |
 | MCP | Actor-derived handler delegates once; local assembly and mutable services have no transport route (M6) |
+| Message channels | One derived id survives process death: a reconstructed send appends no second message and invents no new time; a second differing reply is a typed conflict (M7) |
+| Channel cuts | A send or ack between pages → old vector cut unchanged; a future revision is refused (M7) |
 | Telemetry | Damaged executor output never reports clean success |
 | Reproduction | Installed code differs from recorded digest → refuse (M2) |
 | Loops | Contradictory iteration checkpoint, hidden nested loop, or non-boolean control → refuse before new work; exhausted roots report PARKED (M4) |

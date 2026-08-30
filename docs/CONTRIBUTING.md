@@ -157,14 +157,33 @@ Implement `constructicon.core.effect.EffectAdapter`:
 
 ## Adding a channel transport (L1, M7)
 
-Typed envelopes only (I5); message identities derive from invocation ids;
-durable sends commit through the journal transaction or the effect boundary.
+Implement the L0 `Channel` protocol in `substrate/channels/` and add it to the
+shared contract suite in `tests/substrate/channels/`; a transport with no second
+consumer of that suite is not admittable (I6).
+
+- carry typed envelopes only (I5), and derive every identity — never accept a
+  caller-authored message id, reply id, sequence number, or routing field;
+- build messages with `message_for_intent` and `message_for_reply` rather than
+  constructing `ChannelMessage` directly, so the two transports cannot drift;
+- stamp `Envelope.created_at` exactly once, when the message is first appended,
+  and reconcile a repeated intent against that stored time instead of inventing
+  a new one;
+- treat an equal logical intent under one derived id as idempotent and a
+  different one as `JournalDamaged`; a second, different reply to one request is
+  a `ChannelReplyConflict` — a lost race, not corruption;
+- retain history: never delete, dequeue, or hide a message, and never let an
+  acknowledgement claim that a component consumed a payload (I4);
+- page at one `ChannelRevision` cut ordered by durable sequence, reject a zero,
+  negative, or oversized bound, and refuse a future or incoherent revision;
+- publish a `ChannelProfile` whose `durability` is the truth about this
+  transport — a process-local history says `process` and loses state honestly.
 
 ## Changing SQLite persistence (L1)
 
-`SqliteJournal` is one schema-5 WAL store assembled from private responsibility
+`SqliteJournal` is one schema-6 WAL store assembled from private responsibility
 modules: `_sqlite_base`, `_sqlite_schema`, `_sqlite_execution`,
-`_sqlite_registry`, `_sqlite_control`, and `_sqlite_queries`. A Python module
+`_sqlite_registry`, `_sqlite_control`, `_sqlite_channels`, and
+`_sqlite_queries`. A Python module
 move is not a data migration. Preserve SQL shape, transaction boundaries,
 write-once equality, epoch fences, fault-probe positions, canonical bytes, and
 all source-schema fixtures. Name migration tests by schema endpoints, not the

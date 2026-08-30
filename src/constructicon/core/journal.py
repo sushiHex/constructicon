@@ -22,7 +22,7 @@ from constructicon.core.effect import (
 from constructicon.core.envelope import Envelope
 from constructicon.core.identity import Digest
 from constructicon.core.manifest import CapabilityLease
-from constructicon.core.run import RunLease, RunState, RunStatus
+from constructicon.core.run import ParkedWait, RunLease, RunState, RunStatus
 
 JOURNAL_SCHEMA_VERSION = 1
 
@@ -153,6 +153,16 @@ class Journal(Protocol):
 
     def latest_terminal_event(self, run_id: RunId) -> JournalEvent | None:
         """Return the newest terminal-attempt event with one bounded store read."""
+        ...
+
+    def parked_waits(
+        self,
+        *,
+        after: tuple[str, str] | None = None,
+        through: tuple[str, str] | None = None,
+        limit: int = 100,
+    ) -> list[ParkedWait]:
+        """Bounded page of PARKED runs and the requests that would wake them."""
         ...
 
     def max_event_seq(self, run_id: RunId) -> int: ...

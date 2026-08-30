@@ -18,11 +18,19 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, PositiveInt
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    NonNegativeInt,
+    PositiveInt,
+    model_validator,
+)
 
 from constructicon.core.address import ExecutionPath, RunId
 from constructicon.core.envelope import ArtifactRef
 from constructicon.core.errors import ConstructiconError
+from constructicon.core.identity import Digest
 
 
 class InvocationStatus(StrEnum):
@@ -46,6 +54,8 @@ class RunStatus(StrEnum):
     PARKED = "parked"
 
 
+ChannelWaitReason = Literal["awaiting_advisor", "awaiting_approval"]
+
 ParkedReason = Literal[
     "awaiting_approval",
     "awaiting_advisor",
@@ -56,13 +66,46 @@ ParkedReason = Literal[
 
 
 class ParkedUnit(BaseModel):
-    """One root execution unit that exhausted a policy without failing."""
+    """One root execution unit that stopped without failing.
+
+    A parked unit carries the evidence its own reason needs, and nothing else:
+    an exhausted policy records how far it got, and a wait records the exact
+    request it is waiting on. ``waiting_on`` is what lets recovery reconstruct
+    a wake from durable facts alone, so it must never be set for a reason that
+    is not actually waiting for a reply.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     path: ExecutionPath
     reason: ParkedReason
-    completed_iterations: PositiveInt
+    completed_iterations: PositiveInt | None = None
+    waiting_on: Digest | None = None
+
+    @model_validator(mode="after")
+    def _reason_carries_its_own_evidence(self) -> ParkedUnit:
+        if self.reason == "policy_exhausted" and self.completed_iterations is None:
+            raise ValueError("policy_exhausted parking records completed_iterations")
+        waiting = self.reason in {"awaiting_advisor", "awaiting_approval"}
+        if waiting and self.waiting_on is None:
+            raise ValueError(f"{self.reason} parking records the request it waits on")
+        if not waiting and self.waiting_on is not None:
+            raise ValueError(f"{self.reason} parking is not waiting on a request")
+        return self
+
+
+class ParkedWait(BaseModel):
+    """One PARKED run and the exact requests a reply would wake it at.
+
+    Derived from existing rows — a projection, never a table, an outbox, or a
+    second authority.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    run_id: RunId
+    event_seq: NonNegativeInt
+    requests: tuple[Digest, ...]
 
 
 class RunLease(BaseModel):
@@ -94,6 +137,23 @@ class OwnershipLost(ConstructiconError):
     """A fenced write matched zero rows: a higher epoch owns this run.
 
     The stale worker must stop and write nothing else."""
+
+
+class InvocationParked(ConstructiconError):
+    """One invocation is waiting on a durable request — not failing.
+
+    Raised by a component that has already sent or reconciled its request and
+    found no reply yet. It names the exact request, so the walker records
+    ordinary parking facts and recovery can later observe a reply against that
+    same id. The walker never checkpoints an output that does not exist, and
+    the invocation's capabilities are discarded rather than held open while a
+    human thinks.
+    """
+
+    def __init__(self, request_id: Digest, *, reason: ChannelWaitReason) -> None:
+        self.request_id = request_id
+        self.reason: ChannelWaitReason = reason
+        super().__init__(f"invocation is waiting on channel request {request_id}")
 
 
 class RunAttemptSuperseded(ConstructiconError):
