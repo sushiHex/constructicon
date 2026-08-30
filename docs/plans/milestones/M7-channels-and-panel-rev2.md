@@ -97,9 +97,13 @@ manifest-bound invocation and the effect law.
 
 **Corrections to rev 1's § 10–11.**
 
-1. A cursor for `channels_inbox` must carry the continuation key the store
-   supplies — `ChannelDelivery.message_seq` — not a page-position count. An
-   actor's messages are sparse in shared history.
+1. A cursor for `channels_inbox` must carry the exact continuation key
+   `Channel.inbox` publishes: `(delivery.message_seq,
+   str(delivery.message.message_id))`, matching its `tuple[int, str]` parameter
+   and its `(message_seq, message_id)` ordering. Naming the sequence alone would
+   lean on its being unique today rather than on the published contract, and a
+   page-position count is wrong outright — an actor's messages are sparse in
+   shared history, so counting rows redelivers.
 2. `runs_approve` already accepts any `ProofSubject`, and M7 widened that union
    with `ChannelSendSubject`. Request-bound approval must therefore refuse a
    subject that is not the one its request pinned, rather than relying on the
