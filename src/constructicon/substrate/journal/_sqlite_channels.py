@@ -14,10 +14,12 @@ from contextlib import contextmanager
 from datetime import datetime
 
 from constructicon.core.channel import (
+    ActorInboxRevision,
     ChannelAck,
     ChannelAckConflict,
     ChannelContract,
     ChannelDelivery,
+    ChannelInteraction,
     ChannelMessage,
     ChannelReplyConflict,
     ChannelRevision,
@@ -172,7 +174,7 @@ class _SqliteChannelsMixin:
                 raise ContractViolation(f"no channel message {message_id} to acknowledge")
             return _acknowledge(connection, message_id, actor_id, command_id, self._now_iso())
 
-    def channel_actor_revision(self, *, actor_id: str) -> ChannelRevision:
+    def channel_actor_revision(self, *, actor_id: str) -> ActorInboxRevision:
         """One cut over everything addressed to this actor, across channels.
 
         A transport's cut is per channel so unrelated traffic cannot advance
@@ -182,22 +184,37 @@ class _SqliteChannelsMixin:
 
         del actor_id  # the cut bounds history; the query filters the actor
         with self._read() as connection, _snapshot(connection):
-            return _current_revision(connection, channel_id=None)
+            current = _current_revision(connection, channel_id=None)
+        return ActorInboxRevision(
+            message_seq=current.message_seq,
+            ack_seq=current.ack_seq,
+        )
 
     def channel_actor_inbox(
         self,
         *,
         actor_id: str,
-        revision: ChannelRevision,
+        revision: ActorInboxRevision,
+        interactions: frozenset[ChannelInteraction],
         after: tuple[int, str] | None,
         limit: int,
     ) -> tuple[ChannelDelivery, ...]:
-        """Every retained message addressed to this actor, at one cut."""
+        """Retained messages addressed to this actor that it may read, at one cut.
 
+        ``interactions`` filters INSIDE the bounded query, so ``limit`` counts
+        rows the caller may actually see. Filtering a fetched page afterwards
+        would return short or empty pages while matching rows remained beyond
+        the cut, and an empty page reads as "done".
+        """
+
+        if not interactions:
+            return ()
         return self._inbox(
             channel_id=None,
             actor_id=actor_id,
-            revision=revision,
+            message_seq=revision.message_seq,
+            ack_seq=revision.ack_seq,
+            interactions=interactions,
             after=after,
             limit=limit,
         )
@@ -218,7 +235,8 @@ class _SqliteChannelsMixin:
         return self._inbox(
             channel_id=channel_id,
             actor_id=actor_id,
-            revision=revision,
+            message_seq=revision.message_seq,
+            ack_seq=revision.ack_seq,
             after=after,
             limit=limit,
         )
@@ -228,17 +246,25 @@ class _SqliteChannelsMixin:
         *,
         channel_id: str | None,
         actor_id: str,
-        revision: ChannelRevision,
+        message_seq: int,
+        ack_seq: int,
         after: tuple[int, str] | None,
         limit: int,
+        interactions: frozenset[ChannelInteraction] | None = None,
     ) -> tuple[ChannelDelivery, ...]:
+        """One paging law for both revision domains, over raw bounds."""
+
         if limit <= 0:
             raise ValueError("limit must be positive")
         clauses = ["recipient_actor_id = ?", "message_seq <= ?"]
-        params: list[object] = [actor_id, revision.message_seq]
+        params: list[object] = [actor_id, message_seq]
         if channel_id is not None:
             clauses.insert(0, "channel_id = ?")
             params.insert(0, channel_id)
+        if interactions is not None:
+            ordered = sorted(interactions)
+            clauses.append(f"interaction IN ({','.join('?' for _ in ordered)})")
+            params.extend(ordered)
         if after is not None:
             clauses.append("(message_seq > ? OR (message_seq = ? AND message_id > ?))")
             params.extend((after[0], after[0], after[1]))
@@ -246,9 +272,10 @@ class _SqliteChannelsMixin:
         with self._read() as connection, _snapshot(connection):
             current = _current_revision(connection, channel_id)
 
-            if revision.message_seq > current.message_seq or revision.ack_seq > current.ack_seq:
+            if message_seq > current.message_seq or ack_seq > current.ack_seq:
                 raise InvalidChannelRevision(
-                    f"channel revision {revision.model_dump()} is ahead of retained history"
+                    f"channel revision ({message_seq}, {ack_seq}) is ahead of "
+                    "retained history"
                 )
             # An acknowledgement cannot exist in a snapshot that omits the message
             # it acknowledges, so bounds alone do not make a cut real.
@@ -256,12 +283,12 @@ class _SqliteChannelsMixin:
                 "SELECT 1 FROM channel_acks AS acks"
                 " JOIN channel_messages AS messages ON messages.message_id = acks.message_id"
                 " WHERE acks.ack_seq <= ? AND messages.message_seq > ? LIMIT 1",
-                (revision.ack_seq, revision.message_seq),
+                (ack_seq, message_seq),
             ).fetchone()
             if incoherent is not None:
                 raise InvalidChannelRevision(
-                    f"channel revision {revision.model_dump()} acknowledges a message "
-                    "it does not include"
+                    f"channel revision ({message_seq}, {ack_seq}) acknowledges a "
+                    "message it does not include"
                 )
             rows = connection.execute(
                 "SELECT * FROM channel_messages WHERE "
@@ -278,7 +305,7 @@ class _SqliteChannelsMixin:
                 for ack in connection.execute(
                     "SELECT message_id FROM channel_acks WHERE actor_id = ?"
                     f" AND ack_seq <= ? AND message_id IN ({placeholders})",
-                    (actor_id, revision.ack_seq, *(str(m.message_id) for _, m in paged)),
+                    (actor_id, ack_seq, *(str(m.message_id) for _, m in paged)),
                 ).fetchall()
             }
         return tuple(

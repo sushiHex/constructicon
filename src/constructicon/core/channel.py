@@ -198,7 +198,26 @@ class ChannelMessage(_ChannelModel):
 
 
 class ChannelRevision(_ChannelModel):
-    """One vector cut over retained history: no page can shift beneath a reader."""
+    """One vector cut over ONE channel's retained history.
+
+    Scoped so unrelated channel traffic cannot advance it. This is not
+    interchangeable with an `ActorInboxRevision`: a channel-local cut is at or
+    below the global one, so reading a cross-channel inbox at this cut would
+    silently under-bound the page rather than fail. The two domains are
+    therefore distinct types, and mixing them is a type error.
+    """
+
+    message_seq: NonNegativeInt
+    ack_seq: NonNegativeInt
+
+
+class ActorInboxRevision(_ChannelModel):
+    """One vector cut over ALL retained history, for one actor's inbox.
+
+    An actor's inbox spans channels, so the history it reads is the whole of
+    it. Bounding that read with a channel-local cut would omit messages on
+    every other channel without saying so.
+    """
 
     message_seq: NonNegativeInt
     ack_seq: NonNegativeInt
