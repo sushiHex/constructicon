@@ -98,14 +98,41 @@ class ParkedWait(BaseModel):
     """One PARKED run and the exact requests a reply would wake it at.
 
     Derived from existing rows — a projection, never a table, an outbox, or a
-    second authority.
+    second authority. It carries its own continuation key, because a page whose
+    caller must go re-read a row to keep paging is not really pageable.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     run_id: RunId
+    created_at: AwareDatetime
     event_seq: NonNegativeInt
     requests: tuple[Digest, ...]
+
+    @property
+    def key(self) -> tuple[str, str]:
+        """The exact `after` this page's reader passes to continue."""
+
+        return (self.created_at.isoformat(), str(self.run_id))
+
+
+class AttemptCause(BaseModel):
+    """Why one attempt started: the exact durable fact a host observed.
+
+    M6 observes a committed resume command; M7 observes a stored channel reply.
+    Each serializes under its own key, so an M6 receipt keeps byte-identical
+    legacy bytes and a reader can always tell which fact caused an attempt.
+    A reply cause needs no command lookup to reconstruct.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["resume_command", "channel_reply"]
+    id: str
+
+    def payload(self) -> dict[str, str]:
+        key = "resume_command_id" if self.kind == "resume_command" else "reply_message_id"
+        return {key: self.id}
 
 
 class RunLease(BaseModel):

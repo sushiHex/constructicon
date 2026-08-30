@@ -13,7 +13,12 @@ from constructicon.core.address import RunId
 from constructicon.core.control import CommandRecord, ControlStore, RunRecord
 from constructicon.core.errors import ConstructiconError
 from constructicon.core.journal import Journal
-from constructicon.core.run import OwnershipLost, RunAttemptSuperseded, RunStatus
+from constructicon.core.run import (
+    AttemptCause,
+    OwnershipLost,
+    RunAttemptSuperseded,
+    RunStatus,
+)
 from constructicon.runtime.walker import RunResult
 
 FailureSink = Callable[[RunId, BaseException], None]
@@ -33,7 +38,7 @@ _WorkerTask = asyncio.Task[RunResult | None]
 class _LaunchIntent:
     expected_event_seq: int | None
     allowed_statuses: frozenset[RunStatus]
-    resume_command_id: str | None = None
+    cause: AttemptCause | None = None
 
 
 class RunHost:
@@ -97,6 +102,8 @@ class RunHost:
         self._resume_decoder: ResumeDecoder | None = None
         self._resume_through: tuple[str, str] | None = None
         self._resume_after: tuple[str, str] | None = None
+        self._wait_through: tuple[str, str] | None = None
+        self._wait_after: tuple[str, str] | None = None
 
     def _configure_committed_resumes(
         self,
@@ -153,7 +160,7 @@ class RunHost:
         *,
         expected_event_seq: int | None = None,
         allowed_statuses: frozenset[RunStatus] | None = None,
-        resume_command_id: str | None = None,
+        cause: AttemptCause | None = None,
     ) -> LaunchDisposition:
         """Queue explicit local scheduling intent without creating a waiter task.
 
@@ -169,7 +176,7 @@ class RunHost:
             allowed_statuses=(
                 _RESUMABLE_STATUSES if allowed_statuses is None else allowed_statuses
             ),
-            resume_command_id=resume_command_id,
+            cause=cause,
         )
         current = self._tasks.get(run_id)
         queued = self._requested.get(run_id)
@@ -242,6 +249,8 @@ class RunHost:
         self._deferred.clear()
         self._resume_through = None
         self._resume_after = None
+        self._wait_through = None
+        self._wait_after = None
         self._wake.clear()
         self._cancel_scan_waiters()
         self._pump_task = None
@@ -274,7 +283,10 @@ class RunHost:
     async def _pump(self) -> None:
         while not self._closed:
             self._wake.clear()
-            resume_expiry = self._scan_committed_resumes()
+            resume_expiry = self._earlier(
+                self._scan_committed_resumes(),
+                self._scan_answered_waits(),
+            )
             next_expiry = self._earlier(self._fill_capacity(), resume_expiry)
             self._complete_scan_waiters()
             if self._closed:
@@ -317,13 +329,75 @@ class RunHost:
                     run_id,
                     expected_event_seq=baseline,
                     allowed_statuses=_RESUMABLE_STATUSES,
-                    resume_command_id=command_id,
+                    cause=AttemptCause(kind="resume_command", id=command_id),
                 )
             if len(records) < self._recovery_page_size or (
                 self._resume_after is not None and self._resume_after >= through
             ):
                 self._resume_through = None
                 self._resume_after = None
+                break
+        return self._now() + timedelta(seconds=self._resume_retry_s)
+
+    def _scan_answered_waits(self) -> datetime | None:
+        """Wake a PARKED run whose request already carries a stored reply.
+
+        Recovery reads durable domain facts, never command state, so a death
+        after a reply's domain transaction but before its command completes
+        still produces the wake — and no command lookup reconstructs it.
+
+        PARKED deliberately never joins the ordinary recovery statuses: a
+        parked run is waiting on a human, not on a lost worker, so only an
+        observed reply may wake it. Scanning parking facts rather than
+        watermarking replies also closes the race where a fast reply lands
+        after a component's absence check but just before the park is recorded.
+
+        The cut persists across ticks. Restarting it every tick would cap the
+        scan at one bounded prefix, so a wait beyond `recovery_page_size *
+        resume_pages_per_tick` unanswered rows would never be examined and its
+        run would stay PARKED forever.
+        """
+
+        if self._wait_through is None:
+            self._wait_through = self._journal.latest_run_key(statuses=(RunStatus.PARKED,))
+            self._wait_after = None
+            if self._wait_through is None:
+                return self._now() + timedelta(seconds=self._resume_retry_s)
+        through = self._wait_through
+        for _ in range(self._resume_pages_per_tick):
+            waits = self._journal.parked_waits(
+                after=self._wait_after,
+                through=through,
+                limit=self._recovery_page_size,
+            )
+            if not waits:
+                self._wait_through = None
+                self._wait_after = None
+                break
+            answered = self._journal.answered_requests(
+                [request for wait in waits for request in wait.requests]
+            )
+            for wait in waits:
+                # Advance the cut BEFORE acting, so the next tick resumes past
+                # this row rather than re-reading the same bounded prefix.
+                self._wait_after = wait.key
+                reply = next(
+                    (answered[request] for request in wait.requests if request in answered),
+                    None,
+                )
+                if reply is None:
+                    continue
+                self.launch(
+                    wait.run_id,
+                    expected_event_seq=wait.event_seq,
+                    allowed_statuses=frozenset({RunStatus.PARKED}),
+                    cause=AttemptCause(kind="channel_reply", id=str(reply)),
+                )
+            if len(waits) < self._recovery_page_size or (
+                self._wait_after is not None and self._wait_after >= through
+            ):
+                self._wait_through = None
+                self._wait_after = None
                 break
         return self._now() + timedelta(seconds=self._resume_retry_s)
 
@@ -453,7 +527,7 @@ class RunHost:
                 cancellation="abandon",
                 expected_event_seq=intent.expected_event_seq,
                 expected_statuses=intent.allowed_statuses,
-                resume_command_id=intent.resume_command_id,
+                cause=intent.cause,
             )
         except asyncio.CancelledError:
             raise
@@ -571,10 +645,10 @@ class RunHost:
             return True
         if incoming_seq != existing_seq:
             return incoming_seq > existing_seq
-        if incoming.resume_command_id != existing.resume_command_id:
-            # At one fence an explicit command may replace ordinary recovery,
-            # but the first distinct command-bound intent wins.
-            return incoming.resume_command_id is not None and existing.resume_command_id is None
+        if incoming.cause != existing.cause:
+            # At one fence an observed durable cause may replace ordinary
+            # recovery, but the first distinct caused intent wins.
+            return incoming.cause is not None and existing.cause is None
         # At one exact baseline, broaden the admissible durable observation only.
         # A stale restrictive delivery must never replace a legitimate resume.
         return incoming.allowed_statuses > existing.allowed_statuses

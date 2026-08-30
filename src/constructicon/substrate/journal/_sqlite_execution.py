@@ -592,6 +592,7 @@ class _SqliteExecutionMixin:
                 **draft.model_dump(),
             )
             self._insert_attestation(conn, attestation)
+        self.fault_probe("attestation.after_commit")
         return attestation
 
     def mint_policy_attestation(self, draft: AttestationDraft) -> Attestation:

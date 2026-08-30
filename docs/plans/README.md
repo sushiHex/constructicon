@@ -56,6 +56,7 @@ the eventual code differs.
 | --- | --- |
 | [M6.1 / M6.2 implementation handoff](handoffs/M6.1-M6.2-implementation-handoff.md) | Preserves an earlier artifact-based implementation handoff and its exact base/checksum assumptions; historical only |
 | [M6.2 implementation record](handoffs/M6.2-implementation-record.md) | Records the completed rev-2 scope, compatibility boundary, strengthened failure proof, and integrated-session sequencing |
+| [M7 implementation record](handoffs/M7-implementation-record.md) | Records the completed M7 PR A/B scope, the plan defects implementation forced, and the sealed-routing and compiled-exchange decisions |
 
 ## Completeness and recovery notes
 

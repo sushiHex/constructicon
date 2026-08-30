@@ -31,7 +31,11 @@ from pydantic import (
 
 from constructicon.core.address import ExecutionPath, RunId, invocation_id
 from constructicon.core.envelope import Envelope
-from constructicon.core.errors import ConstructiconError, ContractViolation
+from constructicon.core.errors import (
+    ConstructiconError,
+    ContractViolation,
+    JournalDamaged,
+)
 from constructicon.core.identity import Digest, JsonValue, canonical_json, digest
 
 CHANNEL_SCHEMA_VERSION = 1
@@ -384,6 +388,34 @@ def message_for_reply(
             payload=payload,
         ),
     )
+
+
+def validated_reply(request: ChannelMessage, reply: ChannelMessage) -> ChannelMessage:
+    """Refuse a stored reply that is not the one this request admits.
+
+    A `reply_to` pointer alone is not a relationship. Rebuilding the reply from
+    its request checks the derived id, port, contract, run, path, channel, and
+    sender together, so a row whose pointer was altered to name another request
+    cannot hand that request's run someone else's payload.
+    """
+
+    if reply.kind != "reply" or reply.sender_actor_id is None:
+        raise JournalDamaged(f"message {reply.message_id} is not a reply")
+    if reply.reply_to != request.message_id:
+        raise JournalDamaged(
+            f"reply {reply.message_id} does not answer request {request.message_id}"
+        )
+    expected = message_for_reply(
+        request,
+        actor_id=reply.sender_actor_id,
+        payload=reply.envelope.payload,
+        created_at=reply.envelope.created_at,
+    )
+    if not same_message(reply, expected):
+        raise JournalDamaged(
+            f"reply {reply.message_id} contradicts the request it claims to answer"
+        )
+    return reply
 
 
 @runtime_checkable
