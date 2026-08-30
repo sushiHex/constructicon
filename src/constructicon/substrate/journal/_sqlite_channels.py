@@ -73,7 +73,8 @@ class _SqliteChannelsMixin:
                 return stored
             message = message_for_intent(intent, created_at=self._now())
             _insert_message(connection, message, attestation_id)
-            return message
+        self.fault_probe("channel.after_message_insert")
+        return message
 
     def channel_message(self, *, channel_id: str, message_id: Digest) -> ChannelMessage | None:
         with self._read() as connection:
@@ -142,7 +143,8 @@ class _SqliteChannelsMixin:
             )
             _insert_message(connection, reply, None)
             _acknowledge(connection, request.message_id, actor_id, command_id, self._now_iso())
-            return reply
+        self.fault_probe("channel.after_reply_insert")
+        return reply
 
     def channel_acknowledge(
         self,
