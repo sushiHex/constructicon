@@ -14,6 +14,7 @@ from pathlib import Path
 from constructicon.api.control import ControlPlane
 from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId
+from constructicon.core.admission import AdmissionRejected
 from constructicon.core.channel import ChannelEndpoint
 from constructicon.core.control import (
     ADVISE_SCOPE,
@@ -40,6 +41,7 @@ from constructicon.sdk.std import (
     ADVISOR_COMPONENT,
     APPROVAL_CHANNEL,
     APPROVAL_COMPONENT,
+    DURABLE_CHANNEL_KIND,
     definitions,
 )
 from constructicon.substrate.channels.mailbox import MailboxChannel
@@ -386,3 +388,102 @@ async def test_a_malformed_advice_reply_never_becomes_a_successful_output(
 
     outcome = await system._run_prepared(run_id, cancellation="abandon")
     assert outcome.status is RunStatus.FAILED
+
+
+def test_each_standard_component_declares_the_capability_it_may_hold() -> None:
+    """`capability_requirements=None` means capability-opaque, not authority-free.
+
+    Omitting it is the historical shape, and admission then validates no alias,
+    no kind, and no extra binding — so a graph could hand a component any
+    capability it liked. A component introduced today declares what it needs and
+    thereby refuses everything else (I3). The kind names the durable transport:
+    a human waits across process death.
+    """
+
+    for bundle in definitions():
+        required = bundle.definition.capability_requirements
+        assert required is not None, bundle.name
+        assert len(required) == 1, bundle.name
+        assert required[0].kind == DURABLE_CHANNEL_KIND, bundle.name
+
+    aliases = {}
+    for bundle in definitions():
+        declared = bundle.definition.capability_requirements
+        assert declared is not None
+        aliases[bundle.name] = declared[0].alias
+    assert aliases[ADVISOR_COMPONENT] == ADVISOR_CHANNEL
+    assert aliases[APPROVAL_COMPONENT] == APPROVAL_CHANNEL
+
+
+def test_a_graph_may_not_bind_an_undeclared_capability(journal: SqliteJournal) -> None:
+    """The declaration is what makes an extra binding refusable at admission."""
+
+    system, _advice, _gate = _world(journal)
+    definition = {b.name: b.definition for b in definitions()}[ADVISOR_COMPONENT]
+    smuggled = Graph(
+        name="smuggle",
+        nodes=(
+            GraphNode(
+                id="human",
+                body=Ref(
+                    component=ADVISOR_COMPONENT,
+                    bind={ADVISOR_CHANNEL: ADVICE_CHANNEL_ID, "extra": GATE_CHANNEL_ID},
+                ),
+            ),
+        ),
+        connections=(),
+        inputs=(definition.inputs[0],),
+        outputs=(definition.outputs[0],),
+    )
+    outcome = system.admit_graph(smuggled, {"request": {"question": "?"}})
+    assert isinstance(outcome, AdmissionRejected)
+    assert any("does not declare capability alias" in f.message for f in outcome.faults)
+
+
+async def test_an_approval_refuses_a_record_about_another_run(
+    journal: SqliteJournal,
+    clock: FakeClock,
+) -> None:
+    """The reply belongs to this run; the record inside it must say so too."""
+
+    system, _advice, gate = _world(journal)
+    run_id = RunId("run-std-approval-other-run")
+    inputs = {
+        "request": ApprovalRequestPayload(
+            subject=json_value(SUBJECT.model_dump(mode="json")),
+        ).model_dump(mode="json")
+    }
+    manifest = system.validate(
+        _graph(APPROVAL_COMPONENT, APPROVAL_CHANNEL, GATE_CHANNEL_ID, "decision"),
+        inputs,
+    )
+    system._prepare_run(manifest, run_id=run_id, inputs=inputs)
+    assert (await system._run_prepared(run_id, cancellation="abandon")).status is RunStatus.PARKED
+    request = journal.parked_waits()[0].requests[0]
+
+    gate.reply(
+        request_id=request,
+        actor_id=APPROVER_ID,
+        payload={
+            "schema_version": 1,
+            "approval": {
+                "approval_id": "approval-other-run",
+                "subject": SUBJECT.model_dump(mode="json"),
+                "decision": "approved",
+                "reason": None,
+                "actor": APPROVER.model_dump(mode="json"),
+                "run_id": "run-somewhere-else",
+                "created_at": clock.now().isoformat(),
+            },
+        },
+        command_id="cmd-std-other-run",
+    )
+
+    outcome = await system._run_prepared(run_id, cancellation="abandon")
+    assert outcome.status is RunStatus.FAILED
+    failures = [
+        str(event.payload.get("error", ""))
+        for event in journal.events(run_id, after_seq=0, limit=200)
+        if event.kind == "NodeFailed" and event.payload
+    ]
+    assert any("run-std-approval-other-run" in failure for failure in failures), failures

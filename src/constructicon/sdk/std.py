@@ -17,7 +17,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from constructicon.core.component import ComponentDef, PythonRef
+from constructicon.core.component import (
+    CapabilityRequirement,
+    ComponentDef,
+    PythonRef,
+)
 from constructicon.core.errors import ContractViolation
 from constructicon.core.human import (
     ADVICE_REPLY_CONTRACT,
@@ -38,6 +42,10 @@ ADVISOR_COMPONENT = "constructicon.std/human-advisor"
 APPROVAL_COMPONENT = "constructicon.std/human-approval"
 ADVISOR_CHANNEL = "advisor"
 APPROVAL_CHANNEL = "approver"
+# A human waits across process death, so these require a durable transport by
+# name. `channel.in_process` honestly declares `durability="process"`: a
+# request parked on one would not survive the restart the human outlives.
+DURABLE_CHANNEL_KIND = "channel.mailbox"
 
 
 def _port(name: str, contract: Any) -> Port:
@@ -79,21 +87,42 @@ async def human_approval(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping
     request = ApprovalRequestPayload.model_validate(inputs["request"])
     answer = await ctx.channel(APPROVAL_CHANNEL).ask(request.model_dump(mode="json"))
     decision = ApprovalDecisionPayload.model_validate(answer)
-    decided = json_value(decision.approval.subject.model_dump(mode="json"))
+    approval = decision.approval
+    decided = json_value(approval.subject.model_dump(mode="json"))
     if canonical_json(decided) != canonical_json(json_value(request.subject)):
         # A bytes law, not model equality: `1 == True` and `1 == 1.0` are Python
         # facts, and a decision about a different subject is not this decision.
         raise ContractViolation(
-            f"approval {decision.approval.approval_id} decides a subject this "
-            "request did not ask about"
+            f"approval {approval.approval_id} decides a subject this request "
+            "did not ask about"
+        )
+    if approval.run_id != ctx.run_id:
+        # The transport proved the reply belongs to this run; the record inside
+        # it is separate data and must say so too, or this run would return a
+        # governance fact about another one.
+        raise ContractViolation(
+            f"approval {approval.approval_id} records run {approval.run_id!r}, "
+            f"not {ctx.run_id!r}"
         )
     return {"decision": decision.model_dump(mode="json")}
 
 
-def _definition(name: str, request: Port, reply: Port, impl: Any) -> ComponentDef:
+def _definition(name: str, request: Port, reply: Port, alias: str, impl: Any) -> ComponentDef:
+    """One complete contract: its ports, and the one capability it may hold.
+
+    `capability_requirements` is declared rather than omitted. Omitting it means
+    *capability-opaque* — the historical shape — and admission then validates no
+    alias, no kind, and no extra binding, so a graph could hand these components
+    any capability it liked. A component introduced today declares what it needs
+    and, by doing so, refuses everything it does not (I3).
+    """
+
     return ComponentDef(
         name=name,
         role="node",
+        capability_requirements=(
+            CapabilityRequirement(alias=alias, kind=DURABLE_CHANNEL_KIND),
+        ),
         body=PythonRef(
             package="constructicon",
             module=impl.__module__,
@@ -125,6 +154,7 @@ def definitions() -> tuple[DefinitionBundle, ...]:
                 ADVISOR_COMPONENT,
                 ADVICE_REQUEST,
                 ADVICE_REPLY,
+                ADVISOR_CHANNEL,
                 human_advisor,
             ),
             implementation=human_advisor,
@@ -134,6 +164,7 @@ def definitions() -> tuple[DefinitionBundle, ...]:
                 APPROVAL_COMPONENT,
                 APPROVAL_REQUEST,
                 APPROVAL_DECISION,
+                APPROVAL_CHANNEL,
                 human_approval,
             ),
             implementation=human_approval,
@@ -146,6 +177,7 @@ __all__ = [
     "ADVISOR_COMPONENT",
     "APPROVAL_CHANNEL",
     "APPROVAL_COMPONENT",
+    "DURABLE_CHANNEL_KIND",
     "definitions",
     "human_advisor",
     "human_approval",

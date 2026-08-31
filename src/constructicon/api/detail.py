@@ -178,7 +178,7 @@ class DetailResolver:
         actor: AuthenticatedActor,
         uri: str,
     ) -> DetailRef | ControlRejected:
-        canonical_uri = self._canonical_uri(uri)
+        canonical_uri = self._canonical_uri(actor, uri)
         if isinstance(canonical_uri, ControlRejected):
             return canonical_uri
         resolved = self._resolve(actor, canonical_uri)
@@ -239,7 +239,7 @@ class DetailResolver:
                 "request a fresh DetailRef from the owning status or list operation",
             )
 
-        canonical_uri = self._canonical_uri(reference.uri)
+        canonical_uri = self._canonical_uri(actor, reference.uri)
         if isinstance(canonical_uri, ControlRejected):
             return canonical_uri
 
@@ -338,7 +338,21 @@ class DetailResolver:
             next_cursor=next_cursor,
         )
 
-    def _canonical_uri(self, uri: str) -> str | ControlRejected:
+    def _family_lock(self, actor: AuthenticatedActor, uri: str) -> ControlRejected | None:
+        """Read is required by every family but `channels`, before any store read.
+
+        Applied wherever a URI first reaches the journal rather than only where
+        it resolves. Pinning a result alias to its terminal attempt is itself a
+        journal read, so an unauthorized caller must be refused before it — a
+        refusal that distinguished "unknown run" from "not terminal yet" would
+        report both facts to someone entitled to neither.
+        """
+
+        if urlparse(uri).netloc == "channels":
+            return None
+        return scope_refusal(actor, READ_SCOPE)
+
+    def _canonical_uri(self, actor: AuthenticatedActor, uri: str) -> str | ControlRejected:
         """Pin the mutable result alias to its current terminal attempt."""
 
         parsed = urlparse(uri)
@@ -347,6 +361,9 @@ class DetailResolver:
             return uri
         if len(parts) != 2 or parts[1] != "result":
             return uri
+        denied = self._family_lock(actor, uri)
+        if denied is not None:
+            return denied
 
         try:
             run_id = RunId(parts[0])
@@ -392,10 +409,9 @@ class DetailResolver:
         # message is authorized by the request governing it instead, which is
         # what lets an advisor hold `constructicon:advise` and nothing else (I9)
         # without the relaxed door widening any other family by a single URI.
-        if family != "channels":
-            denied = scope_refusal(actor, READ_SCOPE)
-            if denied is not None:
-                return denied
+        denied = self._family_lock(actor, uri)
+        if denied is not None:
+            return denied
         try:
             if family == "runs" and len(parts) == 2:
                 run_id = RunId(parts[0])

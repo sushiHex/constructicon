@@ -125,6 +125,21 @@ class _SqliteChannelsMixin:
             acknowledged=acknowledged is not None,
         )
 
+    def channel_ack_command(self, *, message_id: Digest, actor_id: str) -> str | None:
+        """Which command owns this actor's delivery fact, if one exists.
+
+        The link from a stored channel exchange back to the command that wrote
+        it, so a caller can ask whether the governance fact that shares its
+        transaction is really there.
+        """
+
+        with self._read() as connection:
+            row = connection.execute(
+                "SELECT command_id FROM channel_acks WHERE message_id = ? AND actor_id = ?",
+                (str(message_id), actor_id),
+            ).fetchone()
+        return str(row["command_id"]) if row is not None else None
+
     def channel_reply_for(self, *, channel_id: str, request_id: Digest) -> ChannelMessage | None:
         with self._read() as connection:
             row = connection.execute(
@@ -181,7 +196,13 @@ class _SqliteChannelsMixin:
             ).fetchone()
             if present is None:
                 raise ContractViolation(f"no channel message {message_id} to acknowledge")
-            return _acknowledge(connection, message_id, actor_id, command_id, self._now_iso())
+            return _claim_acknowledgement(
+                connection,
+                message_id,
+                actor_id,
+                command_id,
+                self._now_iso(),
+            )
 
     def channel_actor_revision(self, *, actor_id: str) -> ActorInboxRevision:
         """One cut over everything addressed to this actor, across channels.
@@ -389,11 +410,11 @@ def reply_in_transaction(
         )
         if not same_message(stored, candidate):
             raise ChannelReplyConflict(f"request {request_id} already carries a different reply")
-        _acknowledge(connection, request.message_id, actor_id, command_id, now_iso)
+        _imply_acknowledgement(connection, request.message_id, actor_id, command_id, now_iso)
         return stored
     reply = message_for_reply(request, actor_id=actor_id, payload=payload, created_at=now)
     _insert_message(connection, reply, None)
-    _acknowledge(connection, request.message_id, actor_id, command_id, now_iso)
+    _imply_acknowledgement(connection, request.message_id, actor_id, command_id, now_iso)
     return reply
 
 
@@ -477,13 +498,55 @@ def _insert_message(
     )
 
 
-def _acknowledge(
+def _claim_acknowledgement(
     connection: sqlite3.Connection,
     message_id: Digest,
     actor_id: str,
     command_id: str,
     acked_at: str,
 ) -> ChannelAck:
+    """One delivery fact, claimed by one command; a second command conflicts."""
+
+    stored = _stored_ack(connection, message_id, actor_id, command_id)
+    if stored is not None:
+        if stored["command_id"] != command_id:
+            raise ChannelAckConflict(
+                f"message {message_id} is already acknowledged for {actor_id!r} "
+                f"by another command; {command_id!r} may not claim it"
+            )
+        return _ack_from_row(stored)
+    return _insert_ack(connection, message_id, actor_id, command_id, acked_at)
+
+
+def _imply_acknowledgement(
+    connection: sqlite3.Connection,
+    message_id: Digest,
+    actor_id: str,
+    command_id: str,
+    acked_at: str,
+) -> ChannelAck:
+    """The request is acknowledged for this actor, whoever first recorded it.
+
+    A reply does not *claim* a delivery fact, it implies one: an actor that
+    answers a request plainly received it. Demanding that the reply's own
+    command own that row would mean an actor who acknowledged a request before
+    answering it could never answer it — a delivery observation would have
+    consumed the right to reply, and for an addressed request nobody else could
+    take it up.
+    """
+
+    stored = _stored_ack(connection, message_id, actor_id, command_id)
+    if stored is not None:
+        return _ack_from_row(stored)
+    return _insert_ack(connection, message_id, actor_id, command_id, acked_at)
+
+
+def _stored_ack(
+    connection: sqlite3.Connection,
+    message_id: Digest,
+    actor_id: str,
+    command_id: str,
+) -> sqlite3.Row | None:
     owner = connection.execute(
         "SELECT message_id, actor_id FROM channel_acks WHERE command_id = ?",
         (command_id,),
@@ -493,17 +556,20 @@ def _acknowledge(
         actor_id,
     ):
         raise JournalDamaged(f"command {command_id!r} already acknowledged a different message")
-    stored = connection.execute(
+    row: sqlite3.Row | None = connection.execute(
         "SELECT * FROM channel_acks WHERE message_id = ? AND actor_id = ?",
         (str(message_id), actor_id),
     ).fetchone()
-    if stored is not None:
-        if stored["command_id"] != command_id:
-            raise ChannelAckConflict(
-                f"message {message_id} is already acknowledged for {actor_id!r} "
-                f"by another command; {command_id!r} may not claim it"
-            )
-        return _ack_from_row(stored)
+    return row
+
+
+def _insert_ack(
+    connection: sqlite3.Connection,
+    message_id: Digest,
+    actor_id: str,
+    command_id: str,
+    acked_at: str,
+) -> ChannelAck:
     connection.execute(
         "INSERT INTO channel_acks (message_id, actor_id, command_id, acked_at)"
         " VALUES (?, ?, ?, ?)",

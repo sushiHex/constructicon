@@ -235,6 +235,10 @@ def test_an_advisor_reads_its_own_work_and_nothing_else(
         control.registry_rdeps(ADVISOR_ONLY, "test/triage"),
         control.resource_read(ADVISOR_ONLY, DetailAddress.manifest(RUN)),
         control.resource_read(ADVISOR_ONLY, DetailAddress.command("cmd-anything")),
+        # The result alias is pinned to its terminal attempt before it resolves,
+        # and pinning reads the journal. An unauthorized caller must be refused
+        # before that read, or the refusal itself reports whether a run exists.
+        control.resource_read(ADVISOR_ONLY, DetailAddress.result(RUN)),
     ):
         assert isinstance(refused, ControlRejected)
         assert refused.faults[0].code is ControlCode.AUTH_REQUIRED_SCOPE

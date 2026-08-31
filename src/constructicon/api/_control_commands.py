@@ -26,6 +26,7 @@ from constructicon.core.channel import (
     ChannelAckConflict,
     ChannelInteraction,
     ChannelMessage,
+    ChannelReplyConflict,
     reply_message_id,
 )
 from constructicon.core.component import ComponentDef, PromotionRecord
@@ -707,7 +708,10 @@ class _CommandExecutor:
             return self._terminal_rejection(claim, plan.response)
         if isinstance(plan, _ChannelApprovalPlan):
             approval = plan.approval
-            reply: Digest | None = self._apply_channel_approval(claim, plan).message_id
+            applied = self._apply_channel_approval(claim, plan)
+            if isinstance(applied, ControlRejected):
+                return applied
+            reply: Digest | None = applied.message_id
         elif isinstance(plan, _ApprovalPlan):
             approval = plan.approval
             self._store.store_approval(claim, approval)
@@ -838,20 +842,30 @@ class _CommandExecutor:
         self,
         claim: CommandClaim,
         plan: _ChannelApprovalPlan,
-    ) -> ChannelMessage:
+    ) -> ChannelMessage | ControlRejected:
         """Approval, reply, and acknowledgement in one commit, then one wake.
 
         Approved and rejected are ordinary data here: nothing branches on which
         the decision was, so both record and wake identically.
         """
 
-        reply = self._store.store_approval_exchange(
-            claim,
-            plan.approval,
-            channel_id=plan.channel_id,
-            request_id=plan.request_id,
-            payload=plan.payload,
-        )
+        try:
+            reply = self._store.store_approval_exchange(
+                claim,
+                plan.approval,
+                channel_id=plan.channel_id,
+                request_id=plan.request_id,
+                payload=plan.payload,
+            )
+        except ChannelReplyConflict:
+            # A decision that lost the race after passing preflight. The whole
+            # transaction rolled back, so no approval was recorded either.
+            return self._terminal_control_fault(
+                claim,
+                ControlCode.CHANNEL_ALREADY_REPLIED,
+                f"approval request {plan.request_id} already carries its one decision",
+                "read the recorded decision with channels_message",
+            )
         self._fault_probe("runs_approve.after_domain_mutation")
         self._run_host.launch(
             plan.run_id,
@@ -864,9 +878,11 @@ class _CommandExecutor:
     def _require_whole_exchange(self, request: ChannelMessage, reply: ChannelMessage) -> None:
         """A foreign decision's triple is whole, or the store is torn.
 
-        Approval, reply, and acknowledgement commit together, so a stored reply
-        whose own sender never acknowledged the request is not a race this
-        command lost — it is a write that should have been impossible.
+        Approval, reply, and acknowledgement commit together, so any two of them
+        without the third is not a race this command lost — it is a write that
+        should have been impossible. All three are checked, reached from the
+        reply: its sender names the acknowledgement, and the acknowledgement
+        names the command that must also have written the approval.
         """
 
         if reply.sender_actor_id is None:
@@ -879,6 +895,15 @@ class _CommandExecutor:
             raise JournalDamaged(
                 f"approval reply {reply.message_id} exists without the request "
                 "acknowledgement written in its own transaction"
+            )
+        owner = self._journal.channel_ack_command(
+            message_id=request.message_id,
+            actor_id=reply.sender_actor_id,
+        )
+        if owner is None or self._store.approval_for_command(owner) is None:
+            raise JournalDamaged(
+                f"approval reply {reply.message_id} exists without the approval "
+                "record written in its own transaction"
             )
 
     async def channels_reply(
@@ -939,13 +964,24 @@ class _CommandExecutor:
             return self._terminal_rejection(claim, plan.response)
         if not isinstance(plan, _ChannelReplyPlan):
             raise JournalDamaged("channels_reply command carries the wrong plan")
-        reply = self._journal.channel_reply(
-            channel_id=plan.channel_id,
-            request_id=plan.request_id,
-            actor_id=plan.actor_id,
-            payload=plan.payload,
-            command_id=claim.command_id,
-        )
+        try:
+            reply = self._journal.channel_reply(
+                channel_id=plan.channel_id,
+                request_id=plan.request_id,
+                actor_id=plan.actor_id,
+                payload=plan.payload,
+                command_id=claim.command_id,
+            )
+        except ChannelReplyConflict:
+            # Preflight and the domain write are not one transaction, so two
+            # commands can both pass the already-replied check. The loser learns
+            # it lost the same way a late caller does.
+            return self._terminal_control_fault(
+                claim,
+                ControlCode.CHANNEL_ALREADY_REPLIED,
+                f"channel request {plan.request_id} already carries its one reply",
+                "read the stored reply with channels_message",
+            )
         self._fault_probe("channels_reply.after_domain_mutation")
         # The reply is the durable wake; this only spares the human the scan
         # interval. It is pinned to the fence the plan recorded, so a replay

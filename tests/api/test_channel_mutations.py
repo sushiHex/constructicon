@@ -658,3 +658,85 @@ async def test_a_tampered_plan_cannot_apply_itself(
             idempotency_key="tamper",
         )
     assert recovered.channel.reply_for(request.message_id) is None
+
+
+async def test_acknowledging_a_request_does_not_forfeit_the_right_to_answer_it(
+    tmp_path: Path,
+    clock: FakeClock,
+    system: Constructicon,
+) -> None:
+    """An acknowledgement is a delivery observation, not a consumed right.
+
+    A reply does not *claim* a delivery fact, it implies one: the actor plainly
+    received the request it is answering. Requiring the reply's own command to
+    own that row would mean an actor who acknowledged a request before
+    answering it could never answer it, and for an addressed request nobody
+    else could either.
+    """
+
+    panel = _panel(tmp_path, clock, system)
+    request = panel.channel.append_request(_intent(), ATTESTATION)
+
+    acked = await panel.control.channels_ack(
+        ADVISOR,
+        message_id=request.message_id,
+        idempotency_key="ack-first",
+    )
+    assert isinstance(acked, ChannelAckResult)
+
+    replied = await panel.control.channels_reply(
+        ADVISOR,
+        message_id=request.message_id,
+        payload={"verdict": "ship"},
+        idempotency_key="reply-after-ack",
+    )
+    assert isinstance(replied, ChannelReplyResult)
+    stored = panel.channel.reply_for(request.message_id)
+    assert stored is not None and stored.message_id == replied.message_id
+
+
+async def test_a_lost_race_past_preflight_is_typed_not_an_exception(
+    tmp_path: Path,
+    clock: FakeClock,
+    system: Constructicon,
+) -> None:
+    """Two commands can both pass the already-replied check, then one loses.
+
+    Preflight and the domain write are not one transaction, so the loser must
+    learn it lost the same way a late caller does — a typed refusal, never an
+    exception with a stranded plan.
+    """
+
+    crashing = _panel(tmp_path, clock, system, _crash_at("channels_reply.after_plan"), "racer")
+    request = crashing.channel.append_request(_intent(), ATTESTATION)
+    with pytest.raises(InjectedCrash):
+        await crashing.control.channels_reply(
+            ADVISOR,
+            message_id=request.message_id,
+            payload={"verdict": "ship"},
+            idempotency_key="racer",
+        )
+
+    # A second command passes preflight and commits the one reply.
+    winner = _panel(tmp_path, clock, system, None, "winner")
+    won = await winner.control.channels_reply(
+        ADVISOR,
+        message_id=request.message_id,
+        payload={"verdict": "hold"},
+        idempotency_key="winner",
+    )
+    assert isinstance(won, ChannelReplyResult)
+
+    # The first command resumes holding a plan, so it never re-runs preflight.
+    clock.advance(31)
+    resumed = _panel(tmp_path, clock, system, None, "racer-again")
+    lost = await resumed.control.channels_reply(
+        ADVISOR,
+        message_id=request.message_id,
+        payload={"verdict": "ship"},
+        idempotency_key="racer",
+    )
+    assert isinstance(lost, ControlRejected)
+    assert lost.faults[0].code is ControlCode.CHANNEL_ALREADY_REPLIED
+    stored = resumed.channel.reply_for(request.message_id)
+    assert stored is not None and stored.envelope.payload == {"verdict": "hold"}

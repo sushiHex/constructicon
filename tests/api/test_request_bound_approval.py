@@ -582,3 +582,38 @@ async def test_a_decision_refuses_a_request_belonging_to_another_run(
         gate.channel.reply_for(request.message_id).envelope.payload  # type: ignore[union-attr]
     ).approval
     assert carried.run_id == RUN
+
+
+async def test_a_reply_and_ack_without_an_approval_record_is_damage(
+    world: Constructicon,
+    journal: SqliteJournal,
+) -> None:
+    """Two of the three facts is not a race this command lost.
+
+    Approval, reply, and acknowledgement commit together, so an exchange
+    carrying only the channel halves cannot have come from a decision. Reached
+    from the reply: its sender names the acknowledgement, and the
+    acknowledgement names the command that must also have written the approval.
+    """
+
+    gate = _gate(world, journal)
+    request = gate.channel.append_request(_intent(), ATTESTATION)
+
+    # Written straight to the transport, so reply and ack exist with no record.
+    gate.channel.reply(
+        request_id=request.message_id,
+        actor_id=APPROVER_ID,
+        payload={"schema_version": 1, "approval": {}},
+        command_id="cmd-no-approval",
+    )
+
+    with pytest.raises(JournalDamaged, match="without the approval"):
+        await gate.control.runs_approve(
+            APPROVER,
+            run_id=RUN,
+            subject=SUBJECT,
+            decision="approved",
+            reason=None,
+            idempotency_key="torn-triple",
+            request_message_id=request.message_id,
+        )

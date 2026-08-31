@@ -338,6 +338,76 @@ since the module is already imported by the time an assertion could run, and
 proven end to end: one process asks and parks, a second process over the same
 database imports the component, decides, and completes the run.
 
+## PR C — what the complete-head review found
+
+Codex reviewed the whole branch and blocked it. Six findings were real and are
+fixed; three are recorded as accepted, with the reasoning.
+
+**An acknowledgement had been consuming the right to answer.** Acknowledging a
+request wrote a delivery fact owned by that command, and the reply then tried to
+claim the same row under its own command and conflicted — so an actor who
+acknowledged a request before answering it could never answer it, and for an
+addressed request nobody else could take it up. A reply does not *claim* a
+delivery fact, it implies one: an actor that answers a request plainly received
+it. The law split into `_claim_acknowledgement`, which one command owns, and
+`_imply_acknowledgement`, which is satisfied by whoever recorded it first.
+
+**A lost race escaped as an exception.** Preflight and the domain write are not
+one transaction, so two commands could both pass the already-replied check. The
+loser hit `ChannelReplyConflict` uncaught, keeping a planned command whose
+retries hit the same exception. Both reply paths now convert it to
+`CHANNEL_ALREADY_REPLIED`, so a race loser learns it lost the way a late caller
+does.
+
+**The standard components were capability-opaque.** `capability_requirements is
+None` means *historical*, not *authority-free*: admission then validates no
+alias, no kind, and no extra binding, so a graph could bind these newly
+introduced components any capability it liked — an I3 violation, and it made
+"holds no authority of its own" false as encoded. Both now declare the one alias
+they need, of kind `channel.mailbox`. The kind is not incidental: a human waits
+across process death, and `channel.in_process` honestly declares
+`durability="process"`.
+
+**A foreign triple was checked two-thirds of the way.** `_require_whole_exchange`
+verified the reply and the acknowledgement but never the approval, so a raw
+transport write producing reply+ack would have been classified as a complete
+foreign decision rather than damage. The third fact is now reached from the
+reply: its sender names the acknowledgement, and the acknowledgement names the
+command that must also have written the approval.
+
+**A record could claim another run.** `human_approval` compared the subject but
+not the run. The transport proves the *reply* belongs to this run; the record
+inside it is separate data, so it must say so too or the component returns a
+governance fact about another run.
+
+**The result alias resolved before its family authorized.** Moving the read gate
+into `_resolve` left `_canonical_uri` — which reads the run record, its status,
+and its terminal event to pin a result alias — running ahead of it. An
+advise-only actor could distinguish unknown run, non-terminal run, and terminal
+run before being refused. The family lock now applies wherever a URI first
+reaches the journal, not only where it resolves.
+
+### Accepted, not fixed
+
+- **A forged cursor can skip or duplicate the caller's own rows.** The codec
+  says plainly that it is not an authority token, and the review confirmed no
+  route to another actor's or interaction's rows: those come from the
+  authenticated actor on every call, never from the cursor. Making continuation
+  unforgeable needs a keyed MAC, which every paged surface would share; that is
+  a system decision, not a PR C fix.
+- **An administrator can act on an addressed message by id but not discover it
+  in an inbox.** An inbox is the actor's own work queue; making an admin's
+  contain every message addressed to anyone would be worse than the asymmetry.
+  Stated here rather than changed.
+- **`sealed_reply_payload` keys on the reply contract alone.** That is the
+  contract which promises authorship, so it is the one that decides whether a
+  reply carries it. The request contract does not enter into what a reply is.
+
+The review also noted that the byte-identity claim for a standalone decision is
+pinned by field absence and plan kind rather than by comparison against an M6
+golden artifact. The M6 seam tests do compare stored response bytes, so the
+claim is carried by the older suite rather than by the new test.
+
 ## Open items
 
 - PR D remains: `panel()` sugar, the deterministic quorum aggregator, and the
