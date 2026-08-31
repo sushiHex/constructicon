@@ -157,10 +157,57 @@ re-checked against `discoverable_by` itself and a disagreement raises
 same discipline `validated_reply` applies to a stored pointer: the rule lives in
 one place, and the query answers to it.
 
+## PR C — answering and acknowledging
+
+**One dispatch rule, stated rather than emergent.** `REPLY_CONSUMES` and
+`ACK_CONSUMES` sit beside each other at the top of the command executor.
+`channels_reply` consumes advice and nothing else: an approval is answered by
+request-bound `runs_approve`, so possessing approve must never turn this into a
+generic reply path. An acknowledgement is a delivery fact and both interactions
+are delivered, so both are ackable, each under the scope its own request seals.
+
+**A reply is actionable by nobody.** No inbox surfaces one, so acknowledging a
+reply would record a delivery that never happened, and replying to one is
+incoherent. `_actionable_request` refuses a reply id for both mutations —
+decided in one place rather than inherited from the shared resolver, which would
+happily govern a reply by the request it answers.
+
+**Refusal order is kind, then interaction, then authority — all before the
+claim.** None of the three is a domain outcome, so none writes a durable command
+record or burns an idempotency key: the same key still works against the
+operation that does consume the message. Order matters as much as timing.
+Refusing an approver for lacking advise would be true and useless, because
+acquiring advise still would not make this the operation that consumes an
+approval. Both channel mutations therefore share one deliberately coarse door —
+any interaction scope — and the exact scope is derived once, from the governing
+request, after the wrong interaction has already been refused.
+
+**The plan decides everything; the caller chose a payload.** Channel, sealed
+interaction, actor, derived reply identity, reply port, run, and the parking
+fence are all read off the request at plan time. Replay re-reads that request and
+refuses a plan that drifted from it, then checks the whole relationship rather
+than mere existence: `channel_reply_for` rebuilds the reply from its request, and
+the stored reply must additionally carry this command's derived id, its sender,
+its planned payload, and the request ack that shares its transaction.
+
+**A different command after an admitted reply is a lost race.** One reply per
+request is a hard constraint, so a fresh command that finds a stored reply
+returns `CHANNEL_ALREADY_REPLIED` before applying anything. A command that
+already planned takes the replay path instead, so a crash between plan and apply
+still converges on one fact. The same shape holds for `channels_ack`: one
+delivery fact has one owning command, and a second command over it is a typed
+idempotency conflict, never damage.
+
+**The wake is a courtesy, not the mechanism.** The reply itself is the durable
+wake — `_scan_answered_waits` reads domain facts and never command state, so a
+death before the command completes still wakes the run. The command additionally
+launches one intent pinned to the fence its plan recorded, which only spares the
+human the scan interval and cannot revive an attempt the run has moved past.
+
 ## Open items
 
-- PR C mutations (`channels_reply`, `channels_ack`, request-bound
-  `runs_approve`), MCP delegation, the two standard components, and PR D remain.
+- Request-bound `runs_approve`, MCP delegation, the two standard components,
+  and PR D remain.
 - A message a caller may not act on is refused with `AUTH_REQUIRED_SCOPE` rather
   than reported absent, which confirms that a supplied id exists. Deliberate:
   ids are derived digests over run, path, channel, lane, interaction, and port,

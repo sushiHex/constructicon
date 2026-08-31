@@ -8,9 +8,12 @@ from urllib.parse import quote, unquote, urlparse
 from constructicon.api.cursor import CursorCodec, CursorFault
 from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId
-from constructicon.core.channel import ChannelDelivery, governing_request
+from constructicon.core.channel import (
+    ChannelDelivery,
+    ChannelMessage,
+    governing_request,
+)
 from constructicon.core.control import (
-    ADMIN_SCOPE,
     INTERACTION_SCOPES,
     READ_SCOPE,
     AuthenticatedActor,
@@ -21,6 +24,7 @@ from constructicon.core.control import (
     DetailRef,
     channel_authority_holder,
     command_visible_to,
+    scope_refusal,
 )
 from constructicon.core.errors import ContractViolation, JournalDamaged
 from constructicon.core.identity import Digest, JsonValue, canonical_json, digest, json_value
@@ -78,18 +82,17 @@ class DetailAddress:
         return f"constructicon://channels/messages/{quote(str(message_id), safe='')}"
 
 
-def authorized_delivery(
+def governed_delivery(
     journal: Journal,
     actor: AuthenticatedActor,
     message_id: Digest,
-) -> ChannelDelivery | ControlRejected:
-    """Load one addressed message under the request whose seal governs it.
+) -> tuple[ChannelDelivery, ChannelMessage] | ControlRejected:
+    """Load one addressed message and the request whose seal governs it.
 
-    Every channel surface — page, message, detail, reply, ack — enters here, so
-    none of them can drift into its own reading of who may act. That matters
-    concretely on the read path: a summary's detail reference is required, so a
-    page whose law disagreed with the detail resolver's would not merely refuse
-    a read, it would raise ``JournalDamaged`` on a legitimate page.
+    Resolution stops short of authorizing, because a mutation must refuse the
+    wrong *kind* of message before it refuses the actor: telling someone to
+    acquire approve scope is wrong guidance when even holding it would not make
+    this the operation that consumes an approval.
     """
 
     delivery = journal.channel_delivery(message_id=message_id, actor_id=actor.actor_id)
@@ -107,19 +110,49 @@ def authorized_delivery(
         if delivery.message.reply_to is not None
         else None
     )
-    governing = governing_request(
+    return delivery, governing_request(
         delivery.message,
         answered.message if answered is not None else None,
     )
-    if not channel_authority_holder(governing, actor):
-        required = INTERACTION_SCOPES[governing.interaction]
-        return ControlRejected.one_fault(
-            ControlCode.AUTH_REQUIRED_SCOPE,
-            f"channel message {message_id} is not this actor's to act on",
-            f"authenticate as the request's sealed recipient with {required}",
-            {"required_scope": required},
-        )
-    return delivery
+
+
+def channel_scope_refusal(
+    governing: ChannelMessage,
+    actor: AuthenticatedActor,
+) -> ControlRejected | None:
+    """Refuse an actor the governing request does not admit."""
+
+    if channel_authority_holder(governing, actor):
+        return None
+    required = INTERACTION_SCOPES[governing.interaction]
+    return ControlRejected.one_fault(
+        ControlCode.AUTH_REQUIRED_SCOPE,
+        f"channel message {governing.message_id} is not this actor's to act on",
+        f"authenticate as the request's sealed recipient with {required}",
+        {"required_scope": required},
+    )
+
+
+def authorized_delivery(
+    journal: Journal,
+    actor: AuthenticatedActor,
+    message_id: Digest,
+) -> ChannelDelivery | ControlRejected:
+    """Load one addressed message under the request whose seal governs it.
+
+    Every channel surface — page, message, detail, reply, ack — resolves through
+    `governed_delivery` and authorizes through `channel_scope_refusal`, so none
+    of them can drift into its own reading of who may act. That matters
+    concretely on the read path: a summary's detail reference is required, so a
+    page whose law disagreed with the detail resolver's would not merely refuse
+    a read, it would raise ``JournalDamaged`` on a legitimate page.
+    """
+
+    resolved = governed_delivery(journal, actor, message_id)
+    if isinstance(resolved, ControlRejected):
+        return resolved
+    delivery, governing = resolved
+    return channel_scope_refusal(governing, actor) or delivery
 
 
 class DetailResolver:
@@ -359,13 +392,10 @@ class DetailResolver:
         # message is authorized by the request governing it instead, which is
         # what lets an advisor hold `constructicon:advise` and nothing else (I9)
         # without the relaxed door widening any other family by a single URI.
-        if family != "channels" and not actor.allows(READ_SCOPE):
-            return self._fault(
-                ControlCode.AUTH_REQUIRED_SCOPE,
-                f"actor {actor.actor_id!r} lacks required scope {READ_SCOPE!r}",
-                f"authenticate with {READ_SCOPE} or {ADMIN_SCOPE}",
-                {"required_scope": READ_SCOPE},
-            )
+        if family != "channels":
+            denied = scope_refusal(actor, READ_SCOPE)
+            if denied is not None:
+                return denied
         try:
             if family == "runs" and len(parts) == 2:
                 run_id = RunId(parts[0])

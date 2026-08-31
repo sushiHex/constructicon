@@ -15,8 +15,10 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict
 from constructicon.core.address import ExecutionPath, RunId
 from constructicon.core.channel import (
     ActorInboxRevision,
+    ChannelAck,
     ChannelDelivery,
     ChannelInteraction,
+    ChannelMessage,
 )
 from constructicon.core.control import RunOrigin, RunRecord
 from constructicon.core.effect import (
@@ -26,7 +28,7 @@ from constructicon.core.effect import (
     EffectRequest,
 )
 from constructicon.core.envelope import Envelope
-from constructicon.core.identity import Digest
+from constructicon.core.identity import Digest, JsonValue
 from constructicon.core.manifest import CapabilityLease
 from constructicon.core.run import ParkedWait, RunLease, RunState, RunStatus
 
@@ -178,6 +180,38 @@ class Journal(Protocol):
         actor_id: str,
     ) -> ChannelDelivery | None:
         """One channel message by identity, with its position and this actor's ack."""
+        ...
+
+    def channel_reply_for(
+        self,
+        *,
+        channel_id: str,
+        request_id: Digest,
+    ) -> ChannelMessage | None:
+        """The one reply a request carries, validated against that request."""
+        ...
+
+    def channel_reply(
+        self,
+        *,
+        channel_id: str,
+        request_id: Digest,
+        actor_id: str,
+        payload: JsonValue,
+        command_id: str,
+    ) -> ChannelMessage:
+        """Append the one authenticated reply and its request ack, atomically."""
+        ...
+
+    def channel_acknowledge(
+        self,
+        *,
+        channel_id: str,
+        message_id: Digest,
+        actor_id: str,
+        command_id: str,
+    ) -> ChannelAck:
+        """One delivery fact about one actor, owned by one command."""
         ...
 
     def channel_actor_revision(self, *, actor_id: str) -> ActorInboxRevision:

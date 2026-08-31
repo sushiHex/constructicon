@@ -23,13 +23,16 @@ from constructicon.core.component import ComponentDef
 from constructicon.core.control import (
     ADMIN_SCOPE,
     APPROVE_SCOPE,
+    INTERACTION_SCOPES,
     OPERATE_SCOPE,
     PROMOTE_SCOPE,
     ApprovalCommandResult,
     AuthenticatedActor,
     CancellationResult,
+    ChannelAckResult,
     ChannelMessagePage,
     ChannelMessageSummary,
+    ChannelReplyResult,
     CommandSummary,
     ComponentComparison,
     ControlCode,
@@ -46,6 +49,7 @@ from constructicon.core.control import (
     RunSubmission,
     RunSummary,
     VersionPage,
+    scope_refusal,
 )
 from constructicon.core.effect import ProofSubject
 from constructicon.core.graph import Graph
@@ -66,7 +70,7 @@ class ControlPlaneClosed(RuntimeError):
 
 
 def _facade_mutation(
-    required_scope: str,
+    required_scope: str | frozenset[str],
     *,
     local_static: bool = False,
 ) -> Callable[
@@ -248,16 +252,9 @@ class ControlPlane:
     def _authorize(
         self,
         actor: AuthenticatedActor,
-        required_scope: str,
+        required_scope: str | frozenset[str],
     ) -> ControlRejected | None:
-        if actor.allows(required_scope):
-            return None
-        return self._fault(
-            ControlCode.AUTH_REQUIRED_SCOPE,
-            f"actor {actor.actor_id!r} lacks required scope {required_scope!r}",
-            f"authenticate with {required_scope} or constructicon:admin",
-            {"required_scope": required_scope},
-        )
+        return scope_refusal(actor, required_scope)
 
     def _authorize_local_admin(
         self,
@@ -547,6 +544,42 @@ class ControlPlane:
             subject=subject,
             decision=decision,
             reason=reason,
+            idempotency_key=idempotency_key,
+        )
+
+    # Both channel mutations share one door, and it is deliberately coarse. The
+    # exact scope is sealed on the request, so a narrow door here would refuse
+    # an approver for lacking advise — true, but misleading guidance, since
+    # acquiring advise still would not make this the operation that consumes an
+    # approval. The command derives the real scope after it has refused the
+    # wrong interaction, so the honest reason reaches the caller.
+    @_facade_mutation(frozenset(INTERACTION_SCOPES.values()))
+    async def channels_reply(
+        self,
+        actor: AuthenticatedActor,
+        *,
+        message_id: Digest,
+        payload: JsonValue,
+        idempotency_key: str,
+    ) -> ChannelReplyResult | ControlRejected:
+        return await self._commands.channels_reply(
+            actor,
+            message_id=message_id,
+            payload=payload,
+            idempotency_key=idempotency_key,
+        )
+
+    @_facade_mutation(frozenset(INTERACTION_SCOPES.values()))
+    async def channels_ack(
+        self,
+        actor: AuthenticatedActor,
+        *,
+        message_id: Digest,
+        idempotency_key: str,
+    ) -> ChannelAckResult | ControlRejected:
+        return await self._commands.channels_ack(
+            actor,
+            message_id=message_id,
             idempotency_key=idempotency_key,
         )
 

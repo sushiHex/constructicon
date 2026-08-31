@@ -12,20 +12,34 @@ from typing import Annotated, Any, Literal, TypeVar, cast
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError
 
 from constructicon.api.cursor import CursorCodec
-from constructicon.api.detail import DetailAddress, DetailResolver
+from constructicon.api.detail import (
+    DetailAddress,
+    DetailResolver,
+    channel_scope_refusal,
+    governed_delivery,
+)
 from constructicon.api.run_host import LaunchDisposition, RunHost
 from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId
 from constructicon.core.admission import AdmissionRejected
+from constructicon.core.channel import (
+    ChannelAckConflict,
+    ChannelInteraction,
+    ChannelMessage,
+    reply_message_id,
+)
 from constructicon.core.component import ComponentDef, PromotionRecord
 from constructicon.core.control import (
     ADMIN_SCOPE,
     APPROVE_SCOPE,
+    INTERACTION_SCOPES,
     OPERATE_SCOPE,
     PROMOTE_SCOPE,
     ApprovalCommandResult,
     AuthenticatedActor,
     CancellationResult,
+    ChannelAckResult,
+    ChannelReplyResult,
     CommandClaim,
     CommandMeta,
     CommandRecord,
@@ -39,7 +53,9 @@ from constructicon.core.control import (
     RunOrigin,
     RunSubmission,
     approval_id_for_command,
+    channel_authority_holder,
     run_id_for_command,
+    scope_refusal,
     validate_idempotency_key,
 )
 from constructicon.core.effect import (
@@ -67,6 +83,13 @@ from constructicon.runtime.registry import (
 from constructicon.sdk.types import DefinitionBundle
 
 COMMAND_TTL_S = 30.0
+# The dispatch rule, stated where both mutations can be read side by side.
+# `channels_reply` consumes advice and nothing else: an approval is answered
+# by request-bound `runs_approve`, so holding approve must never turn this
+# into a generic reply path. An acknowledgement is a delivery fact, and both
+# interactions are delivered, so both are ackable under their own scope.
+REPLY_CONSUMES: frozenset[ChannelInteraction] = frozenset({"advice"})
+ACK_CONSUMES: frozenset[ChannelInteraction] = frozenset({"advice", "approval"})
 DEFAULT_PAGE_SIZE = 25
 MAX_PAGE_SIZE = 100
 _NEW_RUN_LAUNCH_STATUSES = frozenset({RunStatus.PENDING, RunStatus.RUNNING})
@@ -153,6 +176,37 @@ class _RollbackPlan(_PlanModel):
     attestation_id: str
 
 
+class _ChannelReplyPlan(_PlanModel):
+    """Everything the reply is, decided once, before anything is written.
+
+    The caller supplied only the request it answers and a payload. Channel,
+    interaction, reply identity, reply port, the actor, and the fence the wake
+    is pinned to are all read off the sealed request at plan time, so a replay
+    after any crash rebuilds the same fact rather than a second one.
+    """
+
+    kind: Literal["channel_reply"] = "channel_reply"
+    channel_id: str
+    request_id: Digest
+    interaction: ChannelInteraction
+    actor_id: str
+    reply_id: Digest
+    reply_port: str
+    payload: JsonValue
+    run_id: RunId
+    parked_event_seq: int = Field(ge=0)
+
+
+class _ChannelAckPlan(_PlanModel):
+    """One delivery fact: which message, whose, and under which interaction."""
+
+    kind: Literal["channel_ack"] = "channel_ack"
+    channel_id: str
+    message_id: Digest
+    interaction: ChannelInteraction
+    actor_id: str
+
+
 class _AdmissionRejectPlan(_PlanModel):
     kind: Literal["admission_reject"] = "admission_reject"
     command_id: str
@@ -178,6 +232,8 @@ _CommandPlan = Annotated[
     | _InitialPromotionPlan
     | _PromotionPlan
     | _RollbackPlan
+    | _ChannelReplyPlan
+    | _ChannelAckPlan
     | _AdmissionRejectPlan
     | _ControlRejectPlan,
     Field(discriminator="kind"),
@@ -596,6 +652,234 @@ class _CommandExecutor:
         )
         self._complete_command(claim, response)
         return response
+
+    async def channels_reply(
+        self,
+        actor: AuthenticatedActor,
+        *,
+        message_id: Digest,
+        payload: JsonValue,
+        idempotency_key: str,
+    ) -> ChannelReplyResult | ControlRejected:
+        """Answer one advice request, and only an advice request.
+
+        Approval is consumed exclusively by request-bound `runs_approve`, so
+        holding approve must not quietly make this a generic reply path. The
+        dispatch rule is stated at the call — `REPLY_CONSUMES` — rather than
+        emerging from whichever scopes the actor happens to carry.
+        """
+
+        request = self._actionable_request(actor, message_id, consumes=REPLY_CONSUMES)
+        if isinstance(request, ControlRejected):
+            return request
+        begun = self._begin_command(
+            actor,
+            # `_actionable_request` has already derived and enforced the exact
+            # scope this request seals. The claim's door stays the coarse one,
+            # so it states a fact rather than repeating a check that cannot fail.
+            required_scope=frozenset(INTERACTION_SCOPES.values()),
+            operation="channels_reply",
+            idempotency_key=idempotency_key,
+            request={"message_id": str(message_id), "payload": payload},
+            response_types=(ChannelReplyResult, ControlRejected),
+        )
+        if not isinstance(begun, CommandClaim):
+            return cast(ChannelReplyResult | ControlRejected, begun)
+        claim = begun
+        session = _CommandSession(self, claim)
+        if session.record.plan is None:
+            # A stored reply plus no plan of our own is a lost race, never
+            # damage: the request was answered by a different command, and one
+            # reply per request is a hard constraint. A crash *after* this
+            # command planned takes the replay path below instead.
+            if (
+                self._journal.channel_reply_for(
+                    channel_id=request.channel_id,
+                    request_id=request.message_id,
+                )
+                is not None
+            ):
+                return self._terminal_control_fault(
+                    claim,
+                    ControlCode.CHANNEL_ALREADY_REPLIED,
+                    f"channel request {message_id} already carries its one reply",
+                    "read the stored reply with channels_message",
+                )
+            session.plan(self._channel_reply_plan(actor, request, payload))
+        plan = session.load()
+        if isinstance(plan, _ControlRejectPlan):
+            return self._terminal_rejection(claim, plan.response)
+        if not isinstance(plan, _ChannelReplyPlan):
+            raise JournalDamaged("channels_reply command carries the wrong plan")
+        reply = self._journal.channel_reply(
+            channel_id=plan.channel_id,
+            request_id=plan.request_id,
+            actor_id=plan.actor_id,
+            payload=plan.payload,
+            command_id=claim.command_id,
+        )
+        self._fault_probe("channels_reply.after_domain_mutation")
+        # The reply is the durable wake; this only spares the human the scan
+        # interval. It is pinned to the fence the plan recorded, so a replay
+        # cannot revive an attempt the run has already moved past, and the
+        # answered-wait scan remains the authority when this process dies.
+        self._run_host.launch(
+            plan.run_id,
+            expected_event_seq=plan.parked_event_seq,
+            allowed_statuses=frozenset({RunStatus.PARKED}),
+            cause=AttemptCause(kind="channel_reply", id=str(reply.message_id)),
+        )
+        response = ChannelReplyResult(
+            request_id=plan.request_id,
+            message_id=reply.message_id,
+            command=CommandMeta(command_id=claim.command_id, replayed=False),
+            detail=self._details.required_reference(
+                actor,
+                DetailAddress.channel_message(reply.message_id),
+            ),
+        )
+        self._complete_command(claim, response)
+        return response
+
+    async def channels_ack(
+        self,
+        actor: AuthenticatedActor,
+        *,
+        message_id: Digest,
+        idempotency_key: str,
+    ) -> ChannelAckResult | ControlRejected:
+        """Record that one actor took delivery of one request.
+
+        Both interactions are delivered, so both are ackable, each under its own
+        scope. Replies are not: no inbox ever surfaces one, so acknowledging a
+        reply would record a delivery that never happened. `_actionable_request`
+        refuses a reply id for both mutations, deliberately and in one place.
+        """
+
+        request = self._actionable_request(actor, message_id, consumes=ACK_CONSUMES)
+        if isinstance(request, ControlRejected):
+            return request
+        begun = self._begin_command(
+            actor,
+            required_scope=frozenset(INTERACTION_SCOPES.values()),
+            operation="channels_ack",
+            idempotency_key=idempotency_key,
+            request={"message_id": str(message_id)},
+            response_types=(ChannelAckResult, ControlRejected),
+        )
+        if not isinstance(begun, CommandClaim):
+            return cast(ChannelAckResult | ControlRejected, begun)
+        claim = begun
+        session = _CommandSession(self, claim)
+        if session.record.plan is None:
+            session.plan(
+                _ChannelAckPlan(
+                    channel_id=request.channel_id,
+                    message_id=request.message_id,
+                    interaction=request.interaction,
+                    actor_id=actor.actor_id,
+                )
+            )
+        plan = session.load()
+        if isinstance(plan, _ControlRejectPlan):
+            return self._terminal_rejection(claim, plan.response)
+        if not isinstance(plan, _ChannelAckPlan):
+            raise JournalDamaged("channels_ack command carries the wrong plan")
+        try:
+            ack = self._journal.channel_acknowledge(
+                channel_id=plan.channel_id,
+                message_id=plan.message_id,
+                actor_id=plan.actor_id,
+                command_id=claim.command_id,
+            )
+        except ChannelAckConflict:
+            # Another command already owns this actor's delivery fact. One fact,
+            # one owning command, so this is a duplicate rather than damage.
+            return self._terminal_control_fault(
+                claim,
+                ControlCode.IDEMPOTENCY_CONFLICT,
+                f"message {message_id} is already acknowledged for this actor",
+                "read the delivery state with channels_message",
+            )
+        self._fault_probe("channels_ack.after_domain_mutation")
+        response = ChannelAckResult(
+            message_id=ack.message_id,
+            actor_id=ack.actor_id,
+            acked_at=ack.acked_at,
+            command=CommandMeta(command_id=claim.command_id, replayed=False),
+        )
+        self._complete_command(claim, response)
+        return response
+
+    def _actionable_request(
+        self,
+        actor: AuthenticatedActor,
+        message_id: Digest,
+        *,
+        consumes: frozenset[ChannelInteraction],
+    ) -> ChannelMessage | ControlRejected:
+        """The request this operation may act on, refused in dispatch order.
+
+        Kind, then interaction, then authority — and all three before the
+        command is claimed, because none of them is a domain outcome. An
+        idempotency key is not burned by asking the wrong operation, and a
+        durable command record is not written for a message this operation was
+        never going to consume.
+        """
+
+        resolved = governed_delivery(self._journal, actor, message_id)
+        if isinstance(resolved, ControlRejected):
+            return resolved
+        delivery, governing = resolved
+        message = delivery.message
+        if message.kind != "request":
+            return self._fault(
+                ControlCode.CHANNEL_REQUEST_REQUIRED,
+                f"channel message {message_id} is a reply; this operation acts on a request",
+                "address the request instead, as channels_inbox lists it",
+            )
+        if governing.interaction not in consumes:
+            # Interaction before authority: telling an approver to acquire a
+            # scope would be wrong guidance when even holding it, this is not
+            # the operation that consumes an approval.
+            return self._fault(
+                ControlCode.CHANNEL_WRONG_INTERACTION,
+                f"this operation consumes {sorted(consumes)}, "
+                f"not a sealed {governing.interaction!r} request",
+                (
+                    "answer an approval request with runs_approve bound to it"
+                    if governing.interaction == "approval"
+                    else "answer an advice request with channels_reply"
+                ),
+                {"interaction": governing.interaction},
+            )
+        return channel_scope_refusal(governing, actor) or governing
+
+    def _channel_reply_plan(
+        self,
+        actor: AuthenticatedActor,
+        request: ChannelMessage,
+        payload: JsonValue,
+    ) -> _ChannelReplyPlan:
+        """Read every field off the sealed request; the caller chose none of them."""
+
+        if request.reply_port is None:
+            raise JournalDamaged(f"channel request {request.message_id} pins no reply port")
+        run_id = request.envelope.run_id
+        return _ChannelReplyPlan(
+            channel_id=request.channel_id,
+            request_id=request.message_id,
+            interaction=request.interaction,
+            actor_id=actor.actor_id,
+            reply_id=reply_message_id(
+                request_id=request.message_id,
+                reply_port=request.reply_port,
+            ),
+            reply_port=request.reply_port,
+            payload=payload,
+            run_id=run_id,
+            parked_event_seq=self._journal.max_event_seq(run_id),
+        )
 
     async def registry_register(
         self,
@@ -1057,7 +1341,7 @@ class _CommandExecutor:
         self,
         actor: AuthenticatedActor,
         *,
-        required_scope: str,
+        required_scope: str | frozenset[str],
         operation: str,
         idempotency_key: str,
         request: Any,
@@ -1178,6 +1462,8 @@ class _CommandExecutor:
             "runs_reproduce": (_RunCreationPlan, _ControlRejectPlan),
             "runs_counterfactual": (_RunCreationPlan, _ControlRejectPlan),
             "runs_approve": (_ApprovalPlan, _ControlRejectPlan),
+            "channels_reply": (_ChannelReplyPlan, _ControlRejectPlan),
+            "channels_ack": (_ChannelAckPlan, _ControlRejectPlan),
             "registry_register": (_RegistrationPlan, _ControlRejectPlan),
             "registry_promote_initial": (_InitialPromotionPlan, _ControlRejectPlan),
             "registry_promote": (_PromotionPlan, _ControlRejectPlan),
@@ -1453,6 +1739,39 @@ class _CommandExecutor:
                 raise JournalDamaged("approval plan contradicts its canonical request")
             return
 
+        if isinstance(plan, (_ChannelReplyPlan, _ChannelAckPlan)):
+            target = plan.request_id if isinstance(plan, _ChannelReplyPlan) else plan.message_id
+            if request.get("message_id") != str(target) or plan.actor_id != record.actor.actor_id:
+                raise JournalDamaged("channel plan contradicts its canonical request")
+            stored = self._journal.channel_delivery(
+                message_id=target,
+                actor_id=plan.actor_id,
+            )
+            sealed = stored.message if stored is not None else None
+            # The plan may not have invented any of this: every field it carries
+            # is re-read from the sealed request, so a plan that drifted from
+            # the message it names cannot be applied a second time.
+            if (
+                sealed is None
+                or sealed.kind != "request"
+                or sealed.channel_id != plan.channel_id
+                or sealed.interaction != plan.interaction
+                or not channel_authority_holder(sealed, record.actor)
+            ):
+                raise JournalDamaged("channel plan contradicts its sealed request")
+            if isinstance(plan, _ChannelAckPlan):
+                return
+            if (
+                plan.interaction not in REPLY_CONSUMES
+                or sealed.reply_port != plan.reply_port
+                or request.get("payload") != json_value(plan.payload)
+                or sealed.envelope.run_id != plan.run_id
+                or plan.reply_id
+                != reply_message_id(request_id=target, reply_port=plan.reply_port)
+            ):
+                raise JournalDamaged("channel reply plan contradicts its sealed request")
+            return
+
         if isinstance(plan, _RegistrationPlan):
             try:
                 requested = ComponentDef.model_validate(request.get("definition"))
@@ -1617,6 +1936,55 @@ class _CommandExecutor:
                 or response.detail != expected_detail
             ):
                 raise JournalDamaged("approval response contradicts its plan or fact")
+            return
+        if isinstance(response, ChannelReplyResult):
+            if not isinstance(plan, _ChannelReplyPlan):
+                raise JournalDamaged("channel reply response has the wrong plan")
+            request = self._journal.channel_delivery(
+                message_id=plan.request_id,
+                actor_id=plan.actor_id,
+            )
+            reply = self._journal.channel_reply_for(
+                channel_id=plan.channel_id,
+                request_id=plan.request_id,
+            )
+            # `channel_reply_for` rebuilds the reply from its request rather
+            # than trusting a `reply_to` pointer, so existence is already a
+            # validated relationship. What remains is that the stored reply is
+            # THIS command's: its derived id, its sender, its planned payload,
+            # and the request ack that shares its transaction.
+            if (
+                request is None
+                or reply is None
+                or not request.acknowledged
+                or reply.message_id != plan.reply_id
+                or reply.sender_actor_id != plan.actor_id
+                or canonical_json(json_value(reply.envelope.payload))
+                != canonical_json(json_value(plan.payload))
+                or response.request_id != plan.request_id
+                or response.message_id != plan.reply_id
+                or response.detail
+                != self._details.required_reference(
+                    record.actor,
+                    DetailAddress.channel_message(plan.reply_id),
+                )
+            ):
+                raise JournalDamaged("channel reply response contradicts its plan or fact")
+            return
+        if isinstance(response, ChannelAckResult):
+            if not isinstance(plan, _ChannelAckPlan):
+                raise JournalDamaged("channel ack response has the wrong plan")
+            delivery = self._journal.channel_delivery(
+                message_id=plan.message_id,
+                actor_id=plan.actor_id,
+            )
+            if (
+                delivery is None
+                or not delivery.acknowledged
+                or response.message_id != plan.message_id
+                or response.actor_id != plan.actor_id
+            ):
+                raise JournalDamaged("channel ack response contradicts its plan or fact")
             return
         if isinstance(response, RegistrationCommandResult):
             if not isinstance(plan, _RegistrationPlan):
@@ -2106,15 +2474,12 @@ class _CommandExecutor:
     def _optional_digest(value: Any) -> Digest | None:
         return Digest(value) if isinstance(value, str) else None
 
-    def _authorize(self, actor: AuthenticatedActor, required_scope: str) -> ControlRejected | None:
-        if actor.allows(required_scope):
-            return None
-        return self._fault(
-            ControlCode.AUTH_REQUIRED_SCOPE,
-            f"actor {actor.actor_id!r} lacks required scope {required_scope!r}",
-            f"authenticate with {required_scope} or constructicon:admin",
-            {"required_scope": required_scope},
-        )
+    def _authorize(
+        self,
+        actor: AuthenticatedActor,
+        required_scope: str | frozenset[str],
+    ) -> ControlRejected | None:
+        return scope_refusal(actor, required_scope)
 
     def _decode_response(
         self,

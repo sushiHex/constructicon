@@ -78,6 +78,9 @@ class ControlCode(StrEnum):
     REGISTRY_VERSION_UNKNOWN = "control.registry.version_unknown"
     APPROVAL_INVALID_SUBJECT = "control.approval.invalid_subject"
     CHANNEL_MESSAGE_UNKNOWN = "control.channel.message_unknown"
+    CHANNEL_REQUEST_REQUIRED = "control.channel.request_required"
+    CHANNEL_WRONG_INTERACTION = "control.channel.wrong_interaction"
+    CHANNEL_ALREADY_REPLIED = "control.channel.already_replied"
     REQUEST_INVALID = "control.request.invalid"
     COUNTERFACTUAL_OVERRIDE_INVALID = "control.counterfactual.override_invalid"
 
@@ -257,6 +260,39 @@ def command_visible_to(record: CommandRecord, actor: AuthenticatedActor) -> bool
     """One command visibility law shared by status, detail, and transport resources."""
 
     return record.actor.actor_id == actor.actor_id or actor.allows(ADMIN_SCOPE)
+
+
+def scope_refusal(
+    actor: AuthenticatedActor,
+    required: str | frozenset[str],
+) -> ControlRejected | None:
+    """One scope door for every surface: an exact scope, or any one of several.
+
+    A set is not a weaker door. It is the honest one when the exact scope is
+    sealed on the target rather than chosen by the call — acknowledging an
+    approval needs approve and acknowledging advice needs advise, and which
+    applies is the request's to say. The operation then re-derives the exact
+    scope from that request; this only refuses an actor with no way in at all.
+    """
+
+    if isinstance(required, str):
+        if actor.allows(required):
+            return None
+        return ControlRejected.one_fault(
+            ControlCode.AUTH_REQUIRED_SCOPE,
+            f"actor {actor.actor_id!r} lacks required scope {required!r}",
+            f"authenticate with {required} or {ADMIN_SCOPE}",
+            {"required_scope": required},
+        )
+    if any(actor.allows(scope) for scope in required):
+        return None
+    names = sorted(required)
+    return ControlRejected.one_fault(
+        ControlCode.AUTH_REQUIRED_SCOPE,
+        f"actor {actor.actor_id!r} holds none of the required scopes {names}",
+        f"authenticate with one of {', '.join(names)}, or {ADMIN_SCOPE}",
+        {"required_scopes": names},
+    )
 
 
 def channel_reach(actor: AuthenticatedActor) -> frozenset[ChannelInteraction]:
@@ -457,6 +493,28 @@ class ChannelMessagePage(BaseModel):
 
     items: tuple[ChannelMessageSummary, ...]
     page: PageInfo
+
+
+class ChannelReplyResult(BaseModel):
+    """The one reply a request admits, named by both halves of the exchange."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    request_id: Digest
+    message_id: Digest
+    command: CommandMeta
+    detail: DetailRef
+
+
+class ChannelAckResult(BaseModel):
+    """A delivery fact about one actor — never proof of component consumption."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    message_id: Digest
+    actor_id: str
+    acked_at: AwareDatetime
+    command: CommandMeta
 
 
 class VersionPage(BaseModel):

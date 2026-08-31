@@ -43,6 +43,7 @@ from constructicon.core.control import (
     VersionPage,
     VersionSummary,
     channel_reach,
+    scope_refusal,
 )
 from constructicon.core.graph import Graph
 from constructicon.core.identity import Digest, JsonValue, canonical_json, digest, json_value
@@ -860,14 +861,7 @@ class _ControlQueries:
         return None
 
     def _authorize(self, actor: AuthenticatedActor) -> ControlRejected | None:
-        if actor.allows(READ_SCOPE):
-            return None
-        return self._fault(
-            ControlCode.AUTH_REQUIRED_SCOPE,
-            f"actor {actor.actor_id!r} lacks required scope {READ_SCOPE!r}",
-            f"authenticate with {READ_SCOPE} or constructicon:admin",
-            {"required_scope": READ_SCOPE},
-        )
+        return scope_refusal(actor, READ_SCOPE)
 
     def _limit_fault(self, limit: int) -> ControlRejected | None:
         if 1 <= limit <= MAX_PAGE_SIZE:
