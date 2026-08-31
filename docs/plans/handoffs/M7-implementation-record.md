@@ -303,9 +303,45 @@ the executor and the components call the same functions. A plan records the
 *stored* payload, and replay re-derives it from the canonical command request
 rather than trusting what the plan holds: a plan is never its own evidence.
 
+## PR C — the transport and the two standard components
+
+**MCP carries the surface and none of its authority.** Four channel tools, one
+detail resource, and `request_message_id` on `runs_approve`. Three proofs are
+read off the source rather than asserted in prose: every channel handler is a
+single return whose call names the same operation on `control`; none takes an
+actor or a routing argument; and the module contains no identity derivation,
+cursor, revision, transport, journal call, or the authorization law itself. The
+scope matrix then runs through the transport that will actually be used, and
+advise, approve, and read behave as three independent authorities.
+
+**The standard components hold no authority either.** Each declares exactly one
+input and one output — which is what lets admission compile its exchange with
+nothing left to choose at call time — and both ports are typed by the shared L0
+contracts, so executor and component type the same exchange or type nothing.
+Both reach only the narrow facade: no journal, no store, no transport, no
+identity law, one `ask` each.
+
+`human-advisor` returns the authorship the executor stamped, proven by answering
+with `actor_id: static:impostor` and getting `static:advisor` back. It still
+validates what it returns, so a payload written straight to the transport that
+is not an `AdviceReplyPayload` fails the run rather than becoming an output (I4).
+
+`human-approval` returns the trusted `ApprovalRecord` and compares its subject
+against the one it asked about as canonical bytes. The transport already proved
+the reply belongs to this request, run, and path; only the request knows what it
+asked. A record about another subject fails the run.
+
+**Nothing registers at import.** Restart recovery re-imports the module named by
+a stored `PythonRef` precisely because importing must not mutate, so
+`definitions()` returns bundles and a launcher decides. Checked structurally,
+since the module is already imported by the time an assertion could run, and
+proven end to end: one process asks and parks, a second process over the same
+database imports the component, decides, and completes the run.
+
 ## Open items
 
-- MCP delegation, the two standard components, and PR D remain.
+- PR D remains: `panel()` sugar, the deterministic quorum aggregator, and the
+  integrated acceptance lane.
 - A message a caller may not act on is refused with `AUTH_REQUIRED_SCOPE` rather
   than reported absent, which confirms that a supplied id exists. Deliberate:
   ids are derived digests over run, path, channel, lane, interaction, and port,
