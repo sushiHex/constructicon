@@ -295,6 +295,18 @@ human, not on a lost worker, so only an observed reply may wake it. One
 M7's stored reply — and M6 keeps its exact legacy key. See
 [ADR 0014](adr/0014-channel-identity-and-delivery.md).
 
+Who may read and answer a message is sealed on the request, never chosen by the
+answer. An advisor is its own role rather than an observer with extra rights, so
+the channel surface authorizes on `constructicon:advise` and
+`constructicon:approve` alone. A reply carries no recipient — it is addressed to
+the run, not a person — so authority is read from the request it answers.
+Advising is not approving: `channels_reply` consumes advice, and an approval is
+consumed only by request-bound `runs_approve`, which commits the
+`ApprovalRecord`, the reply, and the request's acknowledgement in one
+transaction. A component sees only a payload, so anything it may promise about
+authorship the executor writes there from authenticated facts. See
+[ADR 0015](adr/0015-human-authority-on-channels.md).
+
 ## Journal
 
 One transactional log, many projections. SQLite (stdlib, WAL) is authoritative

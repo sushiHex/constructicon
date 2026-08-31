@@ -8,5 +8,7 @@ decision by decision).
 
 Current M6 control decisions are [ADR 0012](0012-durable-control-plane-and-mcp.md)
 and [ADR 0013](0013-local-assembly-through-command-law.md). The current M7
-channel decision is
-[ADR 0014](0014-channel-identity-and-delivery.md).
+channel decisions are [ADR 0014](0014-channel-identity-and-delivery.md), which
+settles what a message is, and
+[ADR 0015](0015-human-authority-on-channels.md), which settles who may read and
+answer one.

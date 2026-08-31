@@ -155,6 +155,10 @@ channel id across recipients would collide.
 channel identity and delivery decisions. A successor ADR is required before
 slice C only if request-bound approval changes approval authority.
 
+It does: a sealed request became a second authority source for an
+`ApprovalRecord`, deciding who may write one and what it may decide. Recorded as
+[ADR 0015](../../adr/0015-human-authority-on-channels.md).
+
 ## 6. Implementation sequence
 
 - **PR A — contracts and transports.** Merged as #15.
