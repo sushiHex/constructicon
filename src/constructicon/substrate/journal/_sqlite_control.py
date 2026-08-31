@@ -253,15 +253,6 @@ class _SqliteControlMixin:
         )
         return approval
 
-    def approval_for_command(self, command_id: str) -> ApprovalRecord | None:
-        """The approval one command wrote, if it wrote one."""
-
-        with self._read() as connection:
-            row = connection.execute(
-                "SELECT * FROM approvals WHERE command_id = ?", (command_id,)
-            ).fetchone()
-        return self._approval_from_row(row) if row else None
-
     def approval(self, approval_id: str) -> ApprovalRecord | None:
         with self._read() as connection:
             row = connection.execute(

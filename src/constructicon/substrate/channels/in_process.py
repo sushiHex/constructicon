@@ -59,6 +59,10 @@ class InProcessChannel:
         self._attestations: dict[str, str] = {}
         self._ack_by_key: dict[tuple[str, str], ChannelAck] = {}
         self._ack_commands: dict[str, tuple[str, str]] = {}
+        # Which command wrote each reply, so an exact retry of that command
+        # is told apart from a second command that lost the race. The
+        # mailbox transport keeps the same fact in a durable column.
+        self._reply_commands: dict[str, str] = {}
 
     @property
     def profile(self) -> ChannelProfile:
@@ -131,6 +135,10 @@ class InProcessChannel:
             )
             stored = self._by_id.get(str(reply_id))
             if stored is not None:
+                if self._reply_commands.get(str(reply_id)) != command_id:
+                    raise ChannelReplyConflict(
+                        f"request {request_id} was already answered by another command"
+                    )
                 candidate = message_for_reply(
                     request,
                     actor_id=actor_id,
@@ -141,7 +149,7 @@ class InProcessChannel:
                     raise ChannelReplyConflict(
                         f"request {request_id} already carries a different reply"
                     )
-                self._acknowledge(request.message_id, actor_id, command_id)
+                self._imply_acknowledgement(request.message_id, actor_id, command_id)
                 return stored
             # A reply atomically acknowledges its request for that actor, so the
             # acknowledgement must be admissible before anything is appended.
@@ -153,7 +161,8 @@ class InProcessChannel:
                 created_at=self._now(),
             )
             self._append(reply)
-            self._acknowledge(request.message_id, actor_id, command_id)
+            self._reply_commands[str(reply.message_id)] = command_id
+            self._imply_acknowledgement(request.message_id, actor_id, command_id)
             return reply
 
     def acknowledge(
@@ -164,7 +173,7 @@ class InProcessChannel:
         command_id: str,
     ) -> ChannelAck:
         with self._lock:
-            return self._acknowledge(message_id, actor_id, command_id)
+            return self._claim_acknowledgement(message_id, actor_id, command_id)
 
     def latest_revision(self, actor_id: str) -> ChannelRevision:
         del actor_id  # the cut is over retained history, not over one actor
@@ -245,12 +254,14 @@ class InProcessChannel:
             )
         return key
 
-    def _acknowledge(
+    def _claim_acknowledgement(
         self,
         message_id: Digest,
         actor_id: str,
         command_id: str,
     ) -> ChannelAck:
+        """One delivery fact, claimed by one command; a second command conflicts."""
+
         key = self._ack_key(message_id, actor_id, command_id)
         stored = self._ack_by_key.get(key)
         if stored is not None:
@@ -260,6 +271,35 @@ class InProcessChannel:
                     f"by another command; {command_id!r} may not claim it"
                 )
             return stored
+        return self._insert_ack(key, message_id, actor_id, command_id)
+
+    def _imply_acknowledgement(
+        self,
+        message_id: Digest,
+        actor_id: str,
+        command_id: str,
+    ) -> ChannelAck:
+        """The request is acknowledged for this actor, whoever first recorded it.
+
+        A reply does not *claim* a delivery fact, it implies one: an actor that
+        answers a request plainly received it. Demanding that the reply's own
+        command own that row would mean an actor who acknowledged a request
+        before answering it could never answer it.
+        """
+
+        key = self._ack_key(message_id, actor_id, command_id)
+        stored = self._ack_by_key.get(key)
+        if stored is not None:
+            return stored
+        return self._insert_ack(key, message_id, actor_id, command_id)
+
+    def _insert_ack(
+        self,
+        key: tuple[str, str],
+        message_id: Digest,
+        actor_id: str,
+        command_id: str,
+    ) -> ChannelAck:
         ack = ChannelAck(message_id=message_id, actor_id=actor_id, acked_at=self._now())
         self._acks.append(ack)
         self._ack_by_key[key] = ack

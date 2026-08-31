@@ -740,3 +740,66 @@ async def test_a_lost_race_past_preflight_is_typed_not_an_exception(
     assert lost.faults[0].code is ControlCode.CHANNEL_ALREADY_REPLIED
     stored = resumed.channel.reply_for(request.message_id)
     assert stored is not None and stored.envelope.payload == {"verdict": "hold"}
+
+
+async def test_a_lost_reply_replays_its_refusal(
+    tmp_path: Path,
+    clock: FakeClock,
+    system: Constructicon,
+) -> None:
+    """Losing a race is a terminal answer, so it has to repeat like any other."""
+
+    crashing = _panel(tmp_path, clock, system, _crash_at("channels_reply.after_plan"), "crash")
+    request = crashing.channel.append_request(_intent(), ATTESTATION)
+    with pytest.raises(InjectedCrash):
+        await crashing.control.channels_reply(
+            ADVISOR,
+            message_id=request.message_id,
+            payload={"verdict": "ship"},
+            idempotency_key="replay-loser",
+        )
+
+    winner = _panel(tmp_path, clock, system, None, "winner")
+    won = await winner.control.channels_reply(
+        ADVISOR,
+        message_id=request.message_id,
+        payload={"verdict": "hold"},
+        idempotency_key="replay-winner",
+    )
+    assert isinstance(won, ChannelReplyResult)
+
+    clock.advance(31)
+    resumed = _panel(tmp_path, clock, system, None, "resumed")
+    for _ in range(2):
+        lost = await resumed.control.channels_reply(
+            ADVISOR,
+            message_id=request.message_id,
+            payload={"verdict": "ship"},
+            idempotency_key="replay-loser",
+        )
+        assert isinstance(lost, ControlRejected)
+        assert lost.faults[0].code is ControlCode.CHANNEL_ALREADY_REPLIED
+
+
+async def test_a_duplicate_acknowledgement_replays_its_refusal(
+    tmp_path: Path,
+    clock: FakeClock,
+    system: Constructicon,
+) -> None:
+    panel = _panel(tmp_path, clock, system)
+    request = panel.channel.append_request(_intent(), ATTESTATION)
+    first = await panel.control.channels_ack(
+        ADVISOR,
+        message_id=request.message_id,
+        idempotency_key="ack-owner",
+    )
+    assert isinstance(first, ChannelAckResult)
+
+    for _ in range(2):
+        duplicate = await panel.control.channels_ack(
+            ADVISOR,
+            message_id=request.message_id,
+            idempotency_key="ack-duplicate",
+        )
+        assert isinstance(duplicate, ControlRejected)
+        assert duplicate.faults[0].code is ControlCode.IDEMPOTENCY_CONFLICT

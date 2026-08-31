@@ -19,7 +19,7 @@ from constructicon.substrate.journal._sqlite_base import (
     _manifest_semantically_equal,
 )
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 _V5_SCHEMA = """
 CREATE TABLE IF NOT EXISTS commands (
@@ -104,6 +104,7 @@ class _SqliteSchemaMixin:
                 connection.executescript(_SCHEMA)
                 connection.executescript(_V5_SCHEMA)
                 connection.executescript(_V6_SCHEMA)
+                self._add_v7_columns(connection)
                 connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
                 connection.commit()
                 return
@@ -119,6 +120,9 @@ class _SqliteSchemaMixin:
             if version == 5:
                 self._migrate_m5_to_m6(connection)
                 version = 6
+            if version == 6:
+                self._migrate_m6_to_m7(connection)
+                version = 7
             if version == SCHEMA_VERSION:
                 connection.executescript(_SCHEMA)
                 connection.executescript(_V5_SCHEMA)
@@ -132,6 +136,41 @@ class _SqliteSchemaMixin:
         connection.execute("BEGIN IMMEDIATE")
         connection.executescript(_V5_SCHEMA)
         connection.execute("PRAGMA user_version = 5")
+        connection.commit()
+
+    @staticmethod
+    def _add_v7_columns(connection: sqlite3.Connection) -> None:
+        """The one place the v7 column is defined, for fresh and climbing alike.
+
+        Idempotent by inspection rather than by swallowing an error: a database
+        whose ``user_version`` sits below a column it already carries is walking
+        a ladder it has partly climbed, and that is not damage. No row is read
+        or rewritten on either path.
+        """
+
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(channel_messages)")
+        }
+        if "command_id" not in columns:
+            connection.execute("ALTER TABLE channel_messages ADD COLUMN command_id TEXT")
+
+    @staticmethod
+    def _migrate_m6_to_m7(connection: sqlite3.Connection) -> None:
+        """Additive only: one nullable column and a version bump.
+
+        A request already records the attestation that admitted it. A reply now
+        records the command that did, so an exact retry of one command can be
+        told apart from a second command that lost the race — ADR 0014 admits
+        one reply and owes the loser a typed conflict, identical bytes included.
+
+        Existing rows keep NULL and are never read or rewritten. A NULL is not
+        "some command": it is a reply written before this build, which no live
+        command may claim.
+        """
+
+        connection.execute("BEGIN IMMEDIATE")
+        _SqliteSchemaMixin._add_v7_columns(connection)
+        connection.execute("PRAGMA user_version = 7")
         connection.commit()
 
     @staticmethod

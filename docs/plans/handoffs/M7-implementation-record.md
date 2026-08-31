@@ -408,6 +408,50 @@ pinned by field absence and plan kind rather than by comparison against an M6
 golden artifact. The M6 seam tests do compare stored response bytes, so the
 claim is carried by the older suite rather than by the new test.
 
+## PR C — what the second review round found
+
+Four of these are consequences of the first round's own fixes. That is worth
+recording: each fix was locally right and globally incomplete, and only reading
+the branch as a whole surfaced them.
+
+**Reaching the approval through the acknowledgement's command contradicted the
+implied-ack law.** Round one made a reply *imply* an existing acknowledgement,
+and then, separately, made the whole-exchange check reach the approval record
+*through* the acknowledgement's owning command. Together those mean a legitimate
+`channels_ack` followed by `runs_approve` produces an acknowledgement owned by a
+command that wrote no approval — and the next lookup calls that damage. The check
+now reaches the third fact through the reply, which carries the record:
+`ApprovalDecisionPayload` names it, the store must hold an equal one, and its run
+must be the request's. `channel_ack_command` and `approval_for_command` were
+added for the wrong reading and are gone with it.
+
+**A lawfully emitted refusal was not replayable.** A domain plan may only emit
+refusals its operation whitelists, and the channel families emitted none. So the
+first race loser returned `CHANNEL_ALREADY_REPLIED` and its exact retry raised
+`JournalDamaged` — the stored answer called damage. Channel reply, channel
+approval, and channel ack now name the refusals they may lawfully carry, and
+each is tested by asking twice.
+
+**The two transports disagreed.** The implied-ack law landed in SQLite only, so
+acknowledging before replying succeeded through the mailbox and raised through
+the in-process channel — an I6 break. Both now split claim from imply, and the
+scenario lives in the shared contract suite, which is what should have caught it.
+
+**Identical concurrent replies both succeeded.** ADR 0014 admits one reply and
+owes the loser a typed conflict; identical bytes were being treated as an
+idempotent retry no matter which command wrote them, so two commands could both
+report success over one fact. Distinguishing them needs the writer's identity, so
+SQLite advances 6 → 7 with one nullable `command_id` on `channel_messages` — a
+reply now names the command that wrote it, exactly as a request names the
+attestation that admitted it. Additive: no row is read or rewritten, and the
+column is added by inspection so a partly-climbed ladder is not damage.
+
+**The archive was edited and its manifest went stale.** Rev 2 is an approved
+plan, and approved plans are immutable: a later decision belongs in an ADR, a
+successor, or an implementation record, all of which already carry it. The edit
+is reverted and rev 2 is byte-identical to `main` again. The manifest now records
+only this document's new digest, which is the one living document among them.
+
 ## Open items
 
 - PR D remains: `panel()` sugar, the deterministic quorum aggregator, and the

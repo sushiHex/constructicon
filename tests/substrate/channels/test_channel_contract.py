@@ -202,7 +202,7 @@ def test_a_second_different_reply_is_refused_as_a_lost_race(channel: Channel) ->
         payload={"advice": "ship"},
         command_id="cmd-reply-1",
     )
-    with pytest.raises(ChannelReplyConflict, match="already carries a different reply"):
+    with pytest.raises(ChannelReplyConflict, match="already answered by another command"):
         channel.reply(
             request_id=request.message_id,
             actor_id=ADVISOR,
@@ -432,7 +432,7 @@ def test_two_hosts_replying_concurrently_admit_one_exact_reply(
         payload={"advice": "ship"},
         command_id="cmd-host-a",
     )
-    with pytest.raises(ChannelReplyConflict, match="already carries a different reply"):
+    with pytest.raises(ChannelReplyConflict, match="already answered by another command"):
         second.reply(
             request_id=request.message_id,
             actor_id=ADVISOR,
@@ -838,3 +838,58 @@ def test_a_second_command_may_not_claim_an_existing_acknowledgement(
         actor_id=ADVISOR,
         command_id="cmd-two",
     )
+
+
+def test_acknowledging_first_does_not_forfeit_the_right_to_reply(channel: Channel) -> None:
+    """A reply implies a delivery fact; it does not claim one.
+
+    Both transports must agree, or an actor that acknowledged a request before
+    answering it could answer through one and be locked out through the other
+    (I6). For an addressed request nobody else could take it up either.
+    """
+
+    request = channel.append_request(_intent(), ATTESTATION)
+    channel.acknowledge(
+        message_id=request.message_id,
+        actor_id=ADVISOR,
+        command_id="cmd-ack-first",
+    )
+    reply = channel.reply(
+        request_id=request.message_id,
+        actor_id=ADVISOR,
+        payload={"advice": "ship"},
+        command_id="cmd-reply-after",
+    )
+    assert channel.reply_for(request.message_id) == reply
+
+
+def test_an_identical_reply_from_another_command_still_loses(channel: Channel) -> None:
+    """ADR 0014 admits one reply and owes the loser a typed conflict.
+
+    Identical bytes are not an exemption: two commands both reporting success
+    over one fact would make the record say a thing was written twice. An exact
+    retry of the *same* command still reconciles, because that is one command
+    finishing what it started.
+    """
+
+    request = channel.append_request(_intent(), ATTESTATION)
+    winner = channel.reply(
+        request_id=request.message_id,
+        actor_id=ADVISOR,
+        payload={"advice": "ship"},
+        command_id="cmd-identical-first",
+    )
+    with pytest.raises(ChannelReplyConflict, match="already answered by another command"):
+        channel.reply(
+            request_id=request.message_id,
+            actor_id=ADVISOR,
+            payload={"advice": "ship"},
+            command_id="cmd-identical-second",
+        )
+    replayed = channel.reply(
+        request_id=request.message_id,
+        actor_id=ADVISOR,
+        payload={"advice": "ship"},
+        command_id="cmd-identical-first",
+    )
+    assert replayed == winner

@@ -599,11 +599,23 @@ async def test_a_reply_and_ack_without_an_approval_record_is_damage(
     gate = _gate(world, journal)
     request = gate.channel.append_request(_intent(), ATTESTATION)
 
-    # Written straight to the transport, so reply and ack exist with no record.
+    # Written straight to the transport: a well-formed decision naming a record
+    # that was never stored, so only the third fact is missing.
     gate.channel.reply(
         request_id=request.message_id,
         actor_id=APPROVER_ID,
-        payload={"schema_version": 1, "approval": {}},
+        payload={
+            "schema_version": 1,
+            "approval": {
+                "approval_id": "approval-never-stored",
+                "subject": SUBJECT.model_dump(mode="json"),
+                "decision": "approved",
+                "reason": None,
+                "actor": APPROVER.model_dump(mode="json"),
+                "run_id": str(RUN),
+                "created_at": "2026-01-01T00:00:00+00:00",
+            },
+        },
         command_id="cmd-no-approval",
     )
 
@@ -617,3 +629,97 @@ async def test_a_reply_and_ack_without_an_approval_record_is_damage(
             idempotency_key="torn-triple",
             request_message_id=request.message_id,
         )
+
+
+async def test_acknowledging_first_does_not_forfeit_the_right_to_decide(
+    world: Constructicon,
+    journal: SqliteJournal,
+) -> None:
+    """An explicit ack keeps its own command; the decision only implies delivery.
+
+    Reaching the approval record through the acknowledgement's owning command
+    would call this legitimate sequence damage, because that command wrote an
+    acknowledgement and no approval.
+    """
+
+    gate = _gate(world, journal)
+    request = gate.channel.append_request(_intent(), ATTESTATION)
+
+    acked = await gate.control.channels_ack(
+        APPROVER,
+        message_id=request.message_id,
+        idempotency_key="ack-before-deciding",
+    )
+    assert not isinstance(acked, ControlRejected)
+
+    decided = await gate.control.runs_approve(
+        APPROVER,
+        run_id=RUN,
+        subject=SUBJECT,
+        decision="approved",
+        reason=None,
+        idempotency_key="decide-after-ack",
+        request_message_id=request.message_id,
+    )
+    assert isinstance(decided, ApprovalCommandResult)
+
+    # And a later command still reads the completed exchange as a lost race.
+    late = await gate.control.runs_approve(
+        APPROVER,
+        run_id=RUN,
+        subject=SUBJECT,
+        decision="approved",
+        reason=None,
+        idempotency_key="decide-late",
+        request_message_id=request.message_id,
+    )
+    assert isinstance(late, ControlRejected)
+    assert late.faults[0].code is ControlCode.CHANNEL_ALREADY_REPLIED
+
+
+async def test_a_lost_decision_replays_its_refusal(
+    world: Constructicon,
+    journal: SqliteJournal,
+    clock: FakeClock,
+) -> None:
+    """A refusal a domain plan lawfully emitted must repeat, not become damage."""
+
+    crashing = _gate(world, journal, _crash_at("runs_approve.after_plan"), "crash")
+    request = crashing.channel.append_request(_intent(), ATTESTATION)
+    with pytest.raises(InjectedCrash):
+        await crashing.control.runs_approve(
+            APPROVER,
+            run_id=RUN,
+            subject=SUBJECT,
+            decision="approved",
+            reason=None,
+            idempotency_key="loser",
+            request_message_id=request.message_id,
+        )
+
+    winner = _gate(world, journal, None, "winner")
+    won = await winner.control.runs_approve(
+        APPROVER,
+        run_id=RUN,
+        subject=SUBJECT,
+        decision="rejected",
+        reason="mine",
+        idempotency_key="winner",
+        request_message_id=request.message_id,
+    )
+    assert isinstance(won, ApprovalCommandResult)
+
+    clock.advance(31)
+    resumed = _gate(world, journal, None, "resumed")
+    for _ in range(2):
+        lost = await resumed.control.runs_approve(
+            APPROVER,
+            run_id=RUN,
+            subject=SUBJECT,
+            decision="approved",
+            reason=None,
+            idempotency_key="loser",
+            request_message_id=request.message_id,
+        )
+        assert isinstance(lost, ControlRejected)
+        assert lost.faults[0].code is ControlCode.CHANNEL_ALREADY_REPLIED

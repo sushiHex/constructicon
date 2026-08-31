@@ -182,10 +182,6 @@ class Journal(Protocol):
         """One channel message by identity, with its position and this actor's ack."""
         ...
 
-    def channel_ack_command(self, *, message_id: Digest, actor_id: str) -> str | None:
-        """Which command owns this actor's delivery fact, if one exists."""
-        ...
-
     def channel_reply_for(
         self,
         *,

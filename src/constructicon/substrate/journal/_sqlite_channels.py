@@ -39,7 +39,7 @@ from constructicon.core.identity import Digest, JsonValue, canonical_json
 _MESSAGE_COLUMNS = (
     "message_id, channel_id, lane, interaction, kind, reply_to, recipient_actor_id,"
     " sender_actor_id, run_id, path_json, port, type_id, schema_hash, reply_port,"
-    " reply_type_id, reply_schema_hash, envelope_json, attestation_id"
+    " reply_type_id, reply_schema_hash, envelope_json, attestation_id, command_id"
 )
 
 
@@ -124,21 +124,6 @@ class _SqliteChannelsMixin:
             message=_message_from_row(row),
             acknowledged=acknowledged is not None,
         )
-
-    def channel_ack_command(self, *, message_id: Digest, actor_id: str) -> str | None:
-        """Which command owns this actor's delivery fact, if one exists.
-
-        The link from a stored channel exchange back to the command that wrote
-        it, so a caller can ask whether the governance fact that shares its
-        transaction is really there.
-        """
-
-        with self._read() as connection:
-            row = connection.execute(
-                "SELECT command_id FROM channel_acks WHERE message_id = ? AND actor_id = ?",
-                (str(message_id), actor_id),
-            ).fetchone()
-        return str(row["command_id"]) if row is not None else None
 
     def channel_reply_for(self, *, channel_id: str, request_id: Digest) -> ChannelMessage | None:
         with self._read() as connection:
@@ -402,6 +387,14 @@ def reply_in_transaction(
     ).fetchone()
     if stored_row is not None:
         stored = _message_from_row(stored_row)
+        # Whose retry is this? A reply names the command that wrote it, so an
+        # exact retry of that command reconciles and any other command lost the
+        # race — identical bytes included. ADR 0014 admits one reply and owes
+        # the loser a typed conflict, not a second success over one fact.
+        if stored_row["command_id"] != command_id:
+            raise ChannelReplyConflict(
+                f"request {request_id} was already answered by another command"
+            )
         candidate = message_for_reply(
             request,
             actor_id=actor_id,
@@ -413,7 +406,7 @@ def reply_in_transaction(
         _imply_acknowledgement(connection, request.message_id, actor_id, command_id, now_iso)
         return stored
     reply = message_for_reply(request, actor_id=actor_id, payload=payload, created_at=now)
-    _insert_message(connection, reply, None)
+    _insert_message(connection, reply, None, command_id)
     _imply_acknowledgement(connection, request.message_id, actor_id, command_id, now_iso)
     return reply
 
@@ -467,10 +460,17 @@ def _insert_message(
     connection: sqlite3.Connection,
     message: ChannelMessage,
     attestation_id: str | None,
+    command_id: str | None = None,
 ) -> None:
+    """Store one message and the authority that admitted it.
+
+    A request names its attestation; a reply names the command. Exactly one of
+    the two is ever set, because exactly one kind of authority writes each.
+    """
+
     connection.execute(
         f"INSERT INTO channel_messages ({_MESSAGE_COLUMNS})"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             str(message.message_id),
             message.channel_id,
@@ -494,6 +494,7 @@ def _insert_message(
             ),
             message.envelope.model_dump_json(),
             attestation_id,
+            command_id,
         ),
     )
 

@@ -71,6 +71,7 @@ from constructicon.core.graph import Graph
 from constructicon.core.human import (
     APPROVAL_REPLY_CONTRACT,
     APPROVAL_REQUEST_CONTRACT,
+    ApprovalDecisionPayload,
     ApprovalRequestPayload,
     approval_decision_payload,
     sealed_reply_payload,
@@ -880,9 +881,13 @@ class _CommandExecutor:
 
         Approval, reply, and acknowledgement commit together, so any two of them
         without the third is not a race this command lost — it is a write that
-        should have been impossible. All three are checked, reached from the
-        reply: its sender names the acknowledgement, and the acknowledgement
-        names the command that must also have written the approval.
+        should have been impossible.
+
+        The third fact is reached through the reply itself, which carries the
+        record. Reaching it through the acknowledgement's owning command would
+        be wrong: an actor may legitimately have acknowledged the request under
+        an earlier `channels_ack`, and the reply then only implies that delivery
+        fact rather than owning it.
         """
 
         if reply.sender_actor_id is None:
@@ -896,14 +901,21 @@ class _CommandExecutor:
                 f"approval reply {reply.message_id} exists without the request "
                 "acknowledgement written in its own transaction"
             )
-        owner = self._journal.channel_ack_command(
-            message_id=request.message_id,
-            actor_id=reply.sender_actor_id,
-        )
-        if owner is None or self._store.approval_for_command(owner) is None:
+        try:
+            carried = ApprovalDecisionPayload.model_validate(reply.envelope.payload)
+        except ValidationError as exc:
+            raise JournalDamaged(
+                f"approval reply {reply.message_id} carries no decision record"
+            ) from exc
+        stored = self._store.approval(carried.approval.approval_id)
+        if stored is None or stored != carried.approval:
             raise JournalDamaged(
                 f"approval reply {reply.message_id} exists without the approval "
                 "record written in its own transaction"
+            )
+        if stored.run_id != request.envelope.run_id:
+            raise JournalDamaged(
+                f"approval {stored.approval_id} records a run its own request does not"
             )
 
     async def channels_reply(
@@ -2424,6 +2436,15 @@ class _CommandExecutor:
             ("registry_rollback", _RollbackPlan),
         }:
             lawful = {ControlCode.REGISTRY_STABLE_MOVED}
+        elif record.operation == "channels_reply" and isinstance(plan, _ChannelReplyPlan):
+            # A domain plan that lost a race still has to replay its refusal:
+            # the loser learns it lost once, and every retry after that must say
+            # the same thing rather than call the stored answer damage.
+            lawful = {ControlCode.CHANNEL_ALREADY_REPLIED}
+        elif record.operation == "runs_approve" and isinstance(plan, _ChannelApprovalPlan):
+            lawful = {ControlCode.CHANNEL_ALREADY_REPLIED}
+        elif record.operation == "channels_ack" and isinstance(plan, _ChannelAckPlan):
+            lawful = {ControlCode.IDEMPOTENCY_CONFLICT}
         else:
             lawful = set()
         if code not in lawful:
