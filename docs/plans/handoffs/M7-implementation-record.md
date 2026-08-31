@@ -477,6 +477,38 @@ reachable with the provenance link intact and is now pinned by its own scenario.
 rev 1 plan still says 6, correctly: it is a historical record of what was planned
 then, and plans are immutable.
 
+## PR C — a narrow role must be able to finish what it started
+
+An adversarial fan-out over the branch found the sharpest regression yet, and it
+was mine: the family lock from the first review round sat inside `_resolve`,
+which is shared between reads a caller asked for and references the system mints
+onto an owner's own response. Every mutating response carries one. So an actor
+holding exactly the scope its mutation requires — approve, operate, or promote,
+with no `constructicon:read` — committed its domain facts, launched its wake, and
+then raised `JournalDamaged` while describing what it had just done. The command
+stranded, and every retry answered `COMMAND_IN_PROGRESS` forever.
+
+`runs_approve` requires approve on paper. Locking the pointer made it require
+read in fact, and fail after the point of no return rather than before it.
+
+The lock therefore moved to the doors a caller reaches — `read`, and a new
+`caller_reference` for a caller-supplied URI — and left resolution entirely.
+Resolution still authorizes what only the owning family can judge: a command's
+visibility, a channel message's governing request. The distinction is who chose
+the URI. A pointer minted onto an owner's own response was earned by holding the
+mutation's scope; a URI a caller supplied is a read.
+
+Three roles now prove it, each holding one scope and nothing else. The same test
+pins the other direction: an approve-only actor may record a decision and still
+may not read the manifest, nor even the detail its own response just handed it —
+reading is a read.
+
+**The addressed read gained the page's door.** `channels_message` derives
+authority from the message, which means reading the message first, so an actor
+with no channel authority at all learned whether an id existed before being told
+the surface was not its to read. It now refuses first, identically for a real id
+and an absent one.
+
 ## Open items
 
 - PR D remains: `panel()` sugar, the deterministic quorum aggregator, and the

@@ -178,7 +178,7 @@ class DetailResolver:
         actor: AuthenticatedActor,
         uri: str,
     ) -> DetailRef | ControlRejected:
-        canonical_uri = self._canonical_uri(actor, uri)
+        canonical_uri = self._canonical_uri(uri)
         if isinstance(canonical_uri, ControlRejected):
             return canonical_uri
         resolved = self._resolve(actor, canonical_uri)
@@ -189,6 +189,23 @@ class DetailResolver:
             uri=canonical_uri,
             digest=digest("detail", 1, normalized),
         )
+
+    def caller_reference(
+        self,
+        actor: AuthenticatedActor,
+        uri: str,
+    ) -> DetailRef | ControlRejected:
+        """Mint a reference for a URI the *caller* chose.
+
+        Distinct from `reference` because of who chose the URI. A reference
+        minted onto an owner's own response is a pointer that owner already
+        earned by holding the mutation's scope — locking it would make a
+        successful approval crash while describing itself. A URI a caller
+        supplied is a read, and the family that owns the fact authorizes it
+        before anything is read at all.
+        """
+
+        return self._family_lock(actor, uri) or self.reference(actor, uri)
 
     def required_reference(self, actor: AuthenticatedActor, uri: str) -> DetailRef:
         """Mint a detail reference whose absence would contradict its owner."""
@@ -224,6 +241,17 @@ class DetailResolver:
                 ),
                 f"choose max_bytes in {MIN_DETAIL_BYTES}..{MAX_DETAIL_BYTES}",
             )
+        # Every read here is caller-supplied, so the family locks before the
+        # store is touched — pinning a result alias to its terminal attempt is
+        # itself a journal read, and a refusal that distinguished "unknown run"
+        # from "not terminal yet" would report both to someone entitled to
+        # neither.
+        denied = self._family_lock(
+            actor,
+            reference if isinstance(reference, str) else reference.uri,
+        )
+        if denied is not None:
+            return denied
 
         # URI-only reads remain accepted by the resolver for internal resource
         # adapters. Public control surfaces require a typed, digest-bound ref.
@@ -239,7 +267,7 @@ class DetailResolver:
                 "request a fresh DetailRef from the owning status or list operation",
             )
 
-        canonical_uri = self._canonical_uri(actor, reference.uri)
+        canonical_uri = self._canonical_uri(reference.uri)
         if isinstance(canonical_uri, ControlRejected):
             return canonical_uri
 
@@ -339,20 +367,19 @@ class DetailResolver:
         )
 
     def _family_lock(self, actor: AuthenticatedActor, uri: str) -> ControlRejected | None:
-        """Read is required by every family but `channels`, before any store read.
+        """Read is required by every family but `channels`.
 
-        Applied wherever a URI first reaches the journal rather than only where
-        it resolves. Pinning a result alias to its terminal attempt is itself a
-        journal read, so an unauthorized caller must be refused before it — a
-        refusal that distinguished "unknown run" from "not terminal yet" would
-        report both facts to someone entitled to neither.
+        Applied at the doors a caller reaches, never to a reference the system
+        mints onto an owner's own response: `runs_approve` needs approve, not
+        read, and a decision that committed its facts must not then fail while
+        describing itself.
         """
 
         if urlparse(uri).netloc == "channels":
             return None
         return scope_refusal(actor, READ_SCOPE)
 
-    def _canonical_uri(self, actor: AuthenticatedActor, uri: str) -> str | ControlRejected:
+    def _canonical_uri(self, uri: str) -> str | ControlRejected:
         """Pin the mutable result alias to its current terminal attempt."""
 
         parsed = urlparse(uri)
@@ -361,9 +388,6 @@ class DetailResolver:
             return uri
         if len(parts) != 2 or parts[1] != "result":
             return uri
-        denied = self._family_lock(actor, uri)
-        if denied is not None:
-            return denied
 
         try:
             run_id = RunId(parts[0])
@@ -404,14 +428,11 @@ class DetailResolver:
             return self._not_found(uri, "detail URI must use constructicon://")
         family = parsed.netloc
         parts = [unquote(part) for part in parsed.path.split("/") if part]
-        # Every family but `channels` was reachable only behind the caller's
-        # read gate, so that check lives here rather than at the door. A channel
-        # message is authorized by the request governing it instead, which is
-        # what lets an advisor hold `constructicon:advise` and nothing else (I9)
-        # without the relaxed door widening any other family by a single URI.
-        denied = self._family_lock(actor, uri)
-        if denied is not None:
-            return denied
+        # Resolution authorizes what only the owning family can judge — a
+        # command's visibility, a channel message's governing request. Whether
+        # the actor may read this family at all was settled at the door it came
+        # through, because a reference minted onto an owner's own response never
+        # passes one: `runs_approve` needs approve, not read.
         try:
             if family == "runs" and len(parts) == 2:
                 run_id = RunId(parts[0])

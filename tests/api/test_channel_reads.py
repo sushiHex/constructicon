@@ -457,3 +457,29 @@ def test_the_detail_resource_answers_to_the_same_authority_as_the_page(
     stranger = control.resource_read(BOB, uri)
     assert isinstance(stranger, ControlRejected)
     assert stranger.faults[0].code is ControlCode.AUTH_REQUIRED_SCOPE
+
+
+def test_an_actor_with_no_channel_authority_is_refused_before_any_read(
+    tmp_path: Path,
+    clock: FakeClock,
+    system: Constructicon,
+) -> None:
+    """The addressed read gets the same door as the page.
+
+    Deriving authority from the message means reading the message first, so an
+    actor holding no channel authority at all would learn whether an id exists
+    before being told the surface is not its to read. The door comes first.
+    """
+
+    control, review = _panel(tmp_path, clock, system)
+    request = review.append_request(_intent(port="ask"), ATTESTATION)
+    absent = _intent(port="never-sent").message_id
+
+    for message_id in (request.message_id, absent):
+        refused = control.channels_message(READER, message_id)
+        assert isinstance(refused, ControlRejected)
+        # Identical either way: a scopeless caller learns nothing about which.
+        assert refused.faults[0].code is ControlCode.AUTH_REQUIRED_SCOPE
+        assert refused.faults[0].details == {
+            "required_scopes": [ADVISE_SCOPE, APPROVE_SCOPE]
+        }

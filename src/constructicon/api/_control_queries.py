@@ -455,8 +455,15 @@ class _ControlQueries:
         A reply is addressed to the run rather than to a person, so its
         authority is the request it answers — resolved through the same law the
         page and the detail resource apply.
+
+        The door comes first, as it does for the page: an actor holding no
+        channel authority at all is refused before the store is read, rather
+        than being told whether the id it named exists.
         """
 
+        denied = self._channel_interactions(actor)
+        if isinstance(denied, ControlRejected):
+            return denied
         delivery = authorized_delivery(self._journal, actor, message_id)
         if isinstance(delivery, ControlRejected):
             return delivery
@@ -714,7 +721,7 @@ class _ControlQueries:
         denied = self._authorize_detail(actor)
         if denied:
             return denied
-        reference = self._details.reference(actor, uri)
+        reference = self._details.caller_reference(actor, uri)
         if isinstance(reference, ControlRejected):
             return reference
         return self._details.read(actor, reference, max_bytes=max_bytes)
