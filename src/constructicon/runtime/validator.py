@@ -29,6 +29,7 @@ from constructicon.core.grants import (
     Posture,
 )
 from constructicon.core.graph import Connection, Graph, GraphNode, Loop, Ref
+from constructicon.core.human import canonical_exchange_fault
 from constructicon.core.identity import digest, json_value
 from constructicon.core.manifest import (
     CONTINUE_SCHEMA_HASH,
@@ -733,12 +734,21 @@ def _compiled_channel(
         )
         return None
     request, reply = definition.inputs[0], definition.outputs[0]
+    request_contract = ChannelContract(type_id=request.type_id, schema_hash=request.schema_hash)
+    reply_contract = ChannelContract(type_id=reply.type_id, schema_hash=reply.schema_hash)
+    mismatch = canonical_exchange_fault(request_contract, reply_contract, endpoint.interaction)
+    if mismatch is not None:
+        comp.faults.append(
+            f"{instance_scope.render()}: binding {alias!r} to channel "
+            f"{capability_id!r} {mismatch}"
+        )
+        return None
     return ChannelBinding(
         endpoint=endpoint,
         port=request.name,
-        contract=ChannelContract(type_id=request.type_id, schema_hash=request.schema_hash),
+        contract=request_contract,
         reply_port=reply.name,
-        reply_contract=ChannelContract(type_id=reply.type_id, schema_hash=reply.schema_hash),
+        reply_contract=reply_contract,
     )
 
 

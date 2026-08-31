@@ -860,7 +860,17 @@ class _CommandExecutor:
             )
         except ChannelReplyConflict:
             # A decision that lost the race after passing preflight. The whole
-            # transaction rolled back, so no approval was recorded either.
+            # transaction rolled back, so no approval was recorded either — and
+            # the winner owes the same proof here that a pre-plan loser demands,
+            # or a torn exchange would read as a race depending only on when
+            # this command happened to look.
+            answered = self._journal.channel_reply_for(
+                channel_id=plan.channel_id,
+                request_id=plan.request_id,
+            )
+            request = self._sealed_request(plan.request_id, plan.approval.actor)
+            if answered is not None:
+                self._require_whole_exchange(request, answered)
             return self._terminal_control_fault(
                 claim,
                 ControlCode.CHANNEL_ALREADY_REPLIED,

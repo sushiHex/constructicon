@@ -21,8 +21,15 @@ from constructicon.core.channel import (
     message_for_reply,
     request_message_id,
 )
-from constructicon.core.control import ADVISE_SCOPE, APPROVE_SCOPE, INTERACTION_SCOPES
-from constructicon.core.errors import JournalDamaged
+from constructicon.core.control import (
+    ADMIN_SCOPE,
+    ADVISE_SCOPE,
+    APPROVE_SCOPE,
+    INTERACTION_SCOPES,
+    AuthenticatedActor,
+    channel_authority_holder,
+)
+from constructicon.core.errors import ContractViolation, JournalDamaged
 
 RUN = RunId("run-authority")
 PATH = ExecutionPath(scope=ScopePath(segments=("review",)))
@@ -126,3 +133,68 @@ def test_an_approval_reply_cannot_be_governed_by_an_advice_request() -> None:
     with pytest.raises(JournalDamaged):
         governing_request(reply, advice)
     assert INTERACTION_SCOPES[governing_request(reply, approval).interaction] == APPROVE_SCOPE
+
+
+def test_an_administrator_has_no_escape_from_the_recipient_seal() -> None:
+    """This predicate must not be wider than `message_for_reply`.
+
+    An actor it admitted and the domain refused would raise `ContractViolation`
+    after its command was claimed and planned, stranding that command forever.
+    Making the two one also settles the read/act asymmetry: an addressed request
+    is no more discoverable in an administrator's inbox than answerable by one.
+    """
+
+    request = _request()
+    admin = AuthenticatedActor(
+        actor_id="static:admin",
+        auth_method="static",
+        scopes=frozenset({ADMIN_SCOPE}),
+    )
+    assert not channel_authority_holder(request, admin)
+    with pytest.raises(ContractViolation, match="may not answer it"):
+        message_for_reply(
+            request,
+            actor_id=admin.actor_id,
+            payload={"verdict": "ship"},
+            created_at=NOW,
+        )
+
+    # The two laws agree in the other direction too: an unaddressed request is
+    # open to any holder of the scope, and the domain admits the same actor.
+    open_request = message_for_intent(
+        _intent_without_recipient(),
+        created_at=NOW,
+    )
+    assert channel_authority_holder(open_request, admin)
+    assert message_for_reply(
+        open_request,
+        actor_id=admin.actor_id,
+        payload={"verdict": "ship"},
+        created_at=NOW,
+    ).sender_actor_id == admin.actor_id
+
+
+def _intent_without_recipient() -> ChannelSendIntent:
+    return ChannelSendIntent(
+        message_id=request_message_id(
+            run_id=RUN,
+            path=PATH,
+            channel_id="channel/review",
+            channel_revision="1",
+            lane="review",
+            interaction="advice",
+            port="open",
+        ),
+        channel_id="channel/review",
+        channel_revision="1",
+        lane="review",
+        interaction="advice",
+        recipient_actor_id=None,
+        contract=REQUEST_CONTRACT,
+        reply_contract=REPLY_CONTRACT,
+        run_id=RUN,
+        path=PATH,
+        port="open",
+        reply_port="answer",
+        payload={"question": "ship?"},
+    )

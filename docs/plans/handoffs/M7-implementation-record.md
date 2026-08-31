@@ -509,6 +509,56 @@ with no channel authority at all learned whether an id existed before being told
 the surface was not its to read. It now refuses first, identically for a real id
 and an absent one.
 
+## PR C — what an adversarial fan-out found
+
+Thirty-three agents across seven lenses, each finding adversarially refuted
+before it counted. Sixteen survived, deduplicating to six defects. Two were
+escalations, and both had the same root.
+
+**Contracts and interaction were independent facts, and must not be.** A
+component declares what crosses; assembly's endpoint declares under whose
+authority. `_compiled_channel` took both and never asked whether they agreed.
+Bind `human-approval` — typed by the approval contracts — to an endpoint sealing
+`interaction="advice"`, and the request is answered through `channels_reply`,
+which stamps only *advice* replies and so stores the advisor's payload verbatim.
+A human holding `constructicon:advise` alone would author the entire
+`ApprovalRecord`, actor and decision included, that the component then returns as
+a trusted governance fact. The mirror parks a run forever: an advice exchange
+sealed as approval is refused by `channels_reply` for its interaction and by
+`runs_approve` for its contracts, so nothing can answer it.
+
+`canonical_exchange_fault` lives in `core/human.py` beside the contracts and is
+applied at admission, the only place both facts are visible. It refuses either
+mismatch, and refuses a pair naming one canonical contract without its partner —
+half a canonical exchange is not one half-dressed, it is a mismatch one step
+earlier.
+
+**The authorization predicate was wider than the domain's.**
+`channel_authority_holder` ended its recipient test with `or
+actor.allows(ADMIN_SCOPE)`; `message_for_reply` admits only the sealed recipient
+and has no such clause. So an administrator answering an addressed request was
+authorized, claimed a command, stored a plan, and then raised `ContractViolation`
+out of the public surface — leaving the command `prepared` forever, every retry
+raising again. The escape is gone: one predicate for reading and for answering,
+matching the domain exactly. That also settles the asymmetry recorded earlier —
+an addressed request is no more discoverable in an administrator's inbox than it
+is answerable by one.
+
+**A per-channel cut was validated by a global probe.** The coherence check asked
+whether any acknowledgement below the cut belonged to a message above it, across
+every channel. Once one journal carried a second channel, a transport could
+refuse the cut it had just read itself. The probe is now scoped exactly as the
+cut is.
+
+**The post-plan race loser skipped a proof the pre-plan loser owes.** Whether a
+torn exchange read as damage or as a lost race depended only on when the command
+happened to look. Both paths now require the whole exchange.
+
+Two documentation defects were also caught and fixed: an in-code comment and ADR
+0015 both still described the read check as living in resolution, which the
+narrow-role fix had moved. A record that describes a placement the code no longer
+has is worse than no record.
+
 ## Open items
 
 - PR D remains: `panel()` sugar, the deterministic quorum aggregator, and the

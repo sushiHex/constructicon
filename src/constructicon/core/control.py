@@ -326,6 +326,13 @@ def channel_authority_holder(request: ChannelMessage, actor: AuthenticatedActor)
 
     One predicate, one refusal: a caller is never told which half failed, so a
     scopeless actor cannot use the surface to discover that it is the recipient.
+
+    There is deliberately no administrator escape from the recipient test. This
+    predicate must not be wider than `message_for_reply`, which admits only the
+    sealed recipient: an actor this admitted and the domain refused would raise
+    after its command was claimed and planned, stranding it forever. Making the
+    two one also settles the read/act asymmetry — an addressed request is no
+    more discoverable in an administrator's inbox than answerable by one.
     """
 
     if not actor.allows(INTERACTION_SCOPES[request.interaction]):
@@ -333,7 +340,6 @@ def channel_authority_holder(request: ChannelMessage, actor: AuthenticatedActor)
     return (
         request.recipient_actor_id is None
         or request.recipient_actor_id == actor.actor_id
-        or actor.allows(ADMIN_SCOPE)
     )
 
 

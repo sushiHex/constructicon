@@ -344,3 +344,41 @@ def test_an_open_request_is_discoverable_across_channels_and_a_reply_is_not(
     # The stored reply is in neither page: it belongs to the run, not a person.
     assert _page(ADVISOR) == [addressed, open_here, open_there]
     assert _page("static:stranger") == [open_here, open_there]
+
+
+def test_a_channel_cut_stays_coherent_beside_another_channels_traffic(
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    """The coherence probe is scoped exactly as the cut it validates.
+
+    A channel-local cut compared against every channel's acknowledgements would
+    call a revision incoherent the moment it was read, as soon as one journal
+    carried a second channel — the transport would refuse its own fresh cut.
+    """
+
+    _journal, review, escalation = _two_channels(tmp_path, clock)
+    mine = review.append_request(_intent(port="mine"), ATTESTATION)
+
+    # The other channel's message sits BEYOND review's cut, and its ack sits
+    # BELOW it — the exact pair a global probe reads as an acknowledgement of a
+    # message the cut excludes, when in fact it belongs to another channel.
+    elsewhere = escalation.append_request(_elsewhere(port="theirs"), ATTESTATION)
+    escalation.acknowledge(
+        message_id=elsewhere.message_id,
+        actor_id=ADVISOR,
+        command_id="cmd-elsewhere",
+    )
+    review.acknowledge(
+        message_id=mine.message_id,
+        actor_id=ADVISOR,
+        command_id="cmd-mine",
+    )
+
+    page = review.inbox(
+        actor_id=ADVISOR,
+        revision=review.latest_revision(ADVISOR),
+        after=None,
+        limit=10,
+    )
+    assert [delivery.message.envelope.port for delivery in page] == ["mine"]

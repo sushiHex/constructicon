@@ -314,13 +314,20 @@ class _SqliteChannelsMixin:
                     "retained history"
                 )
             # An acknowledgement cannot exist in a snapshot that omits the message
-            # it acknowledges, so bounds alone do not make a cut real.
-            incoherent = connection.execute(
+            # it acknowledges, so bounds alone do not make a cut real. The probe
+            # is scoped exactly as the cut is: a channel-local cut compared
+            # against every channel's acks would call a freshly read revision
+            # incoherent as soon as one journal carried a second channel.
+            coherence = (
                 "SELECT 1 FROM channel_acks AS acks"
                 " JOIN channel_messages AS messages ON messages.message_id = acks.message_id"
-                " WHERE acks.ack_seq <= ? AND messages.message_seq > ? LIMIT 1",
-                (ack_seq, message_seq),
-            ).fetchone()
+                " WHERE acks.ack_seq <= ? AND messages.message_seq > ?"
+            )
+            coherence_params: tuple[object, ...] = (ack_seq, message_seq)
+            if channel_id is not None:
+                coherence += " AND messages.channel_id = ?"
+                coherence_params = (*coherence_params, channel_id)
+            incoherent = connection.execute(coherence + " LIMIT 1", coherence_params).fetchone()
             if incoherent is not None:
                 raise InvalidChannelRevision(
                     f"channel revision ({message_seq}, {ack_seq}) acknowledges a "

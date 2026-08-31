@@ -487,3 +487,38 @@ async def test_an_approval_refuses_a_record_about_another_run(
         if event.kind == "NodeFailed" and event.payload
     ]
     assert any("run-std-approval-other-run" in failure for failure in failures), failures
+
+
+async def test_admission_refuses_an_approval_component_on_an_advice_endpoint(
+    journal: SqliteJournal,
+) -> None:
+    """The escalation, refused where both facts are visible.
+
+    `human-approval` typed by the approval contracts, bound to a channel whose
+    endpoint seals `interaction="advice"`. Nothing downstream could catch this:
+    `channels_reply` would consume it as advice, store the advisor's payload
+    verbatim, and the component would return it as a trusted `ApprovalRecord`.
+    """
+
+    system, _advice, _gate = _world(journal)
+    smuggled = _graph(APPROVAL_COMPONENT, APPROVAL_CHANNEL, ADVICE_CHANNEL_ID, "decision")
+    inputs = {
+        "request": ApprovalRequestPayload(
+            subject=json_value(SUBJECT.model_dump(mode="json")),
+        ).model_dump(mode="json")
+    }
+    outcome = system.admit_graph(smuggled, inputs)
+    assert isinstance(outcome, AdmissionRejected)
+    assert any("interaction='approval'" in fault.message for fault in outcome.faults)
+
+
+async def test_admission_refuses_an_advice_component_on_an_approval_endpoint(
+    journal: SqliteJournal,
+) -> None:
+    """The mirror, which would park a run with nothing able to answer it."""
+
+    system, _advice, _gate = _world(journal)
+    smuggled = _graph(ADVISOR_COMPONENT, ADVISOR_CHANNEL, GATE_CHANNEL_ID, "advice")
+    outcome = system.admit_graph(smuggled, {"request": {"question": "?"}})
+    assert isinstance(outcome, AdmissionRejected)
+    assert any("interaction='advice'" in fault.message for fault in outcome.faults)

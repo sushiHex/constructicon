@@ -25,7 +25,11 @@ from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict
 
-from constructicon.core.channel import ChannelContract, ChannelMessage
+from constructicon.core.channel import (
+    ChannelContract,
+    ChannelInteraction,
+    ChannelMessage,
+)
 from constructicon.core.effect import ApprovalRecord
 from constructicon.core.identity import Digest, JsonValue
 
@@ -45,6 +49,54 @@ APPROVAL_REPLY_CONTRACT = ChannelContract(
     type_id="constructicon.std/ApprovalDecision",
     schema_hash="approval-decision-1",
 )
+
+
+CANONICAL_EXCHANGES: tuple[tuple[ChannelContract, ChannelContract, ChannelInteraction], ...] = (
+    (ADVICE_REQUEST_CONTRACT, ADVICE_REPLY_CONTRACT, "advice"),
+    (APPROVAL_REQUEST_CONTRACT, APPROVAL_REPLY_CONTRACT, "approval"),
+)
+
+
+def canonical_exchange_fault(
+    request: ChannelContract,
+    reply: ChannelContract,
+    interaction: ChannelInteraction,
+) -> str | None:
+    """Why this compiled exchange is not a coherent canonical human exchange.
+
+    The contracts say what crosses; the endpoint says under whose authority. For
+    these two exchanges those are not independent facts, and admission is the
+    only place that sees both.
+
+    An approval exchange sealed as advice is answered by `channels_reply`, which
+    stamps only advice replies — so a human holding `constructicon:advise` alone
+    would author the entire `ApprovalRecord`, actor and decision included, that
+    the run then returns as a trusted governance fact. An advice exchange sealed
+    as approval is the mirror: `channels_reply` refuses the interaction and
+    `runs_approve` refuses the contracts, so the run parks with nothing able to
+    answer it.
+
+    Recognized by either half, because a pair naming one canonical contract and
+    not its partner is not a canonical exchange half-dressed — it is a mismatch,
+    and sealing it would be the same error one step further on.
+    """
+
+    for canonical_request, canonical_reply, required in CANONICAL_EXCHANGES:
+        if request != canonical_request and reply != canonical_reply:
+            continue
+        if request != canonical_request or reply != canonical_reply:
+            return (
+                f"pairs {request.type_id!r} with {reply.type_id!r}; the canonical "
+                f"{required} exchange pairs {canonical_request.type_id!r} with "
+                f"{canonical_reply.type_id!r}"
+            )
+        if interaction != required:
+            return (
+                f"is the canonical {required} exchange, so its endpoint must seal "
+                f"interaction={required!r}, not {interaction!r} — otherwise the "
+                "authority that answers it is not the authority it describes"
+            )
+    return None
 
 
 class _HumanPayload(BaseModel):

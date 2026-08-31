@@ -22,14 +22,23 @@ channel read surface therefore authorizes on `constructicon:advise` and
 granted by them, so a human advisor holds one scope and reads only its own work.
 
 That relaxation is paid for rather than asserted. Every non-channel detail family
-had been protected only by the read gate at the door of `details_read`, so the
-read check moved into `DetailResolver._resolve`, where the family that owns a
-fact holds its own lock. Opening the door for channel details could then widen
-nothing else.
+had been protected only by one read gate at the door of `details_read`, so
+relaxing that door for channel details would have opened all of them. The read
+check therefore moved to the doors a *caller* reaches — reading a reference, and
+minting one for a URI the caller supplied — and not into resolution, which is
+shared with the references the system mints onto an owner's own response.
 
-**Authority comes from the governing request.** A reply deliberately carries no
-recipient: it is addressed to the run, not to a person. Reading authority off the
-message actually addressed would therefore let anyone act on an answer. Every
+That distinction is the whole of it: a pointer minted onto a response was earned
+by holding the mutation's scope, and `runs_approve` requires approve, not read.
+Locking resolution made a successful decision commit its facts and then fail
+while describing itself, stranding its command. Resolution still authorizes what
+only the owning family can judge — a command's visibility, a channel message's
+governing request.
+
+**Authority comes from the governing request, with no administrator escape.**
+A reply deliberately carries no recipient: it is addressed to the run, not to a
+person. Reading authority off the message actually addressed would therefore let
+anyone act on an answer. Every
 channel surface — page, message, detail, reply, acknowledgement — resolves
 through the request that governs the message and authorizes against that. Two
 sealed facts decide together: the interaction says which scope answers this kind
@@ -39,6 +48,22 @@ An unaddressed request is a routing decision, not missing routing. It is
 discoverable by every actor holding the interaction's scope, matched on the
 message *kind* rather than the null recipient, because a reply carries a null
 recipient too and for the opposite reason.
+
+The recipient test admits no administrator, deliberately. `message_for_reply`
+admits only the sealed recipient, so an authorization predicate wider than that
+would admit an actor the domain then refuses — after its command was claimed and
+planned, stranding it. One law for reading and for answering also settles the
+asymmetry: an addressed request is no more discoverable in an administrator's
+inbox than it is answerable by one.
+
+**Contracts and interaction are not independent.** A canonical human exchange is
+typed by its contracts and sealed by its endpoint's interaction, and admission is
+the only place that sees both. An approval exchange sealed as advice would be
+answered through the advice path, whose payload is stored verbatim — letting a
+human holding advise alone author the whole `ApprovalRecord` the run returns as
+a governance fact. The mirror parks a run no operation can answer. Admission
+refuses both, and refuses a pair naming one canonical contract without its
+partner.
 
 **Which operation consumes which interaction is a stated rule.** `channels_reply`
 consumes advice and nothing else; an approval is consumed exclusively by
@@ -74,13 +99,16 @@ actor inside its own payload is data, never a claim.
 
 - `constructicon:advise` joins the known scope set. Scopes remain independent:
   advise, approve, and read grant nothing to each other.
-- Non-channel detail families are now authorized where they resolve rather than
-  at the door. Behaviour for every existing family is unchanged; the check moved.
+- Non-channel detail families are authorized at the caller-facing doors rather
+  than at one shared door. Behaviour for every existing family is unchanged; the
+  check moved, and a mutation's own response is not a caller-facing read.
 - The canonical human exchange contracts live once in L0 (`core/human.py`), so
   the control plane and the standard components type the same exchange or type
   nothing. An `ApprovalRecord` cannot be written into an approval-interaction
   conversation that merely looks similar.
-- Control response schema stays 3 and channel schema stays 1. No migration.
+- Control response schema stays 3 and channel schema stays 1. SQLite advances
+  6 → 7, additively: one nullable column naming the command that wrote a
+  reply, so an exact retry is told from a second command losing the race.
 - The transport keeps no channel law: MCP handlers derive one actor and delegate
   once.
 
@@ -91,6 +119,12 @@ actor inside its own payload is data, never a claim.
   advisor every run in the store to answer one question.
 - **Reading authority off the addressed message.** A reply has no recipient, so
   this grants an answer to anyone who can name it.
+- **An administrator escape from the recipient seal.** It makes the
+  authorization predicate wider than the domain's, which is not a wider
+  permission but an exception thrown after a command is durably planned.
+- **Locking detail resolution rather than the caller's door.** Every mutating
+  response carries a minted pointer, so this makes each mutation require read in
+  fact, and fail after the point of no return.
 - **Matching a null recipient to find open requests.** A reply carries a null
   recipient too; this broadcasts every reply to every actor.
 - **Letting `channels_reply` answer approvals when the actor holds approve.** The
