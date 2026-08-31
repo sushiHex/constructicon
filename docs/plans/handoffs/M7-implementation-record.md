@@ -253,6 +253,25 @@ could not have committed, so it is damage rather than a race this command lost.
 Approved and rejected are ordinary data throughout: nothing branches on the
 decision, and both wake the parked run identically.
 
+**One run, named three ways.** A bound decision names a run, the request belongs
+to a run, and the wake fence is taken from the request. Each was checked against
+its own source, and nothing required them to be the same run — so a request for
+run A could be decided under run B whenever B existed, committing a governance
+record claiming B while the reply it wrote was delivered to and woke A. The
+request's run is now required to equal the command's before the claim, and the
+plan additionally requires `approval.run_id == plan.run_id ==
+sealed.envelope.run_id`. The full-record payload is what made this visible: a
+component returning the record must be able to trust it belongs to its own run.
+
+The pre-claim refusal is pinned by a regression with two real runs — so it
+refuses on authority rather than existence — asserting no command, approval,
+reply, or acknowledgement is written and that the key still works against the
+correct run. The plan-validation equality is defence in depth: with the
+pre-claim boundary in place it is unreachable through the public API, so it is
+deliberately not claimed as test-pinned. It guards a plan written before the
+rule existed or a store edited beneath the command, which is what every other
+branch of `_validate_command_plan` guards.
+
 ## A payload is caller-authored; authorship is not
 
 `Channel.ask` hands a component the reply's payload and nothing else. That

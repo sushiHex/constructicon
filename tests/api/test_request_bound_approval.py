@@ -514,3 +514,71 @@ async def test_an_advisor_may_not_decide_an_approval(
     assert isinstance(refused, ControlRejected)
     assert refused.faults[0].code is ControlCode.AUTH_REQUIRED_SCOPE
     assert gate.channel.reply_for(request.message_id) is None
+
+
+OTHER_RUN = RunId("run-bound-approval-other")
+
+
+def _second_run(world: Constructicon, journal: SqliteJournal) -> RunId:
+    """A second real run, so the refusal is about authority and not existence."""
+
+    if journal.run_record(OTHER_RUN) is None:
+        inputs = {"issue": {"title": "other"}}
+        world._prepare_run(
+            world.validate(pipeline_graph(), inputs),
+            run_id=OTHER_RUN,
+            inputs=inputs,
+        )
+    return OTHER_RUN
+
+
+async def test_a_decision_refuses_a_request_belonging_to_another_run(
+    world: Constructicon,
+    journal: SqliteJournal,
+) -> None:
+    """A record claiming one run while its reply wakes another decides nothing.
+
+    Both runs exist, so this is not a liveness check: the command names a run,
+    the request belongs to a run, and nothing but this makes them the same one.
+    """
+
+    gate = _gate(world, journal)
+    other = _second_run(world, journal)
+    request = gate.channel.append_request(_intent(), ATTESTATION)
+
+    refused = await gate.control.runs_approve(
+        APPROVER,
+        run_id=other,
+        subject=SUBJECT,
+        decision="approved",
+        reason=None,
+        idempotency_key="cross-run",
+        request_message_id=request.message_id,
+    )
+    assert isinstance(refused, ControlRejected)
+    assert refused.faults[0].code is ControlCode.APPROVAL_RUN_MISMATCH
+    assert refused.faults[0].details == {"run_id": str(RUN)}
+
+    # No command, no approval, no reply, no acknowledgement.
+    assert journal.latest_command_key(operation="runs_approve") is None
+    with sqlite3.connect(journal._db_path) as raw:
+        assert raw.execute("SELECT COUNT(*) FROM approvals").fetchone()[0] == 0
+    assert gate.channel.reply_for(request.message_id) is None
+    delivery = journal.channel_delivery(message_id=request.message_id, actor_id=APPROVER_ID)
+    assert delivery is not None and not delivery.acknowledged
+
+    # The key was never burned, so the correct run still uses it.
+    accepted = await gate.control.runs_approve(
+        APPROVER,
+        run_id=RUN,
+        subject=SUBJECT,
+        decision="approved",
+        reason=None,
+        idempotency_key="cross-run",
+        request_message_id=request.message_id,
+    )
+    assert isinstance(accepted, ApprovalCommandResult)
+    carried = ApprovalDecisionPayload.model_validate(
+        gate.channel.reply_for(request.message_id).envelope.payload  # type: ignore[union-attr]
+    ).approval
+    assert carried.run_id == RUN

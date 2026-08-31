@@ -627,7 +627,12 @@ class _CommandExecutor:
     ) -> ApprovalCommandResult | ControlRejected:
         bound: ChannelMessage | None = None
         if request_message_id is not None:
-            prepared = self._bound_approval_request(actor, request_message_id, subject=subject)
+            prepared = self._bound_approval_request(
+                actor,
+                request_message_id,
+                run_id=run_id,
+                subject=subject,
+            )
             if isinstance(prepared, ControlRejected):
                 return prepared
             bound = prepared
@@ -746,6 +751,7 @@ class _CommandExecutor:
         actor: AuthenticatedActor,
         request_message_id: Digest,
         *,
+        run_id: RunId,
         subject: ProofSubject,
     ) -> ChannelMessage | ControlRejected:
         """The approval request this decision answers, or a refusal.
@@ -758,6 +764,17 @@ class _CommandExecutor:
         request = self._actionable_request(actor, request_message_id, consumes=APPROVE_CONSUMES)
         if isinstance(request, ControlRejected):
             return request
+        # The decision names a run and the request belongs to one. If those
+        # differ, the record would claim one run while the reply it writes is
+        # delivered to — and wakes — another: a governance fact about nothing.
+        if request.envelope.run_id != run_id:
+            return self._fault(
+                ControlCode.APPROVAL_RUN_MISMATCH,
+                f"channel request {request_message_id} belongs to run "
+                f"{request.envelope.run_id!r}, not {run_id!r}",
+                "decide the request under the run that is waiting on it",
+                {"run_id": str(request.envelope.run_id)},
+            )
         # An `ApprovalRecord` is a governance fact. Nominal typing is what keeps
         # it from being written into an arbitrary approval-interaction exchange
         # that merely happens to look like a human-approval one.
@@ -1978,6 +1995,10 @@ class _CommandExecutor:
                 or sealed.reply_contract != APPROVAL_REPLY_CONTRACT
                 or sealed.reply_port != plan.reply_port
                 or sealed.envelope.run_id != plan.run_id
+                # One run, named three ways: the command's, the plan's wake
+                # fence, and the request's own. Each was checked against its own
+                # source; this is what makes them one run rather than three.
+                or approval.run_id != plan.run_id
                 or plan.reply_id
                 != reply_message_id(request_id=plan.request_id, reply_port=plan.reply_port)
                 or canonical_json(json_value(plan.payload))

@@ -79,6 +79,7 @@ class ControlCode(StrEnum):
     REGISTRY_STABLE_MOVED = "control.registry.stable_moved"
     REGISTRY_VERSION_UNKNOWN = "control.registry.version_unknown"
     APPROVAL_INVALID_SUBJECT = "control.approval.invalid_subject"
+    APPROVAL_RUN_MISMATCH = "control.approval.run_mismatch"
     CHANNEL_MESSAGE_UNKNOWN = "control.channel.message_unknown"
     CHANNEL_REQUEST_REQUIRED = "control.channel.request_required"
     CHANNEL_WRONG_INTERACTION = "control.channel.wrong_interaction"
