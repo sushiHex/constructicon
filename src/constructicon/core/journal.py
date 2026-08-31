@@ -182,6 +182,10 @@ class Journal(Protocol):
         """One channel message by identity, with its position and this actor's ack."""
         ...
 
+    def channel_message_command(self, *, message_id: Digest) -> str | None:
+        """Which command wrote this message, if a command did."""
+        ...
+
     def channel_reply_for(
         self,
         *,

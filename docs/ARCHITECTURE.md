@@ -318,7 +318,7 @@ input hash and resolved version restores; the first miss resumes live.
 Reproduce starts a new run under a past run's exact manifest and inputs.
 
 One public `SqliteJournal` implements the separate L0 `Journal`,
-`RegistryStore`, and `ControlStore` contracts over one schema-6 WAL database.
+`RegistryStore`, and `ControlStore` contracts over one schema-7 WAL database.
 Its private modules are named by enduring responsibility:
 
 ```text

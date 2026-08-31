@@ -125,6 +125,19 @@ class _SqliteChannelsMixin:
             acknowledged=acknowledged is not None,
         )
 
+    def channel_message_command(self, *, message_id: Digest) -> str | None:
+        """Which command wrote this message, if a command did."""
+
+        with self._read() as connection:
+            row = connection.execute(
+                "SELECT command_id, reply_to, sender_actor_id FROM channel_messages"
+                " WHERE message_id = ?",
+                (str(message_id),),
+            ).fetchone()
+            if row is None:
+                return None
+            return _reply_writer(connection, row)
+
     def channel_reply_for(self, *, channel_id: str, request_id: Digest) -> ChannelMessage | None:
         with self._read() as connection:
             row = connection.execute(
@@ -391,7 +404,7 @@ def reply_in_transaction(
         # exact retry of that command reconciles and any other command lost the
         # race — identical bytes included. ADR 0014 admits one reply and owes
         # the loser a typed conflict, not a second success over one fact.
-        if stored_row["command_id"] != command_id:
+        if _reply_writer(connection, stored_row) != command_id:
             raise ChannelReplyConflict(
                 f"request {request_id} was already answered by another command"
             )
@@ -409,6 +422,29 @@ def reply_in_transaction(
     _insert_message(connection, reply, None, command_id)
     _imply_acknowledgement(connection, request.message_id, actor_id, command_id, now_iso)
     return reply
+
+
+def _reply_writer(connection: sqlite3.Connection, row: sqlite3.Row) -> str | None:
+    """The command that wrote one stored message, across the v7 boundary.
+
+    A reply written at schema 7 or later names its command directly. One written
+    under v6 recorded the same fact in its request's acknowledgement, because
+    the reply path *claimed* that row then and no other command could hold it.
+    A pre-v7 reply is therefore not ownerless, only differently recorded — and
+    an exact retry of that command after the upgrade must still reconcile rather
+    than lose a race it never entered.
+    """
+
+    if row["command_id"] is not None:
+        return str(row["command_id"])
+    reply_to, sender = row["reply_to"], row["sender_actor_id"]
+    if reply_to is None or sender is None:
+        return None
+    legacy = connection.execute(
+        "SELECT command_id FROM channel_acks WHERE message_id = ? AND actor_id = ?",
+        (str(reply_to), str(sender)),
+    ).fetchone()
+    return str(legacy["command_id"]) if legacy is not None else None
 
 
 @contextmanager

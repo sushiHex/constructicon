@@ -452,6 +452,31 @@ successor, or an implementation record, all of which already carry it. The edit
 is reverted and rev 2 is byte-identical to `main` again. The manifest now records
 only this document's new digest, which is the one living document among them.
 
+## PR C — what the third review round found
+
+**A v6 reply is not ownerless, only differently recorded.** Schema 7 records the
+command that wrote a reply, and migration leaves that column NULL for everything
+written before. But v6 recorded the same fact elsewhere: the reply path *claimed*
+its request's acknowledgement then, so no other command could hold that row. A
+command that crashed under v6 between its domain write and its completion would
+otherwise, on retry after the upgrade, lose a race it never entered. One read law
+— `_reply_writer` — returns the column when it is set and falls back to the
+acknowledgement when it is not, and a real v6 fixture (column dropped, version
+rewound) proves both the reconcile and the refusal.
+
+**Provenance is necessary and was missing; agreement is also necessary.**
+`_require_whole_exchange` confirmed the carried approval existed and shared the
+run, which a standalone decision spliced into an unrelated reply satisfies. The
+reply names the command that wrote it, and that command must be the one that
+wrote *this* approval — that link is what schema 7 makes available. Beyond it,
+the three facts must agree about run, actor, and subject, each of which is
+reachable with the provenance link intact and is now pinned by its own scenario.
+
+**The authoritative documents said schema 6.** `ARCHITECTURE.md`,
+`CONTRIBUTING.md`, and the schema module's own docstring now say 7. The archived
+rev 1 plan still says 6, correctly: it is a historical record of what was planned
+then, and plans are immutable.
+
 ## Open items
 
 - PR D remains: `panel()` sugar, the deterministic quorum aggregator, and the

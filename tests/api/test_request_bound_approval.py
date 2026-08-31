@@ -32,7 +32,7 @@ from constructicon.core.control import (
     ControlRejected,
     command_id_for,
 )
-from constructicon.core.effect import ComponentProofSubject
+from constructicon.core.effect import ApprovalRecord, ComponentProofSubject
 from constructicon.core.errors import JournalDamaged
 from constructicon.core.human import (
     APPROVAL_REPLY_CONTRACT,
@@ -723,3 +723,191 @@ async def test_a_lost_decision_replays_its_refusal(
         )
         assert isinstance(lost, ControlRejected)
         assert lost.faults[0].code is ControlCode.CHANNEL_ALREADY_REPLIED
+
+
+async def test_a_standalone_approval_spliced_into_an_exchange_is_damage(
+    world: Constructicon,
+    journal: SqliteJournal,
+) -> None:
+    """Existence is not togetherness, in either direction.
+
+    A real `ApprovalRecord` carried inside a reply is not a complete foreign
+    transaction. The reply names the command that wrote it, and that command
+    must be the one that wrote *this* approval — whether it wrote none at all,
+    or wrote a different one.
+    """
+
+    gate = _gate(world, journal)
+
+    async def _standalone(key: str) -> ApprovalCommandResult:
+        result = await gate.control.runs_approve(
+            APPROVER,
+            run_id=RUN,
+            subject=SUBJECT,
+            decision="approved",
+            reason=key,
+            idempotency_key=key,
+        )
+        assert isinstance(result, ApprovalCommandResult)
+        return result
+
+    carried = await _standalone("standalone-carried")
+    elsewhere = await _standalone("standalone-elsewhere")
+    record = journal.approval(carried.approval_id)
+    assert record is not None
+
+    # 1. The reply's command wrote no approval at all.
+    first = gate.channel.append_request(_intent(port="splice-a"), ATTESTATION)
+    gate.channel.reply(
+        request_id=first.message_id,
+        actor_id=APPROVER_ID,
+        payload={"schema_version": 1, "approval": record.model_dump(mode="json")},
+        command_id="cmd-wrote-no-approval",
+    )
+    with pytest.raises(JournalDamaged, match="without the approval record"):
+        await gate.control.runs_approve(
+            APPROVER,
+            run_id=RUN,
+            subject=SUBJECT,
+            decision="approved",
+            reason=None,
+            idempotency_key="after-splice-a",
+            request_message_id=first.message_id,
+        )
+
+    # 2. The reply's command wrote an approval, but not the one carried.
+    second = gate.channel.append_request(_intent(port="splice-b"), ATTESTATION)
+    gate.channel.reply(
+        request_id=second.message_id,
+        actor_id=APPROVER_ID,
+        payload={"schema_version": 1, "approval": record.model_dump(mode="json")},
+        command_id=command_id_for(APPROVER_ID, "runs_approve", "standalone-elsewhere"),
+    )
+    assert elsewhere.approval_id != carried.approval_id
+    with pytest.raises(JournalDamaged, match="its own command did not write"):
+        await gate.control.runs_approve(
+            APPROVER,
+            run_id=RUN,
+            subject=SUBJECT,
+            decision="approved",
+            reason=None,
+            idempotency_key="after-splice-b",
+            request_message_id=second.message_id,
+        )
+
+
+async def _standalone_approval(
+    gate: _Gate,
+    *,
+    run_id: RunId,
+    subject: ComponentProofSubject,
+    key: str,
+    actor: AuthenticatedActor = APPROVER,
+) -> tuple[ApprovalRecord, str]:
+    """One real standalone decision, plus the command id that wrote it."""
+
+    result = await gate.control.runs_approve(
+        actor,
+        run_id=run_id,
+        subject=subject,
+        decision="approved",
+        reason=None,
+        idempotency_key=key,
+    )
+    assert isinstance(result, ApprovalCommandResult)
+    record = gate.journal.approval(result.approval_id)
+    assert record is not None
+    return record, command_id_for(actor.actor_id, "runs_approve", key)
+
+
+def _splice(
+    gate: _Gate,
+    request_id: Digest,
+    record: ApprovalRecord,
+    command_id: str,
+    sender: str,
+) -> None:
+    gate.channel.reply(
+        request_id=request_id,
+        actor_id=sender,
+        payload={"schema_version": 1, "approval": record.model_dump(mode="json")},
+        command_id=command_id,
+    )
+
+
+async def test_the_three_facts_must_agree_on_run_actor_and_subject(
+    world: Constructicon,
+    journal: SqliteJournal,
+) -> None:
+    """Provenance is necessary, not sufficient.
+
+    Each case below has a real approval written by the very command that wrote
+    the reply carrying it — so the provenance link holds — and still describes a
+    decision this exchange did not make.
+    """
+
+    gate = _gate(world, journal)
+    other_run = _second_run(world, journal)
+
+    # 1. The record decides a different run.
+    wrong_run, wrong_run_command = await _standalone_approval(
+        gate, run_id=other_run, subject=SUBJECT, key="agree-run"
+    )
+    first = gate.channel.append_request(_intent(port="agree-run"), ATTESTATION)
+    _splice(gate, first.message_id, wrong_run, wrong_run_command, APPROVER_ID)
+    with pytest.raises(JournalDamaged, match="run, actor, or subject"):
+        await gate.control.runs_approve(
+            APPROVER,
+            run_id=RUN,
+            subject=SUBJECT,
+            decision="approved",
+            reason=None,
+            idempotency_key="after-agree-run",
+            request_message_id=first.message_id,
+        )
+
+    # 2. The record decides a different subject.
+    wrong_subject, wrong_subject_command = await _standalone_approval(
+        gate, run_id=RUN, subject=SUBJECT, key="agree-subject"
+    )
+    second = gate.channel.append_request(
+        _intent(port="agree-subject", subject=OTHER_SUBJECT), ATTESTATION
+    )
+    _splice(gate, second.message_id, wrong_subject, wrong_subject_command, APPROVER_ID)
+    with pytest.raises(JournalDamaged, match="run, actor, or subject"):
+        await gate.control.runs_approve(
+            APPROVER,
+            run_id=RUN,
+            subject=OTHER_SUBJECT,
+            decision="approved",
+            reason=None,
+            idempotency_key="after-agree-subject",
+            request_message_id=second.message_id,
+        )
+
+    # 3. The record names a different decider than the reply's sender. An open
+    #    request is the only one a second actor may answer, so it is the only
+    #    place this disagreement can arise at all.
+    stranger = AuthenticatedActor(
+        actor_id="static:other-approver",
+        auth_method="static",
+        scopes=frozenset({READ_SCOPE, APPROVE_SCOPE}),
+    )
+    wrong_actor, wrong_actor_command = await _standalone_approval(
+        gate, run_id=RUN, subject=SUBJECT, key="agree-actor"
+    )
+    third = gate.channel.append_request(
+        _intent(port="agree-actor").model_copy(update={"recipient_actor_id": None}),
+        ATTESTATION,
+    )
+    _splice(gate, third.message_id, wrong_actor, wrong_actor_command, stranger.actor_id)
+    with pytest.raises(JournalDamaged, match="run, actor, or subject"):
+        await gate.control.runs_approve(
+            APPROVER,
+            run_id=RUN,
+            subject=SUBJECT,
+            decision="approved",
+            reason=None,
+            idempotency_key="after-agree-actor",
+            request_message_id=third.message_id,
+        )

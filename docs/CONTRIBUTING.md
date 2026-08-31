@@ -201,7 +201,7 @@ with an itemized fault rather than guessing which pair is the exchange.
 
 ## Changing SQLite persistence (L1)
 
-`SqliteJournal` is one schema-6 WAL store assembled from private responsibility
+`SqliteJournal` is one schema-7 WAL store assembled from private responsibility
 modules: `_sqlite_base`, `_sqlite_schema`, `_sqlite_execution`,
 `_sqlite_registry`, `_sqlite_control`, `_sqlite_channels`, and
 `_sqlite_queries`. A Python module

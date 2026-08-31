@@ -1,5 +1,5 @@
 # mypy: disable-error-code="attr-defined"
-"""SQLite schema ownership and atomic migrations through schema 6."""
+"""SQLite schema ownership and atomic migrations through schema 7."""
 
 from __future__ import annotations
 

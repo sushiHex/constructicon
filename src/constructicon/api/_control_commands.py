@@ -883,11 +883,16 @@ class _CommandExecutor:
         without the third is not a race this command lost — it is a write that
         should have been impossible.
 
-        The third fact is reached through the reply itself, which carries the
-        record. Reaching it through the acknowledgement's owning command would
-        be wrong: an actor may legitimately have acknowledged the request under
-        an earlier `channels_ack`, and the reply then only implies that delivery
-        fact rather than owning it.
+        Existence is not togetherness. The reply names the command that wrote it,
+        and that command must be the one that wrote the approval — otherwise a
+        standalone decision could be spliced into an unrelated exchange and read
+        as a complete foreign transaction. Provenance first, then the three
+        facts must agree about subject, run, and who decided.
+
+        The acknowledgement cannot supply that provenance: an actor may
+        legitimately have acknowledged the request under an earlier
+        `channels_ack`, and the reply then only implies that delivery fact
+        rather than owning it.
         """
 
         if reply.sender_actor_id is None:
@@ -903,19 +908,32 @@ class _CommandExecutor:
             )
         try:
             carried = ApprovalDecisionPayload.model_validate(reply.envelope.payload)
+            pinned = ApprovalRequestPayload.model_validate(request.envelope.payload)
         except ValidationError as exc:
             raise JournalDamaged(
                 f"approval reply {reply.message_id} carries no decision record"
             ) from exc
-        stored = self._store.approval(carried.approval.approval_id)
-        if stored is None or stored != carried.approval:
+        writer = self._journal.channel_message_command(message_id=reply.message_id)
+        stored = self._store.approval_for_command(writer) if writer is not None else None
+        if stored is None:
             raise JournalDamaged(
                 f"approval reply {reply.message_id} exists without the approval "
                 "record written in its own transaction"
             )
-        if stored.run_id != request.envelope.run_id:
+        if stored != carried.approval:
             raise JournalDamaged(
-                f"approval {stored.approval_id} records a run its own request does not"
+                f"approval reply {reply.message_id} carries a record its own "
+                "command did not write"
+            )
+        if (
+            stored.run_id != request.envelope.run_id
+            or stored.actor.actor_id != reply.sender_actor_id
+            or canonical_json(json_value(stored.subject.model_dump(mode="json")))
+            != canonical_json(json_value(pinned.subject))
+        ):
+            raise JournalDamaged(
+                f"approval {stored.approval_id} decides a run, actor, or subject "
+                "its own exchange does not"
             )
 
     async def channels_reply(
