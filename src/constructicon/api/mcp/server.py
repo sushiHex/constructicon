@@ -25,6 +25,10 @@ from constructicon.core.control import (
     ApprovalCommandResult,
     AuthenticatedActor,
     CancellationResult,
+    ChannelAckResult,
+    ChannelMessagePage,
+    ChannelMessageSummary,
+    ChannelReplyResult,
     CommandSummary,
     ComponentComparison,
     ControlRejected,
@@ -168,6 +172,51 @@ def create_mcp_server(
     ) -> ComponentComparison | ControlRejected:
         return control.registry_compare(await actor(), component, left, right)
 
+    @server.tool(
+        description=(
+            "Page the messages waiting on the authenticated actor. Whose inbox "
+            "this is cannot be chosen: it is derived from the caller's identity."
+        )
+    )
+    async def channels_inbox(
+        cursor: str | None = None,
+        limit: int = 25,
+    ) -> ChannelMessagePage | ControlRejected:
+        return control.channels_inbox(await actor(), cursor=cursor, limit=limit)
+
+    @server.tool(description="Read one exact channel message the caller may act on.")
+    async def channels_message(message_id: Digest) -> ChannelMessageSummary | ControlRejected:
+        return control.channels_message(await actor(), message_id)
+
+    @server.tool(
+        description=(
+            "Answer one advice request. Approval requests are answered by "
+            "runs_approve bound to the request instead."
+        )
+    )
+    async def channels_reply(
+        message_id: Digest,
+        payload: JsonValue,
+        idempotency_key: str,
+    ) -> ChannelReplyResult | ControlRejected:
+        return await control.channels_reply(
+            await actor(),
+            message_id=message_id,
+            payload=payload,
+            idempotency_key=idempotency_key,
+        )
+
+    @server.tool(description="Record that the authenticated actor took delivery of one request.")
+    async def channels_ack(
+        message_id: Digest,
+        idempotency_key: str,
+    ) -> ChannelAckResult | ControlRejected:
+        return await control.channels_ack(
+            await actor(),
+            message_id=message_id,
+            idempotency_key=idempotency_key,
+        )
+
     @server.tool(description="Read one bounded chunk of an immutable detail reference.")
     async def details_read(
         reference: DetailRef,
@@ -243,6 +292,7 @@ def create_mcp_server(
         decision: Literal["approved", "rejected"],
         idempotency_key: str,
         reason: str | None = None,
+        request_message_id: Digest | None = None,
     ) -> ApprovalCommandResult | ControlRejected:
         return await control.runs_approve(
             await actor(),
@@ -251,6 +301,7 @@ def create_mcp_server(
             decision=decision,
             reason=reason,
             idempotency_key=idempotency_key,
+            request_message_id=request_message_id,
         )
 
     @server.tool(description="Promote one exact component version under a journal attestation.")
@@ -347,6 +398,15 @@ def _register_detail_resources(
     )
     async def attestation(attestation_id: str) -> str:
         return await chunk(f"constructicon://attestations/{attestation_id}")
+
+    @server.resource(
+        "constructicon://channels/messages/{message_id}",
+        name="channel-message",
+        description="One immutable channel message the caller may act on.",
+        mime_type="application/json",
+    )
+    async def channel_message(message_id: str) -> str:
+        return await chunk(f"constructicon://channels/messages/{quote(message_id, safe='')}")
 
     @server.resource(
         "constructicon://components/{component}/{version}",
