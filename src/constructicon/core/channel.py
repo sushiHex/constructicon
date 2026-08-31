@@ -437,6 +437,28 @@ def validated_reply(request: ChannelMessage, reply: ChannelMessage) -> ChannelMe
     return reply
 
 
+def governing_request(
+    message: ChannelMessage,
+    request: ChannelMessage | None,
+) -> ChannelMessage:
+    """The request whose seal governs who may act on this message.
+
+    A reply deliberately carries no recipient of its own — it is addressed to
+    the run, not to a person — so authority can never be read off the message
+    actually addressed. It comes from the request the reply answers, validated
+    in full, and one law serves every surface: summary, detail, reply, and ack.
+    """
+
+    if message.kind == "request":
+        return message
+    if request is None:
+        raise JournalDamaged(
+            f"reply {message.message_id} names no stored request to govern it"
+        )
+    validated_reply(request, message)
+    return request
+
+
 @runtime_checkable
 class Channel(Protocol):
     """One transport contract, defined by observable behavior rather than SQLite.

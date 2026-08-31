@@ -87,6 +87,20 @@ class _SqliteChannelsMixin:
             ).fetchone()
         return _message_from_row(row) if row is not None else None
 
+    def channel_message_by_id(self, *, message_id: Digest) -> ChannelMessage | None:
+        """One message wherever it lives.
+
+        The control plane serves an actor across channels, so it addresses a
+        message by identity rather than by the channel that happens to hold it.
+        """
+
+        with self._read() as connection:
+            row = connection.execute(
+                "SELECT * FROM channel_messages WHERE message_id = ?",
+                (str(message_id),),
+            ).fetchone()
+        return _message_from_row(row) if row is not None else None
+
     def channel_reply_for(self, *, channel_id: str, request_id: Digest) -> ChannelMessage | None:
         with self._read() as connection:
             row = connection.execute(

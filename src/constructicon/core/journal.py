@@ -13,6 +13,7 @@ from typing import Any, Protocol
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 from constructicon.core.address import ExecutionPath, RunId
+from constructicon.core.channel import ChannelMessage
 from constructicon.core.control import RunOrigin, RunRecord
 from constructicon.core.effect import (
     Attestation,
@@ -164,6 +165,10 @@ class Journal(Protocol):
         limit: int = 100,
     ) -> list[ParkedWait]:
         """Bounded page of PARKED runs and the requests that would wake them."""
+        ...
+
+    def channel_message_by_id(self, *, message_id: Digest) -> ChannelMessage | None:
+        """One channel message wherever it lives, addressed by identity."""
         ...
 
     def answered_requests(self, requests: Sequence[Digest]) -> dict[Digest, Digest]:
