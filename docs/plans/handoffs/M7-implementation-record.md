@@ -204,10 +204,58 @@ death before the command completes still wakes the run. The command additionally
 launches one intent pinned to the fence its plan recorded, which only spares the
 human the scan interval and cannot revive an attempt the run has moved past.
 
+## PR C — a decision that is also an answer
+
+**Absent, not null.** A standalone M6 decision must hash to exactly the request
+it always hashed to, so `request_message_id` is omitted from the command request
+rather than serialized as null, keeps `_ApprovalPlan` as its own plan family, and
+`ApprovalCommandResult.reply` uses the wrap serializer that drops the field when
+it is None. Hashing a null would have changed the command id of every decision
+already recorded under an existing idempotency key.
+
+**Bound approval is the mirror of `channels_reply`, not a superset.**
+`APPROVE_CONSUMES` is `{"approval"}`, so an advice request is refused here
+exactly as an approval request is refused there, through the same
+`_actionable_request` law and in the same order: kind, interaction, authority.
+
+**Nominal typing keeps a governance fact out of a lookalike conversation.**
+`APPROVAL_REQUEST_CONTRACT` and `APPROVAL_REPLY_CONTRACT` live in `core/human.py`
+so the executor and the standard component cannot drift: an approval reached
+through `runs_approve` and one reached through `constructicon.std/human-approval`
+are the same exchange or they are not the same exchange at all. A request with an
+approval interaction but different contracts is refused.
+
+**The subject is compared as canonical bytes.** `1 == True` and `1 == 1.0` are
+Python facts rather than JSON ones, so model equality would accept a decision
+about a subject the request never pinned — the same hole `same_message` closed
+for retry equality. `ApprovalRequestPayload.subject` is therefore plain JSON,
+typed as `JsonValue`, precisely so the comparison cannot be written the wrong way.
+
+Contract, payload shape, and subject are all properties of the request rather
+than outcomes of the decision, so all three refuse before the claim: no command
+record is written and the idempotency key stays reusable.
+
+**Three facts, one commit.** `store_approval_exchange` writes the
+`ApprovalRecord`, the reply, and the request acknowledgement inside one
+transaction. Composing `store_approval` with `channel_reply` would commit twice,
+and a death between them would leave an approval authorizing an exchange nobody
+answered. `reply_in_transaction` exists at connection level for exactly this: the
+reply law lives in one place and a second caller composes one commit rather than
+copying it. The deciding actor is read off the approval record, so the reply's
+sender and the acknowledgement's owner cannot disagree with the record that
+authorizes them.
+
+Reconciliation reads all three back and validates them relationally and
+byte-for-byte. A fresh command that finds another command's reply first requires
+that triple to be whole — a reply whose own sender never acknowledged the request
+could not have committed, so it is damage rather than a race this command lost.
+
+Approved and rejected are ordinary data throughout: nothing branches on the
+decision, and both wake the parked run identically.
+
 ## Open items
 
-- Request-bound `runs_approve`, MCP delegation, the two standard components,
-  and PR D remain.
+- MCP delegation, the two standard components, and PR D remain.
 - A message a caller may not act on is refused with `AUTH_REQUIRED_SCOPE` rather
   than reported absent, which confirms that a supplied id exists. Deliberate:
   ids are derived digests over run, path, channel, lane, interaction, and port,

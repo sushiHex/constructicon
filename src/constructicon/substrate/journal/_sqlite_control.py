@@ -11,6 +11,7 @@ from typing import Literal, cast
 from pydantic import TypeAdapter
 
 from constructicon.core.address import RunId
+from constructicon.core.channel import ChannelMessage
 from constructicon.core.control import (
     AuthenticatedActor,
     CommandClaim,
@@ -22,6 +23,7 @@ from constructicon.core.effect import ApprovalRecord, ProofSubject
 from constructicon.core.errors import JournalDamaged
 from constructicon.core.identity import Digest, JsonValue, canonical_json
 from constructicon.core.run import OwnershipLost
+from constructicon.substrate.journal._sqlite_channels import reply_in_transaction
 
 
 class _SqliteControlMixin:
@@ -180,30 +182,75 @@ class _SqliteControlMixin:
     def store_approval(self, claim: CommandClaim, approval: ApprovalRecord) -> ApprovalRecord:
         with self._txn() as connection:
             self._command_fenced(connection, claim)
-            row = connection.execute(
-                "SELECT * FROM approvals WHERE approval_id = ?", (approval.approval_id,)
-            ).fetchone()
-            if row is not None:
-                existing = self._approval_from_row(row)
-                if existing == approval and row["command_id"] == claim.command_id:
-                    return existing
-                raise JournalDamaged(
-                    f"approval {approval.approval_id!r} was rewritten contradictorily"
-                )
-            connection.execute(
-                "INSERT INTO approvals (approval_id, run_id, subject_json, decision,"
-                " reason, actor_json, command_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    approval.approval_id,
-                    approval.run_id,
-                    canonical_json(approval.subject.model_dump(mode="json")),
-                    approval.decision,
-                    approval.reason,
-                    approval.actor.model_dump_json(),
-                    claim.command_id,
-                    approval.created_at.isoformat(),
-                ),
+            self._write_approval(connection, claim, approval)
+        return approval
+
+    def store_approval_exchange(
+        self,
+        claim: CommandClaim,
+        approval: ApprovalRecord,
+        *,
+        channel_id: str,
+        request_id: Digest,
+        payload: JsonValue,
+    ) -> ChannelMessage:
+        """One human decision: its approval record, its reply, and its ack.
+
+        Three facts, one commit. Composing `store_approval` with `channel_reply`
+        would commit twice, so a death between them could leave an approval
+        authorizing an exchange nobody answered, or a reply with no governance
+        fact behind it. Neither half is a decision on its own.
+
+        The deciding actor is read off the approval rather than passed again, so
+        the reply's sender and the acknowledgement's owner cannot disagree with
+        the record that authorizes them.
+        """
+
+        actor_id = approval.actor.actor_id
+        with self._txn() as connection:
+            self._command_fenced(connection, claim)
+            self._write_approval(connection, claim, approval)
+            reply = reply_in_transaction(
+                connection,
+                channel_id=channel_id,
+                request_id=request_id,
+                actor_id=actor_id,
+                payload=payload,
+                command_id=claim.command_id,
+                now=self._now(),
+                now_iso=self._now_iso(),
             )
+        self.fault_probe("channel.after_reply_insert")
+        return reply
+
+    def _write_approval(
+        self,
+        connection: sqlite3.Connection,
+        claim: CommandClaim,
+        approval: ApprovalRecord,
+    ) -> ApprovalRecord:
+        row = connection.execute(
+            "SELECT * FROM approvals WHERE approval_id = ?", (approval.approval_id,)
+        ).fetchone()
+        if row is not None:
+            existing = self._approval_from_row(row)
+            if existing == approval and row["command_id"] == claim.command_id:
+                return existing
+            raise JournalDamaged(f"approval {approval.approval_id!r} was rewritten contradictorily")
+        connection.execute(
+            "INSERT INTO approvals (approval_id, run_id, subject_json, decision,"
+            " reason, actor_json, command_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                approval.approval_id,
+                approval.run_id,
+                canonical_json(approval.subject.model_dump(mode="json")),
+                approval.decision,
+                approval.reason,
+                approval.actor.model_dump_json(),
+                claim.command_id,
+                approval.created_at.isoformat(),
+            ),
+        )
         return approval
 
     def approval(self, approval_id: str) -> ApprovalRecord | None:

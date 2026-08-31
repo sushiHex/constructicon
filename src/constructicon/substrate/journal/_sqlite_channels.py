@@ -153,45 +153,16 @@ class _SqliteChannelsMixin:
         """Store the one authenticated reply and its request ack atomically."""
 
         with self._txn() as connection:
-            request_row = connection.execute(
-                "SELECT * FROM channel_messages WHERE message_id = ? AND channel_id = ?",
-                (str(request_id), channel_id),
-            ).fetchone()
-            if request_row is None:
-                raise ContractViolation(f"no channel request {request_id} to reply to")
-            request = _message_from_row(request_row)
-            if request.kind != "request" or request.reply_port is None:
-                raise ContractViolation(f"no channel request {request_id} to reply to")
-            reply_id = reply_message_id(
-                request_id=request.message_id,
-                reply_port=request.reply_port,
-            )
-            stored_row = connection.execute(
-                "SELECT * FROM channel_messages WHERE message_id = ?",
-                (str(reply_id),),
-            ).fetchone()
-            if stored_row is not None:
-                stored = _message_from_row(stored_row)
-                candidate = message_for_reply(
-                    request,
-                    actor_id=actor_id,
-                    payload=payload,
-                    created_at=stored.envelope.created_at,
-                )
-                if not same_message(stored, candidate):
-                    raise ChannelReplyConflict(
-                        f"request {request_id} already carries a different reply"
-                    )
-                _acknowledge(connection, request.message_id, actor_id, command_id, self._now_iso())
-                return stored
-            reply = message_for_reply(
-                request,
+            reply = reply_in_transaction(
+                connection,
+                channel_id=channel_id,
+                request_id=request_id,
                 actor_id=actor_id,
                 payload=payload,
-                created_at=self._now(),
+                command_id=command_id,
+                now=self._now(),
+                now_iso=self._now_iso(),
             )
-            _insert_message(connection, reply, None)
-            _acknowledge(connection, request.message_id, actor_id, command_id, self._now_iso())
         self.fault_probe("channel.after_reply_insert")
         return reply
 
@@ -372,6 +343,58 @@ class _SqliteChannelsMixin:
             )
             for message_seq, message in paged
         )
+
+
+def reply_in_transaction(
+    connection: sqlite3.Connection,
+    *,
+    channel_id: str,
+    request_id: Digest,
+    actor_id: str,
+    payload: JsonValue,
+    command_id: str,
+    now: datetime,
+    now_iso: str,
+) -> ChannelMessage:
+    """The reply and its request ack, inside a transaction someone else owns.
+
+    Exposed at connection level so a caller that must commit further facts in
+    the same transaction — a request-bound approval commits its `ApprovalRecord`
+    with these two — composes one commit rather than two. Composing two
+    committed operations would leave a death between them holding an approval
+    that authorizes an exchange nobody answered.
+    """
+
+    request_row = connection.execute(
+        "SELECT * FROM channel_messages WHERE message_id = ? AND channel_id = ?",
+        (str(request_id), channel_id),
+    ).fetchone()
+    if request_row is None:
+        raise ContractViolation(f"no channel request {request_id} to reply to")
+    request = _message_from_row(request_row)
+    if request.kind != "request" or request.reply_port is None:
+        raise ContractViolation(f"no channel request {request_id} to reply to")
+    reply_id = reply_message_id(request_id=request.message_id, reply_port=request.reply_port)
+    stored_row = connection.execute(
+        "SELECT * FROM channel_messages WHERE message_id = ?",
+        (str(reply_id),),
+    ).fetchone()
+    if stored_row is not None:
+        stored = _message_from_row(stored_row)
+        candidate = message_for_reply(
+            request,
+            actor_id=actor_id,
+            payload=payload,
+            created_at=stored.envelope.created_at,
+        )
+        if not same_message(stored, candidate):
+            raise ChannelReplyConflict(f"request {request_id} already carries a different reply")
+        _acknowledge(connection, request.message_id, actor_id, command_id, now_iso)
+        return stored
+    reply = message_for_reply(request, actor_id=actor_id, payload=payload, created_at=now)
+    _insert_message(connection, reply, None)
+    _acknowledge(connection, request.message_id, actor_id, command_id, now_iso)
+    return reply
 
 
 @contextmanager

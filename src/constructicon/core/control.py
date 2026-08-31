@@ -8,7 +8,7 @@ mutation, long-lived runs, stable pages, and immutable detail references.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import TYPE_CHECKING, Literal, Protocol, Self
+from typing import TYPE_CHECKING, Any, Literal, Protocol, Self
 
 from pydantic import (
     AwareDatetime,
@@ -17,8 +17,10 @@ from pydantic import (
     Field,
     NonNegativeInt,
     PositiveInt,
+    SerializerFunctionWrapHandler,
     field_serializer,
     field_validator,
+    model_serializer,
 )
 
 from constructicon.core.address import RunId, ScopePath
@@ -552,6 +554,18 @@ class ApprovalCommandResult(BaseModel):
     decision: Literal["approved", "rejected"]
     command: CommandMeta
     detail: DetailRef
+    reply: Digest | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """Keep a standalone decision's durable bytes exactly as M6 wrote them."""
+
+        data = handler(self)
+        if not isinstance(data, dict):
+            raise TypeError("ApprovalCommandResult serializer expected an object")
+        if self.reply is None:
+            data.pop("reply", None)
+        return data
 
 
 class PromotionCommandResult(BaseModel):
@@ -663,5 +677,22 @@ class ControlStore(Protocol):
     ) -> tuple[CommandRecord, ...]: ...
 
     def store_approval(self, claim: CommandClaim, approval: ApprovalRecord) -> ApprovalRecord: ...
+
+    def store_approval_exchange(
+        self,
+        claim: CommandClaim,
+        approval: ApprovalRecord,
+        *,
+        channel_id: str,
+        request_id: Digest,
+        payload: JsonValue,
+    ) -> ChannelMessage:
+        """The approval record, its reply, and its request ack — one commit.
+
+        A request-bound decision is one fact in three places. Composing two
+        committed operations would let a death between them leave an approval
+        authorizing an exchange nobody answered.
+        """
+        ...
 
     def approval(self, approval_id: str) -> ApprovalRecord | None: ...

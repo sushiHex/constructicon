@@ -537,6 +537,7 @@ class ControlPlane:
         decision: str,
         reason: str | None,
         idempotency_key: str,
+        request_message_id: Digest | None = None,
     ) -> ApprovalCommandResult | ControlRejected:
         return await self._commands.runs_approve(
             actor,
@@ -545,6 +546,7 @@ class ControlPlane:
             decision=decision,
             reason=reason,
             idempotency_key=idempotency_key,
+            request_message_id=request_message_id,
         )
 
     # Both channel mutations share one door, and it is deliberately coarse. The

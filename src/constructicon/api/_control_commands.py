@@ -67,6 +67,12 @@ from constructicon.core.effect import (
 from constructicon.core.envelope import utc_now
 from constructicon.core.errors import AdmissionError, ContractViolation, JournalDamaged
 from constructicon.core.graph import Graph
+from constructicon.core.human import (
+    APPROVAL_REPLY_CONTRACT,
+    APPROVAL_REQUEST_CONTRACT,
+    ApprovalDecisionPayload,
+    ApprovalRequestPayload,
+)
 from constructicon.core.identity import Digest, JsonValue, canonical_json, digest, json_value
 from constructicon.core.journal import Journal
 from constructicon.core.manifest import ExecutionManifest, parse_manifest_json
@@ -90,6 +96,24 @@ COMMAND_TTL_S = 30.0
 # interactions are delivered, so both are ackable under their own scope.
 REPLY_CONSUMES: frozenset[ChannelInteraction] = frozenset({"advice"})
 ACK_CONSUMES: frozenset[ChannelInteraction] = frozenset({"advice", "approval"})
+# Request-bound `runs_approve` is the mirror image of `channels_reply`.
+APPROVE_CONSUMES: frozenset[ChannelInteraction] = frozenset({"approval"})
+
+
+def _decision_payload(approval: ApprovalRecord) -> JsonValue:
+    """The one reply an approval request admits, derived from the record.
+
+    Derived rather than passed, so the reply a run reads and the governance
+    fact an auditor reads can never disagree about what was decided.
+    """
+
+    return cast(
+        JsonValue,
+        ApprovalDecisionPayload(
+            decision=approval.decision,
+            reason=approval.reason,
+        ).model_dump(mode="json"),
+    )
 DEFAULT_PAGE_SIZE = 25
 MAX_PAGE_SIZE = 100
 _NEW_RUN_LAUNCH_STATUSES = frozenset({RunStatus.PENDING, RunStatus.RUNNING})
@@ -140,6 +164,26 @@ class _ResumePlan(_PlanModel):
 class _ApprovalPlan(_PlanModel):
     kind: Literal["approval"] = "approval"
     approval: ApprovalRecord
+
+
+class _ChannelApprovalPlan(_PlanModel):
+    """A decision that is also an answer: everything both halves need, decided once.
+
+    Deliberately a distinct family rather than nullable fields on
+    `_ApprovalPlan`. A standalone M6 decision must keep writing exactly the plan
+    bytes it always wrote, and it has no channel, no reply, and no fence to bind.
+    """
+
+    kind: Literal["channel_approval"] = "channel_approval"
+    approval: ApprovalRecord
+    channel_id: str
+    request_id: Digest
+    reply_id: Digest
+    reply_port: str
+    payload: JsonValue
+    ack_actor_id: str
+    run_id: RunId
+    parked_event_seq: int = Field(ge=0)
 
 
 class _RegistrationPlan(_PlanModel):
@@ -228,6 +272,7 @@ _CommandPlan = Annotated[
     | _CancelPlan
     | _ResumePlan
     | _ApprovalPlan
+    | _ChannelApprovalPlan
     | _RegistrationPlan
     | _InitialPromotionPlan
     | _PromotionPlan
@@ -590,18 +635,31 @@ class _CommandExecutor:
         decision: str,
         reason: str | None,
         idempotency_key: str,
+        request_message_id: Digest | None = None,
     ) -> ApprovalCommandResult | ControlRejected:
+        bound: ChannelMessage | None = None
+        if request_message_id is not None:
+            prepared = self._bound_approval_request(actor, request_message_id, subject=subject)
+            if isinstance(prepared, ControlRejected):
+                return prepared
+            bound = prepared
+        # The key is absent, not null, when no request is bound: a standalone M6
+        # decision must hash to exactly the request it always hashed to, or
+        # every command already recorded under that key becomes unreplayable.
+        request: dict[str, JsonValue] = {
+            "run_id": str(run_id),
+            "subject": subject.model_dump(mode="json"),
+            "decision": decision,
+            "reason": reason,
+        }
+        if request_message_id is not None:
+            request["request_message_id"] = str(request_message_id)
         begun = self._begin_command(
             actor,
             required_scope=APPROVE_SCOPE,
             operation="runs_approve",
             idempotency_key=idempotency_key,
-            request={
-                "run_id": str(run_id),
-                "subject": subject.model_dump(mode="json"),
-                "decision": decision,
-                "reason": reason,
-            },
+            request=request,
             response_types=(ApprovalCommandResult, ControlRejected),
         )
         if not isinstance(begun, CommandClaim):
@@ -633,15 +691,37 @@ class _CommandExecutor:
                 run_id=run_id,
                 created_at=utc_now(),
             )
-            session.plan(_ApprovalPlan(approval=approval))
+            if bound is None:
+                session.plan(_ApprovalPlan(approval=approval))
+            else:
+                answered = self._journal.channel_reply_for(
+                    channel_id=bound.channel_id,
+                    request_id=bound.message_id,
+                )
+                if answered is not None:
+                    # Another command's decision already answered this request.
+                    # Its triple must be whole before that counts as a race.
+                    self._require_whole_exchange(bound, answered)
+                    return self._terminal_control_fault(
+                        claim,
+                        ControlCode.CHANNEL_ALREADY_REPLIED,
+                        f"approval request {bound.message_id} already carries its one decision",
+                        "read the recorded decision with channels_message",
+                    )
+                session.plan(self._channel_approval_plan(approval, bound))
         plan = session.load()
         if isinstance(plan, _ControlRejectPlan):
             return self._terminal_rejection(claim, plan.response)
-        if not isinstance(plan, _ApprovalPlan):
+        if isinstance(plan, _ChannelApprovalPlan):
+            approval = plan.approval
+            reply: Digest | None = self._apply_channel_approval(claim, plan).message_id
+        elif isinstance(plan, _ApprovalPlan):
+            approval = plan.approval
+            self._store.store_approval(claim, approval)
+            self._fault_probe("runs_approve.after_domain_mutation")
+            reply = None
+        else:
             raise JournalDamaged("runs_approve command carries the wrong plan")
-        approval = plan.approval
-        self._store.store_approval(claim, approval)
-        self._fault_probe("runs_approve.after_domain_mutation")
         response = ApprovalCommandResult(
             approval_id=approval.approval_id,
             decision=approval.decision,
@@ -649,9 +729,152 @@ class _CommandExecutor:
             detail=self._details.required_reference(
                 actor, DetailAddress.approval(approval.approval_id)
             ),
+            reply=reply,
         )
         self._complete_command(claim, response)
         return response
+
+    def _sealed_request(
+        self,
+        request_id: Digest,
+        actor: AuthenticatedActor,
+    ) -> ChannelMessage:
+        """Re-read a plan's request; a plan may never be its own evidence."""
+
+        stored = self._journal.channel_delivery(message_id=request_id, actor_id=actor.actor_id)
+        sealed = stored.message if stored is not None else None
+        if (
+            sealed is None
+            or sealed.kind != "request"
+            or not channel_authority_holder(sealed, actor)
+        ):
+            raise JournalDamaged(
+                f"channel plan names no request {request_id} this actor may act on"
+            )
+        return sealed
+
+    def _bound_approval_request(
+        self,
+        actor: AuthenticatedActor,
+        request_message_id: Digest,
+        *,
+        subject: ProofSubject,
+    ) -> ChannelMessage | ControlRejected:
+        """The approval request this decision answers, or a refusal.
+
+        Everything checked here is a property of the request rather than an
+        outcome of the decision, so all of it refuses before the claim: no
+        command record is written and the idempotency key stays reusable.
+        """
+
+        request = self._actionable_request(actor, request_message_id, consumes=APPROVE_CONSUMES)
+        if isinstance(request, ControlRejected):
+            return request
+        # An `ApprovalRecord` is a governance fact. Nominal typing is what keeps
+        # it from being written into an arbitrary approval-interaction exchange
+        # that merely happens to look like a human-approval one.
+        if (
+            request.contract != APPROVAL_REQUEST_CONTRACT
+            or request.reply_contract != APPROVAL_REPLY_CONTRACT
+        ):
+            return self._fault(
+                ControlCode.APPROVAL_INVALID_SUBJECT,
+                f"channel request {request_message_id} is not a human-approval exchange",
+                "bind the decision to a request typed by the canonical approval contracts",
+            )
+        try:
+            payload = ApprovalRequestPayload.model_validate(request.envelope.payload)
+        except ValidationError:
+            return self._fault(
+                ControlCode.APPROVAL_INVALID_SUBJECT,
+                f"channel request {request_message_id} carries no approval subject",
+                "bind the decision to a request whose payload names its subject",
+            )
+        # Canonical bytes, never model equality. `1 == True` and `1 == 1.0` are
+        # Python facts rather than JSON ones, so comparing models would accept a
+        # decision about a subject this request never pinned.
+        if canonical_json(json_value(payload.subject)) != canonical_json(
+            json_value(subject.model_dump(mode="json"))
+        ):
+            return self._fault(
+                ControlCode.APPROVAL_INVALID_SUBJECT,
+                f"channel request {request_message_id} pins a different subject",
+                "decide exactly the subject the bound request names",
+                {"request_message_id": str(request_message_id)},
+            )
+        return request
+
+    def _channel_approval_plan(
+        self,
+        approval: ApprovalRecord,
+        request: ChannelMessage,
+    ) -> _ChannelApprovalPlan:
+        """Bind the decision to the request, reading every field off the seal."""
+
+        if request.reply_port is None:
+            raise JournalDamaged(f"channel request {request.message_id} pins no reply port")
+        run_id = request.envelope.run_id
+        return _ChannelApprovalPlan(
+            approval=approval,
+            channel_id=request.channel_id,
+            request_id=request.message_id,
+            reply_id=reply_message_id(
+                request_id=request.message_id,
+                reply_port=request.reply_port,
+            ),
+            reply_port=request.reply_port,
+            payload=_decision_payload(approval),
+            ack_actor_id=approval.actor.actor_id,
+            run_id=run_id,
+            parked_event_seq=self._journal.max_event_seq(run_id),
+        )
+
+    def _apply_channel_approval(
+        self,
+        claim: CommandClaim,
+        plan: _ChannelApprovalPlan,
+    ) -> ChannelMessage:
+        """Approval, reply, and acknowledgement in one commit, then one wake.
+
+        Approved and rejected are ordinary data here: nothing branches on which
+        the decision was, so both record and wake identically.
+        """
+
+        reply = self._store.store_approval_exchange(
+            claim,
+            plan.approval,
+            channel_id=plan.channel_id,
+            request_id=plan.request_id,
+            payload=plan.payload,
+        )
+        self._fault_probe("runs_approve.after_domain_mutation")
+        self._run_host.launch(
+            plan.run_id,
+            expected_event_seq=plan.parked_event_seq,
+            allowed_statuses=frozenset({RunStatus.PARKED}),
+            cause=AttemptCause(kind="channel_reply", id=str(reply.message_id)),
+        )
+        return reply
+
+    def _require_whole_exchange(self, request: ChannelMessage, reply: ChannelMessage) -> None:
+        """A foreign decision's triple is whole, or the store is torn.
+
+        Approval, reply, and acknowledgement commit together, so a stored reply
+        whose own sender never acknowledged the request is not a race this
+        command lost — it is a write that should have been impossible.
+        """
+
+        if reply.sender_actor_id is None:
+            raise JournalDamaged(f"channel reply {reply.message_id} names no sender")
+        delivery = self._journal.channel_delivery(
+            message_id=request.message_id,
+            actor_id=reply.sender_actor_id,
+        )
+        if delivery is None or not delivery.acknowledged:
+            raise JournalDamaged(
+                f"approval reply {reply.message_id} exists without the request "
+                "acknowledgement written in its own transaction"
+            )
 
     async def channels_reply(
         self,
@@ -1461,7 +1684,7 @@ class _CommandExecutor:
             "runs_resume": (_ResumePlan, _ControlRejectPlan),
             "runs_reproduce": (_RunCreationPlan, _ControlRejectPlan),
             "runs_counterfactual": (_RunCreationPlan, _ControlRejectPlan),
-            "runs_approve": (_ApprovalPlan, _ControlRejectPlan),
+            "runs_approve": (_ApprovalPlan, _ChannelApprovalPlan, _ControlRejectPlan),
             "channels_reply": (_ChannelReplyPlan, _ControlRejectPlan),
             "channels_ack": (_ChannelAckPlan, _ControlRejectPlan),
             "registry_register": (_RegistrationPlan, _ControlRejectPlan),
@@ -1739,25 +1962,53 @@ class _CommandExecutor:
                 raise JournalDamaged("approval plan contradicts its canonical request")
             return
 
+        if isinstance(plan, _ChannelApprovalPlan):
+            approval = plan.approval
+            if (
+                request.get("run_id") != str(approval.run_id)
+                or request.get("subject") != approval.subject.model_dump(mode="json")
+                or request.get("decision") != approval.decision
+                or request.get("reason") != approval.reason
+                or request.get("request_message_id") != str(plan.request_id)
+                or approval.actor != record.actor
+                or plan.ack_actor_id != record.actor.actor_id
+                or approval.approval_id
+                != approval_id_for_command(claim.command_id, request.get("subject"))
+            ):
+                raise JournalDamaged("channel approval plan contradicts its canonical request")
+            sealed = self._sealed_request(plan.request_id, record.actor)
+            if (
+                sealed.interaction != "approval"
+                or sealed.channel_id != plan.channel_id
+                or sealed.contract != APPROVAL_REQUEST_CONTRACT
+                or sealed.reply_contract != APPROVAL_REPLY_CONTRACT
+                or sealed.reply_port != plan.reply_port
+                or sealed.envelope.run_id != plan.run_id
+                or plan.reply_id
+                != reply_message_id(request_id=plan.request_id, reply_port=plan.reply_port)
+                or canonical_json(json_value(plan.payload))
+                != canonical_json(json_value(_decision_payload(approval)))
+            ):
+                raise JournalDamaged("channel approval plan contradicts its sealed request")
+            try:
+                pinned = ApprovalRequestPayload.model_validate(sealed.envelope.payload)
+            except ValidationError as exc:
+                raise JournalDamaged("bound approval request carries no subject") from exc
+            if canonical_json(json_value(pinned.subject)) != canonical_json(
+                json_value(approval.subject.model_dump(mode="json"))
+            ):
+                raise JournalDamaged("channel approval plan decides an unpinned subject")
+            return
+
         if isinstance(plan, (_ChannelReplyPlan, _ChannelAckPlan)):
             target = plan.request_id if isinstance(plan, _ChannelReplyPlan) else plan.message_id
             if request.get("message_id") != str(target) or plan.actor_id != record.actor.actor_id:
                 raise JournalDamaged("channel plan contradicts its canonical request")
-            stored = self._journal.channel_delivery(
-                message_id=target,
-                actor_id=plan.actor_id,
-            )
-            sealed = stored.message if stored is not None else None
             # The plan may not have invented any of this: every field it carries
             # is re-read from the sealed request, so a plan that drifted from
             # the message it names cannot be applied a second time.
-            if (
-                sealed is None
-                or sealed.kind != "request"
-                or sealed.channel_id != plan.channel_id
-                or sealed.interaction != plan.interaction
-                or not channel_authority_holder(sealed, record.actor)
-            ):
+            sealed = self._sealed_request(target, record.actor)
+            if sealed.channel_id != plan.channel_id or sealed.interaction != plan.interaction:
                 raise JournalDamaged("channel plan contradicts its sealed request")
             if isinstance(plan, _ChannelAckPlan):
                 return
@@ -1923,7 +2174,7 @@ class _CommandExecutor:
                 raise JournalDamaged("cancellation response contradicts its plan")
             return
         if isinstance(response, ApprovalCommandResult):
-            if not isinstance(plan, _ApprovalPlan):
+            if not isinstance(plan, (_ApprovalPlan, _ChannelApprovalPlan)):
                 raise JournalDamaged("approval response has the wrong plan")
             expected_detail = self._details.required_reference(
                 record.actor,
@@ -1936,6 +2187,33 @@ class _CommandExecutor:
                 or response.detail != expected_detail
             ):
                 raise JournalDamaged("approval response contradicts its plan or fact")
+            if isinstance(plan, _ApprovalPlan):
+                if response.reply is not None:
+                    raise JournalDamaged("standalone approval response names a reply")
+                return
+            # Bound: the same three facts that were committed together are
+            # reconciled together. `channel_reply_for` rebuilds the reply from
+            # its request, so the relationship is validated rather than assumed,
+            # and the payload is compared as canonical bytes.
+            answered = self._journal.channel_reply_for(
+                channel_id=plan.channel_id,
+                request_id=plan.request_id,
+            )
+            acked = self._journal.channel_delivery(
+                message_id=plan.request_id,
+                actor_id=plan.ack_actor_id,
+            )
+            if (
+                answered is None
+                or acked is None
+                or not acked.acknowledged
+                or answered.message_id != plan.reply_id
+                or answered.sender_actor_id != plan.ack_actor_id
+                or canonical_json(json_value(answered.envelope.payload))
+                != canonical_json(json_value(plan.payload))
+                or response.reply != plan.reply_id
+            ):
+                raise JournalDamaged("bound approval response contradicts its plan or facts")
             return
         if isinstance(response, ChannelReplyResult):
             if not isinstance(plan, _ChannelReplyPlan):
