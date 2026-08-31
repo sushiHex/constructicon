@@ -253,6 +253,37 @@ could not have committed, so it is damage rather than a race this command lost.
 Approved and rejected are ordinary data throughout: nothing branches on the
 decision, and both wake the parked run identically.
 
+## A payload is caller-authored; authorship is not
+
+`Channel.ask` hands a component the reply's payload and nothing else. That
+narrowness is the point — widening it would put the whole message inside every
+component's reach — but it means anything a component may *promise* about
+authority has to be written into the payload by the executor, from
+authenticated and stored facts, rather than accepted from whoever answered.
+
+`ApprovalDecisionPayload` therefore carries the whole `ApprovalRecord`, derived
+from the stored record, not a bare decision. The standard component can parse
+it, compare its subject against the one it asked about, and return a governance
+fact an auditor can follow — while the transport and runtime boundary keep
+validating the request, run and path, contract, and sender relationship.
+
+`AdviceReplyPayload` applies the same law to advice: the advisor writes
+`advice`, and the executor stamps `actor_id` from the authenticated command and
+`message_id` from the derived reply identity. An answer that names an actor
+inside its own payload is data, not a claim — the stamped fields overwrite
+nothing and are read from nothing the caller supplied. `message_id` is carried
+rather than recomputed in the component so the reply identity law stays in one
+place.
+
+Only the canonical advice exchange is stamped. `sealed_reply_payload` reads the
+request's sealed reply contract and passes every other advice channel's answer
+through verbatim — the contract decides what a reply is, here as everywhere.
+
+Both payload laws live in `core/human.py` beside the contracts they serve, so
+the executor and the components call the same functions. A plan records the
+*stored* payload, and replay re-derives it from the canonical command request
+rather than trusting what the plan holds: a plan is never its own evidence.
+
 ## Open items
 
 - MCP delegation, the two standard components, and PR D remain.

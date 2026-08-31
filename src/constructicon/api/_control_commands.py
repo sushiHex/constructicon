@@ -70,8 +70,9 @@ from constructicon.core.graph import Graph
 from constructicon.core.human import (
     APPROVAL_REPLY_CONTRACT,
     APPROVAL_REQUEST_CONTRACT,
-    ApprovalDecisionPayload,
     ApprovalRequestPayload,
+    approval_decision_payload,
+    sealed_reply_payload,
 )
 from constructicon.core.identity import Digest, JsonValue, canonical_json, digest, json_value
 from constructicon.core.journal import Journal
@@ -99,21 +100,6 @@ ACK_CONSUMES: frozenset[ChannelInteraction] = frozenset({"advice", "approval"})
 # Request-bound `runs_approve` is the mirror image of `channels_reply`.
 APPROVE_CONSUMES: frozenset[ChannelInteraction] = frozenset({"approval"})
 
-
-def _decision_payload(approval: ApprovalRecord) -> JsonValue:
-    """The one reply an approval request admits, derived from the record.
-
-    Derived rather than passed, so the reply a run reads and the governance
-    fact an auditor reads can never disagree about what was decided.
-    """
-
-    return cast(
-        JsonValue,
-        ApprovalDecisionPayload(
-            decision=approval.decision,
-            reason=approval.reason,
-        ).model_dump(mode="json"),
-    )
 DEFAULT_PAGE_SIZE = 25
 MAX_PAGE_SIZE = 100
 _NEW_RUN_LAUNCH_STATUSES = frozenset({RunStatus.PENDING, RunStatus.RUNNING})
@@ -236,6 +222,8 @@ class _ChannelReplyPlan(_PlanModel):
     actor_id: str
     reply_id: Digest
     reply_port: str
+    # The stored payload: the caller's answer plus whatever authorship the
+    # sealed reply contract promises. Never the raw argument.
     payload: JsonValue
     run_id: RunId
     parked_event_seq: int = Field(ge=0)
@@ -823,7 +811,7 @@ class _CommandExecutor:
                 reply_port=request.reply_port,
             ),
             reply_port=request.reply_port,
-            payload=_decision_payload(approval),
+            payload=approval_decision_payload(approval),
             ack_actor_id=approval.actor.actor_id,
             run_id=run_id,
             parked_event_seq=self._journal.max_event_seq(run_id),
@@ -1082,24 +1070,30 @@ class _CommandExecutor:
         self,
         actor: AuthenticatedActor,
         request: ChannelMessage,
-        payload: JsonValue,
+        answer: JsonValue,
     ) -> _ChannelReplyPlan:
-        """Read every field off the sealed request; the caller chose none of them."""
+        """Read every field off the sealed request; the caller wrote the answer."""
 
         if request.reply_port is None:
             raise JournalDamaged(f"channel request {request.message_id} pins no reply port")
         run_id = request.envelope.run_id
+        reply_id = reply_message_id(
+            request_id=request.message_id,
+            reply_port=request.reply_port,
+        )
         return _ChannelReplyPlan(
             channel_id=request.channel_id,
             request_id=request.message_id,
             interaction=request.interaction,
             actor_id=actor.actor_id,
-            reply_id=reply_message_id(
-                request_id=request.message_id,
-                reply_port=request.reply_port,
-            ),
+            reply_id=reply_id,
             reply_port=request.reply_port,
-            payload=payload,
+            payload=sealed_reply_payload(
+                request,
+                answer=answer,
+                actor_id=actor.actor_id,
+                reply_id=reply_id,
+            ),
             run_id=run_id,
             parked_event_seq=self._journal.max_event_seq(run_id),
         )
@@ -1987,7 +1981,7 @@ class _CommandExecutor:
                 or plan.reply_id
                 != reply_message_id(request_id=plan.request_id, reply_port=plan.reply_port)
                 or canonical_json(json_value(plan.payload))
-                != canonical_json(json_value(_decision_payload(approval)))
+                != canonical_json(json_value(approval_decision_payload(approval)))
             ):
                 raise JournalDamaged("channel approval plan contradicts its sealed request")
             try:
@@ -2012,13 +2006,26 @@ class _CommandExecutor:
                 raise JournalDamaged("channel plan contradicts its sealed request")
             if isinstance(plan, _ChannelAckPlan):
                 return
+            # The stored payload is the answer the caller wrote plus whatever
+            # authorship the sealed reply contract requires, so the plan must
+            # equal what that law derives — never something it authored itself.
             if (
                 plan.interaction not in REPLY_CONSUMES
                 or sealed.reply_port != plan.reply_port
-                or request.get("payload") != json_value(plan.payload)
                 or sealed.envelope.run_id != plan.run_id
                 or plan.reply_id
                 != reply_message_id(request_id=target, reply_port=plan.reply_port)
+                or canonical_json(json_value(plan.payload))
+                != canonical_json(
+                    json_value(
+                        sealed_reply_payload(
+                            sealed,
+                            answer=cast(JsonValue, request.get("payload")),
+                            actor_id=plan.actor_id,
+                            reply_id=plan.reply_id,
+                        )
+                    )
+                )
             ):
                 raise JournalDamaged("channel reply plan contradicts its sealed request")
             return

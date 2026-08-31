@@ -12,6 +12,8 @@ three before the command is claimed, because none of them is a domain outcome.
 
 from __future__ import annotations
 
+import json
+import sqlite3
 from pathlib import Path
 from typing import Any, cast
 
@@ -37,6 +39,13 @@ from constructicon.core.control import (
     ChannelReplyResult,
     ControlCode,
     ControlRejected,
+    command_id_for,
+)
+from constructicon.core.errors import JournalDamaged
+from constructicon.core.human import (
+    ADVICE_REPLY_CONTRACT,
+    ADVICE_REQUEST_CONTRACT,
+    AdviceReplyPayload,
 )
 from constructicon.core.identity import Digest, canonical_json, json_value
 from constructicon.core.run import RunStatus
@@ -536,3 +545,116 @@ async def test_an_unknown_message_never_reaches_a_command(
     assert isinstance(refused, ControlRejected)
     assert refused.faults[0].code is ControlCode.CHANNEL_MESSAGE_UNKNOWN
     assert panel.journal.latest_command_key(operation="channels_reply") is None
+
+
+def _canonical_advice(port: str = "ask") -> ChannelSendIntent:
+    """One request typed by the canonical advice contracts."""
+
+    return _intent(port=port).model_copy(
+        update={
+            "contract": ADVICE_REQUEST_CONTRACT,
+            "reply_contract": ADVICE_REPLY_CONTRACT,
+        }
+    )
+
+
+async def test_authorship_is_stamped_by_the_executor_not_the_answer(
+    tmp_path: Path,
+    clock: FakeClock,
+    system: Constructicon,
+) -> None:
+    """`ask()` returns only the payload, so authority must be written into it.
+
+    A component that promises "who advised" would otherwise be repeating a
+    claim the payload made about itself. The advisor supplies advice; the
+    executor supplies the authenticated actor and the derived reply identity.
+    """
+
+    panel = _panel(tmp_path, clock, system)
+    request = panel.channel.append_request(_canonical_advice(), ATTESTATION)
+
+    # The answer even tries to author its own authorship. It is data, not claim.
+    result = await panel.control.channels_reply(
+        ADVISOR,
+        message_id=request.message_id,
+        payload={"verdict": "ship", "actor_id": "static:someone-else"},
+        idempotency_key="stamped",
+    )
+    assert isinstance(result, ChannelReplyResult)
+
+    stored = panel.channel.reply_for(request.message_id)
+    assert stored is not None
+    carried = AdviceReplyPayload.model_validate(stored.envelope.payload)
+    assert carried.actor_id == ADVISOR_ID
+    assert carried.message_id == result.message_id
+    assert carried.advice == {"verdict": "ship", "actor_id": "static:someone-else"}
+
+
+async def test_an_uncanonical_advice_channel_stores_exactly_what_was_written(
+    tmp_path: Path,
+    clock: FakeClock,
+    system: Constructicon,
+) -> None:
+    """The request's sealed reply contract decides, not the executor.
+
+    Only the canonical exchange promises authorship, so only it is stamped;
+    every other advice channel gets the answer verbatim.
+    """
+
+    panel = _panel(tmp_path, clock, system)
+    request = panel.channel.append_request(_intent(), ATTESTATION)
+    await panel.control.channels_reply(
+        ADVISOR,
+        message_id=request.message_id,
+        payload={"verdict": "ship"},
+        idempotency_key="verbatim",
+    )
+    stored = panel.channel.reply_for(request.message_id)
+    assert stored is not None
+    assert stored.envelope.payload == {"verdict": "ship"}
+
+
+async def test_a_tampered_plan_cannot_apply_itself(
+    tmp_path: Path,
+    clock: FakeClock,
+    system: Constructicon,
+) -> None:
+    """A plan is never its own evidence.
+
+    Every field it carries is re-derived from the sealed request on the way
+    back in, so a plan edited between the crash and the retry cannot hand the
+    run a fact the request never authorized.
+    """
+
+    crashing = _panel(tmp_path, clock, system, _crash_at("channels_reply.after_plan"), "crash")
+    request = crashing.channel.append_request(_canonical_advice(port="tamper"), ATTESTATION)
+    with pytest.raises(InjectedCrash):
+        await crashing.control.channels_reply(
+            ADVISOR,
+            message_id=request.message_id,
+            payload={"verdict": "ship"},
+            idempotency_key="tamper",
+        )
+
+    command_id = command_id_for(ADVISOR_ID, "channels_reply", "tamper")
+    with sqlite3.connect(crashing.journal._db_path) as raw:
+        row = raw.execute(
+            "SELECT plan_json FROM commands WHERE command_id = ?", (command_id,)
+        ).fetchone()
+        stored = json.loads(row[0])
+        stored["plan"]["payload"]["actor_id"] = "static:someone-else"
+        raw.execute(
+            "UPDATE commands SET plan_json = ? WHERE command_id = ?",
+            (json.dumps(stored), command_id),
+        )
+
+    clock.advance(31)
+    recovered = _panel(tmp_path, clock, system, None, "recovery")
+    with pytest.raises(JournalDamaged, match="sealed request"):
+        await recovered.control.channels_reply(
+            ADVISOR,
+            message_id=request.message_id,
+            payload={"verdict": "ship"},
+            idempotency_key="tamper",
+        )
+    assert recovered.channel.reply_for(request.message_id) is None

@@ -39,6 +39,7 @@ from constructicon.core.human import (
     APPROVAL_REQUEST_CONTRACT,
     ApprovalDecisionPayload,
     ApprovalRequestPayload,
+    approval_decision_payload,
 )
 from constructicon.core.identity import Digest, canonical_json, json_value
 from constructicon.core.run import RunStatus
@@ -207,10 +208,14 @@ async def test_a_bound_decision_writes_all_three_facts(
     assert reply.message_id == result.reply
     assert reply.sender_actor_id == APPROVER_ID
     assert reply.contract == APPROVAL_REPLY_CONTRACT
-    assert reply.envelope.payload == ApprovalDecisionPayload(
-        decision="approved",
-        reason="looks right",
-    ).model_dump(mode="json")
+
+    # The answer a run reads is the trusted record itself, so a component can
+    # return a governance fact rather than a rumour about one.
+    carried = ApprovalDecisionPayload.model_validate(reply.envelope.payload).approval
+    assert carried == approval
+    assert carried.actor == APPROVER
+    assert carried.subject == SUBJECT
+    assert carried.approval_id == result.approval_id
 
     delivery = gate.journal.channel_delivery(
         message_id=request.message_id,
@@ -246,7 +251,8 @@ async def test_a_rejected_decision_is_ordinary_data(
     assert result.decision == "rejected"
     reply = gate.channel.reply_for(request.message_id)
     assert reply is not None
-    assert reply.envelope.payload["decision"] == "rejected"  # type: ignore[index]
+    carried = ApprovalDecisionPayload.model_validate(reply.envelope.payload).approval
+    assert carried.decision == "rejected"
     assert len(gate.host.launches) == 1
     assert gate.host.launches[0][1]["cause"].id == str(result.reply)
 
@@ -477,15 +483,16 @@ async def test_a_bound_decision_survives_every_response_loss_seam(
 
     reply = recovered.channel.reply_for(request.message_id)
     assert reply is not None and reply.message_id == result.reply
+    stored = recovered.journal.approval(result.approval_id)
+    assert stored is not None
     assert canonical_json(json_value(reply.envelope.payload)) == canonical_json(
-        ApprovalDecisionPayload(decision="approved", reason="seam").model_dump(mode="json")
+        approval_decision_payload(stored)
     )
     delivery = recovered.journal.channel_delivery(
         message_id=request.message_id,
         actor_id=APPROVER_ID,
     )
     assert delivery is not None and delivery.acknowledged
-    assert recovered.journal.approval(result.approval_id) is not None
 
 
 async def test_an_advisor_may_not_decide_an_approval(
