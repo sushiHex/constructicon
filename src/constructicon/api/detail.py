@@ -8,13 +8,18 @@ from urllib.parse import quote, unquote, urlparse
 from constructicon.api.cursor import CursorCodec, CursorFault
 from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId
+from constructicon.core.channel import ChannelDelivery, governing_request
 from constructicon.core.control import (
+    ADMIN_SCOPE,
+    INTERACTION_SCOPES,
+    READ_SCOPE,
     AuthenticatedActor,
     ControlCode,
     ControlRejected,
     ControlStore,
     DetailChunk,
     DetailRef,
+    channel_authority_holder,
     command_visible_to,
 )
 from constructicon.core.errors import ContractViolation, JournalDamaged
@@ -67,6 +72,54 @@ class DetailAddress:
     @staticmethod
     def component(name: str, version: Digest) -> str:
         return f"constructicon://components/{quote(name, safe='')}/{quote(str(version), safe='')}"
+
+    @staticmethod
+    def channel_message(message_id: Digest) -> str:
+        return f"constructicon://channels/messages/{quote(str(message_id), safe='')}"
+
+
+def authorized_delivery(
+    journal: Journal,
+    actor: AuthenticatedActor,
+    message_id: Digest,
+) -> ChannelDelivery | ControlRejected:
+    """Load one addressed message under the request whose seal governs it.
+
+    Every channel surface — page, message, detail, reply, ack — enters here, so
+    none of them can drift into its own reading of who may act. That matters
+    concretely on the read path: a summary's detail reference is required, so a
+    page whose law disagreed with the detail resolver's would not merely refuse
+    a read, it would raise ``JournalDamaged`` on a legitimate page.
+    """
+
+    delivery = journal.channel_delivery(message_id=message_id, actor_id=actor.actor_id)
+    if delivery is None:
+        return ControlRejected.one_fault(
+            ControlCode.CHANNEL_MESSAGE_UNKNOWN,
+            f"unknown channel message {message_id}",
+            "use a message_id returned by channels_inbox",
+        )
+    answered = (
+        journal.channel_delivery(
+            message_id=delivery.message.reply_to,
+            actor_id=actor.actor_id,
+        )
+        if delivery.message.reply_to is not None
+        else None
+    )
+    governing = governing_request(
+        delivery.message,
+        answered.message if answered is not None else None,
+    )
+    if not channel_authority_holder(governing, actor):
+        required = INTERACTION_SCOPES[governing.interaction]
+        return ControlRejected.one_fault(
+            ControlCode.AUTH_REQUIRED_SCOPE,
+            f"channel message {message_id} is not this actor's to act on",
+            f"authenticate as the request's sealed recipient with {required}",
+            {"required_scope": required},
+        )
+    return delivery
 
 
 class DetailResolver:
@@ -301,6 +354,18 @@ class DetailResolver:
             return self._not_found(uri, "detail URI must use constructicon://")
         family = parsed.netloc
         parts = [unquote(part) for part in parsed.path.split("/") if part]
+        # Every family but `channels` was reachable only behind the caller's
+        # read gate, so that check lives here rather than at the door. A channel
+        # message is authorized by the request governing it instead, which is
+        # what lets an advisor hold `constructicon:advise` and nothing else (I9)
+        # without the relaxed door widening any other family by a single URI.
+        if family != "channels" and not actor.allows(READ_SCOPE):
+            return self._fault(
+                ControlCode.AUTH_REQUIRED_SCOPE,
+                f"actor {actor.actor_id!r} lacks required scope {READ_SCOPE!r}",
+                f"authenticate with {READ_SCOPE} or {ADMIN_SCOPE}",
+                {"required_scope": READ_SCOPE},
+            )
         try:
             if family == "runs" and len(parts) == 2:
                 run_id = RunId(parts[0])
@@ -385,6 +450,12 @@ class DetailResolver:
                     if attestation is not None
                     else self._not_found(uri, "attestation does not exist")
                 )
+
+            if family == "channels" and len(parts) == 2 and parts[0] == "messages":
+                delivery = authorized_delivery(self._journal, actor, Digest(parts[1]))
+                if isinstance(delivery, ControlRejected):
+                    return delivery
+                return delivery.message.model_dump(mode="json")
 
             if family == "components" and len(parts) == 2:
                 name, version_text = parts

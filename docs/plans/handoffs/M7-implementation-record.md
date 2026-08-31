@@ -93,9 +93,65 @@ Beyond the plan's list, these are pinned because review found them broken:
 - no `ChannelSendIntent` field escapes both the derived id and retry equality —
   a property test, so a future field cannot silently reopen the hole.
 
+## PR C — the human read surface
+
+**An advisor is its own role, not an observer with extra rights.** I9 names
+observer, advisor, and approver as three participations, and `allows()` has no
+scope implication: `constructicon:advise` neither grants nor requires
+`constructicon:read`. `channels_inbox` and `channels_message` therefore
+authorize on the interaction scopes alone, so a human advisor holds one scope
+and reads only its own work.
+
+That relaxation had to be paid for. `details_read` and `resource_read` gated
+every family on read, and the run, event, result, approval, attestation, and
+component branches of `DetailResolver._resolve` carried no actor check because
+that outer gate protected them. Simply opening the door for channel details
+would have handed an advise-only actor every run in the store. The read check
+moved into `_resolve`, where the family that owns a fact holds its own lock; the
+door now only asks whether the actor may read any family at all.
+
+**One authorization law, four surfaces.** `authorized_delivery` is the single
+entry to page, message, detail, reply, and ack. A reply carries no recipient of
+its own — it is addressed to the run, not a person — so `governing_request`
+validates the request it answers in full and authority is read from that. The
+sharing is not tidiness: `ChannelMessageSummary.detail` is a required reference,
+so a page whose law disagreed with the detail resolver's would raise
+`JournalDamaged` on a legitimate page rather than merely refuse a read.
+
+**A cursor is a self-checking envelope, not an authority token.** Its checksum
+detects corruption, never forgery, so an inbox cursor re-validates every field
+it carries and binds both halves of the reader's authority: the codec binds
+`actor_id`, and the normalized authorized-interaction set rides in the query
+hash. A page cannot be resumed across identities, and a scope change refuses
+rather than silently narrowing a stream mid-walk. The cut travels as
+`ActorInboxRevision.model_dump(mode="json")` and is validated by that model, so
+there is no second hand-written schema to drift from it.
+
+**An empty page and a refusal are different claims.** Holding no interaction
+scope is refused; an advise-only actor with only approvals pending gets an empty
+page. The first says the surface is not yours, the second says nothing here is
+your work. Scope filtering happens inside the bounded query, so `limit` counts
+rows the reader may actually see.
+
 ## Open items
 
-- PR C and PR D remain.
+- PR C mutations (`channels_reply`, `channels_ack`, request-bound
+  `runs_approve`), MCP delegation, the two standard components, and PR D remain.
+- **Unaddressed requests are answerable but not discoverable.** Rev 2 states an
+  unaddressed request is the only one open to any authenticated actor, and both
+  `channel_authority_holder` and `message_for_reply` implement that. But both
+  transports' inboxes filter `recipient_actor_id = actor_id`, so a request
+  addressed to no one appears in no inbox: it can be answered only by an actor
+  who learned its id elsewhere. Whether the inbox should surface it to every
+  holder of the interaction scope, or whether a panel is expected to address
+  each member explicitly, is not settled by the plan. Left as it was rather than
+  changing a merged transport contract on one reading.
+- A message a caller may not act on is refused with `AUTH_REQUIRED_SCOPE` rather
+  than reported absent, which confirms that a supplied id exists. Deliberate:
+  ids are derived digests over run, path, channel, lane, interaction, and port,
+  so an id cannot be guessed without already knowing the message, and a sealed
+  recipient holding the wrong scope needs to be told which scope, not sent
+  chasing a phantom.
 - Nominal reply-contract checking is enforced at the facade; deep payload-schema
   validation is not attempted and is not claimed.
 - The wake scan fails closed on a damaged parking event, consistent with the M6

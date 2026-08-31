@@ -13,7 +13,11 @@ from typing import Any, Protocol
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 from constructicon.core.address import ExecutionPath, RunId
-from constructicon.core.channel import ChannelMessage
+from constructicon.core.channel import (
+    ActorInboxRevision,
+    ChannelDelivery,
+    ChannelInteraction,
+)
 from constructicon.core.control import RunOrigin, RunRecord
 from constructicon.core.effect import (
     Attestation,
@@ -167,8 +171,29 @@ class Journal(Protocol):
         """Bounded page of PARKED runs and the requests that would wake them."""
         ...
 
-    def channel_message_by_id(self, *, message_id: Digest) -> ChannelMessage | None:
-        """One channel message wherever it lives, addressed by identity."""
+    def channel_delivery(
+        self,
+        *,
+        message_id: Digest,
+        actor_id: str,
+    ) -> ChannelDelivery | None:
+        """One channel message by identity, with its position and this actor's ack."""
+        ...
+
+    def channel_actor_revision(self, *, actor_id: str) -> ActorInboxRevision:
+        """The cut over all retained history this actor's inbox is read at."""
+        ...
+
+    def channel_actor_inbox(
+        self,
+        *,
+        actor_id: str,
+        revision: ActorInboxRevision,
+        interactions: frozenset[ChannelInteraction],
+        after: tuple[int, str] | None,
+        limit: int,
+    ) -> tuple[ChannelDelivery, ...]:
+        """Bounded page of this actor's retained messages it may read, at one cut."""
         ...
 
     def answered_requests(self, requests: Sequence[Digest]) -> dict[Digest, Digest]:

@@ -87,19 +87,42 @@ class _SqliteChannelsMixin:
             ).fetchone()
         return _message_from_row(row) if row is not None else None
 
-    def channel_message_by_id(self, *, message_id: Digest) -> ChannelMessage | None:
-        """One message wherever it lives.
+    def channel_delivery(
+        self,
+        *,
+        message_id: Digest,
+        actor_id: str,
+    ) -> ChannelDelivery | None:
+        """One message by identity, with its position and this actor's ack.
 
         The control plane serves an actor across channels, so it addresses a
         message by identity rather than by the channel that happens to hold it.
+        It returns the same ``ChannelDelivery`` a page row carries, so a single
+        read and a page feed one summary law instead of two shapes.
+
+        No revision bounds this read, and it is deliberately not called a
+        snapshot. The message and its position are immutable; ``acknowledged``
+        is a delivery fact that a later ack can flip, so this is the current
+        state of one message, not a cut. Only the immutable message becomes
+        detail — an acknowledgement never enters a digest-bound document.
         """
 
-        with self._read() as connection:
+        with self._read() as connection, _snapshot(connection):
             row = connection.execute(
                 "SELECT * FROM channel_messages WHERE message_id = ?",
                 (str(message_id),),
             ).fetchone()
-        return _message_from_row(row) if row is not None else None
+            if row is None:
+                return None
+            acknowledged = connection.execute(
+                "SELECT 1 FROM channel_acks WHERE message_id = ? AND actor_id = ?",
+                (str(message_id), actor_id),
+            ).fetchone()
+        return ChannelDelivery(
+            message_seq=int(row["message_seq"]),
+            message=_message_from_row(row),
+            acknowledged=acknowledged is not None,
+        )
 
     def channel_reply_for(self, *, channel_id: str, request_id: Digest) -> ChannelMessage | None:
         with self._read() as connection:

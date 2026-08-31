@@ -28,6 +28,8 @@ from constructicon.core.control import (
     ApprovalCommandResult,
     AuthenticatedActor,
     CancellationResult,
+    ChannelMessagePage,
+    ChannelMessageSummary,
     CommandSummary,
     ComponentComparison,
     ControlCode,
@@ -352,6 +354,22 @@ class ControlPlane:
         command_id: str,
     ) -> CommandSummary | ControlRejected:
         return self._queries.commands_status(actor, command_id)
+
+    def channels_inbox(
+        self,
+        actor: AuthenticatedActor,
+        *,
+        cursor: str | None = None,
+        limit: int = DEFAULT_PAGE_SIZE,
+    ) -> ChannelMessagePage | ControlRejected:
+        return self._queries.channels_inbox(actor, cursor=cursor, limit=limit)
+
+    def channels_message(
+        self,
+        actor: AuthenticatedActor,
+        message_id: Digest,
+    ) -> ChannelMessageSummary | ControlRejected:
+        return self._queries.channels_message(actor, message_id)
 
     def registry_versions(
         self,

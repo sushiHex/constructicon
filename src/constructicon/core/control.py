@@ -22,6 +22,7 @@ from pydantic import (
 )
 
 from constructicon.core.address import RunId, ScopePath
+from constructicon.core.channel import ChannelInteraction, ChannelMessage
 from constructicon.core.identity import Digest, JsonValue, digest
 from constructicon.core.run import Liveness, RunStatus
 
@@ -48,8 +49,13 @@ CONTROL_SCOPES = frozenset(
     }
 )
 # Advising is not approving. Which one a message needs is sealed on the request
-# as its interaction, never chosen by whoever answers it.
-INTERACTION_SCOPES = {"advice": ADVISE_SCOPE, "approval": APPROVE_SCOPE}
+# as its interaction, never chosen by whoever answers it. Typed by the
+# interaction rather than by `str`, so the mapping is total by construction and
+# a new interaction cannot reach a surface without naming its scope.
+INTERACTION_SCOPES: dict[ChannelInteraction, str] = {
+    "advice": ADVISE_SCOPE,
+    "approval": APPROVE_SCOPE,
+}
 
 
 class ControlCode(StrEnum):
@@ -71,6 +77,7 @@ class ControlCode(StrEnum):
     REGISTRY_STABLE_MOVED = "control.registry.stable_moved"
     REGISTRY_VERSION_UNKNOWN = "control.registry.version_unknown"
     APPROVAL_INVALID_SUBJECT = "control.approval.invalid_subject"
+    CHANNEL_MESSAGE_UNKNOWN = "control.channel.message_unknown"
     REQUEST_INVALID = "control.request.invalid"
     COUNTERFACTUAL_OVERRIDE_INVALID = "control.counterfactual.override_invalid"
 
@@ -250,6 +257,45 @@ def command_visible_to(record: CommandRecord, actor: AuthenticatedActor) -> bool
     """One command visibility law shared by status, detail, and transport resources."""
 
     return record.actor.actor_id == actor.actor_id or actor.allows(ADMIN_SCOPE)
+
+
+def channel_reach(actor: AuthenticatedActor) -> frozenset[ChannelInteraction]:
+    """The interactions this actor may act on — the whole of its channel reach.
+
+    An advisor is its own role, not an observer with extra rights (I9), so this
+    is derived from the interaction scopes alone. Holding ``constructicon:read``
+    neither grants nor is granted by it.
+    """
+
+    return frozenset(
+        interaction
+        for interaction, scope in INTERACTION_SCOPES.items()
+        if actor.allows(scope)
+    )
+
+
+def channel_authority_holder(request: ChannelMessage, actor: AuthenticatedActor) -> bool:
+    """One channel authority law shared by inbox, message, detail, reply, and ack.
+
+    ``request`` is always the *governing* request, never the message actually
+    addressed: a reply carries no recipient of its own, so reading authority off
+    it would let anyone act on an answer. Two sealed facts decide together — the
+    interaction says which scope answers this kind of question, and the
+    recipient says whose question it is. An unaddressed request admits any
+    holder of the scope, exactly as ``message_for_reply`` already admits any
+    sender when no recipient was sealed.
+
+    One predicate, one refusal: a caller is never told which half failed, so a
+    scopeless actor cannot use the surface to discover that it is the recipient.
+    """
+
+    if not actor.allows(INTERACTION_SCOPES[request.interaction]):
+        return False
+    return (
+        request.recipient_actor_id is None
+        or request.recipient_actor_id == actor.actor_id
+        or actor.allows(ADMIN_SCOPE)
+    )
 
 
 class CommandClaimResult(BaseModel):
