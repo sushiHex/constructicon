@@ -22,6 +22,7 @@ from constructicon.core.channel import (
     ChannelRevision,
     ChannelSendIntent,
     InvalidChannelRevision,
+    discoverable_by,
     message_for_intent,
     message_for_reply,
     reply_message_id,
@@ -206,7 +207,7 @@ class InProcessChannel:
             }
             page: list[ChannelDelivery] = []
             for seq, message in enumerate(self._messages[: revision.message_seq], start=1):
-                if message.recipient_actor_id != actor_id:
+                if not discoverable_by(message, actor_id):
                     continue
                 if after is not None and (seq, str(message.message_id)) <= after:
                     continue

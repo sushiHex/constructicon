@@ -22,6 +22,7 @@ from constructicon.core.channel import (
     Channel,
     ChannelAckConflict,
     ChannelContract,
+    ChannelMessage,
     ChannelReplyConflict,
     ChannelRevision,
     ChannelSendIntent,
@@ -695,6 +696,93 @@ def test_an_unaddressed_request_admits_any_authenticated_actor(
         command_id="cmd-open",
     )
     assert reply.sender_actor_id == "static:whoever"
+
+
+def _page(channel: Channel, actor_id: str) -> list[ChannelMessage]:
+    return [
+        delivery.message
+        for delivery in channel.inbox(
+            actor_id=actor_id,
+            revision=channel.latest_revision(actor_id),
+            after=None,
+            limit=10,
+        )
+    ]
+
+
+def test_an_open_request_is_discoverable_by_every_actor(channel: Channel) -> None:
+    """An unsealed recipient is a routing decision, not missing routing.
+
+    Whoever holds the interaction's scope may take an open request, so it must
+    be findable by them; an approved decision reachable only through a leaked
+    digest would not be discoverable at all (I9). An addressed request stays
+    private to the actor it names.
+    """
+
+    open_request = channel.append_request(_intent(recipient=None), ATTESTATION)
+    addressed = channel.append_request(_intent(port="addressed"), ATTESTATION)
+
+    assert _page(channel, ADVISOR) == [open_request, addressed]
+    assert _page(channel, "static:whoever") == [open_request]
+
+
+def test_a_reply_is_never_broadcast_to_an_inbox(channel: Channel) -> None:
+    """A reply's null recipient means the opposite of an open request's.
+
+    It is addressed to the run, not withheld from a person, so matching a null
+    recipient rather than the message kind would put every reply in everybody's
+    inbox — including actors with no part in the exchange.
+    """
+
+    request = channel.append_request(_intent(), ATTESTATION)
+    reply = channel.reply(
+        request_id=request.message_id,
+        actor_id=ADVISOR,
+        payload={"advice": "ship"},
+        command_id="cmd-not-broadcast",
+    )
+    assert reply.recipient_actor_id is None
+
+    assert _page(channel, ADVISOR) == [request]
+    assert _page(channel, "static:whoever") == []
+
+
+def test_the_first_reply_to_an_open_request_wins(channel: Channel) -> None:
+    """Anyone may answer an open request; exactly one answer exists.
+
+    The winner's acknowledgement is atomic with its reply, and a loser may
+    still record its own delivery fact against the retained request.
+    """
+
+    request = channel.append_request(_intent(recipient=None), ATTESTATION)
+    winner = channel.reply(
+        request_id=request.message_id,
+        actor_id="static:first",
+        payload={"advice": "ship"},
+        command_id="cmd-first",
+    )
+    with pytest.raises(ChannelReplyConflict):
+        channel.reply(
+            request_id=request.message_id,
+            actor_id="static:second",
+            payload={"advice": "hold"},
+            command_id="cmd-second",
+        )
+    assert channel.reply_for(request.message_id) == winner
+
+    page = channel.inbox(
+        actor_id="static:first",
+        revision=channel.latest_revision("static:first"),
+        after=None,
+        limit=10,
+    )
+    assert [delivery.acknowledged for delivery in page] == [True]
+    loser = channel.acknowledge(
+        message_id=request.message_id,
+        actor_id="static:second",
+        command_id="cmd-second-ack",
+    )
+    assert loser.actor_id == "static:second"
 
 
 def test_a_stale_message_id_on_an_intent_is_refused_at_the_transport(

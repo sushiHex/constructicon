@@ -25,6 +25,7 @@ from constructicon.core.channel import (
     ChannelRevision,
     ChannelSendIntent,
     InvalidChannelRevision,
+    discoverable_by,
     message_for_intent,
     message_for_reply,
     reply_message_id,
@@ -293,7 +294,15 @@ class _SqliteChannelsMixin:
 
         if limit <= 0:
             raise ValueError("limit must be positive")
-        clauses = ["recipient_actor_id = ?", "message_seq <= ?"]
+        # `discoverable_by` as one SQL predicate: this actor's own messages,
+        # plus open requests. The `kind` test is load-bearing — a reply also
+        # carries a null recipient, so matching nulls alone would broadcast
+        # every reply to every actor. Every returned row is checked against the
+        # law itself below, so the two expressions cannot drift apart quietly.
+        clauses = [
+            "(recipient_actor_id = ? OR (kind = 'request' AND recipient_actor_id IS NULL))",
+            "message_seq <= ?",
+        ]
         params: list[object] = [actor_id, message_seq]
         if channel_id is not None:
             clauses.insert(0, "channel_id = ?")
@@ -345,6 +354,16 @@ class _SqliteChannelsMixin:
                     (actor_id, ack_seq, *(str(m.message_id) for _, m in paged)),
                 ).fetchall()
             }
+        for _, message in paged:
+            # A page names its reader, so over-inclusion is the direction that
+            # leaks. Re-deriving the law here is the same discipline
+            # `validated_reply` applies to a stored pointer: SQL is a second
+            # expression of a rule that lives in one place.
+            if not discoverable_by(message, actor_id):
+                raise JournalDamaged(
+                    f"channel message {message.message_id} reached the inbox of "
+                    f"{actor_id!r}, which may not discover it"
+                )
         return tuple(
             ChannelDelivery(
                 message_seq=message_seq,

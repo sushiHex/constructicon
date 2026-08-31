@@ -133,25 +133,41 @@ page. The first says the surface is not yours, the second says nothing here is
 your work. Scope filtering happens inside the bounded query, so `limit` counts
 rows the reader may actually see.
 
+**An open request is discoverable, not merely answerable.** A request sealed to
+no recipient is a routing decision assembly made — this is anyone's to take —
+not routing that went missing, so `discoverable_by` puts it in the inbox of
+every actor holding the interaction's scope. Leaving it findable only by whoever
+was handed its digest would make an approved decision reachable by leak alone,
+which I9's discoverability requirement does not permit. Panel members stay
+explicitly addressed in PR D; an open request is the exception, not the pattern.
+
+The predicate names its kind rather than its null:
+
+    recipient_actor_id = :actor_id
+    OR (kind = 'request' AND recipient_actor_id IS NULL)
+
+A reply carries a null recipient too, for the opposite reason — it is addressed
+to the run rather than withheld from a person — so matching nulls alone would
+broadcast every reply to every actor. The `kind` test is the whole guard, and a
+regression pins it in both transports and in the cross-channel inbox.
+
+SQL is a second expression of that one law, so every row a page returns is
+re-checked against `discoverable_by` itself and a disagreement raises
+`JournalDamaged`. Over-inclusion is the direction that leaks, and this is the
+same discipline `validated_reply` applies to a stored pointer: the rule lives in
+one place, and the query answers to it.
+
 ## Open items
 
 - PR C mutations (`channels_reply`, `channels_ack`, request-bound
   `runs_approve`), MCP delegation, the two standard components, and PR D remain.
-- **Unaddressed requests are answerable but not discoverable.** Rev 2 states an
-  unaddressed request is the only one open to any authenticated actor, and both
-  `channel_authority_holder` and `message_for_reply` implement that. But both
-  transports' inboxes filter `recipient_actor_id = actor_id`, so a request
-  addressed to no one appears in no inbox: it can be answered only by an actor
-  who learned its id elsewhere. Whether the inbox should surface it to every
-  holder of the interaction scope, or whether a panel is expected to address
-  each member explicitly, is not settled by the plan. Left as it was rather than
-  changing a merged transport contract on one reading.
 - A message a caller may not act on is refused with `AUTH_REQUIRED_SCOPE` rather
   than reported absent, which confirms that a supplied id exists. Deliberate:
   ids are derived digests over run, path, channel, lane, interaction, and port,
   so an id cannot be guessed without already knowing the message, and a sealed
   recipient holding the wrong scope needs to be told which scope, not sent
-  chasing a phantom.
+  chasing a phantom. Ids are identifiers, not bearer secrets; the refusal
+  discloses no payload, recipient, run, or path.
 - Nominal reply-contract checking is enforced at the facade; deep payload-schema
   validation is not attempted and is not claimed.
 - The wake scan fails closed on a damaged parking event, consistent with the M6

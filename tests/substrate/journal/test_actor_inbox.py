@@ -285,3 +285,62 @@ def test_a_reader_sees_only_the_interactions_it_is_authorized_for(
     assert _page(frozenset({"advice"})) == [advice]
     assert _page(frozenset({"approval"})) == [approval]
     assert _page(BOTH) == [advice, approval]
+
+
+def _open(channel_id: str, port: str):
+    """One request sealed to no recipient, on the named channel."""
+
+    base = _intent(port=port, recipient=None)
+    return base.model_copy(
+        update={
+            "channel_id": channel_id,
+            "message_id": request_message_id(
+                run_id=base.run_id,
+                path=base.path,
+                channel_id=channel_id,
+                channel_revision=base.channel_revision,
+                lane=base.lane,
+                interaction=base.interaction,
+                port=port,
+            ),
+        }
+    )
+
+
+def test_an_open_request_is_discoverable_across_channels_and_a_reply_is_not(
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    """The cross-channel inbox applies the same law the transports do.
+
+    A request sealed to no recipient reaches every actor holding the
+    interaction's scope, wherever it lives. A reply carries a null recipient
+    too, but it is addressed to the run, so it reaches no inbox at all.
+    """
+
+    journal, review, escalation = _two_channels(tmp_path, clock)
+    addressed = review.append_request(_intent(), ATTESTATION)
+    open_here = review.append_request(_open(CHANNEL_ID, "open"), ATTESTATION)
+    open_there = escalation.append_request(_open(OTHER_CHANNEL, "open"), ATTESTATION)
+    review.reply(
+        request_id=addressed.message_id,
+        actor_id=ADVISOR,
+        payload={"advice": "ship"},
+        command_id="cmd-actor-inbox",
+    )
+
+    def _page(actor_id: str) -> list[object]:
+        return [
+            delivery.message
+            for delivery in journal.channel_actor_inbox(
+                actor_id=actor_id,
+                revision=journal.channel_actor_revision(actor_id=actor_id),
+                interactions=BOTH,
+                after=None,
+                limit=10,
+            )
+        ]
+
+    # The stored reply is in neither page: it belongs to the run, not a person.
+    assert _page(ADVISOR) == [addressed, open_here, open_there]
+    assert _page("static:stranger") == [open_here, open_there]

@@ -166,6 +166,48 @@ def test_an_actor_holding_no_channel_scope_is_refused_not_served_an_empty_page(
     assert refused.faults[0].code is ControlCode.AUTH_REQUIRED_SCOPE
 
 
+def test_an_open_request_is_discoverable_under_its_own_interaction_scope(
+    tmp_path: Path,
+    clock: FakeClock,
+    system: Constructicon,
+) -> None:
+    """A request sealed to no one is work whoever holds the scope may take.
+
+    Discovery still follows the sealed interaction, so an open approval is not
+    an advisor's to find — and an addressed request stays private to its
+    recipient even though an open one beside it is public.
+    """
+
+    control, review = _panel(tmp_path, clock, system)
+    open_advice = review.append_request(_intent(port="open", recipient=None), ATTESTATION)
+    open_approval = review.append_request(
+        _intent(port="gate", recipient=None, interaction="approval"),
+        ATTESTATION,
+    )
+    addressed = review.append_request(_intent(port="mine"), ATTESTATION)
+
+    # Alice, holding advise alone: the open advice and her own, never the open
+    # approval — an unsealed recipient widens who may find it, not what.
+    assert _ids(control.channels_inbox(ADVISOR_ONLY)) == [
+        str(open_advice.message_id),
+        str(addressed.message_id),
+    ]
+    assert _ids(control.channels_inbox(ALICE)) == [
+        str(open_advice.message_id),
+        str(open_approval.message_id),
+        str(addressed.message_id),
+    ]
+    # Bob is named by nothing here, so he finds the open pair and not Alice's.
+    assert _ids(control.channels_inbox(BOB)) == [
+        str(open_advice.message_id),
+        str(open_approval.message_id),
+    ]
+    assert not isinstance(
+        control.channels_message(BOB, open_advice.message_id),
+        ControlRejected,
+    )
+
+
 def test_an_advisor_reads_its_own_work_and_nothing_else(
     tmp_path: Path,
     clock: FakeClock,

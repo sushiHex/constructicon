@@ -437,6 +437,29 @@ def validated_reply(request: ChannelMessage, reply: ChannelMessage) -> ChannelMe
     return reply
 
 
+def discoverable_by(message: ChannelMessage, actor_id: str) -> bool:
+    """Whether this actor may find this message in an inbox.
+
+    Deliberately not called "addressed to": an open request is addressed to
+    nobody, and that is precisely why everyone may find it.
+
+    Two shapes qualify, and the second must name its kind. A request sealed to
+    no recipient is an *open* request — assembly deciding that whoever holds the
+    interaction's scope may take it — so it belongs in every such actor's inbox.
+    Leaving it discoverable only to whoever was handed its digest would make an
+    approved routing decision reachable by leak alone (I9).
+
+    A reply also carries no recipient, but for the opposite reason: it is
+    addressed to the run rather than withheld from a person. Matching a null
+    recipient alone would therefore broadcast every reply to every actor, so the
+    kind is tested, not the null.
+    """
+
+    if message.recipient_actor_id is not None:
+        return message.recipient_actor_id == actor_id
+    return message.kind == "request"
+
+
 def governing_request(
     message: ChannelMessage,
     request: ChannelMessage | None,
