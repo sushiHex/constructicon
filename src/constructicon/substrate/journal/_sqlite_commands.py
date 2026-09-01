@@ -386,6 +386,22 @@ def seal_resume_plan_eras(connection: sqlite3.Connection) -> None:
         )
 
 
+def command_plan_exists(column: str) -> str:
+    """The SQL spelling of ``record.plan is not None``, for one plan column.
+
+    Whether a command carries a plan gets asked in two languages, and they must
+    ask the same question of the same bytes. JSON ``null`` is the one value
+    where they can part company: four bytes that are SQL-non-NULL and decode to
+    nothing. A column test that stops at ``IS NOT NULL`` therefore claims a plan
+    the decoder will deny, and the seal it demands was never written.
+
+    The writer refuses those bytes outright, so no current store can hold them.
+    This keeps every reading of an older one honest: unplanned, not damaged.
+    """
+
+    return f"({column} IS NOT NULL AND {column} != 'null')"
+
+
 def validate_command_claim_inventory(connection: sqlite3.Connection) -> int:
     """Surface one missing, orphaned, relocated, or changed command claim."""
 
@@ -395,7 +411,7 @@ def validate_command_claim_inventory(connection: sqlite3.Connection) -> int:
         " LEFT JOIN commands AS c ON c.command_id = s.fact_key"
         " WHERE s.family IN (?, ?, ?)"
         " AND (c.command_id IS NULL"
-        " OR (s.family = ? AND c.plan_json IS NULL)"
+        f" OR (s.family = ? AND NOT {command_plan_exists('c.plan_json')})"
         " OR (s.family = ? AND c.state = 'prepared')) LIMIT 1",
         (
             _COMMAND_FACT_FAMILY,
@@ -433,8 +449,8 @@ def validate_command_claim_inventory(connection: sqlite3.Connection) -> int:
         " c.command_id, c.actor_id, c.actor_json, c.operation,"
         " c.idempotency_key, c.request_hash, c.request_json, c.created_at"
         " )"
-        " OR (c.plan_json IS NULL AND plan.fact_hash IS NOT NULL)"
-        " OR (c.plan_json IS NOT NULL AND ("
+        f" OR (NOT {command_plan_exists('c.plan_json')} AND plan.fact_hash IS NOT NULL)"
+        f" OR ({command_plan_exists('c.plan_json')} AND ("
         " plan.fact_hash IS NULL"
         " OR plan.fact_hash IS NOT constructicon_command_plan_fact_hash("
         " c.command_id, c.plan_json)))"
@@ -774,9 +790,9 @@ def command_from_row(row: sqlite3.Row) -> CommandRecord:
         )
         if record.actor.actor_id != actor_id:
             raise ValueError("command actor columns disagree")
-        if row["plan_json"] is not None:
+        if record.plan is not None:
             canonical_json(record.plan)
-        if row["response_json"] is not None:
+        if record.response is not None:
             canonical_json(record.response)
         if record.state == "prepared":
             if (
@@ -787,8 +803,8 @@ def command_from_row(row: sqlite3.Row) -> CommandRecord:
             ):
                 raise ValueError("prepared command carries terminal lifecycle columns")
         elif (
-            row["response_json"] is None
-            or row["plan_json"] is None
+            record.response is None
+            or record.plan is None
             or record.completed_at is None
             or record.owner_id is not None
             or record.lease_expires_at is not None

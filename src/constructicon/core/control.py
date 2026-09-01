@@ -1176,11 +1176,28 @@ class ControlStore(Protocol):
         ttl_s: float,
     ) -> CommandClaimResult: ...
 
-    def store_command_plan(self, claim: CommandClaim, plan: JsonValue) -> None: ...
+    def store_command_plan(self, claim: CommandClaim, plan: JsonValue) -> None:
+        """Record the one immutable plan for a claimed command.
 
-    def complete_command(self, claim: CommandClaim, response: JsonValue) -> CommandRecord: ...
+        ``None`` is a legal ``JsonValue`` and is not a plan: it stores as bytes
+        a column test reads as present and a decoder reads as absent, so the
+        seal writer and the seal inventory would disagree about whether the
+        fact exists. Implementations refuse it.
+        """
+        ...
 
-    def reject_command(self, claim: CommandClaim, response: JsonValue) -> CommandRecord: ...
+
+    def complete_command(self, claim: CommandClaim, response: JsonValue) -> CommandRecord:
+        """Make a claimed command terminal with the response its key replays.
+
+        ``None`` is refused for the same reason as in `store_command_plan`: a
+        terminal command owes every later retry the answer it already gave.
+        """
+        ...
+
+    def reject_command(self, claim: CommandClaim, response: JsonValue) -> CommandRecord:
+        """Make a claimed command terminal with the refusal its key replays."""
+        ...
 
     def command(self, command_id: str) -> CommandRecord | None: ...
 

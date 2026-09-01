@@ -1507,7 +1507,9 @@ def test_a_malformed_command_time_cannot_become_a_cursor_cut(
         (False, "owner_id", None),
         (False, "lease_expires_at", None),
         (True, "response_json", None),
+        (True, "response_json", "null"),
         (True, "plan_json", None),
+        (True, "plan_json", "null"),
         (True, "completed_at", None),
         (True, "owner_id", "foreign-owner"),
         (True, "lease_expires_at", "2026-01-01T00:00:00+00:00"),
@@ -1529,10 +1531,8 @@ def test_a_command_row_must_have_one_coherent_lifecycle_shape(
     )
     assert claimed.claim is not None
     if terminal:
-        # JSON null is a valid terminal response. Its SQL column is still
-        # non-NULL, which is the lifecycle fact the decoder must preserve.
         _store_test_plan(journal, claimed.claim)
-        journal.complete_command(claimed.claim, None)
+        journal.complete_command(claimed.claim, {"status": "committed"})
 
     with sqlite3.connect(database) as connection:
         connection.execute(

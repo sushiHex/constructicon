@@ -164,6 +164,14 @@ class _SqliteControlMixin:
             )
 
     def store_command_plan(self, claim: CommandClaim, plan: JsonValue) -> None:
+        if plan is None:
+            # `None` is a legal `JsonValue`, so the port's type admits the one
+            # value that is not a plan: it stores as the four SQL-non-NULL bytes
+            # `null` and decodes back to nothing. Refusing it here is what lets
+            # every later reading of the column mean the same thing.
+            raise ValueError(
+                f"command {claim.command_id!r} cannot be planned with no plan"
+            )
         plan_json = canonical_json(plan)
         with self._txn() as connection:
             record = self._command_fenced(connection, claim)
@@ -501,6 +509,13 @@ class _SqliteControlMixin:
         response: JsonValue,
         state: Literal["committed", "rejected"],
     ) -> CommandRecord:
+        if response is None:
+            # The same law as `store_command_plan`: a terminal command must
+            # carry a response some later replay can hand back, and `null` is
+            # bytes that are present to SQL and absent to every reader.
+            raise ValueError(
+                f"command {claim.command_id!r} cannot become {state} with no response"
+            )
         response_json = canonical_json(response)
         with self._txn() as connection:
             existing = command_for_id(connection, claim.command_id)

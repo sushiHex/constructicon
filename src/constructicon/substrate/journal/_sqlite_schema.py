@@ -42,6 +42,7 @@ from constructicon.substrate.journal._sqlite_channels import (
 )
 from constructicon.substrate.journal._sqlite_commands import (
     RESUME_PLAN_ERA_FACT_FAMILY,
+    command_plan_exists,
     seal_command_claim,
     seal_command_phases,
     seal_resume_plan_eras,
@@ -835,12 +836,13 @@ class _SqliteSchemaMixin:
         legacy_effect_outcome_count = validate_effect_fact_inventory(connection)
         validate_capability_lease_inventory(connection)
         validate_channel_fact_seal_inventory(connection)
+        planned = command_plan_exists("plan_json")
         expected_count = _durable_sequence(
             connection.execute(
                 "SELECT"
                 " (SELECT COUNT(*) FROM attestations)"
                 " + (SELECT COUNT(*) FROM commands)"
-                " + (SELECT COUNT(*) FROM commands WHERE plan_json IS NOT NULL)"
+                f" + (SELECT COUNT(*) FROM commands WHERE {planned})"
                 " + (SELECT COUNT(*) FROM commands"
                 "    WHERE state IN ('committed', 'rejected'))"
                 " + (SELECT COUNT(*) FROM approvals)"
