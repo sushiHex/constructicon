@@ -96,6 +96,54 @@ def test_one_bounded_lookup_costs_the_same_however_many_commands_are_stored(
     assert late <= 2
 
 
+def _hashes_for_one_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+    journal: SqliteJournal,
+) -> int:
+    """How many command claim hashes one bounded lookup derives, in SQL or out."""
+
+    original = _sqlite_commands._command_claim_fact_hash_from_values
+    counted = 0
+
+    def counting(*values: object):  # type: ignore[no-untyped-def]
+        nonlocal counted
+        counted += 1
+        return original(*values)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        _sqlite_commands,
+        "_command_claim_fact_hash_from_values",
+        counting,
+    )
+    try:
+        journal.latest_command_key(operation="runs_cancel")
+    finally:
+        monkeypatch.undo()
+    return counted
+
+
+def test_one_bounded_lookup_rehashes_the_same_however_many_commands_are_stored(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other half of the same bill: the whole-table re-hash, done in SQL."""
+
+    journal = SqliteJournal(tmp_path / "command-read-hash.db")
+    for index in range(4):
+        _claim(journal, f"short-{index}")
+    early = _hashes_for_one_lookup(monkeypatch, journal)
+
+    for index in range(60):
+        _claim(journal, f"long-{index}")
+    late = _hashes_for_one_lookup(monkeypatch, journal)
+
+    assert early == late, (
+        f"one lookup hashed {early} claims with a small store and {late} with a "
+        "large one; a bounded read is re-hashing the whole table"
+    )
+    assert late <= 2
+
+
 def test_a_bounded_lookup_still_refuses_an_erased_command(
     tmp_path: Path,
 ) -> None:

@@ -423,16 +423,15 @@ def command_plan_exists(column: str) -> str:
 
 
 def validate_command_claim_integrity(connection: sqlite3.Connection) -> None:
-    """Surface one missing, orphaned, relocated, or changed command claim.
+    """No seal without its command, and no phase seal before its phase.
 
-    Wholly in SQL, over indexed joins and deterministic hash functions. A
-    bounded read keeps this, because its answer can depend on a row's absence:
-    erase the newest command of an operation and the next key derivation would
-    reuse a spent one, which only the orphaned seal left behind can reveal.
-    What a bounded read must not do is project.
+    One indexed join and no hashing at all. A bounded read keeps this, because
+    its answer can depend on a row's absence: erase the newest command of an
+    operation and the next key derivation is handed an older one, so a spent
+    key could be spent again. The seal the erased row leaves behind is the only
+    thing that says so, and finding it is a join.
     """
 
-    register_command_seal_hashes(connection)
     orphan = connection.execute(
         "SELECT s.family, s.fact_key FROM durable_fact_seals AS s"
         " LEFT JOIN commands AS c ON c.command_id = s.fact_key"
@@ -456,6 +455,19 @@ def validate_command_claim_integrity(connection: sqlite3.Connection) -> None:
         raise JournalDamaged(
             f"command {fact_key!r} is missing or precedes its sealed phase"
         )
+
+
+def validate_command_content_inventory(connection: sqlite3.Connection) -> None:
+    """Re-derive every retained command's phase hashes from its own columns.
+
+    This re-hashes the whole table, so it is a whole-store claim and runs where
+    whole-store claims are made — at open. A bounded read proves the rows it
+    actually returns instead, through `sealed_command_from_row`; content damage
+    to a row it never hands back is not that read's question to answer, and
+    making it one charged every lookup for the whole store.
+    """
+
+    register_command_seal_hashes(connection)
     anomaly = connection.execute(
         "SELECT c.* FROM commands AS c"
         " LEFT JOIN durable_fact_seals AS claim"
@@ -536,6 +548,7 @@ def validate_command_claim_inventory(connection: sqlite3.Connection) -> int:
     """Both whole-store command proofs, for the open path that owes them."""
 
     validate_command_claim_integrity(connection)
+    validate_command_content_inventory(connection)
     return validate_resume_plan_era_inventory(connection)
 
 
