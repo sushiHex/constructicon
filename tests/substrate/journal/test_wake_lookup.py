@@ -22,6 +22,7 @@ from tests.channel_requests import (
     mint_send_attestation,
 )
 from tests.conftest import FakeClock
+from tests.durable_seals import reseal_primary_fact
 from tests.substrate.channels.test_channel_contract import (
     ADVISOR,
     ATTESTATION,
@@ -65,14 +66,11 @@ def _rewrite_message_positive_seal(
             (str(message_id),),
         ).fetchone()
         assert row is not None
-        connection.execute(
-            "UPDATE durable_fact_seals SET fact_hash = ?"
-            " WHERE family = ? AND fact_key = ?",
-            (
-                str(channel_message_fact_hash(row)),
-                CHANNEL_MESSAGE_FACT_FAMILY,
-                str(message_id),
-            ),
+        reseal_primary_fact(
+            connection,
+            family=CHANNEL_MESSAGE_FACT_FAMILY,
+            fact_key=str(message_id),
+            fact=channel_message_fact_hash(row),
         )
 
 
@@ -90,19 +88,16 @@ def _rewrite_ack_positive_seal(
             (str(message_id), actor_id),
         ).fetchone()
         assert row is not None
-        connection.execute(
-            "UPDATE durable_fact_seals SET fact_hash = ?"
-            " WHERE family = ? AND fact_key = ?",
-            (
-                str(channel_ack_fact_hash(row, connection=connection)),
-                CHANNEL_ACK_FACT_FAMILY,
-                canonical_json(
-                    {
-                        "actor_id": actor_id,
-                        "message_id": str(message_id),
-                    }
-                ),
+        reseal_primary_fact(
+            connection,
+            family=CHANNEL_ACK_FACT_FAMILY,
+            fact_key=canonical_json(
+                {
+                    "actor_id": actor_id,
+                    "message_id": str(message_id),
+                }
             ),
+            fact=channel_ack_fact_hash(row, connection=connection),
         )
 
 
@@ -549,10 +544,11 @@ def test_wake_reproves_a_preexisting_explicit_ack_plan(
             (command_id,),
         ).fetchone()
         assert row is not None
-        connection.execute(
-            "UPDATE durable_fact_seals SET fact_hash = ?"
-            " WHERE family = 'command_plan' AND fact_key = ?",
-            (str(command_plan_fact_hash(row)), command_id),
+        reseal_primary_fact(
+            connection,
+            family="command_plan",
+            fact_key=command_id,
+            fact=command_plan_fact_hash(row),
         )
 
     with pytest.raises(JournalDamaged, match="contradicts its command"):
@@ -595,10 +591,11 @@ def test_a_reply_command_must_hold_the_request_sealed_authority(
             (command_id,),
         ).fetchone()
         assert row is not None
-        connection.execute(
-            "UPDATE durable_fact_seals SET fact_hash = ?"
-            " WHERE family = 'command_claim' AND fact_key = ?",
-            (str(command_claim_fact_hash(row)), command_id),
+        reseal_primary_fact(
+            connection,
+            family="command_claim",
+            fact_key=command_id,
+            fact=command_claim_fact_hash(row),
         )
         connection.commit()
 

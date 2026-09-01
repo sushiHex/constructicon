@@ -59,6 +59,7 @@ from tests.conftest import (
     pipeline_graph,
     triage_impl,
 )
+from tests.durable_seals import reseal_primary_fact
 
 RUN_ACTOR = AuthenticatedActor(
     actor_id="static:response-loss-runner",
@@ -206,12 +207,12 @@ def _replace_positive_seal(
     call this helper.
     """
 
-    updated = connection.execute(
-        "UPDATE durable_fact_seals SET fact_hash = ?"
-        " WHERE family = ? AND fact_key = ?",
-        (str(fact_hash), family, fact_key),
+    reseal_primary_fact(
+        connection,
+        family=family,
+        fact_key=fact_key,
+        fact=fact_hash,
     )
-    assert updated.rowcount == 1
 
 
 def _reseal_command_phases(

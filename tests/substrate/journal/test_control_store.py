@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from tests.durable_seals import reseal_primary_fact
 from tests.run_worlds import sealed_test_manifest
 
 from constructicon.core.address import RunId
@@ -58,6 +59,7 @@ APPROVAL_SUBJECT = ComponentProofSubject(
     version=digest("version", 1, {"value": 1}),
     baseline_version=None,
 )
+
 REQUEST: dict[str, JsonValue] = {"run_id": "run-control-contract"}
 APPROVAL_REQUEST: dict[str, JsonValue] = {
     "run_id": "run-control-contract",
@@ -1754,10 +1756,11 @@ def test_a_corrupt_persisted_run_origin_actor_is_durable_journal_damage(
         # Explicitly construct impossible history whose outer immutable-world
         # seal agrees. The independent origin identity must still refuse the
         # actor rewrite before any caller can observe a normalized origin.
-        connection.execute(
-            "UPDATE durable_fact_seals SET fact_hash = ?"
-            " WHERE family = 'run_world' AND fact_key = ?",
-            (str(run_world_fact_hash(row)), run_id),
+        reseal_primary_fact(
+            connection,
+            family="run_world",
+            fact_key=run_id,
+            fact=run_world_fact_hash(row),
         )
         connection.commit()
 

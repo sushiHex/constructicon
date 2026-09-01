@@ -64,6 +64,7 @@ from constructicon.substrate.journal._sqlite_channels import (
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.channel_requests import AttestedMailboxChannel as MailboxChannel
 from tests.conftest import FakeClock, InjectedCrash
+from tests.durable_seals import reseal_primary_fact
 
 CHANNEL_ID = "channel/review"
 ADVISOR_ID = "static:advisor"
@@ -200,12 +201,12 @@ def _replace_test_only_channel_seal(
 ) -> None:
     """Keep a deliberately rewritten historical fixture internally sealed."""
 
-    updated = connection.execute(
-        "UPDATE durable_fact_seals SET fact_hash = ?"
-        " WHERE family = ? AND selector = ?",
-        (str(fact_hash), family, selector),
+    reseal_primary_fact(
+        connection,
+        family=family,
+        selector=selector,
+        fact=fact_hash,
     )
-    assert updated.rowcount == 1
 
 
 async def test_a_deleted_reply_command_cannot_be_reclaimed_to_heal_its_fact(

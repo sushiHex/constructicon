@@ -53,6 +53,7 @@ from constructicon.substrate.journal._sqlite_fact_seals import (
     durable_fact_hash,
     durable_fact_seal,
     require_durable_fact_seal,
+    sealed_fact_hash,
     store_durable_fact_seal,
 )
 from constructicon.substrate.journal._sqlite_registry import (
@@ -151,15 +152,23 @@ def _sqlite_run_world_fact_hash(
     origin_json: object,
 ) -> str | None:
     try:
+        # SQL compares against the stored column, so it binds the identity the
+        # same way the seal layer did on the way in — see `sealed_fact_hash`.
+        key = _durable_text(run_id, fact="run world identity")
         return str(
-            _run_world_fact_hash_values(
-                run_id,
-                manifest_hash,
-                input_hash,
-                inputs_json,
-                created_at,
-                creation_command_id,
-                origin_json,
+            sealed_fact_hash(
+                family=RUN_WORLD_FACT_FAMILY,
+                fact_key=key,
+                selector=key,
+                fact=_run_world_fact_hash_values(
+                    run_id,
+                    manifest_hash,
+                    input_hash,
+                    inputs_json,
+                    created_at,
+                    creation_command_id,
+                    origin_json,
+                ),
             )
         )
     except (JournalDamaged, TypeError, ValueError, ValidationError):
@@ -489,13 +498,13 @@ RUN_WORLD_ANOMALY = (
     " LEFT JOIN durable_fact_seals AS sealed_fact"
     " ON sealed_fact.family = 'run_world'"
     " AND sealed_fact.fact_key = sealed_candidate.run_id"
-    " WHERE constructicon_run_world_fact_hash("
+    " WHERE constructicon_run_world_seal_hash("
     " sealed_candidate.run_id, sealed_candidate.manifest_hash,"
     " sealed_candidate.input_hash, sealed_candidate.inputs_json,"
     " sealed_candidate.created_at, sealed_candidate.creation_command_id,"
     " sealed_origin.origin_json) IS NULL"
     " OR sealed_fact.selector IS NOT sealed_candidate.run_id"
-    " OR sealed_fact.fact_hash IS NOT constructicon_run_world_fact_hash("
+    " OR sealed_fact.fact_hash IS NOT constructicon_run_world_seal_hash("
     " sealed_candidate.run_id, sealed_candidate.manifest_hash,"
     " sealed_candidate.input_hash, sealed_candidate.inputs_json,"
     " sealed_candidate.created_at, sealed_candidate.creation_command_id,"
@@ -622,7 +631,7 @@ def register_run_origin_guard(connection: sqlite3.Connection) -> None:
         deterministic=True,
     )
     connection.create_function(
-        "constructicon_run_world_fact_hash",
+        "constructicon_run_world_seal_hash",
         7,
         _sqlite_run_world_fact_hash,
         deterministic=True,

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Literal
 
 import pytest
+from tests.durable_seals import reseal_primary_fact
 from tests.migrations.test_sqlite_v6_to_v7 import _downgrade_v7_schema_to_v6
 from tests.run_worlds import create_test_run
 
@@ -31,7 +32,7 @@ from constructicon.core.control import (
     validated_resume_attempt_command,
 )
 from constructicon.core.errors import JournalDamaged
-from constructicon.core.identity import canonical_json
+from constructicon.core.identity import Digest, canonical_json
 from constructicon.core.run import TERMINAL_STATUS_EVENTS, AttemptCause, RunStatus
 from constructicon.substrate.journal._sqlite_commands import (
     RESUME_PLAN_ERA_FACT_FAMILY,
@@ -44,6 +45,7 @@ from constructicon.substrate.journal._sqlite_execution_facts import (
     RESUME_ATTEMPT_FACT_FAMILY,
     event_fact_hash,
 )
+from constructicon.substrate.journal._sqlite_fact_seals import sealed_fact_hash
 from constructicon.substrate.journal._sqlite_runs import RUN_LIFECYCLE_ANOMALY
 from constructicon.substrate.journal.sqlite import SqliteJournal
 
@@ -266,12 +268,13 @@ def _rewrite_primary_seal(
     *,
     family: Literal["command_claim", "command_plan", "command_terminal", "event"],
     fact_key: str,
-    fact_hash: str,
+    fact_hash: Digest,
 ) -> None:
-    connection.execute(
-        "UPDATE durable_fact_seals SET fact_hash = ?"
-        " WHERE family = ? AND fact_key = ?",
-        (fact_hash, family, fact_key),
+    reseal_primary_fact(
+        connection,
+        family=family,
+        fact_key=fact_key,
+        fact=fact_hash,
     )
 
 
@@ -472,7 +475,7 @@ def test_current_attempt_cannot_masquerade_as_a_historical_plan_era(
             connection,
             family="command_plan",
             fact_key=command_id,
-            fact_hash=str(command_plan_fact_hash(row)),
+            fact_hash=command_plan_fact_hash(row),
         )
         connection.commit()
 
@@ -507,7 +510,14 @@ def test_current_exact_plan_refuses_even_valid_historical_evidence(
                 RESUME_PLAN_ERA_FACT_FAMILY,
                 command_id,
                 canonical_json(evidence.model_dump(mode="json")),
-                str(resume_plan_era_fact_hash(row, evidence=evidence)),
+                str(
+                    sealed_fact_hash(
+                        family=RESUME_PLAN_ERA_FACT_FAMILY,
+                        fact_key=command_id,
+                        selector=canonical_json(evidence.model_dump(mode="json")),
+                        fact=resume_plan_era_fact_hash(row, evidence=evidence),
+                    )
+                ),
             ),
         )
         connection.commit()
@@ -570,7 +580,7 @@ def test_attempt_relationship_cannot_be_repointed_to_an_equally_valid_command(
             connection,
             family="event",
             fact_key=canonical_json({"run_id": str(run_id), "seq": 1}),
-            fact_hash=str(event_fact_hash(event_row)),
+            fact_hash=event_fact_hash(event_row),
         )
         connection.commit()
 
@@ -599,7 +609,7 @@ def test_point_reads_refuse_an_event_whose_attempt_claim_was_erased(
             connection,
             family="event",
             fact_key=canonical_json({"run_id": str(run_id), "seq": 1}),
-            fact_hash=str(event_fact_hash(row)),
+            fact_hash=event_fact_hash(row),
         )
         connection.commit()
 
@@ -674,7 +684,7 @@ def test_attempt_relationship_binds_the_exact_baseline_event(
             connection,
             family="event",
             fact_key=canonical_json({"run_id": str(run_id), "seq": 2}),
-            fact_hash=str(event_fact_hash(row)),
+            fact_hash=event_fact_hash(row),
         )
         command_row = connection.execute(
             "SELECT * FROM commands WHERE command_id = ?",
@@ -696,7 +706,7 @@ def test_attempt_relationship_binds_the_exact_baseline_event(
             connection,
             family="command_plan",
             fact_key=command_id,
-            fact_hash=str(command_plan_fact_hash(command_row)),
+            fact_hash=command_plan_fact_hash(command_row),
         )
         connection.commit()
 
@@ -935,7 +945,7 @@ def test_terminal_resume_era_binds_the_exact_migrated_response_bytes(
             connection,
             family="command_terminal",
             fact_key=claimed.claim.command_id,
-            fact_hash=str(command_terminal_fact_hash(row)),
+            fact_hash=command_terminal_fact_hash(row),
         )
         connection.commit()
 
@@ -1050,7 +1060,7 @@ def test_current_raw_resume_rejection_cannot_masquerade_as_history(
             connection,
             family="command_plan",
             fact_key=claimed.claim.command_id,
-            fact_hash=str(command_plan_fact_hash(row)),
+            fact_hash=command_plan_fact_hash(row),
         )
         connection.commit()
 
@@ -1184,7 +1194,7 @@ def test_legacy_attempt_marker_binds_the_exact_migrated_relationship(
                 connection,
                 family="command_claim",
                 fact_key=command_id,
-                fact_hash=str(command_claim_fact_hash(command_row)),
+                fact_hash=command_claim_fact_hash(command_row),
             )
         elif mutation == "plan":
             connection.execute(
@@ -1203,7 +1213,7 @@ def test_legacy_attempt_marker_binds_the_exact_migrated_relationship(
                 connection,
                 family="command_plan",
                 fact_key=command_id,
-                fact_hash=str(command_plan_fact_hash(command_row)),
+                fact_hash=command_plan_fact_hash(command_row),
             )
         else:
             event_row = connection.execute(
@@ -1227,7 +1237,7 @@ def test_legacy_attempt_marker_binds_the_exact_migrated_relationship(
                 connection,
                 family="event",
                 fact_key=canonical_json({"run_id": str(run_id), "seq": 1}),
-                fact_hash=str(event_fact_hash(event_row)),
+                fact_hash=event_fact_hash(event_row),
             )
         connection.commit()
 

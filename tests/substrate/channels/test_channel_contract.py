@@ -25,6 +25,7 @@ from tests.channel_requests import (
     mint_send_attestation,
 )
 from tests.conftest import FakeClock
+from tests.durable_seals import reseal_primary_fact
 
 from constructicon.core.address import (
     ExecutionPath,
@@ -70,6 +71,7 @@ REPLY_CONTRACT = ChannelContract(
     type_id="test/AdviceResponse",
     schema_hash="advice-response-v1",
 )
+
 ATTESTATION = "att-channel-contract"
 
 
@@ -1560,10 +1562,11 @@ def test_a_current_ack_is_projected_only_through_its_exact_typed_plan(
             (command_id,),
         ).fetchone()
         assert row is not None
-        connection.execute(
-            "UPDATE durable_fact_seals SET fact_hash = ?"
-            " WHERE family = 'command_plan' AND fact_key = ?",
-            (str(command_plan_fact_hash(row)), command_id),
+        reseal_primary_fact(
+            connection,
+            family="command_plan",
+            fact_key=command_id,
+            fact=command_plan_fact_hash(row),
         )
 
     with pytest.raises(JournalDamaged, match="contradicts its command"):

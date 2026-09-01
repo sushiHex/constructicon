@@ -30,6 +30,7 @@ from constructicon.substrate.journal._sqlite_fact_seals import (
     durable_fact_hash,
     durable_fact_seal,
     require_durable_fact_seal,
+    sealed_fact_hash,
     store_durable_fact_seal,
 )
 
@@ -221,6 +222,17 @@ def command_terminal_fact_hash(row: sqlite3.Row) -> Digest:
     )
 
 
+def _command_seal_hash(family: str, command_id: object, fact: Digest) -> str:
+    """The value the seal row stores, for a family keyed by command identity.
+
+    SQL compares against the stored column, so it must bind the identity the
+    same way the seal layer did on the way in — see `sealed_fact_hash`.
+    """
+
+    key = _durable_text(command_id, fact="command identity")
+    return str(sealed_fact_hash(family=family, fact_key=key, selector=key, fact=fact))
+
+
 def _sqlite_command_claim_fact_hash(
     command_id: object,
     actor_id: object,
@@ -234,7 +246,9 @@ def _sqlite_command_claim_fact_hash(
     """SQLite UDF: hash exact immutable claim scalars or mark them invalid."""
 
     try:
-        return str(
+        return _command_seal_hash(
+            _COMMAND_FACT_FAMILY,
+            command_id,
             _command_claim_fact_hash_from_values(
                 command_id,
                 actor_id,
@@ -244,7 +258,7 @@ def _sqlite_command_claim_fact_hash(
                 request_hash,
                 request_json,
                 created_at,
-            )
+            ),
         )
     except JournalDamaged:
         return None
@@ -255,7 +269,11 @@ def _sqlite_command_plan_fact_hash(
     plan_json: object,
 ) -> str | None:
     try:
-        return str(_command_plan_fact_hash_from_values(command_id, plan_json))
+        return _command_seal_hash(
+            _COMMAND_PLAN_FACT_FAMILY,
+            command_id,
+            _command_plan_fact_hash_from_values(command_id, plan_json),
+        )
     except JournalDamaged:
         return None
 
@@ -271,7 +289,9 @@ def _sqlite_command_terminal_fact_hash(
     completed_at: object,
 ) -> str | None:
     try:
-        return str(
+        return _command_seal_hash(
+            _COMMAND_TERMINAL_FACT_FAMILY,
+            command_id,
             _command_terminal_fact_hash_from_values(
                 command_id,
                 state,
@@ -281,27 +301,27 @@ def _sqlite_command_terminal_fact_hash(
                 lease_expires_at,
                 updated_at,
                 completed_at,
-            )
+            ),
         )
     except JournalDamaged:
         return None
 
 
-def register_command_claim_fact_hash(connection: sqlite3.Connection) -> None:
+def register_command_seal_hashes(connection: sqlite3.Connection) -> None:
     connection.create_function(
-        "constructicon_command_claim_fact_hash",
+        "constructicon_command_claim_seal_hash",
         8,
         _sqlite_command_claim_fact_hash,
         deterministic=True,
     )
     connection.create_function(
-        "constructicon_command_plan_fact_hash",
+        "constructicon_command_plan_seal_hash",
         2,
         _sqlite_command_plan_fact_hash,
         deterministic=True,
     )
     connection.create_function(
-        "constructicon_command_terminal_fact_hash",
+        "constructicon_command_terminal_seal_hash",
         8,
         _sqlite_command_terminal_fact_hash,
         deterministic=True,
@@ -405,7 +425,7 @@ def command_plan_exists(column: str) -> str:
 def validate_command_claim_inventory(connection: sqlite3.Connection) -> int:
     """Surface one missing, orphaned, relocated, or changed command claim."""
 
-    register_command_claim_fact_hash(connection)
+    register_command_seal_hashes(connection)
     orphan = connection.execute(
         "SELECT s.family, s.fact_key FROM durable_fact_seals AS s"
         " LEFT JOIN commands AS c ON c.command_id = s.fact_key"
@@ -440,24 +460,24 @@ def validate_command_claim_inventory(connection: sqlite3.Connection) -> int:
         " LEFT JOIN durable_fact_seals AS terminal"
         " ON terminal.family = ? AND terminal.fact_key = c.command_id"
         " AND terminal.selector = c.command_id"
-        " WHERE constructicon_command_claim_fact_hash("
+        " WHERE constructicon_command_claim_seal_hash("
         " c.command_id, c.actor_id, c.actor_json, c.operation,"
         " c.idempotency_key, c.request_hash, c.request_json, c.created_at"
         " ) IS NULL"
         " OR claim.fact_hash IS NULL"
-        " OR claim.fact_hash IS NOT constructicon_command_claim_fact_hash("
+        " OR claim.fact_hash IS NOT constructicon_command_claim_seal_hash("
         " c.command_id, c.actor_id, c.actor_json, c.operation,"
         " c.idempotency_key, c.request_hash, c.request_json, c.created_at"
         " )"
         f" OR (NOT {command_plan_exists('c.plan_json')} AND plan.fact_hash IS NOT NULL)"
         f" OR ({command_plan_exists('c.plan_json')} AND ("
         " plan.fact_hash IS NULL"
-        " OR plan.fact_hash IS NOT constructicon_command_plan_fact_hash("
+        " OR plan.fact_hash IS NOT constructicon_command_plan_seal_hash("
         " c.command_id, c.plan_json)))"
         " OR (c.state = 'prepared' AND terminal.fact_hash IS NOT NULL)"
         " OR (c.state != 'prepared' AND ("
         " terminal.fact_hash IS NULL"
-        " OR terminal.fact_hash IS NOT constructicon_command_terminal_fact_hash("
+        " OR terminal.fact_hash IS NOT constructicon_command_terminal_seal_hash("
         " c.command_id, c.state, c.response_json, c.owner_id, c.owner_epoch,"
         " c.lease_expires_at, c.updated_at, c.completed_at)"
         " )) LIMIT 1",

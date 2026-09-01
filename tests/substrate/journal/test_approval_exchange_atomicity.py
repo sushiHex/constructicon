@@ -11,6 +11,7 @@ import pytest
 from tests.channel_commands import ack_command_id, ack_with_command
 from tests.channel_requests import AttestedMailboxChannel as MailboxChannel
 from tests.conftest import FakeClock
+from tests.durable_seals import reseal_primary_fact
 from tests.substrate.channels.test_channel_contract import (
     ATTESTATION,
     CHANNEL_ID,
@@ -60,7 +61,10 @@ from constructicon.substrate.journal._sqlite_channels import (
     channel_message_fact_hash,
     reply_in_transaction,
 )
-from constructicon.substrate.journal._sqlite_fact_seals import store_durable_fact_seal
+from constructicon.substrate.journal._sqlite_fact_seals import (
+    sealed_fact_hash,
+    store_durable_fact_seal,
+)
 from constructicon.substrate.journal.sqlite import SqliteJournal
 
 
@@ -676,22 +680,29 @@ def test_exact_reads_and_wake_refuse_an_approval_id_not_minted_by_its_command(
             " WHERE family = ? AND fact_key = ? AND selector = ?",
             (
                 forged.approval_id,
-                str(approval_fact_hash(approval_row)),
+                # Relocate the seal *and* rebind it to the identity it moved
+                # to: the forgery is as coordinated as one can be, and the
+                # command-minting proof below must still refuse it.
+                str(
+                    sealed_fact_hash(
+                        family=_APPROVAL_FACT_FAMILY,
+                        fact_key=forged.approval_id,
+                        selector=claimed.claim.command_id,
+                        fact=approval_fact_hash(approval_row),
+                    )
+                ),
                 _APPROVAL_FACT_FAMILY,
                 approval.approval_id,
                 claimed.claim.command_id,
             ),
         )
-        reply_seal = connection.execute(
-            "UPDATE durable_fact_seals SET fact_hash = ?"
-            " WHERE family = ? AND fact_key = ?",
-            (
-                str(channel_message_fact_hash(reply_row)),
-                CHANNEL_MESSAGE_FACT_FAMILY,
-                str(reply.message_id),
-            ),
+        reseal_primary_fact(
+            connection,
+            family=CHANNEL_MESSAGE_FACT_FAMILY,
+            fact_key=str(reply.message_id),
+            fact=channel_message_fact_hash(reply_row),
         )
-        assert approval_seal.rowcount == 1 and reply_seal.rowcount == 1
+        assert approval_seal.rowcount == 1
         connection.commit()
 
     match = "was not minted by command"

@@ -61,6 +61,7 @@ from constructicon.substrate.journal._sqlite_commands import command_plan_fact_h
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.channel_commands import reply_with_command
 from tests.conftest import FakeClock
+from tests.durable_seals import reseal_primary_fact
 
 STD = Path(__file__).parents[2] / "src" / "constructicon" / "sdk" / "std.py"
 ADVISOR_ID = "static:std-advisor"
@@ -464,13 +465,11 @@ async def test_the_standard_approval_refuses_a_downgraded_command_plan(
             (decided.command.command_id,),
         ).fetchone()
         assert command_row is not None
-        connection.execute(
-            "UPDATE durable_fact_seals SET fact_hash = ?"
-            " WHERE family = 'command_plan' AND fact_key = ?",
-            (
-                str(command_plan_fact_hash(command_row)),
-                decided.command.command_id,
-            ),
+        reseal_primary_fact(
+            connection,
+            family="command_plan",
+            fact_key=decided.command.command_id,
+            fact=command_plan_fact_hash(command_row),
         )
         connection.commit()
 

@@ -71,6 +71,7 @@ from tests.channel_commands import (
 )
 from tests.channel_requests import AttestedMailboxChannel as MailboxChannel
 from tests.conftest import FakeClock
+from tests.durable_seals import reseal_primary_fact
 from tests.run_attestations import mint_promotion_attestation, mint_run_attestation
 from tests.run_worlds import sealed_test_manifest
 
@@ -494,10 +495,11 @@ def test_a_current_reply_cannot_downgrade_through_a_migrated_opaque_preack(
             (str(reply.message_id),),
         ).fetchone()
         assert row is not None
-        connection.execute(
-            "UPDATE durable_fact_seals SET fact_hash = ?"
-            " WHERE family = 'channel_message' AND fact_key = ?",
-            (str(channel_message_fact_hash(row)), str(reply.message_id)),
+        reseal_primary_fact(
+            connection,
+            family="channel_message",
+            fact_key=str(reply.message_id),
+            fact=channel_message_fact_hash(row),
         )
         connection.commit()
 

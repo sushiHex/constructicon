@@ -39,6 +39,38 @@ def durable_fact_hash(family: str, exact_fields: Any) -> Digest:
     )
 
 
+def sealed_fact_hash(
+    *,
+    family: str,
+    fact_key: str,
+    selector: str,
+    fact: Digest,
+) -> Digest:
+    """Bind one owner's content hash to the identity it is stored under.
+
+    An owner chooses which bytes constitute its fact. Anti-relocation, though,
+    is not the owner's to choose: if the content hash omits the primary key,
+    two same-shaped rows can trade places and every seal still matches, which
+    is the one attack seals exist to stop. Leaving that to nineteen owners to
+    each remember is a convention, and a convention is what fails silently.
+
+    So the identity is bound here, where the seal layer already holds it and no
+    owner can forget it. `durable_fact_hash` still answers what a row says;
+    this answers which row said it.
+    """
+
+    return digest(
+        "durable-fact-seal-identity",
+        1,
+        {
+            "family": family,
+            "fact_key": fact_key,
+            "selector": selector,
+            "fact": str(fact),
+        },
+    )
+
+
 def _seal_from_row(row: sqlite3.Row) -> DurableFactSeal:
     try:
         family = _durable_text(row["family"], fact="durable fact seal family")
@@ -130,7 +162,12 @@ def require_durable_fact_seal(
         raise JournalDamaged(
             f"durable {family!r} fact {fact_key!r} has no positive seal"
         )
-    if seal.fact_hash != fact_hash:
+    if seal.fact_hash != sealed_fact_hash(
+        family=family,
+        fact_key=fact_key,
+        selector=selector,
+        fact=fact_hash,
+    ):
         raise JournalDamaged(
             f"durable {family!r} fact {fact_key!r} contradicts its positive seal"
         )
@@ -147,6 +184,12 @@ def store_durable_fact_seal(
 ) -> DurableFactSeal:
     """Insert one write-once seal, or prove the already stored exact fact."""
 
+    sealed = sealed_fact_hash(
+        family=family,
+        fact_key=fact_key,
+        selector=selector,
+        fact=fact_hash,
+    )
     prior = durable_fact_seal(
         connection,
         family=family,
@@ -154,7 +197,7 @@ def store_durable_fact_seal(
         selector=selector,
     )
     if prior is not None:
-        if prior.fact_hash != fact_hash:
+        if prior.fact_hash != sealed:
             raise JournalDamaged(
                 f"durable {family!r} fact {fact_key!r} was sealed contradictorily"
             )
@@ -163,7 +206,7 @@ def store_durable_fact_seal(
         connection.execute(
             "INSERT INTO durable_fact_seals"
             " (family, fact_key, selector, fact_hash) VALUES (?, ?, ?, ?)",
-            (family, fact_key, selector, str(fact_hash)),
+            (family, fact_key, selector, str(sealed)),
         )
     except sqlite3.IntegrityError as exc:
         raise JournalDamaged(
@@ -173,7 +216,7 @@ def store_durable_fact_seal(
         family=family,
         fact_key=fact_key,
         selector=selector,
-        fact_hash=fact_hash,
+        fact_hash=sealed,
     )
 
 
