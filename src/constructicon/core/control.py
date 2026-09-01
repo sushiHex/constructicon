@@ -316,6 +316,34 @@ class CommandRecord(BaseModel):
     completed_at: AwareDatetime | None
 
 
+REFUSAL_PLAN_KINDS: frozenset[str] = frozenset({"admission_reject", "control_reject"})
+
+
+def plan_records_a_refusal(plan: JsonValue | None) -> bool:
+    """Whether a stored plan records why nothing was written.
+
+    Every operation may end in a refusal, and some refusals can only be decided
+    once the command exists — they are properties of the decision rather than
+    of the request. A refusal is therefore planned like any other outcome, so
+    that it becomes terminal and replays byte-for-byte under the key it spent.
+
+    Such a plan names no domain fact. Asking it which fact it wrote is a
+    question with no answer, and answering "damage" strands a command that
+    behaved perfectly: its key is spent, its row stays ``prepared``, and no
+    retry can ever finish it.
+
+    Two eras say it two ways. Plans written before the typed envelope carry a
+    bare ``rejection``; current plans declare a refusal ``kind`` inside it.
+    """
+
+    if not isinstance(plan, dict):
+        return False
+    if "rejection" in plan:
+        return True
+    planned = plan.get("plan")
+    return isinstance(planned, dict) and planned.get("kind") in REFUSAL_PLAN_KINDS
+
+
 class ResumeCommandPlan(BaseModel):
     """The exact current plan authorizing one explicit resume attempt.
 

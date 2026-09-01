@@ -39,6 +39,7 @@ from constructicon.core.control import (
     CommandRecord,
     approval_id_for_command,
     channel_authority_holder,
+    plan_records_a_refusal,
 )
 from constructicon.core.effect import ApprovalRecord
 from constructicon.core.errors import JournalDamaged
@@ -288,10 +289,16 @@ def decoded_human_command_plan(command: CommandRecord) -> HumanCommandPlan | Non
     therefore suitable for selectors that must find a relocated fact from the
     immutable plan first; the family-specific projector still proves the fact
     against its request and command before anyone acts on it.
+
+    A command that refused planned no mutation, so it names no fact and this
+    returns ``None`` — the same answer as an operation outside the family, and
+    for the same reason.
     """
 
     raw = command.plan
     if command.operation not in {"runs_approve", "channels_reply", "channels_ack"}:
+        return None
+    if plan_records_a_refusal(raw):
         return None
     if not isinstance(raw, dict):
         raise JournalDamaged(f"human command {command.command_id!r} has no typed plan")
