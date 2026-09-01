@@ -228,7 +228,9 @@ def test_an_erased_event_and_lowered_fence_leave_an_orphan_seal(
         )
         connection.commit()
 
-    with pytest.raises(JournalDamaged, match="seal inventory"):
+    # The reader never walks the history to find this: the seal standing at the
+    # sequence the lowered fence would next allocate says it alone.
+    with pytest.raises(JournalDamaged, match="orphan seal at event"):
         journal.events(RUN_ID)
 
 

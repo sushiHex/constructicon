@@ -44,8 +44,9 @@ from constructicon.substrate.journal._sqlite_commands import (
     command_for_id,
 )
 from constructicon.substrate.journal._sqlite_execution_facts import (
+    EVENT_FACT_FAMILY,
+    event_fact_key,
     stored_event_from_row,
-    validate_event_seal_inventory,
     validate_resume_attempt_provenance,
 )
 from constructicon.substrate.journal._sqlite_fact_seals import (
@@ -735,13 +736,22 @@ def validated_run_lifecycle(
     return event_seq, event_kind
 
 
-def validated_event_history(
+def validated_event_fence(
     connection: sqlite3.Connection,
     *,
     run_id: RunId,
     next_event_seq: object,
 ) -> int:
-    """Prove the append-only event sequence against the run's allocation fence."""
+    """Prove one run's event extent against the fence a writer is about to turn.
+
+    Three indexed aggregates, not a walk. Count, minimum, and maximum against
+    the allocation fence is what catches an erased event — the absent fact a
+    per-row read cannot see — and it is the whole of what a writer needs to know
+    about the history behind it.
+
+    Proving each retained event against its own seal is inventory's work, not a
+    writer's.
+    """
 
     fence = _durable_sequence(
         next_event_seq,
@@ -787,7 +797,21 @@ def validated_event_history(
         raise JournalDamaged(
             f"event sequence history for run {run_id!r} contradicts its allocation fence"
         )
-    validate_event_seal_inventory(connection, run_id=run_id)
+    # Erasing the newest event and lowering the fence to match leaves count,
+    # minimum, and maximum agreeing with each other and lying together. The
+    # seal at the sequence this fence is about to allocate is what survives to
+    # say otherwise, and asking for exactly that one is a point lookup — the
+    # writer never walks the history to learn its own next move.
+    orphan = durable_fact_seal(
+        connection,
+        family=EVENT_FACT_FAMILY,
+        fact_key=event_fact_key(run_id, fence + 1),
+    )
+    if orphan is not None:
+        raise JournalDamaged(
+            f"run {run_id!r} holds an orphan seal at event {fence + 1}: its row "
+            "was erased behind a lowered allocation fence"
+        )
     return fence
 
 
@@ -848,29 +872,29 @@ def _validate_run_integrity_flags(row: sqlite3.Row) -> None:
         raise JournalDamaged("durable run child facts name no retained run")
 
 
-def validated_run_facts(
+def validated_run_fence(
     connection: sqlite3.Connection,
     row: sqlite3.Row,
 ) -> tuple[ValidatedRunWorld, int | None, str | None]:
-    """Prove immutable world, lifecycle, and resume provenance for one run."""
+    """Prove one run's immutable world and the fence a caller is about to use.
 
-    facts = _validated_run_facts_before_resume_inventory(connection, row)
-    validate_resume_attempt_provenance(connection, run_id=facts[0].run_id)
-    return facts
+    Everything here is O(1) or one indexed aggregate: the run's own seal, its
+    sealed immutable world, its event extent against its allocation fence, and
+    the single latest event its status names.
 
-
-def _validated_run_facts_before_resume_inventory(
-    connection: sqlite3.Connection,
-    row: sqlite3.Row,
-) -> tuple[ValidatedRunWorld, int | None, str | None]:
-    """Project run facts while the enclosing inventory proves relations once."""
+    Deliberately not the events behind that fence. They were sealed as they were
+    written, and `validate_event_seal_inventory` proves every one of them exactly
+    once when the store is opened. Re-proving them per call made every append
+    cost the history it appended to — quadratic in a run's own length, which is
+    the one dimension a long run grows in.
+    """
 
     durable = _durable_run_fields(row)
     _validate_run_integrity_flags(row)
     world = validated_run_world(connection, row)
     if world.run_id != durable.run_id:
         raise JournalDamaged(f"run {durable.run_id!r} contradicts its immutable world")
-    validated_event_history(
+    validated_event_fence(
         connection,
         run_id=durable.run_id,
         next_event_seq=row["next_event_seq"],
@@ -908,7 +932,7 @@ def validate_run_fact_inventory(connection: sqlite3.Connection) -> int:
         "SELECT " + RUN_PROJECTION_COLUMNS + RUN_PROJECTION_JOINS + " ORDER BY r.run_id"
     ).fetchall()
     for row in rows:
-        _validated_run_facts_before_resume_inventory(connection, row)
+        validated_run_fence(connection, row)
     return resume_attempt_count
 
 
@@ -921,7 +945,7 @@ def validated_run_projection(
 ) -> tuple[RunRecord, ValidatedRunWorld, int | None, str | None]:
     """Project one run through world, relational, and lifecycle proof once."""
 
-    world, event_seq, event_kind = validated_run_facts(connection, row)
+    world, event_seq, event_kind = validated_run_fence(connection, row)
     record = (
         decode_record(row)
         if decode_record is not None
@@ -965,7 +989,7 @@ def run_facts_for_id(
     if row is None:
         validate_no_orphan_run_facts(connection)
         return None
-    return validated_run_facts(connection, row)
+    return validated_run_fence(connection, row)
 
 
 def validated_run_world(

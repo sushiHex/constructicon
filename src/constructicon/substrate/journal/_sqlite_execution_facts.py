@@ -411,18 +411,19 @@ def resume_attempt_owned_by(
     return False
 
 
-def validate_event_seal_inventory(
-    connection: sqlite3.Connection,
-    *,
-    run_id: RunId | None = None,
-) -> None:
-    """Require a bijection between retained event rows and their seals."""
+def validate_event_seal_inventory(connection: sqlite3.Connection) -> None:
+    """Require a bijection between every retained event row and its seal.
 
-    parameters: tuple[object, ...] = () if run_id is None else (str(run_id),)
-    where = "" if run_id is None else " WHERE run_id = ?"
+    One pass over the whole store, at the one moment that pass is affordable.
+    It deliberately takes no run scope: a per-run variant existed, read every
+    event seal in the database to answer about one run, and was called once per
+    run — so opening a store proved every seal once globally and then again N
+    times over. Inventory is a whole-store act or it is not inventory.
+    """
+
     row_keys: set[str] = set()
     row_count = 0
-    for row in connection.execute("SELECT * FROM events" + where, parameters):
+    for row in connection.execute("SELECT * FROM events"):
         row_count += 1
         event = _stored_event_from_row_without_relationship(connection, row)
         row_keys.add(event_fact_key(event.run_id, event.seq))
@@ -432,17 +433,14 @@ def validate_event_seal_inventory(
         "SELECT fact_key FROM durable_fact_seals WHERE family = ?",
         (EVENT_FACT_FAMILY,),
     ):
-        sealed_run_id, _seq = _event_fact_key_position(seal_row["fact_key"])
-        if run_id is None or sealed_run_id == str(run_id):
-            seal_count += 1
-            seal_keys.add(_durable_text(seal_row["fact_key"], fact="event fact seal key"))
+        seal_count += 1
+        seal_keys.add(_durable_text(seal_row["fact_key"], fact="event fact seal key"))
     if (
         row_keys != seal_keys
         or len(row_keys) != row_count
         or len(seal_keys) != seal_count
     ):
-        scope = "durable event" if run_id is None else f"run {run_id!r} event"
-        raise JournalDamaged(f"{scope} seal inventory has an orphan or missing fact")
+        raise JournalDamaged("durable event seal inventory has an orphan or missing fact")
 
 
 def _checkpoint_position(run_id: str, path_key: str) -> dict[str, str]:

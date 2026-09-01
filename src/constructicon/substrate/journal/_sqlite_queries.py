@@ -68,7 +68,7 @@ from constructicon.substrate.journal._sqlite_runs import (
     register_run_origin_guard,
     run_record_from_row,
     validate_no_orphan_run_facts,
-    validated_run_facts,
+    validated_run_fence,
     validated_run_projection,
 )
 
@@ -759,7 +759,7 @@ class _SqliteQueriesMixin:
         if row is None:
             validate_no_orphan_run_facts(connection)
             return None
-        return validated_run_facts(connection, row)
+        return validated_run_fence(connection, row)
 
     def _run_projection_for_id(
         self,
