@@ -422,8 +422,15 @@ def command_plan_exists(column: str) -> str:
     return f"({column} IS NOT NULL AND {column} != 'null')"
 
 
-def validate_command_claim_inventory(connection: sqlite3.Connection) -> int:
-    """Surface one missing, orphaned, relocated, or changed command claim."""
+def validate_command_claim_integrity(connection: sqlite3.Connection) -> None:
+    """Surface one missing, orphaned, relocated, or changed command claim.
+
+    Wholly in SQL, over indexed joins and deterministic hash functions. A
+    bounded read keeps this, because its answer can depend on a row's absence:
+    erase the newest command of an operation and the next key derivation would
+    reuse a spent one, which only the orphaned seal left behind can reveal.
+    What a bounded read must not do is project.
+    """
 
     register_command_seal_hashes(connection)
     orphan = connection.execute(
@@ -491,6 +498,18 @@ def validate_command_claim_inventory(connection: sqlite3.Connection) -> int:
         # The canonical projector supplies precise identity/content diagnostics.
         sealed_command_from_row(connection, anomaly)
         raise JournalDamaged("command claim inventory is contradictory")
+
+
+def validate_resume_plan_era_inventory(connection: sqlite3.Connection) -> int:
+    """Prove every retained command against the era markers migration wrote.
+
+    This decodes each command in turn and proves its phase seals, so its cost is
+    the whole store however few rows the caller asked for. It is a whole-store
+    claim, and it belongs where whole-store claims are made — at open. On the
+    recovery pump's hot loop it made every bounded read pay for every command it
+    was never going to return.
+    """
+
     expected_marker_keys: set[str] = set()
     for row in connection.execute("SELECT * FROM commands ORDER BY command_id"):
         record = sealed_command_from_row(connection, row)
@@ -511,6 +530,13 @@ def validate_command_claim_inventory(connection: sqlite3.Connection) -> int:
             "resume-plan era seal inventory has an orphan or missing fact"
         )
     return marker_count
+
+
+def validate_command_claim_inventory(connection: sqlite3.Connection) -> int:
+    """Both whole-store command proofs, for the open path that owes them."""
+
+    validate_command_claim_integrity(connection)
+    return validate_resume_plan_era_inventory(connection)
 
 
 def seal_command_claim(connection: sqlite3.Connection, row: sqlite3.Row) -> None:

@@ -54,7 +54,7 @@ from constructicon.substrate.journal._sqlite_commands import (
     seal_command_phases,
     seal_current_command_plan,
     sealed_command_from_row,
-    validate_command_claim_inventory,
+    validate_command_claim_integrity,
 )
 from constructicon.substrate.journal._sqlite_execution_facts import (
     resume_attempt_owned_by,
@@ -212,7 +212,7 @@ class _SqliteControlMixin:
 
     def latest_command_key(self, *, operation: str) -> tuple[str, str] | None:
         with self._read() as connection:
-            validate_command_claim_inventory(connection)
+            validate_command_claim_integrity(connection)
             row = connection.execute(
                 "SELECT * FROM commands WHERE "
                 + _COMMAND_RECOVERY_ANOMALY
@@ -250,7 +250,7 @@ class _SqliteControlMixin:
             params.extend((after[0], after[0], after[1]))
         params.append(limit)
         with self._read() as connection:
-            validate_command_claim_inventory(connection)
+            validate_command_claim_integrity(connection)
             rows = connection.execute(
                 "SELECT * FROM commands WHERE "
                 + " AND ".join(clauses)
@@ -282,7 +282,7 @@ class _SqliteControlMixin:
             params.extend((after[0], after[0], after[1]))
         params.append(limit)
         with self._read() as connection:
-            validate_command_claim_inventory(connection)
+            validate_command_claim_integrity(connection)
             rows = connection.execute(
                 "SELECT * FROM commands WHERE "
                 + _COMMAND_RECOVERY_ANOMALY
