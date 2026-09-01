@@ -48,15 +48,19 @@ def sealed_fact_hash(
 ) -> Digest:
     """Bind one owner's content hash to the identity it is stored under.
 
-    An owner chooses which bytes constitute its fact. Anti-relocation, though,
-    is not the owner's to choose: if the content hash omits the primary key,
-    two same-shaped rows can trade places and every seal still matches, which
-    is the one attack seals exist to stop. Leaving that to nineteen owners to
-    each remember is a convention, and a convention is what fails silently.
+    An owner chooses which bytes constitute its fact. If that content hash
+    omits the primary key, two same-shaped rows can trade places and every seal
+    still matches, which is the one attack seals exist to stop. Every current
+    owner does include its key — that has been checked, family by family — but
+    each of them kept that rule independently, and a rule kept independently is
+    what fails silently in the family added next.
 
-    So the identity is bound here, where the seal layer already holds it and no
-    owner can forget it. `durable_fact_hash` still answers what a row says;
-    this answers which row said it.
+    So the identity is bound here instead. Be exact about what that buys: an
+    owner still chooses the strings it passes as `fact_key` and `selector`, and
+    passing a constant or the wrong column is still a mistake it can make. What
+    it can no longer do is declare an identity to the seal layer and leave that
+    identity out of what the seal commits to. `durable_fact_hash` answers what
+    a row says; this answers which row it was stored as.
     """
 
     return digest(

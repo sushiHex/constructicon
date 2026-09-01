@@ -51,6 +51,7 @@ from constructicon.core.errors import JournalDamaged
 from constructicon.core.human import (
     APPROVAL_REPLY_CONTRACT,
     APPROVAL_REQUEST_CONTRACT,
+    ApprovalDecisionPayload,
     ApprovalRequestPayload,
     ChannelApprovalPlan,
     StoredApprovalPlan,
@@ -559,6 +560,65 @@ def test_current_open_reproves_a_reply_writer_over_a_migrated_opaque_preack(
         match=r"missing command|missing behind a dependent durable fact",
     ):
         SqliteJournal(database, now_fn=clock.now)
+
+
+def test_a_v6_reply_that_merely_looks_like_a_decision_is_not_one(
+    tmp_path: Path,
+) -> None:
+    """What settles a legacy reply is the ledger, not the shape of its bytes.
+
+    A payload test would classify this row as an approval and then demand the
+    decision record its era never wrote — the same permanent migration abort,
+    surviving in whatever subset of history happens to match today's model. It
+    would also move: change the model that reads these bytes and the same
+    history is classified differently on the next release.
+    """
+
+    clock = FakeClock()
+    database = tmp_path / "v6-lookalike-decision.db"
+    journal = SqliteJournal(database, now_fn=clock.now)
+    channel = MailboxChannel(journal, channel_id=CHANNEL_ID)
+    request = channel.append_request(_approval_intent(), "att-v6-lookalike")
+    lookalike = ApprovalDecisionPayload(
+        approval=ApprovalRecord(
+            approval_id="apv-v6-lookalike",
+            subject=SUBJECT,
+            decision="approved",
+            reason=None,
+            actor=APPROVER,
+            run_id=RUN,
+            created_at=clock.now(),
+        )
+    ).model_dump(mode="json")
+    reply = message_for_reply(
+        request,
+        actor_id=APPROVER.actor_id,
+        payload=json_value(lookalike),
+        created_at=clock.now(),
+    )
+    with journal._txn() as connection:
+        _insert_message(connection, reply, None, WRITER)
+        connection.execute(
+            "INSERT INTO channel_acks (message_id, actor_id, command_id, acked_at,"
+            " ack_provenance_version) VALUES (?, ?, ?, ?, NULL)",
+            (
+                str(request.message_id),
+                APPROVER.actor_id,
+                WRITER,
+                clock.now().isoformat(),
+            ),
+        )
+    _downgrade_v7_schema_to_v6(database)
+
+    migrated = SqliteJournal(database, now_fn=clock.now)
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+
+    projected = MailboxChannel(migrated, channel_id=CHANNEL_ID).reply_for(request.message_id)
+    assert projected is not None
+    assert projected.message_id == reply.message_id
+    # No approval was minted, so none is claimed for it.
+    assert migrated.approval("apv-v6-lookalike") is None
 
 
 def test_a_v6_approval_interaction_reply_predates_the_decision_law(

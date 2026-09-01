@@ -1193,6 +1193,7 @@ def _validated_stored_reply_fact(
         request,
         reply,
         current_era=reply_command_id is not None,
+        stored_approval=stored_approval,
     )
     if acknowledgement_command is None:
         raise JournalDamaged(
