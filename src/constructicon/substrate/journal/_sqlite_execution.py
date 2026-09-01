@@ -51,7 +51,6 @@ from constructicon.substrate.journal._sqlite_base import (
     _durable_text,
     _path_key,
 )
-from constructicon.substrate.journal._sqlite_channels import _snapshot
 from constructicon.substrate.journal._sqlite_effects import (
     EFFECT_PREPARATION_FACT_FAMILY,
     StoredEffectRequest,
@@ -569,7 +568,7 @@ class _SqliteExecutionMixin:
         return "recorded"
 
     def run_state(self, run_id: RunId) -> RunState | None:
-        with self._read() as conn, _snapshot(conn):
+        with self._read() as conn:
             projection = run_projection_for_id(conn, run_id, observe=self._now)
             if projection is None:
                 return None
@@ -582,7 +581,7 @@ class _SqliteExecutionMixin:
             )
 
     def run_manifest_hash(self, run_id: RunId) -> Digest | None:
-        with self._read() as conn, _snapshot(conn):
+        with self._read() as conn:
             projection = run_facts_for_id(conn, run_id)
             if projection is None:
                 return None
@@ -590,7 +589,7 @@ class _SqliteExecutionMixin:
             return world.manifest.manifest_hash
 
     def run_inputs(self, run_id: RunId) -> dict[str, Any] | None:
-        with self._read() as conn, _snapshot(conn):
+        with self._read() as conn:
             projection = run_facts_for_id(conn, run_id)
             if projection is None:
                 return None
@@ -610,7 +609,7 @@ class _SqliteExecutionMixin:
             return manifest_json
 
     def events(self, run_id: RunId, *, after_seq: int = 0, limit: int = 100) -> list[JournalEvent]:
-        with self._read() as conn, _snapshot(conn):
+        with self._read() as conn:
             projection = run_facts_for_id(conn, run_id)
             if projection is None:
                 return []

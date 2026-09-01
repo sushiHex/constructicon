@@ -47,7 +47,6 @@ from constructicon.substrate.journal._sqlite_base import (
 from constructicon.substrate.journal._sqlite_channels import (
     _channel_message_rows_for_ids,
     _channel_provenance_cutoffs,
-    _snapshot,
     _stored_ack_record_from_values,
     _stored_channel_message_from_row,
     _stored_reply_writer,
@@ -114,7 +113,7 @@ def _lifecycle_event_row(
 
 class _SqliteQueriesMixin:
     def run_record(self, run_id: RunId) -> RunRecord | None:
-        with self._read() as connection, _snapshot(connection):
+        with self._read() as connection:
             register_run_origin_guard(connection)
             row = connection.execute(
                 "SELECT " + RUN_PROJECTION_COLUMNS + RUN_PROJECTION_JOINS + " WHERE r.run_id = ?",
@@ -130,7 +129,7 @@ class _SqliteQueriesMixin:
             return record
 
     def run_head(self, run_id: RunId) -> RunHead | None:
-        with self._read() as connection, _snapshot(connection):
+        with self._read() as connection:
             projection = self._run_projection_for_id(connection, run_id)
             if projection is None:
                 return None
@@ -163,7 +162,7 @@ class _SqliteQueriesMixin:
             arguments.extend((through[0], through[0], through[1]))
         requested = " AND ".join(clauses) if clauses else "1"
         arguments.append(limit)
-        with self._read() as connection, _snapshot(connection):
+        with self._read() as connection:
             register_run_origin_guard(connection)
             rows = connection.execute(
                 "SELECT "
@@ -190,7 +189,7 @@ class _SqliteQueriesMixin:
             placeholders = ",".join("?" for _ in statuses)
             requested = f"r.status IN ({placeholders})"
             arguments.extend(status.value for status in statuses)
-        with self._read() as connection, _snapshot(connection):
+        with self._read() as connection:
             register_run_origin_guard(connection)
             row = connection.execute(
                 "SELECT "
@@ -216,7 +215,7 @@ class _SqliteQueriesMixin:
         if limit <= 0:
             raise ValueError("limit must be positive")
         observed_at = self._now()
-        with self._read() as connection, _snapshot(connection):
+        with self._read() as connection:
             register_run_origin_guard(connection)
             rows = connection.execute(
                 "SELECT " + RUN_PROJECTION_COLUMNS + RUN_PROJECTION_JOINS + " WHERE r.status = ?"
@@ -255,7 +254,7 @@ class _SqliteQueriesMixin:
             ]
 
     def run_origin(self, run_id: RunId) -> RunOrigin | None:
-        with self._read() as connection, _snapshot(connection):
+        with self._read() as connection:
             register_run_origin_guard(connection)
             row = connection.execute(
                 "SELECT " + RUN_PROJECTION_COLUMNS + RUN_PROJECTION_JOINS + " WHERE r.run_id = ?",
@@ -271,7 +270,7 @@ class _SqliteQueriesMixin:
             return record.origin
 
     def event(self, run_id: RunId, seq: int) -> JournalEvent | None:
-        with self._read() as connection, _snapshot(connection):
+        with self._read() as connection:
             projection = self._run_facts_for_id(connection, run_id)
             if projection is None:
                 return None
@@ -286,7 +285,7 @@ class _SqliteQueriesMixin:
             return event
 
     def latest_terminal_event(self, run_id: RunId) -> JournalEvent | None:
-        with self._read() as connection, _snapshot(connection):
+        with self._read() as connection:
             register_run_origin_guard(connection)
             row = connection.execute(
                 "SELECT " + RUN_PROJECTION_COLUMNS + RUN_PROJECTION_JOINS + " WHERE r.run_id = ?",
@@ -350,7 +349,7 @@ class _SqliteQueriesMixin:
         # Reading PARKED rows first and terminal events later lets another host
         # complete a run between those observations; the newer terminal event
         # would then make an entirely valid transition look like journal damage.
-        with self._read() as connection, _snapshot(connection):
+        with self._read() as connection:
             register_run_origin_guard(connection)
             rows = connection.execute(
                 "SELECT "
@@ -482,7 +481,7 @@ class _SqliteQueriesMixin:
         if not unique:
             return {}
         answered: dict[Digest, Digest] = {}
-        with self._read() as connection, _snapshot(connection):
+        with self._read() as connection:
             legacy_ack_through, legacy_message_through = _channel_provenance_cutoffs(connection)
             request_batch = max(
                 1,
@@ -739,7 +738,7 @@ class _SqliteQueriesMixin:
         return answered
 
     def max_event_seq(self, run_id: RunId) -> int:
-        with self._read() as connection, _snapshot(connection):
+        with self._read() as connection:
             projection = self._run_facts_for_id(connection, run_id)
             if projection is None:
                 return 0

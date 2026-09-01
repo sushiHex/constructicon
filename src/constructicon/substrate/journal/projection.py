@@ -41,7 +41,6 @@ class ProjectionResult(BaseModel):
 
 def project_run(journal: SqliteJournal, run_id: RunId, out_dir: Path) -> ProjectionResult:
     with journal._read() as conn:  # projection is a journal-family module
-        conn.execute("BEGIN")  # one WAL read snapshot for run + events
         run = conn.execute(
             "SELECT run_id, status, manifest_hash, input_hash, created_at, owner_id,"
             " lease_expires_at, cancel_requested"
@@ -55,7 +54,6 @@ def project_run(journal: SqliteJournal, run_id: RunId, out_dir: Path) -> Project
             (run_id,),
         ).fetchall()
         stored_events = [stored_event_from_row(conn, row) for row in rows]
-        conn.execute("COMMIT")
 
     run_fields = _durable_run_fields(run)
     manifest_hash = _durable_digest(

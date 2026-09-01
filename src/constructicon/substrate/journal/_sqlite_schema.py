@@ -29,6 +29,7 @@ from constructicon.substrate.journal._sqlite_base import (
     _durable_sequence,
     _durable_text,
     _manifest_semantically_equal,
+    read_snapshot,
 )
 from constructicon.substrate.journal._sqlite_channels import (
     CHANNEL_ACK_FACT_FAMILY,
@@ -314,8 +315,13 @@ class _SqliteSchemaMixin:
                 self._ensure_v7_lease_schema(connection, mode="current")
                 self._ensure_v7_run_schema(connection, mode="current")
                 self._ensure_v7_fact_seal_schema(connection, mode="current")
-                self._validate_v7_fact_inventory(connection)
                 connection.commit()
+                # Opening compares every primary fact against its seal across
+                # many statements. Without one snapshot a writer committing
+                # between two of them makes a healthy store fail to open, and
+                # ADR 0016 forbids healing on open — so that refusal is final.
+                with read_snapshot(connection):
+                    self._validate_v7_fact_inventory(connection)
         finally:
             connection.close()
 

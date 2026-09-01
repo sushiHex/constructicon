@@ -9,8 +9,7 @@ author, so a crash can never leave a reply without its delivery fact.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, cast
@@ -536,7 +535,7 @@ class _SqliteChannelsMixin:
         return message
 
     def channel_message(self, *, channel_id: str, message_id: Digest) -> ChannelMessage | None:
-        with self._read() as connection, _snapshot(connection):
+        with self._read() as connection:
             _validate_channel_history(connection)
             row = _channel_message_row(connection, message_id)
             if row is None:
@@ -564,7 +563,7 @@ class _SqliteChannelsMixin:
         detail — an acknowledgement never enters a digest-bound document.
         """
 
-        with self._read() as connection, _snapshot(connection):
+        with self._read() as connection:
             _validate_channel_history(connection)
             row = _channel_message_row(connection, message_id)
             if row is None:
@@ -586,7 +585,7 @@ class _SqliteChannelsMixin:
     def channel_message_command(self, *, message_id: Digest) -> str | None:
         """Which command wrote this message, if a command did."""
 
-        with self._read() as connection, _snapshot(connection):
+        with self._read() as connection:
             _validate_channel_history(connection)
             row = _channel_message_row(connection, message_id)
             if row is None:
@@ -595,7 +594,7 @@ class _SqliteChannelsMixin:
             return writer
 
     def channel_reply_for(self, *, channel_id: str, request_id: Digest) -> ChannelMessage | None:
-        with self._read() as connection, _snapshot(connection):
+        with self._read() as connection:
             _validate_channel_history(connection)
             request_row = _channel_message_row(connection, request_id)
             if request_row is None:
@@ -747,7 +746,7 @@ class _SqliteChannelsMixin:
         """
 
         del actor_id  # the cut bounds history; the query filters the actor
-        with self._read() as connection, _snapshot(connection):
+        with self._read() as connection:
             current = _current_revision(connection, channel_id=None)
         return ActorInboxRevision(
             message_seq=current.message_seq,
@@ -784,7 +783,7 @@ class _SqliteChannelsMixin:
         )
 
     def channel_revision(self, *, channel_id: str) -> ChannelRevision:
-        with self._read() as connection, _snapshot(connection):
+        with self._read() as connection:
             return _current_revision(connection, channel_id)
 
     def channel_inbox(
@@ -844,7 +843,7 @@ class _SqliteChannelsMixin:
             )
             visible_params.extend((after[0], after[0], after[1]))
         params = [message_seq, *visible_params, limit]
-        with self._read() as connection, _snapshot(connection):
+        with self._read() as connection:
             connection.create_function(
                 "constructicon_channel_request_routing_matches",
                 7,
@@ -1477,24 +1476,6 @@ def _reply_owned_by_command(
     if message.kind != "reply":
         raise JournalDamaged(f"command {command_id!r} owns a non-reply channel message")
     return message.message_id
-
-
-@contextmanager
-def _snapshot(connection: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
-    """One WAL read snapshot, so multi-statement reads see one consistent state.
-
-    Reading the two sequence maxima in separate statements could otherwise
-    straddle another host's commit and manufacture a cut that never existed —
-    an ack visible while the message from its own transaction is not.
-    """
-
-    connection.execute("BEGIN")
-    try:
-        yield connection
-    except BaseException:
-        connection.execute("ROLLBACK")
-        raise
-    connection.execute("COMMIT")
 
 
 def _current_revision(

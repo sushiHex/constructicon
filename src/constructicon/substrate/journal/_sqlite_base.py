@@ -119,6 +119,34 @@ _ModelT = TypeVar("_ModelT", bound=BaseModel)
 _UNIX_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
+@contextmanager
+def read_snapshot(connection: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
+    """Hold one consistent view of the store across a multi-statement read.
+
+    Every projection here reads a fact and then the seal that proves it. Outside
+    a transaction those are two statements and, in WAL, two snapshots — so a
+    writer committing between them makes a healthy store look like it lost a row
+    or grew an orphan, and the reader reports damage against a database that
+    never had any. Reading two sequence maxima the same way manufactures a cut
+    that never existed: an acknowledgement visible while the message committed
+    in its own transaction is not.
+
+    The transaction is deferred, so the snapshot is taken by the first statement
+    and held until the block ends. It is released by rollback rather than commit
+    because a read has nothing to commit: anything a reader wrote would be a
+    defect, and discarding it is the honest outcome.
+
+    A caller already inside a write transaction holds a snapshot by definition
+    and must not open a second one.
+    """
+
+    connection.execute("BEGIN")
+    try:
+        yield connection
+    finally:
+        connection.rollback()
+
+
 @dataclass(frozen=True)
 class _DurableRunFields:
     run_id: RunId
@@ -479,9 +507,12 @@ class _SqliteBase:
 
     @contextmanager
     def _read(self) -> Iterator[sqlite3.Connection]:
+        """One connection, and one consistent view of the store through it."""
+
         conn = self._connect()
         try:
-            yield conn
+            with read_snapshot(conn):
+                yield conn
         finally:
             conn.close()
 

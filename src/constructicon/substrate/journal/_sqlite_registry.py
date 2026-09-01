@@ -53,32 +53,23 @@ class _SqliteRegistryMixin:
         revision: RegistryRevision | None = None,
     ) -> RegistrySnapshot:
         with self._read() as conn:
-            conn.execute("BEGIN")  # one WAL read snapshot for both tables
-            try:
-                current = _current_registry_revision(conn)
-                selected = revision or current
-                if (
-                    selected.registration_seq > current.registration_seq
-                    or selected.promotion_seq > current.promotion_seq
-                ):
-                    raise InvalidRegistryRevision(
-                        f"future registry revision {selected.model_dump()} exceeds "
-                        f"current {current.model_dump()}"
-                    )
-                snapshot = _registry_snapshot_at_revision(
-                    conn,
-                    selected,
-                    incoherence=(
-                        InvalidRegistryRevision
-                        if revision is not None
-                        else JournalDamaged
-                    ),
+            current = _current_registry_revision(conn)
+            selected = revision or current
+            if (
+                selected.registration_seq > current.registration_seq
+                or selected.promotion_seq > current.promotion_seq
+            ):
+                raise InvalidRegistryRevision(
+                    f"future registry revision {selected.model_dump()} exceeds "
+                    f"current {current.model_dump()}"
                 )
-            except BaseException:
-                conn.execute("ROLLBACK")
-                raise
-            else:
-                conn.execute("COMMIT")
+            snapshot = _registry_snapshot_at_revision(
+                conn,
+                selected,
+                incoherence=(
+                    InvalidRegistryRevision if revision is not None else JournalDamaged
+                ),
+            )
         return snapshot
 
     def store_version(self, version: StoredVersion) -> None:
