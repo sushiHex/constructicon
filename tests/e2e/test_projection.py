@@ -78,9 +78,15 @@ async def test_projection_refuses_unknown_runs(world: Constructicon, tmp_path: P
         world.project_run(RunId("run-never-existed"), tmp_path / "out")
 
 
-@pytest.mark.parametrize("fact", ("run", "event"))
+@pytest.mark.parametrize(
+    ("fact", "refusal"),
+    # The run's seal covers `created_at`, so it refuses first — the positive
+    # seal is the outer boundary, and the decoder behind it never runs.
+    (("run", "contradicts its positive seal"), ("event", "durable timestamp")),
+)
 async def test_projection_uses_the_shared_strict_durable_decoders(
     fact: str,
+    refusal: str,
     world: Constructicon,
     tmp_path: Path,
 ) -> None:
@@ -100,5 +106,42 @@ async def test_projection_uses_the_shared_strict_durable_decoders(
             )
         connection.commit()
 
-    with pytest.raises(JournalDamaged, match="durable timestamp"):
+    with pytest.raises(JournalDamaged, match=refusal):
         world.project_run(run_id, tmp_path / f"damaged-{fact}")
+
+
+@pytest.mark.parametrize("column", ("input_hash", "manifest_hash"))
+async def test_a_projection_requires_the_seal_of_the_run_it_projects(
+    column: str,
+    world: Constructicon,
+    tmp_path: Path,
+) -> None:
+    """A valid value is not the same thing as the right one.
+
+    The strict decoders refuse a scalar that could never have been written.
+    They cannot refuse one that could — a digest swapped for another digest
+    decodes perfectly, and the summary then states it as durable fact. What
+    tells the two apart is the run's positive seal, and a projection that
+    selected only the columns it prints was not in a position to ask for it.
+    """
+
+    run_id = RunId(f"run-project-rewritten-{column}")
+    await world._start_direct(pipeline_graph(), INPUTS, run_id=run_id)
+    honest = world.project_run(run_id, tmp_path / f"honest-{column}")
+
+    forged = "sha256:" + "b" * 64
+    with sqlite3.connect(world._journal._db_path) as connection:
+        before = connection.execute(
+            f"SELECT {column} FROM runs WHERE run_id = ?",
+            (str(run_id),),
+        ).fetchone()
+        assert before is not None and before[0] != forged
+        connection.execute(
+            f"UPDATE runs SET {column} = ? WHERE run_id = ?",
+            (forged, str(run_id)),
+        )
+        connection.commit()
+
+    with pytest.raises(JournalDamaged, match="contradicts its positive seal"):
+        world.project_run(run_id, tmp_path / f"rewritten-{column}")
+    assert honest.summary_digest  # the honest projection really did succeed

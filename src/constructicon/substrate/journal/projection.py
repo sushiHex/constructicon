@@ -25,6 +25,7 @@ from constructicon.substrate.journal._sqlite_base import (
     _durable_run_fields,
 )
 from constructicon.substrate.journal._sqlite_execution_facts import stored_event_from_row
+from constructicon.substrate.journal._sqlite_runs import require_run_world_seal
 from constructicon.substrate.journal.sqlite import SqliteJournal
 
 PROJECTION_SCHEMA_VERSION = 1
@@ -41,14 +42,21 @@ class ProjectionResult(BaseModel):
 
 def project_run(journal: SqliteJournal, run_id: RunId, out_dir: Path) -> ProjectionResult:
     with journal._read() as conn:  # projection is a journal-family module
+        # The whole row, joined to its origin, because that is what the run's
+        # positive seal is about. A projection that selected only the columns it
+        # prints could not ask for that proof, and a rewrite from one valid
+        # value to another would leave the store readable and the projected
+        # bytes quietly wrong — which is the one thing a canonical projection
+        # must never be.
         run = conn.execute(
-            "SELECT run_id, status, manifest_hash, input_hash, created_at, owner_id,"
-            " lease_expires_at, cancel_requested"
-            " FROM runs WHERE run_id = ?",
+            "SELECT r.*, o.origin_json FROM runs AS r"
+            " LEFT JOIN run_origins AS o ON o.run_id = r.run_id"
+            " WHERE r.run_id = ?",
             (run_id,),
         ).fetchone()
         if run is None:
             raise ContractViolation(f"unknown run {run_id!r}")
+        require_run_world_seal(conn, run)
         rows = conn.execute(
             "SELECT * FROM events WHERE run_id = ? ORDER BY seq ASC",
             (run_id,),
