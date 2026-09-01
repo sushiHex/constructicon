@@ -41,6 +41,7 @@ from constructicon.core.control import (
     ControlCode,
     ControlRejected,
     command_id_for,
+    command_request_hash,
 )
 from constructicon.core.errors import JournalDamaged
 from constructicon.core.human import (
@@ -50,7 +51,7 @@ from constructicon.core.human import (
     APPROVAL_REQUEST_CONTRACT,
     AdviceReplyPayload,
 )
-from constructicon.core.identity import Digest, canonical_json, json_value
+from constructicon.core.identity import Digest, JsonValue, canonical_json, json_value
 from constructicon.core.run import RunStatus
 from constructicon.substrate.journal._sqlite_channels import (
     CHANNEL_ACK_FACT_FAMILY,
@@ -1418,6 +1419,111 @@ async def test_a_new_command_can_truthfully_lose_to_an_opaque_v6_reply(
         )
         assert isinstance(duplicate_ack, ControlRejected)
         assert duplicate_ack.faults[0].code is ControlCode.IDEMPOTENCY_CONFLICT
+
+
+async def test_an_opaque_v6_scalar_that_collides_with_a_command_still_loses_cleanly(
+    tmp_path: Path,
+    clock: FakeClock,
+    system: Constructicon,
+) -> None:
+    """A schema-6 acknowledgement id is a token, not a command reference.
+
+    The era that wrote it let any caller choose the string, so it may name a
+    real command of any operation. Resolving it and then demanding a reply plan
+    of whatever it found turns an ordinary lost race into permanent damage — and
+    the reachable branch had been the *miss*, taken because a lookup happened to
+    fail rather than because the reply records which era wrote it.
+    """
+
+    panel = _panel(tmp_path, clock, system)
+    request = panel.channel.append_request(_intent(port="collide"), ATTESTATION)
+    won = await panel.control.channels_reply(
+        ADVISOR,
+        message_id=request.message_id,
+        payload={"verdict": "hold"},
+        idempotency_key="collide-winner",
+    )
+    assert isinstance(won, ChannelReplyResult)
+
+    # A real command of another operation, owning no channel fact at all —
+    # exactly the kind of id a v6 caller could have handed the ack column.
+    foreign_request: JsonValue = {"run_id": "run-collide"}
+    claimed = panel.journal.claim_command(
+        actor=ADVISOR,
+        operation="runs_cancel",
+        idempotency_key="collide-foreign",
+        request_hash=command_request_hash(foreign_request),
+        request=foreign_request,
+        owner_id="test:collide",
+        ttl_s=30,
+    )
+    assert claimed.claim is not None
+    foreign = claimed.claim.command_id
+
+    with sqlite3.connect(panel.journal._db_path) as raw:
+        raw.row_factory = sqlite3.Row
+        ack = raw.execute(
+            "SELECT ack_seq FROM channel_acks WHERE message_id = ? AND actor_id = ?",
+            (str(request.message_id), ADVISOR_ID),
+        ).fetchone()
+        reply_seq = raw.execute(
+            "SELECT message_seq FROM channel_messages WHERE message_id = ?",
+            (str(won.message_id),),
+        ).fetchone()
+        assert ack is not None and reply_seq is not None
+        raw.execute(
+            "UPDATE channel_messages SET command_id = NULL,"
+            " reply_provenance_version = NULL WHERE message_id = ?",
+            (str(won.message_id),),
+        )
+        raw.execute(
+            "UPDATE channel_acks SET ack_provenance_version = 0, command_id = ?"
+            " WHERE message_id = ? AND actor_id = ?",
+            (foreign, str(request.message_id), ADVISOR_ID),
+        )
+        raw.execute(
+            "UPDATE channel_provenance SET legacy_ack_through = ?,"
+            " legacy_message_through = ? WHERE singleton = 1",
+            (int(ack[0]), int(reply_seq[0])),
+        )
+        provenance = raw.execute("SELECT * FROM channel_provenance").fetchone()
+        reply_row = raw.execute(
+            "SELECT * FROM channel_messages WHERE message_id = ?",
+            (str(won.message_id),),
+        ).fetchone()
+        ack_row = raw.execute(
+            "SELECT * FROM channel_acks WHERE message_id = ? AND actor_id = ?",
+            (str(request.message_id), ADVISOR_ID),
+        ).fetchone()
+        assert provenance is not None and reply_row is not None and ack_row is not None
+        _replace_test_only_channel_seal(
+            raw,
+            family=CHANNEL_PROVENANCE_FACT_FAMILY,
+            selector="1",
+            fact_hash=channel_provenance_fact_hash(provenance),
+        )
+        _replace_test_only_channel_seal(
+            raw,
+            family=CHANNEL_MESSAGE_FACT_FAMILY,
+            selector=str(reply_row["message_seq"]),
+            fact_hash=channel_message_fact_hash(reply_row),
+        )
+        _replace_test_only_channel_seal(
+            raw,
+            family=CHANNEL_ACK_FACT_FAMILY,
+            selector=str(ack_row["ack_seq"]),
+            fact_hash=channel_ack_fact_hash(ack_row, connection=raw),
+        )
+
+    for _ in range(2):
+        lost = await panel.control.channels_reply(
+            ADVISOR,
+            message_id=request.message_id,
+            payload={"verdict": "ship"},
+            idempotency_key="collide-loser",
+        )
+        assert isinstance(lost, ControlRejected)
+        assert lost.faults[0].code is ControlCode.CHANNEL_ALREADY_REPLIED
 
 
 @pytest.mark.parametrize("preack", (False, True))

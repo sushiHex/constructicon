@@ -621,7 +621,7 @@ def test_every_reply_read_refuses_an_approval_missing_from_its_atomic_triple(
     with pytest.raises(JournalDamaged, match=match):
         journal.channel_delivery(message_id=reply.message_id, actor_id=ACTOR.actor_id)
     with pytest.raises(JournalDamaged, match=match):
-        journal.channel_message_command(message_id=reply.message_id)
+        journal.channel_message_writer(message_id=reply.message_id)
     with pytest.raises(JournalDamaged, match=match):
         journal.answered_requests([request.message_id])
 

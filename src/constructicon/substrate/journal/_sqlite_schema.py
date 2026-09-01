@@ -255,7 +255,67 @@ CREATE TABLE IF NOT EXISTS channel_acks (
 """
 
 
+def _has_legacy_runs_table(connection: sqlite3.Connection) -> bool:
+    return (
+        connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='runs'"
+        ).fetchone()
+        is not None
+    )
+
+
+def _ddl_statements(*scripts: str) -> tuple[str, ...]:
+    """One schema script as statements that can run inside a transaction.
+
+    `executescript` commits whatever transaction is open before it runs, so a
+    create that must be atomic with the `user_version` it publishes cannot use
+    it. These scripts are plain `CREATE` statements with no string literals, so
+    the statement boundary is exactly the semicolon.
+    """
+
+    return tuple(
+        statement
+        for script in scripts
+        for raw in script.split(";")
+        if (statement := raw.strip())
+    )
+
+
+_CURRENT_SCHEMA_DDL = _ddl_statements(_SCHEMA, _V5_SCHEMA, _V6_SCHEMA)
+
+
 class _SqliteSchemaMixin:
+    def _create_current_schema(self, connection: sqlite3.Connection) -> bool:
+        """Create an empty store at the current version, or say who won.
+
+        Tables become visible to other openers the moment they commit, so a
+        create that publishes them before its `user_version` invites a
+        concurrent opener to read a brand-new database as a version-0 legacy
+        one and run the M1 ladder over it — or to trip over half a schema. One
+        transaction publishes both, and the version is re-read inside it
+        because another process may have created the store in the meantime.
+
+        Returns whether this process is the one that created it.
+        """
+
+        connection.execute("BEGIN IMMEDIATE")
+        if int(connection.execute("PRAGMA user_version").fetchone()[0]) != 0 or (
+            _has_legacy_runs_table(connection)
+        ):
+            connection.rollback()
+            return False
+        for statement in _CURRENT_SCHEMA_DDL:
+            connection.execute(statement)
+        self._ensure_v7_channel_schema(connection, mode="fresh")
+        self._ensure_v7_effect_schema(connection, mode="fresh")
+        self._ensure_v7_lease_schema(connection, mode="fresh")
+        self._ensure_v7_run_schema(connection, mode="fresh")
+        self._ensure_v7_fact_seal_schema(connection, mode="fresh")
+        self._validate_v7_fact_inventory(connection)
+        connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        connection.commit()
+        return True
+
     def _migrate(self) -> None:
         connection = self._connect()
         try:
@@ -270,28 +330,18 @@ class _SqliteSchemaMixin:
             if version == SCHEMA_VERSION:
                 self._require_current_v7_tables(connection)
             connection.execute("PRAGMA journal_mode=WAL")
-            has_runs = (
-                connection.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='runs'"
-                ).fetchone()
-                is not None
-            )
+            has_runs = _has_legacy_runs_table(connection)
+            if version == 0 and not has_runs:
+                if self._create_current_schema(connection):
+                    return
+                # Another process created the store between the read above and
+                # the lock. Ask again: whatever it left behind is what this
+                # opener must now climb from and validate.
+                version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+                has_runs = _has_legacy_runs_table(connection)
             if version == 0 and has_runs:
                 self._migrate_m1_to_m2(connection)
                 version = 2
-            elif version == 0:
-                connection.executescript(_SCHEMA)
-                connection.executescript(_V5_SCHEMA)
-                connection.executescript(_V6_SCHEMA)
-                self._ensure_v7_channel_schema(connection, mode="fresh")
-                self._ensure_v7_effect_schema(connection, mode="fresh")
-                self._ensure_v7_lease_schema(connection, mode="fresh")
-                self._ensure_v7_run_schema(connection, mode="fresh")
-                self._ensure_v7_fact_seal_schema(connection, mode="fresh")
-                self._validate_v7_fact_inventory(connection)
-                connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-                connection.commit()
-                return
             if version == 2:
                 self._migrate_m2_to_m3(connection)
                 version = 3
@@ -893,6 +943,16 @@ class _SqliteSchemaMixin:
         """
 
         connection.execute("BEGIN IMMEDIATE")
+        # The version that chose this step was read before the write lock was
+        # held, so another process may have climbed the same rung in between.
+        # This migration stamps every row it finds as legacy; re-running it on
+        # a database that is already current would call current provenance a
+        # partly migrated schema-6 contradiction, and the loser of an ordinary
+        # race would condemn a healthy store. Re-reading under the lock is what
+        # makes the ladder a ladder rather than a hope.
+        if int(connection.execute("PRAGMA user_version").fetchone()[0]) != 6:
+            connection.rollback()
+            return
         legacy_ack_through = _channel_ack_sequence_max(connection)
         legacy_message_through = _channel_message_sequence_max(connection)
         _SqliteSchemaMixin._ensure_v7_channel_schema(

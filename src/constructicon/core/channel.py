@@ -265,6 +265,25 @@ class ChannelDelivery(_ChannelModel):
     acknowledged: bool
 
 
+class ChannelMessageWriter(_ChannelModel):
+    """Who wrote one stored message, and whether the message itself says so.
+
+    A reply written under schema 7 names its own command. A reply retained from
+    before it does not, and the only writer identity that era left behind is the
+    scalar its request's acknowledgement carries — a historical token, not a
+    reference the current command store can resolve. The two are the same string
+    type and mean entirely different things, so the era travels with the answer
+    rather than being guessed from whether a lookup happened to miss.
+    """
+
+    command_id: str
+    era: Literal["current", "legacy"]
+
+    @property
+    def is_current(self) -> bool:
+        return self.era == "current"
+
+
 class ChannelAck(_ChannelModel):
     """A delivery fact about one actor — never proof of component consumption."""
 

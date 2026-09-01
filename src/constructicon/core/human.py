@@ -895,6 +895,20 @@ def validated_approval_reply(
     return carried
 
 
+def carries_approval_decision(reply: ChannelMessage) -> bool:
+    """Whether this reply's own payload is a decision record.
+
+    The question a request cannot answer for a reply older than the law: not
+    what the exchange was meant to be, but what this row actually says.
+    """
+
+    try:
+        ApprovalDecisionPayload.model_validate(reply.envelope.payload)
+    except ValidationError:
+        return False
+    return True
+
+
 def claims_approval_exchange(request: ChannelMessage) -> bool:
     """Whether any sealed request field claims approval semantics."""
 
@@ -908,13 +922,34 @@ def claims_approval_exchange(request: ChannelMessage) -> bool:
 def approval_record_for_reply(
     request: ChannelMessage,
     reply: ChannelMessage,
+    *,
+    current_era: bool = True,
 ) -> ApprovalRecord | None:
-    """Validate canonical human routing and return its approval, when any."""
+    """Validate canonical human routing and return its approval, when any.
+
+    ``current_era`` is false for a reply written before schema 7 began
+    recording reply provenance. For a current reply the request alone settles
+    it: a request that claims approval semantics must be answered by a decision,
+    and anything else is damage.
+
+    A legacy reply is answered by its own bytes instead, because the request
+    cannot speak for an era it outlived. That era sealed any contract pair under
+    any interaction and, for most of its life, had no approval ledger at all —
+    so demanding a decision of every approval-interaction reply it left behind
+    does not find damage, it invents it, and on the open path, where ADR 0016
+    forbids healing, inventing it once makes the store unopenable forever. A
+    legacy reply that does carry a decision is still held to the whole approval
+    law; one that does not is an ordinary reply, and still has to be the one its
+    request admits.
+    """
 
     if request.kind != "request" or request.reply_contract is None:
         raise JournalDamaged(
             f"channel reply {reply.message_id} does not name a complete request exchange"
         )
+    if not current_era and not carries_approval_decision(reply):
+        validated_reply(request, reply)
+        return None
     mismatch = canonical_exchange_fault(
         request.contract,
         request.reply_contract,

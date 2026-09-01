@@ -37,6 +37,7 @@ from constructicon.core.channel import (
     ChannelAckConflict,
     ChannelInteraction,
     ChannelMessage,
+    ChannelMessageWriter,
     ChannelReplyConflict,
     reply_message_id,
 )
@@ -939,8 +940,16 @@ class _CommandExecutor:
         """
 
         carried = validated_approval_reply(request, reply)
-        writer = self._journal.channel_message_command(message_id=reply.message_id)
-        writer_record = self._store.command(writer) if writer is not None else None
+        writer = self._journal.channel_message_writer(message_id=reply.message_id)
+        if writer is None or not writer.is_current:
+            # An approval exchange is a schema-7 fact. A reply from before that
+            # era names no command of its own, so it cannot be one — and the
+            # acknowledgement scalar it would otherwise offer is not a command
+            # reference to resolve in its place.
+            raise JournalDamaged(
+                f"approval reply {reply.message_id} names no current-era writer command"
+            )
+        writer_record = self._store.command(writer.command_id)
         if writer_record is None:
             raise JournalDamaged(
                 f"approval reply {reply.message_id} exists without its writer's command"
@@ -999,22 +1008,28 @@ class _CommandExecutor:
             request_id=request.message_id,
         )
         writer = (
-            self._journal.channel_message_command(message_id=reply.message_id)
+            self._journal.channel_message_writer(message_id=reply.message_id)
             if reply is not None
             else None
         )
-        if reply is None or writer is None or writer == command_id:
+        if reply is None or writer is None or writer.command_id == command_id:
             raise JournalDamaged(
                 f"rejected command {command_id!r} has no foreign reply for {request.message_id}"
             )
         if reply.sender_actor_id is None:
             raise JournalDamaged(f"channel reply {reply.message_id} names no sender")
-        writer_record = self._store.command(writer)
+        if not writer.is_current:
+            # The schema-6 fallback, taken because the reply records that era —
+            # not because a command lookup happened to miss. Its identity is the
+            # acknowledgement's opaque scalar, which may well collide with a real
+            # command of some other operation; demanding a reply plan of it would
+            # turn this lawful refusal into permanent damage.
+            return writer.command_id
+        writer_record = self._store.command(writer.command_id)
         if writer_record is None:
-            # `channel_reply_for` has already rejected a current row whose
-            # non-NULL writer command is missing. Reaching this branch therefore
-            # identifies the deliberate schema-6 acknowledgement fallback.
-            return writer
+            raise JournalDamaged(
+                f"channel reply {reply.message_id} names a writer command that is gone"
+            )
         if writer_record.state == "rejected" or writer_record.plan is None:
             raise JournalDamaged(
                 f"channel reply {reply.message_id} was not written by a live or "
@@ -2531,8 +2546,8 @@ class _CommandExecutor:
                 request is None
                 or reply is None
                 or not request.acknowledged
-                or self._journal.channel_message_command(message_id=plan.reply_id)
-                != record.command_id
+                or self._journal.channel_message_writer(message_id=plan.reply_id)
+                != ChannelMessageWriter(command_id=record.command_id, era="current")
                 or reply.message_id != plan.reply_id
                 or reply.sender_actor_id != plan.actor_id
                 or canonical_json(json_value(reply.envelope.payload))

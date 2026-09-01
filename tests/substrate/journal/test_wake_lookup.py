@@ -1039,7 +1039,7 @@ def test_a_reply_without_its_atomic_ack_is_damage_and_is_never_healed(
     with pytest.raises(JournalDamaged, match=damage):
         reopened.channel_delivery(message_id=reply.message_id, actor_id=ADVISOR)
     with pytest.raises(JournalDamaged, match=damage):
-        reopened.channel_message_command(message_id=reply.message_id)
+        reopened.channel_message_writer(message_id=reply.message_id)
     with pytest.raises(JournalDamaged, match=damage):
         reply_with_command(
             torn,

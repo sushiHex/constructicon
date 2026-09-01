@@ -22,6 +22,7 @@ import pytest
 from constructicon.core.address import ExecutionPath, RunId, ScopePath
 from constructicon.core.channel import (
     ChannelContract,
+    ChannelMessageWriter,
     ChannelReplyConflict,
     ChannelSendIntent,
     message_for_reply,
@@ -560,6 +561,54 @@ def test_current_open_reproves_a_reply_writer_over_a_migrated_opaque_preack(
         SqliteJournal(database, now_fn=clock.now)
 
 
+def test_a_v6_approval_interaction_reply_predates_the_decision_law(
+    tmp_path: Path,
+) -> None:
+    """A reply older than the approval ledger is not a broken approval.
+
+    Schema 6 sealed `interaction='approval'` long before a decision could be
+    recorded against it, so its replies carry whatever their answerer wrote.
+    Holding one to a law younger than itself is not a discovery of damage: the
+    migration aborts, `user_version` stays at 6, and — since ADR 0016 forbids
+    healing on open — the store can never be opened again.
+    """
+
+    clock = FakeClock()
+    database = tmp_path / "v6-approval-interaction.db"
+    journal = SqliteJournal(database, now_fn=clock.now)
+    channel = MailboxChannel(journal, channel_id=CHANNEL_ID)
+    request = channel.append_request(_approval_intent(), "att-v6-approval-era")
+    reply = message_for_reply(
+        request,
+        actor_id=APPROVER.actor_id,
+        payload={"decision": "approved"},
+        created_at=clock.now(),
+    )
+    with journal._txn() as connection:
+        _insert_message(connection, reply, None, WRITER)
+        connection.execute(
+            "INSERT INTO channel_acks (message_id, actor_id, command_id, acked_at,"
+            " ack_provenance_version) VALUES (?, ?, ?, ?, NULL)",
+            (
+                str(request.message_id),
+                APPROVER.actor_id,
+                WRITER,
+                clock.now().isoformat(),
+            ),
+        )
+    _downgrade_v7_schema_to_v6(database)
+
+    migrated = SqliteJournal(database, now_fn=clock.now)
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+
+    # And it reads back as what it is: an ordinary reply from before the law.
+    projected = MailboxChannel(migrated, channel_id=CHANNEL_ID).reply_for(request.message_id)
+    assert projected is not None
+    assert projected.message_id == reply.message_id
+    assert projected.envelope.payload == {"decision": "approved"}
+
+
 @pytest.mark.parametrize("storage_type", ("TEXT", "REAL"))
 def test_v6_to_v7_never_normalizes_a_damaged_ack_sequence(
     storage_type: str,
@@ -1045,7 +1094,9 @@ def test_a_v6_reply_still_reconciles_for_the_command_that_wrote_it(tmp_path: Pat
     request_id, reply_id = _seed_genuine_v6(database, clock)
 
     journal = SqliteJournal(database, now_fn=clock.now)
-    assert journal.channel_message_command(message_id=reply_id) == WRITER  # type: ignore[arg-type]
+    assert journal.channel_message_writer(  # type: ignore[arg-type]
+        message_id=reply_id
+    ) == ChannelMessageWriter(command_id=WRITER, era="legacy")
 
     channel = MailboxChannel(journal, channel_id=CHANNEL_ID)
     clock.advance(600)

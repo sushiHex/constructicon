@@ -28,6 +28,7 @@ from constructicon.core.channel import (
     ChannelInteraction,
     ChannelMessage,
     ChannelMessageKind,
+    ChannelMessageWriter,
     ChannelReplyConflict,
     ChannelRevision,
     ChannelSendIntent,
@@ -582,8 +583,8 @@ class _SqliteChannelsMixin:
             acknowledged=acknowledgement is not None,
         )
 
-    def channel_message_command(self, *, message_id: Digest) -> str | None:
-        """Which command wrote this message, if a command did."""
+    def channel_message_writer(self, *, message_id: Digest) -> ChannelMessageWriter | None:
+        """Who wrote this message, and in which provenance era they wrote it."""
 
         with self._read() as connection:
             _validate_channel_history(connection)
@@ -591,7 +592,13 @@ class _SqliteChannelsMixin:
             if row is None:
                 return None
             _message, writer = _stored_message_fact(connection, row)
-            return writer
+            if writer is None:
+                return None
+            stored = _stored_channel_message_from_row(connection, row)
+            return ChannelMessageWriter(
+                command_id=writer,
+                era="current" if stored.command_id is not None else "legacy",
+            )
 
     def channel_reply_for(self, *, channel_id: str, request_id: Digest) -> ChannelMessage | None:
         with self._read() as connection:
@@ -1182,7 +1189,11 @@ def _validated_stored_reply_fact(
 ) -> tuple[ChannelMessage, str]:
     """Validate one complete reply fact from already-read immutable rows."""
 
-    carried = approval_record_for_reply(request, reply)
+    carried = approval_record_for_reply(
+        request,
+        reply,
+        current_era=reply_command_id is not None,
+    )
     if acknowledgement_command is None:
         raise JournalDamaged(
             f"channel reply {reply.message_id} exists without its request acknowledgement"
@@ -1211,7 +1222,11 @@ def _validated_stored_reply_fact(
             request,
             reply,
         )
-    elif writer_command is not None:
+    elif writer_command is not None and reply_command_id is not None:
+        # Only a current reply names its own writer. A legacy one offers the
+        # acknowledgement's opaque scalar instead, which may well collide with a
+        # real command of some other operation — demanding a reply plan of that
+        # command would condemn a store for a coincidence.
         validated_channel_command_reply(writer_command, request, reply)
     return reply, writer
 
