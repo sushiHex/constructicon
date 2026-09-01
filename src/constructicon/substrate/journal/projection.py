@@ -10,7 +10,6 @@ derive liveness themselves).
 from __future__ import annotations
 
 import contextlib
-import json
 import os
 import tempfile
 from pathlib import Path
@@ -21,6 +20,11 @@ from pydantic import BaseModel, ConfigDict
 from constructicon.core.address import RunId
 from constructicon.core.errors import ContractViolation
 from constructicon.core.identity import Digest, canonical_json, digest
+from constructicon.substrate.journal._sqlite_base import (
+    _durable_digest,
+    _durable_run_fields,
+)
+from constructicon.substrate.journal._sqlite_execution_facts import stored_event_from_row
 from constructicon.substrate.journal.sqlite import SqliteJournal
 
 PROJECTION_SCHEMA_VERSION = 1
@@ -39,31 +43,41 @@ def project_run(journal: SqliteJournal, run_id: RunId, out_dir: Path) -> Project
     with journal._read() as conn:  # projection is a journal-family module
         conn.execute("BEGIN")  # one WAL read snapshot for run + events
         run = conn.execute(
-            "SELECT status, manifest_hash, input_hash, lease_expires_at"
+            "SELECT run_id, status, manifest_hash, input_hash, created_at, owner_id,"
+            " lease_expires_at, cancel_requested"
             " FROM runs WHERE run_id = ?",
             (run_id,),
         ).fetchone()
         if run is None:
             raise ContractViolation(f"unknown run {run_id!r}")
         rows = conn.execute(
-            "SELECT seq, kind, path_json, payload, created_at FROM events"
-            " WHERE run_id = ? ORDER BY seq ASC",
+            "SELECT * FROM events WHERE run_id = ? ORDER BY seq ASC",
             (run_id,),
         ).fetchall()
+        stored_events = [stored_event_from_row(conn, row) for row in rows]
         conn.execute("COMMIT")
 
+    run_fields = _durable_run_fields(run)
+    manifest_hash = _durable_digest(
+        run["manifest_hash"],
+        fact=f"run {run_id!r} manifest identity",
+    )
+    input_hash = _durable_digest(
+        run["input_hash"],
+        fact=f"run {run_id!r} input identity",
+    )
     lines: list[str] = []
     through_seq = 0
-    for row in rows:
-        through_seq = int(row["seq"])
+    for stored in stored_events:
+        through_seq = stored.seq
         event: dict[str, Any] = {
             "schema_version": PROJECTION_SCHEMA_VERSION,
-            "run_id": run_id,
+            "run_id": stored.run_id,
             "seq": through_seq,
-            "kind": row["kind"],
-            "path": json.loads(row["path_json"]) if row["path_json"] else None,
-            "payload": json.loads(row["payload"]) if row["payload"] else None,
-            "created_at": row["created_at"],
+            "kind": stored.kind,
+            "path": (stored.path.model_dump(mode="json") if stored.path is not None else None),
+            "payload": stored.payload,
+            "created_at": stored.created_at.isoformat(),
         }
         lines.append(canonical_json(event))
     events_text = "".join(line + "\n" for line in lines)
@@ -72,11 +86,15 @@ def project_run(journal: SqliteJournal, run_id: RunId, out_dir: Path) -> Project
         "schema_version": PROJECTION_SCHEMA_VERSION,
         "run_id": run_id,
         "projected_through_seq": through_seq,
-        "status": run["status"],
-        "manifest_hash": run["manifest_hash"],
-        "input_hash": run["input_hash"],
+        "status": run_fields.status.value,
+        "manifest_hash": manifest_hash,
+        "input_hash": input_hash,
         "event_count": len(lines),
-        "lease_expires_at": run["lease_expires_at"],
+        "lease_expires_at": (
+            run_fields.lease_expires_at.isoformat()
+            if run_fields.lease_expires_at is not None
+            else None
+        ),
     }
     summary_text = canonical_json(summary) + "\n"
 

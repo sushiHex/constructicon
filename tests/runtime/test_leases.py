@@ -3,16 +3,20 @@ the I6 double, no git anywhere (M3 §5)."""
 
 from __future__ import annotations
 
+import asyncio
+import sqlite3
 from dataclasses import dataclass, field
+from typing import Any
 
 import pytest
 
 from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId
+from constructicon.core.errors import JournalDamaged
 from constructicon.core.graph import Graph, GraphNode, Loop, Ref
 from constructicon.core.manifest import CONTINUE_SCHEMA_HASH, CONTINUE_TYPE
 from constructicon.core.ports import Port
-from constructicon.core.run import RunStatus
+from constructicon.core.run import CheckpointConflict, OwnershipLost, RunStatus
 from constructicon.core.workspace import (
     AcquiredCapability,
     Disposition,
@@ -25,6 +29,7 @@ from constructicon.core.workspace import (
 )
 from constructicon.runtime.context import NodeContext
 from constructicon.runtime.registry import CapabilityDescriptor
+from constructicon.substrate.channels.in_process import InProcessChannel
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.conftest import (
     ISSUE,
@@ -83,6 +88,39 @@ class FakeLeasedCapability:
         return LeaseReconciliation(
             reaped=tuple(item.lease.resource_ref or "" for item in stale)
         )
+
+
+@dataclass
+class ChannelLaunderingCapability(FakeLeasedCapability):
+    """A generic provider whose acquired resource violates its sealed kind."""
+
+    async def acquire(self, context: LeaseContext) -> AcquiredCapability:
+        acquired = await super().acquire(context)
+        return AcquiredCapability(
+            resource=InProcessChannel(channel_id="smuggled"),
+            lease_id=acquired.lease_id,
+            acquisition_id=acquired.acquisition_id,
+            resource_ref=acquired.resource_ref,
+        )
+
+
+class SuspendingCloseCapability(FakeLeasedCapability):
+    """Expose the unrecorded-acquisition cancellation window deterministically."""
+
+    def __init__(self, *, fail_close: bool = False) -> None:
+        super().__init__()
+        self.close_started = asyncio.Event()
+        self.finish_close = asyncio.Event()
+        self.fail_close = fail_close
+
+    async def close(
+        self, acquisition: AcquiredCapability, disposition: Disposition
+    ) -> LeaseClosure:
+        self.close_started.set()
+        await self.finish_close.wait()
+        if self.fail_close:
+            raise RuntimeError("unrecorded acquisition cleanup failed")
+        return await super().close(acquisition, disposition)
 
 
 async def leased_ok_impl(ctx: NodeContext, inputs: dict) -> dict:
@@ -240,6 +278,33 @@ async def test_crash_leaves_the_lease_for_reconciliation(
     assert healthy_capability.acquired != capability.acquired
 
 
+async def test_forged_lease_closure_cannot_silently_abandon_the_resource(
+    journal: SqliteJournal,
+    clock: FakeClock,
+) -> None:
+    run_id = RunId("run-forged-lease-closure")
+    abandoned, abandoned_capability = leased_system(journal, leased_dying_impl)
+    with pytest.raises(InjectedCrash):
+        await abandoned._start_direct(leased_graph(), INPUTS, run_id=run_id)
+    assert abandoned_capability.closed == []
+
+    with sqlite3.connect(journal._db_path) as connection:
+        connection.execute(
+            "UPDATE capability_leases"
+            " SET state = 'closed', disposition = 'discarded'"
+            " WHERE run_id = ?",
+            (str(run_id),),
+        )
+
+    clock.advance(LEASE_TTL_S + 1)
+    recovered, recovered_capability = leased_system(journal, leased_dying_impl)
+    with pytest.raises(JournalDamaged, match="lifecycle contradicts its event chain"):
+        await recovered._resume_direct(run_id)
+
+    assert recovered_capability.reconciled == []
+    assert abandoned_capability.closed == []
+
+
 async def test_crash_after_completion_releases_on_reconcile(
     journal: SqliteJournal, clock: FakeClock
 ) -> None:
@@ -286,6 +351,314 @@ async def test_leased_declaration_requires_the_protocol(
     result = await system._start_direct(leased_graph(), INPUTS, run_id=RunId("run-bad-cap"))
     assert result.status is RunStatus.FAILED
     assert any("does not implement" in error for error in result.failures.values())
+
+
+async def test_acquired_channel_cannot_escape_through_a_generic_lease(
+    journal: SqliteJournal,
+) -> None:
+    capability = ChannelLaunderingCapability()
+    system = Constructicon(
+        journal=journal,
+        capabilities={"fake-leased": capability},
+        catalog={
+            "fake-leased": CapabilityDescriptor(
+                capability_id="fake-leased", kind="fake", revision="1", leased=True
+            )
+        },
+        owner_id="worker-one",
+        lease_ttl_s=LEASE_TTL_S,
+    )
+    definition, _ = atomic("test/leased", (ISSUE,), (SUMMARY,), leased_ok_impl)
+    version = system._register(definition, leased_ok_impl)
+    system._promote_initial(component="test/leased", version=version)
+
+    result = await system._start_direct(
+        leased_graph(), INPUTS, run_id=RunId("run-laundered-channel")
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert any("has no sealed channel binding" in error for error in result.failures.values())
+    assert capability.closed == [(capability.acquired[0], "discard")]
+    rows = journal.capability_leases(RunId("run-laundered-channel"))
+    assert [(row.state, row.disposition) for row in rows] == [
+        ("closed", "discarded")
+    ]
+
+
+async def test_unrecorded_acquisition_is_closed_without_a_lease_transition(
+    journal: SqliteJournal,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    system, capability = leased_system(journal, leased_ok_impl)
+
+    def refuse_record(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise CheckpointConflict("lease record refused")
+
+    monkeypatch.setattr(journal, "record_capability_lease", refuse_record)
+
+    with pytest.raises(CheckpointConflict, match="lease record refused"):
+        await system._start_direct(
+            leased_graph(), INPUTS, run_id=RunId("run-unrecorded-acquisition")
+        )
+
+    assert capability.closed == [(capability.acquired[0], "discard")]
+    assert journal.capability_leases(RunId("run-unrecorded-acquisition")) == []
+
+
+@pytest.mark.parametrize("close_fails", [False, True], ids=["closed", "close-failed"])
+async def test_cancellation_waits_for_unrecorded_acquisition_cleanup_and_preserves_failure(
+    journal: SqliteJournal,
+    monkeypatch: pytest.MonkeyPatch,
+    close_fails: bool,
+) -> None:
+    capability = SuspendingCloseCapability(fail_close=close_fails)
+    system = Constructicon(
+        journal=journal,
+        capabilities={"fake-leased": capability},
+        catalog={
+            "fake-leased": CapabilityDescriptor(
+                capability_id="fake-leased", kind="fake", revision="1", leased=True
+            )
+        },
+        owner_id="worker-one",
+        lease_ttl_s=LEASE_TTL_S,
+    )
+    definition, _ = atomic("test/leased", (ISSUE,), (SUMMARY,), leased_ok_impl)
+    version = system._register(definition, leased_ok_impl)
+    system._promote_initial(component=definition.name, version=version)
+
+    def refuse_record(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise CheckpointConflict("lease record refused")
+
+    monkeypatch.setattr(journal, "record_capability_lease", refuse_record)
+    run_id = RunId("run-cancelled-unrecorded-acquisition")
+    running = asyncio.create_task(
+        system._start_direct(leased_graph(), INPUTS, run_id=run_id)
+    )
+    await capability.close_started.wait()
+
+    running.cancel()
+    await asyncio.sleep(0)
+    running.cancel()
+    await asyncio.sleep(0)
+    assert not running.done()
+
+    capability.finish_close.set()
+    if close_fails:
+        result = await running
+        assert result.status is RunStatus.FAILED
+        assert any(
+            "unrecorded acquisition cleanup failed" in failure
+            for failure in result.failures.values()
+        )
+        assert capability.closed == []
+    else:
+        with pytest.raises(asyncio.CancelledError):
+            await running
+        assert capability.closed == [(capability.acquired[0], "discard")]
+    assert journal.capability_leases(run_id) == []
+
+
+async def test_cancellation_during_a_later_unrecorded_cleanup_discards_recorded_siblings(
+    journal: SqliteJournal,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = FakeLeasedCapability()
+    second = SuspendingCloseCapability()
+    system = Constructicon(
+        journal=journal,
+        capabilities={"leased-first": first, "leased-second": second},
+        catalog={
+            capability_id: CapabilityDescriptor(
+                capability_id=capability_id,
+                kind="fake",
+                revision="1",
+                leased=True,
+            )
+            for capability_id in ("leased-first", "leased-second")
+        },
+        owner_id="worker-one",
+        lease_ttl_s=LEASE_TTL_S,
+    )
+    definition, _ = atomic("test/two-leases", (ISSUE,), (SUMMARY,), leased_ok_impl)
+    version = system._register(definition, leased_ok_impl)
+    system._promote_initial(component=definition.name, version=version)
+    graph = Graph(
+        name="two-leases-cancelled-cleanup",
+        nodes=(
+            GraphNode(
+                id="worker",
+                body=Ref(
+                    component=definition.name,
+                    bind={"first": "leased-first", "second": "leased-second"},
+                ),
+            ),
+        ),
+        inputs=(ISSUE,),
+        outputs=(SUMMARY,),
+    )
+    original_record = journal.record_capability_lease
+    records = 0
+
+    def refuse_second_record(lease: Any, capability_lease: Any) -> None:
+        nonlocal records
+        records += 1
+        if records == 2:
+            raise CheckpointConflict("second lease record refused")
+        original_record(lease, capability_lease)
+
+    monkeypatch.setattr(journal, "record_capability_lease", refuse_second_record)
+    run_id = RunId("run-two-lease-cancelled-cleanup")
+    running = asyncio.create_task(system._start_direct(graph, INPUTS, run_id=run_id))
+    await second.close_started.wait()
+
+    running.cancel()
+    await asyncio.sleep(0)
+    assert not running.done()
+    second.finish_close.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await running
+
+    assert first.closed == [(first.acquired[0], "discard")]
+    assert second.closed == [(second.acquired[0], "discard")]
+    rows = journal.capability_leases(run_id)
+    assert [(row.state, row.disposition) for row in rows] == [
+        ("closed", "discarded")
+    ]
+
+
+async def test_ownership_loss_during_later_cleanup_leaves_recorded_siblings_to_successor(
+    journal: SqliteJournal,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = FakeLeasedCapability()
+    second = SuspendingCloseCapability()
+    system = Constructicon(
+        journal=journal,
+        capabilities={"leased-first": first, "leased-second": second},
+        catalog={
+            capability_id: CapabilityDescriptor(
+                capability_id=capability_id,
+                kind="fake",
+                revision="1",
+                leased=True,
+            )
+            for capability_id in ("leased-first", "leased-second")
+        },
+        owner_id="worker-one",
+        lease_ttl_s=LEASE_TTL_S,
+    )
+    definition, _ = atomic("test/two-leases", (ISSUE,), (SUMMARY,), leased_ok_impl)
+    version = system._register(definition, leased_ok_impl)
+    system._promote_initial(component=definition.name, version=version)
+    graph = Graph(
+        name="two-leases-lost-cleanup",
+        nodes=(
+            GraphNode(
+                id="worker",
+                body=Ref(
+                    component=definition.name,
+                    bind={"first": "leased-first", "second": "leased-second"},
+                ),
+            ),
+        ),
+        inputs=(ISSUE,),
+        outputs=(SUMMARY,),
+    )
+    original_record = journal.record_capability_lease
+    records = 0
+
+    def lose_second_record(lease: Any, capability_lease: Any) -> None:
+        nonlocal records
+        records += 1
+        if records == 2:
+            raise OwnershipLost("a successor owns recorded leases")
+        original_record(lease, capability_lease)
+
+    monkeypatch.setattr(journal, "record_capability_lease", lose_second_record)
+    run_id = RunId("run-two-lease-lost-cleanup")
+    running = asyncio.create_task(system._start_direct(graph, INPUTS, run_id=run_id))
+    await second.close_started.wait()
+
+    running.cancel()
+    await asyncio.sleep(0)
+    assert not running.done()
+    second.finish_close.set()
+
+    with pytest.raises(OwnershipLost, match="successor owns"):
+        await running
+
+    assert first.closed == []
+    assert second.closed == [(second.acquired[0], "discard")]
+    rows = journal.capability_leases(run_id)
+    assert [(row.state, row.disposition) for row in rows] == [("active", None)]
+
+
+async def test_a_later_lease_record_conflict_discards_earlier_acquisitions(
+    journal: SqliteJournal,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = FakeLeasedCapability()
+    second = FakeLeasedCapability()
+    system = Constructicon(
+        journal=journal,
+        capabilities={"leased-first": first, "leased-second": second},
+        catalog={
+            capability_id: CapabilityDescriptor(
+                capability_id=capability_id,
+                kind="fake",
+                revision="1",
+                leased=True,
+            )
+            for capability_id in ("leased-first", "leased-second")
+        },
+        owner_id="worker-one",
+        lease_ttl_s=LEASE_TTL_S,
+    )
+    definition, _ = atomic("test/two-leases", (ISSUE,), (SUMMARY,), leased_ok_impl)
+    version = system._register(definition, leased_ok_impl)
+    system._promote_initial(component=definition.name, version=version)
+    graph = Graph(
+        name="two-leases",
+        nodes=(
+            GraphNode(
+                id="worker",
+                body=Ref(
+                    component=definition.name,
+                    bind={"first": "leased-first", "second": "leased-second"},
+                ),
+            ),
+        ),
+        inputs=(ISSUE,),
+        outputs=(SUMMARY,),
+    )
+    original_record = journal.record_capability_lease
+    records = 0
+
+    def refuse_second_record(lease: Any, capability_lease: Any) -> None:
+        nonlocal records
+        records += 1
+        if records == 2:
+            raise CheckpointConflict("second lease record refused")
+        original_record(lease, capability_lease)
+
+    monkeypatch.setattr(journal, "record_capability_lease", refuse_second_record)
+
+    with pytest.raises(CheckpointConflict, match="second lease record refused"):
+        await system._start_direct(graph, INPUTS, run_id=RunId("run-two-lease-conflict"))
+
+    assert len(first.acquired) + len(second.acquired) == 2
+    closed = first.closed + second.closed
+    assert len(closed) == 2
+    assert {acquisition for acquisition, _disposition in closed} == set(
+        first.acquired + second.acquired
+    )
+    assert {disposition for _acquisition, disposition in closed} == {"discard"}
+    rows = journal.capability_leases(RunId("run-two-lease-conflict"))
+    assert [(row.state, row.disposition) for row in rows] == [("closed", "discarded")]
 
 
 async def test_loop_iterations_have_frame_distinct_lease_identities(

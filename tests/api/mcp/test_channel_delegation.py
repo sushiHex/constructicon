@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any
 
 from mcp import Client
+from tests.channel_requests import AttestedMailboxChannel as MailboxChannel
+from tests.conftest import pipeline_graph
 
 from constructicon.api.control import ControlPlane
 from constructicon.api.mcp import StaticActorSource, create_mcp_server
@@ -39,7 +41,6 @@ from constructicon.core.human import (
     ApprovalRequestPayload,
 )
 from constructicon.core.identity import Digest, json_value
-from constructicon.substrate.channels.mailbox import MailboxChannel
 from constructicon.substrate.journal.sqlite import SqliteJournal
 
 SERVER = Path(__file__).parents[3] / "src" / "constructicon" / "api" / "mcp" / "server.py"
@@ -216,6 +217,12 @@ async def test_the_channel_scope_matrix_holds_through_the_transport(
     request lets it do. The transport contributes nothing to that.
     """
 
+    inputs = {"issue": {"title": "channel authority fixture"}}
+    world._prepare_run(
+        world.validate(pipeline_graph(), inputs),
+        run_id=RUN,
+        inputs=inputs,
+    )
     channel = MailboxChannel(journal, channel_id=CHANNEL_ID)
     advice = channel.append_request(
         _intent(port="advice", recipient=ADVISOR_ID, interaction="advice"),
@@ -294,7 +301,8 @@ async def test_the_channel_scope_matrix_holds_through_the_transport(
             == ControlCode.AUTH_REQUIRED_SCOPE.value
         )
         listed = _structured(await client.call_tool("runs_list", {}))
-        assert listed["page"]["count"] == 0
+        assert listed["page"]["count"] == 1
+        assert listed["items"][0]["run_id"] == str(RUN)
 
 
 def _structured(result: Any) -> dict[str, Any]:

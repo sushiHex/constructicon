@@ -29,19 +29,26 @@ from constructicon.core.admission import (
     AdmissionRejected,
     AdmissionResult,
 )
+from constructicon.core.channel import CHANNEL_SEND_EFFECT, Channel
 from constructicon.core.component import ComponentDef, PromotionRecord
 from constructicon.core.control import ResolutionLock, RunOrigin
 from constructicon.core.effect import EffectAdapter
 from constructicon.core.errors import AdmissionError, ContractViolation
 from constructicon.core.grants import EffectiveGrants, ModelSelection, Posture
-from constructicon.core.graph import Graph
-from constructicon.core.identity import Digest, canonical_json, digest, json_value
+from constructicon.core.graph import Graph, parse_graph_json
+from constructicon.core.identity import (
+    Digest,
+    canonical_json,
+    digest,
+    json_value,
+    parse_json_value,
+)
 from constructicon.core.introspection import (
     AdmissionLimits,
     ComponentDescription,
     SystemDescription,
 )
-from constructicon.core.journal import Journal
+from constructicon.core.journal import Journal, JournalBackedChannel
 from constructicon.core.manifest import ExecutionManifest
 from constructicon.core.registry import RegistryStore
 from constructicon.core.run import AttemptCause, RunState, RunStatus
@@ -59,6 +66,7 @@ from constructicon.runtime.walker import (
     Walker,
 )
 from constructicon.sdk.types import DefinitionBundle
+from constructicon.substrate.effects.channel import ChannelSendEffect
 from constructicon.substrate.effects.git import MergeVerifiedEffect
 from constructicon.substrate.gates.runner import CheckSpec, GateRunner
 from constructicon.substrate.git.authority import GitAuthority, GitWorkspaceCapability
@@ -162,14 +170,70 @@ class Constructicon:
         self.owner_id = owner_id or f"worker-{os.getpid()}-{uuid.uuid4().hex[:8]}"
         self._capabilities = dict(capabilities or {})
         self._catalog = dict(catalog or {})
+        for capability_id in sorted(self._capabilities.keys() | self._catalog.keys()):
+            descriptor = self._catalog.get(capability_id)
+            if descriptor is None:
+                continue
+            if descriptor.capability_id != capability_id:
+                raise ValueError(
+                    f"catalog key {capability_id!r} differs from its descriptor identity "
+                    f"{descriptor.capability_id!r}"
+                )
+            capability = self._capabilities.get(capability_id)
+            if capability_id not in self._capabilities and descriptor.channel_profile is None:
+                # Non-channel descriptors retain their existing optional/lazy
+                # assembly semantics. A sealed channel, by contrast, must have
+                # the exact live transport recovery will use.
+                continue
+            incoherence = descriptor.channel_incoherence(capability)
+            if incoherence is not None:
+                raise ValueError(
+                    f"capability {capability_id!r} is incoherent with assembly: {incoherence}"
+                )
+            if descriptor.channel_profile is not None and (
+                descriptor.channel_profile.durability == "sqlite_wal"
+                and (
+                    not isinstance(capability, JournalBackedChannel)
+                    or not capability.is_assembled_from(journal)
+                )
+            ):
+                raise ValueError(
+                    f"capability {capability_id!r} is incoherent with assembly: "
+                    "a sqlite_wal channel must use the exact Constructicon journal "
+                    "and prove that assembly"
+                )
         self._root_grants = root_grants
         self._admission_limits = admission_limits
+        assembled_channels = {
+            (capability_id, descriptor.revision): capability
+            for capability_id, descriptor in self._catalog.items()
+            if descriptor.channel_profile is not None
+            and isinstance(
+                (capability := self._capabilities.get(capability_id)),
+                Channel,
+            )
+        }
+        assembled_effects = dict(effects or {})
+        channel_send = assembled_effects.get(CHANNEL_SEND_EFFECT)
+        if channel_send is None and assembled_channels:
+            assembled_effects[CHANNEL_SEND_EFFECT] = ChannelSendEffect(
+                journal=journal,
+                catalog=assembled_channels,
+            )
+        elif channel_send is not None and (
+            not isinstance(channel_send, ChannelSendEffect)
+            or not channel_send.is_assembled_from(journal, assembled_channels)
+        ):
+            raise ValueError(
+                "channel_send must use the exact Constructicon journal and exact channel "
+                "transports assembled as capabilities"
+            )
         self._walker = Walker(
             registry=self._registry,
             journal=journal,
             capabilities=self._capabilities,
             catalog=self._catalog,
-            effects=effects or {},
+            effects=assembled_effects,
             owner_id=self.owner_id,
             lease_ttl_s=lease_ttl_s,
             heartbeat_interval_s=heartbeat_interval_s,
@@ -251,6 +315,7 @@ class Constructicon:
             graph,
             snapshot=self._registry.snapshot(),
             catalog=self._catalog,
+            capabilities=self._capabilities,
             root_grants=self._root_grants,
             inputs=inputs,
             limits=self._admission_limits,
@@ -304,8 +369,9 @@ class Constructicon:
                 size = len(proposal.encode("utf-8"))
                 if size > self._admission_limits.max_proposal_bytes:
                     return self._proposal_too_large(size)
-                proposal_digest = digest("graph-proposal", 1, proposal)
-                graph = Graph.model_validate_json(proposal)
+                parsed_proposal = parse_json_value(proposal)
+                proposal_digest = digest("graph-proposal", 1, parsed_proposal)
+                graph = parse_graph_json(proposal)
             else:
                 normalized_proposal = json_value(dict(proposal))
                 rendered = canonical_json(normalized_proposal)

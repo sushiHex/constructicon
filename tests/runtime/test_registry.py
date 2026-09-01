@@ -7,6 +7,7 @@ from __future__ import annotations
 import pytest
 
 from constructicon.api.system import Constructicon
+from constructicon.core.address import RunId
 from constructicon.core.component import PromotionRecord
 from constructicon.core.effect import AttestationDraft, CheckResult, ComponentProofSubject
 from constructicon.core.envelope import utc_now
@@ -14,6 +15,11 @@ from constructicon.core.errors import AdmissionError
 from constructicon.core.graph import Graph, GraphNode, Ref
 from constructicon.core.identity import Digest, digest
 from tests.conftest import BRIEF, ISSUE, atomic, triage_impl
+from tests.run_attestations import (
+    ensure_test_run,
+    mint_promotion_attestation,
+    mint_run_attestation,
+)
 
 INPUTS = {"issue": {"title": "retry loop is flaky"}}
 
@@ -150,6 +156,46 @@ def test_one_attestation_authorizes_one_move(system: Constructicon) -> None:
     assert len(history) == 2  # initial + evaluated, never a third
 
 
+def test_promotion_source_run_is_derived_from_its_attestation(system: Constructicon) -> None:
+    definition, impl = atomic("test/triage", (ISSUE,), (BRIEF,), triage_impl)
+    v1 = system._register(definition, impl)
+    system._promote_initial(component=definition.name, version=v1)
+    v2 = system._register(definition.model_copy(update={"role": "component"}), impl)
+    source_run = RunId("run-promotion-evaluator")
+    source_manifest = ensure_test_run(system._journal, source_run)
+    draft = AttestationDraft(
+        action="promote",
+        subject=ComponentProofSubject(
+            component=definition.name,
+            version=v2,
+            baseline_version=v1,
+        ),
+        checks=(
+            CheckResult(
+                name="evaluated-in-run",
+                status="passed",
+                detail="test",
+                elapsed_s=0.0,
+            ),
+        ),
+        check_set_hash=digest("check-set", 1, {"policy": "run-evaluation"}),
+        evidence=(),
+        manifest_hash=source_manifest,
+        workspace_id=None,
+    )
+    attestation = mint_run_attestation(system._journal, source_run, draft)
+
+    promotion = system._promote_version(
+        component=definition.name,
+        version=v2,
+        attestation_id=attestation.attestation_id,
+        actor="static:test",
+    )
+
+    assert promotion.source_run == source_run
+    assert system._journal.promotion_for_attestation(attestation.attestation_id) == promotion
+
+
 def test_stale_baseline_promotion_is_refused_by_cas(system: Constructicon) -> None:
     definition, impl = atomic("test/triage", (ISSUE,), (BRIEF,), triage_impl)
     v1 = system._register(definition, impl)
@@ -159,12 +205,19 @@ def test_stale_baseline_promotion_is_refused_by_cas(system: Constructicon) -> No
     evaluated_promotion(system, "test/triage", v2, baseline=v1)
 
     # a record carrying yesterday's baseline must not move today's pointer
+    stale_authority = mint_promotion_attestation(
+        system._journal,
+        component="test/triage",
+        version=v1,
+        baseline=v1,
+        proof="stale-cas",
+    )
     stale = PromotionRecord(
         component="test/triage",
         channel="stable",
         from_version=v1,  # stale: stable is v2 now
         to_version=v1,
-        attestation_id="att-stale-claimant",
+        attestation_id=stale_authority.attestation_id,
         actor="test",
         source_run=None,
         created_at=utc_now(),

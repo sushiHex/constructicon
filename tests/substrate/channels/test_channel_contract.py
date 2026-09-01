@@ -7,9 +7,23 @@ delivery fact rather than proof that a component consumed anything (I4, I6).
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
+from tests.channel_commands import (
+    ack_command_id,
+    ack_with_command,
+    prepare_reply_command,
+    reply_command_id,
+    reply_with_command,
+)
+from tests.channel_requests import (
+    AttestedMailboxChannel as MailboxChannel,
+)
+from tests.channel_requests import (
+    mint_send_attestation,
+)
 from tests.conftest import FakeClock
 
 from constructicon.core.address import (
@@ -22,6 +36,7 @@ from constructicon.core.channel import (
     Channel,
     ChannelAckConflict,
     ChannelContract,
+    ChannelInteraction,
     ChannelMessage,
     ChannelReplyConflict,
     ChannelRevision,
@@ -29,10 +44,16 @@ from constructicon.core.channel import (
     InvalidChannelRevision,
     request_message_id,
 )
+from constructicon.core.control import CommandClaim, command_id_for
 from constructicon.core.errors import ContractViolation, JournalDamaged
+from constructicon.core.human import (
+    APPROVAL_REPLY_CONTRACT,
+    APPROVAL_REQUEST_CONTRACT,
+)
 from constructicon.core.identity import JsonValue, canonical_json, digest
 from constructicon.substrate.channels.in_process import InProcessChannel
-from constructicon.substrate.channels.mailbox import MailboxChannel
+from constructicon.substrate.journal._sqlite_channels import seal_channel_ack
+from constructicon.substrate.journal._sqlite_commands import command_plan_fact_hash
 from constructicon.substrate.journal.sqlite import SqliteJournal
 
 CHANNEL_ID = "channel/review"
@@ -71,6 +92,7 @@ def _intent(
     payload: JsonValue | None = None,
     path: ExecutionPath = PATH,
     recipient: str | None = ADVISOR,
+    interaction: ChannelInteraction = "advice",
 ) -> ChannelSendIntent:
     return ChannelSendIntent(
         message_id=request_message_id(
@@ -79,13 +101,13 @@ def _intent(
             channel_id=CHANNEL_ID,
             channel_revision=CHANNEL_REVISION,
             lane="review",
-            interaction="advice",
+            interaction=interaction,
             port=port,
         ),
         channel_id=CHANNEL_ID,
         channel_revision=CHANNEL_REVISION,
         lane="review",
-        interaction="advice",
+        interaction=interaction,
         recipient_actor_id=recipient,
         contract=REQUEST_CONTRACT,
         reply_contract=REPLY_CONTRACT,
@@ -112,6 +134,244 @@ def test_an_identical_send_returns_one_exact_fact_without_inventing_a_time(
     assert channel.message(intent.message_id) == first
 
 
+def _nested_payload(payload: JsonValue) -> dict[str, JsonValue]:
+    assert isinstance(payload, dict)
+    nested = payload["nested"]
+    assert isinstance(nested, dict)
+    return nested
+
+
+def _seed_orphan_ack_owned_by_reply_command(
+    channel: Channel,
+    *,
+    planned_request: ChannelMessage,
+    acknowledged_request: ChannelMessage,
+    idempotency_key: str,
+) -> None:
+    """Construct impossible history without weakening the current writer."""
+
+    command_id = reply_command_id(ADVISOR, idempotency_key)
+    if isinstance(channel, MailboxChannel):
+        prepare_reply_command(
+            channel,
+            request_id=planned_request.message_id,
+            actor_id=ADVISOR,
+            payload={"advice": "ship"},
+            idempotency_key=idempotency_key,
+        )
+        with channel._journal._txn() as connection:
+            connection.execute(
+                "INSERT INTO channel_acks (message_id, actor_id, command_id,"
+                " acked_at, ack_provenance_version) VALUES (?, ?, ?, ?, 1)",
+                (
+                    str(acknowledged_request.message_id),
+                    ADVISOR,
+                    command_id,
+                    acknowledged_request.envelope.created_at.isoformat(),
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM channel_acks WHERE message_id = ? AND actor_id = ?",
+                (str(acknowledged_request.message_id), ADVISOR),
+            ).fetchone()
+            assert row is not None
+            seal_channel_ack(connection, row)
+        return
+    channel.acknowledge(
+        message_id=acknowledged_request.message_id,
+        actor_id=ADVISOR,
+        command_id=command_id,
+    )
+
+
+def _retained_claim(journal: SqliteJournal, command_id: str) -> CommandClaim:
+    record = journal.command(command_id)
+    assert record is not None
+    assert record.owner_id is not None
+    assert record.lease_expires_at is not None
+    return CommandClaim(
+        command_id=record.command_id,
+        actor_id=record.actor.actor_id,
+        operation=record.operation,
+        owner_id=record.owner_id,
+        epoch=record.owner_epoch,
+        expires_at=record.lease_expires_at,
+    )
+
+
+def _rebuild_channel_messages_with_projection(
+    database: Path,
+    *,
+    column: str,
+    projection: str,
+) -> None:
+    """Change one SQLite storage class without relying on column affinity."""
+
+    with sqlite3.connect(database) as connection:
+        columns = [
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info(channel_messages)")
+        ]
+        assert column in columns
+        connection.execute("ALTER TABLE channel_messages RENAME TO exact_channel_messages")
+        connection.execute(f"CREATE TABLE channel_messages ({', '.join(columns)})")
+        projected = [projection if name == column else name for name in columns]
+        connection.execute(
+            f"INSERT INTO channel_messages ({', '.join(columns)}) "
+            f"SELECT {', '.join(projected)} FROM exact_channel_messages"
+        )
+        connection.execute("DROP TABLE exact_channel_messages")
+        maximum = connection.execute(
+            "SELECT COUNT(*) FROM channel_messages"
+        ).fetchone()[0]
+        connection.execute(
+            "INSERT INTO sqlite_sequence(name, seq) VALUES ('channel_messages', ?)",
+            (maximum,),
+        )
+
+
+def test_request_history_is_detached_from_inputs_and_every_returned_view(
+    channel: Channel,
+) -> None:
+    payload: JsonValue = {"nested": {"value": "original"}}
+    returned = channel.append_request(_intent(payload=payload), ATTESTATION)
+
+    _nested_payload(payload)["value"] = "input-mutated"
+    assert _nested_payload(returned.envelope.payload)["value"] == "original"
+
+    _nested_payload(returned.envelope.payload)["value"] = "return-mutated"
+    loaded = channel.message(returned.message_id)
+    assert loaded is not None
+    assert _nested_payload(loaded.envelope.payload)["value"] == "original"
+
+    _nested_payload(loaded.envelope.payload)["value"] = "read-mutated"
+    page = channel.inbox(
+        actor_id=ADVISOR,
+        revision=channel.latest_revision(ADVISOR),
+        after=None,
+        limit=10,
+    )
+    assert _nested_payload(page[0].message.envelope.payload)["value"] == "original"
+
+    _nested_payload(page[0].message.envelope.payload)["value"] = "page-mutated"
+    reloaded = channel.message(returned.message_id)
+    assert reloaded is not None
+    assert _nested_payload(reloaded.envelope.payload)["value"] == "original"
+
+
+def test_reply_history_is_detached_from_inputs_and_every_returned_view(
+    channel: Channel,
+) -> None:
+    request = channel.append_request(_intent(), ATTESTATION)
+    payload: JsonValue = {"nested": {"value": "original"}}
+    returned = reply_with_command(
+        channel,
+        request_id=request.message_id,
+        actor_id=ADVISOR,
+        payload=payload,
+        idempotency_key="cmd-detached-reply",
+    )
+
+    _nested_payload(payload)["value"] = "input-mutated"
+    assert _nested_payload(returned.envelope.payload)["value"] == "original"
+
+    _nested_payload(returned.envelope.payload)["value"] = "return-mutated"
+    loaded = channel.reply_for(request.message_id)
+    assert loaded is not None
+    assert _nested_payload(loaded.envelope.payload)["value"] == "original"
+
+    _nested_payload(loaded.envelope.payload)["value"] = "read-mutated"
+    by_id = channel.message(returned.message_id)
+    assert by_id is not None
+    assert _nested_payload(by_id.envelope.payload)["value"] == "original"
+
+    _nested_payload(by_id.envelope.payload)["value"] = "message-mutated"
+    replayed = reply_with_command(
+        channel,
+        request_id=request.message_id,
+        actor_id=ADVISOR,
+        payload={"nested": {"value": "original"}},
+        idempotency_key="cmd-detached-reply",
+    )
+    _nested_payload(replayed.envelope.payload)["value"] = "replay-mutated"
+    final = channel.reply_for(request.message_id)
+    assert final is not None
+    assert _nested_payload(final.envelope.payload)["value"] == "original"
+
+
+def test_in_process_reply_evidence_is_an_independent_bytes_snapshot() -> None:
+    """The process transport keeps evidence separate from mutable message JSON."""
+
+    channel = InProcessChannel(channel_id=CHANNEL_ID)
+    request = channel.append_request(_intent(), ATTESTATION)
+    reply = reply_with_command(
+        channel,
+        request_id=request.message_id,
+        actor_id=ADVISOR,
+        payload={"nested": {"value": 1}},
+        idempotency_key="independent-proof",
+    )
+    retained = channel._by_id[str(reply.message_id)]
+    _nested_payload(retained.envelope.payload)["value"] = True
+
+    with pytest.raises(JournalDamaged, match="independently stored proof"):
+        channel.message(reply.message_id)
+
+
+@pytest.mark.parametrize(
+    "projection",
+    ("message", "inbox", "retry", "reply", "reply_for", "acknowledge"),
+)
+def test_in_process_request_evidence_is_an_independent_bytes_snapshot(
+    projection: str,
+) -> None:
+    """Process memory corruption cannot rewrite an already admitted request."""
+
+    channel = InProcessChannel(channel_id=CHANNEL_ID)
+    intent = _intent(payload={"nested": {"value": 1}})
+    request = channel.append_request(intent, ATTESTATION)
+    if projection == "reply_for":
+        reply_with_command(
+            channel,
+            request_id=request.message_id,
+            actor_id=ADVISOR,
+            payload={"advice": "ship"},
+            idempotency_key="request-proof-reply",
+        )
+    retained = channel._by_id[str(request.message_id)]
+    _nested_payload(retained.envelope.payload)["value"] = True
+
+    with pytest.raises(JournalDamaged, match="independent intent proof"):
+        if projection == "message":
+            channel.message(request.message_id)
+        elif projection == "inbox":
+            channel.inbox(
+                actor_id=ADVISOR,
+                revision=channel.latest_revision(ADVISOR),
+                after=None,
+                limit=10,
+            )
+        elif projection == "retry":
+            channel.append_request(intent, ATTESTATION)
+        elif projection == "reply":
+            reply_with_command(
+                channel,
+                request_id=request.message_id,
+                actor_id=ADVISOR,
+                payload={"advice": "ship"},
+                idempotency_key="request-proof-new-reply",
+            )
+        elif projection == "reply_for":
+            channel.reply_for(request.message_id)
+        else:
+            assert projection == "acknowledge"
+            channel.acknowledge(
+                message_id=request.message_id,
+                actor_id=ADVISOR,
+                command_id="request-proof-ack",
+            )
+
+
 def test_a_contradictory_intent_under_one_derived_id_is_damage(channel: Channel) -> None:
     intent = _intent()
     channel.append_request(intent, ATTESTATION)
@@ -124,8 +384,14 @@ def test_a_contradictory_intent_under_one_derived_id_is_damage(channel: Channel)
 def test_a_send_under_a_foreign_attestation_is_damage(channel: Channel) -> None:
     intent = _intent()
     channel.append_request(intent, ATTESTATION)
+    foreign = "att-someone-else"
+    if isinstance(channel, MailboxChannel):
+        foreign = mint_send_attestation(
+            channel._journal,
+            _intent(port="foreign-attestation"),
+        ).attestation_id
     with pytest.raises(JournalDamaged, match="different logical intent"):
-        channel.append_request(intent, "att-someone-else")
+        channel.append_request(intent, foreign)
 
 
 def test_loop_frames_and_ports_produce_distinct_request_identities(channel: Channel) -> None:
@@ -148,11 +414,12 @@ def test_loop_frames_and_ports_produce_distinct_request_identities(channel: Chan
 
 def test_a_reply_is_typed_by_its_request_and_acknowledges_it(channel: Channel) -> None:
     request = channel.append_request(_intent(), ATTESTATION)
-    reply = channel.reply(
+    reply = reply_with_command(
+        channel,
         request_id=request.message_id,
         actor_id=ADVISOR,
         payload={"advice": "ship"},
-        command_id="cmd-reply-1",
+        idempotency_key="cmd-reply-1",
     )
     assert reply.kind == "reply"
     assert reply.reply_to == request.message_id
@@ -170,44 +437,183 @@ def test_a_reply_is_typed_by_its_request_and_acknowledges_it(channel: Channel) -
     assert [delivery.acknowledged for delivery in page] == [True]  # the reply acked it
 
 
+@pytest.mark.parametrize("transport", ("in_process", "mailbox"))
+def test_reply_and_implied_ack_share_one_atomic_observation(
+    transport: str,
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    """Both transports construct the reply and its ack from one clock read."""
+
+    class FailThirdObservation:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def now(self):
+            self.calls += 1
+            if self.calls == 3:
+                raise RuntimeError("timestamp unavailable")
+            return clock.now()
+
+    observations = FailThirdObservation()
+    channel: Channel
+    if transport == "in_process":
+        channel = InProcessChannel(channel_id=CHANNEL_ID, now_fn=observations.now)
+    else:
+        channel = MailboxChannel(
+            SqliteJournal(tmp_path / "clock-fault.db", now_fn=observations.now),
+            channel_id=CHANNEL_ID,
+        )
+    request = channel.append_request(_intent(), ATTESTATION)
+    reply = reply_with_command(
+        channel,
+        request_id=request.message_id,
+        actor_id=ADVISOR,
+        payload={"advice": "ship"},
+        idempotency_key="cmd-clock-fault",
+    )
+    replayed = reply_with_command(
+        channel,
+        request_id=request.message_id,
+        actor_id=ADVISOR,
+        payload={"advice": "ship"},
+        idempotency_key="cmd-clock-fault",
+    )
+
+    assert observations.calls == 2  # request once, then the whole reply exchange once
+    assert replayed == reply
+    assert channel.reply_for(request.message_id) == reply
+    page = channel.inbox(
+        actor_id=ADVISOR,
+        revision=channel.latest_revision(ADVISOR),
+        after=None,
+        limit=10,
+    )
+    assert [delivery.acknowledged for delivery in page] == [True]
+
+
+@pytest.mark.parametrize("transport", ("in_process", "mailbox"))
+def test_an_exact_ack_retry_does_not_invent_an_observation(
+    transport: str,
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    class FailThirdObservation:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def now(self):
+            self.calls += 1
+            if self.calls == 3:
+                raise RuntimeError("timestamp unavailable")
+            return clock.now()
+
+    observations = FailThirdObservation()
+    channel: Channel
+    if transport == "in_process":
+        channel = InProcessChannel(channel_id=CHANNEL_ID, now_fn=observations.now)
+    else:
+        channel = MailboxChannel(
+            SqliteJournal(tmp_path / "ack-clock-fault.db", now_fn=observations.now),
+            channel_id=CHANNEL_ID,
+        )
+    request = channel.append_request(_intent(), ATTESTATION)
+    first = ack_with_command(
+        channel,
+        message_id=request.message_id,
+        actor_id=ADVISOR,
+        idempotency_key="cmd-ack-clock-fault",
+    )
+    replayed = ack_with_command(
+        channel,
+        message_id=request.message_id,
+        actor_id=ADVISOR,
+        idempotency_key="cmd-ack-clock-fault",
+    )
+
+    assert replayed == first
+    assert observations.calls == 2  # request once, then the first ack once
+
+
 def test_an_identical_reply_retry_returns_one_exact_fact(
     channel: Channel,
     clock: FakeClock,
 ) -> None:
     request = channel.append_request(_intent(), ATTESTATION)
-    first = channel.reply(
+    first = reply_with_command(
+        channel,
         request_id=request.message_id,
         actor_id=ADVISOR,
         payload={"advice": "ship"},
-        command_id="cmd-reply-1",
+        idempotency_key="cmd-reply-1",
     )
     clock.advance(600)
-    second = channel.reply(
+    second = reply_with_command(
+        channel,
         request_id=request.message_id,
         actor_id=ADVISOR,
         payload={"advice": "ship"},
-        command_id="cmd-reply-1",
+        idempotency_key="cmd-reply-1",
     )
     assert second == first
     assert channel.latest_revision(ADVISOR).message_seq == 2  # no third message
+
+
+def test_a_deleted_reply_cannot_be_hidden_or_replaced(channel: Channel) -> None:
+    request = channel.append_request(_intent(), ATTESTATION)
+    reply = reply_with_command(
+        channel,
+        request_id=request.message_id,
+        actor_id=ADVISOR,
+        payload={"advice": "ship"},
+        idempotency_key="deleted-reply-writer",
+    )
+    if isinstance(channel, MailboxChannel):
+        with sqlite3.connect(channel._journal._db_path) as connection:
+            connection.execute(
+                "DELETE FROM channel_messages WHERE message_id = ?",
+                (str(reply.message_id),),
+            )
+    else:
+        assert isinstance(channel, InProcessChannel)
+        channel._by_id.pop(str(reply.message_id))
+
+    with pytest.raises(
+        JournalDamaged,
+        match=r"reply history|message .*history|fact-seal inventory",
+    ):
+        channel.reply_for(request.message_id)
+    with pytest.raises(
+        JournalDamaged,
+        match=r"reply history|message .*history|fact-seal inventory",
+    ):
+        reply_with_command(
+            channel,
+            request_id=request.message_id,
+            actor_id=ADVISOR,
+            payload={"advice": "replacement"},
+            idempotency_key="deleted-reply-contender",
+        )
 
 
 def test_a_second_different_reply_is_refused_as_a_lost_race(channel: Channel) -> None:
     """Two processes replying concurrently admit one exact reply."""
 
     request = channel.append_request(_intent(), ATTESTATION)
-    channel.reply(
+    reply_with_command(
+        channel,
         request_id=request.message_id,
         actor_id=ADVISOR,
         payload={"advice": "ship"},
-        command_id="cmd-reply-1",
+        idempotency_key="cmd-reply-1",
     )
     with pytest.raises(ChannelReplyConflict, match="already answered by another command"):
-        channel.reply(
+        reply_with_command(
+            channel,
             request_id=request.message_id,
             actor_id=ADVISOR,
             payload={"advice": "hold"},
-            command_id="cmd-reply-2",
+            idempotency_key="cmd-reply-2",
         )
 
 
@@ -222,19 +628,87 @@ def test_replying_to_an_unknown_request_is_refused(channel: Channel) -> None:
         )
 
 
+def test_generic_reply_cannot_partially_answer_an_approval(channel: Channel) -> None:
+    """Only the request-bound approval transaction may write this exchange."""
+
+    request = channel.append_request(_intent(interaction="approval"), ATTESTATION)
+
+    with pytest.raises(ContractViolation, match="request-bound approval"):
+        channel.reply(
+            request_id=request.message_id,
+            actor_id=ADVISOR,
+            payload={"decision": "approved"},
+            command_id="cmd-generic-approval",
+        )
+
+    assert channel.reply_for(request.message_id) is None
+    page = channel.inbox(
+        actor_id=ADVISOR,
+        revision=channel.latest_revision(ADVISOR),
+        after=None,
+        limit=10,
+    )
+    assert len(page) == 1
+    assert page[0].message == request
+    assert page[0].acknowledged is False
+
+
+@pytest.mark.parametrize(
+    ("request_contract", "reply_contract"),
+    (
+        (APPROVAL_REQUEST_CONTRACT, APPROVAL_REPLY_CONTRACT),
+        (APPROVAL_REQUEST_CONTRACT, REPLY_CONTRACT),
+        (REQUEST_CONTRACT, APPROVAL_REPLY_CONTRACT),
+    ),
+)
+def test_generic_reply_cannot_persist_an_incoherent_canonical_exchange(
+    channel: Channel,
+    request_contract: ChannelContract,
+    reply_contract: ChannelContract,
+) -> None:
+    intent = _intent().model_copy(
+        update={
+            "contract": request_contract,
+            "reply_contract": reply_contract,
+        }
+    )
+    request = channel.append_request(intent, ATTESTATION)
+
+    with pytest.raises(ContractViolation, match="incoherent exchange"):
+        channel.reply(
+            request_id=request.message_id,
+            actor_id=ADVISOR,
+            payload={"decision": "approved"},
+            command_id="cmd-incoherent-exchange",
+        )
+
+    assert channel.reply_for(request.message_id) is None
+    page = channel.inbox(
+        actor_id=ADVISOR,
+        revision=channel.latest_revision(ADVISOR),
+        after=None,
+        limit=10,
+    )
+    assert len(page) == 1
+    assert page[0].message == request
+    assert page[0].acknowledged is False
+
+
 def test_acknowledgement_retains_history_and_never_claims_consumption(
     channel: Channel,
 ) -> None:
     request = channel.append_request(_intent(), ATTESTATION)
-    first = channel.acknowledge(
+    first = ack_with_command(
+        channel,
         message_id=request.message_id,
         actor_id=ADVISOR,
-        command_id="cmd-ack-1",
+        idempotency_key="cmd-ack-1",
     )
-    second = channel.acknowledge(
+    second = ack_with_command(
+        channel,
         message_id=request.message_id,
         actor_id=ADVISOR,
-        command_id="cmd-ack-1",
+        idempotency_key="cmd-ack-1",
     )
     assert second == first
     page = channel.inbox(
@@ -248,19 +722,56 @@ def test_acknowledgement_retains_history_and_never_claims_consumption(
     assert channel.reply_for(request.message_id) is None  # and consumed nothing
 
 
+def test_a_deleted_acknowledgement_cannot_be_recreated(channel: Channel) -> None:
+    request = channel.append_request(_intent(), ATTESTATION)
+    ack_with_command(
+        channel,
+        message_id=request.message_id,
+        actor_id=ADVISOR,
+        idempotency_key="deleted-ack-writer",
+    )
+    if isinstance(channel, MailboxChannel):
+        with sqlite3.connect(channel._journal._db_path) as connection:
+            connection.execute(
+                "DELETE FROM channel_acks WHERE message_id = ? AND actor_id = ?",
+                (str(request.message_id), ADVISOR),
+            )
+    else:
+        assert isinstance(channel, InProcessChannel)
+        key = (str(request.message_id), ADVISOR)
+        channel._ack_by_key.pop(key)
+        channel._acks.clear()
+
+    with pytest.raises(
+        JournalDamaged,
+        match=r"acknowledgement .*history|fact-seal inventory",
+    ):
+        ack_with_command(
+            channel,
+            message_id=request.message_id,
+            actor_id=ADVISOR,
+            idempotency_key="deleted-ack-writer",
+        )
+
+
 def test_one_command_cannot_acknowledge_two_messages(channel: Channel) -> None:
     first = channel.append_request(_intent(), ATTESTATION)
     second = channel.append_request(_intent(port="second-request"), ATTESTATION)
-    channel.acknowledge(
+    ack_with_command(
+        channel,
         message_id=first.message_id,
         actor_id=ADVISOR,
-        command_id="cmd-ack-1",
+        idempotency_key="cmd-ack-1",
     )
-    with pytest.raises(JournalDamaged, match="already acknowledged a different message"):
-        channel.acknowledge(
+    with pytest.raises(
+        JournalDamaged,
+        match=r"already acknowledged a different message|no reply written by its command",
+    ):
+        ack_with_command(
+            channel,
             message_id=second.message_id,
             actor_id=ADVISOR,
-            command_id="cmd-ack-1",
+            idempotency_key="cmd-ack-1",
         )
 
 
@@ -293,10 +804,11 @@ def test_an_old_revision_neither_absorbs_nor_loses_a_later_message_or_ack(
     first = channel.append_request(_intent(), ATTESTATION)
     old = channel.latest_revision(ADVISOR)
     later = channel.append_request(_intent(port="second-request"), ATTESTATION)
-    channel.acknowledge(
+    ack_with_command(
+        channel,
         message_id=first.message_id,
         actor_id=ADVISOR,
-        command_id="cmd-ack-1",
+        idempotency_key="cmd-ack-1",
     )
 
     at_old = channel.inbox(actor_id=ADVISOR, revision=old, after=None, limit=10)
@@ -358,11 +870,12 @@ def test_mailbox_history_and_identities_survive_a_reopen(
     path = tmp_path / "mailbox.db"
     first = MailboxChannel(SqliteJournal(path, now_fn=clock.now), channel_id=CHANNEL_ID)
     request = first.append_request(_intent(), ATTESTATION)
-    reply = first.reply(
+    reply = reply_with_command(
+        first,
         request_id=request.message_id,
         actor_id=ADVISOR,
         payload={"advice": "ship"},
-        command_id="cmd-reply-1",
+        idempotency_key="cmd-reply-1",
     )
     assert first.profile.durability == "sqlite_wal"
 
@@ -426,18 +939,20 @@ def test_two_hosts_replying_concurrently_admit_one_exact_reply(
     second = MailboxChannel(SqliteJournal(path, now_fn=clock.now), channel_id=CHANNEL_ID)
     request = first.append_request(_intent(), ATTESTATION)
 
-    winner = first.reply(
+    winner = reply_with_command(
+        first,
         request_id=request.message_id,
         actor_id=ADVISOR,
         payload={"advice": "ship"},
-        command_id="cmd-host-a",
+        idempotency_key="cmd-host-a",
     )
     with pytest.raises(ChannelReplyConflict, match="already answered by another command"):
-        second.reply(
+        reply_with_command(
+            second,
             request_id=request.message_id,
             actor_id=ADVISOR,
             payload={"advice": "hold"},
-            command_id="cmd-host-b",
+            idempotency_key="cmd-host-b",
         )
     assert second.reply_for(request.message_id) == winner  # the loser observes the winner
 
@@ -450,19 +965,21 @@ def test_a_second_host_replaying_the_same_reply_sees_one_exact_fact(
     first = MailboxChannel(SqliteJournal(path, now_fn=clock.now), channel_id=CHANNEL_ID)
     second = MailboxChannel(SqliteJournal(path, now_fn=clock.now), channel_id=CHANNEL_ID)
     request = first.append_request(_intent(), ATTESTATION)
-    original = first.reply(
+    original = reply_with_command(
+        first,
         request_id=request.message_id,
         actor_id=ADVISOR,
         payload={"advice": "ship"},
-        command_id="cmd-host-a",
+        idempotency_key="cmd-host-a",
     )
 
     clock.advance(900)
-    replayed = second.reply(
+    replayed = reply_with_command(
+        second,
         request_id=request.message_id,
         actor_id=ADVISOR,
         payload={"advice": "ship"},
-        command_id="cmd-host-a",
+        idempotency_key="cmd-host-a",
     )
     assert replayed == original  # no second reply, no second observation time
     assert second.latest_revision(ADVISOR).message_seq == 2
@@ -569,17 +1086,22 @@ def test_a_refused_acknowledgement_leaves_no_orphan_reply(channel: Channel) -> N
 
     other = channel.append_request(_intent(port="second-request"), ATTESTATION)
     request = channel.append_request(_intent(), ATTESTATION)
-    channel.acknowledge(
-        message_id=other.message_id,
-        actor_id=ADVISOR,
-        command_id="cmd-shared",
+    _seed_orphan_ack_owned_by_reply_command(
+        channel,
+        planned_request=request,
+        acknowledged_request=other,
+        idempotency_key="cmd-shared",
     )
-    with pytest.raises(JournalDamaged, match="already acknowledged a different message"):
-        channel.reply(
+    with pytest.raises(
+        JournalDamaged,
+        match=r"already acknowledged a different message|no reply written by its command",
+    ):
+        reply_with_command(
+            channel,
             request_id=request.message_id,
             actor_id=ADVISOR,
             payload={"advice": "ship"},
-            command_id="cmd-shared",
+            idempotency_key="cmd-shared",
         )
     assert channel.reply_for(request.message_id) is None  # nothing was appended
     assert channel.latest_revision(ADVISOR).message_seq == 2
@@ -674,11 +1196,12 @@ def test_only_the_sealed_recipient_may_answer_an_addressed_request(
         )
     assert channel.reply_for(request.message_id) is None  # still answerable
 
-    reply = channel.reply(
+    reply = reply_with_command(
+        channel,
         request_id=request.message_id,
         actor_id=ADVISOR,
         payload={"advice": "ship"},
-        command_id="cmd-reply-1",
+        idempotency_key="cmd-reply-1",
     )
     assert reply.sender_actor_id == ADVISOR
 
@@ -689,11 +1212,12 @@ def test_an_unaddressed_request_admits_any_authenticated_actor(
     """Only an explicitly unassigned request is open to whoever picks it up."""
 
     request = channel.append_request(_intent(recipient=None), ATTESTATION)
-    reply = channel.reply(
+    reply = reply_with_command(
+        channel,
         request_id=request.message_id,
         actor_id="static:whoever",
         payload={"advice": "ship"},
-        command_id="cmd-open",
+        idempotency_key="cmd-open",
     )
     assert reply.sender_actor_id == "static:whoever"
 
@@ -735,11 +1259,12 @@ def test_a_reply_is_never_broadcast_to_an_inbox(channel: Channel) -> None:
     """
 
     request = channel.append_request(_intent(), ATTESTATION)
-    reply = channel.reply(
+    reply = reply_with_command(
+        channel,
         request_id=request.message_id,
         actor_id=ADVISOR,
         payload={"advice": "ship"},
-        command_id="cmd-not-broadcast",
+        idempotency_key="cmd-not-broadcast",
     )
     assert reply.recipient_actor_id is None
 
@@ -755,18 +1280,20 @@ def test_the_first_reply_to_an_open_request_wins(channel: Channel) -> None:
     """
 
     request = channel.append_request(_intent(recipient=None), ATTESTATION)
-    winner = channel.reply(
+    winner = reply_with_command(
+        channel,
         request_id=request.message_id,
         actor_id="static:first",
         payload={"advice": "ship"},
-        command_id="cmd-first",
+        idempotency_key="cmd-first",
     )
     with pytest.raises(ChannelReplyConflict):
-        channel.reply(
+        reply_with_command(
+            channel,
             request_id=request.message_id,
             actor_id="static:second",
             payload={"advice": "hold"},
-            command_id="cmd-second",
+            idempotency_key="cmd-second",
         )
     assert channel.reply_for(request.message_id) == winner
 
@@ -777,10 +1304,11 @@ def test_the_first_reply_to_an_open_request_wins(channel: Channel) -> None:
         limit=10,
     )
     assert [delivery.acknowledged for delivery in page] == [True]
-    loser = channel.acknowledge(
+    loser = ack_with_command(
+        channel,
         message_id=request.message_id,
         actor_id="static:second",
-        command_id="cmd-second-ack",
+        idempotency_key="cmd-second-ack",
     )
     assert loser.actor_id == "static:second"
 
@@ -802,10 +1330,11 @@ def test_a_revision_may_not_acknowledge_a_message_it_excludes(
 
     first = channel.append_request(_intent(), ATTESTATION)
     second = channel.append_request(_intent(port="second-request"), ATTESTATION)
-    channel.acknowledge(
+    ack_with_command(
+        channel,
         message_id=second.message_id,
         actor_id=ADVISOR,
-        command_id="cmd-ack-second",
+        idempotency_key="cmd-ack-second",
     )
     current = channel.latest_revision(ADVISOR)
     torn = ChannelRevision(message_seq=1, ack_seq=current.ack_seq)
@@ -821,22 +1350,26 @@ def test_a_second_command_may_not_claim_an_existing_acknowledgement(
 
     first = channel.append_request(_intent(), ATTESTATION)
     second = channel.append_request(_intent(port="second-request"), ATTESTATION)
-    channel.acknowledge(
+    ack_with_command(
+        channel,
         message_id=first.message_id,
         actor_id=ADVISOR,
-        command_id="cmd-one",
+        idempotency_key="cmd-one",
     )
     with pytest.raises(ChannelAckConflict, match="may not claim it"):
-        channel.acknowledge(
+        ack_with_command(
+            channel,
             message_id=first.message_id,
             actor_id=ADVISOR,
-            command_id="cmd-two",
+            idempotency_key="cmd-two",
         )
-    # ...and cmd-two therefore never became free to address a second message.
-    channel.acknowledge(
+    # Its immutable plan still names the first request; a fresh command may
+    # independently acknowledge the second.
+    ack_with_command(
+        channel,
         message_id=second.message_id,
         actor_id=ADVISOR,
-        command_id="cmd-two",
+        idempotency_key="cmd-three",
     )
 
 
@@ -849,18 +1382,745 @@ def test_acknowledging_first_does_not_forfeit_the_right_to_reply(channel: Channe
     """
 
     request = channel.append_request(_intent(), ATTESTATION)
-    channel.acknowledge(
+    ack_with_command(
+        channel,
         message_id=request.message_id,
         actor_id=ADVISOR,
-        command_id="cmd-ack-first",
+        idempotency_key="cmd-ack-first",
     )
+    reply = reply_with_command(
+        channel,
+        request_id=request.message_id,
+        actor_id=ADVISOR,
+        payload={"advice": "ship"},
+        idempotency_key="cmd-reply-after",
+    )
+    assert channel.reply_for(request.message_id) == reply
+
+
+def test_a_reply_command_cannot_heal_its_own_orphan_ack(channel: Channel) -> None:
+    """The same command's ack without its atomic reply is impossible history."""
+
+    request = channel.append_request(_intent(), ATTESTATION)
+    _seed_orphan_ack_owned_by_reply_command(
+        channel,
+        planned_request=request,
+        acknowledged_request=request,
+        idempotency_key="cmd-torn-reply",
+    )
+
+    with pytest.raises(
+        JournalDamaged,
+        match=r"acknowledgement without its reply|no reply written by its command",
+    ):
+        reply_with_command(
+            channel,
+            request_id=request.message_id,
+            actor_id=ADVISOR,
+            payload={"advice": "ship"},
+            idempotency_key="cmd-torn-reply",
+        )
+    assert channel.reply_for(request.message_id) is None
+
+
+@pytest.mark.parametrize("actor_id", (ADVISOR, "static:second-advisor"))
+def test_an_explicit_ack_cannot_heal_a_torn_reply(
+    channel: Channel,
+    actor_id: str,
+) -> None:
+    """No later delivery observation may manufacture an atomic reply half."""
+
+    request = channel.append_request(_intent(), ATTESTATION)
+    reply_with_command(
+        channel,
+        request_id=request.message_id,
+        actor_id=ADVISOR,
+        payload={"advice": "ship"},
+        idempotency_key="reply-before-torn-ack",
+    )
+    key = (str(request.message_id), ADVISOR)
+    if isinstance(channel, InProcessChannel):
+        torn = channel._ack_by_key.pop(key)
+        channel._acks.remove(torn)
+        owner = next(command for command, owned in channel._ack_commands.items() if owned == key)
+        del channel._ack_commands[owner]
+    else:
+        assert isinstance(channel, MailboxChannel)
+        with sqlite3.connect(channel._journal._db_path) as connection:
+            connection.execute(
+                "DELETE FROM channel_acks WHERE message_id = ? AND actor_id = ?",
+                key,
+            )
+
+    with pytest.raises(
+        JournalDamaged,
+        match=r"acknowledgement|fact-seal inventory",
+    ):
+        channel.acknowledge(
+            message_id=request.message_id,
+            actor_id=actor_id,
+            command_id=f"ack-after-torn-reply-{actor_id}",
+        )
+
+
+def test_a_complete_reply_does_not_block_an_independent_delivery_ack(
+    channel: Channel,
+) -> None:
+    request = channel.append_request(_intent(recipient=None), ATTESTATION)
+    reply_with_command(
+        channel,
+        request_id=request.message_id,
+        actor_id=ADVISOR,
+        payload={"advice": "ship"},
+        idempotency_key="complete-before-second-ack",
+    )
+
+    observed = ack_with_command(
+        channel,
+        message_id=request.message_id,
+        actor_id="static:second-advisor",
+        idempotency_key="second-actor-after-complete-reply",
+    )
+
+    assert observed.message_id == request.message_id
+    assert observed.actor_id == "static:second-advisor"
+
+
+@pytest.mark.parametrize("damage", ("downgrade", "missing-command", "missing-cutoff"))
+def test_current_ack_provenance_cannot_be_downgraded_or_orphaned(
+    damage: str,
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    database = tmp_path / f"ack-provenance-{damage}.db"
+    journal = SqliteJournal(database, now_fn=clock.now)
+    channel = MailboxChannel(journal, channel_id=CHANNEL_ID)
+    request = channel.append_request(_intent(), ATTESTATION)
+    ack_with_command(
+        channel,
+        message_id=request.message_id,
+        actor_id=ADVISOR,
+        idempotency_key=f"ack-provenance-{damage}",
+    )
+    command_id = command_id_for(
+        ADVISOR,
+        "channels_ack",
+        f"ack-provenance-{damage}",
+    )
+    with sqlite3.connect(database) as connection:
+        if damage == "downgrade":
+            connection.execute(
+                "UPDATE channel_acks SET ack_provenance_version = 0"
+                " WHERE message_id = ? AND actor_id = ?",
+                (str(request.message_id), ADVISOR),
+            )
+        elif damage == "missing-command":
+            connection.execute(
+                "DELETE FROM commands WHERE command_id = ?",
+                (command_id,),
+            )
+        else:
+            connection.execute("DROP TABLE channel_provenance")
+
+    with pytest.raises(
+        JournalDamaged,
+        match=r"provenance|cutoff|positive claim seal|durable tables",
+    ):
+        journal.channel_ack(message_id=request.message_id, actor_id=ADVISOR)
+
+
+@pytest.mark.parametrize("projection", ("exact", "inbox"))
+def test_a_current_ack_is_projected_only_through_its_exact_typed_plan(
+    projection: str,
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    database = tmp_path / f"ack-plan-{projection}.db"
+    journal = SqliteJournal(database, now_fn=clock.now)
+    channel = MailboxChannel(journal, channel_id=CHANNEL_ID)
+    request = channel.append_request(_intent(), ATTESTATION)
+    key = f"ack-plan-{projection}"
+    ack_with_command(
+        channel,
+        message_id=request.message_id,
+        actor_id=ADVISOR,
+        idempotency_key=key,
+    )
+    revision = channel.latest_revision(ADVISOR)
+    with sqlite3.connect(database) as connection:
+        connection.row_factory = sqlite3.Row
+        command_id = command_id_for(ADVISOR, "channels_ack", key)
+        connection.execute(
+            "UPDATE commands SET plan_json = json_set("
+            "plan_json, '$.plan.channel_id', 'channel/forged') WHERE command_id = ?",
+            (command_id,),
+        )
+        row = connection.execute(
+            "SELECT * FROM commands WHERE command_id = ?",
+            (command_id,),
+        ).fetchone()
+        assert row is not None
+        connection.execute(
+            "UPDATE durable_fact_seals SET fact_hash = ?"
+            " WHERE family = 'command_plan' AND fact_key = ?",
+            (str(command_plan_fact_hash(row)), command_id),
+        )
+
+    with pytest.raises(JournalDamaged, match="contradicts its command"):
+        if projection == "exact":
+            journal.channel_ack(message_id=request.message_id, actor_id=ADVISOR)
+        else:
+            channel.inbox(
+                actor_id=ADVISOR,
+                revision=revision,
+                after=None,
+                limit=10,
+            )
+
+
+def test_a_durable_ack_requires_an_aware_observation_time(
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    database = tmp_path / "ack-naive-time.db"
+    journal = SqliteJournal(database, now_fn=clock.now)
+    channel = MailboxChannel(journal, channel_id=CHANNEL_ID)
+    request = channel.append_request(_intent(), ATTESTATION)
+    ack_with_command(
+        channel,
+        message_id=request.message_id,
+        actor_id=ADVISOR,
+        idempotency_key="ack-naive-time",
+    )
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE channel_acks SET acked_at = ?"
+            " WHERE message_id = ? AND actor_id = ?",
+            ("2026-01-01T00:00:00", str(request.message_id), ADVISOR),
+        )
+        connection.commit()
+
+    with pytest.raises(JournalDamaged, match="not a valid durable fact") as damaged:
+        journal.channel_ack(message_id=request.message_id, actor_id=ADVISOR)
+    assert isinstance(damaged.value.__cause__, JournalDamaged)
+    assert "durable timestamp" in str(damaged.value.__cause__)
+
+
+@pytest.mark.parametrize(
+    "actor_expression",
+    ("CAST(actor_id AS BLOB)", "'static:other-advisor'"),
+)
+def test_ack_actor_corruption_cannot_look_like_an_unacknowledged_message(
+    actor_expression: str,
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    database = tmp_path / "ack-actor-routing.db"
+    journal = SqliteJournal(database, now_fn=clock.now)
+    channel = MailboxChannel(journal, channel_id=CHANNEL_ID)
+    request = channel.append_request(_intent(), ATTESTATION)
+    ack_with_command(
+        channel,
+        message_id=request.message_id,
+        actor_id=ADVISOR,
+        idempotency_key="ack-actor-routing",
+    )
+    revision = channel.latest_revision(ADVISOR)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            f"UPDATE channel_acks SET actor_id = {actor_expression}"
+            " WHERE message_id = ?",
+            (str(request.message_id),),
+        )
+
+    for read in (
+        lambda: journal.channel_ack(
+            message_id=request.message_id,
+            actor_id=ADVISOR,
+        ),
+        lambda: journal.channel_delivery(
+            message_id=request.message_id,
+            actor_id=ADVISOR,
+        ),
+        lambda: channel.inbox(
+            actor_id=ADVISOR,
+            revision=revision,
+            after=None,
+            limit=10,
+        ),
+    ):
+        with pytest.raises(JournalDamaged):
+            read()
+
+
+def test_a_delivery_never_coerces_its_durable_message_sequence(
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    database = tmp_path / "delivery-sequence.db"
+    journal = SqliteJournal(database, now_fn=clock.now)
+    channel = MailboxChannel(journal, channel_id=CHANNEL_ID)
+    request = channel.append_request(_intent(), ATTESTATION)
+    _rebuild_channel_messages_with_projection(
+        database,
+        column="message_seq",
+        projection="CAST(message_seq AS REAL)",
+    )
+
+    with pytest.raises(
+        JournalDamaged,
+        match=r"append-only history|not a valid durable fact",
+    ):
+        journal.channel_delivery(message_id=request.message_id, actor_id=ADVISOR)
+
+
+def test_an_inbox_never_bounds_history_with_a_coerced_message_sequence(
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    database = tmp_path / "inbox-sequence.db"
+    journal = SqliteJournal(database, now_fn=clock.now)
+    channel = MailboxChannel(journal, channel_id=CHANNEL_ID)
+    channel.append_request(_intent(port="first"), ATTESTATION)
+    channel.append_request(_intent(port="second"), ATTESTATION)
+    revision = channel.latest_revision(ADVISOR)
+    _rebuild_channel_messages_with_projection(
+        database,
+        column="message_seq",
+        projection=(
+            "CASE WHEN message_seq = 1 THEN CAST(message_seq AS REAL) ELSE message_seq END"
+        ),
+    )
+
+    with pytest.raises(
+        JournalDamaged,
+        match=r"message append-only history|not a valid durable fact",
+    ):
+        channel.inbox(
+            actor_id=ADVISOR,
+            revision=revision,
+            after=None,
+            limit=10,
+        )
+
+
+@pytest.mark.parametrize(
+    ("column", "projection"),
+    (
+        ("type_id", "CAST(1 AS INTEGER)"),
+        ("envelope_json", "CAST(envelope_json AS BLOB)"),
+        ("attestation_id", "CAST(attestation_id AS BLOB)"),
+    ),
+)
+def test_a_channel_message_never_normalizes_relational_storage_classes(
+    column: str,
+    projection: str,
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    database = tmp_path / f"message-storage-{column}.db"
+    journal = SqliteJournal(database, now_fn=clock.now)
+    channel = MailboxChannel(journal, channel_id=CHANNEL_ID)
+    request = channel.append_request(_intent(), ATTESTATION)
+    _rebuild_channel_messages_with_projection(
+        database,
+        column=column,
+        projection=projection,
+    )
+
+    with pytest.raises(JournalDamaged, match="not a valid durable fact"):
+        channel.message(request.message_id)
+
+
+@pytest.mark.parametrize(
+    ("column", "expression"),
+    (
+        ("recipient_actor_id", "CAST(recipient_actor_id AS BLOB)"),
+        ("recipient_actor_id", "' static:advisor'"),
+        ("kind", "'invalid-kind'"),
+        ("interaction", "'invalid-interaction'"),
+        ("message_id", "CAST(message_id AS BLOB)"),
+    ),
+)
+def test_inbox_routing_damage_cannot_hide_behind_scope_or_a_cursor(
+    column: str,
+    expression: str,
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    database = tmp_path / f"inbox-routing-{column}.db"
+    journal = SqliteJournal(database, now_fn=clock.now)
+    channel = MailboxChannel(journal, channel_id=CHANNEL_ID)
+    channel.append_request(_intent(port="first"), ATTESTATION)
+    second = channel.append_request(_intent(port="second"), ATTESTATION)
+    revision = channel.latest_revision(ADVISOR)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            f"UPDATE channel_messages SET {column} = {expression} WHERE message_seq = 1"
+        )
+
+    with pytest.raises(JournalDamaged, match="not a valid durable fact"):
+        channel.inbox(
+            actor_id=ADVISOR,
+            revision=revision,
+            after=(revision.message_seq, str(second.message_id)),
+            limit=10,
+        )
+
+
+@pytest.mark.parametrize(
+    ("column", "value", "recipient"),
+    (
+        ("interaction", "approval", ADVISOR),
+        ("recipient_actor_id", "static:other-advisor", ADVISOR),
+        ("kind", "reply", None),
+    ),
+)
+def test_valid_routing_values_cannot_hide_a_request_from_its_send_proof(
+    column: str,
+    value: str,
+    recipient: str | None,
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    database = tmp_path / f"inbox-proof-routing-{column}.db"
+    journal = SqliteJournal(database, now_fn=clock.now)
+    channel = MailboxChannel(journal, channel_id=CHANNEL_ID)
+    channel.append_request(
+        _intent(port="proof-routed", recipient=recipient),
+        ATTESTATION,
+    )
+    later = channel.append_request(_intent(port="later"), ATTESTATION)
+    revision = journal.channel_actor_revision(actor_id=ADVISOR)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            f"UPDATE channel_messages SET {column} = ? WHERE message_seq = 1",
+            (value,),
+        )
+        connection.commit()
+
+    with pytest.raises(JournalDamaged):
+        journal.channel_actor_inbox(
+            actor_id=ADVISOR,
+            revision=revision,
+            interactions=frozenset({"advice"}),
+            after=(revision.message_seq, str(later.message_id)),
+            limit=10,
+        )
+
+
+def test_in_process_reply_lookup_uses_derived_identity_before_its_pointer(
+    clock: FakeClock,
+) -> None:
+    channel = InProcessChannel(channel_id=CHANNEL_ID, now_fn=clock.now)
+    request = channel.append_request(_intent(), ATTESTATION)
     reply = channel.reply(
         request_id=request.message_id,
         actor_id=ADVISOR,
         payload={"advice": "ship"},
-        command_id="cmd-reply-after",
+        command_id="cmd-derived-reply",
     )
+    forged = reply.model_copy(
+        update={"reply_to": digest("channel-message", 1, {"forged": True})},
+        deep=True,
+    )
+    reply_key = str(reply.message_id)
+    channel._by_id[reply_key] = forged
+    channel._messages[channel._seq_by_id[reply_key] - 1] = forged
+
+    with pytest.raises(JournalDamaged):
+        channel.reply_for(request.message_id)
+
+    # A lookup by the forged pointer used to miss the torn reply and let an
+    # explicit acknowledgement manufacture its missing atomic half.
+    channel._acks.clear()
+    channel._ack_by_key.clear()
+    channel._ack_commands.clear()
+    with pytest.raises(JournalDamaged):
+        channel.acknowledge(
+            message_id=request.message_id,
+            actor_id=ADVISOR,
+            command_id="cmd-heal-torn-reply",
+        )
+    assert channel._acks == []
+
+
+def test_a_damaged_channel_identity_cannot_hide_from_its_scoped_revision(
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    database = tmp_path / "channel-id-storage.db"
+    journal = SqliteJournal(database, now_fn=clock.now)
+    channel = MailboxChannel(journal, channel_id=CHANNEL_ID)
+    request = channel.append_request(_intent(), ATTESTATION)
+    revision = channel.latest_revision(ADVISOR)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE channel_messages SET channel_id = CAST(channel_id AS BLOB)"
+        )
+
+    for read in (
+        lambda: channel.message(request.message_id),
+        lambda: channel.reply_for(request.message_id),
+    ):
+        with pytest.raises(JournalDamaged, match="not a valid durable fact"):
+            read()
+    with pytest.raises(JournalDamaged, match="not a valid durable fact"):
+        channel.reply(
+            request_id=request.message_id,
+            actor_id=ADVISOR,
+            payload={"advice": "ship"},
+            command_id="cmd-channel-id-damage",
+        )
+    with pytest.raises(
+        JournalDamaged,
+        match=r"message sequence history is damaged|not a valid durable fact",
+    ):
+        channel.inbox(
+            actor_id=ADVISOR,
+            revision=revision,
+            after=None,
+            limit=10,
+        )
+    with pytest.raises(
+        JournalDamaged,
+        match=r"message sequence history is damaged|not a valid durable fact",
+    ):
+        channel.latest_revision(ADVISOR)
+
+
+@pytest.mark.parametrize(
+    ("column", "projection"),
+    (
+        (
+            "reply_provenance_version",
+            "CASE WHEN kind = 'reply' THEN CAST(reply_provenance_version AS REAL) "
+            "ELSE reply_provenance_version END",
+        ),
+        (
+            "command_id",
+            "CASE WHEN kind = 'reply' THEN CAST(command_id AS BLOB) ELSE command_id END",
+        ),
+    ),
+)
+def test_a_current_reply_never_normalizes_its_authority_columns(
+    column: str,
+    projection: str,
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    database = tmp_path / f"reply-storage-{column}.db"
+    journal = SqliteJournal(database, now_fn=clock.now)
+    channel = MailboxChannel(journal, channel_id=CHANNEL_ID)
+    request = channel.append_request(_intent(), ATTESTATION)
+    reply_with_command(
+        channel,
+        request_id=request.message_id,
+        actor_id=ADVISOR,
+        payload={"advice": "ship"},
+        idempotency_key=f"reply-storage-{column}",
+    )
+    _rebuild_channel_messages_with_projection(
+        database,
+        column=column,
+        projection=projection,
+    )
+
+    with pytest.raises(JournalDamaged, match="not a valid durable fact"):
+        channel.reply_for(request.message_id)
+
+
+def test_a_channel_revision_refuses_an_orphan_acknowledgement(
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    database = tmp_path / "orphan-ack-revision.db"
+    journal = SqliteJournal(database, now_fn=clock.now)
+    channel = MailboxChannel(journal, channel_id=CHANNEL_ID)
+    channel.append_request(_intent(), ATTESTATION)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "INSERT INTO channel_acks (message_id, actor_id, command_id, acked_at,"
+            " ack_provenance_version) VALUES (?, ?, ?, ?, 1)",
+            (
+                str(digest("missing-channel-message", 1, {})),
+                ADVISOR,
+                "cmd-orphan-ack",
+                clock.now().isoformat(),
+            ),
+        )
+
+    with pytest.raises(
+        JournalDamaged,
+        match=(
+            r"names a missing message|dependent durable fact|positive seal|"
+            r"fact-seal inventory"
+        ),
+    ):
+        channel.latest_revision(ADVISOR)
+
+
+def test_answered_requests_never_collapses_duplicate_reply_rows(
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    database = tmp_path / "duplicate-reply-row.db"
+    journal = SqliteJournal(database, now_fn=clock.now)
+    channel = MailboxChannel(journal, channel_id=CHANNEL_ID)
+    request = channel.append_request(_intent(), ATTESTATION)
+    reply_with_command(
+        channel,
+        request_id=request.message_id,
+        actor_id=ADVISOR,
+        payload={"advice": "ship"},
+        idempotency_key="duplicate-reply-row",
+    )
+    _rebuild_channel_messages_with_projection(
+        database,
+        column="message_seq",
+        projection="message_seq",
+    )
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "INSERT INTO channel_messages SELECT * FROM channel_messages"
+            " WHERE kind = 'reply'"
+        )
+
+    with pytest.raises(
+        JournalDamaged,
+        match=r"more than one stored reply|fact-seal inventory",
+    ):
+        journal.answered_requests([request.message_id])
+
+
+def test_a_reply_command_cannot_be_rejected_after_writing_its_exchange(
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    journal = SqliteJournal(tmp_path / "reject-after-reply.db", now_fn=clock.now)
+    channel = MailboxChannel(journal, channel_id=CHANNEL_ID)
+    request = channel.append_request(_intent(), ATTESTATION)
+    key = "reject-after-reply"
+    reply = reply_with_command(
+        channel,
+        request_id=request.message_id,
+        actor_id=ADVISOR,
+        payload={"advice": "ship"},
+        idempotency_key=key,
+    )
+    command_id = reply_command_id(ADVISOR, key)
+    claim = _retained_claim(journal, command_id)
+
+    with pytest.raises(
+        JournalDamaged,
+        match="cannot be rejected after writing a channel reply",
+    ):
+        journal.reject_command(claim, {"status": "rejected"})
+
+    command = journal.command(command_id)
+    assert command is not None and command.state == "prepared"
     assert channel.reply_for(request.message_id) == reply
+
+
+def test_an_ack_command_cannot_be_rejected_after_writing_its_delivery_fact(
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    journal = SqliteJournal(tmp_path / "reject-after-ack.db", now_fn=clock.now)
+    channel = MailboxChannel(journal, channel_id=CHANNEL_ID)
+    request = channel.append_request(_intent(), ATTESTATION)
+    key = "reject-after-ack"
+    ack = ack_with_command(
+        channel,
+        message_id=request.message_id,
+        actor_id=ADVISOR,
+        idempotency_key=key,
+    )
+    command_id = ack_command_id(ADVISOR, key)
+    claim = _retained_claim(journal, command_id)
+
+    with pytest.raises(
+        JournalDamaged,
+        match="cannot be rejected after writing a channel acknowledgement",
+    ):
+        journal.reject_command(claim, {"status": "rejected"})
+
+    command = journal.command(command_id)
+    assert command is not None and command.state == "prepared"
+    stored = journal.channel_ack(message_id=request.message_id, actor_id=ADVISOR)
+    assert stored is not None and stored.ack == ack
+
+
+def test_one_command_cannot_reply_to_two_preacknowledged_requests(channel: Channel) -> None:
+    """A prior ack must not bypass the one-command/one-reply provenance law."""
+
+    first = channel.append_request(_intent(port="first-request"), ATTESTATION)
+    second = channel.append_request(_intent(port="second-request"), ATTESTATION)
+    ack_with_command(
+        channel,
+        message_id=first.message_id,
+        actor_id=ADVISOR,
+        idempotency_key="cmd-ack-first",
+    )
+    ack_with_command(
+        channel,
+        message_id=second.message_id,
+        actor_id=ADVISOR,
+        idempotency_key="cmd-ack-second",
+    )
+    reply_with_command(
+        channel,
+        request_id=first.message_id,
+        actor_id=ADVISOR,
+        payload={"advice": "first"},
+        idempotency_key="cmd-one-reply",
+    )
+
+    with pytest.raises(JournalDamaged, match="already replied to a different request"):
+        reply_with_command(
+            channel,
+            request_id=second.message_id,
+            actor_id=ADVISOR,
+            payload={"advice": "second"},
+            idempotency_key="cmd-one-reply",
+        )
+    assert channel.reply_for(second.message_id) is None
+
+
+def test_a_reply_command_cannot_acknowledge_another_message(channel: Channel) -> None:
+    """Reply and ack ownership are one command namespace, not parallel ledgers."""
+
+    first = channel.append_request(_intent(port="reply-first"), ATTESTATION)
+    second = channel.append_request(_intent(port="ack-second"), ATTESTATION)
+    ack_with_command(
+        channel,
+        message_id=first.message_id,
+        actor_id=ADVISOR,
+        idempotency_key="cmd-preack-first",
+    )
+    reply_with_command(
+        channel,
+        request_id=first.message_id,
+        actor_id=ADVISOR,
+        payload={"advice": "first"},
+        idempotency_key="cmd-one-channel-mutation",
+    )
+
+    with pytest.raises(JournalDamaged, match="already replied to a different request"):
+        channel.acknowledge(
+            message_id=second.message_id,
+            actor_id=ADVISOR,
+            command_id=reply_command_id(ADVISOR, "cmd-one-channel-mutation"),
+        )
+
+    page = channel.inbox(
+        actor_id=ADVISOR,
+        revision=channel.latest_revision(ADVISOR),
+        after=None,
+        limit=10,
+    )
+    deliveries = {delivery.message.message_id: delivery for delivery in page}
+    assert deliveries[second.message_id].acknowledged is False
 
 
 def test_an_identical_reply_from_another_command_still_loses(channel: Channel) -> None:
@@ -873,23 +2133,26 @@ def test_an_identical_reply_from_another_command_still_loses(channel: Channel) -
     """
 
     request = channel.append_request(_intent(), ATTESTATION)
-    winner = channel.reply(
+    winner = reply_with_command(
+        channel,
         request_id=request.message_id,
         actor_id=ADVISOR,
         payload={"advice": "ship"},
-        command_id="cmd-identical-first",
+        idempotency_key="cmd-identical-first",
     )
     with pytest.raises(ChannelReplyConflict, match="already answered by another command"):
-        channel.reply(
+        reply_with_command(
+            channel,
             request_id=request.message_id,
             actor_id=ADVISOR,
             payload={"advice": "ship"},
-            command_id="cmd-identical-second",
+            idempotency_key="cmd-identical-second",
         )
-    replayed = channel.reply(
+    replayed = reply_with_command(
+        channel,
         request_id=request.message_id,
         actor_id=ADVISOR,
         payload={"advice": "ship"},
-        command_id="cmd-identical-first",
+        idempotency_key="cmd-identical-first",
     )
     assert replayed == winner

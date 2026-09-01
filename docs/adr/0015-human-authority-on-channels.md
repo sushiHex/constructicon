@@ -75,10 +75,14 @@ idempotency key remains usable against the operation that does consume the
 message.
 
 **A request-bound decision is one fact in three places.** The `ApprovalRecord`,
-the reply the parked run is waiting on, and that request's acknowledgement commit
-in one transaction. The deciding actor is read off the approval record, so the
-reply's sender and the acknowledgement's owner cannot disagree with the record
-that authorizes them. One run names all of it: the command's run, the request's
+the reply the parked run is waiting on, and that request's acknowledgement form
+one complete exchange. When delivery is new, all three commit in one
+transaction. When the actor acknowledged first, the transaction preserves that
+immutable fact rather than stealing its command ownership, then commits the
+approval and reply together. The approval and reply name the same exact
+`runs_approve` command; the deciding actor is read off the approval record and
+must equal the authenticated command actor, the reply sender, and the
+acknowledgement actor. One run names all of it: the command's run, the request's
 run, and the wake fence must be the same run.
 
 Binding is additive and byte-neutral. A standalone decision omits
@@ -107,10 +111,29 @@ actor inside its own payload is data, never a claim.
   nothing. An `ApprovalRecord` cannot be written into an approval-interaction
   conversation that merely looks similar.
 - Control response schema stays 3 and channel schema stays 1. SQLite advances
-  6 → 7, additively: one nullable column naming the command that wrote a
-  reply, so an exact retry is told from a second command losing the race.
-- The transport keeps no channel law: MCP handlers derive one actor and delegate
-  once.
+  6 → 7, additively: nullable reply-writer, reply-provenance, and
+  acknowledgement-provenance columns; independent immutable legacy-message and
+  legacy-acknowledgement sequence cutoffs; and a partial unique writer index.
+  Two NULL reply fields at or below the message cutoff and a version-0
+  acknowledgement at or below the acknowledgement cutoff mark true schema-6
+  history. A current reply carries its writer and provenance version 1 above
+  its cutoff. If it creates a missing acknowledgement, that row is version 1
+  above its cutoff and names an extant command; if the actor acknowledged under
+  schema 6, the reply preserves that equal version-0 delivery fact rather than
+  rewriting history. The sealed cutoff pair makes erasing current evidence
+  insufficient to downgrade it into the legacy path. See
+  [ADR 0016](0016-positive-durable-facts-and-provenance-eras.md).
+  A current reply is projected only through that command's immutable plan,
+  which independently proves its payload. A retained schema-6
+  `ChannelApprovalPlan` still proves its exact three-fact exchange; schema-6
+  advice replies and version-0 acknowledgements remain opaque and gain no such
+  authority.
+- `ControlPlane`, its concrete `RunHost`, its registry, its durable mailbox, and
+  its send effect are assembled over one exact system world. Compatible-looking
+  handles are insufficient because they do not share process-local state.
+- The MCP transport keeps no channel law: handlers derive one actor and delegate
+  once. Channel transports still enforce their L0 dispatch, identity,
+  acknowledgement, and retry laws as a defence at the persistence boundary.
 
 ## Rejected alternatives
 
@@ -138,3 +161,7 @@ actor inside its own payload is data, never a claim.
 - **Serializing `request_message_id: null` for a standalone decision.** It would
   change the request hash, and therefore the command id, of every approval
   already recorded.
+- **Treating a NULL reply writer as sufficient evidence of schema-6 history.**
+  Erasing one current writer would then bypass its independent command plan;
+  the additive provenance version makes legacy a positive row shape instead of
+  an inference from one missing field.

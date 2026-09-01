@@ -19,6 +19,7 @@ from constructicon.core.identity import canonical_json, digest
 from constructicon.core.run import RunStatus
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.conftest import ISSUE, REVIEW, atomic, pipeline_graph, review_impl
+from tests.run_attestations import mint_promotion_attestation
 
 ALICE = AuthenticatedActor(
     actor_id="static:alice",
@@ -113,13 +114,20 @@ def test_registry_candidate_cursor_pins_registration_and_promotion_cut(
     assert [item.version for item in first.items] == [v2]
     assert first.page.next_cursor is not None
 
+    authority = mint_promotion_attestation(
+        journal,
+        component=definition.name,
+        version=v2,
+        baseline=v1,
+        proof="cursor-revision",
+    )
     journal.store_promotion(
         PromotionRecord(
             component=definition.name,
             channel="stable",
             from_version=v1,
             to_version=v2,
-            attestation_id="att-cursor-revision",
+            attestation_id=authority.attestation_id,
             actor="static:test",
             source_run=None,
             created_at=datetime(2026, 1, 1, tzinfo=UTC),

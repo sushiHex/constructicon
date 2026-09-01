@@ -9,7 +9,15 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Annotated, Any, Literal, TypeVar, cast
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    ValidationError,
+    model_serializer,
+)
 
 from constructicon.api.cursor import CursorCodec
 from constructicon.api.detail import (
@@ -23,6 +31,9 @@ from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId
 from constructicon.core.admission import AdmissionRejected
 from constructicon.core.channel import (
+    ACK_CONSUMES,
+    APPROVE_CONSUMES,
+    REPLY_CONSUMES,
     ChannelAckConflict,
     ChannelInteraction,
     ChannelMessage,
@@ -36,6 +47,7 @@ from constructicon.core.control import (
     INTERACTION_SCOPES,
     OPERATE_SCOPE,
     PROMOTE_SCOPE,
+    RESUMABLE_RUN_STATUSES,
     ApprovalCommandResult,
     AuthenticatedActor,
     CancellationResult,
@@ -45,19 +57,30 @@ from constructicon.core.control import (
     CommandMeta,
     CommandRecord,
     ControlCode,
+    ControlPlaneStore,
     ControlRejected,
-    ControlStore,
+    LegacyResumeCommandPlan,
     PromotionCommandResult,
     RegistrationCommandResult,
     ResolutionLock,
     ResolutionPin,
+    ResumeCommandPlan,
+    RunCreationPlan,
     RunOrigin,
     RunSubmission,
+    SourceRunLock,
     approval_id_for_command,
     channel_authority_holder,
+    command_request_hash,
+    resume_attempt_kind,
+    resume_plan_requires_historical_evidence,
     run_id_for_command,
     scope_refusal,
     validate_idempotency_key,
+    validated_new_run_creation_plan,
+    validated_resume_command_plan,
+    validated_resume_status_at_fence,
+    validated_run_creation_command,
 )
 from constructicon.core.effect import (
     ApprovalRecord,
@@ -71,19 +94,34 @@ from constructicon.core.graph import Graph
 from constructicon.core.human import (
     APPROVAL_REPLY_CONTRACT,
     APPROVAL_REQUEST_CONTRACT,
-    ApprovalDecisionPayload,
+    ApprovalPlan,
     ApprovalRequestPayload,
+    ChannelAckPlan,
+    ChannelApprovalPlan,
+    ChannelReplyPlan,
     approval_decision_payload,
+    canonical_exchange_fault,
     sealed_reply_payload,
+    validated_approval_reply,
+    validated_channel_ack_plan,
+    validated_channel_approval_exchange,
+    validated_channel_approval_plan,
+    validated_channel_command_reply,
+    validated_channel_reply_plan,
 )
 from constructicon.core.identity import Digest, JsonValue, canonical_json, digest, json_value
 from constructicon.core.journal import Journal
-from constructicon.core.manifest import ExecutionManifest, parse_manifest_json
+from constructicon.core.manifest import ExecutionManifest
 from constructicon.core.registry import (
     RegistryStore,
     StoredVersion,
 )
-from constructicon.core.run import AttemptCause, RunStatus
+from constructicon.core.run import (
+    TERMINAL_EVENT_STATUSES,
+    TERMINAL_STATUS_EVENTS,
+    AttemptCause,
+    RunStatus,
+)
 from constructicon.runtime.registry import (
     ComponentRegistry,
     PlannedRegistration,
@@ -92,45 +130,48 @@ from constructicon.runtime.registry import (
 from constructicon.sdk.types import DefinitionBundle
 
 COMMAND_TTL_S = 30.0
-# The dispatch rule, stated where both mutations can be read side by side.
-# `channels_reply` consumes advice and nothing else: an approval is answered
-# by request-bound `runs_approve`, so holding approve must never turn this
-# into a generic reply path. An acknowledgement is a delivery fact, and both
-# interactions are delivered, so both are ackable under their own scope.
-REPLY_CONSUMES: frozenset[ChannelInteraction] = frozenset({"advice"})
-ACK_CONSUMES: frozenset[ChannelInteraction] = frozenset({"advice", "approval"})
-# Request-bound `runs_approve` is the mirror image of `channels_reply`.
-APPROVE_CONSUMES: frozenset[ChannelInteraction] = frozenset({"approval"})
 
 DEFAULT_PAGE_SIZE = 25
 MAX_PAGE_SIZE = 100
 _NEW_RUN_LAUNCH_STATUSES = frozenset({RunStatus.PENDING, RunStatus.RUNNING})
-_RESUME_LAUNCH_STATUSES = frozenset(
-    {RunStatus.PENDING, RunStatus.RUNNING, RunStatus.FAILED, RunStatus.PARKED}
-)
 
 T = TypeVar("T", bound=BaseModel)
+
+
+def _same_json_fact(left: object, right: object) -> bool:
+    """Compare durable facts by their wire bytes, never Python scalar equality."""
+
+    try:
+        return canonical_json(left) == canonical_json(right)
+    except (TypeError, ValueError) as exc:
+        raise JournalDamaged("durable JSON fact is not canonical") from exc
 
 
 class _PlanModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
 
-class _SourceLock(_PlanModel):
-    run_id: RunId
-    manifest_hash: Digest
-    input_hash: Digest
-    source_graph_hash: Digest
-    resolution_lock: ResolutionLock | None = None
+class _ExactRejectionPlan(_PlanModel):
+    """A domain plan whose post-plan refusal has independent canonical bytes.
 
+    ``None`` denotes a plan written before that law existed.  Omitting the
+    nullable marker from those model bytes keeps their historical durable
+    identity readable without pretending they carry the stronger proof.
+    """
 
-class _RunCreationPlan(_PlanModel):
-    kind: Literal["run_creation"] = "run_creation"
-    run_id: RunId
-    manifest: ExecutionManifest
-    inputs: dict[str, JsonValue]
-    origin: RunOrigin
-    source_lock: _SourceLock | None = None
+    terminal_rejection_policy: Literal["exact-v1"] | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(
+        self,
+        handler: SerializerFunctionWrapHandler,
+    ) -> dict[str, Any]:
+        data = handler(self)
+        if not isinstance(data, dict):
+            raise TypeError("command plan serializer expected an object")
+        if self.terminal_rejection_policy is None:
+            data.pop("terminal_rejection_policy", None)
+        return data
 
 
 class _CancelPlan(_PlanModel):
@@ -139,39 +180,19 @@ class _CancelPlan(_PlanModel):
     observed_status: RunStatus
     outcome: Literal["cancel_requested", "already_terminal"]
     response_status: RunStatus
+    observed_event_seq: int | None = Field(default=None, ge=1)
 
-
-class _ResumePlan(_PlanModel):
-    kind: Literal["resume"] = "resume"
-    policy: Literal["resume-v1"] = "resume-v1"
-    run_id: RunId
-    baseline_event_seq: int = Field(ge=0)
-    submitted_status: RunStatus
-
-
-class _ApprovalPlan(_PlanModel):
-    kind: Literal["approval"] = "approval"
-    approval: ApprovalRecord
-
-
-class _ChannelApprovalPlan(_PlanModel):
-    """A decision that is also an answer: everything both halves need, decided once.
-
-    Deliberately a distinct family rather than nullable fields on
-    `_ApprovalPlan`. A standalone M6 decision must keep writing exactly the plan
-    bytes it always wrote, and it has no channel, no reply, and no fence to bind.
-    """
-
-    kind: Literal["channel_approval"] = "channel_approval"
-    approval: ApprovalRecord
-    channel_id: str
-    request_id: Digest
-    reply_id: Digest
-    reply_port: str
-    payload: JsonValue
-    ack_actor_id: str
-    run_id: RunId
-    parked_event_seq: int = Field(ge=0)
+    @model_serializer(mode="wrap")
+    def _serialize(
+        self,
+        handler: SerializerFunctionWrapHandler,
+    ) -> dict[str, Any]:
+        data = handler(self)
+        if not isinstance(data, dict):
+            raise TypeError("cancel plan serializer expected an object")
+        if self.observed_event_seq is None:
+            data.pop("observed_event_seq", None)
+        return data
 
 
 class _RegistrationPlan(_PlanModel):
@@ -182,7 +203,7 @@ class _RegistrationPlan(_PlanModel):
     row_origin: Literal["existing", "canonical_new"]
 
 
-class _InitialPromotionPlan(_PlanModel):
+class _InitialPromotionPlan(_ExactRejectionPlan):
     kind: Literal["initial_promotion"] = "initial_promotion"
     component: str
     baseline: None = None
@@ -191,7 +212,7 @@ class _InitialPromotionPlan(_PlanModel):
     attestation_id: str
 
 
-class _PromotionPlan(_PlanModel):
+class _PromotionPlan(_ExactRejectionPlan):
     kind: Literal["promotion"] = "promotion"
     component: str
     baseline: Digest | None
@@ -199,46 +220,13 @@ class _PromotionPlan(_PlanModel):
     attestation_id: str
 
 
-class _RollbackPlan(_PlanModel):
+class _RollbackPlan(_ExactRejectionPlan):
     kind: Literal["rollback"] = "rollback"
     component: str
     baseline: Digest
     target: Digest
     draft: AttestationDraft
     attestation_id: str
-
-
-class _ChannelReplyPlan(_PlanModel):
-    """Everything the reply is, decided once, before anything is written.
-
-    The caller supplied only the request it answers and a payload. Channel,
-    interaction, reply identity, reply port, the actor, and the fence the wake
-    is pinned to are all read off the sealed request at plan time, so a replay
-    after any crash rebuilds the same fact rather than a second one.
-    """
-
-    kind: Literal["channel_reply"] = "channel_reply"
-    channel_id: str
-    request_id: Digest
-    interaction: ChannelInteraction
-    actor_id: str
-    reply_id: Digest
-    reply_port: str
-    # The stored payload: the caller's answer plus whatever authorship the
-    # sealed reply contract promises. Never the raw argument.
-    payload: JsonValue
-    run_id: RunId
-    parked_event_seq: int = Field(ge=0)
-
-
-class _ChannelAckPlan(_PlanModel):
-    """One delivery fact: which message, whose, and under which interaction."""
-
-    kind: Literal["channel_ack"] = "channel_ack"
-    channel_id: str
-    message_id: Digest
-    interaction: ChannelInteraction
-    actor_id: str
 
 
 class _AdmissionRejectPlan(_PlanModel):
@@ -257,22 +245,66 @@ class _ControlRejectPlan(_PlanModel):
     response: ControlRejected
 
 
+_RegistryPromotionPlan = _InitialPromotionPlan | _PromotionPlan | _RollbackPlan
+
+
+def _canonical_domain_rejection(
+    plan: ResumeCommandPlan | _RegistryPromotionPlan,
+) -> ControlRejected:
+    """Rebuild the one post-plan refusal from immutable planned facts."""
+
+    if isinstance(plan, ResumeCommandPlan):
+        return ControlRejected.one_fault(
+            ControlCode.RUN_NOT_RESUMABLE,
+            f"resume intent for {plan.run_id!r} lost its exact attempt fence",
+            "submit a new resume command after refreshing run status",
+            {
+                "reason": "attempt_superseded",
+                "baseline_event_seq": plan.baseline_event_seq,
+            },
+        )
+    baseline = str(plan.baseline) if plan.baseline is not None else None
+    return ControlRejected.one_fault(
+        ControlCode.REGISTRY_STABLE_MOVED,
+        f"stable changed before the planned edge for {plan.component!r} could commit",
+        "inspect the current stable version and submit a fresh command key",
+        {
+            "component": plan.component,
+            "planned_from": baseline,
+            "planned_to": str(plan.target),
+        },
+    )
+
+
+def _unfenced_resume_rejection(plan: LegacyResumeCommandPlan) -> ControlRejected:
+    """Rebuild the exact terminal refusal owed by one unfenced legacy plan."""
+
+    return ControlRejected.one_fault(
+        ControlCode.RUN_NOT_RESUMABLE,
+        f"legacy resume intent for {plan.run_id!r} has no exact attempt fence",
+        "submit a new resume command with a new idempotency key",
+        {"reason": "attempt_fence_missing"},
+    )
+
+
 _CommandPlan = Annotated[
-    _RunCreationPlan
+    RunCreationPlan
     | _CancelPlan
-    | _ResumePlan
-    | _ApprovalPlan
-    | _ChannelApprovalPlan
+    | ResumeCommandPlan
+    | ApprovalPlan
+    | ChannelApprovalPlan
     | _RegistrationPlan
     | _InitialPromotionPlan
     | _PromotionPlan
     | _RollbackPlan
-    | _ChannelReplyPlan
-    | _ChannelAckPlan
+    | ChannelReplyPlan
+    | ChannelAckPlan
     | _AdmissionRejectPlan
     | _ControlRejectPlan,
     Field(discriminator="kind"),
 ]
+_LoadedCommandPlan = _CommandPlan | LegacyResumeCommandPlan
+_ResumeIntentDisposition = Literal["credited", "launchable", "superseded"]
 
 
 class _StoredPlan(_PlanModel):
@@ -301,9 +333,13 @@ class _CommandSession:
             return value
         plan = self._control._load_stored_plan(self.claim, record.plan)
         self._control._validate_command_plan(self.claim, plan)
+        if isinstance(plan, LegacyResumeCommandPlan):
+            raise JournalDamaged(
+                f"current plan for command {self.claim.command_id!r} reconciled as legacy"
+            )
         return plan
 
-    def load(self) -> _CommandPlan:
+    def load(self) -> _LoadedCommandPlan:
         raw = self.record.plan
         if raw is None:
             raise JournalDamaged(f"command {self.claim.command_id!r} has no stored plan")
@@ -331,7 +367,7 @@ class _CommandExecutor:
         self,
         *,
         system: Constructicon,
-        store: ControlStore,
+        store: ControlPlaneStore,
         journal: Journal | None = None,
         registry: ComponentRegistry | None = None,
         run_host: RunHost | None = None,
@@ -408,7 +444,7 @@ class _CommandExecutor:
             if not isinstance(normalized_inputs, dict):
                 raise JournalDamaged("admitted run inputs are not an object")
             session.plan(
-                _RunCreationPlan(
+                RunCreationPlan(
                     run_id=run_id,
                     manifest=admitted.manifest,
                     inputs=normalized_inputs,
@@ -420,7 +456,7 @@ class _CommandExecutor:
             return self._terminal_rejection(claim, plan.response)
         if isinstance(plan, _ControlRejectPlan):
             return self._terminal_rejection(claim, plan.response)
-        if not isinstance(plan, _RunCreationPlan):
+        if not isinstance(plan, RunCreationPlan):
             raise JournalDamaged("runs_start command carries the wrong plan")
         run_id = plan.run_id
         manifest = plan.manifest
@@ -460,19 +496,30 @@ class _CommandExecutor:
                 f"unknown run {run_id!r}",
                 "use a RunId returned by a Constructicon run mutation",
             )
-        terminal = record.status in {
-            RunStatus.SUCCEEDED,
-            RunStatus.FAILED,
-            RunStatus.CANCELLED,
-            RunStatus.PARKED,
-        }
         if session.record.plan is None:
+            terminal_event = self._journal.latest_terminal_event(run_id)
+            if terminal_event is not None:
+                observed_status = TERMINAL_EVENT_STATUSES.get(terminal_event.kind)
+                if observed_status is None:
+                    raise JournalDamaged("terminal run event has an unknown status family")
+                terminal = True
+                response_status = observed_status
+                observed_event_seq = terminal_event.seq
+            else:
+                observed = self._journal.run_record(run_id)
+                if observed is None:
+                    raise JournalDamaged(f"run {run_id!r} disappeared while planning cancellation")
+                terminal = False
+                response_status = observed.status
+                observed_status = observed.status
+                observed_event_seq = None
             session.plan(
                 _CancelPlan(
                     run_id=run_id,
-                    observed_status=record.status,
+                    observed_status=observed_status,
                     outcome=("already_terminal" if terminal else "cancel_requested"),
-                    response_status=record.status,
+                    response_status=response_status,
+                    observed_event_seq=observed_event_seq,
                 )
             )
         plan = session.load()
@@ -513,32 +560,55 @@ class _CommandExecutor:
             return cast(RunSubmission | ControlRejected, begun)
         claim = begun
         session = _CommandSession(self, claim)
-        record = self._journal.run_record(run_id)
-        if record is None:
+        head = self._journal.run_head(run_id)
+        if head is None:
             return self._terminal_control_fault(
                 claim,
                 ControlCode.RUN_UNKNOWN,
                 f"unknown run {run_id!r}",
                 "use a RunId returned by a Constructicon run mutation",
             )
+        record = head.record
         if session.record.plan is None:
+            # These are complete observations before a resume intent exists.
+            # Keeping them on an exact rejection plan means replay never asks
+            # mutable run state to explain an already-recorded refusal.
+            if record.status is RunStatus.RUNNING and record.liveness == "live":
+                return self._terminal_control_fault(
+                    claim,
+                    ControlCode.RUN_LIVE_OWNER,
+                    f"run {run_id!r} already has a live owner",
+                    "poll runs_status or retry after ownership is lost",
+                )
+            if record.status in {RunStatus.SUCCEEDED, RunStatus.CANCELLED}:
+                return self._terminal_control_fault(
+                    claim,
+                    ControlCode.RUN_TERMINAL,
+                    f"run {run_id!r} is terminal at {record.status.value}",
+                    "start a reproduction for a new RunId instead",
+                )
             session.plan(
-                _ResumePlan(
+                ResumeCommandPlan(
+                    terminal_rejection_policy="exact-v1",
                     run_id=run_id,
-                    baseline_event_seq=self._journal.max_event_seq(run_id),
+                    baseline_event_seq=head.event_seq,
                     submitted_status=record.status,
                 )
             )
         plan = session.load()
         if isinstance(plan, _ControlRejectPlan):
             return self._terminal_rejection(claim, plan.response)
-        if not isinstance(plan, _ResumePlan) or plan.run_id != run_id:
+        if isinstance(plan, LegacyResumeCommandPlan):
+            return self._terminal_rejection(claim, _unfenced_resume_rejection(plan))
+        if not isinstance(plan, ResumeCommandPlan) or plan.run_id != run_id:
             raise JournalDamaged("runs_resume command carries the wrong plan")
-        if self._resume_attempt_started(
+        durable = self._classify_resume_intent(
             run_id,
             baseline_event_seq=plan.baseline_event_seq,
+            submitted_status=plan.submitted_status,
             command_id=claim.command_id,
-        ):
+        )
+        if durable == "credited":
             self._fault_probe("runs_resume.after_domain_mutation")
             response = RunSubmission(
                 run_id=run_id,
@@ -548,33 +618,15 @@ class _CommandExecutor:
             )
             self._complete_command(claim, response)
             return response
-        if record.status is RunStatus.RUNNING and record.liveness == "live":
-            return self._terminal_control_fault(
-                claim,
-                ControlCode.RUN_LIVE_OWNER,
-                f"run {run_id!r} already has a live owner",
-                "poll runs_status or retry after ownership is lost",
-            )
-        if record.status in {RunStatus.SUCCEEDED, RunStatus.CANCELLED}:
-            return self._terminal_control_fault(
-                claim,
-                ControlCode.RUN_TERMINAL,
-                f"run {run_id!r} is terminal at {record.status.value}",
-                "start a reproduction for a new RunId instead",
-            )
+        if durable == "superseded":
+            return self._terminal_rejection(claim, _canonical_domain_rejection(plan))
         disposition = self._launch_resume(
             run_id,
             expected_event_seq=plan.baseline_event_seq,
             command_id=claim.command_id,
         )
         if disposition == "superseded":
-            return self._terminal_control_fault(
-                claim,
-                ControlCode.RUN_NOT_RESUMABLE,
-                f"resume intent for {run_id!r} was superseded at its attempt fence",
-                "submit a new resume command after refreshing run status",
-                {"reason": "attempt_superseded"},
-            )
+            return self._terminal_rejection(claim, _canonical_domain_rejection(plan))
         self._fault_probe("runs_resume.after_domain_mutation")
         response = RunSubmission(
             run_id=run_id,
@@ -687,33 +739,19 @@ class _CommandExecutor:
                 created_at=utc_now(),
             )
             if bound is None:
-                session.plan(_ApprovalPlan(approval=approval))
+                session.plan(ApprovalPlan(approval=approval))
             else:
-                answered = self._journal.channel_reply_for(
-                    channel_id=bound.channel_id,
-                    request_id=bound.message_id,
-                )
-                if answered is not None:
-                    # Another command's decision already answered this request.
-                    # Its triple must be whole before that counts as a race.
-                    self._require_whole_exchange(bound, answered)
-                    return self._terminal_control_fault(
-                        claim,
-                        ControlCode.CHANNEL_ALREADY_REPLIED,
-                        f"approval request {bound.message_id} already carries its one decision",
-                        "read the recorded decision with channels_message",
-                    )
                 session.plan(self._channel_approval_plan(approval, bound))
         plan = session.load()
         if isinstance(plan, _ControlRejectPlan):
             return self._terminal_rejection(claim, plan.response)
-        if isinstance(plan, _ChannelApprovalPlan):
+        if isinstance(plan, ChannelApprovalPlan):
             approval = plan.approval
             applied = self._apply_channel_approval(claim, plan)
             if isinstance(applied, ControlRejected):
                 return applied
             reply: Digest | None = applied.message_id
-        elif isinstance(plan, _ApprovalPlan):
+        elif isinstance(plan, ApprovalPlan):
             approval = plan.approval
             self._store.store_approval(claim, approval)
             self._fault_probe("runs_approve.after_domain_mutation")
@@ -818,13 +856,13 @@ class _CommandExecutor:
         self,
         approval: ApprovalRecord,
         request: ChannelMessage,
-    ) -> _ChannelApprovalPlan:
+    ) -> ChannelApprovalPlan:
         """Bind the decision to the request, reading every field off the seal."""
 
         if request.reply_port is None:
             raise JournalDamaged(f"channel request {request.message_id} pins no reply port")
         run_id = request.envelope.run_id
-        return _ChannelApprovalPlan(
+        return ChannelApprovalPlan(
             approval=approval,
             channel_id=request.channel_id,
             request_id=request.message_id,
@@ -842,7 +880,7 @@ class _CommandExecutor:
     def _apply_channel_approval(
         self,
         claim: CommandClaim,
-        plan: _ChannelApprovalPlan,
+        plan: ChannelApprovalPlan,
     ) -> ChannelMessage | ControlRejected:
         """Approval, reply, and acknowledgement in one commit, then one wake.
 
@@ -859,23 +897,14 @@ class _CommandExecutor:
                 payload=plan.payload,
             )
         except ChannelReplyConflict:
-            # A decision that lost the race after passing preflight. The whole
-            # transaction rolled back, so no approval was recorded either — and
-            # the winner owes the same proof here that a pre-plan loser demands,
-            # or a torn exchange would read as a race depending only on when
-            # this command happened to look.
-            answered = self._journal.channel_reply_for(
-                channel_id=plan.channel_id,
-                request_id=plan.request_id,
-            )
             request = self._sealed_request(plan.request_id, plan.approval.actor)
-            if answered is not None:
-                self._require_whole_exchange(request, answered)
-            return self._terminal_control_fault(
+            self._require_foreign_approval(
+                request=request,
+                command_id=claim.command_id,
+            )
+            return self._terminal_rejection(
                 claim,
-                ControlCode.CHANNEL_ALREADY_REPLIED,
-                f"approval request {plan.request_id} already carries its one decision",
-                "read the recorded decision with channels_message",
+                self._already_replied_fault(plan.request_id, approval=True),
             )
         self._fault_probe("runs_approve.after_domain_mutation")
         self._run_host.launch(
@@ -886,12 +915,16 @@ class _CommandExecutor:
         )
         return reply
 
-    def _require_whole_exchange(self, request: ChannelMessage, reply: ChannelMessage) -> None:
+    def _require_whole_exchange(
+        self,
+        request: ChannelMessage,
+        reply: ChannelMessage,
+    ) -> CommandRecord:
         """A foreign decision's triple is whole, or the store is torn.
 
-        Approval, reply, and acknowledgement commit together, so any two of them
-        without the third is not a race this command lost — it is a write that
-        should have been impossible.
+        Approval and reply commit together and ensure the actor's immutable
+        acknowledgement. Any two facts without the third are therefore not a
+        race this command lost — they are a state that should be impossible.
 
         Existence is not togetherness. The reply names the command that wrote it,
         and that command must be the one that wrote the approval — otherwise a
@@ -905,46 +938,195 @@ class _CommandExecutor:
         rather than owning it.
         """
 
+        carried = validated_approval_reply(request, reply)
+        writer = self._journal.channel_message_command(message_id=reply.message_id)
+        writer_record = self._store.command(writer) if writer is not None else None
+        if writer_record is None:
+            raise JournalDamaged(
+                f"approval reply {reply.message_id} exists without its writer's command"
+            )
+        if writer_record.state == "rejected" or writer_record.plan is None:
+            raise JournalDamaged(
+                f"approval reply {reply.message_id} was not written by a live or "
+                "successful approval plan"
+            )
+        validated_channel_approval_exchange(writer_record, carried, request, reply)
+        return writer_record
+
+    @staticmethod
+    def _already_replied_fault(
+        request_id: Digest,
+        *,
+        approval: bool,
+    ) -> ControlRejected:
+        noun = "approval request" if approval else "channel request"
+        fact = "decision" if approval else "reply"
+        repair = (
+            "read the recorded decision with channels_message"
+            if approval
+            else "read the stored reply with channels_message"
+        )
+        return ControlRejected.one_fault(
+            ControlCode.CHANNEL_ALREADY_REPLIED,
+            f"{noun} {request_id} already carries its one {fact}",
+            repair,
+        )
+
+    @staticmethod
+    def _already_acknowledged_fault(message_id: Digest) -> ControlRejected:
+        return ControlRejected.one_fault(
+            ControlCode.IDEMPOTENCY_CONFLICT,
+            f"message {message_id} is already acknowledged for this actor",
+            "read the delivery state with channels_message",
+        )
+
+    def _require_foreign_reply(
+        self,
+        *,
+        request: ChannelMessage,
+        command_id: str,
+    ) -> str:
+        """Prove a foreign reply under its current or historical provenance.
+
+        A schema-7 reply's exact read already requires its typed writer command
+        and plan. A migrated schema-6 reply has a NULL writer column and only
+        the acknowledgement's opaque command id; exact relationship, bytes,
+        and ack ownership are the strongest historical proof that exists.
+        """
+
+        reply = self._journal.channel_reply_for(
+            channel_id=request.channel_id,
+            request_id=request.message_id,
+        )
+        writer = (
+            self._journal.channel_message_command(message_id=reply.message_id)
+            if reply is not None
+            else None
+        )
+        if reply is None or writer is None or writer == command_id:
+            raise JournalDamaged(
+                f"rejected command {command_id!r} has no foreign reply for {request.message_id}"
+            )
         if reply.sender_actor_id is None:
             raise JournalDamaged(f"channel reply {reply.message_id} names no sender")
-        delivery = self._journal.channel_delivery(
-            message_id=request.message_id,
-            actor_id=reply.sender_actor_id,
+        writer_record = self._store.command(writer)
+        if writer_record is None:
+            # `channel_reply_for` has already rejected a current row whose
+            # non-NULL writer command is missing. Reaching this branch therefore
+            # identifies the deliberate schema-6 acknowledgement fallback.
+            return writer
+        if writer_record.state == "rejected" or writer_record.plan is None:
+            raise JournalDamaged(
+                f"channel reply {reply.message_id} was not written by a live or "
+                "successful reply plan"
+            )
+        writer_claim = self._claim_for_record(writer_record)
+        writer_plan = self._load_stored_plan(writer_claim, writer_record.plan)
+        self._validate_command_plan(writer_claim, writer_plan)
+        if not isinstance(writer_plan, ChannelReplyPlan):
+            raise JournalDamaged(
+                f"channel reply {reply.message_id} was not written by a channel reply plan"
+            )
+        validated_channel_command_reply(writer_record, request, reply)
+        return writer_record.command_id
+
+    def _require_foreign_approval(
+        self,
+        *,
+        request: ChannelMessage,
+        command_id: str,
+    ) -> CommandRecord:
+        """Prove the foreign approval exchange that made one decision lose."""
+
+        reply = self._journal.channel_reply_for(
+            channel_id=request.channel_id,
+            request_id=request.message_id,
         )
-        if delivery is None or not delivery.acknowledged:
-            raise JournalDamaged(
-                f"approval reply {reply.message_id} exists without the request "
-                "acknowledgement written in its own transaction"
-            )
-        try:
-            carried = ApprovalDecisionPayload.model_validate(reply.envelope.payload)
-            pinned = ApprovalRequestPayload.model_validate(request.envelope.payload)
-        except ValidationError as exc:
-            raise JournalDamaged(
-                f"approval reply {reply.message_id} carries no decision record"
-            ) from exc
-        writer = self._journal.channel_message_command(message_id=reply.message_id)
-        stored = self._store.approval_for_command(writer) if writer is not None else None
-        if stored is None:
-            raise JournalDamaged(
-                f"approval reply {reply.message_id} exists without the approval "
-                "record written in its own transaction"
-            )
-        if stored != carried.approval:
-            raise JournalDamaged(
-                f"approval reply {reply.message_id} carries a record its own "
-                "command did not write"
-            )
+        if reply is None:
+            raise JournalDamaged(f"rejected approval command {command_id!r} has no winning reply")
+        writer = self._require_whole_exchange(request, reply)
+        if writer.command_id == command_id:
+            raise JournalDamaged("rejected approval command owns the reply it claims it lost")
+        return writer
+
+    def _require_foreign_ack(
+        self,
+        *,
+        plan: ChannelAckPlan,
+        command_id: str,
+    ) -> str:
+        """Prove the command whose delivery fact made one acknowledgement lose.
+
+        An acknowledgement has three legitimate authors.  ``channels_ack`` may
+        claim it directly; ``channels_reply`` and request-bound ``runs_approve``
+        may imply it while writing their reply.  The row alone cannot say which
+        law produced it, so its owning command must carry the corresponding
+        exact plan, and reply-shaped owners must still prove their reply-shaped
+        domain fact.
+        """
+
+        ack = self._journal.channel_ack(
+            message_id=plan.message_id,
+            actor_id=plan.actor_id,
+        )
         if (
-            stored.run_id != request.envelope.run_id
-            or stored.actor.actor_id != reply.sender_actor_id
-            or canonical_json(json_value(stored.subject.model_dump(mode="json")))
-            != canonical_json(json_value(pinned.subject))
+            ack is None
+            or ack.ack.message_id != plan.message_id
+            or ack.ack.actor_id != plan.actor_id
+            or ack.command_id == command_id
         ):
+            raise JournalDamaged(f"rejected command {command_id!r} has no foreign acknowledgement")
+        writer = self._store.command(ack.command_id)
+        if writer is None:
+            # SQLite exposes this case only for the positive schema-6 shape:
+            # provenance v0 below the migration cutoff and no command row.
+            # Historical acknowledgement was a standalone delivery fact and
+            # need not have an accompanying reply. A current row whose command
+            # disappeared is refused by the durable decoder before it reaches
+            # this compatibility branch.
+            return ack.command_id
+        if writer.state == "rejected" or writer.plan is None:
             raise JournalDamaged(
-                f"approval {stored.approval_id} decides a run, actor, or subject "
-                "its own exchange does not"
+                f"acknowledgement for {plan.message_id} was not written by a live or "
+                "successful command plan"
             )
+        writer_claim = self._claim_for_record(writer)
+        writer_plan = self._load_stored_plan(writer_claim, writer.plan)
+        self._validate_command_plan(writer_claim, writer_plan)
+
+        if isinstance(writer_plan, ChannelAckPlan):
+            exact = (
+                writer_plan.message_id == plan.message_id and writer_plan.actor_id == plan.actor_id
+            )
+        elif isinstance(writer_plan, ChannelReplyPlan):
+            request = self._sealed_request(writer_plan.request_id, writer.actor)
+            reply_writer = self._require_foreign_reply(
+                request=request,
+                command_id=command_id,
+            )
+            exact = (
+                reply_writer == ack.command_id
+                and writer_plan.request_id == plan.message_id
+                and writer_plan.actor_id == plan.actor_id
+            )
+        elif isinstance(writer_plan, ChannelApprovalPlan):
+            request = self._sealed_request(writer_plan.request_id, writer.actor)
+            approval_writer = self._require_foreign_approval(
+                request=request,
+                command_id=command_id,
+            )
+            exact = (
+                approval_writer.command_id == ack.command_id
+                and writer_plan.request_id == plan.message_id
+                and writer_plan.ack_actor_id == plan.actor_id
+            )
+        else:
+            exact = False
+        if not exact:
+            raise JournalDamaged(
+                f"acknowledgement for {plan.message_id} contradicts its writer's durable plan"
+            )
+        return writer.command_id
 
     async def channels_reply(
         self,
@@ -965,6 +1147,24 @@ class _CommandExecutor:
         request = self._actionable_request(actor, message_id, consumes=REPLY_CONSUMES)
         if isinstance(request, ControlRejected):
             return request
+        reply_contract = request.reply_contract
+        if reply_contract is None:
+            raise JournalDamaged(
+                f"channel request {request.message_id} carries no sealed reply contract"
+            )
+        incoherence = canonical_exchange_fault(
+            request.contract,
+            reply_contract,
+            request.interaction,
+        )
+        if incoherence is not None:
+            return self._fault(
+                ControlCode.REQUEST_INVALID,
+                f"channel request {request.message_id} carries an incoherent exchange: "
+                f"{incoherence}",
+                "answer a request admitted with a coherent contract pair and interaction",
+                {"interaction": request.interaction},
+            )
         begun = self._begin_command(
             actor,
             # `_actionable_request` has already derived and enforced the exact
@@ -981,28 +1181,11 @@ class _CommandExecutor:
         claim = begun
         session = _CommandSession(self, claim)
         if session.record.plan is None:
-            # A stored reply plus no plan of our own is a lost race, never
-            # damage: the request was answered by a different command, and one
-            # reply per request is a hard constraint. A crash *after* this
-            # command planned takes the replay path below instead.
-            if (
-                self._journal.channel_reply_for(
-                    channel_id=request.channel_id,
-                    request_id=request.message_id,
-                )
-                is not None
-            ):
-                return self._terminal_control_fault(
-                    claim,
-                    ControlCode.CHANNEL_ALREADY_REPLIED,
-                    f"channel request {message_id} already carries its one reply",
-                    "read the stored reply with channels_message",
-                )
             session.plan(self._channel_reply_plan(actor, request, payload))
         plan = session.load()
         if isinstance(plan, _ControlRejectPlan):
             return self._terminal_rejection(claim, plan.response)
-        if not isinstance(plan, _ChannelReplyPlan):
+        if not isinstance(plan, ChannelReplyPlan):
             raise JournalDamaged("channels_reply command carries the wrong plan")
         try:
             reply = self._journal.channel_reply(
@@ -1013,14 +1196,14 @@ class _CommandExecutor:
                 command_id=claim.command_id,
             )
         except ChannelReplyConflict:
-            # Preflight and the domain write are not one transaction, so two
-            # commands can both pass the already-replied check. The loser learns
-            # it lost the same way a late caller does.
-            return self._terminal_control_fault(
+            request = self._sealed_request(plan.request_id, actor)
+            self._require_foreign_reply(
+                request=request,
+                command_id=claim.command_id,
+            )
+            return self._terminal_rejection(
                 claim,
-                ControlCode.CHANNEL_ALREADY_REPLIED,
-                f"channel request {plan.request_id} already carries its one reply",
-                "read the stored reply with channels_message",
+                self._already_replied_fault(plan.request_id, approval=False),
             )
         self._fault_probe("channels_reply.after_domain_mutation")
         # The reply is the durable wake; this only spares the human the scan
@@ -1077,7 +1260,7 @@ class _CommandExecutor:
         session = _CommandSession(self, claim)
         if session.record.plan is None:
             session.plan(
-                _ChannelAckPlan(
+                ChannelAckPlan(
                     channel_id=request.channel_id,
                     message_id=request.message_id,
                     interaction=request.interaction,
@@ -1087,7 +1270,7 @@ class _CommandExecutor:
         plan = session.load()
         if isinstance(plan, _ControlRejectPlan):
             return self._terminal_rejection(claim, plan.response)
-        if not isinstance(plan, _ChannelAckPlan):
+        if not isinstance(plan, ChannelAckPlan):
             raise JournalDamaged("channels_ack command carries the wrong plan")
         try:
             ack = self._journal.channel_acknowledge(
@@ -1099,11 +1282,13 @@ class _CommandExecutor:
         except ChannelAckConflict:
             # Another command already owns this actor's delivery fact. One fact,
             # one owning command, so this is a duplicate rather than damage.
-            return self._terminal_control_fault(
+            self._require_foreign_ack(
+                plan=plan,
+                command_id=claim.command_id,
+            )
+            return self._terminal_rejection(
                 claim,
-                ControlCode.IDEMPOTENCY_CONFLICT,
-                f"message {message_id} is already acknowledged for this actor",
-                "read the delivery state with channels_message",
+                self._already_acknowledged_fault(message_id),
             )
         self._fault_probe("channels_ack.after_domain_mutation")
         response = ChannelAckResult(
@@ -1164,7 +1349,7 @@ class _CommandExecutor:
         actor: AuthenticatedActor,
         request: ChannelMessage,
         answer: JsonValue,
-    ) -> _ChannelReplyPlan:
+    ) -> ChannelReplyPlan:
         """Read every field off the sealed request; the caller wrote the answer."""
 
         if request.reply_port is None:
@@ -1174,7 +1359,7 @@ class _CommandExecutor:
             request_id=request.message_id,
             reply_port=request.reply_port,
         )
-        return _ChannelReplyPlan(
+        return ChannelReplyPlan(
             channel_id=request.channel_id,
             request_id=request.message_id,
             interaction=request.interaction,
@@ -1310,6 +1495,7 @@ class _CommandExecutor:
                 )
             session.plan(
                 _InitialPromotionPlan(
+                    terminal_rejection_policy="exact-v1",
                     component=component,
                     target=version,
                     draft=planned.draft,
@@ -1374,6 +1560,7 @@ class _CommandExecutor:
                 return self._terminal_rejection(claim, planned)
             session.plan(
                 _PromotionPlan(
+                    terminal_rejection_policy="exact-v1",
                     component=component,
                     baseline=self._optional_digest(planned.get("baseline")),
                     target=version,
@@ -1392,19 +1579,9 @@ class _CommandExecutor:
         else:
             current = self._registry.stable_version(plan.component)
             if current == plan.target:
-                return self._terminal_control_fault(
-                    claim,
-                    ControlCode.REGISTRY_STABLE_MOVED,
-                    "stable already names the target but not through this attestation",
-                    "choose a fresh idempotency key after inspecting promotion history",
-                )
+                return self._terminal_rejection(claim, _canonical_domain_rejection(plan))
             if current != plan.baseline:
-                return self._terminal_control_fault(
-                    claim,
-                    ControlCode.REGISTRY_STABLE_MOVED,
-                    f"stable moved from planned baseline {plan.baseline} to {current}",
-                    "re-evaluate the candidate against the current stable version",
-                )
+                return self._terminal_rejection(claim, _canonical_domain_rejection(plan))
             try:
                 record = self._system._promote_version(
                     component=plan.component,
@@ -1412,15 +1589,10 @@ class _CommandExecutor:
                     attestation_id=plan.attestation_id,
                     actor=actor.actor_id,
                 )
-            except (AdmissionError, ContractViolation) as exc:
+            except (AdmissionError, ContractViolation):
                 prior = self._registry.store.promotion_for_attestation(plan.attestation_id)
                 if prior is None:
-                    return self._terminal_control_fault(
-                        claim,
-                        ControlCode.REGISTRY_STABLE_MOVED,
-                        str(exc),
-                        "inspect the attestation and current stable version",
-                    )
+                    return self._terminal_rejection(claim, _canonical_domain_rejection(plan))
                 record = prior
             self._validate_evaluated_promotion_receipt(record, plan=plan)
         self._fault_probe("registry_promote.after_domain_mutation")
@@ -1472,6 +1644,7 @@ class _CommandExecutor:
                 )
             session.plan(
                 _RollbackPlan(
+                    terminal_rejection_policy="exact-v1",
                     component=component,
                     baseline=expected_stable,
                     target=planned.target,
@@ -1612,12 +1785,12 @@ class _CommandExecutor:
                 source_manifest.source_graph.model_dump(mode="json"),
             )
             session.plan(
-                _RunCreationPlan(
+                RunCreationPlan(
                     run_id=run_id,
                     manifest=manifest,
                     inputs=source_inputs,
                     origin=origin,
-                    source_lock=_SourceLock(
+                    source_lock=SourceRunLock(
                         run_id=source_run_id,
                         manifest_hash=source_manifest.manifest_hash,
                         input_hash=source_manifest.input_hash,
@@ -1629,7 +1802,7 @@ class _CommandExecutor:
         plan = session.load()
         if isinstance(plan, _ControlRejectPlan):
             return self._terminal_rejection(claim, plan.response)
-        if not isinstance(plan, _RunCreationPlan):
+        if not isinstance(plan, RunCreationPlan):
             raise JournalDamaged(f"{operation} command carries the wrong plan")
         run_id = plan.run_id
         manifest = plan.manifest
@@ -1669,7 +1842,7 @@ class _CommandExecutor:
                 str(exc),
                 "submit canonical JSON and a non-empty bounded idempotency key",
             )
-        request_hash = digest("control-request", 1, normalized)
+        request_hash = command_request_hash(normalized)
         result = self._store.claim_command(
             actor=actor,
             operation=operation,
@@ -1706,6 +1879,7 @@ class _CommandExecutor:
     def _terminal_rejection(self, claim: CommandClaim, response: T) -> T:
         session = _CommandSession(self, claim)
         record = session.record
+        plan: _LoadedCommandPlan
         if record.plan is None:
             if isinstance(response, AdmissionRejected):
                 planned: _CommandPlan = _AdmissionRejectPlan(
@@ -1722,15 +1896,18 @@ class _CommandExecutor:
                 )
             else:
                 raise JournalDamaged("unknown terminal rejection schema family")
-            session.plan(planned)
+            plan = session.plan(planned)
         else:
-            existing = self._load_stored_plan(claim, record.plan)
+            plan = self._load_stored_plan(claim, record.plan)
+            self._validate_command_plan(claim, plan)
             if (
-                isinstance(existing, (_AdmissionRejectPlan, _ControlRejectPlan))
-                and existing.response != response
+                isinstance(plan, (_AdmissionRejectPlan, _ControlRejectPlan))
+                and not _same_json_fact(plan.response, response)
             ):
                 raise JournalDamaged(f"command {claim.command_id!r} rejection contradicts its plan")
-        session.reject(cast(ControlRejected | AdmissionRejected, response))
+        rejection = cast(ControlRejected | AdmissionRejected, response)
+        self._validate_terminal_rejection(record, plan, rejection)
+        session.reject(rejection)
         return response
 
     def _terminal_control_fault(
@@ -1758,22 +1935,22 @@ class _CommandExecutor:
             )
         try:
             parsed = _StoredPlan.model_validate_json(canonical_json(raw))
-        except ValidationError as exc:
+        except (TypeError, ValueError, ValidationError) as exc:
             raise JournalDamaged(
                 f"command {claim.command_id!r} has an invalid typed plan: {exc}"
             ) from exc
         rendered = parsed.model_dump(mode="json")
         if canonical_json(raw) != canonical_json(rendered):
             raise JournalDamaged(f"command {claim.command_id!r} typed plan is not lossless")
-        expected: dict[str, tuple[type[_PlanModel], ...]] = {
-            "runs_start": (_RunCreationPlan, _AdmissionRejectPlan, _ControlRejectPlan),
+        expected: dict[str, tuple[type[BaseModel], ...]] = {
+            "runs_start": (RunCreationPlan, _AdmissionRejectPlan, _ControlRejectPlan),
             "runs_cancel": (_CancelPlan, _ControlRejectPlan),
-            "runs_resume": (_ResumePlan, _ControlRejectPlan),
-            "runs_reproduce": (_RunCreationPlan, _ControlRejectPlan),
-            "runs_counterfactual": (_RunCreationPlan, _ControlRejectPlan),
-            "runs_approve": (_ApprovalPlan, _ChannelApprovalPlan, _ControlRejectPlan),
-            "channels_reply": (_ChannelReplyPlan, _ControlRejectPlan),
-            "channels_ack": (_ChannelAckPlan, _ControlRejectPlan),
+            "runs_resume": (ResumeCommandPlan, _ControlRejectPlan),
+            "runs_reproduce": (RunCreationPlan, _ControlRejectPlan),
+            "runs_counterfactual": (RunCreationPlan, _ControlRejectPlan),
+            "runs_approve": (ApprovalPlan, ChannelApprovalPlan, _ControlRejectPlan),
+            "channels_reply": (ChannelReplyPlan, _ControlRejectPlan),
+            "channels_ack": (ChannelAckPlan, _ControlRejectPlan),
             "registry_register": (_RegistrationPlan, _ControlRejectPlan),
             "registry_promote_initial": (_InitialPromotionPlan, _ControlRejectPlan),
             "registry_promote": (_PromotionPlan, _ControlRejectPlan),
@@ -1791,7 +1968,7 @@ class _CommandExecutor:
         self,
         claim: CommandClaim,
         raw: JsonValue,
-    ) -> _CommandPlan:
+    ) -> _LoadedCommandPlan:
         if isinstance(raw, dict) and "schema_version" in raw:
             return self._parse_stored_plan(claim, raw)
         if not isinstance(raw, dict):
@@ -1834,7 +2011,7 @@ class _CommandExecutor:
                 legacy_inputs = json_value(self._object(raw, "inputs"))
                 if not isinstance(legacy_inputs, dict):
                     raise JournalDamaged("legacy run inputs are not an object")
-                return _RunCreationPlan(
+                return RunCreationPlan(
                     run_id=RunId(self._string(raw, "run_id")),
                     manifest=ExecutionManifest.model_validate(self._object(raw, "manifest")),
                     inputs=legacy_inputs,
@@ -1842,19 +2019,25 @@ class _CommandExecutor:
                 )
             if operation == "runs_resume":
                 run_id = RunId(self._string(raw, "run_id"))
+                legacy_plan = validated_resume_command_plan(record)
+                if (
+                    isinstance(legacy_plan, LegacyResumeCommandPlan)
+                    and legacy_plan.baseline_event_seq is None
+                ):
+                    return legacy_plan
                 run = self._journal.run_record(run_id)
                 if run is None:
                     raise JournalDamaged("legacy resume run disappeared")
                 resume_baseline = self._optional_nonnegative_int(raw, "baseline_event_seq")
                 if resume_baseline is None:
-                    resume_baseline = self._journal.max_event_seq(run_id)
-                return _ResumePlan(
+                    raise JournalDamaged("unfenced legacy resume plan changed during decoding")
+                return ResumeCommandPlan(
                     run_id=run_id,
                     baseline_event_seq=resume_baseline,
-                    submitted_status=run.status,
+                    submitted_status=self._resume_status_for_plan_fence(legacy_plan),
                 )
             if operation == "runs_approve":
-                return _ApprovalPlan(
+                return ApprovalPlan(
                     approval=ApprovalRecord.model_validate(self._object(raw, "approval"))
                 )
             if operation == "registry_promote":
@@ -1891,7 +2074,7 @@ class _CommandExecutor:
     def _validate_command_plan(
         self,
         claim: CommandClaim,
-        plan: _CommandPlan,
+        plan: _LoadedCommandPlan,
     ) -> None:
         """Bind a parsed plan to its immutable command request and domain identity."""
 
@@ -1908,82 +2091,31 @@ class _CommandExecutor:
                 raise JournalDamaged("rejection plan contradicts its command identity")
             return
 
-        if isinstance(plan, _RunCreationPlan):
-            if plan.run_id != run_id_for_command(claim.command_id):
-                raise JournalDamaged("run creation plan has a non-derived RunId")
-            try:
-                parsed_manifest = parse_manifest_json(
-                    canonical_json(plan.manifest.model_dump(mode="json"))
-                )
-            except (TypeError, ValueError, ValidationError) as exc:
-                raise JournalDamaged(f"run creation plan has an invalid manifest: {exc}") from exc
-            if parsed_manifest != plan.manifest:
-                raise JournalDamaged("run creation plan manifest parsing is lossy")
-            if digest("inputs", 1, plan.inputs) != plan.manifest.input_hash:
-                raise JournalDamaged("run creation inputs contradict the manifest input hash")
-            origin = plan.origin
-            if origin.actor_id != record.actor.actor_id or origin.command_id != claim.command_id:
-                raise JournalDamaged("run origin contradicts its command actor or identity")
-            if claim.operation == "runs_start":
-                proposal = request.get("proposal")
-                inputs = request.get("inputs")
-                try:
-                    graph = (
-                        Graph.model_validate_json(proposal)
-                        if isinstance(proposal, str)
-                        else Graph.model_validate(proposal)
-                    )
-                except (TypeError, ValueError, ValidationError) as exc:
-                    raise JournalDamaged(
-                        f"stored start request is not a valid graph: {exc}"
-                    ) from exc
-                if (
-                    plan.source_lock is not None
-                    or graph != plan.manifest.source_graph
-                    or inputs != plan.inputs
-                    or origin
-                    != RunOrigin(
-                        kind="start",
-                        actor_id=record.actor.actor_id,
-                        command_id=claim.command_id,
-                    )
-                ):
-                    raise JournalDamaged("start plan contradicts its canonical request")
-                return
-            if claim.operation not in {"runs_reproduce", "runs_counterfactual"}:
-                raise JournalDamaged("run creation plan belongs to another operation")
-            source_value = request.get("source_run_id")
-            if not isinstance(source_value, str):
-                raise JournalDamaged("clone request has no exact source RunId")
-            source_run_id = RunId(source_value)
-            raw_overrides = request.get("overrides")
-            if not isinstance(raw_overrides, dict) or not all(
-                isinstance(name, str) and isinstance(value, str)
-                for name, value in raw_overrides.items()
-            ):
-                raise JournalDamaged("clone request has invalid overrides")
-            overrides = {name: Digest(value) for name, value in raw_overrides.items()}
-            expected_origin = RunOrigin(
-                kind=(
-                    "counterfactual" if claim.operation == "runs_counterfactual" else "reproduce"
-                ),
-                actor_id=record.actor.actor_id,
-                command_id=claim.command_id,
-                source_run_id=source_run_id,
-                overrides=(overrides if claim.operation == "runs_counterfactual" else {}),
-                effects=("simulated" if claim.operation == "runs_counterfactual" else "live"),
-                capabilities=("discard" if claim.operation == "runs_counterfactual" else "normal"),
+        if isinstance(plan, RunCreationPlan):
+            validated = (
+                validated_run_creation_command(record)
+                if record.plan is not None
+                else validated_new_run_creation_plan(record, plan)
             )
-            if origin != expected_origin:
-                raise JournalDamaged("clone origin contradicts its canonical request")
+            if validated != plan:
+                raise JournalDamaged("run creation plan contradicts its command")
+            origin = plan.origin
+            if claim.operation == "runs_start":
+                return
+            source_run_id = origin.source_run_id
+            assert source_run_id is not None
+            overrides = origin.overrides
             source_record = self._journal.run_record(source_run_id)
             if source_record is None:
                 raise JournalDamaged("clone source run disappeared")
             source_manifest = self._system.manifest_for_run(source_run_id)
             source_inputs = self._system.inputs_for_run(source_run_id)
             if (
-                plan.inputs != source_inputs
-                or plan.manifest.source_graph != source_manifest.source_graph
+                not _same_json_fact(plan.inputs, source_inputs)
+                or not _same_json_fact(
+                    plan.manifest.source_graph,
+                    source_manifest.source_graph,
+                )
             ):
                 raise JournalDamaged("clone plan contradicts its immutable source world")
             legacy = isinstance(record.plan, dict) and "schema_version" not in record.plan
@@ -2008,7 +2140,7 @@ class _CommandExecutor:
                 if (
                     overrides
                     or source_lock.resolution_lock is not None
-                    or plan.manifest != source_manifest
+                    or not _same_json_fact(plan.manifest, source_manifest)
                 ):
                     raise JournalDamaged("reproduce plan changed its source world")
                 return
@@ -2030,16 +2162,58 @@ class _CommandExecutor:
                 raise JournalDamaged("counterfactual resolution lock contradicts its request")
             return
 
-        if isinstance(plan, (_CancelPlan, _ResumePlan)):
+        if isinstance(plan, _CancelPlan):
             if request.get("run_id") != str(plan.run_id):
                 raise JournalDamaged("run command plan targets another RunId")
+            if plan.observed_status != plan.response_status:
+                raise JournalDamaged("cancellation plan carries contradictory observed statuses")
+            if plan.outcome == "cancel_requested":
+                if plan.observed_event_seq is not None:
+                    raise JournalDamaged("cancel-request plan carries a terminal event marker")
+                return
+            if plan.observed_event_seq is not None:
+                event = self._journal.event(plan.run_id, plan.observed_event_seq)
+                expected_kind = TERMINAL_STATUS_EVENTS.get(plan.observed_status)
+                if event is None or event.kind != expected_kind:
+                    raise JournalDamaged(
+                        "cancellation plan contradicts its exact terminal observation"
+                    )
+                return
+            if plan.observed_status not in {RunStatus.SUCCEEDED, RunStatus.CANCELLED}:
+                raise JournalDamaged(
+                    "legacy cancellation of a resumable status has no exact observation"
+                )
+            current = self._journal.run_record(plan.run_id)
+            if current is None or current.status != plan.observed_status:
+                raise JournalDamaged(
+                    "legacy cancellation contradicts its immutable terminal status"
+                )
             return
 
-        if isinstance(plan, _ApprovalPlan):
+        if isinstance(plan, LegacyResumeCommandPlan):
+            if (
+                claim.operation != "runs_resume"
+                or plan.baseline_event_seq is not None
+                or validated_resume_command_plan(record) != plan
+            ):
+                raise JournalDamaged("legacy unfenced resume plan contradicts its command")
+            return
+
+        if isinstance(plan, ResumeCommandPlan):
+            if request.get("run_id") != str(plan.run_id):
+                raise JournalDamaged("run command plan targets another RunId")
+            self._resume_status_for_plan_fence(plan)
+            return
+
+        if isinstance(plan, ApprovalPlan):
             approval = plan.approval
             if (
-                request.get("run_id") != str(approval.run_id)
-                or request.get("subject") != approval.subject.model_dump(mode="json")
+                "request_message_id" in request
+                or request.get("run_id") != str(approval.run_id)
+                or not _same_json_fact(
+                    request.get("subject"),
+                    approval.subject,
+                )
                 or request.get("decision") != approval.decision
                 or request.get("reason") != approval.reason
                 or approval.actor != record.actor
@@ -2049,11 +2223,14 @@ class _CommandExecutor:
                 raise JournalDamaged("approval plan contradicts its canonical request")
             return
 
-        if isinstance(plan, _ChannelApprovalPlan):
+        if isinstance(plan, ChannelApprovalPlan):
             approval = plan.approval
             if (
                 request.get("run_id") != str(approval.run_id)
-                or request.get("subject") != approval.subject.model_dump(mode="json")
+                or not _same_json_fact(
+                    request.get("subject"),
+                    approval.subject,
+                )
                 or request.get("decision") != approval.decision
                 or request.get("reason") != approval.reason
                 or request.get("request_message_id") != str(plan.request_id)
@@ -2064,67 +2241,17 @@ class _CommandExecutor:
             ):
                 raise JournalDamaged("channel approval plan contradicts its canonical request")
             sealed = self._sealed_request(plan.request_id, record.actor)
-            if (
-                sealed.interaction != "approval"
-                or sealed.channel_id != plan.channel_id
-                or sealed.contract != APPROVAL_REQUEST_CONTRACT
-                or sealed.reply_contract != APPROVAL_REPLY_CONTRACT
-                or sealed.reply_port != plan.reply_port
-                or sealed.envelope.run_id != plan.run_id
-                # One run, named three ways: the command's, the plan's wake
-                # fence, and the request's own. Each was checked against its own
-                # source; this is what makes them one run rather than three.
-                or approval.run_id != plan.run_id
-                or plan.reply_id
-                != reply_message_id(request_id=plan.request_id, reply_port=plan.reply_port)
-                or canonical_json(json_value(plan.payload))
-                != canonical_json(json_value(approval_decision_payload(approval)))
-            ):
-                raise JournalDamaged("channel approval plan contradicts its sealed request")
-            try:
-                pinned = ApprovalRequestPayload.model_validate(sealed.envelope.payload)
-            except ValidationError as exc:
-                raise JournalDamaged("bound approval request carries no subject") from exc
-            if canonical_json(json_value(pinned.subject)) != canonical_json(
-                json_value(approval.subject.model_dump(mode="json"))
-            ):
-                raise JournalDamaged("channel approval plan decides an unpinned subject")
+            validated_channel_approval_plan(plan, approval, sealed)
             return
 
-        if isinstance(plan, (_ChannelReplyPlan, _ChannelAckPlan)):
-            target = plan.request_id if isinstance(plan, _ChannelReplyPlan) else plan.message_id
-            if request.get("message_id") != str(target) or plan.actor_id != record.actor.actor_id:
-                raise JournalDamaged("channel plan contradicts its canonical request")
-            # The plan may not have invented any of this: every field it carries
-            # is re-read from the sealed request, so a plan that drifted from
-            # the message it names cannot be applied a second time.
-            sealed = self._sealed_request(target, record.actor)
-            if sealed.channel_id != plan.channel_id or sealed.interaction != plan.interaction:
-                raise JournalDamaged("channel plan contradicts its sealed request")
-            if isinstance(plan, _ChannelAckPlan):
-                return
-            # The stored payload is the answer the caller wrote plus whatever
-            # authorship the sealed reply contract requires, so the plan must
-            # equal what that law derives — never something it authored itself.
-            if (
-                plan.interaction not in REPLY_CONSUMES
-                or sealed.reply_port != plan.reply_port
-                or sealed.envelope.run_id != plan.run_id
-                or plan.reply_id
-                != reply_message_id(request_id=target, reply_port=plan.reply_port)
-                or canonical_json(json_value(plan.payload))
-                != canonical_json(
-                    json_value(
-                        sealed_reply_payload(
-                            sealed,
-                            answer=cast(JsonValue, request.get("payload")),
-                            actor_id=plan.actor_id,
-                            reply_id=plan.reply_id,
-                        )
-                    )
-                )
-            ):
-                raise JournalDamaged("channel reply plan contradicts its sealed request")
+        if isinstance(plan, ChannelReplyPlan):
+            sealed = self._sealed_request(plan.request_id, record.actor)
+            validated_channel_reply_plan(record, plan, sealed)
+            return
+
+        if isinstance(plan, ChannelAckPlan):
+            sealed = self._sealed_request(plan.message_id, record.actor)
+            validated_channel_ack_plan(record, plan, sealed)
             return
 
         if isinstance(plan, _RegistrationPlan):
@@ -2132,7 +2259,7 @@ class _CommandExecutor:
                 requested = ComponentDef.model_validate(request.get("definition"))
             except ValidationError as exc:
                 raise JournalDamaged("registration request has an invalid definition") from exc
-            if requested != plan.definition:
+            if not _same_json_fact(requested, plan.definition):
                 raise JournalDamaged("registration plan contradicts its canonical request")
             existing = self._registry.snapshot().get(
                 plan.definition.name,
@@ -2145,7 +2272,7 @@ class _CommandExecutor:
                 # every row registered under an older hash law unreplayable.
                 if (
                     existing is None
-                    or existing.definition != plan.definition
+                    or not _same_json_fact(existing.definition, plan.definition)
                     or existing.registered_at != plan.candidate_timestamp
                 ):
                     raise JournalDamaged("registration plan contradicts its existing row")
@@ -2171,7 +2298,7 @@ class _CommandExecutor:
                 raise JournalDamaged("initial-promotion target is not retained") from exc
             if (
                 plan.baseline is not None
-                or plan.draft != expected.draft
+                or not _same_json_fact(plan.draft, expected.draft)
                 or plan.attestation_id != expected.attestation_id
             ):
                 raise JournalDamaged("initial-promotion policy identity is invalid")
@@ -2211,20 +2338,20 @@ class _CommandExecutor:
                 )
             except RegistryError as exc:
                 raise JournalDamaged("rollback target is not retained") from exc
-            if plan.draft != expected.draft or plan.attestation_id != expected.attestation_id:
+            if (
+                not _same_json_fact(plan.draft, expected.draft)
+                or plan.attestation_id != expected.attestation_id
+            ):
                 raise JournalDamaged("rollback policy identity is invalid")
             return
 
         raise JournalDamaged("unknown command plan family")
 
-    def _validate_terminal_response(
-        self,
-        record: CommandRecord,
-        response: BaseModel,
-    ) -> None:
-        if record.plan is None:
-            raise JournalDamaged("terminal command has no immutable plan")
-        claim = CommandClaim(
+    @staticmethod
+    def _claim_for_record(record: CommandRecord) -> CommandClaim:
+        """A read-only claim identity for validating one durable command record."""
+
+        return CommandClaim(
             command_id=record.command_id,
             actor_id=record.actor.actor_id,
             operation=record.operation,
@@ -2232,11 +2359,59 @@ class _CommandExecutor:
             epoch=max(1, record.owner_epoch),
             expires_at=record.updated_at,
         )
-        plan = self._load_stored_plan(claim, record.plan)
+
+    def _validate_created_run_fact(self, plan: RunCreationPlan) -> None:
+        """Bind one creation plan to the exact run world it committed."""
+
+        record = self._journal.run_record(plan.run_id)
+        inputs = self._journal.run_inputs(plan.run_id)
+        try:
+            manifest = self._system.manifest_for_run(plan.run_id)
+        except ContractViolation as exc:
+            raise JournalDamaged(
+                f"created run {plan.run_id!r} has no exact manifest"
+            ) from exc
+        if (
+            record is None
+            or inputs is None
+            or record.manifest_hash != plan.manifest.manifest_hash
+            or record.input_hash != plan.manifest.input_hash
+            or not _same_json_fact(manifest, plan.manifest)
+            or not _same_json_fact(inputs, plan.inputs)
+            or not _same_json_fact(record.origin, plan.origin)
+        ):
+            raise JournalDamaged(
+                f"created run {plan.run_id!r} contradicts its command plan"
+            )
+
+    def _validate_terminal_response(
+        self,
+        record: CommandRecord,
+        response: BaseModel,
+        *,
+        loaded_plan: _LoadedCommandPlan | None = None,
+    ) -> _ResumeIntentDisposition | None:
+        response_is_rejection = isinstance(
+            response,
+            (AdmissionRejected, ControlRejected),
+        )
+        if (record.state == "rejected") != response_is_rejection:
+            raise JournalDamaged(
+                "terminal command lifecycle contradicts its response family"
+            )
+        if record.plan is None:
+            raise JournalDamaged("terminal command has no immutable plan")
+        claim = self._claim_for_record(record)
+        plan = (
+            self._load_stored_plan(claim, record.plan)
+            if loaded_plan is None
+            else loaded_plan
+        )
         self._validate_command_plan(claim, plan)
-        if isinstance(response, (AdmissionRejected, ControlRejected)):
+        if response_is_rejection:
+            assert isinstance(response, (AdmissionRejected, ControlRejected))
             self._validate_terminal_rejection(record, plan, response)
-            return
+            return None
 
         command = getattr(response, "command", None)
         if (
@@ -2247,38 +2422,55 @@ class _CommandExecutor:
             raise JournalDamaged("successful response has invalid command metadata")
 
         if isinstance(response, RunSubmission):
-            if isinstance(plan, _RunCreationPlan):
+            if isinstance(plan, RunCreationPlan):
+                self._validate_created_run_fact(plan)
                 if (
                     response.run_id != plan.run_id
                     or response.run_status is not RunStatus.PENDING
                     or response.origin != plan.origin
                 ):
                     raise JournalDamaged("run submission contradicts its creation plan")
-            elif isinstance(plan, _ResumePlan):
+            elif isinstance(plan, (ResumeCommandPlan, LegacyResumeCommandPlan)):
                 run = self._journal.run_record(plan.run_id)
+                expected_status = (
+                    plan.submitted_status if isinstance(plan, ResumeCommandPlan) else None
+                )
                 if (
                     run is None
                     or response.run_id != plan.run_id
-                    or response.run_status != plan.submitted_status
+                    or (expected_status is not None and response.run_status != expected_status)
                     or response.origin != run.origin
                 ):
                     raise JournalDamaged("resume response contradicts its attempt plan")
+                if isinstance(plan, ResumeCommandPlan):
+                    return self._classify_resume_intent(
+                        plan.run_id,
+                        baseline_event_seq=plan.baseline_event_seq,
+                        submitted_status=plan.submitted_status,
+                        command_id=record.command_id,
+                    )
             else:
                 raise JournalDamaged("run submission has the wrong plan family")
             if self._journal.run_record(response.run_id) is None:
                 raise JournalDamaged("submitted run has no durable row")
-            return
+            return None
+
         if isinstance(response, CancellationResult):
+            run = self._journal.run_record(plan.run_id) if isinstance(plan, _CancelPlan) else None
             if (
                 not isinstance(plan, _CancelPlan)
                 or response.run_id != plan.run_id
                 or response.status != plan.outcome
                 or response.run_status != plan.response_status
+                or run is None
+                or (plan.outcome == "cancel_requested" and not run.cancel_requested)
             ):
-                raise JournalDamaged("cancellation response contradicts its plan")
-            return
+                raise JournalDamaged(
+                    "cancellation response contradicts its plan or durable request"
+                )
+            return None
         if isinstance(response, ApprovalCommandResult):
-            if not isinstance(plan, (_ApprovalPlan, _ChannelApprovalPlan)):
+            if not isinstance(plan, (ApprovalPlan, ChannelApprovalPlan)):
                 raise JournalDamaged("approval response has the wrong plan")
             expected_detail = self._details.required_reference(
                 record.actor,
@@ -2288,29 +2480,29 @@ class _CommandExecutor:
                 response.approval_id != plan.approval.approval_id
                 or response.decision != plan.approval.decision
                 or self._store.approval(response.approval_id) != plan.approval
+                or self._store.approval_for_command(record.command_id) != plan.approval
                 or response.detail != expected_detail
             ):
                 raise JournalDamaged("approval response contradicts its plan or fact")
-            if isinstance(plan, _ApprovalPlan):
+            if isinstance(plan, ApprovalPlan):
                 if response.reply is not None:
                     raise JournalDamaged("standalone approval response names a reply")
-                return
-            # Bound: the same three facts that were committed together are
-            # reconciled together. `channel_reply_for` rebuilds the reply from
-            # its request, so the relationship is validated rather than assumed,
-            # and the payload is compared as canonical bytes.
+                return None
+            # Bound: validate the same transaction-shaped proof used when a
+            # foreign command discovers this answer. Content agreement alone is
+            # insufficient: both the approval and reply must name this command.
             answered = self._journal.channel_reply_for(
                 channel_id=plan.channel_id,
                 request_id=plan.request_id,
             )
-            acked = self._journal.channel_delivery(
-                message_id=plan.request_id,
-                actor_id=plan.ack_actor_id,
+            sealed = self._sealed_request(plan.request_id, record.actor)
+            writer = (
+                self._require_whole_exchange(sealed, answered) if answered is not None else None
             )
             if (
                 answered is None
-                or acked is None
-                or not acked.acknowledged
+                or writer is None
+                or writer.command_id != record.command_id
                 or answered.message_id != plan.reply_id
                 or answered.sender_actor_id != plan.ack_actor_id
                 or canonical_json(json_value(answered.envelope.payload))
@@ -2318,9 +2510,9 @@ class _CommandExecutor:
                 or response.reply != plan.reply_id
             ):
                 raise JournalDamaged("bound approval response contradicts its plan or facts")
-            return
+            return None
         if isinstance(response, ChannelReplyResult):
-            if not isinstance(plan, _ChannelReplyPlan):
+            if not isinstance(plan, ChannelReplyPlan):
                 raise JournalDamaged("channel reply response has the wrong plan")
             request = self._journal.channel_delivery(
                 message_id=plan.request_id,
@@ -2339,6 +2531,8 @@ class _CommandExecutor:
                 request is None
                 or reply is None
                 or not request.acknowledged
+                or self._journal.channel_message_command(message_id=plan.reply_id)
+                != record.command_id
                 or reply.message_id != plan.reply_id
                 or reply.sender_actor_id != plan.actor_id
                 or canonical_json(json_value(reply.envelope.payload))
@@ -2352,22 +2546,25 @@ class _CommandExecutor:
                 )
             ):
                 raise JournalDamaged("channel reply response contradicts its plan or fact")
-            return
+            return None
         if isinstance(response, ChannelAckResult):
-            if not isinstance(plan, _ChannelAckPlan):
+            if not isinstance(plan, ChannelAckPlan):
                 raise JournalDamaged("channel ack response has the wrong plan")
-            delivery = self._journal.channel_delivery(
+            ack_record = self._journal.channel_ack(
                 message_id=plan.message_id,
                 actor_id=plan.actor_id,
             )
             if (
-                delivery is None
-                or not delivery.acknowledged
-                or response.message_id != plan.message_id
-                or response.actor_id != plan.actor_id
+                ack_record is None
+                or ack_record.command_id != record.command_id
+                or ack_record.ack.message_id != plan.message_id
+                or ack_record.ack.actor_id != plan.actor_id
+                or response.message_id != ack_record.ack.message_id
+                or response.actor_id != ack_record.ack.actor_id
+                or response.acked_at != ack_record.ack.acked_at
             ):
                 raise JournalDamaged("channel ack response contradicts its plan or fact")
-            return
+            return None
         if isinstance(response, RegistrationCommandResult):
             if not isinstance(plan, _RegistrationPlan):
                 raise JournalDamaged("registration response has the wrong plan")
@@ -2377,7 +2574,8 @@ class _CommandExecutor:
             )
             if (
                 stored is None
-                or stored.definition != plan.definition
+                or not _same_json_fact(stored.definition, plan.definition)
+                or stored.registered_at != plan.candidate_timestamp
                 or response.component != plan.definition.name
                 or response.version != plan.content_hash
                 or response.detail
@@ -2387,7 +2585,7 @@ class _CommandExecutor:
                 )
             ):
                 raise JournalDamaged("registration response contradicts its exact row")
-            return
+            return None
         if isinstance(response, PromotionCommandResult):
             if isinstance(plan, (_InitialPromotionPlan, _PromotionPlan, _RollbackPlan)):
                 component = plan.component
@@ -2426,36 +2624,65 @@ class _CommandExecutor:
                     attestation_id=attestation_id,
                     draft=plan.draft,
                 )
-            return
+            return None
         raise JournalDamaged("terminal response uses an unknown schema family")
 
-    @staticmethod
     def _validate_terminal_rejection(
+        self,
         record: CommandRecord,
-        plan: _CommandPlan,
+        plan: _LoadedCommandPlan,
         response: AdmissionRejected | ControlRejected,
     ) -> None:
         """Bind a refusal to the only plan families that can lawfully emit it."""
 
         if isinstance(plan, _AdmissionRejectPlan):
-            if record.operation != "runs_start" or response != plan.response:
+            if record.operation != "runs_start" or not _same_json_fact(
+                response,
+                plan.response,
+            ):
                 raise JournalDamaged("admission rejection contradicts its claimed command")
             return
         if isinstance(plan, _ControlRejectPlan):
-            if response != plan.response:
+            if not _same_json_fact(response, plan.response):
                 raise JournalDamaged("control rejection contradicts its claimed command")
+            return
+        if record.operation == "runs_resume" and isinstance(
+            plan,
+            (ResumeCommandPlan, LegacyResumeCommandPlan),
+        ):
+            if not isinstance(response, ControlRejected):
+                raise JournalDamaged("resume domain plan carries another response family")
+            historical = resume_plan_requires_historical_evidence(record)
+            if historical:
+                evidence = self._store.historical_resume_plan_evidence(record.command_id)
+                if evidence is None:
+                    raise JournalDamaged("historical resume plan has no era evidence")
+                if evidence.phase_at_migration == "terminal":
+                    # The migration witness binds the complete structurally
+                    # decoded response, including its fault tuple.
+                    return
+            expected_resume = (
+                _unfenced_resume_rejection(plan)
+                if isinstance(plan, LegacyResumeCommandPlan)
+                else _canonical_domain_rejection(plan)
+            )
+            if len(response.faults) != 1 or not _same_json_fact(
+                response,
+                expected_resume,
+            ):
+                raise JournalDamaged(
+                    "resume rejection contradicts its exact planned refusal"
+                )
             return
         if not isinstance(response, ControlRejected) or len(response.faults) != 1:
             raise JournalDamaged("domain plan carries an invalid terminal rejection")
 
         code = response.faults[0].code
-        if record.operation == "runs_resume" and isinstance(plan, _ResumePlan):
-            lawful = {
-                ControlCode.RUN_LIVE_OWNER,
-                ControlCode.RUN_TERMINAL,
-                ControlCode.RUN_NOT_RESUMABLE,
-            }
-        elif (
+        expected: ControlRejected | None = None
+        if isinstance(
+            plan,
+            (_InitialPromotionPlan, _PromotionPlan, _RollbackPlan),
+        ) and (
             record.operation,
             type(plan),
         ) in {
@@ -2463,21 +2690,48 @@ class _CommandExecutor:
             ("registry_promote", _PromotionPlan),
             ("registry_rollback", _RollbackPlan),
         }:
-            lawful = {ControlCode.REGISTRY_STABLE_MOVED}
-        elif record.operation == "channels_reply" and isinstance(plan, _ChannelReplyPlan):
-            # A domain plan that lost a race still has to replay its refusal:
-            # the loser learns it lost once, and every retry after that must say
-            # the same thing rather than call the stored answer damage.
+            if plan.terminal_rejection_policy != "exact-v1":
+                raise JournalDamaged(
+                    f"{record.operation!r} legacy domain-plan rejection has no exact proof"
+                )
+            expected = _canonical_domain_rejection(plan)
+            if not _same_json_fact(response, expected):
+                raise JournalDamaged(
+                    f"{record.operation!r} rejection contradicts its exact planned edge"
+                )
+            return
+        elif record.operation == "channels_reply" and isinstance(plan, ChannelReplyPlan):
+            request = self._sealed_request(plan.request_id, record.actor)
+            self._require_foreign_reply(
+                request=request,
+                command_id=record.command_id,
+            )
             lawful = {ControlCode.CHANNEL_ALREADY_REPLIED}
-        elif record.operation == "runs_approve" and isinstance(plan, _ChannelApprovalPlan):
+            expected = self._already_replied_fault(plan.request_id, approval=False)
+        elif record.operation == "runs_approve" and isinstance(plan, ChannelApprovalPlan):
+            request = self._sealed_request(plan.request_id, record.actor)
+            self._require_foreign_approval(
+                request=request,
+                command_id=record.command_id,
+            )
             lawful = {ControlCode.CHANNEL_ALREADY_REPLIED}
-        elif record.operation == "channels_ack" and isinstance(plan, _ChannelAckPlan):
+            expected = self._already_replied_fault(plan.request_id, approval=True)
+        elif record.operation == "channels_ack" and isinstance(plan, ChannelAckPlan):
+            self._require_foreign_ack(
+                plan=plan,
+                command_id=record.command_id,
+            )
             lawful = {ControlCode.IDEMPOTENCY_CONFLICT}
+            expected = self._already_acknowledged_fault(plan.message_id)
         else:
             lawful = set()
         if code not in lawful:
             raise JournalDamaged(
                 f"{record.operation!r} rejection is not lawful for its durable domain plan"
+            )
+        if expected is not None and not _same_json_fact(response, expected):
+            raise JournalDamaged(
+                f"{record.operation!r} rejection contradicts its canonical response"
             )
 
     # -- helpers ----------------------------------------------------------
@@ -2512,7 +2766,7 @@ class _CommandExecutor:
         return self._run_host.launch(
             run_id,
             expected_event_seq=expected_event_seq,
-            allowed_statuses=_RESUME_LAUNCH_STATUSES,
+            allowed_statuses=RESUMABLE_RUN_STATUSES,
             cause=AttemptCause(kind="resume_command", id=command_id),
         )
 
@@ -2534,102 +2788,123 @@ class _CommandExecutor:
         self,
         record: CommandRecord,
     ) -> tuple[RunId, int, str] | None:
-        if record.operation != "runs_resume" or record.state != "committed":
-            raise JournalDamaged("committed resume scan returned a non-resume command")
+        if record.operation != "runs_resume" or record.state not in {"committed", "rejected"}:
+            raise JournalDamaged("terminal resume scan returned a nonterminal command")
         if record.response is None or record.plan is None:
-            raise JournalDamaged("committed resume command lacks plan or response")
-        request = record.request
-        if not isinstance(request, dict) or not isinstance(request.get("run_id"), str):
-            raise JournalDamaged("resume command request has no exact RunId")
-        run_id = RunId(request["run_id"])
-
-        raw_plan = record.plan
-        if not isinstance(raw_plan, dict):
-            raise JournalDamaged("resume command plan is not an object")
-        if "schema_version" in raw_plan:
-            try:
-                stored = _StoredPlan.model_validate_json(canonical_json(raw_plan))
-            except ValidationError as exc:
-                raise JournalDamaged("committed resume plan is invalid") from exc
-            if canonical_json(raw_plan) != canonical_json(stored.model_dump(mode="json")):
-                raise JournalDamaged("committed resume plan is not lossless")
-            if not isinstance(stored.plan, _ResumePlan):
-                raise JournalDamaged("committed resume command carries another plan kind")
-            plan = stored.plan
-            baseline = plan.baseline_event_seq
-            if plan.run_id != run_id:
-                raise JournalDamaged("resume request and plan RunIds disagree")
-        else:
-            legacy_baseline = self._optional_nonnegative_int(
-                raw_plan,
-                "baseline_event_seq",
-            )
-            if legacy_baseline is None:
-                return None
-            baseline = legacy_baseline
-            if RunId(self._string(raw_plan, "run_id")) != run_id:
-                raise JournalDamaged("legacy resume request and plan RunIds disagree")
-
+            raise JournalDamaged("terminal resume command lacks plan or response")
         decoded = self._decode_response(
             record.response,
-            (RunSubmission,),
+            (RunSubmission, ControlRejected),
             record.actor,
         )
+        claim = self._claim_for_record(record)
+        plan = self._load_stored_plan(claim, record.plan)
+        disposition = self._validate_terminal_response(
+            record,
+            decoded,
+            loaded_plan=plan,
+        )
+        if record.state == "rejected":
+            return None
         if not isinstance(decoded, RunSubmission):
             raise JournalDamaged("committed resume response has the wrong family")
-        if (
-            decoded.run_id != run_id
-            or decoded.command.command_id != record.command_id
-            or decoded.command.replayed
-        ):
-            raise JournalDamaged("resume response contradicts its command or RunId")
+        if isinstance(plan, LegacyResumeCommandPlan):
+            return None
+        if not isinstance(plan, ResumeCommandPlan):
+            raise JournalDamaged("committed resume command carries another plan kind")
+        if disposition is None:
+            raise JournalDamaged("committed resume response has no durable disposition")
+        if disposition != "launchable":
+            return None
+        return (plan.run_id, plan.baseline_event_seq, record.command_id)
+
+    def _classify_resume_intent(
+        self,
+        run_id: RunId,
+        *,
+        baseline_event_seq: int,
+        submitted_status: RunStatus,
+        command_id: str,
+    ) -> _ResumeIntentDisposition:
+        """Classify one successful intent without crediting a competing attempt."""
 
         current_seq = self._journal.max_event_seq(run_id)
         if self._resume_attempt_started(
             run_id,
-            baseline_event_seq=baseline,
-            command_id=record.command_id,
+            baseline_event_seq=baseline_event_seq,
+            submitted_status=submitted_status,
+            command_id=command_id,
             current_event_seq=current_seq,
         ):
-            return None
+            return "credited"
         run = self._journal.run_record(run_id)
         if run is None:
-            raise JournalDamaged("committed resume target disappeared")
-        if current_seq != baseline or run.status not in _RESUME_LAUNCH_STATUSES:
-            return None
-        return (run_id, baseline, record.command_id)
+            raise JournalDamaged(f"committed resume run {run_id!r} disappeared")
+        if current_seq > baseline_event_seq:
+            # Another command or ordinary recovery lawfully won the fence.
+            return "superseded"
+        if run.status not in RESUMABLE_RUN_STATUSES:
+            return "superseded"
+        return "launchable"
 
     def _resume_attempt_started(
         self,
         run_id: RunId,
         *,
         baseline_event_seq: int,
+        submitted_status: RunStatus,
         command_id: str,
         current_event_seq: int | None = None,
     ) -> bool:
         current = (
-            self._journal.max_event_seq(run_id)
-            if current_event_seq is None
-            else current_event_seq
+            self._journal.max_event_seq(run_id) if current_event_seq is None else current_event_seq
         )
         if current < baseline_event_seq:
             raise JournalDamaged("resume event sequence precedes its stored baseline")
-        after = baseline_event_seq
-        while after < current:
-            events = self._journal.events(run_id, after_seq=after, limit=100)
-            if not events:
-                break
-            for event in events:
-                after = event.seq
-                if (
-                    event.kind in {"RunStarted", "RunResumed", "RunReclaimed"}
-                    and event.payload is not None
-                    and event.payload.get("resume_command_id") == command_id
-                ):
-                    return True
-            if len(events) < 100:
-                break
-        return False
+        if current == baseline_event_seq:
+            return False
+        events = self._journal.events(
+            run_id,
+            after_seq=baseline_event_seq,
+            limit=1,
+        )
+        if not events or events[0].seq != baseline_event_seq + 1:
+            raise JournalDamaged("resume attempt history is not contiguous with its baseline")
+        try:
+            expected_kind = resume_attempt_kind(submitted_status)
+        except ValueError as exc:
+            raise JournalDamaged("resume plan has a non-resumable submitted status") from exc
+        event = events[0]
+        try:
+            cause = AttemptCause.from_payload(event.payload)
+        except ValueError as exc:
+            raise JournalDamaged("resume attempt event has contradictory cause facts") from exc
+        return event.kind == expected_kind and cause == AttemptCause(
+            kind="resume_command",
+            id=command_id,
+        )
+
+    def _resume_status_for_plan_fence(
+        self,
+        plan: ResumeCommandPlan | LegacyResumeCommandPlan,
+    ) -> RunStatus:
+        """Project the one L0 status law through retained event history."""
+
+        baseline_event_seq = plan.baseline_event_seq
+        if baseline_event_seq is None:
+            raise JournalDamaged("resume plan has no exact event fence")
+        baseline = (
+            self._journal.event(plan.run_id, baseline_event_seq)
+            if baseline_event_seq > 0
+            else None
+        )
+        try:
+            return validated_resume_status_at_fence(
+                plan,
+                baseline_event_kind=(baseline.kind if baseline is not None else None),
+            )
+        except ValueError as exc:
+            raise JournalDamaged("resume plan contradicts its exact fenced status") from exc
 
     def _submission(
         self,
@@ -2743,11 +3018,7 @@ class _CommandExecutor:
                     draft=plan.draft,
                 )
                 return prior
-            return self._fault(
-                ControlCode.REGISTRY_STABLE_MOVED,
-                f"stable moved from planned {plan.baseline} to {current}",
-                "inspect registry state and submit a new command key",
-            )
+            return _canonical_domain_rejection(plan)
         try:
             receipt = self._system._promote_version(
                 component=plan.component,
@@ -2755,14 +3026,10 @@ class _CommandExecutor:
                 attestation_id=plan.attestation_id,
                 actor=actor_id,
             )
-        except (AdmissionError, ContractViolation) as exc:
+        except (AdmissionError, ContractViolation):
             prior = self._registry.store.promotion_for_attestation(plan.attestation_id)
             if prior is None:
-                return self._fault(
-                    ControlCode.REGISTRY_STABLE_MOVED,
-                    str(exc),
-                    "inspect registry state and submit a new command key",
-                )
+                return _canonical_domain_rejection(plan)
             receipt = prior
         self._validate_promotion_receipt(
             receipt,
@@ -2801,7 +3068,7 @@ class _CommandExecutor:
         if (
             attestation.action != draft.action
             or attestation.subject != draft.subject
-            or attestation.checks != draft.checks
+            or not _same_json_fact(attestation.checks, draft.checks)
             or attestation.check_set_hash != draft.check_set_hash
             or attestation.evidence != draft.evidence
             or attestation.manifest_hash != draft.manifest_hash
@@ -2881,17 +3148,29 @@ class _CommandExecutor:
         failures: list[str] = []
         for model in models:
             try:
-                return model.model_validate(value)
+                decoded = model.model_validate(value)
             except ValidationError as exc:
                 failures.append(f"{model.__name__}: {exc.error_count()}")
+                continue
+            if not _same_json_fact(value, decoded.model_dump(mode="json")):
+                failures.append(f"{model.__name__}: current response parsing is not lossless")
+                continue
+            return decoded
         for model in models:
             upgraded = self._normalize_legacy_response(value, model, actor)
             if upgraded is None:
                 continue
             try:
-                return model.model_validate(upgraded)
+                decoded = model.model_validate(upgraded)
             except ValidationError as exc:
                 failures.append(f"{model.__name__} normalized: {exc.error_count()}")
+                continue
+            if not _same_json_fact(upgraded, decoded.model_dump(mode="json")):
+                failures.append(
+                    f"{model.__name__} normalized: response parsing is not lossless"
+                )
+                continue
+            return decoded
         raise JournalDamaged(
             f"stored command response matches none of the operation models: {failures}"
         )

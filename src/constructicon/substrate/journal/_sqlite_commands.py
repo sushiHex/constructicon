@@ -1,0 +1,810 @@
+"""The one projection from a durable command row to its L0 fact."""
+
+from __future__ import annotations
+
+import sqlite3
+from typing import Literal, cast
+
+from pydantic import ValidationError
+
+from constructicon.core.control import (
+    CommandRecord,
+    HistoricalResumePlanEvidence,
+    command_id_for,
+    command_request_hash,
+    resume_plan_requires_historical_evidence,
+    run_id_for_command,
+    validate_idempotency_key,
+    validated_new_resume_command_plan,
+)
+from constructicon.core.errors import JournalDamaged
+from constructicon.core.identity import Digest, canonical_json, parse_json_value
+from constructicon.substrate.journal._sqlite_actors import durable_authenticated_actor
+from constructicon.substrate.journal._sqlite_base import (
+    _durable_datetime,
+    _durable_digest,
+    _durable_sequence,
+    _durable_text,
+)
+from constructicon.substrate.journal._sqlite_fact_seals import (
+    durable_fact_hash,
+    durable_fact_seal,
+    require_durable_fact_seal,
+    store_durable_fact_seal,
+)
+
+_COMMAND_FACT_FAMILY = "command_claim"
+_COMMAND_PLAN_FACT_FAMILY = "command_plan"
+_COMMAND_TERMINAL_FACT_FAMILY = "command_terminal"
+RESUME_PLAN_ERA_FACT_FAMILY = "resume_plan_pre_v7"
+
+
+def _command_claim_fact_hash_from_values(
+    command_id_raw: object,
+    actor_id_raw: object,
+    actor_json_raw: object,
+    operation_raw: object,
+    idempotency_key_raw: object,
+    request_hash_raw: object,
+    request_json_raw: object,
+    created_at_raw: object,
+) -> Digest:
+    command_id = _durable_text(command_id_raw, fact="command identity")
+    return durable_fact_hash(
+        _COMMAND_FACT_FAMILY,
+        {
+            "command_id": command_id,
+            "actor_id": _durable_text(
+                actor_id_raw,
+                fact=f"command {command_id!r} actor identity",
+            ),
+            "actor_json": _durable_text(
+                actor_json_raw,
+                fact=f"command {command_id!r} actor payload",
+            ),
+            "operation": _durable_text(
+                operation_raw,
+                fact=f"command {command_id!r} operation",
+            ),
+            "idempotency_key": _durable_text(
+                idempotency_key_raw,
+                fact=f"command {command_id!r} idempotency key",
+            ),
+            "request_hash": str(
+                _durable_digest(
+                    request_hash_raw,
+                    fact=f"command {command_id!r} request hash",
+                )
+            ),
+            "request_json": _durable_text(
+                request_json_raw,
+                fact=f"command {command_id!r} request payload",
+            ),
+            "created_at": _durable_text(
+                created_at_raw,
+                fact=f"command {command_id!r} creation time",
+            ),
+        },
+    )
+
+
+def command_claim_fact_hash(row: sqlite3.Row) -> Digest:
+    """Identity of the immutable claim fields, retaining exact JSON bytes."""
+
+    return _command_claim_fact_hash_from_values(
+        row["command_id"],
+        row["actor_id"],
+        row["actor_json"],
+        row["operation"],
+        row["idempotency_key"],
+        row["request_hash"],
+        row["request_json"],
+        row["created_at"],
+    )
+
+
+def _command_plan_fact_hash_from_values(
+    command_id_raw: object,
+    plan_json_raw: object,
+) -> Digest:
+    command_id = _durable_text(command_id_raw, fact="command identity")
+    return durable_fact_hash(
+        _COMMAND_PLAN_FACT_FAMILY,
+        {
+            "command_id": command_id,
+            "plan_json": _durable_text(
+                plan_json_raw,
+                fact=f"command {command_id!r} plan payload",
+            ),
+        },
+    )
+
+
+def command_plan_fact_hash(row: sqlite3.Row) -> Digest:
+    return _command_plan_fact_hash_from_values(row["command_id"], row["plan_json"])
+
+
+def _resume_plan_era_selector(
+    evidence: HistoricalResumePlanEvidence,
+) -> str:
+    return canonical_json(evidence.model_dump(mode="json"))
+
+
+def resume_plan_era_fact_hash(
+    row: sqlite3.Row,
+    *,
+    evidence: HistoricalResumePlanEvidence,
+) -> Digest:
+    """Bind one weak/raw plan and the exact phase observed at migration."""
+
+    command_id = _durable_text(row["command_id"], fact="historical resume command identity")
+    exact_fields = {
+        "command_id": command_id,
+        "command_claim_hash": str(command_claim_fact_hash(row)),
+        "command_plan_hash": str(command_plan_fact_hash(row)),
+        "command_terminal_hash": (
+            str(command_terminal_fact_hash(row))
+            if evidence.phase_at_migration == "terminal"
+            else None
+        ),
+        "evidence": evidence.model_dump(mode="json"),
+    }
+    return durable_fact_hash(
+        RESUME_PLAN_ERA_FACT_FAMILY,
+        exact_fields,
+    )
+
+
+def _command_terminal_fact_hash_from_values(
+    command_id_raw: object,
+    state_raw: object,
+    response_json_raw: object,
+    owner_id_raw: object,
+    owner_epoch_raw: object,
+    lease_expires_at_raw: object,
+    updated_at_raw: object,
+    completed_at_raw: object,
+) -> Digest:
+    command_id = _durable_text(command_id_raw, fact="command identity")
+    owner_id = (
+        _durable_text(owner_id_raw, fact=f"command {command_id!r} owner identity")
+        if owner_id_raw is not None
+        else None
+    )
+    lease_expires_at = (
+        _durable_text(
+            lease_expires_at_raw,
+            fact=f"command {command_id!r} lease expiry",
+        )
+        if lease_expires_at_raw is not None
+        else None
+    )
+    return durable_fact_hash(
+        _COMMAND_TERMINAL_FACT_FAMILY,
+        {
+            "command_id": command_id,
+            "state": _durable_text(state_raw, fact=f"command {command_id!r} state"),
+            "response_json": _durable_text(
+                response_json_raw,
+                fact=f"command {command_id!r} response payload",
+            ),
+            "owner_id": owner_id,
+            "owner_epoch": _durable_sequence(
+                owner_epoch_raw,
+                fact=f"command {command_id!r} owner epoch",
+                allow_zero=True,
+                kind="owner epoch",
+            ),
+            "lease_expires_at": lease_expires_at,
+            "updated_at": _durable_text(
+                updated_at_raw,
+                fact=f"command {command_id!r} update time",
+            ),
+            "completed_at": _durable_text(
+                completed_at_raw,
+                fact=f"command {command_id!r} completion time",
+            ),
+        },
+    )
+
+
+def command_terminal_fact_hash(row: sqlite3.Row) -> Digest:
+    return _command_terminal_fact_hash_from_values(
+        row["command_id"],
+        row["state"],
+        row["response_json"],
+        row["owner_id"],
+        row["owner_epoch"],
+        row["lease_expires_at"],
+        row["updated_at"],
+        row["completed_at"],
+    )
+
+
+def _sqlite_command_claim_fact_hash(
+    command_id: object,
+    actor_id: object,
+    actor_json: object,
+    operation: object,
+    idempotency_key: object,
+    request_hash: object,
+    request_json: object,
+    created_at: object,
+) -> str | None:
+    """SQLite UDF: hash exact immutable claim scalars or mark them invalid."""
+
+    try:
+        return str(
+            _command_claim_fact_hash_from_values(
+                command_id,
+                actor_id,
+                actor_json,
+                operation,
+                idempotency_key,
+                request_hash,
+                request_json,
+                created_at,
+            )
+        )
+    except JournalDamaged:
+        return None
+
+
+def _sqlite_command_plan_fact_hash(
+    command_id: object,
+    plan_json: object,
+) -> str | None:
+    try:
+        return str(_command_plan_fact_hash_from_values(command_id, plan_json))
+    except JournalDamaged:
+        return None
+
+
+def _sqlite_command_terminal_fact_hash(
+    command_id: object,
+    state: object,
+    response_json: object,
+    owner_id: object,
+    owner_epoch: object,
+    lease_expires_at: object,
+    updated_at: object,
+    completed_at: object,
+) -> str | None:
+    try:
+        return str(
+            _command_terminal_fact_hash_from_values(
+                command_id,
+                state,
+                response_json,
+                owner_id,
+                owner_epoch,
+                lease_expires_at,
+                updated_at,
+                completed_at,
+            )
+        )
+    except JournalDamaged:
+        return None
+
+
+def register_command_claim_fact_hash(connection: sqlite3.Connection) -> None:
+    connection.create_function(
+        "constructicon_command_claim_fact_hash",
+        8,
+        _sqlite_command_claim_fact_hash,
+        deterministic=True,
+    )
+    connection.create_function(
+        "constructicon_command_plan_fact_hash",
+        2,
+        _sqlite_command_plan_fact_hash,
+        deterministic=True,
+    )
+    connection.create_function(
+        "constructicon_command_terminal_fact_hash",
+        8,
+        _sqlite_command_terminal_fact_hash,
+        deterministic=True,
+    )
+
+
+def require_resume_plan_era(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+    record: CommandRecord,
+) -> HistoricalResumePlanEvidence | None:
+    marker = durable_fact_seal(
+        connection,
+        family=RESUME_PLAN_ERA_FACT_FAMILY,
+        fact_key=record.command_id,
+    )
+    requires_marker = resume_plan_requires_historical_evidence(record)
+    if not requires_marker:
+        if marker is not None:
+            raise JournalDamaged(
+                f"command {record.command_id!r} carries historical era evidence"
+                " outside its wire era"
+            )
+        return None
+    if marker is None:
+        raise JournalDamaged(
+            f"durable {RESUME_PLAN_ERA_FACT_FAMILY!r} fact "
+            f"{record.command_id!r} has no positive seal"
+        )
+    try:
+        evidence = HistoricalResumePlanEvidence.model_validate_json(marker.selector)
+    except (TypeError, ValueError, ValidationError) as exc:
+        raise JournalDamaged(
+            f"historical resume command {record.command_id!r} has an invalid era selector"
+        ) from exc
+    if (
+        canonical_json(evidence.model_dump(mode="json")) != marker.selector
+        or evidence.command_id != record.command_id
+    ):
+        raise JournalDamaged(
+            f"historical resume command {record.command_id!r} has a contradictory era selector"
+        )
+    if evidence.phase_at_migration == "terminal" and record.state == "prepared":
+        raise JournalDamaged(
+            f"historical resume command {record.command_id!r} lost its migrated terminal phase"
+        )
+    require_durable_fact_seal(
+        connection,
+        family=RESUME_PLAN_ERA_FACT_FAMILY,
+        fact_key=record.command_id,
+        selector=marker.selector,
+        fact_hash=resume_plan_era_fact_hash(
+            row,
+            evidence=evidence,
+        ),
+    )
+    return evidence
+
+
+def seal_resume_plan_eras(connection: sqlite3.Connection) -> None:
+    """Classify every retained historical resume-plan wire era during migration."""
+
+    for row in connection.execute("SELECT * FROM commands ORDER BY command_id"):
+        record = _sealed_command_phases_from_row(connection, row)
+        if not resume_plan_requires_historical_evidence(record):
+            continue
+        evidence = HistoricalResumePlanEvidence(
+            command_id=record.command_id,
+            phase_at_migration=(
+                "prepared" if record.state == "prepared" else "terminal"
+            ),
+        )
+        store_durable_fact_seal(
+            connection,
+            family=RESUME_PLAN_ERA_FACT_FAMILY,
+            fact_key=record.command_id,
+            selector=_resume_plan_era_selector(evidence),
+            fact_hash=resume_plan_era_fact_hash(
+                row,
+                evidence=evidence,
+            ),
+        )
+
+
+def validate_command_claim_inventory(connection: sqlite3.Connection) -> int:
+    """Surface one missing, orphaned, relocated, or changed command claim."""
+
+    register_command_claim_fact_hash(connection)
+    orphan = connection.execute(
+        "SELECT s.family, s.fact_key FROM durable_fact_seals AS s"
+        " LEFT JOIN commands AS c ON c.command_id = s.fact_key"
+        " WHERE s.family IN (?, ?, ?)"
+        " AND (c.command_id IS NULL"
+        " OR (s.family = ? AND c.plan_json IS NULL)"
+        " OR (s.family = ? AND c.state = 'prepared')) LIMIT 1",
+        (
+            _COMMAND_FACT_FAMILY,
+            _COMMAND_PLAN_FACT_FAMILY,
+            _COMMAND_TERMINAL_FACT_FAMILY,
+            _COMMAND_PLAN_FACT_FAMILY,
+            _COMMAND_TERMINAL_FACT_FAMILY,
+        ),
+    ).fetchone()
+    if orphan is not None:
+        fact_key = _durable_text(
+            orphan["fact_key"],
+            fact="orphaned command phase seal identity",
+        )
+        raise JournalDamaged(
+            f"command {fact_key!r} is missing or precedes its sealed phase"
+        )
+    anomaly = connection.execute(
+        "SELECT c.* FROM commands AS c"
+        " LEFT JOIN durable_fact_seals AS claim"
+        " ON claim.family = ? AND claim.fact_key = c.command_id"
+        " AND claim.selector = c.command_id"
+        " LEFT JOIN durable_fact_seals AS plan"
+        " ON plan.family = ? AND plan.fact_key = c.command_id"
+        " AND plan.selector = c.command_id"
+        " LEFT JOIN durable_fact_seals AS terminal"
+        " ON terminal.family = ? AND terminal.fact_key = c.command_id"
+        " AND terminal.selector = c.command_id"
+        " WHERE constructicon_command_claim_fact_hash("
+        " c.command_id, c.actor_id, c.actor_json, c.operation,"
+        " c.idempotency_key, c.request_hash, c.request_json, c.created_at"
+        " ) IS NULL"
+        " OR claim.fact_hash IS NULL"
+        " OR claim.fact_hash IS NOT constructicon_command_claim_fact_hash("
+        " c.command_id, c.actor_id, c.actor_json, c.operation,"
+        " c.idempotency_key, c.request_hash, c.request_json, c.created_at"
+        " )"
+        " OR (c.plan_json IS NULL AND plan.fact_hash IS NOT NULL)"
+        " OR (c.plan_json IS NOT NULL AND ("
+        " plan.fact_hash IS NULL"
+        " OR plan.fact_hash IS NOT constructicon_command_plan_fact_hash("
+        " c.command_id, c.plan_json)))"
+        " OR (c.state = 'prepared' AND terminal.fact_hash IS NOT NULL)"
+        " OR (c.state != 'prepared' AND ("
+        " terminal.fact_hash IS NULL"
+        " OR terminal.fact_hash IS NOT constructicon_command_terminal_fact_hash("
+        " c.command_id, c.state, c.response_json, c.owner_id, c.owner_epoch,"
+        " c.lease_expires_at, c.updated_at, c.completed_at)"
+        " )) LIMIT 1",
+        (
+            _COMMAND_FACT_FAMILY,
+            _COMMAND_PLAN_FACT_FAMILY,
+            _COMMAND_TERMINAL_FACT_FAMILY,
+        ),
+    ).fetchone()
+    if anomaly is not None:
+        # The canonical projector supplies precise identity/content diagnostics.
+        sealed_command_from_row(connection, anomaly)
+        raise JournalDamaged("command claim inventory is contradictory")
+    expected_marker_keys: set[str] = set()
+    for row in connection.execute("SELECT * FROM commands ORDER BY command_id"):
+        record = sealed_command_from_row(connection, row)
+        if resume_plan_requires_historical_evidence(record):
+            expected_marker_keys.add(record.command_id)
+    marker_keys: set[str] = set()
+    marker_count = 0
+    for row in connection.execute(
+        "SELECT fact_key FROM durable_fact_seals WHERE family = ?",
+        (RESUME_PLAN_ERA_FACT_FAMILY,),
+    ):
+        marker_count += 1
+        marker_keys.add(
+            _durable_text(row["fact_key"], fact="resume-plan era seal identity")
+        )
+    if marker_keys != expected_marker_keys or len(marker_keys) != marker_count:
+        raise JournalDamaged(
+            "resume-plan era seal inventory has an orphan or missing fact"
+        )
+    return marker_count
+
+
+def seal_command_claim(connection: sqlite3.Connection, row: sqlite3.Row) -> None:
+    """Write or reconcile the positive seal for one exact command claim."""
+
+    record = command_from_row(row)
+    store_durable_fact_seal(
+        connection,
+        family=_COMMAND_FACT_FAMILY,
+        fact_key=record.command_id,
+        selector=record.command_id,
+        fact_hash=command_claim_fact_hash(row),
+    )
+
+
+def seal_command_phases(connection: sqlite3.Connection, row: sqlite3.Row) -> None:
+    """Seal each immutable phase the command has durably crossed."""
+
+    record = command_from_row(row)
+    if record.plan is not None:
+        store_durable_fact_seal(
+            connection,
+            family=_COMMAND_PLAN_FACT_FAMILY,
+            fact_key=record.command_id,
+            selector=record.command_id,
+            fact_hash=command_plan_fact_hash(row),
+        )
+    if record.state != "prepared":
+        store_durable_fact_seal(
+            connection,
+            family=_COMMAND_TERMINAL_FACT_FAMILY,
+            fact_key=record.command_id,
+            selector=record.command_id,
+            fact_hash=command_terminal_fact_hash(row),
+        )
+
+
+def sealed_command_from_row(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+) -> CommandRecord:
+    """Project one command through every phase and resume-era proof."""
+
+    record = _sealed_command_phases_from_row(connection, row)
+    require_resume_plan_era(connection, row, record)
+    return record
+
+
+def seal_current_command_plan(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+) -> CommandRecord:
+    """Seal and project one plan written by the current command store."""
+
+    seal_command_phases(connection, row)
+    record = _sealed_command_phases_from_row(connection, row)
+    validated_new_resume_command_plan(record)
+    require_resume_plan_era(connection, row, record)
+    return record
+
+
+def _sealed_command_phases_from_row(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+) -> CommandRecord:
+    """Project sealed command phases while a migration-era seal is pending."""
+
+    record = command_from_row(row)
+    require_durable_fact_seal(
+        connection,
+        family=_COMMAND_FACT_FAMILY,
+        fact_key=record.command_id,
+        selector=record.command_id,
+        fact_hash=command_claim_fact_hash(row),
+    )
+    plan_seal = durable_fact_seal(
+        connection,
+        family=_COMMAND_PLAN_FACT_FAMILY,
+        fact_key=record.command_id,
+        selector=record.command_id,
+    )
+    if record.plan is None:
+        if plan_seal is not None:
+            raise JournalDamaged(
+                f"command {record.command_id!r} precedes its sealed plan phase"
+            )
+    else:
+        require_durable_fact_seal(
+            connection,
+            family=_COMMAND_PLAN_FACT_FAMILY,
+            fact_key=record.command_id,
+            selector=record.command_id,
+            fact_hash=command_plan_fact_hash(row),
+        )
+    terminal_seal = durable_fact_seal(
+        connection,
+        family=_COMMAND_TERMINAL_FACT_FAMILY,
+        fact_key=record.command_id,
+        selector=record.command_id,
+    )
+    if record.state == "prepared":
+        if terminal_seal is not None:
+            raise JournalDamaged(
+                f"command {record.command_id!r} precedes its sealed terminal phase"
+            )
+    else:
+        require_durable_fact_seal(
+            connection,
+            family=_COMMAND_TERMINAL_FACT_FAMILY,
+            fact_key=record.command_id,
+            selector=record.command_id,
+            fact_hash=command_terminal_fact_hash(row),
+        )
+    return record
+
+
+def command_for_id(
+    connection: sqlite3.Connection,
+    command_id: str,
+) -> CommandRecord | None:
+    """Select by relational or derived identity before deciding absence."""
+
+    rows = connection.execute(
+        "SELECT * FROM commands WHERE command_id = ?"
+        " OR constructicon_command_id(actor_id, operation, idempotency_key) = ?"
+        " OR constructicon_command_id(actor_id, operation, idempotency_key) IS NULL"
+        " LIMIT 2",
+        (command_id, command_id),
+    ).fetchall()
+    if len(rows) > 1:
+        raise JournalDamaged(
+            f"command {command_id!r} has contradictory durable selectors"
+        )
+    if rows:
+        record = sealed_command_from_row(connection, rows[0])
+        if record.command_id != command_id:
+            raise JournalDamaged(
+                f"command {command_id!r} contradicts its requested selector"
+            )
+        return record
+    seal = durable_fact_seal(
+        connection,
+        family=_COMMAND_FACT_FAMILY,
+        fact_key=command_id,
+        selector=command_id,
+    )
+    if seal is not None:
+        raise JournalDamaged(
+            f"command {command_id!r} is missing behind its positive claim seal"
+        )
+    dependent = connection.execute(
+        "SELECT 1 FROM durable_fact_seals"
+        " WHERE family IN (?, ?, ?, ?) AND fact_key = ?"
+        " UNION ALL SELECT 1 FROM runs WHERE creation_command_id = ?"
+        " UNION ALL SELECT 1 FROM run_origins WHERE run_id = ?"
+        " UNION ALL SELECT 1 FROM approvals WHERE command_id = ?"
+        " UNION ALL SELECT 1 FROM channel_messages WHERE command_id = ?"
+        " UNION ALL SELECT 1 FROM channel_acks"
+        " WHERE command_id = ? AND ack_provenance_version = 1"
+        " LIMIT 1",
+        (
+            _COMMAND_PLAN_FACT_FAMILY,
+            _COMMAND_TERMINAL_FACT_FAMILY,
+            RESUME_PLAN_ERA_FACT_FAMILY,
+            # Cross-owner absence guard: execution facts own this persisted
+            # family; command projection only refuses a missing dependency.
+            "resume_attempt",
+            command_id,
+            command_id,
+            str(run_id_for_command(command_id)),
+            command_id,
+            command_id,
+            command_id,
+        ),
+    ).fetchone()
+    if dependent is not None:
+        raise JournalDamaged(
+            f"command {command_id!r} is missing behind a dependent durable fact"
+        )
+    return None
+
+
+def historical_resume_plan_evidence_for_id(
+    connection: sqlite3.Connection,
+    command_id: str,
+) -> HistoricalResumePlanEvidence | None:
+    """Project the migration-only resume era through the canonical command."""
+
+    record = command_for_id(connection, command_id)
+    if record is None:
+        return None
+    row = connection.execute(
+        "SELECT * FROM commands WHERE command_id = ?",
+        (command_id,),
+    ).fetchone()
+    assert row is not None
+    return require_resume_plan_era(connection, row, record)
+
+
+def command_from_row(row: sqlite3.Row) -> CommandRecord:
+    """Decode a command while proving every redundant durable identity."""
+
+    raw_command_id = row["command_id"]
+    command_identity = repr(raw_command_id)
+    try:
+        command_id = _durable_text(raw_command_id, fact="command identity")
+        command_identity = repr(command_id)
+        actor_id = _durable_text(
+            row["actor_id"],
+            fact=f"command {command_id!r} actor identity",
+        )
+        operation = _durable_text(
+            row["operation"],
+            fact=f"command {command_id!r} operation",
+        )
+        idempotency_key = _durable_text(
+            row["idempotency_key"],
+            fact=f"command {command_id!r} idempotency key",
+        )
+        raw_state = _durable_text(
+            row["state"],
+            fact=f"command {command_id!r} state",
+        )
+        if raw_state not in {"prepared", "committed", "rejected"}:
+            raise ValueError("command state is unknown")
+        state = cast(Literal["prepared", "committed", "rejected"], raw_state)
+        raw_actor = parse_json_value(row["actor_json"])
+        request = parse_json_value(row["request_json"])
+        raw_plan = row["plan_json"]
+        plan = (
+            parse_json_value(raw_plan)
+            if raw_plan is not None
+            else None
+        )
+        raw_response = row["response_json"]
+        response = (
+            parse_json_value(raw_response)
+            if raw_response is not None
+            else None
+        )
+        raw_owner_id = row["owner_id"]
+        owner_id = (
+            _durable_text(
+                raw_owner_id,
+                fact=f"command {command_id!r} owner identity",
+            )
+            if raw_owner_id is not None
+            else None
+        )
+        record = CommandRecord(
+            command_id=command_id,
+            actor=durable_authenticated_actor(
+                raw_actor,
+                fact=f"command {command_id!r} actor payload",
+            ),
+            operation=operation,
+            idempotency_key=idempotency_key,
+            request_hash=_durable_digest(
+                row["request_hash"],
+                fact=f"command {command_id!r} request hash",
+            ),
+            request=request,
+            state=state,
+            plan=plan,
+            response=response,
+            owner_id=owner_id,
+            owner_epoch=_durable_sequence(
+                row["owner_epoch"],
+                fact=f"command {command_id!r} owner epoch",
+                allow_zero=True,
+                kind="owner epoch",
+            ),
+            lease_expires_at=(
+                _durable_datetime(
+                    row["lease_expires_at"],
+                    fact=f"command {command_id!r} lease expiry",
+                )
+                if row["lease_expires_at"] is not None
+                else None
+            ),
+            created_at=_durable_datetime(
+                row["created_at"],
+                fact=f"command {command_id!r} creation time",
+            ),
+            updated_at=_durable_datetime(
+                row["updated_at"],
+                fact=f"command {command_id!r} update time",
+            ),
+            completed_at=(
+                _durable_datetime(
+                    row["completed_at"],
+                    fact=f"command {command_id!r} completion time",
+                )
+                if row["completed_at"] is not None
+                else None
+            ),
+        )
+        if record.actor.actor_id != actor_id:
+            raise ValueError("command actor columns disagree")
+        if row["plan_json"] is not None:
+            canonical_json(record.plan)
+        if row["response_json"] is not None:
+            canonical_json(record.response)
+        if record.state == "prepared":
+            if (
+                row["response_json"] is not None
+                or row["completed_at"] is not None
+                or record.owner_id is None
+                or record.lease_expires_at is None
+            ):
+                raise ValueError("prepared command carries terminal lifecycle columns")
+        elif (
+            row["response_json"] is None
+            or row["plan_json"] is None
+            or record.completed_at is None
+            or record.owner_id is not None
+            or record.lease_expires_at is not None
+        ):
+            raise ValueError("terminal command contradicts its lifecycle columns")
+        validate_idempotency_key(record.idempotency_key)
+        if record.command_id != command_id_for(
+            record.actor.actor_id,
+            record.operation,
+            record.idempotency_key,
+        ):
+            raise ValueError("command id contradicts its canonical identity")
+        if record.request_hash != command_request_hash(record.request):
+            raise ValueError("command request hash contradicts its decoded request")
+        return record
+    except (JournalDamaged, TypeError, ValueError, ValidationError) as exc:
+        raise JournalDamaged(
+            f"command row {command_identity} is not a valid durable record"
+        ) from exc

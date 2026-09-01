@@ -3,10 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import sqlite3
+from pathlib import Path
+from typing import cast
+
+import pytest
 
 from constructicon.api.control import ControlPlane
 from constructicon.api.run_host import RunHost
+from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId
+from constructicon.core.component import LearningProfile
 from constructicon.core.control import (
     ADMIN_SCOPE,
     OPERATE_SCOPE,
@@ -17,11 +25,12 @@ from constructicon.core.control import (
     RegistrationCommandResult,
     RunSubmission,
 )
-from constructicon.core.envelope import utc_now
+from constructicon.core.graph import Ref
 from constructicon.core.identity import digest
-from constructicon.core.registry import StoredVersion
 from constructicon.core.run import RunStatus
+from constructicon.runtime.registry import ComponentRegistry, InMemoryRegistryStore
 from constructicon.sdk.types import DefinitionBundle
+from constructicon.substrate.control import InMemoryControlStore
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.conftest import (
     BRIEF,
@@ -33,6 +42,7 @@ from tests.conftest import (
     pipeline_graph,
     triage_impl,
 )
+from tests.migrations.test_sqlite_v6_to_v7 import _downgrade_v7_schema_to_v6
 
 ACTOR = AuthenticatedActor(
     actor_id="static:test-agent",
@@ -44,6 +54,90 @@ ADMIN = AuthenticatedActor(
     auth_method="static",
     scopes=frozenset({READ_SCOPE, ADMIN_SCOPE}),
 )
+
+
+class _ValueEqualSqliteJournal(SqliteJournal):
+    """A distinct ledger that defeats equality-based world checks."""
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, SqliteJournal)
+
+
+class _ValueEqualComponentRegistry(ComponentRegistry):
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, ComponentRegistry)
+
+
+class _ValueEqualConstructicon(Constructicon):
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Constructicon)
+
+
+def test_control_plane_refuses_a_store_that_cannot_commit_channel_exchanges(world) -> None:
+    with pytest.raises(TypeError, match="co-locate command, approval, and channel"):
+        ControlPlane(system=world, store=InMemoryControlStore())  # type: ignore[arg-type]
+
+
+def test_control_plane_refuses_a_store_or_journal_from_another_world(
+    tmp_path,
+    world: Constructicon,
+    journal: SqliteJournal,
+) -> None:
+    other = _ValueEqualSqliteJournal(tmp_path / "other-world.db")
+    assert other == journal and other is not journal
+
+    with pytest.raises(ValueError, match="store must be the exact journal"):
+        ControlPlane(system=world, store=other)
+    with pytest.raises(ValueError, match="journal must be the exact co-located store"):
+        ControlPlane(system=world, store=journal, journal=other)
+
+
+def test_control_plane_refuses_a_registry_or_host_from_another_world(
+    tmp_path,
+    world: Constructicon,
+    journal: SqliteJournal,
+) -> None:
+    other = _ValueEqualSqliteJournal(tmp_path / "other-services.db")
+    lookalike_registry = _ValueEqualComponentRegistry(store=journal)
+    assert lookalike_registry == world._registry
+    assert lookalike_registry is not world._registry
+
+    with pytest.raises(ValueError, match="registry must be the exact registry"):
+        ControlPlane(
+            system=world,
+            store=journal,
+            registry=lookalike_registry,
+        )
+    with pytest.raises(ValueError, match="run host must serve the exact"):
+        ControlPlane(
+            system=world,
+            store=journal,
+            run_host=RunHost(world, journal=other),
+        )
+    lookalike_world = _ValueEqualConstructicon(journal=journal)
+    assert lookalike_world == world and lookalike_world is not world
+    with pytest.raises(ValueError, match="run host must serve the exact"):
+        ControlPlane(
+            system=world,
+            store=journal,
+            run_host=RunHost(lookalike_world, journal=journal),
+        )
+    with pytest.raises(TypeError, match="run host must be a RunHost"):
+        ControlPlane(
+            system=world,
+            store=journal,
+            run_host=cast(RunHost, object()),
+        )
+
+
+def test_control_plane_reuses_the_systems_legitimate_separate_registry(
+    journal: SqliteJournal,
+) -> None:
+    system = Constructicon(journal=journal, store=InMemoryRegistryStore())
+    control = ControlPlane(system=system, store=journal)
+
+    assert control._commands._registry is system._registry
+    assert control._queries._registry is system._registry
 
 
 async def test_start_returns_immediately_and_retry_replays_one_run(
@@ -192,6 +286,7 @@ def test_scope_is_checked_before_command_claim(world, journal: SqliteJournal) ->
 async def test_registration_reuses_a_row_retained_under_a_superseded_identity_law(
     world,
     journal: SqliteJournal,
+    tmp_path: Path,
 ) -> None:
     """A retained version keeps the identity it was written under.
 
@@ -207,15 +302,53 @@ async def test_registration_reuses_a_row_retained_under_a_superseded_identity_la
         (BRIEF,),
         triage_impl,
     )
-    superseded = digest("component", 1, {"identity-law": "superseded"})
-    assert superseded != definition.content_hash()
-    world._registry.store.store_version(
-        StoredVersion(
-            definition=definition,
-            content_hash=superseded,
-            registered_at=utc_now(),
-        )
+    learning = LearningProfile(
+        change_surfaces=frozenset({"code", "prompt"}),
+        experience_policy=Ref(component="policy/experience"),
+        evaluator=Ref(component="policy/evaluator"),
+        promotion_policy=Ref(component="policy/promotion"),
     )
+    definition = definition.model_copy(
+        update={
+            "metadata": definition.metadata.model_copy(update={"learning": learning})
+        }
+    )
+    historical = definition.model_dump(mode="json")
+    historical_metadata = historical["metadata"]
+    assert isinstance(historical_metadata, dict)
+    historical_learning = historical_metadata["learning"]
+    assert isinstance(historical_learning, dict)
+    # The pre-sort writer hashed and stored this retained array order.
+    historical_learning["change_surfaces"] = ["prompt", "code"]
+    superseded = digest(
+        "component",
+        1,
+        {
+            "role": historical["role"],
+            "body": historical["body"],
+            "inputs": historical["inputs"],
+            "outputs": historical["outputs"],
+            "learning": historical_learning,
+        },
+    )
+    assert superseded != definition.content_hash()
+    database = tmp_path / "journal.db"
+    _downgrade_v7_schema_to_v6(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "INSERT INTO components"
+            " (name, content_hash, definition_json, registered_at)"
+            " VALUES (?, ?, ?, ?)",
+            (
+                definition.name,
+                str(superseded),
+                json.dumps(historical, sort_keys=True, separators=(",", ":")),
+                "2026-01-01T00:00:00+00:00",
+            ),
+        )
+        connection.commit()
+    # Only migration may mint positive proof for a retained historical row.
+    SqliteJournal(database)
     control = ControlPlane(
         system=world,
         store=journal,

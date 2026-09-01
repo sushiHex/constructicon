@@ -29,18 +29,12 @@ from constructicon.core.control import (
 from constructicon.core.errors import ContractViolation, JournalDamaged
 from constructicon.core.identity import Digest, JsonValue, canonical_json, digest, json_value
 from constructicon.core.journal import Journal
-from constructicon.core.run import RunStatus
+from constructicon.core.run import TERMINAL_EVENT_STATUSES, RunStatus
 from constructicon.runtime.registry import ComponentRegistry
 
 DEFAULT_DETAIL_BYTES = 16_000
 MIN_DETAIL_BYTES = 4
 MAX_DETAIL_BYTES = 64_000
-TERMINAL_EVENT_STATUSES = {
-    "RunSucceeded": RunStatus.SUCCEEDED,
-    "RunFailed": RunStatus.FAILED,
-    "RunParked": RunStatus.PARKED,
-    "RunCancelled": RunStatus.CANCELLED,
-}
 IMMUTABLE_RESULT_STATUSES = frozenset(TERMINAL_EVENT_STATUSES.values())
 
 

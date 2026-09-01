@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, PositiveInt
 
 from constructicon.core.address import NodeId
 from constructicon.core.grants import GrantRequest
+from constructicon.core.identity import parse_json_value
 from constructicon.core.ports import Port
 
 GRAPH_SCHEMA_VERSION = 1
@@ -64,3 +65,12 @@ class Graph(BaseModel):
     connections: tuple[Connection, ...] = ()
     inputs: tuple[Port, ...] = ()
     outputs: tuple[Port, ...] = ()
+
+
+def parse_graph_json(raw: str) -> Graph:
+    """Parse the raw authoring form under the same exact JSON law as storage."""
+
+    value = parse_json_value(raw)
+    if not isinstance(value, dict):
+        raise ValueError("Graph JSON must be an object")
+    return Graph.model_validate(value)

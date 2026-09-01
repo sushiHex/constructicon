@@ -8,7 +8,10 @@ another identity or under scopes the actor no longer holds.
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
+
+import pytest
 
 from constructicon.api.control import ControlPlane
 from constructicon.api.cursor import CursorCodec
@@ -30,9 +33,11 @@ from constructicon.core.control import (
     ControlCode,
     ControlRejected,
 )
+from constructicon.core.errors import JournalDamaged
 from constructicon.core.identity import canonical_json, json_value
-from constructicon.substrate.channels.mailbox import MailboxChannel
 from constructicon.substrate.journal.sqlite import SqliteJournal
+from tests.channel_commands import reply_with_command
+from tests.channel_requests import AttestedMailboxChannel as MailboxChannel
 from tests.conftest import FakeClock
 
 CHANNEL_ID = "channel/review"
@@ -104,8 +109,12 @@ def _panel(
     """One control plane over one journal that already carries a channel."""
 
     journal = SqliteJournal(tmp_path / "channel-reads.db", now_fn=clock.now)
+    local_system = Constructicon(
+        journal=journal,
+        store=system._registry.store,
+    )
     return (
-        ControlPlane(system=system, store=journal),
+        ControlPlane(system=local_system, store=journal),
         MailboxChannel(journal, channel_id=CHANNEL_ID),
     )
 
@@ -382,11 +391,12 @@ def test_a_reply_is_read_under_the_request_that_governs_it(
 
     control, review = _panel(tmp_path, clock, system)
     request = review.append_request(_intent(port="ask"), ATTESTATION)
-    reply = review.reply(
+    reply = reply_with_command(
+        review,
         request_id=request.message_id,
         actor_id=ALICE_ID,
         payload={"verdict": "ship"},
-        command_id="cmd-reply",
+        idempotency_key="cmd-reply",
     )
     assert reply.recipient_actor_id is None
 
@@ -401,6 +411,34 @@ def test_a_reply_is_read_under_the_request_that_governs_it(
     stranger = control.channels_message(BOB, reply.message_id)
     assert isinstance(stranger, ControlRejected)
     assert stranger.faults[0].code is ControlCode.AUTH_REQUIRED_SCOPE
+
+
+def test_an_exact_reply_read_refuses_a_torn_atomic_ack(
+    tmp_path: Path,
+    clock: FakeClock,
+    system: Constructicon,
+) -> None:
+    control, review = _panel(tmp_path, clock, system)
+    request = review.append_request(_intent(port="torn"), ATTESTATION)
+    reply = reply_with_command(
+        review,
+        request_id=request.message_id,
+        actor_id=ALICE_ID,
+        payload={"verdict": "ship"},
+        idempotency_key="cmd-torn-read",
+    )
+    with sqlite3.connect(tmp_path / "channel-reads.db") as connection:
+        connection.execute(
+            "DELETE FROM channel_acks WHERE message_id = ? AND actor_id = ?",
+            (str(request.message_id), ALICE_ID),
+        )
+        connection.commit()
+
+    with pytest.raises(
+        JournalDamaged,
+        match=r"(without its request acknowledgement|append-only history)",
+    ):
+        control.channels_message(ALICE, reply.message_id)
 
 
 def test_an_approval_message_is_not_readable_under_advise_scope(

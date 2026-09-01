@@ -17,7 +17,9 @@ removes history from runtime recovery.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
+from types import MappingProxyType
 from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import (
@@ -36,7 +38,14 @@ from constructicon.core.errors import (
     ContractViolation,
     JournalDamaged,
 )
-from constructicon.core.identity import Digest, JsonValue, canonical_json, digest
+from constructicon.core.identity import (
+    ActorId,
+    Digest,
+    JsonValue,
+    canonical_json,
+    digest,
+    json_value,
+)
 
 CHANNEL_SCHEMA_VERSION = 1
 
@@ -52,9 +61,26 @@ class ChannelReplyConflict(ConstructiconError):
 class ChannelAckConflict(ConstructiconError):
     """This delivery fact belongs to another command — a duplicate, not damage."""
 
+
 ChannelInteraction = Literal["advice", "approval"]
 ChannelMessageKind = Literal["request", "reply"]
 ChannelDurability = Literal["process", "sqlite_wal"]
+
+MAILBOX_CHANNEL_KIND = "channel.mailbox"
+IN_PROCESS_CHANNEL_KIND = "channel.in_process"
+BUILTIN_CHANNEL_DURABILITIES: Mapping[str, ChannelDurability] = MappingProxyType(
+    {
+        MAILBOX_CHANNEL_KIND: "sqlite_wal",
+        IN_PROCESS_CHANNEL_KIND: "process",
+    }
+)
+
+# One dispatch law for every layer that exposes a channel mutation. Generic
+# reply consumes advice only; request-bound approval owns approval decisions;
+# acknowledgement observes delivery and therefore consumes either interaction.
+REPLY_CONSUMES: frozenset[ChannelInteraction] = frozenset({"advice"})
+APPROVE_CONSUMES: frozenset[ChannelInteraction] = frozenset({"approval"})
+ACK_CONSUMES: frozenset[ChannelInteraction] = frozenset({"advice", "approval"})
 
 CHANNEL_SEND_EFFECT = "channel_send"
 MAX_INBOX_BATCH = 100
@@ -87,7 +113,7 @@ class ChannelEndpoint(_ManifestModel):
 
     lane: str
     interaction: ChannelInteraction
-    recipient_actor_id: str | None
+    recipient_actor_id: ActorId | None
 
 
 class ChannelBinding(_ManifestModel):
@@ -134,7 +160,7 @@ class ChannelSendIntent(_ChannelModel):
     channel_revision: str
     lane: str
     interaction: ChannelInteraction
-    recipient_actor_id: str | None
+    recipient_actor_id: ActorId | None
     contract: ChannelContract
     reply_contract: ChannelContract
     run_id: RunId
@@ -175,8 +201,8 @@ class ChannelMessage(_ChannelModel):
     interaction: ChannelInteraction
     kind: ChannelMessageKind
     reply_to: Digest | None
-    recipient_actor_id: str | None
-    sender_actor_id: str | None
+    recipient_actor_id: ActorId | None
+    sender_actor_id: ActorId | None
     contract: ChannelContract
     reply_contract: ChannelContract | None
     reply_port: str | None
@@ -192,6 +218,8 @@ class ChannelMessage(_ChannelModel):
             return self
         if self.reply_to is None or self.sender_actor_id is None:
             raise ValueError("a channel reply names one request and its authenticated sender")
+        if self.recipient_actor_id is not None:
+            raise ValueError("a channel reply is addressed to the run, not another actor")
         if self.reply_contract is not None or self.reply_port is not None:
             raise ValueError("a channel reply does not pin a further reply")
         return self
@@ -241,8 +269,22 @@ class ChannelAck(_ChannelModel):
     """A delivery fact about one actor — never proof of component consumption."""
 
     message_id: Digest
-    actor_id: str
+    actor_id: ActorId
     acked_at: AwareDatetime
+
+
+class ChannelAckRecord(_ChannelModel):
+    """One acknowledgement together with the command that recorded it.
+
+    ``ChannelAck`` remains the public delivery fact.  Command ownership is
+    durable provenance used when the control plane validates an exact replay;
+    keeping it beside rather than inside the fact avoids making an internal
+    command identifier part of the participant-facing channel contract.
+    """
+
+    ack: ChannelAck
+    command_id: str
+    provenance_version: Literal[0, 1]
 
 
 class ChannelProfile(_ChannelModel):
@@ -356,7 +398,10 @@ def message_for_intent(
             path=intent.path,
             port=intent.port,
             created_at=created_at,
-            payload=intent.payload,
+            # Frozen models do not recursively freeze caller-owned dicts and
+            # lists.  Normalize here so every transport receives its own JSON
+            # tree rather than an alias that can rewrite the constructed fact.
+            payload=json_value(intent.payload),
         ),
     )
 
@@ -364,7 +409,7 @@ def message_for_intent(
 def message_for_reply(
     request: ChannelMessage,
     *,
-    actor_id: str,
+    actor_id: ActorId,
     payload: JsonValue,
     created_at: datetime,
 ) -> ChannelMessage:
@@ -404,7 +449,7 @@ def message_for_reply(
             path=request.envelope.path,
             port=request.reply_port,
             created_at=created_at,
-            payload=payload,
+            payload=json_value(payload),
         ),
     )
 
@@ -437,7 +482,7 @@ def validated_reply(request: ChannelMessage, reply: ChannelMessage) -> ChannelMe
     return reply
 
 
-def discoverable_by(message: ChannelMessage, actor_id: str) -> bool:
+def discoverable_by(message: ChannelMessage, actor_id: ActorId) -> bool:
     """Whether this actor may find this message in an inbox.
 
     Deliberately not called "addressed to": an open request is addressed to
@@ -475,9 +520,7 @@ def governing_request(
     if message.kind == "request":
         return message
     if request is None:
-        raise JournalDamaged(
-            f"reply {message.message_id} names no stored request to govern it"
-        )
+        raise JournalDamaged(f"reply {message.message_id} names no stored request to govern it")
     validated_reply(request, message)
     return request
 
@@ -489,6 +532,11 @@ class Channel(Protocol):
     Only a transport may construct a durable message: it accepts the
     timestamp-free intent and stamps the observation time once.
     """
+
+    @property
+    def channel_id(self) -> str:
+        """The exact routing identity this transport instance serves."""
+        ...
 
     @property
     def profile(self) -> ChannelProfile: ...
@@ -509,7 +557,7 @@ class Channel(Protocol):
         self,
         *,
         request_id: Digest,
-        actor_id: str,
+        actor_id: ActorId,
         payload: JsonValue,
         command_id: str,
     ) -> ChannelMessage:
@@ -520,16 +568,16 @@ class Channel(Protocol):
         self,
         *,
         message_id: Digest,
-        actor_id: str,
+        actor_id: ActorId,
         command_id: str,
     ) -> ChannelAck: ...
 
-    def latest_revision(self, actor_id: str) -> ChannelRevision: ...
+    def latest_revision(self, actor_id: ActorId) -> ChannelRevision: ...
 
     def inbox(
         self,
         *,
-        actor_id: str,
+        actor_id: ActorId,
         revision: ChannelRevision,
         after: tuple[int, str] | None,
         limit: int,

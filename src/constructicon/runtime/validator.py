@@ -10,15 +10,12 @@ infers no structure (I8, I11, I13).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 from constructicon.core.address import NodeId, ScopePath
-from constructicon.core.channel import (
-    ChannelBinding,
-    ChannelContract,
-    ChannelEndpoint,
-)
+from constructicon.core.channel import ChannelBinding, ChannelContract
 from constructicon.core.component import ComponentDef
 from constructicon.core.control import ResolutionLock, ResolutionPin
 from constructicon.core.errors import AdmissionError
@@ -45,6 +42,7 @@ from constructicon.core.manifest import (
     LoopResolution,
     ResolvedPortBinding,
     manifest_hash_for,
+    source_graph_hash_for,
 )
 from constructicon.core.ports import (
     GraphInputAddress,
@@ -67,6 +65,7 @@ class _Source:
 class _Compilation:
     snapshot: RegistrySnapshot
     catalog: dict[str, CapabilityDescriptor]
+    capabilities: Mapping[str, object]
     faults: list[str] = field(default_factory=list)
     resolutions: list[ComponentResolution] = field(default_factory=list)
     bindings: list[ResolvedPortBinding] = field(default_factory=list)
@@ -82,6 +81,7 @@ def admit(
     *,
     snapshot: RegistrySnapshot,
     catalog: dict[str, CapabilityDescriptor],
+    capabilities: Mapping[str, object],
     root_grants: EffectiveGrants,
     inputs: dict[str, Any],
     resolution_lock: ResolutionLock | None = None,
@@ -95,6 +95,7 @@ def admit(
     comp = _Compilation(
         snapshot=snapshot,
         catalog=catalog,
+        capabilities=capabilities,
         resolution_lock=(
             {pin.scope.segments: pin for pin in resolution_lock.pins}
             if resolution_lock is not None
@@ -167,7 +168,7 @@ def admit(
     if comp.faults:
         raise AdmissionError(comp.faults)
 
-    graph_hash = digest("graph", 1, graph.model_dump(mode="json"))
+    graph_hash = source_graph_hash_for(graph)
     world_hash = digest(
         "world",
         1,
@@ -708,8 +709,7 @@ def _compiled_channel(
     instance_scope: ScopePath,
     *,
     alias: str,
-    capability_id: str,
-    endpoint: ChannelEndpoint | None,
+    descriptor: CapabilityDescriptor,
 ) -> ChannelBinding | None:
     """Compile the one exchange a channel-bound component may carry.
 
@@ -722,7 +722,23 @@ def _compiled_channel(
     rather than teaching admission to guess which pair is the exchange (I10).
     """
 
+    capability_id = descriptor.capability_id
+    incoherence = descriptor.channel_incoherence(comp.capabilities.get(capability_id))
+    if incoherence is not None:
+        comp.faults.append(
+            f"{instance_scope.render()}: binding {alias!r} names capability "
+            f"{capability_id!r}, but {incoherence}"
+        )
+        return None
+    if descriptor.channel_profile is None:
+        return None
+    endpoint = descriptor.endpoint
     if endpoint is None:
+        comp.faults.append(
+            f"{instance_scope.render()}: binding {alias!r} names channel "
+            f"{capability_id!r}, but assembly supplied no ChannelEndpoint — a "
+            "channel-bound component requires sealed lane, interaction, and recipient"
+        )
         return None
     if len(definition.inputs) != 1 or len(definition.outputs) != 1:
         comp.faults.append(
@@ -826,8 +842,7 @@ def _register_atomic(
                     definition,
                     instance_scope,
                     alias=alias,
-                    capability_id=capability_id,
-                    endpoint=descriptor.endpoint,
+                    descriptor=descriptor,
                 ),
             )
         )

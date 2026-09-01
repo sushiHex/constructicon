@@ -12,7 +12,7 @@ that prove it: approve, operate, and promote, each holding nothing else.
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any
 
 from constructicon.api.control import ControlPlane
 from constructicon.api.detail import DetailAddress
@@ -59,8 +59,10 @@ OPERATE_ONLY = _only("static:operate-only", OPERATE_SCOPE)
 PROMOTE_ONLY = _only("static:promote-only", PROMOTE_SCOPE)
 
 
-class _PassiveHost:
-    def __init__(self) -> None:
+class _PassiveHost(RunHost):
+    def __init__(self, system: Constructicon, journal: SqliteJournal) -> None:
+        self._system = system
+        self._journal = journal
         self.launches: list[RunId] = []
 
     def _configure_committed_resumes(self, store: Any, decoder: Any) -> None:
@@ -84,7 +86,7 @@ def _control(world: Constructicon, journal: SqliteJournal) -> ControlPlane:
     return ControlPlane(
         system=world,
         store=journal,
-        run_host=cast(RunHost, _PassiveHost()),
+        run_host=_PassiveHost(world, journal),
     )
 
 

@@ -34,7 +34,6 @@ FOREIGN_REPLY = ChannelContract(type_id="other/Answer", schema_hash="answer-1")
         (ADVICE_REQUEST_CONTRACT, ADVICE_REPLY_CONTRACT, "advice"),
         (APPROVAL_REQUEST_CONTRACT, APPROVAL_REPLY_CONTRACT, "approval"),
         (FOREIGN_REQUEST, FOREIGN_REPLY, "advice"),
-        (FOREIGN_REQUEST, FOREIGN_REPLY, "approval"),
     ],
 )
 def test_a_coherent_exchange_is_admitted(
@@ -42,9 +41,18 @@ def test_a_coherent_exchange_is_admitted(
     reply_contract: ChannelContract,
     interaction: ChannelInteraction,
 ) -> None:
-    """Both canonical pairs under their own interaction, and any foreign pair."""
+    """Both canonical pairs under their own interaction, plus foreign advice."""
 
     assert canonical_exchange_fault(request_contract, reply_contract, interaction) is None
+
+
+def test_a_foreign_exchange_cannot_claim_the_exclusively_consumed_approval_lane() -> None:
+    """Only the canonical pair can be answered by request-bound runs_approve."""
+
+    fault = canonical_exchange_fault(FOREIGN_REQUEST, FOREIGN_REPLY, "approval")
+    assert fault is not None
+    assert "sole consumer" in fault
+    assert "canonical approval exchange" in fault
 
 
 def test_an_approval_exchange_sealed_as_advice_is_refused() -> None:

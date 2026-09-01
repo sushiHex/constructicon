@@ -8,13 +8,14 @@ calls and across processes.
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
 
 from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId
-from constructicon.core.errors import ContractViolation
+from constructicon.core.errors import ContractViolation, JournalDamaged
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.conftest import FakeClock, pipeline_graph
 
@@ -75,3 +76,29 @@ async def test_summary_projects_durable_state_only(
 async def test_projection_refuses_unknown_runs(world: Constructicon, tmp_path: Path) -> None:
     with pytest.raises(ContractViolation, match="unknown run"):
         world.project_run(RunId("run-never-existed"), tmp_path / "out")
+
+
+@pytest.mark.parametrize("fact", ("run", "event"))
+async def test_projection_uses_the_shared_strict_durable_decoders(
+    fact: str,
+    world: Constructicon,
+    tmp_path: Path,
+) -> None:
+    run_id = RunId(f"run-project-damaged-{fact}")
+    await world._start_direct(pipeline_graph(), INPUTS, run_id=run_id)
+    with sqlite3.connect(world._journal._db_path) as connection:
+        if fact == "run":
+            connection.execute(
+                "UPDATE runs SET created_at = '0' WHERE run_id = ?",
+                (str(run_id),),
+            )
+        else:
+            connection.execute(
+                "UPDATE events SET created_at = '0' WHERE run_id = ? AND seq = ("
+                "SELECT MIN(seq) FROM events WHERE run_id = ?)",
+                (str(run_id), str(run_id)),
+            )
+        connection.commit()
+
+    with pytest.raises(JournalDamaged, match="durable timestamp"):
+        world.project_run(run_id, tmp_path / f"damaged-{fact}")

@@ -12,12 +12,11 @@ from collections.abc import Mapping
 
 from constructicon.core.channel import CHANNEL_SEND_EFFECT, Channel, ChannelSendIntent
 from constructicon.core.effect import (
-    ChannelSendSubject,
     EffectProfile,
     EffectReceipt,
     EffectRequest,
-    channel_send_subject,
     request_hash,
+    validated_channel_send_attestation,
 )
 from constructicon.core.errors import ContractViolation, JournalDamaged
 from constructicon.core.identity import canonical_json
@@ -35,6 +34,17 @@ class ChannelSendEffect:
     ) -> None:
         self._journal = journal
         self._catalog = dict(catalog)
+
+    def is_assembled_from(
+        self,
+        journal: Journal,
+        catalog: Mapping[tuple[str, str], Channel],
+    ) -> bool:
+        """Whether effect, transport, and run facts inhabit one exact world."""
+
+        return self._journal is journal and self._catalog.keys() == catalog.keys() and all(
+            self._catalog[key] is channel for key, channel in catalog.items()
+        )
 
     @property
     def profile(self) -> EffectProfile:
@@ -82,7 +92,12 @@ class ChannelSendEffect:
     def _intent(request: EffectRequest) -> ChannelSendIntent:
         if request.kind != CHANNEL_SEND_EFFECT:
             raise ContractViolation(f"channel send adapter received kind {request.kind!r}")
-        return ChannelSendIntent.model_validate_json(canonical_json(request.subject))
+        intent = ChannelSendIntent.model_validate_json(canonical_json(request.subject))
+        if canonical_json(request.subject) != canonical_json(intent):
+            raise ContractViolation(
+                "channel send effect subject is not a lossless ChannelSendIntent"
+            )
+        return intent
 
     def _channel(self, intent: ChannelSendIntent) -> Channel:
         endpoint = (intent.channel_id, intent.channel_revision)
@@ -109,17 +124,14 @@ class ChannelSendEffect:
                 f"channel send names attestation {request.attestation_id!r}, "
                 "which the journal does not hold"
             )
-        subject = attestation.subject
-        if (
-            attestation.action != "send"
-            or not isinstance(subject, ChannelSendSubject)
-            or not attestation.ok
-        ):
-            raise ContractViolation("channel send attestation does not authorize a send")
-        if subject != channel_send_subject(intent):
-            raise ContractViolation(
-                "channel send attestation authorizes a different message than this intent"
+        try:
+            validated_channel_send_attestation(
+                attestation,
+                intent,
+                expected_manifest_hash=request.manifest_hash,
             )
+        except ValueError as exc:
+            raise ContractViolation(str(exc)) from exc
         return attestation.attestation_id
 
 

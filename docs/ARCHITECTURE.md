@@ -145,8 +145,12 @@ A `Gate` is one producer of `CheckResult`s; a promotion evaluator is another.
 Every effect adapter declares native idempotency or reconcilability; the
 recovery law: prepared + no receipt → reconcile externally — found → record
 receipt; absent → execute; indeterminate → park. Never blindly repeat an
-unknown external effect. Idempotency keys derive from
-`(manifest_hash, path, kind, subject)`.
+unknown external effect. Preparing an effect returns the first durable request
+under its derived identity; every contender reconciles or executes that
+canonical request, never its caller's losing value. A receipt is valid only
+over that preparation and its `(receipt_json, receipted_at)` lifecycle is
+all-or-nothing. Idempotency keys derive from `(manifest_hash, path, kind,
+subject)`.
 
 Workspace merges follow the exact-merge-tree rule: gates run against the
 prepared merge commit of candidate into the *current* base;
@@ -188,7 +192,7 @@ refusal, never a best-effort reconstruction.
 collaborators have disjoint responsibilities:
 
 ```text
-_CommandExecutor   ten mutations; claim, immutable plan, apply/reconcile, record
+_CommandExecutor   twelve mutations; claim, immutable plan, apply/reconcile, record
 _ControlQueries    authorized bounded reads and page continuations
 ```
 
@@ -204,6 +208,21 @@ validated. Response loss after the plan, domain fact, or command completion
 cannot duplicate a run, attempt, approval, registration, promotion, rollback,
 or cancellation. Historical v1/v2 responses replay as control schema 3 in
 memory without rewriting their durable bytes.
+
+A rejection is an exact fact, not a lawful error code. A pre-domain refusal
+stores its complete typed response in the rejection plan; a post-plan race uses
+one response derivable from the immutable domain plan and retained facts. A
+command that already owns a co-located approval, reply, or acknowledgement
+cannot become rejected, because that lifecycle would contradict the mutation
+the same store already committed.
+
+The control plane is one assembled world, not a set of compatible-looking
+handles. Its store is the exact journal already assembled into `Constructicon`
+and implements `ControlPlaneStore`, which co-locates commands, approvals, and
+channel exchange transactions. Its registry is the system's exact registry,
+and a concrete `RunHost` serves that same system and journal. A second handle is
+refused even when it points at the same SQLite file: object identity also binds
+the live implementation cache and process-local scheduler state.
 
 Local component registration and initial promotion use the same command law.
 They require a launcher-minted static actor with admin scope and are absent from
@@ -222,8 +241,12 @@ unauthorized calls start nothing. Shutdown admits no new commands, waits for
 already-admitted command orchestration to reach a durable terminal response,
 then abandons workers without inventing user cancellation. `RunHost` owns only
 bounded process-local workers and recovery scans; the walker remains the sole
-graph scheduler. A resume command is receipted by the exact attempt transition
-carrying its `resume_command_id`, not by status polling or an unrelated event.
+graph scheduler. A resume command is receipted by one `resume_attempt`
+relationship co-committed with the exact transition carrying its
+`resume_command_id`. The relationship binds the command claim, plan, baseline
+event (or the sequence-zero PENDING fact), and attempt event. Command and event
+point reads validate both halves; current-open inventory proves their
+bijection, and a command that owns the relationship cannot later be rejected.
 
 Opaque cursor schema 2 binds actor, endpoint, canonical query, calibrated
 checksum, snapshot bound, and continuation key. The checksum detects accidental
@@ -252,7 +275,30 @@ saying what reply is admissible.
 History is retained and delivery is honestly at-least-once. Nothing is deleted
 or dequeued; an acknowledgement is a delivery fact about one actor and never
 claims a component consumed the payload. `UNIQUE(reply_to)` admits one reply per
-request, so concurrent repliers yield one exact reply and a typed conflict.
+request, so concurrent repliers yield one exact reply and a typed conflict. A
+reply records its writing command and ensures the sender's acknowledgement in
+the same transaction; an acknowledgement written earlier remains its original
+command's fact rather than being stolen by the reply. One command cannot write
+two replies or cross from reply ownership into an unrelated acknowledgement.
+Schema 7 adds a nullable writer and nullable reply-provenance version plus a
+partial unique writer index: two NULLs identify true schema-6 history, while a
+current reply must carry both its writer and provenance version 1. It also adds
+an acknowledgement-provenance version and independent immutable message and
+acknowledgement migration cutoffs. Migration bounds schema-6 replies by the
+captured `message_seq` and marks acknowledgements at or below the captured
+`ack_seq` as version 0; current replies and acknowledgements carry version 1,
+lie above their respective cutoff, and name an extant writer command. The
+sealed cutoff pair makes legacy provenance a positive historical fact rather
+than something a damaged current row can imitate by losing one column.
+A current durable reply is readable only when its writer's operation-specific
+immutable typed plan independently proves the payload and every derived field:
+`ChannelReplyPlan` for advice, or `ChannelApprovalPlan` plus its exact approval
+exchange. A schema-6 advice reply retains only acknowledgement-owned
+provenance: its version-0 acknowledgement's command id is an opaque historical
+scalar and is never resolved into a current command. A schema-6 approval
+exchange may still recover and validate its `ChannelApprovalPlan` through the
+retained approval row. Neither compatibility path can manufacture a current
+command plan.
 Inbox pages are taken at one `ChannelRevision(message_seq, ack_seq)` vector cut
 ordered by durable sequence, so tied observation times still order totally and a
 later write cannot shift an older page.
@@ -268,6 +314,17 @@ compares the live endpoint against the sealed one, because a revision is only a
 string. A manifest that binds a channel declares schema 3; one that binds none
 stays schema 2 and byte-identical.
 
+Assembly also binds the physical world: descriptor identity, channel id,
+profile, and live transport must agree; a durable mailbox uses the system's
+exact journal; and `ChannelSendEffect` uses that same journal and the exact
+transport objects used for reads and replies. Component code receives only the
+sealed `ask` facade. The two built-in capability kinds are fixed facts:
+`channel.mailbox` means `sqlite_wal`, and `channel.in_process` means `process`;
+a custom kind may declare its own truthful profile. A `sqlite_wal` channel must
+implement `JournalBackedChannel` and prove that its journal is the system
+journal. The raw transport never appears through
+`ctx.capability(alias)`, including when a leased provider tries to return one.
+
 Nothing about the message is therefore chosen at call time. A component holds
 only `await ctx.channel(alias).ask(payload)`, and pinned source is not pinned
 behavior: a component free to name its own port could branch differently on a
@@ -281,18 +338,25 @@ ordinary parking facts and checkpoints nothing, because there is no output yet
 and a checkpoint would make the next attempt skip the wait. No workspace, lease,
 or coroutine stays open while a human thinks.
 
-Recovery reads durable domain facts, never command state. `Journal.parked_waits`
-projects current PARKED runs and their latest exact `RunParked` event; a bounded
-scan asks which of those requests already carry a reply and wakes the run at the
-projection's event fence. A death after a reply's domain transaction but before
-its command completes therefore still produces the wake, with no command lookup
-and no wake outbox. Scanning parking facts rather than watermarking replies also
-closes the race where a fast reply lands just before the park is recorded.
+Recovery eligibility comes from durable domain facts, never command
+completion. `Journal.parked_waits` projects current PARKED runs and their latest
+exact `RunParked` event; a bounded scan asks which of those requests already
+carry a reply and wakes the run at the projection's event fence. The reply's
+immutable writer command and plan are checked as provenance, but whether that
+command is already complete is not the wake signal. A death after the reply's
+domain transaction but before command completion therefore still produces the
+wake, with no wake outbox. Scanning parking facts rather than watermarking
+replies also closes the race where a fast reply lands just before the park is
+recorded. A missing or non-request wait target is journal damage, not an
+unanswered request; the projection fails closed instead of stranding the run
+silently.
 
 PARKED never joins the ordinary recovery statuses: a parked run waits on a
 human, not on a lost worker, so only an observed reply may wake it. One
-`AttemptCause` names why an attempt started — M6's committed resume command or
-M7's stored reply — and M6 keeps its exact legacy key. See
+`AttemptCause` names exactly one reason why an attempt started — M6's committed
+resume command or M7's stored reply — and M6 keeps its exact legacy key. Its
+single serializer/parser owns both reserved payload keys and refuses a payload
+that claims both causes. See
 [ADR 0014](adr/0014-channel-identity-and-delivery.md).
 
 Who may read and answer a message is sealed on the request, never chosen by the
@@ -303,35 +367,98 @@ the run, not a person — so authority is read from the request it answers.
 Advising is not approving: `channels_reply` consumes advice, and an approval is
 consumed only by request-bound `runs_approve`, which commits the
 `ApprovalRecord`, the reply, and the request's acknowledgement in one
-transaction. A component sees only a payload, so anything it may promise about
-authorship the executor writes there from authenticated facts. See
+transaction when the acknowledgement is new, or preserves an equal earlier
+delivery fact. The approval and reply always share the exact `runs_approve`
+command and authenticated actor; a retry validates those durable relationships
+rather than trusting its own plan. A component sees only a payload, so anything
+it may promise about authorship the executor writes there from authenticated
+facts. See
 [ADR 0015](adr/0015-human-authority-on-channels.md).
 
 ## Journal
 
 One transactional log, many projections. SQLite (stdlib, WAL) is authoritative
 for runs, events (per-run monotonic sequence), checkpoints, attestations,
-channel messages/acks, and effect records; node completion commits checkpoint + event in one transaction.
+channel messages/acks, and effect records; node completion commits checkpoint
+and event in one transaction.
 JSONL, summaries, and renderings are regenerable projections (M2+). Resume
 re-walks the graph: a checkpoint at the same `ExecutionPath` with matching
 input hash and resolved version restores; the first miss resumes live.
 Reproduce starts a new run under a past run's exact manifest and inputs.
 
 One public `SqliteJournal` implements the separate L0 `Journal`,
-`RegistryStore`, and `ControlStore` contracts over one schema-7 WAL database.
-Its private modules are named by enduring responsibility:
+`RegistryStore`, and `ControlPlaneStore` contracts over one schema-7 WAL
+database. `ControlPlaneStore` extends the standalone `ControlStore` ledger with
+the transaction that must also own channel facts. Its private modules are named
+by enduring responsibility:
 
 ```text
-_sqlite_base       connections, transactions, clock, fault hook
-_sqlite_schema     creation and explicitly versioned migrations
-_sqlite_execution  runs, events, checkpoints, effects, leases, attestations
-_sqlite_registry   registrations, promotions, coherent snapshots
-_sqlite_control    commands and approvals
-_sqlite_channels   channel messages and acknowledgements
-_sqlite_queries    bounded read projections
+_sqlite_base             connections, transactions, exact scalar/JSON decoders
+_sqlite_schema           creation, versioned migrations, inventory validation
+_sqlite_fact_seals       mechanical write-once positive-seal storage
+_sqlite_runs             manifests and the immutable run-creation world
+_sqlite_execution_facts  event/checkpoint and resume-attempt relationship facts
+_sqlite_effects          effect preparation and historical request/outcome eras
+_sqlite_leases           current event provenance and historical lease seals
+_sqlite_attestations     attestation identity and historical provenance eras
+_sqlite_execution        fenced lifecycle writers over those projections
+_sqlite_registry         registrations, promotions, coherent snapshots
+_sqlite_actors           exact actor decoding and its named legacy shape
+_sqlite_commands         command phases and pre-v7 resume-plan evidence
+_sqlite_approvals        approval projection and durable relationships
+_sqlite_control          command transactions and approval application
+_sqlite_channels         messages, acknowledgements, provenance, bounded reads
+_sqlite_queries          bounded run/event projections
 ```
 
 This is implementation decomposition, not multiple stores.
+
+Every durable JSON boundary rejects duplicate keys, non-finite numbers, and
+non-scalar Unicode before typing. Except for an explicitly named,
+fixture-proven historical writer shape, a typed projection must render to the
+same canonical JSON fact it decoded; model coercion is never repair. Relational
+copies of identities and lifecycle fields are independently checked, and stored
+timestamps use one exact aware-ISO decoder so a projection cannot change the
+lexical key used by a cursor. Durable SQLite booleans and sequences are exact
+integers, not Python truthiness. Contradiction is `JournalDamaged`, never a
+best-effort projection or a silently healed fact.
+
+An immutable row is not its own evidence. Each current durable fact or
+authority-bearing relationship family co-commits one positive seal over every
+exact relational and JSON scalar under an independently selected key. A
+current open validates the complete bidirectional inventory and never repairs
+or reseals it. An ordinary read uses
+the owner's canonical projector and requires the selected fact's matching
+seal; it does not rescan or weaken that inventory. Only the versioned 6→7
+migration may classify retained historical bytes, and it does so in dependency
+order under closed, named writer eras. Missing current provenance therefore
+cannot become legacy compatibility, and deleting a fact cannot turn its
+identity back into permission to create. See
+[ADR 0016](adr/0016-positive-durable-facts-and-provenance-eras.md).
+
+Compatibility preserves exact writer bytes rather than normalizing them into
+today's shape. M1/M2 effect requests omit `run_id`, `manifest_hash`, and `mode`;
+M3–M5 requests carry `run_id` and `manifest_hash` but omit `mode`; current
+requests carry all three. Historical terminal receipts remain hashed over their
+own request era. A pre-v7 keyless outcome event carries a second,
+migration-only positive classification; a current outcome must carry its exact
+effect key and can never acquire that historical marker. Schema-5/6 actor scope
+arrays and pre-sort component set arrays retain their original unique ordering
+while producing a lossless typed view; current writers always emit the
+canonical order. No other coercion is implied by these named exceptions.
+
+Resume-plan wire eras are disjoint. Schema-7 SQLite and in-memory writers accept
+only typed schema-1 envelopes. A current resume domain plan additionally carries
+`terminal_rejection_policy="exact-v1"`; a typed pre-domain refusal is a separate
+plan family whose response is already sealed in that plan. Only the 6→7
+migration may mint `resume_plan_pre_v7`, for every retained raw `runs_resume`
+plan and for a weak typed resume domain plan. Its explicit `prepared` phase
+binds the claim and plan without inventing future terminal evidence; its
+`terminal` phase also binds the exact retained response. An exact-v1 plan is
+never historical, so removing its policy cannot downgrade it into
+compatibility. A new resume intent observes the run row and latest retained
+event through one `RunHead` snapshot, so a concurrent transition can supersede
+a coherent fence but cannot manufacture a mismatched immutable plan.
 
 Loops use that same machinery rather than a second scheduler. Every iteration
 adds one `IterationFrame` to each member's `ExecutionPath`; checkpoints,
@@ -392,8 +519,10 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
   simulation; optional stdio/OAuth MCP adapter; and schema-5 SQLite decomposed
   by permanent responsibility. See [ADR 0012](adr/0012-durable-control-plane-and-mcp.md)
   and [ADR 0013](adr/0013-local-assembly-through-command-law.md).
-- **M7** — channels (InProcess + Mailbox over the journal) and the panel
-  pattern; human advisor and approval round trips.
+- **M7 (in progress)** — channels (InProcess + Mailbox over the journal), typed
+  human inbox/reply/ack and request-bound approval commands, MCP delegation,
+  and standard advisor/approval components; deterministic panel aggregation
+  remains.
 - **M8** — live CLI executors (ClaudeCode, Codex, Pi) once isolation profiles
   are enforceable; recorded-transcript contract suites.
 - **M9** — self-improvement phase 1 (prompt/context skills); see
@@ -416,13 +545,13 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
 | Gather | One producer fails → complete producer-status report, never a hang (M2) |
 | Agent authoring | Unknown Graph fields are refused; a serialized architect repairs schema and magnetic ambiguity faults using describe + rejection data only (M5) |
 | SDK identity | A persisted decorated task activates in a fresh process; SDK/direct/repaired Graphs produce one manifest identity (M5) |
-| Command law | Response loss after plan, domain fact, or completion across all ten mutations → one exact fact and response (M6) |
+| Command law | Response loss after plan, domain fact, or completion across all twelve mutations → one exact fact and response (M6/M7) |
 | Control lifecycle | Startup/shutdown and mutation/shutdown races → no orphan pump, command after close, or invented cancellation (M6) |
 | Registry pages | Registration or promotion between pages → old vector cut unchanged; fresh query sees the new revision (M6) |
 | MCP | Actor-derived handler delegates once; local assembly and mutable services have no transport route (M6) |
 | Message channels | One derived id survives process death: a reconstructed send appends no second message and invents no new time; a second differing reply is a typed conflict (M7) |
 | Channel cuts | A send or ack between pages → old vector cut unchanged; a future revision is refused (M7) |
-| Channel parking | A death at any send seam yields one message; a stored reply wakes the PARKED run with no command lookup (M7) |
+| Channel parking | A death at any send seam yields one message; a provenance-valid stored reply wakes the PARKED run without waiting for command completion (M7) |
 | Telemetry | Damaged executor output never reports clean success |
 | Reproduction | Installed code differs from recorded digest → refuse (M2) |
 | Loops | Contradictory iteration checkpoint, hidden nested loop, or non-boolean control → refuse before new work; exhausted roots report PARKED (M4) |

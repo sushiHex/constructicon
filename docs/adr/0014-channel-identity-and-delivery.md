@@ -44,9 +44,11 @@ destructive dequeue, no message deletion, and no acknowledgement-as-authority:
 - an acknowledgement is a delivery fact about one actor. It never removes
   history from runtime recovery and never proves a component consumed the
   payload (I4);
-- a reply atomically acknowledges its request for its author, so a crash cannot
-  leave a reply without its delivery fact. Explicit acknowledgement remains for
-  notification-only and dismissed messages;
+- a reply transaction ensures its author's request acknowledgement. It writes a
+  missing delivery fact atomically with the reply and preserves an equal fact
+  the actor wrote earlier, so a crash cannot leave a reply without delivery
+  evidence. Explicit acknowledgement remains for notification-only and
+  dismissed messages;
 - `UNIQUE(reply_to)` is what enforces one reply per request. Two processes
   replying concurrently admit one exact reply; the loser receives a typed
   conflict rather than damage, because losing a race is not corruption;
@@ -76,6 +78,20 @@ survive or fail together. Neither owns a second database path or schema manager.
   No run, command, approval, effect, event, manifest, component, or promotion
   row is read or rewritten, and a database newer than the running build is
   refused rather than touched.
+- SQLite advances 6→7 additively with nullable reply-writer and
+  reply-provenance fields, an acknowledgement-provenance field, one immutable
+  legacy-message cutoff, one immutable legacy-acknowledgement cutoff, and a
+  partial unique reply-writer index. Current replies write `(command_id, 1)`
+  above the message cutoff. Migration marks acknowledgements at or below the
+  acknowledgement cutoff as version 0; current acknowledgements are version 1
+  above it and require their writer command. The cutoff pair is itself a sealed
+  singleton fact. Mixed eras are damage, so deleting current evidence cannot
+  disguise it as legacy opacity. A schema-6 advice reply retains only its
+  version-0 acknowledgement's opaque writer identity; that command id is never
+  resolved into a current command. A schema-6 approval exchange may recover its
+  exact retained plan through the approval row. Truly opaque history stays
+  narrow rather than acquiring a synthetic plan. See
+  [ADR 0016](0016-positive-durable-facts-and-provenance-eras.md).
 - `ProofSubject` gains `ChannelSendSubject` and the attestation action union
   gains `send`. Existing drafts serialize byte-identically, so historical
   attestation ids are unchanged.

@@ -16,25 +16,20 @@ import pytest
 from constructicon.core.address import ExecutionPath, RunId, ScopePath
 from constructicon.core.envelope import Envelope, utc_now
 from constructicon.core.errors import ContractViolation
-from constructicon.core.identity import digest
 from constructicon.core.journal import Checkpoint
 from constructicon.core.run import CheckpointConflict, OwnershipLost, RunLease, RunStatus
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.conftest import LEASE_TTL_S, FakeClock
+from tests.run_worlds import create_test_run, sealed_test_manifest, start_test_run
 
 RUN = RunId("run-lease")
-MANIFEST_HASH = digest("manifest", 1, {"stub": True})
-INPUT_HASH = digest("inputs", 1, {"a": 1})
+_MANIFEST = sealed_test_manifest({"a": 1})
+MANIFEST_HASH = _MANIFEST.manifest_hash
+INPUT_HASH = _MANIFEST.input_hash
 
 
 def make_run(journal: SqliteJournal, run_id: RunId = RUN) -> None:
-    journal.create_run(
-        run_id,
-        manifest_json='{"stub": true}',
-        manifest_hash=MANIFEST_HASH,
-        input_hash=INPUT_HASH,
-        inputs={"a": 1},
-    )
+    create_test_run(journal, run_id, inputs={"a": 1})
 
 
 def make_checkpoint(run_id: RunId = RUN, *, payload: str = "value") -> Checkpoint:
@@ -68,7 +63,12 @@ def test_expired_lease_is_reclaimed_and_the_stale_owner_is_fenced(
     journal: SqliteJournal, clock: FakeClock
 ) -> None:
     make_run(journal)
-    stale = journal.claim_run(RUN, owner_id="worker-a", ttl_s=LEASE_TTL_S)
+    stale = start_test_run(
+        journal,
+        RUN,
+        owner_id="worker-a",
+        ttl_s=LEASE_TTL_S,
+    )
     clock.advance(LEASE_TTL_S + 1)
     fresh = journal.claim_run(RUN, owner_id="worker-b", ttl_s=LEASE_TTL_S)
     assert fresh.epoch == stale.epoch + 1
@@ -81,9 +81,9 @@ def test_expired_lease_is_reclaimed_and_the_stale_owner_is_fenced(
     with pytest.raises(OwnershipLost):
         journal.transition_run(
             stale,
-            expected=frozenset({RunStatus.PENDING}),
-            target=RunStatus.RUNNING,
-            event_kind="RunStarted",
+            expected=frozenset({RunStatus.RUNNING}),
+            target=RunStatus.SUCCEEDED,
+            event_kind="RunSucceeded",
         )
     with pytest.raises(OwnershipLost):
         journal.record_completion(stale, make_checkpoint())
@@ -91,7 +91,7 @@ def test_expired_lease_is_reclaimed_and_the_stale_owner_is_fenced(
         journal.release_run(stale)
     # the winner is untouched by all of that
     event = journal.append_event(fresh, "NodeStarted")
-    assert event.seq == 1
+    assert event.seq == 2
 
 
 def test_two_concurrent_claimants_produce_one_winner(
@@ -184,7 +184,7 @@ def test_terminal_runs_cannot_be_claimed(journal: SqliteJournal) -> None:
 def test_transition_refuses_unexpected_states(journal: SqliteJournal) -> None:
     make_run(journal)
     lease = journal.claim_run(RUN, owner_id="worker-a", ttl_s=LEASE_TTL_S)
-    with pytest.raises(ContractViolation, match="expected"):
+    with pytest.raises(ContractViolation, match="event allocation requires status"):
         journal.transition_run(
             lease,
             expected=frozenset({RunStatus.RUNNING}),
@@ -196,19 +196,25 @@ def test_transition_refuses_unexpected_states(journal: SqliteJournal) -> None:
 def test_create_run_is_write_once(journal: SqliteJournal) -> None:
     make_run(journal)
     make_run(journal)  # identical repetition is idempotent
+    different = sealed_test_manifest({"a": 2})
     with pytest.raises(CheckpointConflict, match="different manifest/inputs"):
         journal.create_run(
             RUN,
-            manifest_json='{"stub": true}',
-            manifest_hash=MANIFEST_HASH,
-            input_hash=digest("inputs", 1, {"a": 2}),
+            manifest_json=different.model_dump_json(),
+            manifest_hash=different.manifest_hash,
+            input_hash=different.input_hash,
             inputs={"a": 2},
         )
 
 
 def test_checkpoints_are_write_once(journal: SqliteJournal) -> None:
     make_run(journal)
-    lease = journal.claim_run(RUN, owner_id="worker-a", ttl_s=LEASE_TTL_S)
+    lease = start_test_run(
+        journal,
+        RUN,
+        owner_id="worker-a",
+        ttl_s=LEASE_TTL_S,
+    )
     journal.record_completion(lease, make_checkpoint())
     # identical repetition (timestamps differ, semantics identical) -> idempotent
     journal.record_completion(lease, make_checkpoint())
@@ -220,6 +226,11 @@ def test_event_sequences_are_fenced_and_gapless_per_writer(
     journal: SqliteJournal,
 ) -> None:
     make_run(journal)
-    lease = journal.claim_run(RUN, owner_id="worker-a", ttl_s=LEASE_TTL_S)
+    lease = start_test_run(
+        journal,
+        RUN,
+        owner_id="worker-a",
+        ttl_s=LEASE_TTL_S,
+    )
     seqs = [journal.append_event(lease, f"E{i}").seq for i in range(3)]
-    assert seqs == [1, 2, 3]
+    assert seqs == [2, 3, 4]

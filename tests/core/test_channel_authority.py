@@ -15,6 +15,7 @@ import pytest
 from constructicon.core.address import ExecutionPath, RunId, ScopePath
 from constructicon.core.channel import (
     ChannelContract,
+    ChannelEndpoint,
     ChannelSendIntent,
     governing_request,
     message_for_intent,
@@ -73,6 +74,26 @@ def _reply(request):
         payload={"verdict": "ship"},
         created_at=NOW,
     )
+
+
+@pytest.mark.parametrize("actor_id", ["", "advisor", " static:advisor", "static:advisor "])
+def test_a_sealed_recipient_obeys_the_authenticated_actor_identity_law(
+    actor_id: str,
+) -> None:
+    """Assembly cannot address a request to an identity no actor may hold."""
+
+    with pytest.raises(ValueError, match="actor_id must"):
+        ChannelEndpoint(
+            lane="review",
+            interaction="advice",
+            recipient_actor_id=actor_id,
+        )
+    with pytest.raises(ValueError, match="actor_id must"):
+        AuthenticatedActor(
+            actor_id=actor_id,
+            auth_method="static",
+            scopes=frozenset({ADVISE_SCOPE}),
+        )
 
 
 def test_a_request_governs_itself() -> None:

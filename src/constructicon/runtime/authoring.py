@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ast
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -41,6 +42,7 @@ def admit_authored_graph(
     *,
     snapshot: RegistrySnapshot,
     catalog: dict[str, CapabilityDescriptor],
+    capabilities: Mapping[str, object],
     root_grants: EffectiveGrants,
     inputs: dict[str, Any],
     limits: AdmissionLimits,
@@ -69,6 +71,7 @@ def admit_authored_graph(
             graph,
             snapshot=snapshot,
             catalog=catalog,
+            capabilities=capabilities,
             root_grants=root_grants,
             inputs=inputs,
             resolution_lock=resolution_lock,

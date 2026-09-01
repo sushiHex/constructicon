@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 
 import pytest
 
 from constructicon.core.address import RunId
-from constructicon.core.errors import JournalDamaged
+from constructicon.core.errors import ContractViolation, JournalDamaged
 from constructicon.core.manifest import manifest_hash_for, parse_manifest_json
 from constructicon.substrate.journal.sqlite import SqliteJournal
 
@@ -74,6 +75,53 @@ def test_manifest_refuses_unknown_future_schema(world: object) -> None:
         parse_manifest_json(json.dumps(payload))
 
 
+@pytest.mark.parametrize("schema_version", [True, 1.0])
+def test_manifest_schema_version_is_an_exact_integer(
+    world: object,
+    schema_version: object,
+) -> None:
+    manifest = _v1_manifest(world)
+    payload = manifest.model_dump(mode="json")
+    payload["schema_version"] = schema_version
+
+    with pytest.raises(ValueError, match="exact integer"):
+        parse_manifest_json(json.dumps(payload))
+
+
+def test_manifest_proves_the_retained_source_graph_identity(world: object) -> None:
+    manifest = _v1_manifest(world)
+    payload = manifest.model_dump(mode="json")
+    payload["source_graph"]["name"] = "altered-after-admission"
+
+    with pytest.raises(ValueError, match="source graph identity mismatch"):
+        parse_manifest_json(json.dumps(payload))
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_manifest_never_normalizes_a_nested_schema_scalar(
+    world: object,
+    version: int,
+) -> None:
+    manifest = _v1_manifest(world)
+    if version == 2:
+        manifest = manifest.model_copy(
+            update={
+                "schema_version": 2,
+                "manifest_hash": manifest.manifest_hash,
+            }
+        )
+        manifest = manifest.model_copy(
+            update={"manifest_hash": manifest_hash_for(manifest)}
+        )
+    payload = manifest.model_dump(mode="json")
+    if version == 1:
+        payload.pop("resolved_loops")
+    payload["source_graph"]["schema_version"] = True
+
+    with pytest.raises(ValueError, match="lossless typed encoding"):
+        parse_manifest_json(json.dumps(payload))
+
+
 def test_journal_accepts_semantically_equal_v1_manifest_bytes(
     world: object,
     tmp_path: object,
@@ -127,7 +175,7 @@ def test_journal_refuses_different_semantics_under_same_manifest_hash(
         inputs={"issue": {"title": "retry loop is flaky"}},
     )
 
-    with pytest.raises(JournalDamaged, match="different semantics"):
+    with pytest.raises(ContractViolation, match="valid sealed manifest"):
         journal.create_run(
             RunId("v1-altered"),
             manifest_json=json.dumps(altered),
@@ -135,3 +183,34 @@ def test_journal_refuses_different_semantics_under_same_manifest_hash(
             input_hash=manifest.input_hash,
             inputs={"issue": {"title": "retry loop is flaky"}},
         )
+
+
+def test_retained_v1_manifest_proves_its_source_graph_before_run_reads(
+    world: object,
+    tmp_path: object,
+) -> None:
+    from pathlib import Path
+
+    assert isinstance(tmp_path, Path)
+    manifest = _v1_manifest(world)
+    payload = manifest.model_dump(mode="json")
+    payload.pop("resolved_loops")
+    database = tmp_path / "retained-v1-graph.db"
+    run_id = RunId("v1-retained-graph")
+    journal = SqliteJournal(database)
+    journal.create_run(
+        run_id,
+        manifest_json=json.dumps(payload),
+        manifest_hash=manifest.manifest_hash,
+        input_hash=manifest.input_hash,
+        inputs={"issue": {"title": "retry loop is flaky"}},
+    )
+    payload["source_graph"]["name"] = "altered-after-storage"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE manifests SET manifest_json = ? WHERE manifest_hash = ?",
+            (json.dumps(payload), str(manifest.manifest_hash)),
+        )
+
+    with pytest.raises(JournalDamaged, match="valid durable manifest"):
+        journal.run_manifest_hash(run_id)

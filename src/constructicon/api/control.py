@@ -36,8 +36,8 @@ from constructicon.core.control import (
     CommandSummary,
     ComponentComparison,
     ControlCode,
+    ControlPlaneStore,
     ControlRejected,
-    ControlStore,
     DetailChunk,
     DetailRef,
     EventPage,
@@ -56,7 +56,6 @@ from constructicon.core.graph import Graph
 from constructicon.core.identity import Digest, JsonValue
 from constructicon.core.introspection import SystemDescription
 from constructicon.core.journal import Journal
-from constructicon.core.registry import RegistryStore
 from constructicon.core.run import RunStatus
 from constructicon.runtime.registry import ComponentRegistry
 from constructicon.sdk.types import DefinitionBundle
@@ -122,7 +121,7 @@ class ControlPlane:
         self,
         *,
         system: Constructicon,
-        store: ControlStore,
+        store: ControlPlaneStore,
         journal: Journal | None = None,
         registry: ComponentRegistry | None = None,
         run_host: RunHost | None = None,
@@ -131,8 +130,33 @@ class ControlPlane:
         cursor_codec: CursorCodec | None = None,
         fault_probe: Callable[[str], None] | None = None,
     ) -> None:
-        journal_service = journal or cast(Journal, store)
-        registry_service = registry or ComponentRegistry(store=cast(RegistryStore, store))
+        if not isinstance(store, ControlPlaneStore):
+            raise TypeError(
+                "ControlPlane store must co-locate command, approval, and channel "
+                "exchange transactions"
+            )
+        assembled_journal: object = system._journal
+        if journal is not None and journal is not assembled_journal:
+            raise ValueError(
+                "ControlPlane journal must be the exact co-located store, not another world"
+            )
+        if store is not assembled_journal:
+            raise ValueError(
+                "ControlPlane store must be the exact journal assembled into Constructicon"
+            )
+        if registry is not None and registry is not system._registry:
+            raise ValueError(
+                "ControlPlane registry must be the exact registry assembled into Constructicon"
+            )
+        journal_service = cast(Journal, assembled_journal)
+        registry_service = system._registry
+        if run_host is not None:
+            if not isinstance(run_host, RunHost):
+                raise TypeError("ControlPlane run host must be a RunHost")
+            if not run_host.is_assembled_from(system, journal_service):
+                raise ValueError(
+                    "ControlPlane run host must serve the exact Constructicon journal and system"
+                )
         cursor_service = cursor_codec or CursorCodec()
         host_service = run_host or RunHost(system, journal=journal_service)
         detail_service = DetailResolver(

@@ -64,6 +64,19 @@ Retrying the same actor, operation, key, and request must create exactly one
 domain fact. Reusing the key with different arguments must be a typed conflict
 and perform nothing.
 
+A rejection is evidence too. If it is decided before the domain plan, retain
+the complete typed response in a rejection plan. If a post-plan race may still
+refuse, its complete response must derive only from that immutable plan and
+independently retained domain facts; a code whitelist or mutable current state
+is not replay proof. Once a co-located domain fact names the command, the store
+must not let that command become rejected.
+
+If one mutation must commit control and channel facts together, its injection
+root requires `ControlPlaneStore`: the exact store already assembled as the
+system journal. Do not compose separate `ControlStore` and `Channel` calls or
+accept a second handle to the same database; neither proves one transaction or
+one live world.
+
 Registration and first promotion are local control operations, not setup
 bypasses. Assemble an empty `Constructicon` and `ControlPlane`, call
 `startup()`, then use `registry_register` and `registry_promote_initial` with a
@@ -152,6 +165,9 @@ Implement `constructicon.core.effect.EffectAdapter`:
 - honor the computed live idempotency key and implement `reconcile()`;
 - declare whether simulation is supported and, when supported, implement
   `simulate()` without external mutation;
+- treat the request returned by durable preparation as canonical. If another
+  contender prepared the same derived identity first, reconcile or execute its
+  stored request rather than the caller's losing value;
 - never make an adapter that blindly re-executes an unknown external outcome;
 - never return `committed` for simulation — use the truthful `simulated` status.
 
@@ -160,6 +176,13 @@ Implement `constructicon.core.effect.EffectAdapter`:
 Implement the L0 `Channel` protocol in `substrate/channels/` and add it to the
 shared contract suite in `tests/substrate/channels/`; a transport with no second
 consumer of that suite is not admittable (I6).
+
+The built-in capability kinds are reserved: `channel.mailbox` must report
+`durability="sqlite_wal"`, while `channel.in_process` must report
+`durability="process"`. A `sqlite_wal` transport implements
+`JournalBackedChannel`, and assembly proves its journal is the exact system
+journal. New transports use a new kind and an honest profile; do not make a
+compatible-looking second handle stand in for one assembled world.
 
 - carry typed envelopes only (I5), and derive every identity — never accept a
   caller-authored message id, reply id, sequence number, or routing field;
@@ -171,6 +194,10 @@ consumer of that suite is not admittable (I6).
 - treat an equal logical intent under one derived id as idempotent and a
   different one as `JournalDamaged`; a second, different reply to one request is
   a `ChannelReplyConflict` — a lost race, not corruption;
+- retain reply payload evidence independently of the message. A durable current
+  reply is projected through the immutable command plan that authored it; an
+  in-process transport keeps a deep first-write proof so the shared contract
+  exercises the same damage boundary;
 - retain history: never delete, dequeue, or hide a message, and never let an
   acknowledgement claim that a component consumed a payload (I4);
 - page at one `ChannelRevision` cut ordered by durable sequence, reject a zero,
@@ -203,12 +230,82 @@ with an itemized fault rather than guessing which pair is the exchange.
 
 `SqliteJournal` is one schema-7 WAL store assembled from private responsibility
 modules: `_sqlite_base`, `_sqlite_schema`, `_sqlite_execution`,
-`_sqlite_registry`, `_sqlite_control`, `_sqlite_channels`, and
-`_sqlite_queries`. A Python module
+`_sqlite_execution_facts`, `_sqlite_runs`, `_sqlite_effects`, `_sqlite_leases`,
+`_sqlite_attestations`, `_sqlite_registry`, `_sqlite_actors`, `_sqlite_control`,
+`_sqlite_commands`, `_sqlite_approvals`, `_sqlite_channels`,
+`_sqlite_fact_seals`, and `_sqlite_queries`. A Python module
 move is not a data migration. Preserve SQL shape, transaction boundaries,
 write-once equality, epoch fences, fault-probe positions, canonical bytes, and
-all source-schema fixtures. Name migration tests by schema endpoints, not the
-milestone that introduced them.
+all source-schema fixtures.
+
+Every new immutable fact or cross-row relationship family needs one
+owner-defined exact hash, primary key, secondary selector where one exists,
+absence check, canonical point projector, bidirectional inventory, and positive
+seal written in the fact's transaction. A current open
+validates only: it must never create evidence, repair a row, classify an era, or
+reseal observed bytes.
+Compatibility belongs solely to a versioned migration and must name a real
+fixture-proven writer era. Read and batch paths use the same sealed canonical
+projection as retries; a faster query is not a weaker evidence boundary. See
+[ADR 0016](adr/0016-positive-durable-facts-and-provenance-eras.md).
+
+Schema 7 adds `durable_fact_seals`; `runs.creation_command_id`;
+`effects.outcome_run_id` and `effects.outcome_event_seq`;
+`channel_messages.command_id` and
+`channel_messages.reply_provenance_version`;
+`channel_acks.ack_provenance_version`;
+`channel_provenance.legacy_message_through` and
+`channel_provenance.legacy_ack_through`; the partial unique index
+`channel_reply_command_unique`; and `legacy_effect_seals` and
+`legacy_capability_lease_seals`. The same seal table owns the migration-only
+`resume_plan_pre_v7` family and the current `resume_attempt` relationship
+family. Preserve them as one law. Two NULL reply
+fields at or below the message cutoff and a version-0
+acknowledgement at or below the ack cutoff mean true schema-6 history; a current
+reply carries its writer and version 1, and a current acknowledgement is
+version 1 above its cutoff with an extant writer. A version-0 acknowledgement's
+command id remains an opaque historical scalar: never resolve it into a later
+same-named command. A retained schema-6 approval may recover its exact
+`ChannelApprovalPlan` through the approval row; an advice reply cannot, and
+opaque history never gains a current plan.
+
+The 6→7 migration first records the `channel_provenance` cutoffs, stamps
+retained acknowledgements with era 0, populates the run-creation markers, and
+seals legacy terminal effect outcomes. It then seals facts in this topological
+order: commands → pre-v7 resume-plan evidence → manifests → run worlds →
+attestations → approvals → component registrations/promotions → effect
+preparations → events → opaque effect-outcome classifications → resume-attempt
+relationships → checkpoints → channel provenance → messages → acknowledgements.
+Legacy lease lifecycle seals follow the event seals too. Name migration tests by
+schema endpoints, not the milestone that introduced them.
+
+Decode durable JSON through the shared strict boundary. Duplicate keys,
+non-finite numbers, invalid Unicode scalars, model normalization, malformed
+digests, noncanonical aware timestamps, non-integer sequences, and non-0/1
+SQLite booleans are damage, not compatibility. If compatibility is real, name
+the exact historical writer shape and test a database produced by it; never
+broaden a decoder around a hypothetical row.
+
+The admitted historical shapes are equally exact. M1/M2 effect requests omit
+`run_id`, `manifest_hash`, and `mode`; M3–M5 requests carry `run_id` and
+`manifest_hash` but omit `mode`; current requests carry all three, and a
+retained terminal receipt keeps the hash of its own request era. A keyless
+pre-v7 outcome event requires its migration-only
+`legacy_effect_outcome_pre_v7` seal; current writers never mint that family and
+must carry the exact effect key. Schema-5/6 actors may retain one unique
+unsorted array of known scopes, and pre-sort component definitions may retain
+the unique array order of `labels`, `change_surfaces`, and
+`capability_requirements`. These rules reconstruct a typed view without
+rewriting stored bytes or admitting any other normalization.
+
+Current SQLite and in-memory command stores accept only an exact-v1 typed
+resume plan. The 6→7 migration alone may classify a genuine raw or weak typed
+schema-6 plan under `resume_plan_pre_v7`, with its observed `prepared` or
+`terminal` phase explicit; current plans never enter that family. An event that
+carries `resume_command_id` atomically co-seals a `resume_attempt` relationship
+binding its command claim, plan, baseline, and event. An unfenced historical
+plan cannot own that receipt. Point, batch, retry, and recovery paths all use
+the same relationship projector.
 
 ## Kernel changes (L0/L2)
 

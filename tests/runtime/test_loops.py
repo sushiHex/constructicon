@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 from collections.abc import Mapping
 from typing import Any
 
@@ -17,11 +16,7 @@ from constructicon.core.manifest import CONTINUE_SCHEMA_HASH, CONTINUE_TYPE
 from constructicon.core.ports import GraphInputAddress, NodePortAddress, Port
 from constructicon.core.run import CheckpointConflict, RunStatus
 from constructicon.runtime.context import NodeContext
-from constructicon.substrate.journal.sqlite import (
-    SqliteJournal,
-    _checkpoint_identity,
-    _path_key,
-)
+from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.conftest import FakeClock, InjectedCrash, atomic
 
 SEED = Port(name="seed", type_id="loop/State", schema_hash="state-v1")
@@ -437,19 +432,31 @@ async def test_contradictory_iteration_checkpoint_refuses_before_reexecution(
         scope=loop_scope.child("body").child("$body"),
         iterations=(frame,),
     )
-    checkpoint = journal.checkpoint(run_id, member_path)
-    assert checkpoint is not None
-    damaged = checkpoint.model_copy(
-        update={"input_hash": digest("inputs", 1, {"damaged": True})}
+    first = journal.checkpoint(run_id, member_path)
+    assert first is not None
+    later_path = ExecutionPath(
+        scope=member_path.scope,
+        iterations=(IterationFrame(loop=loop_scope, index=1),),
     )
-    with sqlite3.connect(journal._db_path) as connection:
-        connection.execute(
-            "UPDATE checkpoints SET checkpoint_json = ?"
-            " WHERE run_id = ? AND path_key = ?",
-            (damaged.model_dump_json(), run_id, _path_key(member_path)),
-        )
-
+    contradictory = first.model_copy(
+        update={
+            "path": later_path,
+            "input_hash": digest("inputs", 1, {"damaged": True}),
+            "outputs": {
+                name: envelope.model_copy(update={"path": later_path})
+                for name, envelope in first.outputs.items()
+            },
+        }
+    )
     clock.advance(31)
+    injector = journal.claim_run(
+        run_id,
+        owner_id="contradictory-checkpoint-fixture",
+        ttl_s=30,
+    )
+    journal.record_completion(injector, contradictory)
+    journal.release_run(injector)
+
     with pytest.raises(CheckpointConflict, match="contradicts"):
         await system._resume_direct(run_id)
     assert ADVANCE_CALLS == [1]
@@ -458,16 +465,27 @@ async def test_contradictory_iteration_checkpoint_refuses_before_reexecution(
 async def test_checkpoint_after_terminal_false_is_journal_damage(
     system: Constructicon,
     journal: SqliteJournal,
+    clock: FakeClock,
 ) -> None:
     ADVANCE_CALLS.clear()
     component = register_loop_component(system)
     run_id = RunId("loop-checkpoint-after-false")
-    result = await system._start_direct(
-        loop_graph(component, max_iterations=2),
-        {"seed": {"count": 0}, "limit": 1},
-        run_id=run_id,
-    )
-    assert result.status is RunStatus.SUCCEEDED
+    fired = False
+
+    def crash_after_first_completion(name: str) -> None:
+        nonlocal fired
+        if name == "completion.after_commit" and not fired:
+            fired = True
+            raise InjectedCrash(name)
+
+    journal.fault_probe = crash_after_first_completion
+    with pytest.raises(InjectedCrash):
+        await system._start_direct(
+            loop_graph(component, max_iterations=2),
+            {"seed": {"count": 0}, "limit": 1},
+            run_id=run_id,
+        )
+    journal.fault_probe = lambda name: None
 
     loop_scope = ScopePath(segments=("bounded-counter", "counter"))
     member_scope = loop_scope.child("body").child("$body")
@@ -481,13 +499,23 @@ async def test_checkpoint_after_terminal_false_is_journal_damage(
     )
     first = journal.checkpoint(run_id, first_path)
     assert first is not None
-    later = first.model_copy(update={"path": later_path})
-    with sqlite3.connect(journal._db_path) as connection:
-        connection.execute(
-            "INSERT INTO checkpoints"
-            " (run_id, path_key, identity, checkpoint_json) VALUES (?, ?, ?, ?)",
-            (run_id, _path_key(later_path), _checkpoint_identity(later), later.model_dump_json()),
-        )
+    later = first.model_copy(
+        update={
+            "path": later_path,
+            "outputs": {
+                name: envelope.model_copy(update={"path": later_path})
+                for name, envelope in first.outputs.items()
+            },
+        }
+    )
+    clock.advance(31)
+    injector = journal.claim_run(
+        run_id,
+        owner_id="post-terminal-checkpoint-fixture",
+        ttl_s=30,
+    )
+    journal.record_completion(injector, later)
+    journal.release_run(injector)
 
     with pytest.raises(JournalDamaged, match="after terminal false"):
         await system._resume_direct(run_id)

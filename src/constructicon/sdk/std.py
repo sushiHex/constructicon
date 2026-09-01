@@ -1,9 +1,10 @@
 """The two standard human-in-the-loop components (M7).
 
-Each is atomic, declares exactly one input and one output — which is what lets
-admission compile its channel exchange with nothing left to choose at call time
-— and holds no authority of its own. Both ask through the narrow
-`ChannelFacade`, so all either one ever sees of an answer is its payload.
+Each is atomic, declares exactly one input, one output, and one durable channel
+capability. Admission compiles that exchange with nothing left to choose at
+call time. Both ask through the narrow `ChannelFacade`, so neither receives
+routing or actor-selection authority and all either sees of an answer is its
+payload.
 
 Nothing here registers anything at import. A module that registered on import
 would make importing it a mutation, and restart recovery imports it precisely
@@ -17,6 +18,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from constructicon.core.channel import MAILBOX_CHANNEL_KIND
 from constructicon.core.component import (
     CapabilityRequirement,
     ComponentDef,
@@ -45,7 +47,7 @@ APPROVAL_CHANNEL = "approver"
 # A human waits across process death, so these require a durable transport by
 # name. `channel.in_process` honestly declares `durability="process"`: a
 # request parked on one would not survive the restart the human outlives.
-DURABLE_CHANNEL_KIND = "channel.mailbox"
+DURABLE_CHANNEL_KIND = MAILBOX_CHANNEL_KIND
 
 
 def _port(name: str, contract: Any) -> Port:
@@ -121,7 +123,7 @@ def _definition(name: str, request: Port, reply: Port, alias: str, impl: Any) ->
         name=name,
         role="node",
         capability_requirements=(
-            CapabilityRequirement(alias=alias, kind=DURABLE_CHANNEL_KIND),
+            CapabilityRequirement(alias=alias, kind=MAILBOX_CHANNEL_KIND),
         ),
         body=PythonRef(
             package="constructicon",

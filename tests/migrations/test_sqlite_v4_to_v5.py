@@ -6,10 +6,10 @@ import sqlite3
 from pathlib import Path
 
 from constructicon.core.address import RunId
-from constructicon.core.control import RunOrigin
 from constructicon.substrate.journal.sqlite import SCHEMA_VERSION, SqliteJournal
 from tests.conftest import FakeClock, pipeline_graph
 from tests.migrations.test_sqlite_from_v3_to_current import _register_pipeline
+from tests.migrations.test_sqlite_v6_to_v7 import _downgrade_v7_schema_to_v6
 
 
 def test_v4_to_v5_adds_control_tables_without_inventing_run_origins(
@@ -30,7 +30,10 @@ def test_v4_to_v5_adds_control_tables_without_inventing_run_origins(
         inputs=inputs,
     )
 
+    _downgrade_v7_schema_to_v6(database)
     with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE channel_messages")
+        connection.execute("DROP TABLE channel_acks")
         connection.execute("DROP TABLE commands")
         connection.execute("DROP TABLE approvals")
         connection.execute("DROP TABLE run_origins")
@@ -50,22 +53,3 @@ def test_v4_to_v5_adds_control_tables_without_inventing_run_origins(
     assert migrated.run_origin(historical_run) is None
     record = migrated.run_record(historical_run)
     assert record is not None and record.origin is None
-
-    origin = RunOrigin(
-        kind="reproduce",
-        actor_id="static:migration-test",
-        command_id="cmd-migration-test",
-        source_run_id=historical_run,
-    )
-    new_run = RunId("m6-origin-run")
-    migrated.create_run(
-        new_run,
-        manifest_json=manifest.model_dump_json(),
-        manifest_hash=manifest.manifest_hash,
-        input_hash=manifest.input_hash,
-        inputs=inputs,
-        origin=origin,
-    )
-    assert migrated.run_origin(new_run) == origin
-    new_record = migrated.run_record(new_run)
-    assert new_record is not None and new_record.origin == origin

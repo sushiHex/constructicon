@@ -31,7 +31,7 @@ READ_ACTOR = AuthenticatedActor(
 )
 
 
-class HostProbe:
+class HostProbe(RunHost):
     def __init__(self) -> None:
         self.startup_calls = 0
         self.abort_calls = 0
@@ -59,6 +59,8 @@ class HostProbe:
 
 
 def _control(world: Any, journal: SqliteJournal, host: HostProbe) -> ControlPlane:
+    host._system = world
+    host._journal = journal
     return ControlPlane(
         system=world,
         store=journal,

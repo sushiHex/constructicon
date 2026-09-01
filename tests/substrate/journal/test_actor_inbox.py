@@ -10,6 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from tests.channel_commands import ack_with_command, reply_with_command
+from tests.channel_requests import AttestedMailboxChannel as MailboxChannel
 from tests.conftest import FakeClock
 from tests.substrate.channels.test_channel_contract import (
     ADVISOR,
@@ -20,7 +22,6 @@ from tests.substrate.channels.test_channel_contract import (
 )
 
 from constructicon.core.channel import ActorInboxRevision, InvalidChannelRevision
-from constructicon.substrate.channels.mailbox import MailboxChannel
 from constructicon.substrate.journal.sqlite import SqliteJournal
 
 OTHER_CHANNEL = "channel/escalation"
@@ -322,11 +323,12 @@ def test_an_open_request_is_discoverable_across_channels_and_a_reply_is_not(
     addressed = review.append_request(_intent(), ATTESTATION)
     open_here = review.append_request(_open(CHANNEL_ID, "open"), ATTESTATION)
     open_there = escalation.append_request(_open(OTHER_CHANNEL, "open"), ATTESTATION)
-    review.reply(
+    reply_with_command(
+        review,
         request_id=addressed.message_id,
         actor_id=ADVISOR,
         payload={"advice": "ship"},
-        command_id="cmd-actor-inbox",
+        idempotency_key="cmd-actor-inbox",
     )
 
     def _page(actor_id: str) -> list[object]:
@@ -364,15 +366,17 @@ def test_a_channel_cut_stays_coherent_beside_another_channels_traffic(
     # BELOW it — the exact pair a global probe reads as an acknowledgement of a
     # message the cut excludes, when in fact it belongs to another channel.
     elsewhere = escalation.append_request(_elsewhere(port="theirs"), ATTESTATION)
-    escalation.acknowledge(
+    ack_with_command(
+        escalation,
         message_id=elsewhere.message_id,
         actor_id=ADVISOR,
-        command_id="cmd-elsewhere",
+        idempotency_key="elsewhere",
     )
-    review.acknowledge(
+    ack_with_command(
+        review,
         message_id=mine.message_id,
         actor_id=ADVISOR,
-        command_id="cmd-mine",
+        idempotency_key="mine",
     )
 
     page = review.inbox(

@@ -9,13 +9,16 @@ against the one it asked about. Both survive the process that asked them dying.
 from __future__ import annotations
 
 import ast
+import json
+import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 from constructicon.api.control import ControlPlane
 from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId
 from constructicon.core.admission import AdmissionRejected
-from constructicon.core.channel import ChannelEndpoint
+from constructicon.core.channel import ChannelEndpoint, reply_message_id
 from constructicon.core.control import (
     ADVISE_SCOPE,
     APPROVE_SCOPE,
@@ -23,17 +26,23 @@ from constructicon.core.control import (
     ApprovalCommandResult,
     AuthenticatedActor,
     ChannelReplyResult,
+    approval_id_for_command,
+    command_request_hash,
 )
-from constructicon.core.effect import ComponentProofSubject
+from constructicon.core.effect import ApprovalRecord, ComponentProofSubject, ProofSubject
 from constructicon.core.graph import Graph, GraphNode, Ref
 from constructicon.core.human import (
     ADVICE_REPLY_CONTRACT,
     ADVICE_REQUEST_CONTRACT,
     APPROVAL_REPLY_CONTRACT,
     APPROVAL_REQUEST_CONTRACT,
+    ApprovalPlan,
     ApprovalRequestPayload,
+    ChannelApprovalPlan,
+    StoredApprovalPlan,
+    approval_decision_payload,
 )
-from constructicon.core.identity import Digest, json_value
+from constructicon.core.identity import Digest, canonical_json, json_value
 from constructicon.core.run import RunStatus
 from constructicon.runtime.registry import CapabilityDescriptor, ComponentRegistry
 from constructicon.sdk.std import (
@@ -46,7 +55,11 @@ from constructicon.sdk.std import (
 )
 from constructicon.substrate.channels.mailbox import MailboxChannel
 from constructicon.substrate.effects.channel import ChannelSendEffect
+from constructicon.substrate.journal._sqlite_approvals import seal_approval
+from constructicon.substrate.journal._sqlite_channels import reply_in_transaction
+from constructicon.substrate.journal._sqlite_commands import command_plan_fact_hash
 from constructicon.substrate.journal.sqlite import SqliteJournal
+from tests.channel_commands import reply_with_command
 from tests.conftest import FakeClock
 
 STD = Path(__file__).parents[2] / "src" / "constructicon" / "sdk" / "std.py"
@@ -70,6 +83,107 @@ APPROVER = AuthenticatedActor(
     auth_method="static",
     scopes=frozenset({READ_SCOPE, APPROVE_SCOPE}),
 )
+
+
+def _force_impossible_approval_reply(
+    journal: SqliteJournal,
+    *,
+    request_id: Digest,
+    subject: ProofSubject,
+    run_id: RunId,
+    created_at: datetime,
+    idempotency_key: str,
+) -> None:
+    """Inject a complete approval exchange that contradicts its request.
+
+    The command, plan, approval, reply, and acknowledgement agree with one
+    another.  Only their subject/run relation to the sealed request is corrupt,
+    preserving the exact downstream branch these adversarial tests exercise.
+    """
+
+    request = journal.channel_message(channel_id=GATE_CHANNEL_ID, message_id=request_id)
+    assert request is not None
+    assert request.reply_port is not None
+    command_request = {
+        "run_id": str(run_id),
+        "subject": json_value(subject.model_dump(mode="json")),
+        "decision": "approved",
+        "reason": None,
+        "request_message_id": str(request_id),
+    }
+    claimed = journal.claim_command(
+        actor=APPROVER,
+        operation="runs_approve",
+        idempotency_key=idempotency_key,
+        request_hash=command_request_hash(command_request),
+        request=command_request,
+        owner_id="test:impossible-approval-reply",
+        ttl_s=30,
+    )
+    assert claimed.claim is not None
+    command_id = claimed.claim.command_id
+    approval = ApprovalRecord(
+        approval_id=approval_id_for_command(
+            command_id,
+            json_value(subject.model_dump(mode="json")),
+        ),
+        subject=subject,
+        decision="approved",
+        reason=None,
+        actor=APPROVER,
+        run_id=run_id,
+        created_at=created_at,
+    )
+    reply_id = reply_message_id(
+        request_id=request.message_id,
+        reply_port=request.reply_port,
+    )
+    plan = ChannelApprovalPlan(
+        approval=approval,
+        channel_id=request.channel_id,
+        request_id=request.message_id,
+        reply_id=reply_id,
+        reply_port=request.reply_port,
+        payload=approval_decision_payload(approval),
+        ack_actor_id=APPROVER.actor_id,
+        run_id=approval.run_id,
+        parked_event_seq=journal.max_event_seq(request.envelope.run_id),
+    )
+    journal.store_command_plan(
+        claimed.claim,
+        StoredApprovalPlan(plan=plan).model_dump(mode="json"),
+    )
+
+    with journal._txn() as connection:
+        connection.execute(
+            "INSERT INTO approvals (approval_id, run_id, subject_json, decision,"
+            " reason, actor_json, command_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                approval.approval_id,
+                str(approval.run_id),
+                canonical_json(json_value(approval.subject.model_dump(mode="json"))),
+                approval.decision,
+                approval.reason,
+                approval.actor.model_dump_json(),
+                command_id,
+                approval.created_at.isoformat(),
+            ),
+        )
+        approval_row = connection.execute(
+            "SELECT * FROM approvals WHERE approval_id = ?",
+            (approval.approval_id,),
+        ).fetchone()
+        assert approval_row is not None
+        seal_approval(connection, approval_row)
+        reply_in_transaction(
+            connection,
+            channel_id=GATE_CHANNEL_ID,
+            request_id=request_id,
+            actor_id=APPROVER_ID,
+            payload=approval_decision_payload(approval),
+            command_id=command_id,
+            observe=journal._now,
+        )
 
 
 def test_each_standard_component_declares_exactly_one_input_and_output() -> None:
@@ -298,17 +412,90 @@ async def test_an_approval_returns_the_trusted_record_across_a_restart(
     assert record["subject"] == SUBJECT.model_dump(mode="json")
 
 
+async def test_the_standard_approval_refuses_a_downgraded_command_plan(
+    tmp_path: Path,
+    clock: FakeClock,
+) -> None:
+    """A stored payload is not governance evidence without its bound plan."""
+
+    database = tmp_path / "std-downgraded-plan.db"
+    first = SqliteJournal(database, now_fn=clock.now)
+    system, _advice, _gate = _world(first)
+    run_id = RunId("run-std-downgraded-plan")
+    inputs = {
+        "request": ApprovalRequestPayload(
+            subject=json_value(SUBJECT.model_dump(mode="json")),
+        ).model_dump(mode="json")
+    }
+    manifest = system.validate(
+        _graph(APPROVAL_COMPONENT, APPROVAL_CHANNEL, GATE_CHANNEL_ID, "decision"),
+        inputs,
+    )
+    system._prepare_run(manifest, run_id=run_id, inputs=inputs)
+    assert (await system._run_prepared(run_id, cancellation="abandon")).status is RunStatus.PARKED
+    request = first.parked_waits()[0].requests[0]
+
+    second = SqliteJournal(database, now_fn=clock.now)
+    restarted, _advice_two, _gate_two = _world(second)
+    decided = await ControlPlane(system=restarted, store=second).runs_approve(
+        APPROVER,
+        run_id=run_id,
+        subject=SUBJECT,
+        decision="approved",
+        reason="ship it",
+        idempotency_key="std-downgraded-plan",
+        request_message_id=request,
+    )
+    assert isinstance(decided, ApprovalCommandResult)
+    approval = second.approval(decided.approval_id)
+    assert approval is not None
+
+    downgraded = StoredApprovalPlan(
+        plan=ApprovalPlan(approval=approval)
+    ).model_dump_json()
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE commands SET plan_json = ? WHERE command_id = ?",
+            (downgraded, decided.command.command_id),
+        )
+        connection.row_factory = sqlite3.Row
+        command_row = connection.execute(
+            "SELECT * FROM commands WHERE command_id = ?",
+            (decided.command.command_id,),
+        ).fetchone()
+        assert command_row is not None
+        connection.execute(
+            "UPDATE durable_fact_seals SET fact_hash = ?"
+            " WHERE family = 'command_plan' AND fact_key = ?",
+            (
+                str(command_plan_fact_hash(command_row)),
+                decided.command.command_id,
+            ),
+        )
+        connection.commit()
+
+    outcome = await restarted._run_prepared(run_id, cancellation="abandon")
+    assert outcome.status is RunStatus.FAILED
+    failures = [
+        str(event.payload.get("error", ""))
+        for event in second.events(run_id, after_seq=0, limit=200)
+        if event.kind == "NodeFailed" and event.payload
+    ]
+    assert any("request-bound plan" in failure for failure in failures), failures
+
+
 async def test_an_approval_refuses_a_record_about_another_subject(
     journal: SqliteJournal,
     clock: FakeClock,
 ) -> None:
-    """The transport proved the reply belongs here; only the request knows what it asked.
+    """A fabricated approval reply never reaches the component as governance.
 
-    A malformed or mismatched answer is a typed component-boundary failure and
-    never becomes a successful output (I4).
+    Current approval replies require their command, plan, approval, and ack;
+    lower-level corruption cannot manufacture only the payload and become a
+    successful output (I4).
     """
 
-    system, _advice, gate = _world(journal)
+    system, _advice, _gate = _world(journal)
     run_id = RunId("run-std-approval-mismatch")
     inputs = {
         "request": ApprovalRequestPayload(
@@ -328,24 +515,15 @@ async def test_an_approval_refuses_a_record_about_another_subject(
         version=Digest("sha256:" + "e" * 64),
         baseline_version=None,
     )
-    # Written straight to the transport, bypassing the control plane's own
-    # subject check, so the component's is the only thing standing here.
-    gate.reply(
+    # Corrupt the durable rows directly: public channel replies deliberately
+    # cannot answer approval exchanges.
+    _force_impossible_approval_reply(
+        journal,
         request_id=request,
-        actor_id=APPROVER_ID,
-        payload={
-            "schema_version": 1,
-            "approval": {
-                "approval_id": "approval-elsewhere",
-                "subject": other.model_dump(mode="json"),
-                "decision": "approved",
-                "reason": None,
-                "actor": APPROVER.model_dump(mode="json"),
-                "run_id": str(run_id),
-                "created_at": clock.now().isoformat(),
-            },
-        },
-        command_id="cmd-std-mismatch",
+        subject=other,
+        run_id=run_id,
+        created_at=clock.now(),
+        idempotency_key="std-mismatch",
     )
 
     outcome = await system._run_prepared(run_id, cancellation="abandon")
@@ -355,17 +533,20 @@ async def test_an_approval_refuses_a_record_about_another_subject(
         for event in journal.events(run_id, after_seq=0, limit=200)
         if event.kind == "NodeFailed" and event.payload
     ]
-    assert any("did not ask about" in failure for failure in failures), failures
+    assert any(
+        "decides a run, actor, or subject its own exchange does not" in failure
+        for failure in failures
+    ), failures
 
 
-async def test_a_malformed_advice_reply_never_becomes_a_successful_output(
+async def test_a_tampered_advice_reply_never_becomes_a_successful_output(
     journal: SqliteJournal,
 ) -> None:
-    """The component types its own boundary (I4).
+    """A durable reply is evidence only while it matches its command plan (I4).
 
-    `channels_reply` stamps every canonical advice answer, so a payload that is
-    not one can only arrive by writing straight to the transport. It still must
-    not pass: a component validates what it returns.
+    The relation, sender, and derived reply id all survive this corruption. If
+    payload evidence authenticated itself, the standard component would return
+    the forged answer as successful human advice.
     """
 
     system, advice, _gate = _world(journal)
@@ -379,15 +560,31 @@ async def test_a_malformed_advice_reply_never_becomes_a_successful_output(
     assert (await system._run_prepared(run_id, cancellation="abandon")).status is RunStatus.PARKED
     request = journal.parked_waits()[0].requests[0]
 
-    advice.reply(
+    reply = reply_with_command(
+        advice,
         request_id=request,
         actor_id=ADVISOR_ID,
-        payload={"verdict": "ship"},  # no authorship: not an AdviceReplyPayload
-        command_id="cmd-std-malformed",
+        payload={"verdict": "ship"},
+        idempotency_key="cmd-std-malformed",
     )
+    with sqlite3.connect(journal._db_path) as connection:
+        row = connection.execute(
+            "SELECT envelope_json FROM channel_messages WHERE message_id = ?",
+            (str(reply.message_id),),
+        ).fetchone()
+        assert row is not None
+        envelope = json.loads(row[0])
+        envelope["payload"]["advice"] = {"verdict": "forged"}
+        connection.execute(
+            "UPDATE channel_messages SET command_id = NULL, envelope_json = ?"
+            " WHERE message_id = ?",
+            (json.dumps(envelope), str(reply.message_id)),
+        )
+        connection.commit()
 
     outcome = await system._run_prepared(run_id, cancellation="abandon")
     assert outcome.status is RunStatus.FAILED
+    assert outcome.outputs == {}
 
 
 def test_each_standard_component_declares_the_capability_it_may_hold() -> None:
@@ -444,9 +641,9 @@ async def test_an_approval_refuses_a_record_about_another_run(
     journal: SqliteJournal,
     clock: FakeClock,
 ) -> None:
-    """The reply belongs to this run; the record inside it must say so too."""
+    """A fabricated cross-run approval never becomes successful governance."""
 
-    system, _advice, gate = _world(journal)
+    system, _advice, _gate = _world(journal)
     run_id = RunId("run-std-approval-other-run")
     inputs = {
         "request": ApprovalRequestPayload(
@@ -461,22 +658,15 @@ async def test_an_approval_refuses_a_record_about_another_run(
     assert (await system._run_prepared(run_id, cancellation="abandon")).status is RunStatus.PARKED
     request = journal.parked_waits()[0].requests[0]
 
-    gate.reply(
+    other_run = RunId("run-somewhere-else")
+    system._prepare_run(manifest, run_id=other_run, inputs=inputs)
+    _force_impossible_approval_reply(
+        journal,
         request_id=request,
-        actor_id=APPROVER_ID,
-        payload={
-            "schema_version": 1,
-            "approval": {
-                "approval_id": "approval-other-run",
-                "subject": SUBJECT.model_dump(mode="json"),
-                "decision": "approved",
-                "reason": None,
-                "actor": APPROVER.model_dump(mode="json"),
-                "run_id": "run-somewhere-else",
-                "created_at": clock.now().isoformat(),
-            },
-        },
-        command_id="cmd-std-other-run",
+        subject=SUBJECT,
+        run_id=other_run,
+        created_at=clock.now(),
+        idempotency_key="std-other-run",
     )
 
     outcome = await system._run_prepared(run_id, cancellation="abandon")
@@ -486,7 +676,10 @@ async def test_an_approval_refuses_a_record_about_another_run(
         for event in journal.events(run_id, after_seq=0, limit=200)
         if event.kind == "NodeFailed" and event.payload
     ]
-    assert any("run-std-approval-other-run" in failure for failure in failures), failures
+    assert any(
+        "decides a run, actor, or subject its own exchange does not" in failure
+        for failure in failures
+    ), failures
 
 
 async def test_admission_refuses_an_approval_component_on_an_advice_endpoint(
