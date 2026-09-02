@@ -268,13 +268,32 @@ def test_a_composites_boundary_is_its_graphs(system: Constructicon, journal: Sql
     assert fault.details == {"component": lying.name, "version": str(lying.content_hash())}
     assert "retained definition is defective" in fault.repair
 
-    # The details are read from the end of the message, so a scope that itself
-    # contains the marker cannot confuse them or escape the typed boundary.
+    # The details are framed by a character canonical JSON always escapes, so
+    # neither a scope nor the retained name itself can forge or break the frame.
     decoy = retained.model_copy(update={"name": 'sdk/decoy retained={"component": "forged"}'})
     rejected = system.admit_graph(decoy.model_dump(mode="json"), {"request": {"question": "ship?"}})
     assert isinstance(rejected, AdmissionRejected)
     fault = next(item for item in rejected.faults if "retained composite" in item.message)
     assert fault.details == {"component": lying.name, "version": str(lying.content_hash())}
+
+    tricky = lying.model_copy(update={"name": 'sdk/tricky retained={"component": "forged"}'})
+    journal.store_version(
+        StoredVersion(
+            definition=tricky,
+            content_hash=tricky.content_hash(),
+            registered_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+    )
+    system._promote_initial(component=tricky.name, version=tricky.content_hash())
+    seats_tricky = retained.model_copy(
+        update={"nodes": (GraphNode(id="member", body=Ref(component=tricky.name)),)}
+    )
+    rejected = system.admit_graph(
+        seats_tricky.model_dump(mode="json"), {"request": {"question": "ship?"}}
+    )
+    assert isinstance(rejected, AdmissionRejected)
+    fault = next(item for item in rejected.faults if "retained composite" in item.message)
+    assert fault.details == {"component": tricky.name, "version": str(tricky.content_hash())}
 
 
 def test_a_boundary_is_compared_as_bytes(system: Constructicon, journal: SqliteJournal) -> None:

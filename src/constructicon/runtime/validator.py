@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from constructicon.core.address import LOOP_BODY_SEGMENT, NodeId, ScopePath
+from constructicon.core.admission import FAULT_DETAILS_SEPARATOR
 from constructicon.core.channel import ChannelBinding, ChannelContract
 from constructicon.core.component import ComponentDef
 from constructicon.core.control import ResolutionLock, ResolutionPin
@@ -663,7 +664,7 @@ def _boundary_lies(comp: _Compilation, stored: StoredVersion, *, where: ScopePat
     retained = canonical_json({"component": definition.name, "version": str(stored.content_hash)})
     comp.faults.append(
         f"{where.render()}: a retained composite declares a boundary its Graph does not "
-        f"export retained={retained}"
+        f"export{FAULT_DETAILS_SEPARATOR}{retained}"
     )
     return True
 

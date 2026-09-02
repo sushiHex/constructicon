@@ -16,8 +16,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from constructicon.core.address import ScopePath
-from constructicon.core.admission import AdmissionCode, AdmissionFault
+from constructicon.core.address import LOOP_BODY_SEGMENT, ScopePath
+from constructicon.core.admission import FAULT_DETAILS_SEPARATOR, AdmissionCode, AdmissionFault
 from constructicon.core.control import ResolutionLock
 from constructicon.core.errors import AdmissionError
 from constructicon.core.grants import EffectiveGrants
@@ -175,7 +175,7 @@ def _preflight_graph(
                 _preflight_ref(
                     state,
                     loop_body,
-                    scope=node_scope.child("body").child("$body"),
+                    scope=node_scope.child(LOOP_BODY_SEGMENT).child("$body"),
                     path=(*node_path, "body", "body"),
                     depth=depth + 1,
                     component_stack=component_stack,
@@ -184,7 +184,7 @@ def _preflight_graph(
                 _preflight_graph(
                     state,
                     loop_body,
-                    scope=node_scope.child("body"),
+                    scope=node_scope.child(LOOP_BODY_SEGMENT),
                     path=(*node_path, "body", "body"),
                     depth=depth + 1,
                     component_stack=component_stack,
@@ -393,10 +393,10 @@ def _classify_fault(
             "the retained definition is defective, not this graph: pin or promote a "
             "version whose declared boundary is its Graph's"
         )
-        marker = message.rfind(" retained=")
-        if marker != -1:
+        _, framed, suffix = message.rpartition(FAULT_DETAILS_SEPARATOR)
+        if framed:
             try:
-                retained = json.loads(message[marker + len(" retained=") :])
+                retained = json.loads(suffix)
             except ValueError:
                 retained = None
             if isinstance(retained, dict):
