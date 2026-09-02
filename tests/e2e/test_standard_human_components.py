@@ -19,7 +19,7 @@ from typing import get_args
 from constructicon.api.control import ControlPlane
 from constructicon.api.system import Constructicon
 from constructicon.core import panel as core_panel
-from constructicon.core.address import RunId
+from constructicon.core.address import LOOP_BODY_SEGMENT, RunId
 from constructicon.core.admission import AdmissionRejected
 from constructicon.core.channel import ChannelEndpoint, reply_message_id
 from constructicon.core.control import (
@@ -280,6 +280,7 @@ def test_the_panel_law_is_part_of_the_pure_components_identity() -> None:
         core_panel.aggregate_panel,
     )
     source = {member.__name__: inspect.getsource(member) for member in closure}
+    source["LOOP_BODY_SEGMENT"] = LOOP_BODY_SEGMENT
     source["PanelMemberOutcome"] = canonical_json(list(get_args(core_panel.PanelMemberOutcome)))
     source["PanelBallot"] = canonical_json(list(get_args(core_panel.PanelBallot)))
     source["PanelOutcome"] = canonical_json(list(get_args(core_panel.PanelOutcome)))

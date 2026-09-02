@@ -370,6 +370,8 @@ def _law_source() -> dict[str, str]:
         aggregate_panel,
     )
     source = {member.__name__: inspect.getsource(member) for member in members}
+    # The IR segment the frame law reads is behaviour of this module too.
+    source["LOOP_BODY_SEGMENT"] = LOOP_BODY_SEGMENT
     # Type aliases have no source object; their domains are the law too.
     for name, alias in (
         ("PanelMemberOutcome", PanelMemberOutcome),

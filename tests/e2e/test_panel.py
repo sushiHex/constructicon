@@ -6,17 +6,21 @@ every member's report is gathered through one `many` port, and the human
 member is the standard advisor followed by the standard ballot — the same
 exchange PR C sealed, with the same authorship stamped.
 
-A restart here is a fresh journal and a fresh system over the same database
-file, with nothing carried in memory from the objects that asked. Resumption
-after a reply is the control plane's own: the mutation launches the woken
-attempt on its run host, and the attempt records the reply that caused it.
+A restart here is a real one: each round trip's answer is recorded by a child
+interpreter that imports the components afresh over the same database file,
+and nothing crosses the boundary but that file. Resumption after a reply is
+the control plane's own: the mutation launches the woken attempt on its run
+host, and the attempt records the reply that caused it.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sqlite3
+import subprocess
+import sys
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -51,7 +55,7 @@ from constructicon.sdk.std import (
 )
 from constructicon.sdk.types import DefinitionBundle
 from constructicon.substrate.journal.sqlite import SqliteJournal
-from tests.conftest import FakeClock, atomic
+from tests.conftest import atomic
 from tests.e2e.test_standard_human_components import (
     ADVICE_CHANNEL_ID,
     ADVISOR,
@@ -302,54 +306,38 @@ async def test_every_declared_member_reaches_the_aggregate(journal: SqliteJourna
         assert all(summary.result.actor_id is None for summary in result.members)
 
 
-async def test_a_human_member_votes_across_a_restart_and_the_panel_reaches_approval(
-    tmp_path: Path,
-    clock: FakeClock,
-) -> None:
-    """Two round trips, each across a restart, credential-free.
+HUMAN_RUN = RunId("run-panel-human")
+REPO_ROOT = Path(__file__).parents[2]
 
-    The system that asks is discarded before the human answers; a second
-    imports the components, records the ballot, and its own host wakes the run
-    to conclude the panel; a third records the approval the same way. One
-    request, reply, acknowledgement, and wake per round trip, one approval.
-    """
 
-    database = tmp_path / "panel.db"
-    run_id = RunId("run-panel-human")
+async def _stage_reply(database: Path) -> None:
+    """A fresh process: import the components, record Alice's ballot, let the host wake the run."""
 
-    first = SqliteJournal(database, now_fn=clock.now)
-    ballot_request = await _ask(_assemble(first), first, run_id)
-
-    # Alice answers through a fresh system over the same file, with a ballot
-    # and nothing else.
-    second = SqliteJournal(database, now_fn=clock.now)
-    answering = ControlPlane(system=_assemble(second), store=second)
-    replied = await answering.channels_reply(
+    journal = SqliteJournal(database)
+    control = ControlPlane(system=_assemble(journal), store=journal)
+    (wait,) = journal.parked_waits()
+    (ballot_request,) = wait.requests
+    replied = await control.channels_reply(
         ADVISOR,
         message_id=ballot_request,
         payload={"outcome": "responded", "ballot": "approve", "rationale": "looks right"},
         idempotency_key="alice-ballot",
     )
     assert isinstance(replied, ChannelReplyResult)
-    approval_request = await _parks_anew(second, run_id, after=ballot_request)
-    await answering.shutdown()
+    await _parks_anew(journal, HUMAN_RUN, after=ballot_request)
+    await control.shutdown()
 
-    concluded = _quorum_result(second, run_id)
-    assert concluded.outcome == "approved"
-    assert [summary.node for summary in concluded.members] == ["human_alice", "panel_yes"]
-    human = concluded.members[0].result
-    assert human.actor_id == ADVISOR_ID
-    assert human.message_id == replied.message_id
-    assert human.ballot == "approve"
-    assert concluded.members[1].result.actor_id is None
 
-    # The approver answers through a third system over the same file.
-    third = SqliteJournal(database, now_fn=clock.now)
-    world = _assemble(third)
-    deciding = ControlPlane(system=world, store=third)
-    decided = await deciding.runs_approve(
+async def _stage_approve(database: Path) -> None:
+    """A fresh process: import the components, record the approval, let the host finish the run."""
+
+    journal = SqliteJournal(database)
+    control = ControlPlane(system=_assemble(journal), store=journal)
+    (wait,) = journal.parked_waits()
+    (approval_request,) = wait.requests
+    decided = await control.runs_approve(
         APPROVER,
-        run_id=run_id,
+        run_id=HUMAN_RUN,
         subject=SUBJECT,
         decision="approved",
         reason="the panel approved",
@@ -358,31 +346,98 @@ async def test_a_human_member_votes_across_a_restart_and_the_panel_reaches_appro
     )
     assert isinstance(decided, ApprovalCommandResult)
     assert decided.reply is not None
-    await _settles(third, run_id, status=RunStatus.SUCCEEDED)
-    await deciding.shutdown()
-    record = world.materialize_run(run_id)["decision"]["approval"]
-    assert record["approval_id"] == decided.approval_id
-    assert record["run_id"] == str(run_id)
+    await _settles(journal, HUMAN_RUN, status=RunStatus.SUCCEEDED)
+    await control.shutdown()
 
-    # Three attempts and no more: the start, and one wake per reply, each caused
-    # by exactly that reply.
-    assert _attempts(third, run_id) == [
-        ("RunStarted", None),
-        ("RunResumed", AttemptCause(kind="channel_reply", id=str(replied.message_id))),
-        ("RunResumed", AttemptCause(kind="channel_reply", id=str(decided.reply))),
+
+_STAGES = {"reply": _stage_reply, "approve": _stage_approve}
+
+
+def _child(stage: str, database: str) -> None:
+    """Entry point of a child process: one stage of the lane, nothing carried over."""
+
+    asyncio.run(_STAGES[stage](Path(database)))
+
+
+def _in_a_fresh_process(stage: str, database: Path) -> None:
+    """Run one stage in a new interpreter over the same database file."""
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            f"from tests.e2e.test_panel import _child; _child({stage!r}, {str(database)!r})",
+        ],
+        cwd=REPO_ROOT,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr[-4000:]
+
+
+async def test_a_human_member_votes_across_a_real_process_restart_and_the_panel_reaches_approval(
+    tmp_path: Path,
+) -> None:
+    """Two round trips, each across a real process restart, credential-free.
+
+    The process that asks ends before the human answers. A second process
+    imports the components, records the ballot, and its own control-plane host
+    wakes the run to conclude the panel; a third records the approval the same
+    way. Nothing in memory crosses a boundary — only the database file. One
+    request, reply, acknowledgement, and wake per round trip, one approval.
+    """
+
+    database = tmp_path / "panel.db"
+    first = SqliteJournal(database)
+    ballot_request = await _ask(_assemble(first), first, HUMAN_RUN)
+    del first
+
+    _in_a_fresh_process("reply", database)
+
+    second = SqliteJournal(database)
+    concluded = _quorum_result(second, HUMAN_RUN)
+    assert concluded.outcome == "approved"
+    assert [summary.node for summary in concluded.members] == ["human_alice", "panel_yes"]
+    human = concluded.members[0].result
+    assert human.actor_id == ADVISOR_ID
+    assert human.ballot == "approve"
+    assert human.message_id is not None
+    assert concluded.members[1].result.actor_id is None
+    (wait,) = second.parked_waits()
+    (approval_request,) = wait.requests
+    assert approval_request != ballot_request
+    del second
+
+    _in_a_fresh_process("approve", database)
+
+    third = SqliteJournal(database)
+    world = _assemble(third)
+    record = world.materialize_run(HUMAN_RUN)["decision"]["approval"]
+    assert record["run_id"] == str(HUMAN_RUN)
+    approval_ids = [
+        row[0] for row in sqlite3.connect(database).execute("SELECT approval_id FROM approvals")
     ]
+    assert approval_ids == [record["approval_id"]]
+
+    # Three attempts and no more: the start in the first process, and one
+    # resumption per reply, each caused by exactly that reply.
+    attempts = _attempts(third, HUMAN_RUN)
+    assert [kind for kind, _ in attempts] == ["RunStarted", "RunResumed", "RunResumed"]
+    assert attempts[0][1] is None
+    assert attempts[1][1] == AttemptCause(kind="channel_reply", id=str(human.message_id))
+    assert attempts[2][1] is not None and attempts[2][1].kind == "channel_reply"
     assert _counts(database) == (2, 2, 2, 1)
 
 
-async def test_a_panel_that_does_not_approve_never_reaches_the_approver(
-    tmp_path: Path,
-    clock: FakeClock,
-) -> None:
+async def test_a_panel_that_does_not_approve_never_reaches_the_approver(tmp_path: Path) -> None:
     """The approval request exists only because the panel's result said so."""
 
     database = tmp_path / "panel-rejects.db"
     run_id = RunId("run-panel-human-rejects")
-    journal = SqliteJournal(database, now_fn=clock.now)
+    journal = SqliteJournal(database)
     world = _assemble(journal)
     ballot_request = await _ask(world, journal, run_id)
 
