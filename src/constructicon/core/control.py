@@ -572,6 +572,14 @@ def resume_plan_requires_historical_evidence(command: CommandRecord) -> bool:
 _DOMAIN_PLAN_ERA_OPERATIONS: frozenset[str] = frozenset(
     {"registry_promote_initial", "registry_promote", "registry_rollback", "runs_cancel"}
 )
+_TERMINAL_STATUS_VALUES: frozenset[str] = frozenset(
+    {
+        RunStatus.SUCCEEDED.value,
+        RunStatus.FAILED.value,
+        RunStatus.CANCELLED.value,
+        RunStatus.PARKED.value,
+    }
+)
 
 
 def domain_plan_requires_historical_evidence(command: CommandRecord) -> bool:
@@ -587,6 +595,13 @@ def domain_plan_requires_historical_evidence(command: CommandRecord) -> bool:
     against the event that made it true. Current writers always record both, and
     the migration is the only authority allowed to witness their absence.
 
+    Two eras of promotion plan qualify: the raw pre-envelope object the first
+    registry writer stored, and the typed envelope written before the policy
+    marker. Only ``registry_promote`` and ``registry_rollback`` ever had a raw
+    shape. A cancellation qualifies only for a status the historical writer
+    could actually have observed as terminal; the migration witnesses history,
+    and must not bless a combination no writer ever produced.
+
     A refusal plan under one of these operations is not a domain plan and is
     never classified here.
     """
@@ -594,10 +609,10 @@ def domain_plan_requires_historical_evidence(command: CommandRecord) -> bool:
     raw = command.plan
     if command.operation not in _DOMAIN_PLAN_ERA_OPERATIONS or raw is None:
         return False
-    if plan_records_a_refusal(raw):
+    if plan_records_a_refusal(raw) or not isinstance(raw, dict):
         return False
-    if not isinstance(raw, dict) or "schema_version" not in raw:
-        return False
+    if "schema_version" not in raw:
+        return command.operation in {"registry_promote", "registry_rollback"}
     planned = raw.get("plan")
     if not isinstance(planned, dict):
         return False
@@ -606,6 +621,8 @@ def domain_plan_requires_historical_evidence(command: CommandRecord) -> bool:
             planned.get("kind") == "cancel"
             and planned.get("outcome") == "already_terminal"
             and planned.get("observed_event_seq") is None
+            and planned.get("observed_status") in _TERMINAL_STATUS_VALUES
+            and planned.get("response_status") == planned.get("observed_status")
         )
     return (
         planned.get("kind") in {"initial_promotion", "promotion", "rollback"}

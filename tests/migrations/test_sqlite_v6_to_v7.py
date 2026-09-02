@@ -1137,6 +1137,26 @@ def test_a_request_bound_v6_approval_keeps_its_exact_three_fact_exchange(
     assert migrated.answered_requests([request.message_id]) == {
         request.message_id: reply.message_id
     }
+
+    # The batched wake must prove exactly what the exact read proves. Corrupt
+    # the decision behind its seal: both readers must refuse, because both
+    # must have looked at it.
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE approvals SET decision = 'rejected' WHERE approval_id = ?",
+            (approval.approval_id,),
+        )
+    with pytest.raises(JournalDamaged):
+        reopened.reply_for(request.message_id)
+    with pytest.raises(JournalDamaged):
+        migrated.answered_requests([request.message_id])
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE approvals SET decision = 'approved' WHERE approval_id = ?",
+            (approval.approval_id,),
+        )
+    assert reopened.reply_for(request.message_id) == reply
+
     acknowledgement = migrated.channel_ack(
         message_id=request.message_id,
         actor_id=APPROVER.actor_id,

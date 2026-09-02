@@ -566,7 +566,7 @@ class _SqliteQueriesMixin:
                     # to share the string be held to a law it never took part
                     # in — batching may change the query's shape, never its
                     # evidentiary strength.
-                    acknowledgement_writer = (
+                    acknowledgement_scalar = (
                         _durable_text(
                             row["acknowledgement_command"],
                             fact=(
@@ -575,14 +575,28 @@ class _SqliteQueriesMixin:
                             ),
                         )
                         if row["acknowledgement_command"] is not None
-                        and row["acknowledgement_provenance_version"] == 1
                         else None
                     )
-                    stored_replies.append((row, stored_reply, acknowledgement_writer))
+                    # The scalar is two things, and the exact read keeps them
+                    # apart. As a legacy reply's writer it names the approval
+                    # ledger row to prove, whatever era wrote it. As a command
+                    # to attach to the acknowledgement it counts only under
+                    # current provenance — a schema-6 scalar is a token, and a
+                    # later command that shares the string took no part here.
+                    acknowledgement_writer = (
+                        acknowledgement_scalar
+                        if row["acknowledgement_provenance_version"] == 1
+                        else None
+                    )
+                    stored_replies.append(
+                        (row, stored_reply, acknowledgement_scalar, acknowledgement_writer)
+                    )
                 approval_writers: set[str] = set()
                 reply_writers: set[str] = set()
                 acknowledgement_writers: set[str] = set()
-                for _row, stored_reply, acknowledgement_writer in stored_replies:
+                for _row, stored_reply, acknowledgement_scalar, acknowledgement_writer in (
+                    stored_replies
+                ):
                     reply = stored_reply.message
                     if reply.kind != "reply" or reply.reply_to is None:
                         raise JournalDamaged(
@@ -594,7 +608,7 @@ class _SqliteQueriesMixin:
                         acknowledgement_writers.add(acknowledgement_writer)
                     writer = _stored_reply_writer(
                         stored_reply.command_id,
-                        acknowledgement_writer,
+                        acknowledgement_scalar,
                     )
                     candidate_request = request_by_reply_id.get(str(reply.message_id))
                     if candidate_request is None:
@@ -666,7 +680,7 @@ class _SqliteQueriesMixin:
                                 "batched writer command"
                             )
                         approvals_by_writer[approval_command_id] = approval
-                for row, stored_reply, exact_acknowledgement_writer in stored_replies:
+                for row, stored_reply, _scalar, exact_acknowledgement_writer in stored_replies:
                     reply = stored_reply.message
                     assert reply.reply_to is not None
                     candidate_request = request_by_reply_id.get(str(reply.message_id))

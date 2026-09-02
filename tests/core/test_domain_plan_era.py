@@ -116,12 +116,71 @@ def test_an_already_terminal_cancellation_without_its_observation_is_historical(
     )
 
 
+def _cancel_with(**fields: JsonValue) -> JsonValue:
+    inner = dict(_cancel("already_terminal", observed=False)["plan"])  # type: ignore[index]
+    inner.update(fields)
+    return _enveloped(inner)
+
+
+@pytest.mark.parametrize("status", ["pending", "running"])
+def test_a_cancellation_no_writer_could_have_observed_is_not_history(status: str) -> None:
+    """The migration witnesses history; it must not bless the impossible.
+
+    Every writer that ever recorded `already_terminal` observed a terminal
+    status. The shape alone is not the era — a combination no writer produced
+    gets no witness, and without one it is judged as a current plan.
+    """
+
+    assert not domain_plan_requires_historical_evidence(
+        _command("runs_cancel", _cancel_with(observed_status=status, response_status=status))
+    )
+    # And the two statuses must agree, as the plan law already demands.
+    assert not domain_plan_requires_historical_evidence(
+        _command("runs_cancel", _cancel_with(response_status="succeeded"))
+    )
+
+
+RAW_PROMOTION: dict[str, JsonValue] = {
+    "component": "test/component",
+    "baseline": None,
+    "version": "sha256:" + "a" * 64,
+    "attestation_id": "att-raw",
+}
+RAW_ROLLBACK: dict[str, JsonValue] = {
+    "component": "test/component",
+    "expected_stable": "sha256:" + "a" * 64,
+    "target": "sha256:" + "b" * 64,
+}
+
+
+@pytest.mark.parametrize(
+    ("operation", "raw"),
+    [("registry_promote", RAW_PROMOTION), ("registry_rollback", RAW_ROLLBACK)],
+)
+def test_the_raw_pre_envelope_promotion_shape_is_historical(
+    operation: str,
+    raw: dict[str, JsonValue],
+) -> None:
+    """The first registry writer stored bare objects; they are an era too."""
+
+    assert domain_plan_requires_historical_evidence(_command(operation, raw))
+    # A raw refusal under the same operation is another family's concern.
+    assert not domain_plan_requires_historical_evidence(
+        _command(operation, {"rejection": {"status": "rejected"}})
+    )
+    # Only these two operations ever had a raw shape.
+    assert not domain_plan_requires_historical_evidence(
+        _command("registry_promote_initial", raw)
+    )
+    assert not domain_plan_requires_historical_evidence(_command("runs_cancel", raw))
+
+
 @pytest.mark.parametrize(
     ("operation", "plan"),
     [
         ("registry_promote", None),
         ("registry_promote", "not-an-object"),
-        ("registry_promote", {"kind": "promotion", "component": "c"}),
+        ("registry_promote_initial", {"kind": "initial_promotion", "component": "c"}),
         ("registry_promote", {"rejection": {"status": "rejected"}}),
         (
             "registry_promote",
@@ -132,7 +191,7 @@ def test_an_already_terminal_cancellation_without_its_observation_is_historical(
     ],
 )
 def test_other_plans_are_not_this_family(operation: str, plan: JsonValue | None) -> None:
-    """Refusals, raw pre-envelope plans, and other operations belong elsewhere."""
+    """Refusals, shapes no writer ever stored raw, and other operations."""
 
     assert not domain_plan_requires_historical_evidence(_command(operation, plan))
 

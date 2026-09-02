@@ -2726,6 +2726,14 @@ class _CommandExecutor:
                         f"{record.operation!r} legacy domain-plan rejection has no exact proof"
                     )
                 if witness.phase_at_migration == "terminal":
+                    # The witness excuses the wording, which no law today can
+                    # re-derive. It does not excuse the code: every writer that
+                    # ever refused after a promotion plan refused for this one
+                    # reason, and that much is checkable without any bytes.
+                    if code is not ControlCode.REGISTRY_STABLE_MOVED:
+                        raise JournalDamaged(
+                            f"{record.operation!r} witnessed rejection carries an unlawful code"
+                        )
                     return
                 # Witnessed while still prepared: whoever finished it did so
                 # under the current law, so its refusal must be the exact one.
