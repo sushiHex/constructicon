@@ -69,9 +69,9 @@ def build_system_description(
         truncated = len(requested) > limit
 
     component_descriptions: list[ComponentDescription] = []
-    schema_by_hash: dict[str, SchemaDocument] = {
-        document.schema_hash: document for document in NAMED_CONTRACT_SCHEMAS.values()
-    }
+    schema_by_hash: dict[tuple[str, str], SchemaDocument] = {}
+    for key in NAMED_CONTRACT_SCHEMAS:
+        _publish(schema_by_hash, _named_document(key))
     for name in selected_names:
         stable_hash = snapshot.stable_version(name)
         if stable_hash is None:
@@ -204,7 +204,7 @@ def build_component_description(
     stored = snapshot.get(name, selected)
     if stored is None:
         raise ContractViolation(f"component {name!r} has no version {selected}")
-    schemas: dict[str, SchemaDocument] = {}
+    schemas: dict[tuple[str, str], SchemaDocument] = {}
     return _component_description(
         registry,
         snapshot,
@@ -219,12 +219,12 @@ def _component_description(
     snapshot: RegistrySnapshot,
     definition: ComponentDef,
     version: Digest,
-    schema_by_hash: dict[str, SchemaDocument],
+    schema_by_hash: dict[tuple[str, str], SchemaDocument],
 ) -> ComponentDescription:
     for port in (*definition.inputs, *definition.outputs):
         document = _port_schema(port)
-        if document is not None and document.schema_hash not in schema_by_hash:
-            schema_by_hash[document.schema_hash] = document
+        if document is not None:
+            _publish(schema_by_hash, document)
     stored = snapshot.get(definition.name, version)
     if stored is None:
         raise ContractViolation(
@@ -270,7 +270,11 @@ def _port_description(port: Any) -> PortDescription:
 
 
 def _port_schema(port: Any) -> SchemaDocument | None:
-    """The shape a port's payload has: embedded on the port, or a named contract's."""
+    """The shape a port's payload has: embedded on the port, or a named contract's.
+
+    Built fresh on every call: a description owns its documents, so a caller
+    that mutates one changes nothing another description will publish.
+    """
 
     if port.json_schema is not None:
         return _schema_document(
@@ -279,7 +283,27 @@ def _port_schema(port: Any) -> SchemaDocument | None:
             port.json_schema,
             declared_hash=port.schema_hash,
         )
-    return NAMED_CONTRACT_SCHEMAS.get((port.type_id, port.schema_hash))
+    key = (port.type_id, port.schema_hash)
+    return _named_document(key) if key in NAMED_CONTRACT_SCHEMAS else None
+
+
+def _named_document(key: tuple[str, str]) -> SchemaDocument:
+    type_id, schema_hash = key
+    return _schema_document(
+        f"contract:{type_id}",
+        1,
+        NAMED_CONTRACT_SCHEMAS[key].model_json_schema(),
+        declared_hash=schema_hash,
+    )
+
+
+def _publish(
+    schema_by_hash: dict[tuple[str, str], SchemaDocument],
+    document: SchemaDocument,
+) -> None:
+    """One document per (name, revision): two contracts may not share a revision string."""
+
+    schema_by_hash.setdefault((document.name, document.schema_hash), document)
 
 
 def _schema_document(
@@ -303,23 +327,18 @@ def _schema_document(
     )
 
 
-NAMED_CONTRACT_SCHEMAS: Mapping[tuple[str, str], SchemaDocument] = MappingProxyType(
+NAMED_CONTRACT_SCHEMAS: Mapping[tuple[str, str], type[pydantic.BaseModel]] = MappingProxyType(
     {
-        (contract.type_id, contract.schema_hash): _schema_document(
-            f"contract:{contract.type_id}",
-            1,
-            schema,
-            declared_hash=contract.schema_hash,
-        )
+        (contract.type_id, contract.schema_hash): model
         for catalog in (_HUMAN_CONTRACT_SCHEMAS, _PANEL_CONTRACT_SCHEMAS)
-        for contract, schema in catalog.items()
+        for contract, model in catalog.items()
     }
 )
-"""The standard vocabulary: every named contract revision and the shape it names.
+"""The standard vocabulary: every named contract revision and the model whose shape it names.
 
 A named revision is not the digest of a schema, so the registry refuses to
 embed one on a port; the shape is published from here instead, keyed by the
 nominal pair a port declares. Every description carries the whole vocabulary,
 so a payload no port names — a panel ballot inside an advice reply — is
-discoverable too (I9).
+discoverable too (I9). Documents are generated per description, never shared.
 """

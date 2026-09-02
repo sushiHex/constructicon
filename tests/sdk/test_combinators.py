@@ -9,10 +9,12 @@ import pytest
 from pydantic import BaseModel
 
 from constructicon.api.system import Constructicon
+from constructicon.core.component import ComponentDef
 from constructicon.core.errors import AdmissionError
 from constructicon.core.graph import Connection, Graph, GraphNode, Loop, Ref
 from constructicon.core.manifest import CONTINUE_TYPE, ExecutionManifest
 from constructicon.core.ports import Port
+from constructicon.runtime.registry import RegistryError
 from constructicon.sdk import component, flow, harness, loop, panel, port_type, task
 
 
@@ -206,6 +208,33 @@ def test_panel_is_exactly_the_hand_authored_fan_out_and_fan_in(
         "panel_no",
         "panel_yes",
     ]
+
+
+def test_a_composites_boundary_is_its_graphs(system: Constructicon) -> None:
+    """Admission exposes the Graph's ports, so a declaration that differs is refused twice."""
+
+    _promote_all(system, panel_yes)
+    body = Graph(
+        name="sdk/one-yes",
+        nodes=(GraphNode(id="yes", body=Ref(component="sdk/panel-yes")),),
+        inputs=panel_yes.definition.inputs,
+        outputs=panel_yes.definition.outputs,
+    )
+    wider = (panel_yes.definition.outputs[0].model_copy(update={"cardinality": "many"}),)
+    with pytest.raises(TypeError, match="cannot redeclare a Graph's boundary"):
+        component("sdk/one-yes", body, outputs=wider)
+    # The same boundary, restated, is not a redeclaration.
+    assert component("sdk/one-yes", body, outputs=body.outputs).definition.body == body
+
+    lying = ComponentDef(
+        name="sdk/one-yes-lying",
+        role="component",
+        body=body,
+        inputs=body.inputs,
+        outputs=wider,
+    )
+    with pytest.raises(RegistryError, match="boundary its Graph does not export"):
+        system._register(lying)
 
 
 def test_panel_with_explicit_ids_and_a_repeated_member_is_still_the_direct_graph(
@@ -416,6 +445,12 @@ def test_panel_refuses_what_would_be_gathered_wrongly_or_not_at_all() -> None:
         )
         with pytest.raises(TypeError, match="one-cardinality request and result"):
             panel(f"sdk/{cardinality}-member", wide, aggregator=panel_tally)
+
+    # The aggregator's law reads its own seat; wrapped in a composite it would
+    # sit beneath the aggregator node and place nothing.
+    wrapped = component("sdk/panel-tally-wrapped", panel_tally)
+    with pytest.raises(TypeError, match="must be atomic"):
+        panel("sdk/wrapped", panel_yes, aggregator=wrapped)
 
     # Shape refusals: no members, a member of the wrong arity, an aggregator
     # with two gathers, and an aggregator id that is also a member id.

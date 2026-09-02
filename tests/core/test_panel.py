@@ -195,7 +195,7 @@ def test_a_member_cannot_claim_the_aggregators_own_seat() -> None:
 def test_every_named_panel_contract_publishes_its_shape() -> None:
     """A participant can discover the ballot without reading source (I9)."""
 
-    ballot = CONTRACT_SCHEMAS[PANEL_BALLOT_CONTRACT]
+    ballot = CONTRACT_SCHEMAS[PANEL_BALLOT_CONTRACT].model_json_schema()
     assert set(ballot["properties"]) == {"schema_version", "outcome", "ballot", "rationale"}
     assert ballot["additionalProperties"] is False
     assert {contract.schema_hash for contract in CONTRACT_SCHEMAS} == {
@@ -207,30 +207,32 @@ def test_every_named_panel_contract_publishes_its_shape() -> None:
 
 
 def test_a_member_sits_in_the_aggregators_own_iteration() -> None:
-    """Inside a loop, siblings share the frame; a member reporting another is not one."""
+    """Siblings share the aggregator's frames; a member's internals may add their own."""
 
     in_loop = ExecutionPath(scope=AGGREGATOR.scope, iterations=(FRAME,))
-    result = aggregate_panel(
-        (_member("alice", "responded", "approve", iterations=(FRAME,)),),
-        PanelQuorum(required_approvals=1),
-        aggregator=in_loop,
-        run_id=RUN,
-    )
-    assert result.outcome == "approved"
-    with pytest.raises(ContractViolation, match="not a sibling"):
-        aggregate_panel(
-            (_member("alice", "responded", "approve"),),
+    inner = IterationFrame(loop=ScopePath(segments=(*PANEL, "alice", "retry")), index=0)
+    for aggregator, frames in (
+        (in_loop, (FRAME,)),
+        (in_loop, (FRAME, inner)),
+        (AGGREGATOR, ()),
+        (AGGREGATOR, (inner,)),
+    ):
+        result = aggregate_panel(
+            (_member("alice", "responded", "approve", iterations=frames),),
             PanelQuorum(required_approvals=1),
-            aggregator=in_loop,
+            aggregator=aggregator,
             run_id=RUN,
         )
-    with pytest.raises(ContractViolation, match="not a sibling"):
-        aggregate_panel(
-            (_member("alice", "responded", "approve", iterations=(FRAME,)),),
-            PanelQuorum(required_approvals=1),
-            aggregator=AGGREGATOR,
-            run_id=RUN,
-        )
+        assert result.outcome == "approved"
+    other = IterationFrame(loop=FRAME.loop, index=FRAME.index + 1)
+    for frames in ((), (other,), (inner, FRAME)):
+        with pytest.raises(ContractViolation, match="not a sibling"):
+            aggregate_panel(
+                (_member("alice", "responded", "approve", iterations=frames),),
+                PanelQuorum(required_approvals=1),
+                aggregator=in_loop,
+                run_id=RUN,
+            )
 
 
 def test_a_member_from_another_run_is_refused() -> None:

@@ -46,8 +46,15 @@ def component(
         body = body.ref()
     if isinstance(body, Graph):
         graph = body
-        resolved_inputs = graph.inputs if inputs is None else inputs
-        resolved_outputs = graph.outputs if outputs is None else outputs
+        if (inputs is not None and tuple(inputs) != tuple(graph.inputs)) or (
+            outputs is not None and tuple(outputs) != tuple(graph.outputs)
+        ):
+            raise TypeError(
+                "component cannot redeclare a Graph's boundary; a composite's ports are "
+                "its Graph's, so change the Graph"
+            )
+        resolved_inputs = graph.inputs
+        resolved_outputs = graph.outputs
     else:
         if inputs is None or outputs is None:
             raise TypeError(
@@ -176,7 +183,8 @@ def panel(
     contracts — which is why members and the aggregator are bundles and never
     bare names. Every member declares one request and one result, each of
     cardinality ``one`` — a seat answers exactly once — and the same pair as
-    every other member; the aggregator declares exactly one ``many``
+    every other member; the aggregator is atomic, because its law reads its
+    own seat, and declares exactly one ``many``
     port and it is that result contract; no boundary input — the request or an
     aggregator policy input — carries that result contract, because a graph
     input is in every node's pool and would be gathered as a member; and no
@@ -195,6 +203,15 @@ def panel(
             raise TypeError("panel members must be definition bundles, not bare names")
     if not isinstance(aggregator, DefinitionBundle):
         raise TypeError("panel aggregator must be a definition bundle, not a bare name")
+    if isinstance(aggregator.definition.body, Graph):
+        # The aggregator's law reads its own seat: a standard quorum places the
+        # members as siblings of the path it was invoked at. Wrapped inside a
+        # composite it would sit beneath the aggregator node and place nothing.
+        # Compose around the panel instead: `flow(panel(...), after)`.
+        raise TypeError(
+            f"panel aggregator {aggregator.name!r} must be atomic; compose around the "
+            "panel rather than inside its aggregator"
+        )
     request, result = _one_member_contract(members)
     gathers, policy_inputs = _aggregator_contract(aggregator, result)
 

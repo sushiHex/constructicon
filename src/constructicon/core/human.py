@@ -23,9 +23,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Annotated, Any, Literal, cast
+from typing import Annotated, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidationError
 
 from constructicon.core.address import RunId
 from constructicon.core.channel import (
@@ -987,21 +987,24 @@ def sealed_reply_payload(
     )
 
 
-CONTRACT_SCHEMAS: Mapping[ChannelContract, dict[str, Any]] = MappingProxyType(
+class AdviceRequestPayload(RootModel[JsonValue]):
+    """Caller-authored JSON: the question exactly as the workflow wrote it.
+
+    It is all the advisor sees, so it has to say what the answer must contain.
+    Named here only so the shape ``describe()`` publishes is the truth: any
+    JSON value.
+    """
+
+
+CONTRACT_SCHEMAS: Mapping[ChannelContract, type[BaseModel]] = MappingProxyType(
     {
-        ADVICE_REQUEST_CONTRACT: {
-            "title": "AdviceRequest",
-            "description": (
-                "Caller-authored JSON: the question exactly as the workflow wrote it. "
-                "It is all the advisor sees, so it must say what the answer has to contain."
-            ),
-        },
-        ADVICE_REPLY_CONTRACT: AdviceReplyPayload.model_json_schema(),
-        APPROVAL_REQUEST_CONTRACT: ApprovalRequestPayload.model_json_schema(),
-        APPROVAL_REPLY_CONTRACT: ApprovalDecisionPayload.model_json_schema(),
+        ADVICE_REQUEST_CONTRACT: AdviceRequestPayload,
+        ADVICE_REPLY_CONTRACT: AdviceReplyPayload,
+        APPROVAL_REQUEST_CONTRACT: ApprovalRequestPayload,
+        APPROVAL_REPLY_CONTRACT: ApprovalDecisionPayload,
     }
 )
-"""Each named contract revision and the shape it names, for ``describe()``.
+"""Each named contract revision and the model whose shape it names, for ``describe()``.
 
 A named revision is not the digest of a schema, so the registry will not
 embed one on a port; the shape is published from here instead.

@@ -333,6 +333,17 @@ class ComponentRegistry:
                 "bindings inside its Graph; outer capability requirements are not "
                 "part of the M5 contract"
             )
+        if not is_atomic:
+            graph = definition.body
+            assert isinstance(graph, Graph)
+            if definition.inputs != graph.inputs or definition.outputs != graph.outputs:
+                # Admission compiles a composite from its Graph and exposes the
+                # Graph's boundary; a declaration that differs would be a
+                # contract the body does not keep.
+                raise RegistryError(
+                    f"composite component {definition.name!r} declares a boundary its "
+                    "Graph does not export; a composite's ports are its Graph's"
+                )
         if is_atomic:
             body = definition.body
             assert not isinstance(body, Graph)

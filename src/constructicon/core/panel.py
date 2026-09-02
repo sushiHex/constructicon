@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, NonNegativeInt, PositiveInt, model_validator
 
@@ -223,8 +223,10 @@ def _place(
 
     Members are the aggregator's siblings by ``panel()`` construction, so each
     result's path must begin with the aggregator's parent scope, have a segment
-    at that depth — that segment is the member's node — and sit in the same
-    loop iteration. Any other topology is refused rather than guessed at, and
+    at that depth — that segment is the member's node — and carry the
+    aggregator's loop frames as a prefix of its own, since a member's internals
+    may iterate beneath its seat but its seat is in the aggregator's iteration.
+    Any other topology is refused rather than guessed at, and
     so is a node claimed twice — whether by one path repeated or by two paths
     beneath it: a member that reports a sibling's identity collides with the
     sibling instead of replacing it, and one that claims the aggregator's own
@@ -249,10 +251,11 @@ def _place(
                 f"not {run_id!r}"
             )
         segments = result.member.scope.segments
+        frames = aggregator.iterations
         if (
             segments[:depth] != parent
             or len(segments) <= depth
-            or result.member.iterations != aggregator.iterations
+            or result.member.iterations[: len(frames)] != frames
         ):
             raise ContractViolation(
                 f"panel member {result.member.render()} is not a sibling of the "
@@ -308,15 +311,15 @@ def aggregate_panel(
     )
 
 
-CONTRACT_SCHEMAS: Mapping[ChannelContract, dict[str, Any]] = MappingProxyType(
+CONTRACT_SCHEMAS: Mapping[ChannelContract, type[BaseModel]] = MappingProxyType(
     {
-        PANEL_BALLOT_CONTRACT: PanelBallotPayload.model_json_schema(),
-        PANEL_MEMBER_RESULT_CONTRACT: PanelMemberResult.model_json_schema(),
-        PANEL_QUORUM_CONTRACT: PanelQuorum.model_json_schema(),
-        PANEL_RESULT_CONTRACT: PanelResult.model_json_schema(),
+        PANEL_BALLOT_CONTRACT: PanelBallotPayload,
+        PANEL_MEMBER_RESULT_CONTRACT: PanelMemberResult,
+        PANEL_QUORUM_CONTRACT: PanelQuorum,
+        PANEL_RESULT_CONTRACT: PanelResult,
     }
 )
-"""Each named contract revision and the shape it names, for ``describe()``."""
+"""Each named contract revision and the model whose shape it names, for ``describe()``."""
 
 
 __all__ = [

@@ -17,6 +17,7 @@ from pathlib import Path
 
 from constructicon.api.control import ControlPlane
 from constructicon.api.system import Constructicon
+from constructicon.core import panel as core_panel
 from constructicon.core.address import RunId
 from constructicon.core.admission import AdmissionRejected
 from constructicon.core.channel import ChannelEndpoint, reply_message_id
@@ -77,6 +78,9 @@ from tests.conftest import FakeClock
 from tests.durable_seals import reseal_primary_fact
 
 STD = Path(__file__).parents[2] / "src" / "constructicon" / "sdk" / "std.py"
+LAW_DIGEST_BY_REVISION = {
+    "panel-law-1": "sha256:dc5f2010fd57c584650d3b42a2635a14be85e5d7567ae44886544b73a1513060",
+}
 ADVISOR_ID = "static:std-advisor"
 APPROVER_ID = "static:std-approver"
 ADVICE_CHANNEL_ID = "channel/std-advice"
@@ -260,6 +264,24 @@ def test_the_panel_law_is_part_of_the_pure_components_identity() -> None:
             "python-source", 1, inspect.getsource(implementation)
         )
 
+    # The revision names this exact law. Changing any of these bodies without
+    # bumping `PANEL_LAW_REVISION` fails here, which is the point.
+    law = digest(
+        "panel-law",
+        1,
+        {
+            name: inspect.getsource(member)
+            for name, member in (
+                ("_place", core_panel._place),
+                ("_tally", core_panel._tally),
+                ("panel_outcome", core_panel.panel_outcome),
+                ("self_check", core_panel.PanelResult._concluded_from_its_members),
+            )
+        },
+    )
+    assert PANEL_LAW_REVISION == "panel-law-1"
+    assert str(law) == LAW_DIGEST_BY_REVISION[PANEL_LAW_REVISION]
+
 
 def test_describe_publishes_every_standard_shape(journal: SqliteJournal) -> None:
     """Every standard port's shape, and the ballot no port names, are discoverable (I9)."""
@@ -278,6 +300,18 @@ def test_describe_publishes_every_standard_shape(journal: SqliteJournal) -> None
     ballot = published[PANEL_BALLOT_CONTRACT.schema_hash]
     assert ballot.name == f"contract:{PANEL_BALLOT_CONTRACT.type_id}"
     assert set(ballot.schema_["properties"]) == {"schema_version", "outcome", "ballot", "rationale"}
+
+    # A description owns its documents: mutating one changes nothing published later.
+    ballot.schema_["properties"].clear()
+    again = system.describe(limit=100)
+    fresh = {document.schema_hash: document for document in again.schemas}
+    assert set(fresh[PANEL_BALLOT_CONTRACT.schema_hash].schema_["properties"]) == {
+        "schema_version",
+        "outcome",
+        "ballot",
+        "rationale",
+    }
+    assert again.description_digest == description.description_digest
 
 
 def test_the_standard_ports_are_the_shared_l0_contracts() -> None:
