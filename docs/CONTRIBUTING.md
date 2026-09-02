@@ -36,12 +36,14 @@ changing a shared definition. Compose before you drop a tier (I10).
   combinator behavior.
 - `panel()` takes definition bundles, never bare names, because it proves the
   gather exact from declared contracts. A panel member declares one input and
-  one output typed by the panel contracts in `core/panel.py`; an aggregator
-  declares exactly one `many` input of the members' result contract. A human
-  member is `human_panel_member(name, channel_id)` — the standard advisor and
-  ballot composed, registered and promoted like any composite — with one
-  channel id per participant. Report `unavailable` and `timed_out` as member
-  data; the kernel infers nothing from elapsed time.
+  one output typed by the panel contracts in `core/panel.py`, and the two
+  differ; an aggregator declares exactly one `many` input of the members'
+  result contract and no other input of it. A human member is
+  `human_panel_member(name, channel_id)` — the standard advisor and ballot
+  composed, registered and promoted like any composite — with one channel id
+  per participant, and the request payload you write is what tells the
+  participant to answer with a `PanelBallotPayload`. Report `unavailable` and
+  `timed_out` as member data; the kernel infers nothing from elapsed time.
 - Architect JSON enters through `system.admit_graph()`. It is strict and bounded;
   rejection is a versioned `AdmissionRejected` with itemized repair data. Never
   add automatic repair or a trusted-SDK bypass. Public execution calls

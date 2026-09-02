@@ -1,7 +1,11 @@
 # M7 PR D — panel pattern: design record
 
-Status: revised after adversarial review (Codex, twelve findings; ten
-accepted, two narrowed), then implemented as written on branch `m7/pr-d-panel`.
+Status: revised after adversarial review of the design (Codex, twelve
+findings; ten accepted, two narrowed), implemented on branch `m7/pr-d-panel`,
+then corrected after an adversarial review of the head (five blockers, three
+lower; see the implementation record). Two corrections change this record:
+no boundary input, the members' request included, may carry the result
+contract (D1), and `PanelResult` is self-verifying (D4).
 Approved plan: rev 2 §4 ("unchanged from rev 1 §12"), §7 "Slice D must add".
 This records the decisions the plan leaves open, the constraints the code
 imposes, and what the review changed. The implementation record
@@ -50,9 +54,9 @@ at authoring from their declared contracts, which a name cannot supply.
 Authoring refuses, with a typed error, unless: every member declares exactly
 one input and one output and all members declare the same pair; the
 aggregator declares exactly one `many` port and its contract is the members'
-output contract; every other aggregator input is nominally distinct from that
-contract (else it would magnetically bind a member); all boundary port names
-are unique. Node ids follow `flow`'s derivation, and the aggregator's id is
+output contract; no boundary input — the members' request or an aggregator
+policy input — carries that contract (a graph input is in every pool and
+would be gathered as a member); all boundary port names are unique. Node ids follow `flow`'s derivation, and the aggregator's id is
 its component's last segment unless `aggregator_id` says otherwise.
 
 Byte equality (§7) is to the golden direct Graph in exactly this order — node,
@@ -127,7 +131,9 @@ output `result` (PANEL_RESULT). The outcome is total and says what happened:
     rejected                otherwise: enough answered, and they did not approve
 
 Same members in any input order give the same bytes. Rev 2 waits for every
-declared member, so the aggregator never sees a partial set.
+declared member, so the aggregator never sees a partial set. The result
+carries `run_id` and the aggregator path and re-derives placement, tally, and
+outcome from its members on validation, refusing a contradiction (I4).
 
 **D5 — the human member is composition, not a new exchange.** A human panel
 member is `human-advisor` (canonical advice pair, authorship stamped) followed
@@ -168,11 +174,13 @@ second restart.
 - One advisor round trip and one approval round trip complete across real
   process restarts, credential-free, with one request, reply, ack, approval,
   and wake cause each.
-- Mutation check (shipped): ten mutants — no canonical order, no sibling
+- Mutation check (shipped): twelve mutants — no canonical order, no sibling
   check, no iteration check, no duplicate check, no run check, both threshold
-  off-by-ones, the
-  ballot bucket, the member-binding check, the gather-contract check — each
+  off-by-ones, the ballot bucket, the boundary-contract check, the
+  gather-contract check, and two ways of not re-deriving a result — each
   killed by `tests/core/test_panel.py` and `tests/sdk/test_combinators.py`.
+- Wake (shipped): resumption after each reply goes through the control
+  plane's host; the run's attempt causes are exactly the two replies.
 
 ## Deferred, recorded
 

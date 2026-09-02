@@ -337,16 +337,20 @@ The combinator executes nothing, chooses no model, infers no quorum, and hides
 no scheduler; its Graph is byte-equal to the hand-authored one. Exactness is
 proved at authoring from bundles' declared contracts — every member shares one
 request/result pair, the aggregator has exactly one `many` port of that result
-contract and no other input that could bind a member — because the gather is
-the general connector law: a compatible graph input or a compatible helper
-upstream of a member would widen it. The standard aggregator
+contract, and no boundary input, the request included, carries that contract —
+because the gather is the general connector law: a graph input sits in every
+node's pool, and a compatible graph input or a compatible helper upstream of a
+member would widen it. The standard aggregator
 `constructicon.std/panel-quorum` is pure and declares no capability; it derives
 each member's node from the member's reported path against its own path —
 same parent scope, same loop iteration — refuses any other topology or a
 node reported twice, orders members by the
 canonical JSON of their path, and concludes one of four explicit outcomes
 (`approved`, `rejected`, `insufficient_responses`, `impossible_quorum`) from an
-explicit quorum input. Every outcome a member reports — `responded`,
+explicit quorum input. The result names its aggregator and run and is
+self-verifying: validating one re-derives placement, tally, and outcome from
+the members it carries and refuses a contradiction, whichever aggregator wrote
+it. Every outcome a member reports — `responded`,
 `declined`, `unavailable`, `timed_out` — is data; the kernel owns no clock. A
 human member is `human-advisor` followed by `constructicon.std/panel-ballot`,
 which reads the human's reply strictly as a ballot and carries the actor and
@@ -548,7 +552,8 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
   standard advisor/approval components, and the panel pattern: `panel()` sugar
   byte-equal to the direct Graph, nominal member/quorum/result contracts, a
   pure deterministic quorum aggregator, and a human member composed from the
-  advisor and a ballot adapter, proven across process restarts. See
+  advisor and a ballot adapter, proven across restarts through the control
+  plane's own host. See
   [ADR 0014](adr/0014-channel-identity-and-delivery.md),
   [ADR 0015](adr/0015-human-authority-on-channels.md), and
   [ADR 0016](adr/0016-positive-durable-facts-and-provenance-eras.md).

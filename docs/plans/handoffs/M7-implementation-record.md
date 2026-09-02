@@ -721,9 +721,11 @@ with equal `source_graph_hash` and `manifest_hash`. It takes definition bundles
 rather than bare Refs because exactness is proved at authoring from declared
 contracts: every member declares one input and one output and all share the
 same pair; the aggregator declares exactly one `many` input of that result
-contract and no other input that could bind a member magnetically; boundary
-names are unique. Each refusal is a typed error at authoring, not an absent
-member at admission.
+contract; no boundary input — a policy input of the aggregator or the members'
+own request — carries that result contract, because a graph input sits in
+every node's pool and would be gathered as a member; boundary names are
+unique. Each refusal is a typed error at authoring, not an absent member at
+admission.
 
 **The gather is the general connector law, not a panel privilege.** A `many`
 port gathers every compatible source in its pool, which is the transitive
@@ -749,6 +751,12 @@ canonical JSON of the complete `ExecutionPath`, never by `render()`, which is
 not injective. Kernel-attested source identity on `many` ports would change the
 atomic invocation contract and is deferred.
 
+**The result is self-verifying.** `PanelResult` names the aggregator path and
+run it was concluded for, and validating one re-derives the members'
+placement, the tally, and the outcome from the members it carries: a stored or
+foreign result whose conclusion contradicts its members is refused (I4), so any
+aggregator that shares the contract is held to the standard one's law.
+
 **The outcome says what happened.** `impossible_quorum` when the quorum exceeds
 the member count, `approved` when approvals meet it, `insufficient_responses`
 when fewer members answered than the quorum needs, and `rejected` only when
@@ -773,21 +781,70 @@ unchanged. Both panel components declare `capability_requirements=()`, and the
 structural tests now distinguish the channel-bound components (exactly one
 input, one output, one durable channel) from the pure ones.
 
-**Proof.** Ten mutants of the aggregation law and the authoring checks —
+**What a participant can discover.** The ballot's shape travels inside the
+generic advice reply, so nothing in the exchange announces it: the request
+payload the workflow author writes is what the participant sees, and it has to
+say that the answer is read as a `PanelBallotPayload`. The panel ports embed no
+JSON Schema, for the same reason the advisor and approval ports embed none: the
+registry binds an embedded schema to its own digest, and a named contract
+revision is not that digest. `system.describe()` therefore reports all six
+standard ports schema-incomplete. Publishing a schema per named revision is an
+introspection change and stays open.
+
+**Proof.** Twelve mutants of the aggregation law and the authoring checks —
 dropped ordering, sibling check, iteration check, duplicate check, run check,
-both off-by-one
-thresholds, the ballot bucket, the member-binding check, and the gather
-contract check — are each killed. The acceptance lane runs six fakes reporting
-all six buckets through the real graph and then one fake plus one
-mailbox-backed human: the asking process dies, a second replies with a ballot
-and completes the panel with the human's stamped authorship, and a third
-approves; exactly two requests, two replies, two acknowledgements, and one
-approval exist afterwards.
+both off-by-one thresholds, the ballot bucket, the boundary-contract check, the
+gather-contract check, and two ways of not re-deriving a result — are each
+killed. The acceptance lane runs six fakes reporting all six buckets through
+the real graph, then one fake plus one mailbox-backed human across restarts — a
+fresh journal and system over the same database file, nothing carried in
+memory. The system that asked is discarded; a second records the ballot and its
+own control-plane host wakes the run to conclude the panel; a third records the
+approval the same way. The run's history holds exactly two attempt causes, each
+the reply that woke it, and exactly two requests, two replies, two
+acknowledgements, and one approval exist afterwards. A human who rejects leaves
+the panel `rejected`, fails the run at the adapter, and never produces an
+approval request, so the request exists only because the result said so.
+
+## PR D — what the complete-head review found
+
+An adversarial Codex review of the head returned five blockers and three lower
+findings; four blockers were accepted and fixed, one was narrowed with
+evidence.
+
+- Accepted: a member whose request and result contracts coincide put the
+  request — a graph input, so in every pool — into the gather. `panel()` now
+  refuses any boundary input carrying the result contract.
+- Accepted: the aggregator compared scope only; a member reporting another loop
+  iteration passed. It now takes its whole path and compares iterations.
+- Narrowed: a member reporting an invented sibling name is not a second vote.
+  The walker delivers exactly one payload per sealed source, so the count is
+  the kernel's; a misreported name that is nobody else's mislabels only its
+  author. That is the recorded member-reported identity, deferred as before.
+- Accepted: `PanelResult` accepted contradictions. It is now self-verifying.
+- Accepted: the lane called the run directly after each reply, so a broken
+  wake could pass, and the approval adapter's result parse was removable
+  without a failing test. Resumption now goes through the control plane's
+  host, attempt causes are asserted, and a rejecting panel proves the adapter
+  reads the result.
+- Accepted in part: the ballot's shape is not discoverable from the exchange.
+  Recorded above; embedding a schema is refused by the registry for a named
+  revision, and the request payload is the author's channel to the
+  participant.
+- Accepted: the claimed proof matrix was incomplete. Explicit ids, a repeated
+  member, zero members, wrong member arity, two gathers, and an id collision
+  are now tested.
+- Accepted: `actor_id` and `message_id` in a member result are telemetry any
+  component may write; a consumer that needs provenance follows `message_id`
+  to the sealed reply. The contract's docstring says so.
 
 ## Open items
 
 - Kernel-attested source identity on `many` ports and wall-clock timeouts for
   human members are deferred, as recorded above.
+- The six standard ports embed no JSON Schema and `system.describe()` reports
+  them schema-incomplete; publishing a schema per named contract revision is an
+  introspection change.
 - A message a caller may not act on is refused with `AUTH_REQUIRED_SCOPE` rather
   than reported absent, which confirms that a supplied id exists. Deliberate:
   ids are derived digests over run, path, channel, lane, interaction, and port,
