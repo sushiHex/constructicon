@@ -13,7 +13,13 @@ import random
 import pytest
 from pydantic import ValidationError
 
-from constructicon.core.address import ExecutionPath, IterationFrame, RunId, ScopePath
+from constructicon.core.address import (
+    LOOP_BODY_SEGMENT,
+    ExecutionPath,
+    IterationFrame,
+    RunId,
+    ScopePath,
+)
 from constructicon.core.errors import ContractViolation
 from constructicon.core.identity import canonical_json
 from constructicon.core.panel import (
@@ -31,9 +37,10 @@ from constructicon.core.panel import (
 )
 
 RUN = RunId("run-panel-law")
-PANEL = ("review", "panel")
+LOOP = ScopePath(segments=("review",))
+PANEL = ("review", LOOP_BODY_SEGMENT, "panel")  # the panel sits in the loop's body
 AGGREGATOR = ExecutionPath(scope=ScopePath(segments=(*PANEL, "quorum")))
-FRAME = IterationFrame(loop=ScopePath(segments=("review",)), index=2)
+FRAME = IterationFrame(loop=LOOP, index=2)
 
 
 def _member(
@@ -132,7 +139,7 @@ def test_a_member_outside_the_aggregators_siblings_is_refused() -> None:
 
     elsewhere = PanelMemberResult(
         run_id=RUN,
-        member=ExecutionPath(scope=ScopePath(segments=("other", "graph", "node"))),
+        member=ExecutionPath(scope=ScopePath(segments=("other", "graph", "deep", "node"))),
         outcome="declined",
     )
     with pytest.raises(ContractViolation, match="not a sibling"):
@@ -207,22 +214,24 @@ def test_every_named_panel_contract_publishes_its_shape() -> None:
 
 
 def test_a_member_sits_in_the_aggregators_own_iteration() -> None:
-    """Siblings share the aggregator's frames; a member's internals may add their own.
+    """Siblings share the aggregator's frame; a member's internals may carry their own.
 
-    An added frame names a loop at or beneath the member's seat that encloses
-    the reporting invocation, and frames nest in order. Anything else is a path
-    the walker could not have written.
+    Every path is held to what the walker writes: an instance inside a loop
+    body carries exactly one frame, whose loop the body sits directly beneath
+    (`loop/body/...`), and nested loops are refused at admission, so a second
+    frame is not a path. A member's own frame names a loop at or beneath its
+    seat.
     """
 
     in_loop = ExecutionPath(scope=AGGREGATOR.scope, iterations=(FRAME,))
     retry = IterationFrame(loop=ScopePath(segments=(*PANEL, "alice", "retry")), index=0)
-    again = IterationFrame(loop=ScopePath(segments=(*PANEL, "alice", "retry", "again")), index=1)
+    seat_is_loop = IterationFrame(loop=ScopePath(segments=(*PANEL, "alice")), index=0)
     for aggregator, below, frames in (
         (in_loop, (), (FRAME,)),
-        (in_loop, ("retry", "vote"), (FRAME, retry)),
-        (in_loop, ("retry", "again", "vote"), (FRAME, retry, again)),
+        (in_loop, ("ballot",), (FRAME,)),
         (AGGREGATOR, (), ()),
-        (AGGREGATOR, ("retry", "vote"), (retry,)),
+        (AGGREGATOR, ("retry", LOOP_BODY_SEGMENT, "vote"), (retry,)),
+        (AGGREGATOR, (LOOP_BODY_SEGMENT, "vote"), (seat_is_loop,)),
     ):
         result = aggregate_panel(
             (_member("alice", "responded", "approve", below=below, iterations=frames),),
@@ -232,15 +241,13 @@ def test_a_member_sits_in_the_aggregators_own_iteration() -> None:
         )
         assert result.outcome == "approved"
 
-    other = IterationFrame(loop=FRAME.loop, index=FRAME.index + 1)
+    other = IterationFrame(loop=LOOP, index=FRAME.index + 1)
     elsewhere = IterationFrame(loop=ScopePath(segments=(*PANEL, "bob", "retry")), index=0)
     for below, frames in (
         ((), ()),  # the aggregator's frame is missing
         ((), (other,)),  # another iteration of the same loop
-        ((), (retry, FRAME)),  # the aggregator's frame is not first
-        (("retry", "vote"), (FRAME, elsewhere)),  # a loop beneath another seat
-        ((), (FRAME, retry)),  # a loop that does not enclose the invocation
-        (("retry", "again", "vote"), (FRAME, again, retry)),  # not nested in order
+        (("retry", LOOP_BODY_SEGMENT, "vote"), (FRAME, retry)),  # two frames: not a path today
+        (("retry", LOOP_BODY_SEGMENT, "vote"), (retry,)),  # the aggregator's frame replaced
     ):
         with pytest.raises(ContractViolation, match="not a sibling"):
             aggregate_panel(
@@ -249,18 +256,17 @@ def test_a_member_sits_in_the_aggregators_own_iteration() -> None:
                 aggregator=in_loop,
                 run_id=RUN,
             )
-    # Outside any loop the aggregator has no frames; a member's frames must
-    # still name loops beneath its own seat that enclose its invocation. A
-    # loop's body sits strictly beneath the loop, so a loop equal to the
-    # invocation, or one repeated, is a path the walker cannot write.
-    seat_loop = IterationFrame(loop=ScopePath(segments=(*PANEL, "alice", "retry", "vote")), index=0)
-    above = IterationFrame(loop=ScopePath(segments=PANEL), index=0)  # encloses the aggregator too
+    # Outside any loop the aggregator has no frame; a member's frame must name
+    # a loop at or beneath its seat whose body its invocation sits in.
+    above = IterationFrame(loop=ScopePath(segments=PANEL[:1]), index=0)
+    sibling_loop = IterationFrame(loop=ScopePath(segments=(*PANEL, "alice", "other")), index=0)
     for below, frames in (
-        (("retry", "vote"), (elsewhere,)),
-        ((), (retry,)),
-        (("retry", "vote"), (seat_loop,)),
-        (("retry", "again", "vote"), (retry, retry)),
-        (("retry", "vote"), (above,)),
+        (("retry", LOOP_BODY_SEGMENT, "vote"), (elsewhere,)),  # beneath another seat
+        ((), (retry,)),  # the loop does not enclose the invocation
+        (("retry", LOOP_BODY_SEGMENT, "vote"), (sibling_loop,)),  # a body-shaped path, wrong loop
+        (("retry", "vote"), (retry,)),  # the invocation is not in the loop's body
+        (("retry", LOOP_BODY_SEGMENT, "vote"), (above,)),  # a loop above the seat
+        (("retry", LOOP_BODY_SEGMENT, "vote"), (retry, retry)),  # two frames
     ):
         with pytest.raises(ContractViolation, match="not a sibling"):
             aggregate_panel(
@@ -271,13 +277,14 @@ def test_a_member_sits_in_the_aggregators_own_iteration() -> None:
             )
 
 
-def test_the_aggregators_own_frames_must_enclose_it() -> None:
+def test_the_aggregators_own_frames_must_be_writable() -> None:
     """A result carries the aggregator's path as data, so that path is checked too."""
 
     elsewhere = IterationFrame(loop=ScopePath(segments=("other", "loop")), index=0)
     own = IterationFrame(loop=AGGREGATOR.scope, index=0)  # a loop equal to its scope
     root = IterationFrame(loop=ScopePath(segments=()), index=0)
-    for frames in ((elsewhere,), (own,), (root,), (FRAME, FRAME)):
+    not_body = IterationFrame(loop=ScopePath(segments=PANEL[:2]), index=0)  # panel is not "body"
+    for frames in ((elsewhere,), (own,), (root,), (not_body,), (FRAME, FRAME)):
         impossible = ExecutionPath(scope=AGGREGATOR.scope, iterations=frames)
         with pytest.raises(ContractViolation, match="do not enclose"):
             aggregate_panel(

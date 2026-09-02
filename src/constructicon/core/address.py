@@ -37,6 +37,10 @@ class ScopePath(BaseModel):
         return "/".join(self.segments) if self.segments else "<root>"
 
 
+LOOP_BODY_SEGMENT = "body"
+"""The scope segment beneath a Loop node under which its body's instances sit."""
+
+
 class IterationFrame(BaseModel):
     model_config = ConfigDict(frozen=True)
 

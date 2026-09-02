@@ -21,7 +21,7 @@ from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, NonNegativeInt, PositiveInt, model_validator
 
-from constructicon.core.address import ExecutionPath, IterationFrame, RunId
+from constructicon.core.address import LOOP_BODY_SEGMENT, ExecutionPath, IterationFrame, RunId
 from constructicon.core.channel import ChannelContract
 from constructicon.core.errors import ContractViolation
 from constructicon.core.identity import ActorId, Digest, JsonValue, canonical_json, digest
@@ -218,11 +218,12 @@ def _place(
     result's path must begin with the aggregator's parent scope, have a segment
     at that depth — that segment is the member's node — and carry the
     aggregator's loop frames as a prefix of its own, any further frame naming a
-    loop strictly enclosing its invocation, nested strictly from its seat: a
-    member's internals may iterate beneath its seat, but its seat is in the
-    aggregator's iteration and nowhere else. The aggregator's own frames are
-    held to the same law, because a result carries that path as data. Any
-    other topology is refused rather than guessed at, and
+    loop at or beneath its seat whose body its invocation sits in: a member's
+    internals may iterate beneath its seat, but its seat is in the
+    aggregator's iteration and nowhere else. Every path is held to what the
+    walker writes — one frame at most, its loop directly above a ``body``
+    segment — the aggregator's included, because a result carries that path
+    as data. Any other topology is refused rather than guessed at, and
     so is a node claimed twice — whether by one path repeated or by two paths
     beneath it: a member that reports a sibling's identity collides with the
     sibling instead of replacing it, and one that claims the aggregator's own
@@ -236,7 +237,7 @@ def _place(
     scope = aggregator.scope.segments
     if not scope:
         raise ContractViolation("a panel aggregator has a scope; the root is not one")
-    if not _frames_enclose(aggregator.iterations, seat=(), invocation=scope):
+    if not _frames_writable(aggregator.iterations, invocation=scope):
         raise ContractViolation(
             f"panel aggregator {aggregator.render()} carries frames that do not enclose it"
         )
@@ -252,14 +253,15 @@ def _place(
             )
         segments = result.member.scope.segments
         frames = aggregator.iterations
+        seat = segments[: depth + 1]
         if (
             segments[:depth] != parent
             or len(segments) <= depth
             or result.member.iterations[: len(frames)] != frames
-            or not _frames_enclose(
-                result.member.iterations[len(frames) :],
-                seat=segments[: depth + 1],
-                invocation=segments,
+            or not _frames_writable(result.member.iterations, invocation=segments)
+            or any(
+                frame.loop.segments[: len(seat)] != seat
+                for frame in result.member.iterations[len(frames) :]
             )
         ):
             raise ContractViolation(
@@ -278,32 +280,21 @@ def _place(
     return tuple(summaries)
 
 
-def _frames_enclose(
-    frames: tuple[IterationFrame, ...],
-    *,
-    seat: tuple[str, ...],
-    invocation: tuple[str, ...],
-) -> bool:
-    """Frames a walker could have written beneath ``seat`` for ``invocation``.
+def _frames_writable(frames: tuple[IterationFrame, ...], *, invocation: tuple[str, ...]) -> bool:
+    """Frames the walker could have written for ``invocation``.
 
-    A loop's body sits strictly beneath the loop, so every frame's loop is a
-    strict prefix of the invocation; frames nest strictly, outermost first,
-    starting at the seat (a seat may itself be the loop); and no loop is the
-    root.
+    An instance inside a loop body carries exactly one frame, whose loop is a
+    node scope the body sits directly beneath — ``loop/body/...`` — and nested
+    loops are refused at admission, so more than one frame is not a path.
     """
 
-    enclosing: tuple[str, ...] = seat
-    for index, frame in enumerate(frames):
+    if len(frames) > 1:
+        return False
+    for frame in frames:
         loop = frame.loop.segments
-        if (
-            not loop
-            or len(loop) >= len(invocation)
-            or invocation[: len(loop)] != loop
-            or loop[: len(enclosing)] != enclosing
-            or (index > 0 and len(loop) <= len(enclosing))
-        ):
+        beneath = invocation[len(loop) : len(loop) + 1]
+        if not loop or invocation[: len(loop)] != loop or beneath != (LOOP_BODY_SEGMENT,):
             return False
-        enclosing = loop
     return True
 
 
@@ -374,7 +365,7 @@ def _law_source() -> dict[str, str]:
         panel_outcome,
         _member_key,
         _place,
-        _frames_enclose,
+        _frames_writable,
         _tally,
         aggregate_panel,
     )

@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from constructicon.core.address import NodeId, ScopePath
+from constructicon.core.address import LOOP_BODY_SEGMENT, NodeId, ScopePath
 from constructicon.core.channel import ChannelBinding, ChannelContract
 from constructicon.core.component import ComponentDef
 from constructicon.core.control import ResolutionLock, ResolutionPin
@@ -399,7 +399,7 @@ def _compile_loop(
     """Compile one loop into a complete, sealed mini-program."""
 
     loop_scope = level_scope.child(node.id)
-    body_scope = loop_scope.child("body")
+    body_scope = loop_scope.child(LOOP_BODY_SEGMENT)
 
     if isinstance(loop.body, Ref):
         stored = _resolve_ref(comp, loop.body, where=body_scope.child("$body"))

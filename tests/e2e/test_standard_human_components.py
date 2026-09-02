@@ -275,7 +275,7 @@ def test_the_panel_law_is_part_of_the_pure_components_identity() -> None:
         core_panel.panel_outcome,
         core_panel._member_key,
         core_panel._place,
-        core_panel._frames_enclose,
+        core_panel._frames_writable,
         core_panel._tally,
         core_panel.aggregate_panel,
     )

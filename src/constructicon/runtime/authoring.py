@@ -393,9 +393,14 @@ def _classify_fault(
             "the retained definition is defective, not this graph: pin or promote a "
             "version whose declared boundary is its Graph's"
         )
-        retained = re.search(r" retained=(\{.*\})$", message)
-        if retained:
-            details.update(json.loads(retained.group(1)))
+        marker = message.rfind(" retained=")
+        if marker != -1:
+            try:
+                retained = json.loads(message[marker + len(" retained=") :])
+            except ValueError:
+                retained = None
+            if isinstance(retained, dict):
+                details.update(retained)
     elif "no upstream output" in lowered or "needs an initial value" in lowered:
         code = AdmissionCode.GRAPH_PORT_MISSING_SOURCE
         repair = "connect a matching upstream output or graph input"

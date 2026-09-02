@@ -268,6 +268,14 @@ def test_a_composites_boundary_is_its_graphs(system: Constructicon, journal: Sql
     assert fault.details == {"component": lying.name, "version": str(lying.content_hash())}
     assert "retained definition is defective" in fault.repair
 
+    # The details are read from the end of the message, so a scope that itself
+    # contains the marker cannot confuse them or escape the typed boundary.
+    decoy = retained.model_copy(update={"name": 'sdk/decoy retained={"component": "forged"}'})
+    rejected = system.admit_graph(decoy.model_dump(mode="json"), {"request": {"question": "ship?"}})
+    assert isinstance(rejected, AdmissionRejected)
+    fault = next(item for item in rejected.faults if "retained composite" in item.message)
+    assert fault.details == {"component": lying.name, "version": str(lying.content_hash())}
+
 
 def test_a_boundary_is_compared_as_bytes(system: Constructicon, journal: SqliteJournal) -> None:
     """`1 == True` is a Python fact; an embedded schema that differs there is another boundary."""
