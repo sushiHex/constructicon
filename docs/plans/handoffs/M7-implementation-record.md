@@ -812,7 +812,7 @@ off-by-one thresholds, the ballot bucket, the boundary-contract check, the
 gather-contract check, member cardinality, a composite aggregator, a
 composite's lying boundary at registration and at admission, a boundary
 compared as models at authoring, registration, and admission, fault details
-parsed from the first marker, and two ways of not re-deriving a result — are
+framed by a forgeable marker, and two ways of not re-deriving a result — are
 each killed. The acceptance lane runs six fakes reporting all six buckets through
 the real graph, then one fake plus one mailbox-backed human across restarts — a
 fresh journal and system over the same database file, nothing carried in
@@ -1006,6 +1006,18 @@ A seventh classified review returned two introduced items; both accepted.
   error escape the typed boundary. It now reads from the last marker and
   swallows a failed decode, proven with a graph whose own name carries a
   forged marker.
+
+An eighth classified review returned one introduced item and one design nit;
+both accepted.
+
+- A retained component whose own name contained the marker put a later
+  marker inside the JSON value, and reading from the last marker then failed.
+  The details are now framed by the ASCII unit separator, which canonical
+  JSON always escapes, so the suffix after the last separator is the details
+  and nothing inside them can imitate the frame; proven with a retained name
+  that carries the old marker.
+- The authoring preflight described loop-body scopes with a literal; it uses
+  `LOOP_BODY_SEGMENT` now, as the validator does.
 
 ## Open items
 

@@ -370,9 +370,10 @@ composite's declared boundary is its Graph's — admission exposes the Graph's
 ports, so the registry refuses a declaration that differs, `component()`
 refuses to redeclare one, and admission re-proves a retained store rather than
 trusting it, as a fault whose details name the retained component and version
-exactly — carried as an anchored JSON suffix, never scraped from prose — under
-the existing `graph.contract.invalid` code, since the code set is the
-versioned wire schema. A boundary is compared as canonical bytes, never as
+exactly — canonical JSON framed by a separator that canonical JSON always
+escapes, so no name can forge or break the frame — under the existing
+`graph.contract.invalid` code, since the code set is the versioned wire
+schema. A boundary is compared as canonical bytes, never as
 models: `1 == True` is a Python fact, and an embedded schema that differs only
 there is a different boundary.
 The sugar emits unversioned Refs like every combinator: the authoring proof is

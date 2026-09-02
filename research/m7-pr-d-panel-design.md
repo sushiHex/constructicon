@@ -5,7 +5,7 @@ findings; ten accepted, two narrowed), implemented on branch `m7/pr-d-panel`,
 then corrected after six adversarial reviews of the head (five blockers and
 three lower, then three and three, then four and four, then six and two, then
 six classified findings and one pre-existing item, then three and two, then
-two; see the implementation record). The
+two, then one; see the implementation record). The
 corrections that change this record: no boundary input, the members' request
 included, may carry the result contract, and a member's request and result
 are cardinality `one` (D1); a member may not claim the aggregator's own seat
@@ -190,7 +190,7 @@ second restart.
   sibling check, iteration prefix, a second frame, a loop that does not
   enclose its invocation, a loop not directly above a body, the aggregator's
   own frames trusted, a member's frame beneath another seat, fault details
-  parsed from the first marker, no duplicate check, the
+  framed by a forgeable marker, no duplicate check, the
   aggregator's own seat, no run check, both threshold off-by-ones, the ballot
   bucket, the boundary-contract check, the gather-contract check, member
   cardinality, a composite aggregator, a composite's lying boundary at
