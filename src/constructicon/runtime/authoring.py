@@ -10,6 +10,7 @@ sealing.
 from __future__ import annotations
 
 import ast
+import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -386,17 +387,15 @@ def _classify_fault(
         code = AdmissionCode.GRAPH_REFERENCE_UNPROMOTED
         repair = "pin an exact retained version or promote one to stable"
     elif "declares a boundary its graph does not export" in lowered:
-        code = AdmissionCode.GRAPH_REFERENCE_INVALID
+        # The retained definition is what is wrong; the graph that seats it is
+        # not. The defect names it exactly, as an anchored JSON suffix.
         repair = (
             "the retained definition is defective, not this graph: pin or promote a "
             "version whose declared boundary is its Graph's"
         )
-        component = _quoted_after(message, "retained composite")
-        if component:
-            details["component"] = component
-        version = re.search(r"@(sha256:[0-9a-f]+)", message)
-        if version:
-            details["version"] = version.group(1)
+        retained = re.search(r" retained=(\{.*\})$", message)
+        if retained:
+            details.update(json.loads(retained.group(1)))
     elif "no upstream output" in lowered or "needs an initial value" in lowered:
         code = AdmissionCode.GRAPH_PORT_MISSING_SOURCE
         repair = "connect a matching upstream output or graph input"

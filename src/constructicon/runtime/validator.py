@@ -27,7 +27,7 @@ from constructicon.core.grants import (
 )
 from constructicon.core.graph import Connection, Graph, GraphNode, Loop, Ref
 from constructicon.core.human import canonical_exchange_fault
-from constructicon.core.identity import digest, json_value
+from constructicon.core.identity import canonical_json, digest, json_value
 from constructicon.core.manifest import (
     CONTINUE_SCHEMA_HASH,
     CONTINUE_TYPE,
@@ -660,9 +660,10 @@ def _boundary_lies(comp: _Compilation, stored: StoredVersion, *, where: ScopePat
         definition.outputs, definition.body.outputs
     ):
         return False
+    retained = canonical_json({"component": definition.name, "version": str(stored.content_hash)})
     comp.faults.append(
-        f"{where.render()}: retained composite {definition.name!r}@{stored.content_hash} "
-        "declares a boundary its Graph does not export"
+        f"{where.render()}: a retained composite declares a boundary its Graph does not "
+        f"export retained={retained}"
     )
     return True
 

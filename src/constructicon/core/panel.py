@@ -218,9 +218,11 @@ def _place(
     result's path must begin with the aggregator's parent scope, have a segment
     at that depth — that segment is the member's node — and carry the
     aggregator's loop frames as a prefix of its own, any further frame naming a
-    loop beneath its seat: a member's internals may iterate beneath its seat,
-    but its seat is in the aggregator's iteration and nowhere else. Any other
-    topology is refused rather than guessed at, and
+    loop strictly enclosing its invocation, nested strictly from its seat: a
+    member's internals may iterate beneath its seat, but its seat is in the
+    aggregator's iteration and nowhere else. The aggregator's own frames are
+    held to the same law, because a result carries that path as data. Any
+    other topology is refused rather than guessed at, and
     so is a node claimed twice — whether by one path repeated or by two paths
     beneath it: a member that reports a sibling's identity collides with the
     sibling instead of replacing it, and one that claims the aggregator's own
@@ -234,6 +236,10 @@ def _place(
     scope = aggregator.scope.segments
     if not scope:
         raise ContractViolation("a panel aggregator has a scope; the root is not one")
+    if not _frames_enclose(aggregator.iterations, seat=(), invocation=scope):
+        raise ContractViolation(
+            f"panel aggregator {aggregator.render()} carries frames that do not enclose it"
+        )
     parent = scope[:-1]
     depth = len(parent)
     summaries: list[PanelMemberSummary] = []
@@ -278,14 +284,23 @@ def _frames_enclose(
     seat: tuple[str, ...],
     invocation: tuple[str, ...],
 ) -> bool:
-    """Each frame's loop is at or beneath the seat, encloses the invocation, nests in order."""
+    """Frames a walker could have written beneath ``seat`` for ``invocation``.
+
+    A loop's body sits strictly beneath the loop, so every frame's loop is a
+    strict prefix of the invocation; frames nest strictly, outermost first,
+    starting at the seat (a seat may itself be the loop); and no loop is the
+    root.
+    """
 
     enclosing: tuple[str, ...] = seat
-    for frame in frames:
+    for index, frame in enumerate(frames):
         loop = frame.loop.segments
         if (
-            invocation[: len(loop)] != loop
+            not loop
+            or len(loop) >= len(invocation)
+            or invocation[: len(loop)] != loop
             or loop[: len(enclosing)] != enclosing
+            or (index > 0 and len(loop) <= len(enclosing))
         ):
             return False
         enclosing = loop

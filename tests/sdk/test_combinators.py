@@ -257,16 +257,15 @@ def test_a_composites_boundary_is_its_graphs(system: Constructicon, journal: Sql
     )
     with pytest.raises(AdmissionError, match="boundary its Graph does not export"):
         system.validate(retained, {"request": {"question": "ship?"}})
+    # The typed result names the retained version exactly and says where the
+    # defect is; the code set is the versioned wire schema and gains nothing.
     rejected = system.admit_graph(
         retained.model_dump(mode="json"), {"request": {"question": "ship?"}}
     )
     assert isinstance(rejected, AdmissionRejected)
-    fault = next(
-        item for item in rejected.faults if item.code is AdmissionCode.GRAPH_REFERENCE_INVALID
-    )
-    assert fault.code is AdmissionCode.GRAPH_REFERENCE_INVALID
-    assert fault.details["component"] == lying.name
-    assert fault.details["version"] == str(lying.content_hash())
+    fault = next(item for item in rejected.faults if "retained composite" in item.message)
+    assert fault.code is AdmissionCode.GRAPH_CONTRACT_INVALID
+    assert fault.details == {"component": lying.name, "version": str(lying.content_hash())}
     assert "retained definition is defective" in fault.repair
 
 

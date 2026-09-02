@@ -250,8 +250,18 @@ def test_a_member_sits_in_the_aggregators_own_iteration() -> None:
                 run_id=RUN,
             )
     # Outside any loop the aggregator has no frames; a member's frames must
-    # still name loops beneath its own seat that enclose its invocation.
-    for below, frames in ((("retry", "vote"), (elsewhere,)), ((), (retry,))):
+    # still name loops beneath its own seat that enclose its invocation. A
+    # loop's body sits strictly beneath the loop, so a loop equal to the
+    # invocation, or one repeated, is a path the walker cannot write.
+    seat_loop = IterationFrame(loop=ScopePath(segments=(*PANEL, "alice", "retry", "vote")), index=0)
+    above = IterationFrame(loop=ScopePath(segments=PANEL), index=0)  # encloses the aggregator too
+    for below, frames in (
+        (("retry", "vote"), (elsewhere,)),
+        ((), (retry,)),
+        (("retry", "vote"), (seat_loop,)),
+        (("retry", "again", "vote"), (retry, retry)),
+        (("retry", "vote"), (above,)),
+    ):
         with pytest.raises(ContractViolation, match="not a sibling"):
             aggregate_panel(
                 (_member("alice", "responded", "approve", below=below, iterations=frames),),
@@ -259,6 +269,33 @@ def test_a_member_sits_in_the_aggregators_own_iteration() -> None:
                 aggregator=AGGREGATOR,
                 run_id=RUN,
             )
+
+
+def test_the_aggregators_own_frames_must_enclose_it() -> None:
+    """A result carries the aggregator's path as data, so that path is checked too."""
+
+    elsewhere = IterationFrame(loop=ScopePath(segments=("other", "loop")), index=0)
+    own = IterationFrame(loop=AGGREGATOR.scope, index=0)  # a loop equal to its scope
+    root = IterationFrame(loop=ScopePath(segments=()), index=0)
+    for frames in ((elsewhere,), (own,), (root,), (FRAME, FRAME)):
+        impossible = ExecutionPath(scope=AGGREGATOR.scope, iterations=frames)
+        with pytest.raises(ContractViolation, match="do not enclose"):
+            aggregate_panel(
+                (_member("alice", "responded", "approve", iterations=frames),),
+                PanelQuorum(required_approvals=1),
+                aggregator=impossible,
+                run_id=RUN,
+            )
+    concluded = aggregate_panel(
+        (_member("alice", "responded", "approve"),),
+        PanelQuorum(required_approvals=1),
+        aggregator=AGGREGATOR,
+        run_id=RUN,
+    )
+    stored = concluded.model_dump(mode="json")
+    forged = ExecutionPath(scope=AGGREGATOR.scope, iterations=(elsewhere,))
+    with pytest.raises(ValidationError):
+        PanelResult.model_validate({**stored, "aggregator": forged.model_dump(mode="json")})
 
 
 def test_a_member_from_another_run_is_refused() -> None:
