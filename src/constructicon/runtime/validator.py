@@ -14,7 +14,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from constructicon.core.address import NodeId, ScopePath
+from constructicon.core.address import LOOP_BODY_SEGMENT, NodeId, ScopePath
+from constructicon.core.admission import FAULT_DETAILS_SEPARATOR
 from constructicon.core.channel import ChannelBinding, ChannelContract
 from constructicon.core.component import ComponentDef
 from constructicon.core.control import ResolutionLock, ResolutionPin
@@ -27,7 +28,7 @@ from constructicon.core.grants import (
 )
 from constructicon.core.graph import Connection, Graph, GraphNode, Loop, Ref
 from constructicon.core.human import canonical_exchange_fault
-from constructicon.core.identity import digest, json_value
+from constructicon.core.identity import canonical_json, digest, json_value
 from constructicon.core.manifest import (
     CONTINUE_SCHEMA_HASH,
     CONTINUE_TYPE,
@@ -50,6 +51,7 @@ from constructicon.core.ports import (
     NodePortAddress,
     Port,
     PortAddress,
+    same_boundary,
 )
 from constructicon.core.registry import RegistrySnapshot, StoredVersion
 from constructicon.runtime.registry import CapabilityDescriptor
@@ -333,6 +335,8 @@ def _compile_node(
             input_sources,
         )
         if isinstance(definition.body, Graph):
+            if _boundary_lies(comp, stored, where=instance_scope):
+                return {}
             declared = {port.name: port for port in definition.inputs}
             retagged = {
                 name: [
@@ -396,11 +400,13 @@ def _compile_loop(
     """Compile one loop into a complete, sealed mini-program."""
 
     loop_scope = level_scope.child(node.id)
-    body_scope = loop_scope.child("body")
+    body_scope = loop_scope.child(LOOP_BODY_SEGMENT)
 
     if isinstance(loop.body, Ref):
         stored = _resolve_ref(comp, loop.body, where=body_scope.child("$body"))
         if stored is None:
+            return {}
+        if _boundary_lies(comp, stored, where=body_scope.child("$body")):
             return {}
         body_inputs = stored.definition.inputs
         body_outputs_declared = stored.definition.outputs
@@ -637,6 +643,30 @@ def _record_resolution(
             ),
         )
     )
+
+
+def _boundary_lies(comp: _Compilation, stored: StoredVersion, *, where: ScopePath) -> bool:
+    """A retained composite whose declared boundary is not its Graph's is re-proved, not trusted.
+
+    The registry refuses such a definition at registration; a store retained
+    from before that rule reaches admission only through here. The fault names
+    the retained version, because the defect is in it and not in the graph
+    that seats it.
+    """
+
+    definition = stored.definition
+    if not isinstance(definition.body, Graph):
+        return False
+    if same_boundary(definition.inputs, definition.body.inputs) and same_boundary(
+        definition.outputs, definition.body.outputs
+    ):
+        return False
+    retained = canonical_json({"component": definition.name, "version": str(stored.content_hash)})
+    comp.faults.append(
+        f"{where.render()}: a retained composite declares a boundary its Graph does not "
+        f"export{FAULT_DETAILS_SEPARATOR}{retained}"
+    )
+    return True
 
 
 def _resolve_ref(

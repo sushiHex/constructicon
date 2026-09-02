@@ -30,9 +30,33 @@ changing a shared definition. Compose before you drop a tier (I10).
 - Declare atomic capability aliases with `CapabilityRequirement(alias, kind)`.
   Bind an assembled capability id explicitly on the `Ref`; combinators never
   choose one by kind.
-- Use `component`, `flow`, `harness`, and `loop` only as sugar. The produced
-  definition must contain the same `Ref | Graph | Loop` you would hand-author.
-  Add an equality test against the direct Graph for new combinator behavior.
+- Use `component`, `flow`, `harness`, `loop`, and `panel` only as sugar. The
+  produced definition must contain the same `Ref | Graph | Loop` you would
+  hand-author. Add an equality test against the direct Graph for new
+  combinator behavior. A composite's declared ports are its Graph's; neither
+  `component()` nor the registry nor admission accepts a boundary the Graph
+  does not export, and boundaries are compared as bytes
+  (`core.ports.same_boundary`), never with `==`.
+- `panel()` takes definition bundles, never bare names, because it proves the
+  gather exact from declared contracts. A panel member declares one input and
+  one output typed by the panel contracts in `core/panel.py`, both of
+  cardinality one, and the two differ; an aggregator is atomic — its law
+  reads its own seat, so compose around the panel, not inside its aggregator —
+  and declares exactly one `many` input of the members' result contract and
+  no other input of it. A human member is
+  `human_panel_member(name, channel_id)` — the standard advisor and ballot
+  composed, registered and promoted like any composite — with one channel id
+  per participant, and the request payload you write is what tells the
+  participant to answer with a `PanelBallotPayload`, whose shape
+  `system.describe()` publishes. Report `unavailable` and `timed_out` as
+  member data; the kernel infers nothing from elapsed time.
+- A named contract revision (`ChannelContract` with a hand-named
+  `schema_hash`) cannot embed its JSON Schema on a port. Add the contract and
+  its shape to the module's `CONTRACT_SCHEMAS` so `describe()` publishes it,
+  and bump the revision when the shape changes. A pure standard component
+  that delegates its behaviour to an L0 law stamps that law's revision into
+  its implementation identity (`sdk/std.py`, `_under_law`); the panel law's
+  revision is derived from its own source, so nothing has to be bumped.
 - Architect JSON enters through `system.admit_graph()`. It is strict and bounded;
   rejection is a versioned `AdmissionRejected` with itemized repair data. Never
   add automatic repair or a trusted-SDK bypass. Public execution calls

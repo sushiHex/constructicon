@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Any
 
 import pydantic
@@ -13,6 +14,7 @@ from constructicon.core.component import ComponentDef
 from constructicon.core.errors import ContractViolation
 from constructicon.core.grants import EffectiveGrants, GrantRequest, Posture
 from constructicon.core.graph import Graph
+from constructicon.core.human import CONTRACT_SCHEMAS as _HUMAN_CONTRACT_SCHEMAS
 from constructicon.core.identity import Digest, digest
 from constructicon.core.introspection import (
     AdmissionLimits,
@@ -29,6 +31,7 @@ from constructicon.core.introspection import (
     SystemDescription,
 )
 from constructicon.core.manifest import CONTINUE_SCHEMA_HASH, CONTINUE_TYPE
+from constructicon.core.panel import CONTRACT_SCHEMAS as _PANEL_CONTRACT_SCHEMAS
 from constructicon.core.registry import RegistrySnapshot, registry_snapshot_digest
 from constructicon.runtime.registry import CapabilityDescriptor, ComponentRegistry
 
@@ -67,6 +70,8 @@ def build_system_description(
 
     component_descriptions: list[ComponentDescription] = []
     schema_by_hash: dict[str, SchemaDocument] = {}
+    for key in NAMED_CONTRACT_SCHEMAS:
+        _publish(schema_by_hash, _named_document(key))
     for name in selected_names:
         stable_hash = snapshot.stable_version(name)
         if stable_hash is None:
@@ -217,14 +222,9 @@ def _component_description(
     schema_by_hash: dict[str, SchemaDocument],
 ) -> ComponentDescription:
     for port in (*definition.inputs, *definition.outputs):
-        if port.json_schema is None or port.schema_hash in schema_by_hash:
-            continue
-        schema_by_hash[port.schema_hash] = _schema_document(
-            f"port:{port.schema_hash}",
-            1,
-            port.json_schema,
-            declared_hash=port.schema_hash,
-        )
+        document = _port_schema(port)
+        if document is not None:
+            _publish(schema_by_hash, document)
     stored = snapshot.get(definition.name, version)
     if stored is None:
         raise ContractViolation(
@@ -243,7 +243,7 @@ def _component_description(
         capability_requirements=tuple(requirements or ()),
         completeness=ContractCompleteness(
             port_schemas=all(
-                port.json_schema is not None for port in (*definition.inputs, *definition.outputs)
+                _port_schema(port) is not None for port in (*definition.inputs, *definition.outputs)
             ),
             capability_bindings=requirements is not None,
         ),
@@ -265,8 +265,42 @@ def _port_description(port: Any) -> PortDescription:
         type_id=port.type_id,
         schema_hash=port.schema_hash,
         cardinality=port.cardinality,
-        schema_available=port.json_schema is not None,
+        schema_available=_port_schema(port) is not None,
     )
+
+
+def _port_schema(port: Any) -> SchemaDocument | None:
+    """The shape a port's payload has: embedded on the port, or a named contract's.
+
+    Built fresh on every call: a description owns its documents, so a caller
+    that mutates one changes nothing another description will publish.
+    """
+
+    if port.json_schema is not None:
+        return _schema_document(
+            f"port:{port.schema_hash}",
+            1,
+            port.json_schema,
+            declared_hash=port.schema_hash,
+        )
+    key = (port.type_id, port.schema_hash)
+    return _named_document(key) if key in NAMED_CONTRACT_SCHEMAS else None
+
+
+def _named_document(key: tuple[str, str]) -> SchemaDocument:
+    type_id, schema_hash = key
+    return _schema_document(
+        f"contract:{type_id}",
+        1,
+        NAMED_CONTRACT_SCHEMAS[key].model_json_schema(),
+        declared_hash=schema_hash,
+    )
+
+
+def _publish(schema_by_hash: dict[str, SchemaDocument], document: SchemaDocument) -> None:
+    """One document per revision: `schema_hash` is the public key a port declares."""
+
+    schema_by_hash.setdefault(document.schema_hash, document)
 
 
 def _schema_document(
@@ -288,3 +322,25 @@ def _schema_document(
         schema_=normalized,
         generator=f"pydantic-{pydantic.__version__}",
     )
+
+
+_NAMED_CONTRACT_ENTRIES = tuple(
+    ((contract.type_id, contract.schema_hash), model)
+    for catalog in (_HUMAN_CONTRACT_SCHEMAS, _PANEL_CONTRACT_SCHEMAS)
+    for contract, model in catalog.items()
+)
+if len({schema_hash for (_, schema_hash), _ in _NAMED_CONTRACT_ENTRIES}) != len(
+    _NAMED_CONTRACT_ENTRIES
+):
+    raise RuntimeError("two named contracts share one revision string; the revision is the key")
+NAMED_CONTRACT_SCHEMAS: Mapping[tuple[str, str], type[pydantic.BaseModel]] = MappingProxyType(
+    dict(_NAMED_CONTRACT_ENTRIES)
+)
+"""The standard vocabulary: every named contract revision and the model whose shape it names.
+
+A named revision is not the digest of a schema, so the registry refuses to
+embed one on a port; the shape is published from here instead, keyed by the
+nominal pair a port declares. Every description carries the whole vocabulary,
+so a payload no port names — a panel ballot inside an advice reply — is
+discoverable too (I9). Documents are generated per description, never shared.
+"""

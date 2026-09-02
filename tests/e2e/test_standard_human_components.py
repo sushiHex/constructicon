@@ -9,14 +9,17 @@ against the one it asked about. Both survive the process that asked them dying.
 from __future__ import annotations
 
 import ast
+import inspect
 import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from typing import get_args
 
 from constructicon.api.control import ControlPlane
 from constructicon.api.system import Constructicon
-from constructicon.core.address import RunId
+from constructicon.core import panel as core_panel
+from constructicon.core.address import LOOP_BODY_SEGMENT, RunId
 from constructicon.core.admission import AdmissionRejected
 from constructicon.core.channel import ChannelEndpoint, reply_message_id
 from constructicon.core.control import (
@@ -42,17 +45,29 @@ from constructicon.core.human import (
     StoredApprovalPlan,
     approval_decision_payload,
 )
-from constructicon.core.identity import Digest, canonical_json, json_value
+from constructicon.core.identity import Digest, canonical_json, digest, json_value
+from constructicon.core.panel import (
+    PANEL_BALLOT_CONTRACT,
+    PANEL_LAW_REVISION,
+    PANEL_MEMBER_RESULT_CONTRACT,
+)
 from constructicon.core.run import RunStatus
-from constructicon.runtime.registry import CapabilityDescriptor, ComponentRegistry
+from constructicon.runtime.registry import (
+    CapabilityDescriptor,
+    ComponentRegistry,
+    source_digest_for,
+)
 from constructicon.sdk.std import (
     ADVISOR_CHANNEL,
     ADVISOR_COMPONENT,
     APPROVAL_CHANNEL,
     APPROVAL_COMPONENT,
     DURABLE_CHANNEL_KIND,
+    PANEL_BALLOT_COMPONENT,
+    PANEL_QUORUM_COMPONENT,
     definitions,
 )
+from constructicon.sdk.types import DefinitionBundle
 from constructicon.substrate.channels.mailbox import MailboxChannel
 from constructicon.substrate.effects.channel import ChannelSendEffect
 from constructicon.substrate.journal._sqlite_approvals import seal_approval
@@ -187,16 +202,120 @@ def _force_impossible_approval_reply(
         )
 
 
-def test_each_standard_component_declares_exactly_one_input_and_output() -> None:
+def _channel_bound() -> list[DefinitionBundle]:
+    return [bundle for bundle in definitions() if bundle.definition.capability_requirements]
+
+
+def _pure() -> list[DefinitionBundle]:
+    return [bundle for bundle in definitions() if not bundle.definition.capability_requirements]
+
+
+def test_each_channel_bound_component_declares_exactly_one_input_and_output() -> None:
     """Admission compiles the exchange from that pair, so there is nothing to pick.
 
     A second port would mean the request's port — and therefore its derived
-    identity — was chosen at call time rather than sealed at admission.
+    identity — was chosen at call time rather than sealed at admission. The
+    panel components hold no channel and compile no exchange; the quorum takes
+    the members' reports through one `many` port and its policy through one
+    `one` port, which is the shape `panel()` requires of an aggregator.
     """
 
-    for bundle in definitions():
+    assert {bundle.name for bundle in _channel_bound()} == {ADVISOR_COMPONENT, APPROVAL_COMPONENT}
+    for bundle in _channel_bound():
         assert len(bundle.definition.inputs) == 1, bundle.name
         assert len(bundle.definition.outputs) == 1, bundle.name
+
+    by_name = {bundle.name: bundle.definition for bundle in _pure()}
+    assert set(by_name) == {PANEL_BALLOT_COMPONENT, PANEL_QUORUM_COMPONENT}
+    ballot = by_name[PANEL_BALLOT_COMPONENT]
+    assert [port.cardinality for port in ballot.inputs] == ["one"]
+    assert ballot.inputs[0].type_id == ADVICE_REPLY_CONTRACT.type_id
+    quorum = by_name[PANEL_QUORUM_COMPONENT]
+    assert [port.cardinality for port in quorum.inputs] == ["many", "one"]
+    assert (
+        quorum.inputs[0].type_id
+        == ballot.outputs[0].type_id
+        == PANEL_MEMBER_RESULT_CONTRACT.type_id
+    )
+    for definition in by_name.values():
+        assert len(definition.outputs) == 1, definition.name
+
+
+def test_the_panel_law_is_part_of_the_pure_components_identity() -> None:
+    """Their own source says almost nothing; the law they delegate to is versioned in."""
+
+    for bundle in _pure():
+        implementation = bundle.implementation
+        assert implementation is not None
+        assert bundle.definition.body.source_digest == source_digest_for(implementation)
+        assert source_digest_for(implementation) == digest(
+            "python-source",
+            2,
+            {
+                "source": inspect.getsource(implementation),
+                "adapter_revision": PANEL_LAW_REVISION,
+            },
+        )
+        # The stamp is what carries the revision; without it the digest would be
+        # the bare source's, and a change to the law would leave it unchanged.
+        assert source_digest_for(implementation) != digest(
+            "python-source", 1, inspect.getsource(implementation)
+        )
+
+    # The revision is the digest of exactly this closure: every contract class
+    # and every law body. Dropping one from the production closure fails here.
+    closure = (
+        core_panel._PanelModel,
+        core_panel.PanelBallotPayload,
+        core_panel.PanelMemberResult,
+        core_panel.PanelQuorum,
+        core_panel.PanelTally,
+        core_panel.PanelMemberSummary,
+        core_panel.PanelResult,
+        core_panel.panel_outcome,
+        core_panel._member_key,
+        core_panel._place,
+        core_panel._frames_writable,
+        core_panel._tally,
+        core_panel.aggregate_panel,
+    )
+    source = {member.__name__: inspect.getsource(member) for member in closure}
+    source["LOOP_BODY_SEGMENT"] = LOOP_BODY_SEGMENT
+    source["PanelMemberOutcome"] = canonical_json(list(get_args(core_panel.PanelMemberOutcome)))
+    source["PanelBallot"] = canonical_json(list(get_args(core_panel.PanelBallot)))
+    source["PanelOutcome"] = canonical_json(list(get_args(core_panel.PanelOutcome)))
+    assert str(digest("panel-law", 1, source)) == PANEL_LAW_REVISION
+
+
+def test_describe_publishes_every_standard_shape(journal: SqliteJournal) -> None:
+    """Every standard port's shape, and the ballot no port names, are discoverable (I9)."""
+
+    system, _advice, _gate = _world(journal)
+    description = system.describe(limit=100)
+    by_name = {item.name: item for item in description.components}
+    for bundle in definitions():
+        described = by_name[bundle.name]
+        assert described.completeness.port_schemas is True, bundle.name
+        assert all(port.schema_available for port in (*described.inputs, *described.outputs))
+    published = {document.schema_hash: document for document in description.schemas}
+    for bundle in definitions():
+        for port in (*bundle.definition.inputs, *bundle.definition.outputs):
+            assert published[port.schema_hash].name == f"contract:{port.type_id}"
+    ballot = published[PANEL_BALLOT_CONTRACT.schema_hash]
+    assert ballot.name == f"contract:{PANEL_BALLOT_CONTRACT.type_id}"
+    assert set(ballot.schema_["properties"]) == {"schema_version", "outcome", "ballot", "rationale"}
+
+    # A description owns its documents: mutating one changes nothing published later.
+    ballot.schema_["properties"].clear()
+    again = system.describe(limit=100)
+    fresh = {document.schema_hash: document for document in again.schemas}
+    assert set(fresh[PANEL_BALLOT_CONTRACT.schema_hash].schema_["properties"]) == {
+        "schema_version",
+        "outcome",
+        "ballot",
+        "rationale",
+    }
+    assert again.description_digest == description.description_digest
 
 
 def test_the_standard_ports_are_the_shared_l0_contracts() -> None:
@@ -597,18 +716,20 @@ def test_each_standard_component_declares_the_capability_it_may_hold() -> None:
     """
 
     for bundle in definitions():
-        required = bundle.definition.capability_requirements
-        assert required is not None, bundle.name
-        assert len(required) == 1, bundle.name
-        assert required[0].kind == DURABLE_CHANNEL_KIND, bundle.name
+        assert bundle.definition.capability_requirements is not None, bundle.name
 
     aliases = {}
-    for bundle in definitions():
+    for bundle in _channel_bound():
         declared = bundle.definition.capability_requirements
         assert declared is not None
+        assert len(declared) == 1, bundle.name
+        assert declared[0].kind == DURABLE_CHANNEL_KIND, bundle.name
         aliases[bundle.name] = declared[0].alias
-    assert aliases[ADVISOR_COMPONENT] == ADVISOR_CHANNEL
-    assert aliases[APPROVAL_COMPONENT] == APPROVAL_CHANNEL
+    assert aliases == {ADVISOR_COMPONENT: ADVISOR_CHANNEL, APPROVAL_COMPONENT: APPROVAL_CHANNEL}
+
+    # The panel components ask for nothing, and `()` is that statement — an
+    # admission that hands them any capability at all is refused.
+    assert {bundle.definition.capability_requirements for bundle in _pure()} == {()}
 
 
 def test_a_graph_may_not_bind_an_undeclared_capability(journal: SqliteJournal) -> None:

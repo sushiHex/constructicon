@@ -10,13 +10,14 @@ sealing.
 from __future__ import annotations
 
 import ast
+import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from constructicon.core.address import ScopePath
-from constructicon.core.admission import AdmissionCode, AdmissionFault
+from constructicon.core.address import LOOP_BODY_SEGMENT, ScopePath
+from constructicon.core.admission import FAULT_DETAILS_SEPARATOR, AdmissionCode, AdmissionFault
 from constructicon.core.control import ResolutionLock
 from constructicon.core.errors import AdmissionError
 from constructicon.core.grants import EffectiveGrants
@@ -174,7 +175,7 @@ def _preflight_graph(
                 _preflight_ref(
                     state,
                     loop_body,
-                    scope=node_scope.child("body").child("$body"),
+                    scope=node_scope.child(LOOP_BODY_SEGMENT).child("$body"),
                     path=(*node_path, "body", "body"),
                     depth=depth + 1,
                     component_stack=component_stack,
@@ -183,7 +184,7 @@ def _preflight_graph(
                 _preflight_graph(
                     state,
                     loop_body,
-                    scope=node_scope.child("body"),
+                    scope=node_scope.child(LOOP_BODY_SEGMENT),
                     path=(*node_path, "body", "body"),
                     depth=depth + 1,
                     component_stack=component_stack,
@@ -385,6 +386,21 @@ def _classify_fault(
     elif "has no stable version" in lowered:
         code = AdmissionCode.GRAPH_REFERENCE_UNPROMOTED
         repair = "pin an exact retained version or promote one to stable"
+    elif "declares a boundary its graph does not export" in lowered:
+        # The retained definition is what is wrong; the graph that seats it is
+        # not. The defect names it exactly, as an anchored JSON suffix.
+        repair = (
+            "the retained definition is defective, not this graph: pin or promote a "
+            "version whose declared boundary is its Graph's"
+        )
+        _, framed, suffix = message.rpartition(FAULT_DETAILS_SEPARATOR)
+        if framed:
+            try:
+                retained = json.loads(suffix)
+            except ValueError:
+                retained = None
+            if isinstance(retained, dict):
+                details.update(retained)
     elif "no upstream output" in lowered or "needs an initial value" in lowered:
         code = AdmissionCode.GRAPH_PORT_MISSING_SOURCE
         repair = "connect a matching upstream output or graph input"

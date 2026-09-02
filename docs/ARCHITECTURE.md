@@ -330,6 +330,64 @@ only `await ctx.channel(alias).ask(payload)`, and pinned source is not pinned
 behavior: a component free to name its own port could branch differently on a
 second host and append a second request.
 
+A panel is a Graph pattern over this, not a primitive. `panel()` emits the
+literal fan-out and fan-in: each member sees the graph's one request input, and
+one explicit aggregator gathers every member through an ordinary `many` port.
+The combinator executes nothing, chooses no model, infers no quorum, and hides
+no scheduler; its Graph is byte-equal to the hand-authored one. Exactness is
+proved at authoring from bundles' declared contracts — every member shares one
+request/result pair of cardinality one, the aggregator is atomic and has
+exactly one `many` port of that result contract, and no boundary input, the
+request included, carries that contract —
+because the gather is the general connector law: a graph input sits in every
+node's pool, and a compatible graph input or a compatible helper upstream of a
+member would widen it. The standard aggregator
+`constructicon.std/panel-quorum` is pure and declares no capability; it derives
+each member's node from the member's reported path against its own path —
+same parent scope, the aggregator's loop frame as a prefix of the member's,
+a member's own frame naming a loop at or beneath its seat whose body its
+invocation sits in, and every path held to what the walker writes: one frame
+at most, its loop directly above a `body` segment, the aggregator's own path
+included — refuses any other topology, the aggregator's own seat, or a node
+reported twice, orders members by the
+canonical JSON of their path, and concludes one of four explicit outcomes
+(`approved`, `rejected`, `insufficient_responses`, `impossible_quorum`) from an
+explicit quorum input. The result names its aggregator and run and is
+self-verifying: validating one re-derives placement, tally, and outcome from
+the members it carries and refuses a contradiction, whichever aggregator wrote
+it. Every outcome a member reports — `responded`,
+`declined`, `unavailable`, `timed_out` — is data; the kernel owns no clock. A
+human member is `human-advisor` followed by `constructicon.std/panel-ballot`,
+which reads the human's reply strictly as a ballot and carries the actor and
+message id the executor stamped, so the vote can be followed back to its
+durable reply. Member identity is member-reported and shape-checked, not
+kernel-attested; attesting `many`-port sources is deferred. The two panel
+components delegate their behaviour to the law in `core/panel.py`, so its
+revision — a digest of the contract classes and law bodies, derived rather
+than named — is stamped into their implementation identity: a changed law is
+a new version by construction, never a silent change of a retained one. A
+composite's declared boundary is its Graph's — admission exposes the Graph's
+ports, so the registry refuses a declaration that differs, `component()`
+refuses to redeclare one, and admission re-proves a retained store rather than
+trusting it, as a fault whose details name the retained component and version
+exactly — canonical JSON framed by a separator that canonical JSON always
+escapes, so no name can forge or break the frame — under the existing
+`graph.contract.invalid` code, since the code set is the versioned wire
+schema. A boundary is compared as canonical bytes, never as
+models: `1 == True` is a Python fact, and an embedded schema that differs only
+there is a different boundary.
+The sugar emits unversioned Refs like every combinator: the authoring proof is
+about the bundles as authored, and admission re-proves the gather nominally
+against the one atomic world it seals.
+
+A named contract revision is not the digest of a schema, so the registry
+refuses to embed one on a port. `system.describe()` publishes the standard
+vocabulary instead — every named contract revision and the shape it names,
+from the L0 catalogues beside the contracts — and reports a port's schema
+available when the port embeds one or names a catalogued revision. A shape no
+port carries, such as the ballot inside an advice reply, is published the
+same way (I9).
+
 ## Parking and waking
 
 Waiting is not failing. A component that has sent or reconciled its request and
@@ -519,10 +577,16 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
   simulation; optional stdio/OAuth MCP adapter; and schema-5 SQLite decomposed
   by permanent responsibility. See [ADR 0012](adr/0012-durable-control-plane-and-mcp.md)
   and [ADR 0013](adr/0013-local-assembly-through-command-law.md).
-- **M7 (in progress)** — channels (InProcess + Mailbox over the journal), typed
+- **M7 (done)** — channels (InProcess + Mailbox over the journal), typed
   human inbox/reply/ack and request-bound approval commands, MCP delegation,
-  and standard advisor/approval components; deterministic panel aggregation
-  remains.
+  standard advisor/approval components, and the panel pattern: `panel()` sugar
+  byte-equal to the direct Graph, nominal member/quorum/result contracts, a
+  pure deterministic quorum aggregator, and a human member composed from the
+  advisor and a ballot adapter, proven across real process restarts through
+  the control plane's own host. See
+  [ADR 0014](adr/0014-channel-identity-and-delivery.md),
+  [ADR 0015](adr/0015-human-authority-on-channels.md), and
+  [ADR 0016](adr/0016-positive-durable-facts-and-provenance-eras.md).
 - **M8** — live CLI executors (ClaudeCode, Codex, Pi) once isolation profiles
   are enforceable; recorded-transcript contract suites.
 - **M9** — self-improvement phase 1 (prompt/context skills); see

@@ -23,7 +23,7 @@ src/constructicon/
 ├── substrate/   L1 — executors, journal/control store, effects, git, gates
 ├── runtime/     L2 — registry, typed authoring preflight, validator → manifest,
 │                     walker (imports core contracts only — never substrate)
-├── sdk/         L3 — @task + component/flow/harness/loop authoring sugar
+├── sdk/         L3 — @task + component/flow/harness/loop/panel authoring sugar
 └── api/         L4 — system object, ControlPlane, RunHost, cursor/detail logic,
                       optional MCP adapter, and the injection root
 tests/           mirrors the layers + credential-free e2e acceptance lanes

@@ -11,11 +11,12 @@ this records the deviations and decisions that implementation forced
 
 ## Scope completed
 
-PR A and PR B are merged. PR C (the human control surface) is implemented on
-draft PR #18. Typed message channels have two transports; routing and exchange
-are sealed into the manifest; sends carry proof through the existing effect
-law; invocation parking is typed; and durable replies drive wake recovery. PR D
-(`panel()`) is not started.
+PRs A, B, and C are merged (C as #18). Typed message channels have two
+transports; routing and exchange are sealed into the manifest; sends carry
+proof through the existing effect law; invocation parking is typed; and durable
+replies drive wake recovery. PR D adds the panel pattern: `panel()` sugar, the
+L0 panel contracts, the pure quorum aggregator and ballot adapter, and the
+credential-free acceptance lane across process restarts.
 
 - One L0 `Channel` contract with `InProcessChannel` and `MailboxChannel`,
   exercised by a single parity suite. Both derive messages from the same
@@ -707,10 +708,376 @@ bounded pages across recovery ticks.
 The approved rev-2 plan remains byte-identical to `main`. Decisions discovered
 after approval live here and in ADRs 0014–0016, not in rewritten history.
 
+## PR D — the panel pattern
+
+Design record: `research/m7-pr-d-panel-design.md` (revised after an adversarial
+Codex review of the design; twelve findings, ten accepted, two narrowed).
+
+**`panel()` is literal Graph sugar over bundles.** Its body is the members, the
+aggregator, one map-free connection from each member to the aggregator, the
+members' one request port plus the aggregator's non-`many` inputs as graph
+inputs, and the aggregator's outputs — byte-equal to the hand-authored Graph
+with equal `source_graph_hash` and `manifest_hash`. It takes definition bundles
+rather than bare Refs because exactness is proved at authoring from declared
+contracts: every member declares one input and one output and all share the
+same pair; the aggregator declares exactly one `many` input of that result
+contract; no boundary input — a policy input of the aggregator or the members'
+own request — carries that result contract, because a graph input sits in
+every node's pool and would be gathered as a member; boundary names are
+unique. Each refusal is a typed error at authoring, not an absent member at
+admission.
+
+**The gather is the general connector law, not a panel privilege.** A `many`
+port gathers every compatible source in its pool, which is the transitive
+upstream closure plus every graph input. A same-level bystander contributes
+nothing; a compatible graph input or a compatible helper upstream of a member
+widens the gather, and the tests say so. `panel()` never emits either shape. A
+`one` port fed by two members still raises the existing ambiguity fault from
+the hand-authored Graph, and `panel()` refuses such an aggregator before that.
+
+**Member identity is reported and shape-checked, not kernel-attested.** The
+walker hands a `many` port payloads in sealed source order and drops the source
+address; nothing stamps provenance into a payload. So a member writes
+`member = ctx.path` — the genuine path it was handed — and the aggregator checks
+everything the kernel makes checkable: every path begins with the aggregator's
+parent scope, has a segment at that depth, which is the member's node, and
+sits in the aggregator's own loop iteration, since the walker gives every
+sibling in a loop body the same frame; a
+node reported twice, whether by one path repeated or two paths beneath it, is a
+contract violation, so a member claiming a sibling's identity collides with the
+sibling rather than replacing it; any other topology is refused rather than
+guessed at; a result from another run is refused. Members are ordered by the
+canonical JSON of the complete `ExecutionPath`, never by `render()`, which is
+not injective. Kernel-attested source identity on `many` ports would change the
+atomic invocation contract and is deferred.
+
+**The result is self-verifying.** `PanelResult` names the aggregator path and
+run it was concluded for, and validating one re-derives the members'
+placement, the tally, and the outcome from the members it carries: a stored or
+foreign result whose conclusion contradicts its members is refused (I4), so any
+aggregator that shares the contract is held to the standard one's law.
+
+**The outcome says what happened.** `impossible_quorum` when the quorum exceeds
+the member count, `approved` when approvals meet it, `insufficient_responses`
+when fewer members answered than the quorum needs, and `rejected` only when
+enough answered to have approved and did not. The quorum is an explicit typed
+input, never a combinator default. Every member outcome — `responded`,
+`declined`, `unavailable`, `timed_out` — is data a member or policy component
+reports; M7 owns no clock, so the kernel infers nothing from elapsed time. A
+human who does not answer keeps the run parked; one who will not answer replies
+`declined`. Wall-clock timeouts need a timer owner, a durable observation, and
+wake law, and stay deferred.
+
+**A human member is composition, not a new exchange.** `human_panel_member` is
+`human-advisor` followed by `constructicon.std/panel-ballot`, authored per
+participant because each human needs their own channel id carrying their own
+sealed endpoint. The adapter validates the outer, executor-stamped
+`AdviceReplyPayload`, then reads its `advice` strictly as a `PanelBallotPayload`
+with `extra="forbid"`: an `actor_id` a human writes inside their answer is a
+malformed ballot that fails the run, not a claim the panel repeats. The vote
+carries the stamped `actor_id` and `message_id` so it can be followed back to
+its durable reply. `CANONICAL_EXCHANGES` and `sealed_reply_payload` are
+unchanged. Both panel components declare `capability_requirements=()`, and the
+structural tests now distinguish the channel-bound components (exactly one
+input, one output, one durable channel) from the pure ones.
+
+**What a participant can discover.** The ballot's shape travels inside the
+generic advice reply, so nothing in the exchange announces it: the request
+payload the workflow author writes is what the participant sees, and it should
+say that the answer is read as a `PanelBallotPayload`. The panel ports embed no
+JSON Schema, for the same reason the advisor and approval ports embed none: the
+registry binds an embedded schema to its own digest, and a named contract
+revision is not that digest. So `describe()` publishes the standard vocabulary
+from L0 catalogues beside the contracts — every named revision and its shape,
+including `constructicon.std/PanelBallot`, which no port names — and reports a
+port's schema available when it embeds one or names a catalogued revision. All
+six standard ports are now complete.
+
+**The law is part of the identity.** `source_digest_for` hashes a component's
+own source, and the two panel components' own source says almost nothing:
+they delegate to `core/panel.py`. Its revision (`PANEL_LAW_REVISION`) is a
+digest of the contract classes and law bodies, derived at import rather than
+named, and stamped into both implementations through the same
+adapter-revision mechanism a task adapter uses. A change to any contract
+field, validator, placement, tallying, the outcome, or the result's
+self-check is therefore a new version by construction; a test pins the
+closure the digest is taken over.
+
+**Proof.** Twenty-six mutants of the aggregation law, the authoring checks,
+and the boundary checks — dropped ordering, sibling check, iteration prefix, a
+second frame, a loop that does not enclose its invocation, a loop not directly
+above a body, the aggregator's own frames trusted, a member's frame beneath
+another seat, duplicate check, the aggregator's own seat, run check, both
+off-by-one thresholds, the ballot bucket, the boundary-contract check, the
+gather-contract check, member cardinality, a composite aggregator, a
+composite's lying boundary at registration and at admission, a boundary
+compared as models at authoring, registration, and admission, fault details
+framed by a forgeable marker, and two ways of not re-deriving a result — are
+each killed. The acceptance lane runs six fakes reporting all six buckets through
+the real graph, then one fake plus one mailbox-backed human across real
+process restarts: the process that asked does nothing more, a child
+interpreter imports the components over the same database file, records the
+ballot, and its own control-plane host wakes the run to conclude the panel; a
+third interpreter records the approval the same way, and no application state
+crosses a boundary except through the file. Each resumption's cause is the
+durable reply to that round trip's request, read back from the journal, and
+the vote's copied message id is that reply. The run's history holds exactly three attempts — the
+start and one resumption per reply, each caused by that reply — and exactly
+two requests, two replies, two acknowledgements, and one approval exist
+afterwards. A human who rejects leaves
+the panel `rejected`, fails the run at the adapter, and never produces an
+approval request, so the request exists only because the result said so.
+
+## PR D — what the complete-head review found
+
+An adversarial Codex review of the head returned five blockers and three lower
+findings; four blockers were accepted and fixed, one was narrowed with
+evidence.
+
+- Accepted: a member whose request and result contracts coincide put the
+  request — a graph input, so in every pool — into the gather. `panel()` now
+  refuses any boundary input carrying the result contract.
+- Accepted: the aggregator compared scope only; a member reporting another loop
+  iteration passed. It now takes its whole path and compares iterations.
+- Narrowed: a member reporting an invented sibling name is not a second vote.
+  The walker delivers exactly one payload per sealed source, so the count is
+  the kernel's; a misreported name that is nobody else's mislabels only its
+  author. That is the recorded member-reported identity, deferred as before.
+- Accepted: `PanelResult` accepted contradictions. It is now self-verifying.
+- Accepted: the lane called the run directly after each reply, so a broken
+  wake could pass, and the approval adapter's result parse was removable
+  without a failing test. Resumption now goes through the control plane's
+  host, attempt causes are asserted, and a rejecting panel proves the adapter
+  reads the result.
+- Accepted in part: the ballot's shape is not discoverable from the exchange.
+  Recorded above; embedding a schema is refused by the registry for a named
+  revision, and the request payload is the author's channel to the
+  participant.
+- Accepted: the claimed proof matrix was incomplete. Explicit ids, a repeated
+  member, zero members, wrong member arity, two gathers, and an id collision
+  are now tested.
+- Accepted: `actor_id` and `message_id` in a member result are telemetry any
+  component may write; a consumer that needs provenance follows `message_id`
+  to the sealed reply. The contract's docstring says so.
+
+A second review of the corrected head returned three blockers and three lower
+findings; all six were accepted.
+
+- A composite member with an `optional` result could seat nobody and one with a
+  `many` result could seat every internal source. A member's request and
+  result must now be cardinality `one`: a seat answers exactly once.
+- The registered identity of the pure components did not cover the law they
+  execute. The law's revision is stamped into both, as recorded above.
+- Deferring discoverability was not acceptable for a milestone marked done.
+  The named-contract catalogue above closes it without touching contract
+  identity; the introspection contract is met for every standard port.
+- A member could report the aggregator's own seat without colliding with
+  anything. That claim is refused outright; the residual — a member may
+  mislabel itself with a name nobody holds — is stated exactly.
+- The result's self-check proves self-consistency, not which run or aggregator
+  produced it; a consumer with a context compares `run_id` and `aggregator`
+  explicitly, as the lane does.
+- The wake assertion counted causes, not attempts, so a cause-less extra
+  attempt could hide. The lane now asserts the exact attempt sequence: one
+  start and one resumption per reply, each caused by that reply.
+
+A third review returned four blockers and four lower findings; three blockers
+and all four lower findings were accepted, one blocker rejected with evidence.
+
+- Rejected: `panel()` emits unversioned Refs, so a later promotion could give a
+  member another contract and the gather would silently omit it. That is
+  every combinator's and every direct Graph's behaviour — `Ref.version` is
+  optional by IR design, the stable pointer is the release law's, and
+  admission seals one atomic world and re-proves the gather nominally against
+  it. The authoring proof is about the bundles as authored. A validator fault
+  for a connection that binds nothing would close the residual for every
+  graph; it is an IR decision and stays open.
+- Accepted: a composite could declare a boundary its Graph does not export,
+  because admission compiles the Graph and ignores the declaration. The
+  registry now refuses such a definition and `component()` refuses to
+  redeclare a Graph's boundary, so a member's advertised `one` result is its
+  body's.
+- Accepted: a composite aggregator wrapping the standard quorum would place
+  nothing, since the quorum's law reads its own seat; `panel()` now requires
+  an atomic aggregator. A member whose internals iterate carries frames
+  beneath its seat; the aggregator's frames must be a prefix of a member's,
+  not equal to them.
+- Accepted: the vocabulary's documents were shared mutable dictionaries. The
+  catalogues now hold the models, every description generates its documents
+  afresh, and documents are keyed by name and revision so two types cannot
+  overwrite one another.
+- Accepted: the identity test verified the digest formula, not that the law's
+  source matches its revision. A golden digest of the four law bodies is now
+  pinned to `panel-law-1`; editing the law without a bump fails it.
+- Accepted: the advice request's schema is generated from a `RootModel` of
+  any JSON value, so its generator is stated truthfully; the design record's
+  result shape names `run_id` and `aggregator`.
+
+A fourth review returned six findings and two nits; four accepted, one shown
+already safe by a test, one rejected again with the residual stated exactly.
+
+- Rejected again: unversioned Refs. The proposed connector-liveness rule — a
+  connection's source must contribute a resolved binding somewhere beneath
+  its destination — is the right shape for the open IR item, and the item
+  now says so; it applies to every graph and is not this slice's.
+- Accepted: the registry check covered new registrations only. Admission now
+  refuses a retained composite whose declared boundary is not its Graph's,
+  proven by storing one past the registry and validating a graph that seats
+  it.
+- Accepted: a member's extra loop frames must name loops beneath its own seat;
+  a frame for a loop elsewhere is not a sibling's.
+- Narrowed and kept: `panel()` still requires an atomic aggregator. A
+  composite aggregator that does not read its seat would admit as a direct
+  Graph, and the refusal is a choice of the sugar, recorded as such: the seat
+  is the aggregator's, and transformation composes around the panel. Relaxing
+  it needs a way for an aggregator to say whether its law reads its seat.
+- Shown safe: a description's documents were said to share nested dictionaries
+  with the registered ports. They do not — a description is built from dumped
+  and re-validated documents — and a test now mutates a returned embedded
+  schema, nested dictionary included, and shows the next description
+  unchanged. The deep copy tried in response was dead code and was removed.
+- Accepted: the law's golden covered four bodies. The revision is now derived
+  from the whole closure, so there is no golden to keep complete.
+- Accepted: `schema_hash` is the public key of a published schema, as it was
+  before; the vocabulary asserts at import that no two named contracts share
+  a revision string.
+- Declined: relaxing member equality to nominal contracts. A panel's members
+  share one declared pair by name too, because the pair becomes the boundary
+  the sugar emits; a direct Graph may name ports differently, and the sugar
+  does not promise to admit every direct Graph, only to equal the one it
+  emits.
+
+A fifth review, asked to classify each finding as introduced here, pre-existing,
+or a design choice, returned four introduced defects, two introduced nits, and
+one pre-existing item; all accepted.
+
+- The three boundary checks compared ports with `==`, and `1 == True` is a
+  Python fact: an embedded schema differing only there passed all three. A
+  boundary is now compared as canonical bytes (`core.ports.same_boundary`) at
+  authoring, registration, and admission, and the members' shared pair is
+  compared the same way.
+- The retained-boundary fault was a legacy string that `admit_graph()`
+  classified as a graph contract fault with a repair aimed at the wrong
+  thing. It now names the retained component and version in its details,
+  with a repair that says the retained definition is defective. The
+  Loop-body reference path re-proves the same boundary. (A new fault code was
+  tried and withdrawn in the next round; see below.)
+- A member's extra frame needed only to begin with its seat, so a loop that
+  did not enclose the reporting invocation passed. Each further frame must
+  now name a loop that encloses the invocation, and frames nest in order from
+  the seat; a frame at or beneath the seat follows from that.
+- The law's closure omitted the shared model config and the literal domains.
+  Both are in the digest now: `_PanelModel`'s source and each literal's
+  values.
+- The vocabulary's uniqueness guard counted after a comprehension had already
+  collapsed duplicates; it now counts the entries first. The design record's
+  frame wording is corrected.
+- Pre-existing, recorded below: composite registration never verifies that an
+  embedded `json_schema` hashes to its declared `schema_hash`; that check is
+  confined to atomic identity.
+
+A sixth classified review returned three introduced items and two
+pre-existing; all accepted.
+
+- The frame law trusted the aggregator's own frames and accepted a loop equal
+  to its invocation or repeated. A loop's body sits strictly beneath the loop,
+  so every frame's loop is now a strict prefix of the invocation, frames nest
+  strictly from the seat, no loop is the root, and the aggregator's path —
+  data in a result — is held to the same law.
+- The fifth round added a fault code to a closed enum without a schema
+  version transition. The code is withdrawn: the code set is the versioned
+  wire schema and this slice changes no schema. The fault stays under
+  `graph.contract.invalid` with exact details and a repair that says where
+  the defect is.
+- Those details were scraped from prose and were not exact for names holding
+  quotes or digest-like text. The validator now appends an anchored JSON
+  suffix and the classifier parses that, so any legal name survives.
+- Pre-existing, recorded below: registration deduplication compares
+  definitions as models, and the legacy fault-scope parser drops scopes with
+  spaces and truncates those with colons.
+
+A seventh classified review returned two introduced items; both accepted.
+
+- The frame law described nesting the walker cannot write: nested loops are
+  refused at admission, an instance in a loop body carries exactly one frame,
+  and the body sits directly beneath the loop under a `body` segment. The law
+  now states exactly that — one frame at most, its loop directly above
+  `body` — for members and the aggregator alike, and the segment is named
+  once in the IR (`LOOP_BODY_SEGMENT`) and used by the validator. When nested
+  loops arrive the law changes and, being digested, so does the revision.
+- The details parser matched greedily from the first marker and let a decode
+  error escape the typed boundary. It now reads from the last marker and
+  swallows a failed decode, proven with a graph whose own name carries a
+  forged marker.
+
+An eighth classified review returned one introduced item and one design nit;
+both accepted.
+
+- A retained component whose own name contained the marker put a later
+  marker inside the JSON value, and reading from the last marker then failed.
+  The details are now framed by the ASCII unit separator, which canonical
+  JSON always escapes, so the suffix after the last separator is the details
+  and nothing inside them can imitate the frame; proven with a retained name
+  that carries the old marker.
+- The authoring preflight described loop-body scopes with a literal; it uses
+  `LOOP_BODY_SEGMENT` now, as the validator does.
+
+A ninth classified review found no blocking defect. It corrected two stale
+statements in the design record and recorded one pre-existing item below: a
+composite may reuse a standard revision string with a different embedded
+schema, because embedded schemas are verified against their digest only for
+atomics, and `describe()` would then publish the standard shape for it.
+
+A tenth review, confirming the head, returned two introduced items; both
+accepted.
+
+- The plan's slice-D proof says "across a real process restart"; the lane had
+  used fresh objects in one interpreter, as PR C's lanes do. The human lane
+  now runs its reply stage and its approval stage in child interpreters over
+  the same database file, each importing the components afresh, with
+  nothing crossing the boundary but that file.
+- The frame law reads `LOOP_BODY_SEGMENT`; the law's digest now includes its
+  value, so changing the IR segment changes the standard components'
+  identity too.
+
+An eleventh review returned one introduced item, accepted: the child-process
+rewrite had loosened the attempt-cause proof to a copied id and a kind. Both
+causes are now compared to the durable replies read back from the journal,
+and the vote's copied message id is compared to the same reply. Two wording
+corrections went with it. It confirmed that re-assembling in each child is
+honest rehydration: exact registrations resolve as existing and promotion
+finds stable already equal, so no new registry, promotion, or attestation
+rows are written.
+
 ## Open items
 
-- PR D remains: `panel()` sugar, the deterministic quorum aggregator, and the
-  integrated acceptance lane.
+- Kernel-attested source identity on `many` ports and wall-clock timeouts for
+  human members are deferred, as recorded above.
+- `describe()` publishes the whole standard vocabulary in every description,
+  filtered or not. It is the system's fixed L0 vocabulary rather than a
+  property of the selected components; a per-selection projection would be a
+  choice, not a correction.
+- Registration deduplication compares definitions as models
+  (`plan_registration`'s semantic match), so two truthful composites differing
+  only where Python equality is blind — `1` and `true` — dedupe to one retained
+  version despite distinct canonical bytes. Pre-existing; the bytes law for
+  boundaries does not extend to it yet.
+- The legacy fault-scope parser in `_classify_fault` drops scopes containing
+  spaces and truncates those containing colons, both legal in raw Graph names
+  and node ids; typed faults inherit it. Pre-existing.
+- Composite registration never verifies that an embedded `json_schema` hashes
+  to its declared `schema_hash`; that check is confined to atomic
+  `_validate_atomic_identity`. The boundary checks compare the schema bytes a
+  composite declares against its Graph's, not against the digest. One
+  consequence: a composite port may reuse a standard named revision with a
+  different embedded schema, and `describe()` publishes the standard shape for
+  it under that revision, since named documents are published first and a
+  revision is one document.
+- Connector liveness is not an admission rule. A connection whose source node
+  contributes no resolved binding anywhere beneath the edge is admitted, so a
+  member whose stable version later changes contract is silently absent from a
+  `many` gather; a fault for that would close this for every graph and is an
+  IR decision.
 - A message a caller may not act on is refused with `AUTH_REQUIRED_SCOPE` rather
   than reported absent, which confirms that a supplied id exists. Deliberate:
   ids are derived digests over run, path, channel, lane, interaction, and port,

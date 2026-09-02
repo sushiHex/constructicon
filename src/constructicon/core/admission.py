@@ -20,6 +20,14 @@ from constructicon.core.manifest import ExecutionManifest
 
 ADMISSION_SCHEMA_VERSION = 1
 
+FAULT_DETAILS_SEPARATOR = "\x1f"
+"""Frames structured details appended to a legacy fault message.
+
+The unit separator: canonical JSON escapes every control character, so the
+suffix after the last separator is the details and nothing inside them can
+imitate the frame.
+"""
+
 
 class AdmissionCode(StrEnum):
     GRAPH_SCHEMA_INVALID_JSON = "graph.schema.invalid_json"
