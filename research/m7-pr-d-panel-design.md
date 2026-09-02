@@ -2,9 +2,9 @@
 
 Status: revised after adversarial review of the design (Codex, twelve
 findings; ten accepted, two narrowed), implemented on branch `m7/pr-d-panel`,
-then corrected after three adversarial reviews of the head (five blockers and
-three lower, then three and three, then four and four with one blocker
-rejected; see the implementation record). The
+then corrected after four adversarial reviews of the head (five blockers and
+three lower, then three and three, then four and four, then six and two; see
+the implementation record). The
 corrections that change this record: no boundary input, the members' request
 included, may carry the result contract, and a member's request and result
 are cardinality `one` (D1); a member may not claim the aggregator's own seat
@@ -182,12 +182,14 @@ second restart.
 - One advisor round trip and one approval round trip complete across real
   process restarts, credential-free, with one request, reply, ack, approval,
   and wake cause each.
-- Mutation check (shipped): seventeen mutants — no canonical order, no sibling
-  check, iteration prefix, no duplicate check, the aggregator's own seat, no
-  run check, both threshold off-by-ones, the ballot bucket, the
-  boundary-contract check, the gather-contract check, member cardinality, a
-  composite aggregator, a composite's lying boundary, an edited law without a
-  revision bump, and two ways of not re-deriving a result — each killed.
+- Mutation check (shipped): eighteen mutants — no canonical order, no sibling
+  check, iteration prefix, a frame beneath another seat, no duplicate check,
+  the aggregator's own seat, no run check, both threshold off-by-ones, the
+  ballot bucket, the boundary-contract check, the gather-contract check,
+  member cardinality, a composite aggregator, a composite's lying boundary at
+  registration and at admission, and two ways of not re-deriving a result —
+  each killed. The law's revision is derived from its source, so an edited
+  law is a new revision by construction rather than a mutant to kill.
 - Wake (shipped): resumption after each reply goes through the control
   plane's host; the run's attempt causes are exactly the two replies.
 

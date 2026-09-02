@@ -344,9 +344,10 @@ node's pool, and a compatible graph input or a compatible helper upstream of a
 member would widen it. The standard aggregator
 `constructicon.std/panel-quorum` is pure and declares no capability; it derives
 each member's node from the member's reported path against its own path —
-same parent scope, the aggregator's loop frames as a prefix of the member's —
-refuses any other topology, the aggregator's own seat, or a node reported
-twice, orders members by the
+same parent scope, the aggregator's loop frames as a prefix of the member's,
+any further frame naming a loop beneath the member's seat — refuses any other
+topology, the aggregator's own seat, or a node reported twice, orders members
+by the
 canonical JSON of their path, and concludes one of four explicit outcomes
 (`approved`, `rejected`, `insufficient_responses`, `impossible_quorum`) from an
 explicit quorum input. The result names its aggregator and run and is
@@ -360,10 +361,13 @@ message id the executor stamped, so the vote can be followed back to its
 durable reply. Member identity is member-reported and shape-checked, not
 kernel-attested; attesting `many`-port sources is deferred. The two panel
 components delegate their behaviour to the law in `core/panel.py`, so its
-revision is stamped into their implementation identity: a changed law is a
-new version, never a silent change of a retained one. A composite's declared
-boundary is its Graph's — admission exposes the Graph's ports, so the registry
-refuses a declaration that differs and `component()` refuses to redeclare one.
+revision — a digest of the contract classes and law bodies, derived rather
+than named — is stamped into their implementation identity: a changed law is
+a new version by construction, never a silent change of a retained one. A
+composite's declared boundary is its Graph's — admission exposes the Graph's
+ports, so the registry refuses a declaration that differs, `component()`
+refuses to redeclare one, and admission re-proves a retained store rather than
+trusting it.
 The sugar emits unversioned Refs like every combinator: the authoring proof is
 about the bundles as authored, and admission re-proves the gather nominally
 against the one atomic world it seals.

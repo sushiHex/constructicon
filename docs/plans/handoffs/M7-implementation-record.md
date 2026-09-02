@@ -795,19 +795,21 @@ six standard ports are now complete.
 
 **The law is part of the identity.** `source_digest_for` hashes a component's
 own source, and the two panel components' own source says almost nothing:
-they delegate to `core/panel.py`. Its revision (`PANEL_LAW_REVISION`) is
-stamped into both implementations through the same adapter-revision mechanism
-a task adapter uses, so a change to placement, tallying, the outcome, or the
-result's self-check is a new version rather than a silent change of a retained
-one; a test pins the digest to that stamp.
+they delegate to `core/panel.py`. Its revision (`PANEL_LAW_REVISION`) is a
+digest of the contract classes and law bodies, derived at import rather than
+named, and stamped into both implementations through the same
+adapter-revision mechanism a task adapter uses. A change to any contract
+field, validator, placement, tallying, the outcome, or the result's
+self-check is therefore a new version by construction; a test pins the
+closure the digest is taken over.
 
-**Proof.** Seventeen mutants of the aggregation law, the authoring checks, and
-the registry's boundary check — dropped ordering, sibling check, iteration
-prefix, duplicate check, the aggregator's own seat, run check, both off-by-one
-thresholds, the ballot bucket, the boundary-contract check, the
-gather-contract check, member cardinality, a composite aggregator, a
-composite's lying boundary, an edited law without a revision bump, and two
-ways of not re-deriving a result — are each killed. The acceptance lane runs six fakes reporting all six buckets through
+**Proof.** Eighteen mutants of the aggregation law, the authoring checks, and
+the boundary checks — dropped ordering, sibling check, iteration prefix, a
+frame beneath another seat, duplicate check, the aggregator's own seat, run
+check, both off-by-one thresholds, the ballot bucket, the boundary-contract
+check, the gather-contract check, member cardinality, a composite aggregator,
+a composite's lying boundary at registration and at admission, and two ways
+of not re-deriving a result — are each killed. The acceptance lane runs six fakes reporting all six buckets through
 the real graph, then one fake plus one mailbox-backed human across restarts — a
 fresh journal and system over the same database file, nothing carried in
 memory. The system that asked is discarded; a second records the ballot and its
@@ -904,6 +906,40 @@ and all four lower findings were accepted, one blocker rejected with evidence.
   any JSON value, so its generator is stated truthfully; the design record's
   result shape names `run_id` and `aggregator`.
 
+A fourth review returned six findings and two nits; four accepted, one shown
+already safe by a test, one rejected again with the residual stated exactly.
+
+- Rejected again: unversioned Refs. The proposed connector-liveness rule — a
+  connection's source must contribute a resolved binding somewhere beneath
+  its destination — is the right shape for the open IR item, and the item
+  now says so; it applies to every graph and is not this slice's.
+- Accepted: the registry check covered new registrations only. Admission now
+  refuses a retained composite whose declared boundary is not its Graph's,
+  proven by storing one past the registry and validating a graph that seats
+  it.
+- Accepted: a member's extra loop frames must name loops beneath its own seat;
+  a frame for a loop elsewhere is not a sibling's.
+- Narrowed and kept: `panel()` still requires an atomic aggregator. A
+  composite aggregator that does not read its seat would admit as a direct
+  Graph, and the refusal is a choice of the sugar, recorded as such: the seat
+  is the aggregator's, and transformation composes around the panel. Relaxing
+  it needs a way for an aggregator to say whether its law reads its seat.
+- Shown safe: a description's documents were said to share nested dictionaries
+  with the registered ports. They do not — a description is built from dumped
+  and re-validated documents — and a test now mutates a returned embedded
+  schema, nested dictionary included, and shows the next description
+  unchanged. The deep copy tried in response was dead code and was removed.
+- Accepted: the law's golden covered four bodies. The revision is now derived
+  from the whole closure, so there is no golden to keep complete.
+- Accepted: `schema_hash` is the public key of a published schema, as it was
+  before; the vocabulary asserts at import that no two named contracts share
+  a revision string.
+- Declined: relaxing member equality to nominal contracts. A panel's members
+  share one declared pair by name too, because the pair becomes the boundary
+  the sugar emits; a direct Graph may name ports differently, and the sugar
+  does not promise to admit every direct Graph, only to equal the one it
+  emits.
+
 ## Open items
 
 - Kernel-attested source identity on `many` ports and wall-clock timeouts for
@@ -912,10 +948,11 @@ and all four lower findings were accepted, one blocker rejected with evidence.
   filtered or not. It is the system's fixed L0 vocabulary rather than a
   property of the selected components; a per-selection projection would be a
   choice, not a correction.
-- A connection that binds nothing is not an admission fault. A member whose
-  stable version later changes contract is silently absent from a `many`
-  gather; a fault for a dangling connection would close this for every graph
-  and is an IR decision.
+- Connector liveness is not an admission rule. A connection whose source node
+  contributes no resolved binding anywhere beneath the edge is admitted, so a
+  member whose stable version later changes contract is silently absent from a
+  `many` gather; a fault for that would close this for every graph and is an
+  IR decision.
 - A message a caller may not act on is refused with `AUTH_REQUIRED_SCOPE` rather
   than reported absent, which confirms that a supplied id exists. Deliberate:
   ids are derived digests over run, path, channel, lane, interaction, and port,

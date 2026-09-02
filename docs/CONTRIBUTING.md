@@ -53,7 +53,8 @@ changing a shared definition. Compose before you drop a tier (I10).
   its shape to the module's `CONTRACT_SCHEMAS` so `describe()` publishes it,
   and bump the revision when the shape changes. A pure standard component
   that delegates its behaviour to an L0 law stamps that law's revision into
-  its implementation identity (`sdk/std.py`, `_under_law`).
+  its implementation identity (`sdk/std.py`, `_under_law`); the panel law's
+  revision is derived from its own source, so nothing has to be bumped.
 - Architect JSON enters through `system.admit_graph()`. It is strict and bounded;
   rejection is a versioned `AdmissionRejected` with itemized repair data. Never
   add automatic repair or a trusted-SDK bypass. Public execution calls
