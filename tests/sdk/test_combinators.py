@@ -13,7 +13,7 @@ from constructicon.core.errors import AdmissionError
 from constructicon.core.graph import Connection, Graph, GraphNode, Loop, Ref
 from constructicon.core.manifest import CONTINUE_TYPE, ExecutionManifest
 from constructicon.core.ports import Port
-from constructicon.sdk import flow, harness, loop, panel, port_type, task
+from constructicon.sdk import component, flow, harness, loop, panel, port_type, task
 
 
 class Issue(BaseModel):
@@ -398,6 +398,24 @@ def test_panel_refuses_what_would_be_gathered_wrongly_or_not_at_all() -> None:
         panel("sdk/seeded", panel_yes, aggregator=panel_tally_seeded)
     with pytest.raises(TypeError, match="would be gathered as a member"):
         panel("sdk/echo", panel_echo, aggregator=panel_tally)
+
+    # A seat answers exactly once: a composite member whose result is `many`
+    # would seat every internal source it gathers, and one whose result is
+    # `optional` might seat nobody.
+    for cardinality in ("many", "optional"):
+        wide = component(
+            f"sdk/panel-{cardinality}",
+            Graph(
+                name=f"sdk/panel-{cardinality}",
+                nodes=(GraphNode(id="yes", body=Ref(component="sdk/panel-yes")),),
+                inputs=panel_yes.definition.inputs,
+                outputs=(
+                    panel_yes.definition.outputs[0].model_copy(update={"cardinality": cardinality}),
+                ),
+            ),
+        )
+        with pytest.raises(TypeError, match="one-cardinality request and result"):
+            panel(f"sdk/{cardinality}-member", wide, aggregator=panel_tally)
 
     # Shape refusals: no members, a member of the wrong arity, an aggregator
     # with two gathers, and an aggregator id that is also a member id.

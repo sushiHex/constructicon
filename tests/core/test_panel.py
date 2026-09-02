@@ -17,6 +17,8 @@ from constructicon.core.address import ExecutionPath, IterationFrame, RunId, Sco
 from constructicon.core.errors import ContractViolation
 from constructicon.core.identity import canonical_json
 from constructicon.core.panel import (
+    CONTRACT_SCHEMAS,
+    PANEL_BALLOT_CONTRACT,
     PanelBallot,
     PanelBallotPayload,
     PanelMemberOutcome,
@@ -175,6 +177,33 @@ def test_a_member_claiming_a_siblings_identity_collides_with_it() -> None:
             aggregator=AGGREGATOR,
             run_id=RUN,
         )
+
+
+def test_a_member_cannot_claim_the_aggregators_own_seat() -> None:
+    """The aggregator is not a member; a report from its seat is a lie about the shape."""
+
+    for below in ((), ("deeper",)):
+        with pytest.raises(ContractViolation, match="aggregator's own seat"):
+            aggregate_panel(
+                (_member("quorum", "responded", "approve", below=below),),
+                PanelQuorum(required_approvals=1),
+                aggregator=AGGREGATOR,
+                run_id=RUN,
+            )
+
+
+def test_every_named_panel_contract_publishes_its_shape() -> None:
+    """A participant can discover the ballot without reading source (I9)."""
+
+    ballot = CONTRACT_SCHEMAS[PANEL_BALLOT_CONTRACT]
+    assert set(ballot["properties"]) == {"schema_version", "outcome", "ballot", "rationale"}
+    assert ballot["additionalProperties"] is False
+    assert {contract.schema_hash for contract in CONTRACT_SCHEMAS} == {
+        "panel-ballot-1",
+        "panel-member-result-1",
+        "panel-quorum-1",
+        "panel-result-1",
+    }
 
 
 def test_a_member_sits_in_the_aggregators_own_iteration() -> None:

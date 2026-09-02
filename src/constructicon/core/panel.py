@@ -14,7 +14,9 @@ parked; one who will not answer replies ``declined``.
 
 from __future__ import annotations
 
-from typing import Literal
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, NonNegativeInt, PositiveInt, model_validator
 
@@ -39,6 +41,22 @@ PANEL_RESULT_CONTRACT = ChannelContract(
     type_id="constructicon.std/PanelResult",
     schema_hash="panel-result-1",
 )
+PANEL_BALLOT_CONTRACT = ChannelContract(
+    type_id="constructicon.std/PanelBallot",
+    schema_hash="panel-ballot-1",
+)
+"""The ballot's nominal identity. No port carries it: a ballot travels inside
+the generic advice reply. This names what ``panel-ballot`` reads, so that
+``system.describe()`` can publish the shape a participant has to answer in."""
+
+PANEL_LAW_REVISION = "panel-law-1"
+"""The revision of the aggregation law in this module.
+
+Stamped into the implementation identity of every standard component that
+delegates to it (see ``sdk.std``), because their own source says almost
+nothing. A change to placement, tallying, the outcome, or the result's
+self-check is a new revision, or a retained component would change behaviour
+under an unchanged version."""
 
 
 class _PanelModel(BaseModel):
@@ -209,10 +227,12 @@ def _place(
     loop iteration. Any other topology is refused rather than guessed at, and
     so is a node claimed twice — whether by one path repeated or by two paths
     beneath it: a member that reports a sibling's identity collides with the
-    sibling instead of replacing it. The walker delivers one payload per sealed
+    sibling instead of replacing it, and one that claims the aggregator's own
+    seat is refused outright. The walker delivers one payload per sealed
     source, so the count is the kernel's; what a member can misreport is only
     its own name, and a misreported name that is nobody else's is a lie about
-    itself, not a second vote.
+    itself — a mislabelled seat, not a second vote — which is the recorded
+    limit of member-reported identity.
     """
 
     scope = aggregator.scope.segments
@@ -239,6 +259,10 @@ def _place(
                 f"aggregator at {aggregator.render()}"
             )
         node = segments[depth]
+        if node == scope[-1]:
+            raise ContractViolation(
+                f"panel member {result.member.render()} claims the aggregator's own seat"
+            )
         if node in seen:
             raise ContractViolation(f"panel member {node!r} reported more than one result")
         seen.add(node)
@@ -284,7 +308,21 @@ def aggregate_panel(
     )
 
 
+CONTRACT_SCHEMAS: Mapping[ChannelContract, dict[str, Any]] = MappingProxyType(
+    {
+        PANEL_BALLOT_CONTRACT: PanelBallotPayload.model_json_schema(),
+        PANEL_MEMBER_RESULT_CONTRACT: PanelMemberResult.model_json_schema(),
+        PANEL_QUORUM_CONTRACT: PanelQuorum.model_json_schema(),
+        PANEL_RESULT_CONTRACT: PanelResult.model_json_schema(),
+    }
+)
+"""Each named contract revision and the shape it names, for ``describe()``."""
+
+
 __all__ = [
+    "CONTRACT_SCHEMAS",
+    "PANEL_BALLOT_CONTRACT",
+    "PANEL_LAW_REVISION",
     "PANEL_MEMBER_RESULT_CONTRACT",
     "PANEL_QUORUM_CONTRACT",
     "PANEL_RESULT_CONTRACT",

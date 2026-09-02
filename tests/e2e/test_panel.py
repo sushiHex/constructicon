@@ -163,19 +163,21 @@ def _quorum_result(journal: SqliteJournal, run_id: RunId) -> PanelResult:
     return result
 
 
-def _wake_causes(journal: SqliteJournal, run_id: RunId) -> list[AttemptCause]:
-    """Every attempt cause in the run's history, in event order."""
+ATTEMPT_KINDS = frozenset({"RunStarted", "RunResumed", "RunReclaimed"})
 
-    causes: list[AttemptCause] = []
+
+def _attempts(journal: SqliteJournal, run_id: RunId) -> list[tuple[str, AttemptCause | None]]:
+    """Every attempt the run made, in order, with the durable fact that caused it."""
+
+    attempts: list[tuple[str, AttemptCause | None]] = []
     after = 0
     while True:
         page = journal.events(run_id, after_seq=after, limit=500)
         if not page:
-            return causes
+            return attempts
         for event in page:
-            cause = AttemptCause.from_payload(event.payload)
-            if cause is not None:
-                causes.append(cause)
+            if event.kind in ATTEMPT_KINDS:
+                attempts.append((event.kind, AttemptCause.from_payload(event.payload)))
         after = page[-1].seq
 
 
@@ -318,7 +320,8 @@ async def test_a_human_member_votes_across_a_restart_and_the_panel_reaches_appro
     first = SqliteJournal(database, now_fn=clock.now)
     ballot_request = await _ask(_assemble(first), first, run_id)
 
-    # Alice answers from another process, with a ballot and nothing else.
+    # Alice answers through a fresh system over the same file, with a ballot
+    # and nothing else.
     second = SqliteJournal(database, now_fn=clock.now)
     answering = ControlPlane(system=_assemble(second), store=second)
     replied = await answering.channels_reply(
@@ -340,7 +343,7 @@ async def test_a_human_member_votes_across_a_restart_and_the_panel_reaches_appro
     assert human.ballot == "approve"
     assert concluded.members[1].result.actor_id is None
 
-    # The approver answers from a third process.
+    # The approver answers through a third system over the same file.
     third = SqliteJournal(database, now_fn=clock.now)
     world = _assemble(third)
     deciding = ControlPlane(system=world, store=third)
@@ -361,10 +364,12 @@ async def test_a_human_member_votes_across_a_restart_and_the_panel_reaches_appro
     assert record["approval_id"] == decided.approval_id
     assert record["run_id"] == str(run_id)
 
-    # Each round trip's attempt was caused by exactly its reply, and nothing else woke the run.
-    assert _wake_causes(third, run_id) == [
-        AttemptCause(kind="channel_reply", id=str(replied.message_id)),
-        AttemptCause(kind="channel_reply", id=str(decided.reply)),
+    # Three attempts and no more: the start, and one wake per reply, each caused
+    # by exactly that reply.
+    assert _attempts(third, run_id) == [
+        ("RunStarted", None),
+        ("RunResumed", AttemptCause(kind="channel_reply", id=str(replied.message_id))),
+        ("RunResumed", AttemptCause(kind="channel_reply", id=str(decided.reply))),
     ]
     assert _counts(database) == (2, 2, 2, 1)
 
@@ -402,8 +407,9 @@ async def test_a_panel_that_does_not_approve_never_reaches_the_approver(
         "unavailable": 0,
         "timed_out": 0,
     }
-    assert _wake_causes(journal, run_id) == [
-        AttemptCause(kind="channel_reply", id=str(replied.message_id))
+    assert _attempts(journal, run_id) == [
+        ("RunStarted", None),
+        ("RunResumed", AttemptCause(kind="channel_reply", id=str(replied.message_id))),
     ]
     assert journal.parked_waits() == []
     assert _counts(database) == (1, 1, 1, 0)

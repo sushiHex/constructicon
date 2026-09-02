@@ -21,7 +21,9 @@ called by the executor — never assembled by a caller.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, cast
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Annotated, Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -983,3 +985,24 @@ def sealed_reply_payload(
             message_id=reply_id,
         ).model_dump(mode="json"),
     )
+
+
+CONTRACT_SCHEMAS: Mapping[ChannelContract, dict[str, Any]] = MappingProxyType(
+    {
+        ADVICE_REQUEST_CONTRACT: {
+            "title": "AdviceRequest",
+            "description": (
+                "Caller-authored JSON: the question exactly as the workflow wrote it. "
+                "It is all the advisor sees, so it must say what the answer has to contain."
+            ),
+        },
+        ADVICE_REPLY_CONTRACT: AdviceReplyPayload.model_json_schema(),
+        APPROVAL_REQUEST_CONTRACT: ApprovalRequestPayload.model_json_schema(),
+        APPROVAL_REPLY_CONTRACT: ApprovalDecisionPayload.model_json_schema(),
+    }
+)
+"""Each named contract revision and the shape it names, for ``describe()``.
+
+A named revision is not the digest of a schema, so the registry will not
+embed one on a port; the shape is published from here instead.
+"""

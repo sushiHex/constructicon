@@ -9,6 +9,7 @@ against the one it asked about. Both survive the process that asked them dying.
 from __future__ import annotations
 
 import ast
+import inspect
 import json
 import sqlite3
 from datetime import datetime
@@ -42,10 +43,18 @@ from constructicon.core.human import (
     StoredApprovalPlan,
     approval_decision_payload,
 )
-from constructicon.core.identity import Digest, canonical_json, json_value
-from constructicon.core.panel import PANEL_MEMBER_RESULT_CONTRACT
+from constructicon.core.identity import Digest, canonical_json, digest, json_value
+from constructicon.core.panel import (
+    PANEL_BALLOT_CONTRACT,
+    PANEL_LAW_REVISION,
+    PANEL_MEMBER_RESULT_CONTRACT,
+)
 from constructicon.core.run import RunStatus
-from constructicon.runtime.registry import CapabilityDescriptor, ComponentRegistry
+from constructicon.runtime.registry import (
+    CapabilityDescriptor,
+    ComponentRegistry,
+    source_digest_for,
+)
 from constructicon.sdk.std import (
     ADVISOR_CHANNEL,
     ADVISOR_COMPONENT,
@@ -228,6 +237,47 @@ def test_each_channel_bound_component_declares_exactly_one_input_and_output() ->
     )
     for definition in by_name.values():
         assert len(definition.outputs) == 1, definition.name
+
+
+def test_the_panel_law_is_part_of_the_pure_components_identity() -> None:
+    """Their own source says almost nothing; the law they delegate to is versioned in."""
+
+    for bundle in _pure():
+        implementation = bundle.implementation
+        assert implementation is not None
+        assert bundle.definition.body.source_digest == source_digest_for(implementation)
+        assert source_digest_for(implementation) == digest(
+            "python-source",
+            2,
+            {
+                "source": inspect.getsource(implementation),
+                "adapter_revision": PANEL_LAW_REVISION,
+            },
+        )
+        # The stamp is what carries the revision; without it the digest would be
+        # the bare source's, and a change to the law would leave it unchanged.
+        assert source_digest_for(implementation) != digest(
+            "python-source", 1, inspect.getsource(implementation)
+        )
+
+
+def test_describe_publishes_every_standard_shape(journal: SqliteJournal) -> None:
+    """Every standard port's shape, and the ballot no port names, are discoverable (I9)."""
+
+    system, _advice, _gate = _world(journal)
+    description = system.describe(limit=100)
+    by_name = {item.name: item for item in description.components}
+    for bundle in definitions():
+        described = by_name[bundle.name]
+        assert described.completeness.port_schemas is True, bundle.name
+        assert all(port.schema_available for port in (*described.inputs, *described.outputs))
+    published = {document.schema_hash: document for document in description.schemas}
+    for bundle in definitions():
+        for port in (*bundle.definition.inputs, *bundle.definition.outputs):
+            assert published[port.schema_hash].name == f"contract:{port.type_id}"
+    ballot = published[PANEL_BALLOT_CONTRACT.schema_hash]
+    assert ballot.name == f"contract:{PANEL_BALLOT_CONTRACT.type_id}"
+    assert set(ballot.schema_["properties"]) == {"schema_version", "outcome", "ballot", "rationale"}
 
 
 def test_the_standard_ports_are_the_shared_l0_contracts() -> None:

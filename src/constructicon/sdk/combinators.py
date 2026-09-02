@@ -174,8 +174,9 @@ def panel(
 
     Exact by construction means proved here, at authoring, from declared
     contracts — which is why members and the aggregator are bundles and never
-    bare names. Every member declares one request and one result, the same
-    pair as every other member; the aggregator declares exactly one ``many``
+    bare names. Every member declares one request and one result, each of
+    cardinality ``one`` — a seat answers exactly once — and the same pair as
+    every other member; the aggregator declares exactly one ``many``
     port and it is that result contract; no boundary input — the request or an
     aggregator policy input — carries that result contract, because a graph
     input is in every node's pool and would be gathered as a member; and no
@@ -254,6 +255,15 @@ def _one_member_contract(members: tuple[DefinitionBundle, ...]) -> tuple[Port, P
             f"panel member {first.name!r} must declare exactly one input and one output; "
             f"it declares {len(first.inputs)} and {len(first.outputs)}"
         )
+    request, result = first.inputs[0], first.outputs[0]
+    if request.cardinality != "one" or result.cardinality != "one":
+        # A composite whose result is `optional` may seat nobody; one whose
+        # result is `many` may seat every internal source it gathers. A member
+        # is one seat, and one seat answers exactly once.
+        raise TypeError(
+            f"panel member {first.name!r} must declare a one-cardinality request and result; "
+            f"it declares {request.cardinality!r} -> {result.cardinality!r}"
+        )
     for other in members[1:]:
         definition = other.definition
         if definition.inputs != first.inputs or definition.outputs != first.outputs:
@@ -264,7 +274,7 @@ def _one_member_contract(members: tuple[DefinitionBundle, ...]) -> tuple[Port, P
                 f"{[p.name for p in first.inputs]} -> {[p.name for p in first.outputs]}; "
                 "a panel's members share one exact request and result contract"
             )
-    return first.inputs[0], first.outputs[0]
+    return request, result
 
 
 def _aggregator_contract(

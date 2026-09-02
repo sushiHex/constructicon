@@ -22,8 +22,8 @@ a stored `PythonRef` and expects to find the same function it recorded.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any, Literal
+from collections.abc import Callable, Mapping
+from typing import Any, Literal, TypeVar
 
 from pydantic import ValidationError
 
@@ -46,6 +46,7 @@ from constructicon.core.human import (
 )
 from constructicon.core.identity import canonical_json, digest, json_value
 from constructicon.core.panel import (
+    PANEL_LAW_REVISION,
     PANEL_MEMBER_RESULT_CONTRACT,
     PANEL_QUORUM_CONTRACT,
     PANEL_RESULT_CONTRACT,
@@ -77,9 +78,8 @@ def _port(name: str, contract: Any, *, cardinality: Literal["one", "many"] = "on
 
     Nominal identity is the contract's `type_id` and named `schema_hash`. No
     JSON Schema is embedded: the registry binds an embedded schema to its own
-    digest, and a named revision is not that digest, so `system.describe()`
-    reports these ports schema-incomplete — the same as the advisor and
-    approval ports — and their shapes are the L0 models they name.
+    digest, and a named revision is not that digest. The shape is published by
+    `system.describe()` from the L0 contract catalogues instead.
     """
 
     return Port(
@@ -147,6 +147,27 @@ async def human_approval(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping
     return {"decision": decision.model_dump(mode="json")}
 
 
+_Impl = TypeVar("_Impl", bound=Callable[..., Any])
+
+
+def _under_law(revision: str) -> Callable[[_Impl], _Impl]:
+    """Stamp the law a pure component delegates to into its implementation identity.
+
+    `source_digest_for` hashes a component's own source. The two panel
+    components delegate nearly everything to `core.panel`, so its revision
+    joins the digest the way a task adapter's does: a change to the law is a
+    new revision and therefore a new version, never a silent change of a
+    retained one.
+    """
+
+    def stamp(impl: _Impl) -> _Impl:
+        setattr(impl, "__constructicon_adapter_revision__", revision)  # noqa: B010
+        return impl
+
+    return stamp
+
+
+@_under_law(PANEL_LAW_REVISION)
 async def panel_ballot(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[str, Any]:
     """Turn one human's advice reply into a panel vote, with its provenance.
 
@@ -161,10 +182,11 @@ async def panel_ballot(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[s
     `member` is this component's own path, which the walker handed it. Its
     parent is the member node the panel declared.
 
-    The ballot's shape travels inside the generic advice reply, so nothing in
-    the exchange itself announces it: the request the workflow author writes
-    is what the participant sees, and it has to say that the answer is read as
-    a `PanelBallotPayload` — `outcome`, `ballot`, `rationale`, nothing else.
+    The ballot's shape travels inside the generic advice reply, so the
+    exchange itself does not announce it. `system.describe()` publishes it as
+    the named contract `constructicon.std/PanelBallot`, and the request the
+    workflow author writes — all the participant sees — should say that the
+    answer is read as one: `outcome`, `ballot`, `rationale`, nothing else.
     """
 
     reply = AdviceReplyPayload.model_validate(inputs["advice"])
@@ -186,6 +208,7 @@ async def panel_ballot(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[s
     return {"vote": vote.model_dump(mode="json")}
 
 
+@_under_law(PANEL_LAW_REVISION)
 async def panel_quorum(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[str, Any]:
     """Conclude a panel from every member's report under an explicit quorum.
 
@@ -214,8 +237,8 @@ def human_panel_member(name: str, channel_id: str) -> DefinitionBundle:
     channel inside its Graph rather than declaring one outside it.
 
     The participant learns how to answer from the request payload, which the
-    workflow author writes (see `panel_ballot`); nothing in the exchange
-    itself announces the ballot's shape.
+    workflow author writes, and can discover the ballot's shape through
+    `system.describe()` (see `panel_ballot`).
     """
 
     return flow(
