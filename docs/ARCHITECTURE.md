@@ -344,11 +344,12 @@ node's pool, and a compatible graph input or a compatible helper upstream of a
 member would widen it. The standard aggregator
 `constructicon.std/panel-quorum` is pure and declares no capability; it derives
 each member's node from the member's reported path against its own path —
-same parent scope, the aggregator's loop frames as a prefix of the member's,
-any further frame naming a loop that strictly encloses the reporting
-invocation, nested strictly from the member's seat, and the aggregator's own
-frames held to the same law — refuses any other topology, the aggregator's
-own seat, or a node reported twice, orders members by the
+same parent scope, the aggregator's loop frame as a prefix of the member's,
+a member's own frame naming a loop at or beneath its seat whose body its
+invocation sits in, and every path held to what the walker writes: one frame
+at most, its loop directly above a `body` segment, the aggregator's own path
+included — refuses any other topology, the aggregator's own seat, or a node
+reported twice, orders members by the
 canonical JSON of their path, and concludes one of four explicit outcomes
 (`approved`, `rejected`, `insufficient_responses`, `impossible_quorum`) from an
 explicit quorum input. The result names its aggregator and run and is

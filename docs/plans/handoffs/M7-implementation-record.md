@@ -803,16 +803,17 @@ field, validator, placement, tallying, the outcome, or the result's
 self-check is therefore a new version by construction; a test pins the
 closure the digest is taken over.
 
-**Proof.** Twenty-five mutants of the aggregation law, the authoring checks,
+**Proof.** Twenty-six mutants of the aggregation law, the authoring checks,
 and the boundary checks — dropped ordering, sibling check, iteration prefix, a
-frame that does not enclose its invocation, frames out of nesting order, a loop
-equal to its invocation, a repeated loop, the aggregator's own frames trusted,
-duplicate check, the aggregator's own seat, run check, both off-by-one
-thresholds, the ballot bucket, the boundary-contract check, the
+second frame, a loop that does not enclose its invocation, a loop not directly
+above a body, the aggregator's own frames trusted, a member's frame beneath
+another seat, duplicate check, the aggregator's own seat, run check, both
+off-by-one thresholds, the ballot bucket, the boundary-contract check, the
 gather-contract check, member cardinality, a composite aggregator, a
 composite's lying boundary at registration and at admission, a boundary
-compared as models at authoring, registration, and admission, and two ways of
-not re-deriving a result — are each killed. The acceptance lane runs six fakes reporting all six buckets through
+compared as models at authoring, registration, and admission, fault details
+parsed from the first marker, and two ways of not re-deriving a result — are
+each killed. The acceptance lane runs six fakes reporting all six buckets through
 the real graph, then one fake plus one mailbox-backed human across restarts — a
 fresh journal and system over the same database file, nothing carried in
 memory. The system that asked is discarded; a second records the ballot and its
@@ -991,6 +992,20 @@ pre-existing; all accepted.
 - Pre-existing, recorded below: registration deduplication compares
   definitions as models, and the legacy fault-scope parser drops scopes with
   spaces and truncates those with colons.
+
+A seventh classified review returned two introduced items; both accepted.
+
+- The frame law described nesting the walker cannot write: nested loops are
+  refused at admission, an instance in a loop body carries exactly one frame,
+  and the body sits directly beneath the loop under a `body` segment. The law
+  now states exactly that — one frame at most, its loop directly above
+  `body` — for members and the aggregator alike, and the segment is named
+  once in the IR (`LOOP_BODY_SEGMENT`) and used by the validator. When nested
+  loops arrive the law changes and, being digested, so does the revision.
+- The details parser matched greedily from the first marker and let a decode
+  error escape the typed boundary. It now reads from the last marker and
+  swallows a failed decode, proven with a graph whose own name carries a
+  forged marker.
 
 ## Open items
 
