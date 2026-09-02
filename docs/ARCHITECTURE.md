@@ -341,8 +341,9 @@ contract and no other input that could bind a member — because the gather is
 the general connector law: a compatible graph input or a compatible helper
 upstream of a member would widen it. The standard aggregator
 `constructicon.std/panel-quorum` is pure and declares no capability; it derives
-each member's node from the member's reported path against its own scope,
-refuses any other topology or a node reported twice, orders members by the
+each member's node from the member's reported path against its own path —
+same parent scope, same loop iteration — refuses any other topology or a
+node reported twice, orders members by the
 canonical JSON of their path, and concludes one of four explicit outcomes
 (`approved`, `rejected`, `insufficient_responses`, `impossible_quorum`) from an
 explicit quorum input. Every outcome a member reports — `responded`,

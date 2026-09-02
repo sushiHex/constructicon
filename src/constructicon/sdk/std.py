@@ -176,20 +176,16 @@ async def panel_quorum(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[s
     """Conclude a panel from every member's report under an explicit quorum.
 
     Pure: the same members in any order give the same bytes, and the outcome
-    is the one law in `core.panel`. This component's own scope is what places
-    the members — they are its siblings by `panel()` construction — so the
-    aggregation derives each member's node from its reported path against that
-    scope and refuses any other topology rather than guessing.
+    is the one law in `core.panel`. This component's own path is what places
+    the members — they are its siblings by `panel()` construction, in the same
+    loop iteration — so the aggregation derives each member's node from its
+    reported path against that path and refuses any other topology rather than
+    guessing.
     """
 
     votes = tuple(PanelMemberResult.model_validate(vote) for vote in inputs["votes"])
     quorum = PanelQuorum.model_validate(inputs["quorum"])
-    result = aggregate_panel(
-        votes,
-        quorum,
-        aggregator_scope=ctx.path.scope.segments,
-        run_id=ctx.run_id,
-    )
+    result = aggregate_panel(votes, quorum, aggregator=ctx.path, run_id=ctx.run_id)
     return {"result": result.model_dump(mode="json")}
 
 

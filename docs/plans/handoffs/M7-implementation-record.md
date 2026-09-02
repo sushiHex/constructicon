@@ -738,7 +738,9 @@ walker hands a `many` port payloads in sealed source order and drops the source
 address; nothing stamps provenance into a payload. So a member writes
 `member = ctx.path` — the genuine path it was handed — and the aggregator checks
 everything the kernel makes checkable: every path begins with the aggregator's
-parent scope and has a segment at that depth, which is the member's node; a
+parent scope, has a segment at that depth, which is the member's node, and
+sits in the aggregator's own loop iteration, since the walker gives every
+sibling in a loop body the same frame; a
 node reported twice, whether by one path repeated or two paths beneath it, is a
 contract violation, so a member claiming a sibling's identity collides with the
 sibling rather than replacing it; any other topology is refused rather than
@@ -771,8 +773,9 @@ unchanged. Both panel components declare `capability_requirements=()`, and the
 structural tests now distinguish the channel-bound components (exactly one
 input, one output, one durable channel) from the pure ones.
 
-**Proof.** Nine mutants of the aggregation law and the authoring checks —
-dropped ordering, sibling check, duplicate check, run check, both off-by-one
+**Proof.** Ten mutants of the aggregation law and the authoring checks —
+dropped ordering, sibling check, iteration check, duplicate check, run check,
+both off-by-one
 thresholds, the ballot bucket, the member-binding check, and the gather
 contract check — are each killed. The acceptance lane runs six fakes reporting
 all six buckets through the real graph and then one fake plus one

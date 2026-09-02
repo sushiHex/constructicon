@@ -169,23 +169,24 @@ def aggregate_panel(
     votes: tuple[PanelMemberResult, ...],
     quorum: PanelQuorum,
     *,
-    aggregator_scope: tuple[str, ...],
+    aggregator: ExecutionPath,
     run_id: RunId,
 ) -> PanelResult:
     """Conclude a panel from its members' reports, in one canonical order.
 
-    ``aggregator_scope`` is the aggregator's own scope segments. Members are its
-    siblings by ``panel()`` construction, so each result's path must begin with
-    the aggregator's parent scope and have a segment at that depth — that
-    segment is the member's node. Any other topology is refused rather than
-    guessed at, and so is a node claimed twice — whether by one path repeated
-    or by two paths beneath it: a member that reports a sibling's identity
-    collides with the sibling instead of replacing it.
+    ``aggregator`` is the aggregator's own path. Members are its siblings by
+    ``panel()`` construction, so each result's path must begin with the
+    aggregator's parent scope, have a segment at that depth — that segment is
+    the member's node — and sit in the same loop iteration. Any other topology
+    is refused rather than guessed at, and so is a node claimed twice — whether
+    by one path repeated or by two paths beneath it: a member that reports a
+    sibling's identity collides with the sibling instead of replacing it.
     """
 
-    if not aggregator_scope:
+    scope = aggregator.scope.segments
+    if not scope:
         raise ContractViolation("a panel aggregator has a scope; the root is not one")
-    parent = aggregator_scope[:-1]
+    parent = scope[:-1]
     depth = len(parent)
     summaries: list[PanelMemberSummary] = []
     seen: set[str] = set()
@@ -196,10 +197,14 @@ def aggregate_panel(
                 f"not {run_id!r}"
             )
         segments = result.member.scope.segments
-        if segments[:depth] != parent or len(segments) <= depth:
+        if (
+            segments[:depth] != parent
+            or len(segments) <= depth
+            or result.member.iterations != aggregator.iterations
+        ):
             raise ContractViolation(
                 f"panel member {result.member.render()} is not a sibling of the "
-                f"aggregator at {'/'.join(aggregator_scope)}"
+                f"aggregator at {aggregator.render()}"
             )
         node = segments[depth]
         if node in seen:

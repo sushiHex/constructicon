@@ -2,7 +2,7 @@
 
 Every member is counted exactly once by what it reported. The outcome names
 what happened rather than folding every shortfall into "rejected". Members are
-placed by their reported path against the aggregator's own scope, and a path
+placed by their reported path against the aggregator's own path, and a path
 the panel's shape cannot account for is refused, not guessed at.
 """
 
@@ -13,7 +13,7 @@ import random
 import pytest
 from pydantic import ValidationError
 
-from constructicon.core.address import ExecutionPath, RunId, ScopePath
+from constructicon.core.address import ExecutionPath, IterationFrame, RunId, ScopePath
 from constructicon.core.errors import ContractViolation
 from constructicon.core.identity import canonical_json
 from constructicon.core.panel import (
@@ -29,7 +29,8 @@ from constructicon.core.panel import (
 
 RUN = RunId("run-panel-law")
 PANEL = ("review", "panel")
-AGGREGATOR = (*PANEL, "quorum")
+AGGREGATOR = ExecutionPath(scope=ScopePath(segments=(*PANEL, "quorum")))
+FRAME = IterationFrame(loop=ScopePath(segments=("review",)), index=2)
 
 
 def _member(
@@ -39,10 +40,14 @@ def _member(
     *,
     below: tuple[str, ...] = (),
     run_id: RunId = RUN,
+    iterations: tuple[IterationFrame, ...] = (),
 ) -> PanelMemberResult:
     return PanelMemberResult(
         run_id=run_id,
-        member=ExecutionPath(scope=ScopePath(segments=(*PANEL, node, *below))),
+        member=ExecutionPath(
+            scope=ScopePath(segments=(*PANEL, node, *below)),
+            iterations=iterations,
+        ),
         outcome=outcome,
         ballot=ballot,
     )
@@ -84,7 +89,7 @@ def test_every_member_appears_once_by_node_in_one_canonical_order() -> None:
         _member("erin", "timed_out"),
     ]
     quorum = PanelQuorum(required_approvals=1)
-    baseline = aggregate_panel(tuple(members), quorum, aggregator_scope=AGGREGATOR, run_id=RUN)
+    baseline = aggregate_panel(tuple(members), quorum, aggregator=AGGREGATOR, run_id=RUN)
     assert [summary.node for summary in baseline.members] == [
         "alice",
         "bob",
@@ -101,7 +106,7 @@ def test_every_member_appears_once_by_node_in_one_canonical_order() -> None:
     shuffled = list(members)
     for seed in range(8):
         random.Random(seed).shuffle(shuffled)
-        again = aggregate_panel(tuple(shuffled), quorum, aggregator_scope=AGGREGATOR, run_id=RUN)
+        again = aggregate_panel(tuple(shuffled), quorum, aggregator=AGGREGATOR, run_id=RUN)
         assert canonical_json(again.model_dump(mode="json")) == canonical_json(
             baseline.model_dump(mode="json")
         )
@@ -113,7 +118,7 @@ def test_a_composite_member_reports_from_beneath_its_node() -> None:
     result = aggregate_panel(
         (_member("human", "responded", "approve", below=("ballot",)),),
         PanelQuorum(required_approvals=1),
-        aggregator_scope=AGGREGATOR,
+        aggregator=AGGREGATOR,
         run_id=RUN,
     )
     assert [summary.node for summary in result.members] == ["human"]
@@ -131,7 +136,7 @@ def test_a_member_outside_the_aggregators_siblings_is_refused() -> None:
         aggregate_panel(
             (elsewhere,),
             PanelQuorum(required_approvals=1),
-            aggregator_scope=AGGREGATOR,
+            aggregator=AGGREGATOR,
             run_id=RUN,
         )
     # Too shallow to have a node at the member depth.
@@ -144,7 +149,7 @@ def test_a_member_outside_the_aggregators_siblings_is_refused() -> None:
         aggregate_panel(
             (shallow,),
             PanelQuorum(required_approvals=1),
-            aggregator_scope=AGGREGATOR,
+            aggregator=AGGREGATOR,
             run_id=RUN,
         )
 
@@ -158,7 +163,7 @@ def test_a_member_claiming_a_siblings_identity_collides_with_it() -> None:
         aggregate_panel(
             (honest, forged),
             PanelQuorum(required_approvals=1),
-            aggregator_scope=AGGREGATOR,
+            aggregator=AGGREGATOR,
             run_id=RUN,
         )
     # Two distinct paths under one node are the same node twice.
@@ -166,7 +171,34 @@ def test_a_member_claiming_a_siblings_identity_collides_with_it() -> None:
         aggregate_panel(
             (honest, _member("bob", "declined", below=("ballot",))),
             PanelQuorum(required_approvals=1),
-            aggregator_scope=AGGREGATOR,
+            aggregator=AGGREGATOR,
+            run_id=RUN,
+        )
+
+
+def test_a_member_sits_in_the_aggregators_own_iteration() -> None:
+    """Inside a loop, siblings share the frame; a member reporting another is not one."""
+
+    in_loop = ExecutionPath(scope=AGGREGATOR.scope, iterations=(FRAME,))
+    result = aggregate_panel(
+        (_member("alice", "responded", "approve", iterations=(FRAME,)),),
+        PanelQuorum(required_approvals=1),
+        aggregator=in_loop,
+        run_id=RUN,
+    )
+    assert result.outcome == "approved"
+    with pytest.raises(ContractViolation, match="not a sibling"):
+        aggregate_panel(
+            (_member("alice", "responded", "approve"),),
+            PanelQuorum(required_approvals=1),
+            aggregator=in_loop,
+            run_id=RUN,
+        )
+    with pytest.raises(ContractViolation, match="not a sibling"):
+        aggregate_panel(
+            (_member("alice", "responded", "approve", iterations=(FRAME,)),),
+            PanelQuorum(required_approvals=1),
+            aggregator=AGGREGATOR,
             run_id=RUN,
         )
 
@@ -176,7 +208,7 @@ def test_a_member_from_another_run_is_refused() -> None:
         aggregate_panel(
             (_member("alice", "declined", run_id=RunId("run-other")),),
             PanelQuorum(required_approvals=1),
-            aggregator_scope=AGGREGATOR,
+            aggregator=AGGREGATOR,
             run_id=RUN,
         )
 
@@ -198,7 +230,7 @@ def test_order_is_the_structural_path_not_its_rendering() -> None:
     result = aggregate_panel(
         (joined, split),
         PanelQuorum(required_approvals=1),
-        aggregator_scope=AGGREGATOR,
+        aggregator=AGGREGATOR,
         run_id=RUN,
     )
     assert [summary.node for summary in result.members] == ["x", "x/y"]

@@ -100,7 +100,9 @@ invocation contract and is deferred, recorded below.
 What the aggregator does check is everything the kernel makes checkable. Let
 `S` be the aggregator's own scope segments and `P = S[:-1]` its parent. Every
 result's `member.scope.segments` must begin with `P` and have a segment at
-index `len(P)`; that segment is the member's `node`. Duplicate exact member
+index `len(P)`; that segment is the member's `node`. Every result's
+`member.iterations` must equal the aggregator's own, because the walker gives
+each sibling in a loop body the same frame (walker :736). Duplicate exact member
 paths and duplicate derived nodes are contract violations, so a member that
 claims a sibling's identity collides with the sibling rather than replacing
 it. Any other topology is refused: the derivation is defined for members that
@@ -166,8 +168,9 @@ second restart.
 - One advisor round trip and one approval round trip complete across real
   process restarts, credential-free, with one request, reply, ack, approval,
   and wake cause each.
-- Mutation check (shipped): nine mutants — no canonical order, no sibling
-  check, no duplicate check, no run check, both threshold off-by-ones, the
+- Mutation check (shipped): ten mutants — no canonical order, no sibling
+  check, no iteration check, no duplicate check, no run check, both threshold
+  off-by-ones, the
   ballot bucket, the member-binding check, the gather-contract check — each
   killed by `tests/core/test_panel.py` and `tests/sdk/test_combinators.py`.
 
