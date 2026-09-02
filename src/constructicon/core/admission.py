@@ -29,6 +29,7 @@ class AdmissionCode(StrEnum):
     GRAPH_NODE_RESERVED_ID = "graph.node.reserved_id"
     GRAPH_REFERENCE_UNKNOWN = "graph.reference.unknown"
     GRAPH_REFERENCE_UNPROMOTED = "graph.reference.unpromoted"
+    GRAPH_REFERENCE_INVALID = "graph.reference.invalid"
     GRAPH_PORT_MISSING_SOURCE = "graph.port.missing_source"
     GRAPH_PORT_AMBIGUOUS = "graph.port.ambiguous"
     GRAPH_PORT_CONTRACT_MISMATCH = "graph.port.contract_mismatch"

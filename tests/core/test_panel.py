@@ -207,42 +207,58 @@ def test_every_named_panel_contract_publishes_its_shape() -> None:
 
 
 def test_a_member_sits_in_the_aggregators_own_iteration() -> None:
-    """Siblings share the aggregator's frames; a member's internals may add their own."""
+    """Siblings share the aggregator's frames; a member's internals may add their own.
+
+    An added frame names a loop at or beneath the member's seat that encloses
+    the reporting invocation, and frames nest in order. Anything else is a path
+    the walker could not have written.
+    """
 
     in_loop = ExecutionPath(scope=AGGREGATOR.scope, iterations=(FRAME,))
-    inner = IterationFrame(loop=ScopePath(segments=(*PANEL, "alice", "retry")), index=0)
-    for aggregator, frames in (
-        (in_loop, (FRAME,)),
-        (in_loop, (FRAME, inner)),
-        (AGGREGATOR, ()),
-        (AGGREGATOR, (inner,)),
+    retry = IterationFrame(loop=ScopePath(segments=(*PANEL, "alice", "retry")), index=0)
+    again = IterationFrame(loop=ScopePath(segments=(*PANEL, "alice", "retry", "again")), index=1)
+    for aggregator, below, frames in (
+        (in_loop, (), (FRAME,)),
+        (in_loop, ("retry", "vote"), (FRAME, retry)),
+        (in_loop, ("retry", "again", "vote"), (FRAME, retry, again)),
+        (AGGREGATOR, (), ()),
+        (AGGREGATOR, ("retry", "vote"), (retry,)),
     ):
         result = aggregate_panel(
-            (_member("alice", "responded", "approve", iterations=frames),),
+            (_member("alice", "responded", "approve", below=below, iterations=frames),),
             PanelQuorum(required_approvals=1),
             aggregator=aggregator,
             run_id=RUN,
         )
         assert result.outcome == "approved"
+
     other = IterationFrame(loop=FRAME.loop, index=FRAME.index + 1)
     elsewhere = IterationFrame(loop=ScopePath(segments=(*PANEL, "bob", "retry")), index=0)
-    for frames in ((), (other,), (inner, FRAME), (FRAME, elsewhere)):
+    for below, frames in (
+        ((), ()),  # the aggregator's frame is missing
+        ((), (other,)),  # another iteration of the same loop
+        ((), (retry, FRAME)),  # the aggregator's frame is not first
+        (("retry", "vote"), (FRAME, elsewhere)),  # a loop beneath another seat
+        ((), (FRAME, retry)),  # a loop that does not enclose the invocation
+        (("retry", "again", "vote"), (FRAME, again, retry)),  # not nested in order
+    ):
         with pytest.raises(ContractViolation, match="not a sibling"):
             aggregate_panel(
-                (_member("alice", "responded", "approve", iterations=frames),),
+                (_member("alice", "responded", "approve", below=below, iterations=frames),),
                 PanelQuorum(required_approvals=1),
                 aggregator=in_loop,
                 run_id=RUN,
             )
     # Outside any loop the aggregator has no frames; a member's frames must
-    # still name loops beneath its own seat, not somewhere else.
-    with pytest.raises(ContractViolation, match="not a sibling"):
-        aggregate_panel(
-            (_member("alice", "responded", "approve", iterations=(elsewhere,)),),
-            PanelQuorum(required_approvals=1),
-            aggregator=AGGREGATOR,
-            run_id=RUN,
-        )
+    # still name loops beneath its own seat that enclose its invocation.
+    for below, frames in ((("retry", "vote"), (elsewhere,)), ((), (retry,))):
+        with pytest.raises(ContractViolation, match="not a sibling"):
+            aggregate_panel(
+                (_member("alice", "responded", "approve", below=below, iterations=frames),),
+                PanelQuorum(required_approvals=1),
+                aggregator=AGGREGATOR,
+                run_id=RUN,
+            )
 
 
 def test_a_member_from_another_run_is_refused() -> None:

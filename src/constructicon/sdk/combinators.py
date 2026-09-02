@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from constructicon.core.address import NodeId
 from constructicon.core.component import ComponentDef, ComponentRole
 from constructicon.core.graph import Connection, Graph, GraphNode, Loop, Ref
-from constructicon.core.ports import Port
+from constructicon.core.ports import Port, same_boundary
 from constructicon.sdk.types import AuthoringStep, DefinitionBundle
 
 
@@ -46,8 +46,8 @@ def component(
         body = body.ref()
     if isinstance(body, Graph):
         graph = body
-        if (inputs is not None and tuple(inputs) != tuple(graph.inputs)) or (
-            outputs is not None and tuple(outputs) != tuple(graph.outputs)
+        if (inputs is not None and not same_boundary(inputs, graph.inputs)) or (
+            outputs is not None and not same_boundary(outputs, graph.outputs)
         ):
             raise TypeError(
                 "component cannot redeclare a Graph's boundary; a composite's ports are "
@@ -283,7 +283,9 @@ def _one_member_contract(members: tuple[DefinitionBundle, ...]) -> tuple[Port, P
         )
     for other in members[1:]:
         definition = other.definition
-        if definition.inputs != first.inputs or definition.outputs != first.outputs:
+        if not same_boundary(definition.inputs, first.inputs) or not same_boundary(
+            definition.outputs, first.outputs
+        ):
             raise TypeError(
                 f"panel member {definition.name!r} declares "
                 f"{[p.name for p in definition.inputs]} -> "

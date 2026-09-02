@@ -385,6 +385,18 @@ def _classify_fault(
     elif "has no stable version" in lowered:
         code = AdmissionCode.GRAPH_REFERENCE_UNPROMOTED
         repair = "pin an exact retained version or promote one to stable"
+    elif "declares a boundary its graph does not export" in lowered:
+        code = AdmissionCode.GRAPH_REFERENCE_INVALID
+        repair = (
+            "the retained definition is defective, not this graph: pin or promote a "
+            "version whose declared boundary is its Graph's"
+        )
+        component = _quoted_after(message, "retained composite")
+        if component:
+            details["component"] = component
+        version = re.search(r"@(sha256:[0-9a-f]+)", message)
+        if version:
+            details["version"] = version.group(1)
     elif "no upstream output" in lowered or "needs an initial value" in lowered:
         code = AdmissionCode.GRAPH_PORT_MISSING_SOURCE
         repair = "connect a matching upstream output or graph input"

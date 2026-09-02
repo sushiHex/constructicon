@@ -14,6 +14,7 @@ import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from typing import get_args
 
 from constructicon.api.control import ControlPlane
 from constructicon.api.system import Constructicon
@@ -264,6 +265,7 @@ def test_the_panel_law_is_part_of_the_pure_components_identity() -> None:
     # The revision is the digest of exactly this closure: every contract class
     # and every law body. Dropping one from the production closure fails here.
     closure = (
+        core_panel._PanelModel,
         core_panel.PanelBallotPayload,
         core_panel.PanelMemberResult,
         core_panel.PanelQuorum,
@@ -273,12 +275,15 @@ def test_the_panel_law_is_part_of_the_pure_components_identity() -> None:
         core_panel.panel_outcome,
         core_panel._member_key,
         core_panel._place,
+        core_panel._frames_enclose,
         core_panel._tally,
         core_panel.aggregate_panel,
     )
-    assert str(
-        digest("panel-law", 1, {member.__name__: inspect.getsource(member) for member in closure})
-    ) == PANEL_LAW_REVISION
+    source = {member.__name__: inspect.getsource(member) for member in closure}
+    source["PanelMemberOutcome"] = canonical_json(list(get_args(core_panel.PanelMemberOutcome)))
+    source["PanelBallot"] = canonical_json(list(get_args(core_panel.PanelBallot)))
+    source["PanelOutcome"] = canonical_json(list(get_args(core_panel.PanelOutcome)))
+    assert str(digest("panel-law", 1, source)) == PANEL_LAW_REVISION
 
 
 def test_describe_publishes_every_standard_shape(journal: SqliteJournal) -> None:

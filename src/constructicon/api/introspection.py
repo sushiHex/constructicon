@@ -324,15 +324,18 @@ def _schema_document(
     )
 
 
-NAMED_CONTRACT_SCHEMAS: Mapping[tuple[str, str], type[pydantic.BaseModel]] = MappingProxyType(
-    {
-        (contract.type_id, contract.schema_hash): model
-        for catalog in (_HUMAN_CONTRACT_SCHEMAS, _PANEL_CONTRACT_SCHEMAS)
-        for contract, model in catalog.items()
-    }
+_NAMED_CONTRACT_ENTRIES = tuple(
+    ((contract.type_id, contract.schema_hash), model)
+    for catalog in (_HUMAN_CONTRACT_SCHEMAS, _PANEL_CONTRACT_SCHEMAS)
+    for contract, model in catalog.items()
 )
-if len({schema_hash for _, schema_hash in NAMED_CONTRACT_SCHEMAS}) != len(NAMED_CONTRACT_SCHEMAS):
+if len({schema_hash for (_, schema_hash), _ in _NAMED_CONTRACT_ENTRIES}) != len(
+    _NAMED_CONTRACT_ENTRIES
+):
     raise RuntimeError("two named contracts share one revision string; the revision is the key")
+NAMED_CONTRACT_SCHEMAS: Mapping[tuple[str, str], type[pydantic.BaseModel]] = MappingProxyType(
+    dict(_NAMED_CONTRACT_ENTRIES)
+)
 """The standard vocabulary: every named contract revision and the model whose shape it names.
 
 A named revision is not the digest of a schema, so the registry refuses to

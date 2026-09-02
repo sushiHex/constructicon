@@ -10,6 +10,7 @@ import pytest
 from pydantic import BaseModel
 
 from constructicon.api.system import Constructicon
+from constructicon.core.admission import AdmissionCode, AdmissionRejected
 from constructicon.core.component import ComponentDef
 from constructicon.core.errors import AdmissionError
 from constructicon.core.graph import Connection, Graph, GraphNode, Loop, Ref
@@ -253,6 +254,59 @@ def test_a_composites_boundary_is_its_graphs(system: Constructicon, journal: Sql
         nodes=(GraphNode(id="member", body=Ref(component=lying.name)),),
         inputs=panel_yes.definition.inputs,
         outputs=wider,
+    )
+    with pytest.raises(AdmissionError, match="boundary its Graph does not export"):
+        system.validate(retained, {"request": {"question": "ship?"}})
+    rejected = system.admit_graph(
+        retained.model_dump(mode="json"), {"request": {"question": "ship?"}}
+    )
+    assert isinstance(rejected, AdmissionRejected)
+    fault = next(
+        item for item in rejected.faults if item.code is AdmissionCode.GRAPH_REFERENCE_INVALID
+    )
+    assert fault.code is AdmissionCode.GRAPH_REFERENCE_INVALID
+    assert fault.details["component"] == lying.name
+    assert fault.details["version"] == str(lying.content_hash())
+    assert "retained definition is defective" in fault.repair
+
+
+def test_a_boundary_is_compared_as_bytes(system: Constructicon, journal: SqliteJournal) -> None:
+    """`1 == True` is a Python fact; an embedded schema that differs there is another boundary."""
+
+    _promote_all(system, panel_yes)
+    truthful = panel_yes.definition.outputs[0].model_copy(update={"json_schema": {"const": 1}})
+    lie = truthful.model_copy(update={"json_schema": {"const": True}})
+    assert truthful == lie  # model equality cannot see the difference
+    body = Graph(
+        name="sdk/one-yes-bytes",
+        nodes=(GraphNode(id="yes", body=Ref(component="sdk/panel-yes")),),
+        inputs=panel_yes.definition.inputs,
+        outputs=(truthful,),
+    )
+    with pytest.raises(TypeError, match="cannot redeclare a Graph's boundary"):
+        component("sdk/one-yes-bytes", body, outputs=(lie,))
+    lying = ComponentDef(
+        name="sdk/one-yes-bytes",
+        role="component",
+        body=body,
+        inputs=body.inputs,
+        outputs=(lie,),
+    )
+    with pytest.raises(RegistryError, match="boundary its Graph does not export"):
+        system._register(lying)
+    journal.store_version(
+        StoredVersion(
+            definition=lying,
+            content_hash=lying.content_hash(),
+            registered_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+    )
+    system._promote_initial(component=lying.name, version=lying.content_hash())
+    retained = Graph(
+        name="sdk/uses-bytes-lie",
+        nodes=(GraphNode(id="member", body=Ref(component=lying.name)),),
+        inputs=panel_yes.definition.inputs,
+        outputs=(lie,),
     )
     with pytest.raises(AdmissionError, match="boundary its Graph does not export"):
         system.validate(retained, {"request": {"question": "ship?"}})

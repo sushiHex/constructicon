@@ -50,6 +50,7 @@ from constructicon.core.ports import (
     NodePortAddress,
     Port,
     PortAddress,
+    same_boundary,
 )
 from constructicon.core.registry import RegistrySnapshot, StoredVersion
 from constructicon.runtime.registry import CapabilityDescriptor
@@ -333,16 +334,7 @@ def _compile_node(
             input_sources,
         )
         if isinstance(definition.body, Graph):
-            if (
-                definition.inputs != definition.body.inputs
-                or definition.outputs != definition.body.outputs
-            ):
-                # The registry refuses this at registration; a store retained
-                # from before that rule is re-proved here rather than trusted.
-                comp.faults.append(
-                    f"{instance_scope.render()}: composite {definition.name!r} declares a "
-                    "boundary its Graph does not export"
-                )
+            if _boundary_lies(comp, stored, where=instance_scope):
                 return {}
             declared = {port.name: port for port in definition.inputs}
             retagged = {
@@ -412,6 +404,8 @@ def _compile_loop(
     if isinstance(loop.body, Ref):
         stored = _resolve_ref(comp, loop.body, where=body_scope.child("$body"))
         if stored is None:
+            return {}
+        if _boundary_lies(comp, stored, where=body_scope.child("$body")):
             return {}
         body_inputs = stored.definition.inputs
         body_outputs_declared = stored.definition.outputs
@@ -648,6 +642,29 @@ def _record_resolution(
             ),
         )
     )
+
+
+def _boundary_lies(comp: _Compilation, stored: StoredVersion, *, where: ScopePath) -> bool:
+    """A retained composite whose declared boundary is not its Graph's is re-proved, not trusted.
+
+    The registry refuses such a definition at registration; a store retained
+    from before that rule reaches admission only through here. The fault names
+    the retained version, because the defect is in it and not in the graph
+    that seats it.
+    """
+
+    definition = stored.definition
+    if not isinstance(definition.body, Graph):
+        return False
+    if same_boundary(definition.inputs, definition.body.inputs) and same_boundary(
+        definition.outputs, definition.body.outputs
+    ):
+        return False
+    comp.faults.append(
+        f"{where.render()}: retained composite {definition.name!r}@{stored.content_hash} "
+        "declares a boundary its Graph does not export"
+    )
+    return True
 
 
 def _resolve_ref(

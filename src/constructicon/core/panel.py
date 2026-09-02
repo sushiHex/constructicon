@@ -17,11 +17,11 @@ from __future__ import annotations
 import inspect
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, NonNegativeInt, PositiveInt, model_validator
 
-from constructicon.core.address import ExecutionPath, RunId
+from constructicon.core.address import ExecutionPath, IterationFrame, RunId
 from constructicon.core.channel import ChannelContract
 from constructicon.core.errors import ContractViolation
 from constructicon.core.identity import ActorId, Digest, JsonValue, canonical_json, digest
@@ -246,14 +246,14 @@ def _place(
             )
         segments = result.member.scope.segments
         frames = aggregator.iterations
-        seat = segments[: depth + 1]
         if (
             segments[:depth] != parent
             or len(segments) <= depth
             or result.member.iterations[: len(frames)] != frames
-            or any(
-                frame.loop.segments[: depth + 1] != seat
-                for frame in result.member.iterations[len(frames) :]
+            or not _frames_enclose(
+                result.member.iterations[len(frames) :],
+                seat=segments[: depth + 1],
+                invocation=segments,
             )
         ):
             raise ContractViolation(
@@ -270,6 +270,26 @@ def _place(
         seen.add(node)
         summaries.append(PanelMemberSummary(node=node, result=result))
     return tuple(summaries)
+
+
+def _frames_enclose(
+    frames: tuple[IterationFrame, ...],
+    *,
+    seat: tuple[str, ...],
+    invocation: tuple[str, ...],
+) -> bool:
+    """Each frame's loop is at or beneath the seat, encloses the invocation, nests in order."""
+
+    enclosing: tuple[str, ...] = seat
+    for frame in frames:
+        loop = frame.loop.segments
+        if (
+            invocation[: len(loop)] != loop
+            or loop[: len(enclosing)] != enclosing
+        ):
+            return False
+        enclosing = loop
+    return True
 
 
 def _tally(members: tuple[PanelMemberSummary, ...]) -> PanelTally:
@@ -329,6 +349,7 @@ def _law_source() -> dict[str, str]:
     """
 
     members: tuple[type[BaseModel] | Callable[..., object], ...] = (
+        _PanelModel,
         PanelBallotPayload,
         PanelMemberResult,
         PanelQuorum,
@@ -338,10 +359,19 @@ def _law_source() -> dict[str, str]:
         panel_outcome,
         _member_key,
         _place,
+        _frames_enclose,
         _tally,
         aggregate_panel,
     )
-    return {member.__name__: inspect.getsource(member) for member in members}
+    source = {member.__name__: inspect.getsource(member) for member in members}
+    # Type aliases have no source object; their domains are the law too.
+    for name, alias in (
+        ("PanelMemberOutcome", PanelMemberOutcome),
+        ("PanelBallot", PanelBallot),
+        ("PanelOutcome", PanelOutcome),
+    ):
+        source[name] = canonical_json(list(get_args(alias)))
+    return source
 
 
 PANEL_LAW_REVISION = str(digest("panel-law", 1, _law_source()))

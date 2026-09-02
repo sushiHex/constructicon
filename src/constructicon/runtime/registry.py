@@ -40,6 +40,7 @@ from constructicon.core.graph import Graph, Loop, Ref
 from constructicon.core.identity import Digest, digest
 from constructicon.core.journal import Journal
 from constructicon.core.manifest import SELF_BINDING, ExecutionManifest
+from constructicon.core.ports import same_boundary
 from constructicon.core.registry import (
     InvalidRegistryRevision,
     Loadability,
@@ -336,7 +337,9 @@ class ComponentRegistry:
         if not is_atomic:
             graph = definition.body
             assert isinstance(graph, Graph)
-            if definition.inputs != graph.inputs or definition.outputs != graph.outputs:
+            if not same_boundary(definition.inputs, graph.inputs) or not same_boundary(
+                definition.outputs, graph.outputs
+            ):
                 # Admission compiles a composite from its Graph and exposes the
                 # Graph's boundary; a declaration that differs would be a
                 # contract the body does not keep.
