@@ -482,7 +482,9 @@ async def test_the_standard_approval_refuses_a_downgraded_command_plan(
     approval = second.approval(decided.approval_id)
     assert approval is not None
 
-    downgraded = StoredApprovalPlan(plan=ApprovalPlan(approval=approval)).model_dump_json()
+    downgraded = StoredApprovalPlan(
+        plan=ApprovalPlan(approval=approval)
+    ).model_dump_json()
     with sqlite3.connect(database) as connection:
         connection.execute(
             "UPDATE commands SET plan_json = ? WHERE command_id = ?",
@@ -604,7 +606,8 @@ async def test_a_tampered_advice_reply_never_becomes_a_successful_output(
         envelope = json.loads(row[0])
         envelope["payload"]["advice"] = {"verdict": "forged"}
         connection.execute(
-            "UPDATE channel_messages SET command_id = NULL, envelope_json = ? WHERE message_id = ?",
+            "UPDATE channel_messages SET command_id = NULL, envelope_json = ?"
+            " WHERE message_id = ?",
             (json.dumps(envelope), str(reply.message_id)),
         )
         connection.commit()

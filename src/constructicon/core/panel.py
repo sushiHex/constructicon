@@ -74,9 +74,12 @@ class PanelMemberResult(_PanelModel):
     invocation path the walker handed that component, but the payload is the
     component's to write and the kernel does not stamp provenance into
     payloads, so it is checked for shape by the aggregator, not attested by the
-    kernel. ``actor_id`` and ``message_id`` are present only when a transport
-    stamped them — a human's reply — and let the vote be followed back to its
-    durable channel fact; a fake reports neither.
+    kernel. ``actor_id`` and ``message_id`` are copied by the standard ballot
+    adapter from the executor-stamped reply and let a vote be followed back to
+    its durable channel fact; a fake reports neither. In this payload they are
+    telemetry: any component may write them, and a consumer that needs them as
+    provenance follows ``message_id`` to the sealed reply rather than trusting
+    the copy. ``rationale`` is the member's free text and asserts nothing.
     """
 
     schema_version: Literal[1] = 1
@@ -138,13 +141,40 @@ class PanelResult(_PanelModel):
     is ``insufficient_responses``, and a policy no member count could meet is
     ``impossible_quorum``. Nothing is dropped: a member who declined, was
     unavailable, or timed out is in ``members`` with that outcome.
+
+    Self-verifying. The result names the aggregator and run it was concluded
+    for, and validation re-derives the members' placement, the tally, and the
+    outcome from the members themselves: a stored or foreign result whose
+    conclusion contradicts its members is refused (I4). Any aggregator sharing
+    this contract is held to the same law as the standard one.
     """
 
     schema_version: Literal[1] = 1
-    outcome: PanelOutcome
+    run_id: RunId
+    aggregator: ExecutionPath
     quorum: PanelQuorum
+    outcome: PanelOutcome
     tally: PanelTally
     members: tuple[PanelMemberSummary, ...]
+
+    @model_validator(mode="after")
+    def _concluded_from_its_members(self) -> PanelResult:
+        try:
+            placed = _place(
+                tuple(summary.result for summary in self.members),
+                aggregator=self.aggregator,
+                run_id=self.run_id,
+            )
+        except ContractViolation as exc:
+            raise ValueError(str(exc)) from exc
+        tally = _tally(placed)
+        if (self.members, self.tally, self.outcome) != (
+            placed,
+            tally,
+            panel_outcome(tally, self.quorum),
+        ):
+            raise ValueError("panel result contradicts the members it names")
+        return self
 
 
 def panel_outcome(tally: PanelTally, quorum: PanelQuorum) -> PanelOutcome:
@@ -165,22 +195,24 @@ def _member_key(result: PanelMemberResult) -> str:
     return canonical_json(result.member.model_dump(mode="json"))
 
 
-def aggregate_panel(
+def _place(
     votes: tuple[PanelMemberResult, ...],
-    quorum: PanelQuorum,
     *,
     aggregator: ExecutionPath,
     run_id: RunId,
-) -> PanelResult:
-    """Conclude a panel from its members' reports, in one canonical order.
+) -> tuple[PanelMemberSummary, ...]:
+    """Seat every member by its reported path, in one canonical order.
 
-    ``aggregator`` is the aggregator's own path. Members are its siblings by
-    ``panel()`` construction, so each result's path must begin with the
-    aggregator's parent scope, have a segment at that depth — that segment is
-    the member's node — and sit in the same loop iteration. Any other topology
-    is refused rather than guessed at, and so is a node claimed twice — whether
-    by one path repeated or by two paths beneath it: a member that reports a
-    sibling's identity collides with the sibling instead of replacing it.
+    Members are the aggregator's siblings by ``panel()`` construction, so each
+    result's path must begin with the aggregator's parent scope, have a segment
+    at that depth — that segment is the member's node — and sit in the same
+    loop iteration. Any other topology is refused rather than guessed at, and
+    so is a node claimed twice — whether by one path repeated or by two paths
+    beneath it: a member that reports a sibling's identity collides with the
+    sibling instead of replacing it. The walker delivers one payload per sealed
+    source, so the count is the kernel's; what a member can misreport is only
+    its own name, and a misreported name that is nobody else's is a lie about
+    itself, not a second vote.
     """
 
     scope = aggregator.scope.segments
@@ -211,7 +243,10 @@ def aggregate_panel(
             raise ContractViolation(f"panel member {node!r} reported more than one result")
         seen.add(node)
         summaries.append(PanelMemberSummary(node=node, result=result))
+    return tuple(summaries)
 
+
+def _tally(members: tuple[PanelMemberSummary, ...]) -> PanelTally:
     counts = {
         "approve": 0,
         "reject": 0,
@@ -220,17 +255,32 @@ def aggregate_panel(
         "unavailable": 0,
         "timed_out": 0,
     }
-    for summary in summaries:
+    for summary in members:
         result = summary.result
         # A responded member names its ballot and nothing else names one, so
         # the bucket is the ballot when there is one and the outcome otherwise.
         counts[result.ballot or result.outcome] += 1
-    tally = PanelTally(**counts)
+    return PanelTally(**counts)
+
+
+def aggregate_panel(
+    votes: tuple[PanelMemberResult, ...],
+    quorum: PanelQuorum,
+    *,
+    aggregator: ExecutionPath,
+    run_id: RunId,
+) -> PanelResult:
+    """Conclude a panel from its members' reports; ``aggregator`` is the caller's own path."""
+
+    members = _place(votes, aggregator=aggregator, run_id=run_id)
+    tally = _tally(members)
     return PanelResult(
-        outcome=panel_outcome(tally, quorum),
+        run_id=run_id,
+        aggregator=aggregator,
         quorum=quorum,
+        outcome=panel_outcome(tally, quorum),
         tally=tally,
-        members=tuple(summaries),
+        members=members,
     )
 
 

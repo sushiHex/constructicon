@@ -22,6 +22,7 @@ from constructicon.core.panel import (
     PanelMemberOutcome,
     PanelMemberResult,
     PanelQuorum,
+    PanelResult,
     PanelTally,
     aggregate_panel,
     panel_outcome,
@@ -234,6 +235,36 @@ def test_order_is_the_structural_path_not_its_rendering() -> None:
         run_id=RUN,
     )
     assert [summary.node for summary in result.members] == ["x", "x/y"]
+
+
+def test_a_result_that_contradicts_its_members_is_refused() -> None:
+    """A stored or foreign result is re-derived from its members on the way in (I4)."""
+
+    concluded = aggregate_panel(
+        (_member("alice", "responded", "approve"), _member("bob", "declined")),
+        PanelQuorum(required_approvals=1),
+        aggregator=AGGREGATOR,
+        run_id=RUN,
+    )
+    stored = concluded.model_dump(mode="json")
+    assert PanelResult.model_validate(stored) == concluded
+    alice, bob = stored["members"]
+    elsewhere = ExecutionPath(scope=ScopePath(segments=("other", "graph", "quorum")))
+    contradictions = (
+        {"outcome": "rejected"},
+        {"tally": {**stored["tally"], "approve": 2}},
+        {"tally": {**stored["tally"], "declined": 0}},
+        {"members": [bob, alice]},
+        {"members": [alice, alice]},
+        {"members": [{**alice, "node": "mallory"}, bob]},
+        {"members": [alice]},
+        {"quorum": {"required_approvals": 3}},
+        {"aggregator": elsewhere.model_dump(mode="json")},
+        {"run_id": "run-other"},
+    )
+    for contradiction in contradictions:
+        with pytest.raises(ValidationError):
+            PanelResult.model_validate({**stored, **contradiction})
 
 
 def test_a_ballot_is_named_exactly_when_a_member_responded() -> None:

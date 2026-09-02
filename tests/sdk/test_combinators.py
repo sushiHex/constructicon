@@ -208,6 +208,43 @@ def test_panel_is_exactly_the_hand_authored_fan_out_and_fan_in(
     ]
 
 
+def test_panel_with_explicit_ids_and_a_repeated_member_is_still_the_direct_graph(
+    system: Constructicon,
+) -> None:
+    """Ids are the author's; a component seated twice is two nodes of one Ref."""
+
+    _promote_all(system, panel_yes, panel_tally)
+    sugared = panel(
+        "sdk/twice",
+        panel_yes,
+        panel_yes,
+        aggregator=panel_tally,
+        ids=("first", "second"),
+        aggregator_id="tally",
+    )
+    direct = Graph(
+        name="sdk/twice",
+        nodes=(
+            GraphNode(id="first", body=Ref(component="sdk/panel-yes")),
+            GraphNode(id="second", body=Ref(component="sdk/panel-yes")),
+            GraphNode(id="tally", body=Ref(component="sdk/panel-tally")),
+        ),
+        connections=(
+            Connection(src="first", dst="tally"),
+            Connection(src="second", dst="tally"),
+        ),
+        inputs=(*panel_yes.definition.inputs, panel_tally.definition.inputs[1]),
+        outputs=panel_tally.definition.outputs,
+    )
+    assert sugared.definition.body == direct
+    assert sugared.definition.body.model_dump(mode="json") == direct.model_dump(mode="json")
+    inputs = {"request": {"question": "ship?"}, "quorum": {"required": 1}}
+    assert (
+        system.validate(sugared.definition.body, inputs).manifest_hash
+        == system.validate(direct, inputs).manifest_hash
+    )
+
+
 def _gathered(manifest: ExecutionManifest) -> list[str]:
     """Every source the tally's `many` port gathers, by node, `$input` for the boundary."""
 
@@ -302,6 +339,21 @@ async def panel_other(
     return Tally(approvals=0)
 
 
+@task("sdk/panel-echo", output="vote")
+async def panel_echo(
+    request: Annotated[Vote, port_type("sdk/Vote")],
+) -> Annotated[Vote, port_type("sdk/Vote")]:
+    return request
+
+
+@task("sdk/panel-tally-twice", output="tally")
+async def panel_tally_twice(
+    votes: list[Annotated[Vote, port_type("sdk/Vote")]],
+    more: list[Annotated[Vote, port_type("sdk/Vote")]],
+) -> Annotated[Tally, port_type("sdk/Tally")]:
+    return Tally(approvals=0)
+
+
 @task("sdk/panel-tally-seeded", output="tally")
 async def panel_tally_seeded(
     votes: list[Annotated[Vote, port_type("sdk/Vote")]],
@@ -339,10 +391,24 @@ def test_panel_refuses_what_would_be_gathered_wrongly_or_not_at_all() -> None:
     with pytest.raises(TypeError, match="but the members produce"):
         panel("sdk/deaf", panel_yes, aggregator=panel_tally_tallies)
 
-    # An aggregator input carrying the members' contract would bind a member
-    # magnetically instead of the boundary.
-    with pytest.raises(TypeError, match="would bind a member"):
+    # A boundary input carrying the members' result contract sits in every
+    # node's pool and would be gathered as a member — whether it is a policy
+    # input of the aggregator or the members' own request.
+    with pytest.raises(TypeError, match="would be gathered as a member"):
         panel("sdk/seeded", panel_yes, aggregator=panel_tally_seeded)
+    with pytest.raises(TypeError, match="would be gathered as a member"):
+        panel("sdk/echo", panel_echo, aggregator=panel_tally)
+
+    # Shape refusals: no members, a member of the wrong arity, an aggregator
+    # with two gathers, and an aggregator id that is also a member id.
+    with pytest.raises(ValueError, match="at least one member"):
+        panel("sdk/empty", aggregator=panel_tally)
+    with pytest.raises(TypeError, match="exactly one input and one output"):
+        panel("sdk/arity", panel_tally, aggregator=panel_tally)
+    with pytest.raises(TypeError, match="exactly one many-cardinality input"):
+        panel("sdk/twice", panel_yes, aggregator=panel_tally_twice)
+    with pytest.raises(ValueError, match="collides with a member id"):
+        panel("sdk/ids", panel_yes, aggregator=panel_tally, ids=("panel_tally",))
 
     # The members' request and the aggregator's policy share a boundary name.
     with pytest.raises(TypeError, match="boundary port names collide"):

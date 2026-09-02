@@ -23,7 +23,7 @@ a stored `PythonRef` and expects to find the same function it recorded.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import ValidationError
 
@@ -72,10 +72,22 @@ APPROVAL_CHANNEL = "approver"
 DURABLE_CHANNEL_KIND = MAILBOX_CHANNEL_KIND
 
 
-def _port(name: str, contract: Any) -> Port:
-    """One port typed by a canonical contract, so the pair cannot drift."""
+def _port(name: str, contract: Any, *, cardinality: Literal["one", "many"] = "one") -> Port:
+    """One port typed by a canonical contract, so the pair cannot drift.
 
-    return Port(name=name, type_id=contract.type_id, schema_hash=contract.schema_hash)
+    Nominal identity is the contract's `type_id` and named `schema_hash`. No
+    JSON Schema is embedded: the registry binds an embedded schema to its own
+    digest, and a named revision is not that digest, so `system.describe()`
+    reports these ports schema-incomplete — the same as the advisor and
+    approval ports — and their shapes are the L0 models they name.
+    """
+
+    return Port(
+        name=name,
+        type_id=contract.type_id,
+        schema_hash=contract.schema_hash,
+        cardinality=cardinality,
+    )
 
 
 ADVICE_REQUEST = _port("request", ADVICE_REQUEST_CONTRACT)
@@ -83,12 +95,7 @@ ADVICE_REPLY = _port("advice", ADVICE_REPLY_CONTRACT)
 APPROVAL_REQUEST = _port("request", APPROVAL_REQUEST_CONTRACT)
 APPROVAL_DECISION = _port("decision", APPROVAL_REPLY_CONTRACT)
 PANEL_VOTE = _port("vote", PANEL_MEMBER_RESULT_CONTRACT)
-PANEL_VOTES = Port(
-    name="votes",
-    type_id=PANEL_MEMBER_RESULT_CONTRACT.type_id,
-    schema_hash=PANEL_MEMBER_RESULT_CONTRACT.schema_hash,
-    cardinality="many",
-)
+PANEL_VOTES = _port("votes", PANEL_MEMBER_RESULT_CONTRACT, cardinality="many")
 PANEL_QUORUM = _port("quorum", PANEL_QUORUM_CONTRACT)
 PANEL_RESULT = _port("result", PANEL_RESULT_CONTRACT)
 
@@ -126,14 +133,16 @@ async def human_approval(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping
         # A bytes law, not model equality: `1 == True` and `1 == 1.0` are Python
         # facts, and a decision about a different subject is not this decision.
         raise ContractViolation(
-            f"approval {approval.approval_id} decides a subject this request did not ask about"
+            f"approval {approval.approval_id} decides a subject this request "
+            "did not ask about"
         )
     if approval.run_id != ctx.run_id:
         # The transport proved the reply belongs to this run; the record inside
         # it is separate data and must say so too, or this run would return a
         # governance fact about another one.
         raise ContractViolation(
-            f"approval {approval.approval_id} records run {approval.run_id!r}, not {ctx.run_id!r}"
+            f"approval {approval.approval_id} records run {approval.run_id!r}, "
+            f"not {ctx.run_id!r}"
         )
     return {"decision": decision.model_dump(mode="json")}
 
@@ -151,6 +160,11 @@ async def panel_ballot(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[s
 
     `member` is this component's own path, which the walker handed it. Its
     parent is the member node the panel declared.
+
+    The ballot's shape travels inside the generic advice reply, so nothing in
+    the exchange itself announces it: the request the workflow author writes
+    is what the participant sees, and it has to say that the answer is read as
+    a `PanelBallotPayload` — `outcome`, `ballot`, `rationale`, nothing else.
     """
 
     reply = AdviceReplyPayload.model_validate(inputs["advice"])
@@ -198,6 +212,10 @@ def human_panel_member(name: str, channel_id: str) -> DefinitionBundle:
     and a Ref's bindings are its own. It is a composite like any other: it must
     be registered and promoted, it carries no implementation, and it binds its
     channel inside its Graph rather than declaring one outside it.
+
+    The participant learns how to answer from the request payload, which the
+    workflow author writes (see `panel_ballot`); nothing in the exchange
+    itself announces the ballot's shape.
     """
 
     return flow(
@@ -259,7 +277,9 @@ def _definition(name: str, request: Port, reply: Port, alias: str, impl: Any) ->
     return ComponentDef(
         name=name,
         role="node",
-        capability_requirements=(CapabilityRequirement(alias=alias, kind=MAILBOX_CHANNEL_KIND),),
+        capability_requirements=(
+            CapabilityRequirement(alias=alias, kind=MAILBOX_CHANNEL_KIND),
+        ),
         body=PythonRef(
             package="constructicon",
             module=impl.__module__,

@@ -50,7 +50,9 @@ def component(
         resolved_outputs = graph.outputs if outputs is None else outputs
     else:
         if inputs is None or outputs is None:
-            raise TypeError("component inputs and outputs are required when wrapping a Ref or Loop")
+            raise TypeError(
+                "component inputs and outputs are required when wrapping a Ref or Loop"
+            )
         graph = Graph(
             name=name,
             nodes=(GraphNode(id=NodeId("body"), body=body),),
@@ -101,16 +103,22 @@ def flow(
         raise ValueError("flow requires at least one component reference")
     refs = tuple(_to_ref(step) for step in steps)
     node_ids = _node_ids(refs, ids)
-    bundle_by_index = tuple(step if isinstance(step, DefinitionBundle) else None for step in steps)
+    bundle_by_index = tuple(
+        step if isinstance(step, DefinitionBundle) else None for step in steps
+    )
     if inputs is None:
         first = bundle_by_index[0]
         if first is None:
-            raise TypeError("flow inputs must be declared when the first step is only a Ref/name")
+            raise TypeError(
+                "flow inputs must be declared when the first step is only a Ref/name"
+            )
         inputs = first.definition.inputs
     if outputs is None:
         last = bundle_by_index[-1]
         if last is None:
-            raise TypeError("flow outputs must be declared when the last step is only a Ref/name")
+            raise TypeError(
+                "flow outputs must be declared when the last step is only a Ref/name"
+            )
         outputs = last.definition.outputs
 
     maps_by_id = {key: dict(value) for key, value in (maps or {}).items()}
@@ -127,7 +135,8 @@ def flow(
         )
 
     nodes = tuple(
-        GraphNode(id=NodeId(node_id), body=ref) for node_id, ref in zip(node_ids, refs, strict=True)
+        GraphNode(id=NodeId(node_id), body=ref)
+        for node_id, ref in zip(node_ids, refs, strict=True)
     )
     connections = tuple(
         Connection(
@@ -167,8 +176,9 @@ def panel(
     contracts — which is why members and the aggregator are bundles and never
     bare names. Every member declares one request and one result, the same
     pair as every other member; the aggregator declares exactly one ``many``
-    port and it is that result contract; every other aggregator input is
-    nominally distinct from it, or it would bind a member magnetically; and no
+    port and it is that result contract; no boundary input — the request or an
+    aggregator policy input — carries that result contract, because a graph
+    input is in every node's pool and would be gathered as a member; and no
     boundary port name repeats. A member of another contract would not fail —
     it would be gathered by nobody and silently absent — so it is refused.
 
@@ -197,6 +207,12 @@ def panel(
         )
 
     inputs = (request, *policy_inputs)
+    for port in inputs:
+        if _same_contract(port, result):
+            raise TypeError(
+                f"panel boundary input {port.name!r} has the members' result contract and "
+                "would be gathered as a member; a graph input is in every node's pool"
+            )
     names = [port.name for port in inputs]
     if len(set(names)) != len(names):
         raise TypeError(
@@ -255,7 +271,7 @@ def _aggregator_contract(
     aggregator: DefinitionBundle,
     result: Port,
 ) -> tuple[Port, tuple[Port, ...]]:
-    """One `many` port for the members' result, and nothing else that could take it."""
+    """One `many` port for the members' result, and the rest as boundary inputs."""
 
     definition = aggregator.definition
     gathering = [port for port in definition.inputs if port.cardinality == "many"]
@@ -271,14 +287,7 @@ def _aggregator_contract(
             f"{gathers.schema_hash!r}, but the members produce {result.type_id!r}@"
             f"{result.schema_hash!r}"
         )
-    others = tuple(port for port in definition.inputs if port.cardinality != "many")
-    for port in others:
-        if _same_contract(port, result):
-            raise TypeError(
-                f"panel aggregator {definition.name!r} input {port.name!r} has the members' "
-                "result contract and would bind a member instead of the boundary"
-            )
-    return gathers, others
+    return gathers, tuple(port for port in definition.inputs if port.cardinality != "many")
 
 
 def _to_ref(step: AuthoringStep) -> Ref:
