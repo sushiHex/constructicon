@@ -383,11 +383,12 @@ async def test_a_human_member_votes_across_a_real_process_restart_and_the_panel_
 ) -> None:
     """Two round trips, each across a real process restart, credential-free.
 
-    The process that asks ends before the human answers. A second process
-    imports the components, records the ballot, and its own control-plane host
-    wakes the run to conclude the panel; a third records the approval the same
-    way. Nothing in memory crosses a boundary — only the database file. One
-    request, reply, acknowledgement, and wake per round trip, one approval.
+    The process that asks does nothing more once the run is parked. A child
+    process imports the components, records the ballot, and its own
+    control-plane host wakes the run to conclude the panel; a third records the
+    approval the same way. No application state crosses a boundary except
+    through the database file. One request, reply, acknowledgement, and wake
+    per round trip, one approval.
     """
 
     database = tmp_path / "panel.db"
@@ -423,12 +424,16 @@ async def test_a_human_member_votes_across_a_real_process_restart_and_the_panel_
     assert approval_ids == [record["approval_id"]]
 
     # Three attempts and no more: the start in the first process, and one
-    # resumption per reply, each caused by exactly that reply.
-    attempts = _attempts(third, HUMAN_RUN)
-    assert [kind for kind, _ in attempts] == ["RunStarted", "RunResumed", "RunResumed"]
-    assert attempts[0][1] is None
-    assert attempts[1][1] == AttemptCause(kind="channel_reply", id=str(human.message_id))
-    assert attempts[2][1] is not None and attempts[2][1].kind == "channel_reply"
+    # resumption per reply, each caused by exactly the durable reply to that
+    # round trip's request — and the vote's copied message id is that reply.
+    replies = third.answered_requests([ballot_request, approval_request])
+    assert set(replies) == {ballot_request, approval_request}
+    assert human.message_id == replies[ballot_request]
+    assert _attempts(third, HUMAN_RUN) == [
+        ("RunStarted", None),
+        ("RunResumed", AttemptCause(kind="channel_reply", id=str(replies[ballot_request]))),
+        ("RunResumed", AttemptCause(kind="channel_reply", id=str(replies[approval_request]))),
+    ]
     assert _counts(database) == (2, 2, 2, 1)
 
 
