@@ -41,10 +41,12 @@ from constructicon.substrate.journal._sqlite_channels import (
     validate_channel_fact_seal_inventory,
 )
 from constructicon.substrate.journal._sqlite_commands import (
+    DOMAIN_PLAN_ERA_FACT_FAMILY,
     RESUME_PLAN_ERA_FACT_FAMILY,
     command_plan_exists,
     seal_command_claim,
     seal_command_phases,
+    seal_domain_plan_eras,
     seal_resume_plan_eras,
     validate_command_claim_inventory,
 )
@@ -139,6 +141,7 @@ _DURABLE_FACT_SEAL_FAMILIES = frozenset(
         "legacy_attestation_m1_m2",
         LEGACY_EFFECT_OUTCOME_FACT_FAMILY,
         "legacy_promotion_pre_v7",
+        DOMAIN_PLAN_ERA_FACT_FAMILY,
         RESUME_PLAN_ERA_FACT_FAMILY,
         MANIFEST_FACT_FAMILY,
         "promotion",
@@ -832,6 +835,7 @@ class _SqliteSchemaMixin:
                 seal_command_claim(connection, row)
                 seal_command_phases(connection, row)
             seal_resume_plan_eras(connection)
+            seal_domain_plan_eras(connection)
             for row in connection.execute("SELECT * FROM manifests").fetchall():
                 seal_manifest(connection, row)
             for row in connection.execute(
@@ -873,7 +877,7 @@ class _SqliteSchemaMixin:
     def _validate_v7_fact_inventory(connection: sqlite3.Connection) -> None:
         """Prove the complete current graph after every migration seal exists."""
 
-        resume_plan_era_count = validate_command_claim_inventory(connection)
+        plan_era_count = validate_command_claim_inventory(connection)
         for row in connection.execute("SELECT * FROM manifests").fetchall():
             require_manifest_seal(connection, row)
         validate_event_seal_inventory(connection)
@@ -910,7 +914,7 @@ class _SqliteSchemaMixin:
             fact="durable fact seal expected count",
             allow_zero=True,
             kind="count",
-        ) + legacy_effect_outcome_count + resume_plan_era_count + resume_provenance_count
+        ) + legacy_effect_outcome_count + plan_era_count + resume_provenance_count
         validate_durable_fact_seal_inventory(
             connection,
             known_families=_DURABLE_FACT_SEAL_FAMILIES,

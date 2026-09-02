@@ -13,6 +13,7 @@ from constructicon.core.control import (
     CommandClaim,
     CommandClaimResult,
     CommandRecord,
+    HistoricalDomainPlanEvidence,
     HistoricalResumePlanEvidence,
     command_id_for,
     command_request_hash,
@@ -49,6 +50,7 @@ from constructicon.substrate.journal._sqlite_channels import (
 )
 from constructicon.substrate.journal._sqlite_commands import (
     command_for_id,
+    historical_domain_plan_evidence_for_id,
     historical_resume_plan_evidence_for_id,
     seal_command_claim,
     seal_command_phases,
@@ -209,6 +211,13 @@ class _SqliteControlMixin:
     ) -> HistoricalResumePlanEvidence | None:
         with self._read() as connection:
             return historical_resume_plan_evidence_for_id(connection, command_id)
+
+    def historical_domain_plan_evidence(
+        self,
+        command_id: str,
+    ) -> HistoricalDomainPlanEvidence | None:
+        with self._read() as connection:
+            return historical_domain_plan_evidence_for_id(connection, command_id)
 
     def latest_command_key(self, *, operation: str) -> tuple[str, str] | None:
         with self._read() as connection:

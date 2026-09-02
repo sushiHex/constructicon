@@ -62,7 +62,7 @@ classifies only genuine raw or weak typed pre-v7 resume plans with their exact
 migration-time phase. It then seals in this topological order:
 
 ```text
-commands → pre-v7 resume-plan evidence
+commands → pre-v7 resume-plan evidence → pre-v7 domain-plan evidence
 → manifests → run worlds → attestations → approvals
 → component registrations/promotions → effect preparations
 → events → opaque effect-outcome classifications
@@ -92,6 +92,20 @@ The compatibility paths tightened by this decision are closed, named eras:
   `resume_plan_pre_v7`. A `prepared` marker binds claim and plan without
   inventing a future terminal fact; a `terminal` marker also binds the exact
   retained response. Unfenced history cannot own an attributed attempt receipt;
+- two further domain-plan families predate the exact proofs they now answer
+  to, and share the resume family's mechanism under `domain_plan_pre_v7`. A
+  registry promotion, evaluated promotion, or rollback plan written before
+  `terminal_rejection_policy` existed cannot have its refusal re-derived
+  byte-for-byte; a `runs_cancel` plan that found its run already terminal
+  before `observed_event_seq` existed cannot be re-proved against the event
+  that made it true. Migration alone witnesses each retained plan of either
+  shape with the phase it found it in. A `prepared` witness binds claim and
+  plan; a `terminal` witness also binds the exact retained response, and only
+  that witness lets the stored refusal or observation replay. A command that
+  is claimed but unplanned at migration receives no witness, so a plan stored
+  for it afterwards must carry the current shape. Current writers refuse to
+  mint either legacy shape, so the same bytes without a witness are a
+  downgrade and remain damage;
 - schema-5/6 actors may retain one unique unsorted array of known scopes, and
   pre-sort component definitions may retain the unique array order of `labels`,
   `change_surfaces`, and `capability_requirements`. The typed view is
@@ -128,7 +142,8 @@ opaque, that opacity remains part of its contract.
 - The pending schema-7 migration owns `durable_fact_seals`,
   `legacy_effect_seals`, `legacy_capability_lease_seals`,
   the `legacy_effect_outcome_pre_v7` fact family,
-  the `resume_plan_pre_v7` and `resume_attempt` fact families,
+  the `resume_plan_pre_v7`, `domain_plan_pre_v7`, and `resume_attempt` fact
+  families,
   `runs.creation_command_id`, `effects.outcome_run_id`,
   `effects.outcome_event_seq`, `channel_messages.command_id`,
   `channel_messages.reply_provenance_version`,

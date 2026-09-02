@@ -1050,6 +1050,9 @@ def _rewrite_resume_as_legacy_rejection(
         _reseal_command_phases(connection, command_id, plan=True, terminal=True)
 
 
+_NO_DOMAIN_PLAN_WITNESS = "'domain_plan_pre_v7' fact .* has no positive seal"
+
+
 def _strip_terminal_rejection_policy(
     db_path: str | Path,
     command_id: str,
@@ -1340,19 +1343,20 @@ async def test_already_terminal_cancel_remains_replayable_after_a_later_resume(
     await control.shutdown()
 
 
-@pytest.mark.parametrize(
-    ("status", "replayable"),
-    [
-        (RunStatus.SUCCEEDED, True),
-        (RunStatus.FAILED, False),
-    ],
-)
-async def test_pre_marker_cancel_plan_preserves_only_immutable_terminal_evidence(
+@pytest.mark.parametrize("status", [RunStatus.SUCCEEDED, RunStatus.FAILED])
+async def test_a_stripped_cancel_observation_is_a_forgery_not_history(
     status: RunStatus,
-    replayable: bool,
     world: Any,
     journal: SqliteJournal,
 ) -> None:
+    """The pre-marker shape is history only when the migration witnessed it.
+
+    Strip `observed_event_seq` from a current plan and the bytes match a plan
+    written before that field existed — but no migration saw this plan in that
+    shape, so no witness exists, and the seal boundary refuses it whatever the
+    run's status. The genuine pre-v7 shape, witnessed at migration, replays for
+    both statuses: see tests/api/test_pre_v7_plan_replay.py.
+    """
     run_id = (
         _prepare_terminal_run(world, journal, f"legacy-cancel-{status.value}", status)
         if status is RunStatus.SUCCEEDED
@@ -1389,21 +1393,12 @@ async def test_pre_marker_cancel_plan_preserves_only_immutable_terminal_evidence
         )
         _reseal_command_phases(connection, command_id, plan=True)
 
-    if replayable:
-        replay = await control.runs_cancel(
+    with pytest.raises(JournalDamaged, match=_NO_DOMAIN_PLAN_WITNESS):
+        await control.runs_cancel(
             RUN_ACTOR,
             run_id=run_id,
             idempotency_key=key,
         )
-        assert isinstance(replay, CancellationResult)
-        assert replay.command.replayed
-    else:
-        with pytest.raises(JournalDamaged, match="resumable status has no exact observation"):
-            await control.runs_cancel(
-                RUN_ACTOR,
-                run_id=run_id,
-                idempotency_key=key,
-            )
     await control.shutdown()
 
 
@@ -1813,12 +1808,14 @@ async def test_initial_promotion_rejected_after_its_domain_plan_replays(
         )
     assert world._registry.stable_version(definition.name) == other_version
 
+    # A legacy shape with no migration witness is not history but a downgrade,
+    # and the seal boundary refuses it before any replay law is consulted.
     _strip_terminal_rejection_policy(
         journal._db_path,
         command_id,
         response_json=stored,
     )
-    with pytest.raises(JournalDamaged, match="legacy domain-plan rejection has no exact proof"):
+    with pytest.raises(JournalDamaged, match=_NO_DOMAIN_PLAN_WITNESS):
         await control_b.registry_promote_initial(
             LOCAL_ADMIN,
             component=definition.name,

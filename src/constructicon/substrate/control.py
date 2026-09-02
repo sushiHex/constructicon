@@ -18,10 +18,12 @@ from constructicon.core.control import (
     CommandClaim,
     CommandClaimResult,
     CommandRecord,
+    HistoricalDomainPlanEvidence,
     HistoricalResumePlanEvidence,
     command_id_for,
     command_request_hash,
     validate_idempotency_key,
+    validated_new_domain_command_plan,
     validated_new_resume_command_plan,
 )
 from constructicon.core.effect import ApprovalRecord
@@ -143,6 +145,10 @@ class InMemoryControlStore:
             )
 
     def store_command_plan(self, claim: CommandClaim, plan: JsonValue) -> None:
+        if plan is None:
+            # The same refusal as the SQLite store, for the same reason: `null`
+            # is bytes a column test reads as a plan and a decoder reads as none.
+            raise ValueError(f"command {claim.command_id!r} cannot be planned with no plan")
         durable_plan, plan_json = _durable_json(plan)
         with self._lock:
             record = self._fenced(claim)
@@ -151,6 +157,7 @@ class InMemoryControlStore:
                     update={"plan": durable_plan, "updated_at": self._now()}
                 )
                 validated_new_resume_command_plan(planned)
+                validated_new_domain_command_plan(planned)
                 self._commands[claim.command_id] = planned
                 return
             if canonical_json(record.plan) != plan_json:
@@ -174,6 +181,14 @@ class InMemoryControlStore:
         command_id: str,
     ) -> HistoricalResumePlanEvidence | None:
         """The current-only in-memory store never contains migrated plans."""
+
+        return None
+
+    def historical_domain_plan_evidence(
+        self,
+        command_id: str,
+    ) -> HistoricalDomainPlanEvidence | None:
+        """Likewise: nothing here was ever witnessed by a migration."""
 
         return None
 
@@ -355,6 +370,10 @@ class InMemoryControlStore:
         response: JsonValue,
         state: str,
     ) -> CommandRecord:
+        if response is None:
+            raise ValueError(
+                f"command {claim.command_id!r} cannot become {state} with no response"
+            )
         durable_response, response_json = _durable_json(response)
         with self._lock:
             record = self._commands.get(claim.command_id)

@@ -2194,16 +2194,24 @@ class _CommandExecutor:
                         "cancellation plan contradicts its exact terminal observation"
                     )
                 return
-            if plan.observed_status not in {RunStatus.SUCCEEDED, RunStatus.CANCELLED}:
-                raise JournalDamaged(
-                    "legacy cancellation of a resumable status has no exact observation"
-                )
-            current = self._journal.run_record(plan.run_id)
-            if current is None or current.status != plan.observed_status:
-                raise JournalDamaged(
-                    "legacy cancellation contradicts its immutable terminal status"
-                )
-            return
+            if plan.observed_status in {RunStatus.SUCCEEDED, RunStatus.CANCELLED}:
+                # Immutable, so the run itself still proves the observation.
+                current = self._journal.run_record(plan.run_id)
+                if current is None or current.status != plan.observed_status:
+                    raise JournalDamaged(
+                        "legacy cancellation contradicts its immutable terminal status"
+                    )
+                return
+            # A resumable status may have moved on since, so the run cannot
+            # re-prove what was observed. The migration's terminal witness can:
+            # it bound this plan and the exact response the command gave at
+            # the one moment the observation could be honestly recorded.
+            witness = self._store.historical_domain_plan_evidence(claim.command_id)
+            if witness is not None and witness.phase_at_migration == "terminal":
+                return
+            raise JournalDamaged(
+                "legacy cancellation of a resumable status has no exact observation"
+            )
 
         if isinstance(plan, LegacyResumeCommandPlan):
             if (
@@ -2706,9 +2714,21 @@ class _CommandExecutor:
             ("registry_rollback", _RollbackPlan),
         }:
             if plan.terminal_rejection_policy != "exact-v1":
-                raise JournalDamaged(
-                    f"{record.operation!r} legacy domain-plan rejection has no exact proof"
-                )
+                # Written before its refusal had canonical bytes, so nothing
+                # can re-derive them today. What can still be trusted is the
+                # migration's witness: a terminal witness bound the exact
+                # retained response at the one moment such a plan could be
+                # honestly observed, and a legacy shape with no witness is not
+                # history but a downgrade — which stays damage.
+                witness = self._store.historical_domain_plan_evidence(record.command_id)
+                if witness is None:
+                    raise JournalDamaged(
+                        f"{record.operation!r} legacy domain-plan rejection has no exact proof"
+                    )
+                if witness.phase_at_migration == "terminal":
+                    return
+                # Witnessed while still prepared: whoever finished it did so
+                # under the current law, so its refusal must be the exact one.
             expected = _canonical_domain_rejection(plan)
             if not _same_json_fact(response, expected):
                 raise JournalDamaged(

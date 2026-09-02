@@ -405,13 +405,34 @@ class LegacyResumeCommandPlan(BaseModel):
         return data
 
 
-class HistoricalResumePlanEvidence(BaseModel):
-    """Migration-only phase evidence for one retained weak resume plan."""
+class HistoricalPlanEvidence(BaseModel):
+    """What the 6→7 migration witnessed about one plan older than its law.
+
+    Two facts, and only two: which command, and whether it had already finished
+    when the migration looked. A ``prepared`` witness binds the claim and the
+    plan; a ``terminal`` witness also binds the exact retained response. Nothing
+    written after the migration can mint one, which is what lets a legacy shape
+    with a witness be history and the same shape without one be a forgery.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     command_id: str
     phase_at_migration: Literal["prepared", "terminal"]
+
+
+class HistoricalResumePlanEvidence(HistoricalPlanEvidence):
+    """Migration-only phase evidence for one retained weak resume plan."""
+
+
+class HistoricalDomainPlanEvidence(HistoricalPlanEvidence):
+    """Migration-only phase evidence for one retained pre-exact-proof domain plan.
+
+    A registry promotion, rollback, or initial promotion planned before
+    ``terminal_rejection_policy`` existed; a cancellation that found its run
+    already terminal before ``observed_event_seq`` existed. The families are
+    distinct types so a witness for one can never be presented for the other.
+    """
 
 
 _RESUME_ATTEMPT_KIND_BY_STATUS: dict[
@@ -546,6 +567,64 @@ def resume_plan_requires_historical_evidence(command: CommandRecord) -> bool:
     return isinstance(plan, ResumeCommandPlan) and (
         plan.terminal_rejection_policy is None
     )
+
+
+_DOMAIN_PLAN_ERA_OPERATIONS: frozenset[str] = frozenset(
+    {"registry_promote_initial", "registry_promote", "registry_rollback", "runs_cancel"}
+)
+
+
+def domain_plan_requires_historical_evidence(command: CommandRecord) -> bool:
+    """Whether a stored domain plan predates the exact-proof law it now answers to.
+
+    Classified from the stored bytes alone, as the resume classifier is, so the
+    substrate and the control plane agree without either importing the other's
+    plan models. Two shapes qualify. A registry promotion plan with no
+    ``terminal_rejection_policy`` was written before its refusal had canonical
+    bytes, so that refusal cannot be re-derived today. A cancellation that found
+    its run already terminal but records no ``observed_event_seq`` was written
+    before the observation had to name its event, so it cannot be re-proved
+    against the event that made it true. Current writers always record both, and
+    the migration is the only authority allowed to witness their absence.
+
+    A refusal plan under one of these operations is not a domain plan and is
+    never classified here.
+    """
+
+    raw = command.plan
+    if command.operation not in _DOMAIN_PLAN_ERA_OPERATIONS or raw is None:
+        return False
+    if plan_records_a_refusal(raw):
+        return False
+    if not isinstance(raw, dict) or "schema_version" not in raw:
+        return False
+    planned = raw.get("plan")
+    if not isinstance(planned, dict):
+        return False
+    if command.operation == "runs_cancel":
+        return (
+            planned.get("kind") == "cancel"
+            and planned.get("outcome") == "already_terminal"
+            and planned.get("observed_event_seq") is None
+        )
+    return (
+        planned.get("kind") in {"initial_promotion", "promotion", "rollback"}
+        and planned.get("terminal_rejection_policy") is None
+    )
+
+
+def validated_new_domain_command_plan(command: CommandRecord) -> None:
+    """Refuse a current writer the shape only history may carry.
+
+    Both control stores call this at their plan write boundary, beside the
+    resume guard, so a plan that would need a migration witness cannot be
+    minted in an era that has no migration to witness it.
+    """
+
+    if domain_plan_requires_historical_evidence(command):
+        raise JournalDamaged(
+            f"command {command.command_id!r} cannot mint a historical domain plan era"
+        )
 
 
 def validated_new_resume_command_plan(
@@ -1206,6 +1285,13 @@ class ControlStore(Protocol):
         command_id: str,
     ) -> HistoricalResumePlanEvidence | None:
         """Return explicit pre-v7 phase evidence for one resume domain plan."""
+        ...
+
+    def historical_domain_plan_evidence(
+        self,
+        command_id: str,
+    ) -> HistoricalDomainPlanEvidence | None:
+        """Return explicit pre-v7 phase evidence for one pre-exact-proof domain plan."""
         ...
 
     def latest_command_key(self, *, operation: str) -> tuple[str, str] | None: ...

@@ -3,18 +3,24 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import Literal, cast
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Generic, Literal, TypeVar, cast
 
 from pydantic import ValidationError
 
 from constructicon.core.control import (
     CommandRecord,
+    HistoricalDomainPlanEvidence,
+    HistoricalPlanEvidence,
     HistoricalResumePlanEvidence,
     command_id_for,
     command_request_hash,
+    domain_plan_requires_historical_evidence,
     resume_plan_requires_historical_evidence,
     run_id_for_command,
     validate_idempotency_key,
+    validated_new_domain_command_plan,
     validated_new_resume_command_plan,
 )
 from constructicon.core.errors import JournalDamaged
@@ -38,6 +44,48 @@ _COMMAND_FACT_FAMILY = "command_claim"
 _COMMAND_PLAN_FACT_FAMILY = "command_plan"
 _COMMAND_TERMINAL_FACT_FAMILY = "command_terminal"
 RESUME_PLAN_ERA_FACT_FAMILY = "resume_plan_pre_v7"
+DOMAIN_PLAN_ERA_FACT_FAMILY = "domain_plan_pre_v7"
+
+_EvidenceT = TypeVar("_EvidenceT", bound=HistoricalPlanEvidence)
+# The descriptor only ever hands its witness type out, so it is covariant in
+# it; the functions below take an era and a witness together, so they are not.
+_EvidenceT_co = TypeVar("_EvidenceT_co", bound=HistoricalPlanEvidence, covariant=True)
+
+
+@dataclass(frozen=True)
+class _PlanEra(Generic[_EvidenceT_co]):
+    """One family of plans older than a law, and how migration witnessed them.
+
+    The mechanism is the same for every such family: the migration classifies
+    each retained command from its bytes, writes one witness naming the phase
+    it found the command in, and binds that witness to the claim, the plan, and
+    — when the command had already finished — the exact response. What differs
+    is only which bytes count as older than the law and which witness type says
+    so, and that is all a family has to supply.
+    """
+
+    family: str
+    label: str
+    requires_evidence: Callable[[CommandRecord], bool]
+    evidence: type[_EvidenceT_co]
+
+
+_RESUME_PLAN_ERA: _PlanEra[HistoricalResumePlanEvidence] = _PlanEra(
+    family=RESUME_PLAN_ERA_FACT_FAMILY,
+    label="resume",
+    requires_evidence=resume_plan_requires_historical_evidence,
+    evidence=HistoricalResumePlanEvidence,
+)
+_DOMAIN_PLAN_ERA: _PlanEra[HistoricalDomainPlanEvidence] = _PlanEra(
+    family=DOMAIN_PLAN_ERA_FACT_FAMILY,
+    label="domain",
+    requires_evidence=domain_plan_requires_historical_evidence,
+    evidence=HistoricalDomainPlanEvidence,
+)
+_PLAN_ERAS: tuple[_PlanEra[HistoricalPlanEvidence], ...] = (
+    _RESUME_PLAN_ERA,
+    _DOMAIN_PLAN_ERA,
+)
 
 
 def _command_claim_fact_hash_from_values(
@@ -125,20 +173,21 @@ def command_plan_fact_hash(row: sqlite3.Row) -> Digest:
     return _command_plan_fact_hash_from_values(row["command_id"], row["plan_json"])
 
 
-def _resume_plan_era_selector(
-    evidence: HistoricalResumePlanEvidence,
-) -> str:
+def _plan_era_selector(evidence: HistoricalPlanEvidence) -> str:
     return canonical_json(evidence.model_dump(mode="json"))
 
 
-def resume_plan_era_fact_hash(
+def _plan_era_fact_hash(
+    era: _PlanEra[_EvidenceT],
     row: sqlite3.Row,
-    *,
-    evidence: HistoricalResumePlanEvidence,
+    evidence: _EvidenceT,
 ) -> Digest:
-    """Bind one weak/raw plan and the exact phase observed at migration."""
+    """Bind one pre-law plan and the exact phase observed at migration."""
 
-    command_id = _durable_text(row["command_id"], fact="historical resume command identity")
+    command_id = _durable_text(
+        row["command_id"],
+        fact=f"historical {era.label} command identity",
+    )
     exact_fields = {
         "command_id": command_id,
         "command_claim_hash": str(command_claim_fact_hash(row)),
@@ -150,10 +199,27 @@ def resume_plan_era_fact_hash(
         ),
         "evidence": evidence.model_dump(mode="json"),
     }
-    return durable_fact_hash(
-        RESUME_PLAN_ERA_FACT_FAMILY,
-        exact_fields,
-    )
+    return durable_fact_hash(era.family, exact_fields)
+
+
+def resume_plan_era_fact_hash(
+    row: sqlite3.Row,
+    *,
+    evidence: HistoricalResumePlanEvidence,
+) -> Digest:
+    """Bind one weak/raw resume plan and the exact phase observed at migration."""
+
+    return _plan_era_fact_hash(_RESUME_PLAN_ERA, row, evidence)
+
+
+def domain_plan_era_fact_hash(
+    row: sqlite3.Row,
+    *,
+    evidence: HistoricalDomainPlanEvidence,
+) -> Digest:
+    """Bind one pre-exact-proof domain plan and the phase observed at migration."""
+
+    return _plan_era_fact_hash(_DOMAIN_PLAN_ERA, row, evidence)
 
 
 def _command_terminal_fact_hash_from_values(
@@ -328,17 +394,20 @@ def register_command_seal_hashes(connection: sqlite3.Connection) -> None:
     )
 
 
-def require_resume_plan_era(
+def _require_plan_era(
     connection: sqlite3.Connection,
     row: sqlite3.Row,
     record: CommandRecord,
-) -> HistoricalResumePlanEvidence | None:
+    era: _PlanEra[_EvidenceT],
+) -> _EvidenceT | None:
+    """A witness where the bytes call for one, and none where they do not."""
+
     marker = durable_fact_seal(
         connection,
-        family=RESUME_PLAN_ERA_FACT_FAMILY,
+        family=era.family,
         fact_key=record.command_id,
     )
-    requires_marker = resume_plan_requires_historical_evidence(record)
+    requires_marker = era.requires_evidence(record)
     if not requires_marker:
         if marker is not None:
             raise JournalDamaged(
@@ -348,62 +417,87 @@ def require_resume_plan_era(
         return None
     if marker is None:
         raise JournalDamaged(
-            f"durable {RESUME_PLAN_ERA_FACT_FAMILY!r} fact "
-            f"{record.command_id!r} has no positive seal"
+            f"durable {era.family!r} fact {record.command_id!r} has no positive seal"
         )
     try:
-        evidence = HistoricalResumePlanEvidence.model_validate_json(marker.selector)
+        evidence = era.evidence.model_validate_json(marker.selector)
     except (TypeError, ValueError, ValidationError) as exc:
         raise JournalDamaged(
-            f"historical resume command {record.command_id!r} has an invalid era selector"
+            f"historical {era.label} command {record.command_id!r} has an invalid era selector"
         ) from exc
     if (
         canonical_json(evidence.model_dump(mode="json")) != marker.selector
         or evidence.command_id != record.command_id
     ):
         raise JournalDamaged(
-            f"historical resume command {record.command_id!r} has a contradictory era selector"
+            f"historical {era.label} command {record.command_id!r} has a contradictory era"
+            " selector"
         )
     if evidence.phase_at_migration == "terminal" and record.state == "prepared":
         raise JournalDamaged(
-            f"historical resume command {record.command_id!r} lost its migrated terminal phase"
+            f"historical {era.label} command {record.command_id!r} lost its migrated"
+            " terminal phase"
         )
     require_durable_fact_seal(
         connection,
-        family=RESUME_PLAN_ERA_FACT_FAMILY,
+        family=era.family,
         fact_key=record.command_id,
         selector=marker.selector,
-        fact_hash=resume_plan_era_fact_hash(
-            row,
-            evidence=evidence,
-        ),
+        fact_hash=_plan_era_fact_hash(era, row, evidence),
     )
     return evidence
+
+
+def require_resume_plan_era(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+    record: CommandRecord,
+) -> HistoricalResumePlanEvidence | None:
+    return _require_plan_era(connection, row, record, _RESUME_PLAN_ERA)
+
+
+def require_domain_plan_era(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+    record: CommandRecord,
+) -> HistoricalDomainPlanEvidence | None:
+    return _require_plan_era(connection, row, record, _DOMAIN_PLAN_ERA)
+
+
+def _seal_plan_eras(connection: sqlite3.Connection, era: _PlanEra[_EvidenceT]) -> None:
+    for row in connection.execute("SELECT * FROM commands ORDER BY command_id"):
+        record = _sealed_command_phases_from_row(connection, row)
+        if not era.requires_evidence(record):
+            continue
+        evidence = era.evidence(
+            command_id=record.command_id,
+            phase_at_migration=("prepared" if record.state == "prepared" else "terminal"),
+        )
+        store_durable_fact_seal(
+            connection,
+            family=era.family,
+            fact_key=record.command_id,
+            selector=_plan_era_selector(evidence),
+            fact_hash=_plan_era_fact_hash(era, row, evidence),
+        )
 
 
 def seal_resume_plan_eras(connection: sqlite3.Connection) -> None:
     """Classify every retained historical resume-plan wire era during migration."""
 
-    for row in connection.execute("SELECT * FROM commands ORDER BY command_id"):
-        record = _sealed_command_phases_from_row(connection, row)
-        if not resume_plan_requires_historical_evidence(record):
-            continue
-        evidence = HistoricalResumePlanEvidence(
-            command_id=record.command_id,
-            phase_at_migration=(
-                "prepared" if record.state == "prepared" else "terminal"
-            ),
-        )
-        store_durable_fact_seal(
-            connection,
-            family=RESUME_PLAN_ERA_FACT_FAMILY,
-            fact_key=record.command_id,
-            selector=_resume_plan_era_selector(evidence),
-            fact_hash=resume_plan_era_fact_hash(
-                row,
-                evidence=evidence,
-            ),
-        )
+    _seal_plan_eras(connection, _RESUME_PLAN_ERA)
+
+
+def seal_domain_plan_eras(connection: sqlite3.Connection) -> None:
+    """Witness every retained pre-exact-proof domain plan during migration.
+
+    Sound only because it runs at migration and nowhere else. A command that is
+    claimed but unplanned when the migration looks gets no witness, so a plan
+    stored for it afterwards must carry the current shape — the witness binds
+    the plan hash, and there was no plan to bind.
+    """
+
+    _seal_plan_eras(connection, _DOMAIN_PLAN_ERA)
 
 
 def command_plan_exists(column: str) -> str:
@@ -512,44 +606,58 @@ def validate_command_content_inventory(connection: sqlite3.Connection) -> None:
         raise JournalDamaged("command claim inventory is contradictory")
 
 
-def validate_resume_plan_era_inventory(connection: sqlite3.Connection) -> int:
-    """Prove every retained command against the era markers migration wrote.
+def _validate_plan_era_inventory(
+    connection: sqlite3.Connection,
+    era: _PlanEra[_EvidenceT],
+) -> int:
+    """Set equality between the commands that need a witness and the witnesses.
 
-    This decodes each command in turn and proves its phase seals, so its cost is
-    the whole store however few rows the caller asked for. It is a whole-store
-    claim, and it belongs where whole-store claims are made — at open. On the
-    recovery pump's hot loop it made every bounded read pay for every command it
-    was never going to return.
+    A count could not tell a balanced substitution from the truth; the sets
+    can. This decodes each command in turn and proves its phase seals, so its
+    cost is the whole store however few rows a caller asked for — a whole-store
+    claim, made where whole-store claims are made, at open.
     """
 
     expected_marker_keys: set[str] = set()
     for row in connection.execute("SELECT * FROM commands ORDER BY command_id"):
         record = sealed_command_from_row(connection, row)
-        if resume_plan_requires_historical_evidence(record):
+        if era.requires_evidence(record):
             expected_marker_keys.add(record.command_id)
     marker_keys: set[str] = set()
     marker_count = 0
     for row in connection.execute(
         "SELECT fact_key FROM durable_fact_seals WHERE family = ?",
-        (RESUME_PLAN_ERA_FACT_FAMILY,),
+        (era.family,),
     ):
         marker_count += 1
         marker_keys.add(
-            _durable_text(row["fact_key"], fact="resume-plan era seal identity")
+            _durable_text(row["fact_key"], fact=f"{era.label}-plan era seal identity")
         )
     if marker_keys != expected_marker_keys or len(marker_keys) != marker_count:
         raise JournalDamaged(
-            "resume-plan era seal inventory has an orphan or missing fact"
+            f"{era.label}-plan era seal inventory has an orphan or missing fact"
         )
     return marker_count
 
 
+def validate_resume_plan_era_inventory(connection: sqlite3.Connection) -> int:
+    return _validate_plan_era_inventory(connection, _RESUME_PLAN_ERA)
+
+
+def validate_domain_plan_era_inventory(connection: sqlite3.Connection) -> int:
+    return _validate_plan_era_inventory(connection, _DOMAIN_PLAN_ERA)
+
+
 def validate_command_claim_inventory(connection: sqlite3.Connection) -> int:
-    """Both whole-store command proofs, for the open path that owes them."""
+    """Every whole-store command proof, for the open path that owes them.
+
+    Returns how many migration witnesses the store holds across every plan era,
+    which the global seal inventory adds to the primary facts it expects.
+    """
 
     validate_command_claim_integrity(connection)
     validate_command_content_inventory(connection)
-    return validate_resume_plan_era_inventory(connection)
+    return sum(_validate_plan_era_inventory(connection, era) for era in _PLAN_ERAS)
 
 
 def seal_command_claim(connection: sqlite3.Connection, row: sqlite3.Row) -> None:
@@ -594,7 +702,8 @@ def sealed_command_from_row(
     """Project one command through every phase and resume-era proof."""
 
     record = _sealed_command_phases_from_row(connection, row)
-    require_resume_plan_era(connection, row, record)
+    for era in _PLAN_ERAS:
+        _require_plan_era(connection, row, record, era)
     return record
 
 
@@ -607,7 +716,9 @@ def seal_current_command_plan(
     seal_command_phases(connection, row)
     record = _sealed_command_phases_from_row(connection, row)
     validated_new_resume_command_plan(record)
-    require_resume_plan_era(connection, row, record)
+    validated_new_domain_command_plan(record)
+    for era in _PLAN_ERAS:
+        _require_plan_era(connection, row, record, era)
     return record
 
 
@@ -732,11 +843,12 @@ def command_for_id(
     return None
 
 
-def historical_resume_plan_evidence_for_id(
+def _historical_plan_evidence_for_id(
     connection: sqlite3.Connection,
     command_id: str,
-) -> HistoricalResumePlanEvidence | None:
-    """Project the migration-only resume era through the canonical command."""
+    era: _PlanEra[_EvidenceT],
+) -> _EvidenceT | None:
+    """Project one migration-only era through the canonical command."""
 
     record = command_for_id(connection, command_id)
     if record is None:
@@ -746,7 +858,21 @@ def historical_resume_plan_evidence_for_id(
         (command_id,),
     ).fetchone()
     assert row is not None
-    return require_resume_plan_era(connection, row, record)
+    return _require_plan_era(connection, row, record, era)
+
+
+def historical_resume_plan_evidence_for_id(
+    connection: sqlite3.Connection,
+    command_id: str,
+) -> HistoricalResumePlanEvidence | None:
+    return _historical_plan_evidence_for_id(connection, command_id, _RESUME_PLAN_ERA)
+
+
+def historical_domain_plan_evidence_for_id(
+    connection: sqlite3.Connection,
+    command_id: str,
+) -> HistoricalDomainPlanEvidence | None:
+    return _historical_plan_evidence_for_id(connection, command_id, _DOMAIN_PLAN_ERA)
 
 
 def command_from_row(row: sqlite3.Row) -> CommandRecord:
