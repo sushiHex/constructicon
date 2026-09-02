@@ -567,33 +567,6 @@ def stored_checkpoint_from_row(
     return checkpoint
 
 
-def _checkpoint_selector(run_id: RunId, path: ExecutionPath) -> str:
-    return canonical_json(_checkpoint_position(str(run_id), _path_key(path)))
-
-
-def _checkpoint_selector_from_json(raw: object) -> str | None:
-    try:
-        checkpoint = _durable_model(
-            Checkpoint,
-            _durable_text(raw, fact="checkpoint selector payload"),
-            fact="checkpoint selector payload",
-        )
-        return _checkpoint_selector(checkpoint.run_id, checkpoint.path)
-    except (JournalDamaged, TypeError, ValueError, ValidationError):
-        return None
-
-
-def _checkpoint_event_selector(run_id: object, raw_path: object) -> str | None:
-    try:
-        durable_run_id = RunId(_durable_text(run_id, fact="checkpoint event run identity"))
-        path = _durable_model(
-            ExecutionPath,
-            _durable_text(raw_path, fact="checkpoint event path"),
-            fact="checkpoint event path",
-        )
-        return _checkpoint_selector(durable_run_id, path)
-    except (JournalDamaged, TypeError, ValueError, ValidationError):
-        return None
 
 
 def stored_checkpoint_for(
@@ -602,9 +575,23 @@ def stored_checkpoint_for(
     run_id: RunId,
     path: ExecutionPath,
 ) -> Checkpoint | None:
-    """Select one checkpoint by every identity before deciding absence."""
+    """One checkpoint and the completion event that proves it, by identity.
 
-    selector = _checkpoint_selector(run_id, path)
+    Both lookups are keyed on the run: the checkpoint by its primary key, the
+    completion event by the run's primary-key prefix and the canonical path
+    bytes both tables store. Neither evaluates a Python selector per row.
+
+    Deliberately not the whole store. Every checkpoint and completion event is
+    sealed under its own identity as it is written, and the open-time inventory
+    proves the one-to-one relationship across the store exactly once. Re-proving
+    that here scanned every event of every run through a Python callback to
+    return at most two rows — on the walker's per-node path, on every
+    completion write, and once per checkpoint at open.
+
+    Relocation is still caught, from the other side: a checkpoint row moved to
+    another run leaves its completion event behind, and the two disagree.
+    """
+
     fact_key = checkpoint_fact_key(run_id, path)
     fact_selector = _checkpoint_payload_selector(run_id, path)
     seal = durable_fact_seal(
@@ -613,37 +600,20 @@ def stored_checkpoint_for(
         fact_key=fact_key,
         selector=fact_selector,
     )
-    connection.create_function(
-        "constructicon_checkpoint_selector",
-        1,
-        _checkpoint_selector_from_json,
-        deterministic=True,
-    )
-    connection.create_function(
-        "constructicon_checkpoint_event_selector",
-        2,
-        _checkpoint_event_selector,
-        deterministic=True,
-    )
+    path_key = _path_key(path)
     rows = connection.execute(
-        "SELECT * FROM checkpoints"
-        " WHERE (run_id = ? AND path_key = ?)"
-        " OR constructicon_checkpoint_selector(checkpoint_json) = ?"
-        " OR constructicon_checkpoint_selector(checkpoint_json) IS NULL"
-        " LIMIT 2",
-        (run_id, _path_key(path), selector),
+        "SELECT * FROM checkpoints WHERE run_id = ? AND path_key = ? LIMIT 2",
+        (run_id, path_key),
     ).fetchall()
     if len(rows) > 1:
         raise JournalDamaged(
             f"checkpoint {run_id!r}/{path.render()} has contradictory durable selectors"
         )
     completion_rows = connection.execute(
-        "SELECT * FROM events WHERE kind = 'NodeCompleted' AND ("
-        " constructicon_checkpoint_event_selector(run_id, path_json) = ?"
-        " OR (run_id = ? AND"
-        " constructicon_checkpoint_event_selector(run_id, path_json) IS NULL))"
+        "SELECT * FROM events"
+        " WHERE run_id = ? AND kind = 'NodeCompleted' AND path_json = ?"
         " LIMIT 2",
-        (selector, run_id),
+        (run_id, path_key),
     ).fetchall()
     if len(completion_rows) > 1:
         raise JournalDamaged(

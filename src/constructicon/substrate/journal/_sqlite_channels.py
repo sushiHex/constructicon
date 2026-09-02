@@ -50,9 +50,11 @@ from constructicon.core.effect import (
 from constructicon.core.envelope import Envelope
 from constructicon.core.errors import ContractViolation, JournalDamaged
 from constructicon.core.human import (
+    ChannelApprovalPlan,
     approval_record_for_reply,
     canonical_exchange_fault,
     claims_approval_exchange,
+    decoded_human_command_plan,
     validated_channel_ack_provenance,
     validated_channel_approval_exchange,
     validated_channel_command_ack,
@@ -1189,6 +1191,24 @@ def _validated_stored_reply_fact(
 ) -> tuple[ChannelMessage, str]:
     """Validate one complete reply fact from already-read immutable rows."""
 
+    if reply_command_id is None and stored_approval is not None:
+        # A legacy reply's writer is the acknowledgement's scalar, not a
+        # command reference, so an approval found under that string is this
+        # reply's decision only if the command that minted it planned exactly
+        # this exchange. Anything else is a later command that happens to share
+        # the string — not this reply's decision, and not damage either, since
+        # nothing about this reply changed when that command was written.
+        planned = (
+            decoded_human_command_plan(approval_command)
+            if approval_command is not None
+            else None
+        )
+        if not (
+            isinstance(planned, ChannelApprovalPlan)
+            and planned.request_id == request.message_id
+        ):
+            stored_approval = None
+            approval_command = None
     carried = approval_record_for_reply(
         request,
         reply,

@@ -558,6 +558,14 @@ class _SqliteQueriesMixin:
                 stored_replies = []
                 for row in reply_rows:
                     stored_reply = _stored_channel_message_from_row(connection, row)
+                    # The same rule the exact read applies one row at a time: a
+                    # command is attached to an acknowledgement only when the
+                    # acknowledgement records current provenance. A schema-6
+                    # acknowledgement's scalar is a historical token, and
+                    # resolving it here would let a later command that happens
+                    # to share the string be held to a law it never took part
+                    # in — batching may change the query's shape, never its
+                    # evidentiary strength.
                     acknowledgement_writer = (
                         _durable_text(
                             row["acknowledgement_command"],
@@ -567,6 +575,7 @@ class _SqliteQueriesMixin:
                             ),
                         )
                         if row["acknowledgement_command"] is not None
+                        and row["acknowledgement_provenance_version"] == 1
                         else None
                     )
                     stored_replies.append((row, stored_reply, acknowledgement_writer))
@@ -715,7 +724,10 @@ class _SqliteQueriesMixin:
                         ),
                         writer_command=(commands_by_id.get(writer) if writer is not None else None),
                     )
-                    if acknowledgement_record is not None:
+                    if (
+                        acknowledgement_record is not None
+                        and acknowledgement_record.provenance_version == 1
+                    ):
                         acknowledgement_writer_command = commands_by_id.get(
                             acknowledgement_record.command_id
                         )

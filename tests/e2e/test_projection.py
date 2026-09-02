@@ -80,9 +80,9 @@ async def test_projection_refuses_unknown_runs(world: Constructicon, tmp_path: P
 
 @pytest.mark.parametrize(
     ("fact", "refusal"),
-    # The run's seal covers `created_at`, so it refuses first — the positive
-    # seal is the outer boundary, and the decoder behind it never runs.
-    (("run", "contradicts its positive seal"), ("event", "durable timestamp")),
+    # Both rows reach the shared strict decoders first: the run through the
+    # lifecycle projector, which decodes its fields before proving its world.
+    (("run", "durable timestamp"), ("event", "durable timestamp")),
 )
 async def test_projection_uses_the_shared_strict_durable_decoders(
     fact: str,
@@ -145,3 +145,54 @@ async def test_a_projection_requires_the_seal_of_the_run_it_projects(
     with pytest.raises(JournalDamaged, match="contradicts its positive seal"):
         world.project_run(run_id, tmp_path / f"rewritten-{column}")
     assert honest.summary_digest  # the honest projection really did succeed
+
+
+async def test_a_projection_requires_the_lifecycle_of_the_run_it_projects(
+    world: Constructicon,
+    tmp_path: Path,
+) -> None:
+    """The summary prints `status`; only the lifecycle law can vouch for it.
+
+    The immutable world's seal does not cover the status column. A run rewritten
+    from a valid status to another valid one, with no event ever recording the
+    change, is exactly what a byte-stable projection must refuse to state.
+    """
+
+    run_id = RunId("run-project-lifecycle")
+    await world._start_direct(pipeline_graph(), INPUTS, run_id=run_id)
+    honest = world.project_run(run_id, tmp_path / "honest-lifecycle")
+    with sqlite3.connect(world._journal._db_path) as connection:
+        before = connection.execute(
+            "SELECT status FROM runs WHERE run_id = ?", (str(run_id),)
+        ).fetchone()
+        assert before is not None and before[0] != "cancelled"
+        connection.execute(
+            "UPDATE runs SET status = 'cancelled' WHERE run_id = ?",
+            (str(run_id),),
+        )
+        connection.commit()
+
+    with pytest.raises(JournalDamaged):
+        world.project_run(run_id, tmp_path / "rewritten-lifecycle")
+    assert honest.summary_digest
+
+
+async def test_a_projection_refuses_a_history_with_an_event_quietly_missing(
+    world: Constructicon,
+    tmp_path: Path,
+) -> None:
+    """Returned events are each sealed; the extent is what says none is absent."""
+
+    run_id = RunId("run-project-erased-event")
+    await world._start_direct(pipeline_graph(), INPUTS, run_id=run_id)
+    honest = world.project_run(run_id, tmp_path / "honest-extent")
+    assert honest.through_seq >= 3
+    with sqlite3.connect(world._journal._db_path) as connection:
+        connection.execute(
+            "DELETE FROM events WHERE run_id = ? AND seq = 2",
+            (str(run_id),),
+        )
+        connection.commit()
+
+    with pytest.raises(JournalDamaged):
+        world.project_run(run_id, tmp_path / "erased-extent")
