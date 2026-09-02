@@ -2,10 +2,10 @@
 
 Status: revised after adversarial review of the design (Codex, twelve
 findings; ten accepted, two narrowed), implemented on branch `m7/pr-d-panel`,
-then corrected after five adversarial reviews of the head (five blockers and
+then corrected after six adversarial reviews of the head (five blockers and
 three lower, then three and three, then four and four, then six and two, then
-six classified findings and one pre-existing item; see the implementation
-record). The
+six classified findings and one pre-existing item, then three and two; see the
+implementation record). The
 corrections that change this record: no boundary input, the members' request
 included, may carry the result contract, and a member's request and result
 are cardinality `one` (D1); a member may not claim the aggregator's own seat
@@ -185,9 +185,10 @@ second restart.
 - One advisor round trip and one approval round trip complete across real
   process restarts, credential-free, with one request, reply, ack, approval,
   and wake cause each.
-- Mutation check (shipped): twenty-two mutants — no canonical order, no
+- Mutation check (shipped): twenty-five mutants — no canonical order, no
   sibling check, iteration prefix, a frame that does not enclose its
-  invocation, frames out of nesting order, no duplicate check, the
+  invocation, frames out of nesting order, a loop equal to its invocation, a
+  repeated loop, the aggregator's own frames trusted, no duplicate check, the
   aggregator's own seat, no run check, both threshold off-by-ones, the ballot
   bucket, the boundary-contract check, the gather-contract check, member
   cardinality, a composite aggregator, a composite's lying boundary at

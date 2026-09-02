@@ -803,9 +803,10 @@ field, validator, placement, tallying, the outcome, or the result's
 self-check is therefore a new version by construction; a test pins the
 closure the digest is taken over.
 
-**Proof.** Twenty-two mutants of the aggregation law, the authoring checks, and
-the boundary checks — dropped ordering, sibling check, iteration prefix, a
-frame that does not enclose its invocation, frames out of nesting order,
+**Proof.** Twenty-five mutants of the aggregation law, the authoring checks,
+and the boundary checks — dropped ordering, sibling check, iteration prefix, a
+frame that does not enclose its invocation, frames out of nesting order, a loop
+equal to its invocation, a repeated loop, the aggregator's own frames trusted,
 duplicate check, the aggregator's own seat, run check, both off-by-one
 thresholds, the ballot bucket, the boundary-contract check, the
 gather-contract check, member cardinality, a composite aggregator, a
@@ -953,9 +954,10 @@ one pre-existing item; all accepted.
   compared the same way.
 - The retained-boundary fault was a legacy string that `admit_graph()`
   classified as a graph contract fault with a repair aimed at the wrong
-  thing. It is now `graph.reference.invalid`, naming the retained component
-  and version, with a repair that says the retained definition is defective.
-  The Loop-body reference path re-proves the same boundary.
+  thing. It now names the retained component and version in its details,
+  with a repair that says the retained definition is defective. The
+  Loop-body reference path re-proves the same boundary. (A new fault code was
+  tried and withdrawn in the next round; see below.)
 - A member's extra frame needed only to begin with its seat, so a loop that
   did not enclose the reporting invocation passed. Each further frame must
   now name a loop that encloses the invocation, and frames nest in order from
@@ -970,6 +972,26 @@ one pre-existing item; all accepted.
   embedded `json_schema` hashes to its declared `schema_hash`; that check is
   confined to atomic identity.
 
+A sixth classified review returned three introduced items and two
+pre-existing; all accepted.
+
+- The frame law trusted the aggregator's own frames and accepted a loop equal
+  to its invocation or repeated. A loop's body sits strictly beneath the loop,
+  so every frame's loop is now a strict prefix of the invocation, frames nest
+  strictly from the seat, no loop is the root, and the aggregator's path —
+  data in a result — is held to the same law.
+- The fifth round added a fault code to a closed enum without a schema
+  version transition. The code is withdrawn: the code set is the versioned
+  wire schema and this slice changes no schema. The fault stays under
+  `graph.contract.invalid` with exact details and a repair that says where
+  the defect is.
+- Those details were scraped from prose and were not exact for names holding
+  quotes or digest-like text. The validator now appends an anchored JSON
+  suffix and the classifier parses that, so any legal name survives.
+- Pre-existing, recorded below: registration deduplication compares
+  definitions as models, and the legacy fault-scope parser drops scopes with
+  spaces and truncates those with colons.
+
 ## Open items
 
 - Kernel-attested source identity on `many` ports and wall-clock timeouts for
@@ -978,6 +1000,14 @@ one pre-existing item; all accepted.
   filtered or not. It is the system's fixed L0 vocabulary rather than a
   property of the selected components; a per-selection projection would be a
   choice, not a correction.
+- Registration deduplication compares definitions as models
+  (`plan_registration`'s semantic match), so two truthful composites differing
+  only where Python equality is blind — `1` and `true` — dedupe to one retained
+  version despite distinct canonical bytes. Pre-existing; the bytes law for
+  boundaries does not extend to it yet.
+- The legacy fault-scope parser in `_classify_fault` drops scopes containing
+  spaces and truncates those containing colons, both legal in raw Graph names
+  and node ids; typed faults inherit it. Pre-existing.
 - Composite registration never verifies that an embedded `json_schema` hashes
   to its declared `schema_hash`; that check is confined to atomic
   `_validate_atomic_identity`. The boundary checks compare the schema bytes a
