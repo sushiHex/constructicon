@@ -11,11 +11,12 @@ this records the deviations and decisions that implementation forced
 
 ## Scope completed
 
-PR A and PR B are merged. PR C (the human control surface) is implemented on
-draft PR #18. Typed message channels have two transports; routing and exchange
-are sealed into the manifest; sends carry proof through the existing effect
-law; invocation parking is typed; and durable replies drive wake recovery. PR D
-(`panel()`) is not started.
+PRs A, B, and C are merged (C as #18). Typed message channels have two
+transports; routing and exchange are sealed into the manifest; sends carry
+proof through the existing effect law; invocation parking is typed; and durable
+replies drive wake recovery. PR D adds the panel pattern: `panel()` sugar, the
+L0 panel contracts, the pure quorum aggregator and ballot adapter, and the
+credential-free acceptance lane across process restarts.
 
 - One L0 `Channel` contract with `InProcessChannel` and `MailboxChannel`,
   exercised by a single parity suite. Both derive messages from the same
@@ -707,10 +708,83 @@ bounded pages across recovery ticks.
 The approved rev-2 plan remains byte-identical to `main`. Decisions discovered
 after approval live here and in ADRs 0014–0016, not in rewritten history.
 
+## PR D — the panel pattern
+
+Design record: `research/m7-pr-d-panel-design.md` (revised after an adversarial
+Codex review of the design; twelve findings, ten accepted, two narrowed).
+
+**`panel()` is literal Graph sugar over bundles.** Its body is the members, the
+aggregator, one map-free connection from each member to the aggregator, the
+members' one request port plus the aggregator's non-`many` inputs as graph
+inputs, and the aggregator's outputs — byte-equal to the hand-authored Graph
+with equal `source_graph_hash` and `manifest_hash`. It takes definition bundles
+rather than bare Refs because exactness is proved at authoring from declared
+contracts: every member declares one input and one output and all share the
+same pair; the aggregator declares exactly one `many` input of that result
+contract and no other input that could bind a member magnetically; boundary
+names are unique. Each refusal is a typed error at authoring, not an absent
+member at admission.
+
+**The gather is the general connector law, not a panel privilege.** A `many`
+port gathers every compatible source in its pool, which is the transitive
+upstream closure plus every graph input. A same-level bystander contributes
+nothing; a compatible graph input or a compatible helper upstream of a member
+widens the gather, and the tests say so. `panel()` never emits either shape. A
+`one` port fed by two members still raises the existing ambiguity fault from
+the hand-authored Graph, and `panel()` refuses such an aggregator before that.
+
+**Member identity is reported and shape-checked, not kernel-attested.** The
+walker hands a `many` port payloads in sealed source order and drops the source
+address; nothing stamps provenance into a payload. So a member writes
+`member = ctx.path` — the genuine path it was handed — and the aggregator checks
+everything the kernel makes checkable: every path begins with the aggregator's
+parent scope and has a segment at that depth, which is the member's node; a
+node reported twice, whether by one path repeated or two paths beneath it, is a
+contract violation, so a member claiming a sibling's identity collides with the
+sibling rather than replacing it; any other topology is refused rather than
+guessed at; a result from another run is refused. Members are ordered by the
+canonical JSON of the complete `ExecutionPath`, never by `render()`, which is
+not injective. Kernel-attested source identity on `many` ports would change the
+atomic invocation contract and is deferred.
+
+**The outcome says what happened.** `impossible_quorum` when the quorum exceeds
+the member count, `approved` when approvals meet it, `insufficient_responses`
+when fewer members answered than the quorum needs, and `rejected` only when
+enough answered to have approved and did not. The quorum is an explicit typed
+input, never a combinator default. Every member outcome — `responded`,
+`declined`, `unavailable`, `timed_out` — is data a member or policy component
+reports; M7 owns no clock, so the kernel infers nothing from elapsed time. A
+human who does not answer keeps the run parked; one who will not answer replies
+`declined`. Wall-clock timeouts need a timer owner, a durable observation, and
+wake law, and stay deferred.
+
+**A human member is composition, not a new exchange.** `human_panel_member` is
+`human-advisor` followed by `constructicon.std/panel-ballot`, authored per
+participant because each human needs their own channel id carrying their own
+sealed endpoint. The adapter validates the outer, executor-stamped
+`AdviceReplyPayload`, then reads its `advice` strictly as a `PanelBallotPayload`
+with `extra="forbid"`: an `actor_id` a human writes inside their answer is a
+malformed ballot that fails the run, not a claim the panel repeats. The vote
+carries the stamped `actor_id` and `message_id` so it can be followed back to
+its durable reply. `CANONICAL_EXCHANGES` and `sealed_reply_payload` are
+unchanged. Both panel components declare `capability_requirements=()`, and the
+structural tests now distinguish the channel-bound components (exactly one
+input, one output, one durable channel) from the pure ones.
+
+**Proof.** Nine mutants of the aggregation law and the authoring checks —
+dropped ordering, sibling check, duplicate check, run check, both off-by-one
+thresholds, the ballot bucket, the member-binding check, and the gather
+contract check — are each killed. The acceptance lane runs six fakes reporting
+all six buckets through the real graph and then one fake plus one
+mailbox-backed human: the asking process dies, a second replies with a ballot
+and completes the panel with the human's stamped authorship, and a third
+approves; exactly two requests, two replies, two acknowledgements, and one
+approval exist afterwards.
+
 ## Open items
 
-- PR D remains: `panel()` sugar, the deterministic quorum aggregator, and the
-  integrated acceptance lane.
+- Kernel-attested source identity on `many` ports and wall-clock timeouts for
+  human members are deferred, as recorded above.
 - A message a caller may not act on is refused with `AUTH_REQUIRED_SCOPE` rather
   than reported absent, which confirms that a supplied id exists. Deliberate:
   ids are derived digests over run, path, channel, lane, interaction, and port,

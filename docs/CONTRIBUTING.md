@@ -30,9 +30,18 @@ changing a shared definition. Compose before you drop a tier (I10).
 - Declare atomic capability aliases with `CapabilityRequirement(alias, kind)`.
   Bind an assembled capability id explicitly on the `Ref`; combinators never
   choose one by kind.
-- Use `component`, `flow`, `harness`, and `loop` only as sugar. The produced
-  definition must contain the same `Ref | Graph | Loop` you would hand-author.
-  Add an equality test against the direct Graph for new combinator behavior.
+- Use `component`, `flow`, `harness`, `loop`, and `panel` only as sugar. The
+  produced definition must contain the same `Ref | Graph | Loop` you would
+  hand-author. Add an equality test against the direct Graph for new
+  combinator behavior.
+- `panel()` takes definition bundles, never bare names, because it proves the
+  gather exact from declared contracts. A panel member declares one input and
+  one output typed by the panel contracts in `core/panel.py`; an aggregator
+  declares exactly one `many` input of the members' result contract. A human
+  member is `human_panel_member(name, channel_id)` — the standard advisor and
+  ballot composed, registered and promoted like any composite — with one
+  channel id per participant. Report `unavailable` and `timed_out` as member
+  data; the kernel infers nothing from elapsed time.
 - Architect JSON enters through `system.admit_graph()`. It is strict and bounded;
   rejection is a versioned `AdmissionRejected` with itemized repair data. Never
   add automatic repair or a trusted-SDK bypass. Public execution calls

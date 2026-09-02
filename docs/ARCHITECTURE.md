@@ -330,6 +330,29 @@ only `await ctx.channel(alias).ask(payload)`, and pinned source is not pinned
 behavior: a component free to name its own port could branch differently on a
 second host and append a second request.
 
+A panel is a Graph pattern over this, not a primitive. `panel()` emits the
+literal fan-out and fan-in: each member sees the graph's one request input, and
+one explicit aggregator gathers every member through an ordinary `many` port.
+The combinator executes nothing, chooses no model, infers no quorum, and hides
+no scheduler; its Graph is byte-equal to the hand-authored one. Exactness is
+proved at authoring from bundles' declared contracts — every member shares one
+request/result pair, the aggregator has exactly one `many` port of that result
+contract and no other input that could bind a member — because the gather is
+the general connector law: a compatible graph input or a compatible helper
+upstream of a member would widen it. The standard aggregator
+`constructicon.std/panel-quorum` is pure and declares no capability; it derives
+each member's node from the member's reported path against its own scope,
+refuses any other topology or a node reported twice, orders members by the
+canonical JSON of their path, and concludes one of four explicit outcomes
+(`approved`, `rejected`, `insufficient_responses`, `impossible_quorum`) from an
+explicit quorum input. Every outcome a member reports — `responded`,
+`declined`, `unavailable`, `timed_out` — is data; the kernel owns no clock. A
+human member is `human-advisor` followed by `constructicon.std/panel-ballot`,
+which reads the human's reply strictly as a ballot and carries the actor and
+message id the executor stamped, so the vote can be followed back to its
+durable reply. Member identity is member-reported and shape-checked, not
+kernel-attested; attesting `many`-port sources is deferred.
+
 ## Parking and waking
 
 Waiting is not failing. A component that has sent or reconciled its request and
@@ -519,10 +542,15 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
   simulation; optional stdio/OAuth MCP adapter; and schema-5 SQLite decomposed
   by permanent responsibility. See [ADR 0012](adr/0012-durable-control-plane-and-mcp.md)
   and [ADR 0013](adr/0013-local-assembly-through-command-law.md).
-- **M7 (in progress)** — channels (InProcess + Mailbox over the journal), typed
+- **M7 (done)** — channels (InProcess + Mailbox over the journal), typed
   human inbox/reply/ack and request-bound approval commands, MCP delegation,
-  and standard advisor/approval components; deterministic panel aggregation
-  remains.
+  standard advisor/approval components, and the panel pattern: `panel()` sugar
+  byte-equal to the direct Graph, nominal member/quorum/result contracts, a
+  pure deterministic quorum aggregator, and a human member composed from the
+  advisor and a ballot adapter, proven across process restarts. See
+  [ADR 0014](adr/0014-channel-identity-and-delivery.md),
+  [ADR 0015](adr/0015-human-authority-on-channels.md), and
+  [ADR 0016](adr/0016-positive-durable-facts-and-provenance-eras.md).
 - **M8** — live CLI executors (ClaudeCode, Codex, Pi) once isolation profiles
   are enforceable; recorded-transcript contract suites.
 - **M9** — self-improvement phase 1 (prompt/context skills); see
