@@ -14,6 +14,7 @@ from constructicon.core.admission import AdmissionCode, AdmissionRejected
 from constructicon.core.component import ComponentDef
 from constructicon.core.errors import AdmissionError
 from constructicon.core.graph import Connection, Graph, GraphNode, Loop, Ref
+from constructicon.core.identity import digest
 from constructicon.core.manifest import CONTINUE_TYPE, ExecutionManifest
 from constructicon.core.ports import Port
 from constructicon.core.registry import StoredVersion
@@ -300,23 +301,30 @@ def test_a_boundary_is_compared_as_bytes(system: Constructicon, journal: SqliteJ
     """`1 == True` is a Python fact; an embedded schema that differs there is another boundary."""
 
     _promote_all(system, panel_yes)
-    truthful = panel_yes.definition.outputs[0].model_copy(update={"json_schema": {"const": 1}})
+    # The declaration is honest about its embedded schema; the Graph's own
+    # boundary port lies where model equality is blind.
+    truthful = panel_yes.definition.outputs[0].model_copy(
+        update={
+            "json_schema": {"const": 1},
+            "schema_hash": str(digest("json-schema", 1, {"const": 1})),
+        }
+    )
     lie = truthful.model_copy(update={"json_schema": {"const": True}})
     assert truthful == lie  # model equality cannot see the difference
     body = Graph(
         name="sdk/one-yes-bytes",
         nodes=(GraphNode(id="yes", body=Ref(component="sdk/panel-yes")),),
         inputs=panel_yes.definition.inputs,
-        outputs=(truthful,),
+        outputs=(lie,),
     )
     with pytest.raises(TypeError, match="cannot redeclare a Graph's boundary"):
-        component("sdk/one-yes-bytes", body, outputs=(lie,))
+        component("sdk/one-yes-bytes", body, outputs=(truthful,))
     lying = ComponentDef(
         name="sdk/one-yes-bytes",
         role="component",
         body=body,
         inputs=body.inputs,
-        outputs=(lie,),
+        outputs=(truthful,),
     )
     with pytest.raises(RegistryError, match="boundary its Graph does not export"):
         system._register(lying)
@@ -332,7 +340,7 @@ def test_a_boundary_is_compared_as_bytes(system: Constructicon, journal: SqliteJ
         name="sdk/uses-bytes-lie",
         nodes=(GraphNode(id="member", body=Ref(component=lying.name)),),
         inputs=panel_yes.definition.inputs,
-        outputs=(lie,),
+        outputs=(truthful,),
     )
     with pytest.raises(AdmissionError, match="boundary its Graph does not export"):
         system.validate(retained, {"request": {"question": "ship?"}})

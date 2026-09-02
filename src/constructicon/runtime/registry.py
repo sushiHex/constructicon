@@ -23,7 +23,7 @@ from constructicon.core.channel import (
     ChannelEndpoint,
     ChannelProfile,
 )
-from constructicon.core.component import ComponentDef, PromotionRecord
+from constructicon.core.component import ComponentDef, PromotionRecord, same_definition
 from constructicon.core.effect import (
     Attestation,
     AttestationDraft,
@@ -276,6 +276,29 @@ class InMemoryRegistryStore:
             )
 
 
+def embedded_schema_faults(definition: ComponentDef) -> list[str]:
+    """Every port whose embedded JSON Schema does not hash to its declared revision.
+
+    An embedded schema is bound to its digest on every definition alike: an
+    atomic's, and a composite's boundary. A named revision embeds no schema
+    and is not checked here.
+    """
+
+    faults: list[str] = []
+    for direction, ports in (("input", definition.inputs), ("output", definition.outputs)):
+        for port in ports:
+            if port.json_schema is None:
+                continue
+            expected_schema_hash = str(digest("json-schema", 1, port.json_schema))
+            if port.schema_hash != expected_schema_hash:
+                faults.append(
+                    f"{definition.name!r}: {direction} port {port.name!r} declares "
+                    f"schema_hash {port.schema_hash!r}, expected "
+                    f"{expected_schema_hash!r} for its embedded JSON Schema"
+                )
+    return faults
+
+
 def source_digest_for(impl: NodeImpl) -> Digest | None:
     """Observe implementation identity without changing historical digests."""
 
@@ -335,6 +358,9 @@ class ComponentRegistry:
                 "part of the M5 contract"
             )
         if not is_atomic:
+            schema_faults = embedded_schema_faults(definition)
+            if schema_faults:
+                raise AdmissionError(schema_faults)
             graph = definition.body
             assert isinstance(graph, Graph)
             if not same_boundary(definition.inputs, graph.inputs) or not same_boundary(
@@ -372,7 +398,7 @@ class ComponentRegistry:
         semantic_matches = [
             stored
             for stored in snapshot.versions.get(definition.name, {}).values()
-            if stored.definition == definition
+            if same_definition(stored.definition, definition)
         ]
         identities = {str(stored.content_hash) for stored in semantic_matches}
         if len(identities) > 1:
@@ -385,7 +411,7 @@ class ComponentRegistry:
 
         content = definition.content_hash()
         collision = snapshot.get(definition.name, content)
-        if collision is not None and collision.definition != definition:
+        if collision is not None and not same_definition(collision.definition, definition):
             raise JournalDamaged(
                 f"component {definition.name!r}@{content} already exists with "
                 "different semantics under the same identity"
@@ -407,7 +433,7 @@ class ComponentRegistry:
             plan.stored.content_hash,
         )
         if existing is not None:
-            if existing.definition != plan.stored.definition:
+            if not same_definition(existing.definition, plan.stored.definition):
                 raise JournalDamaged(
                     f"component {plan.stored.definition.name!r}@"
                     f"{plan.stored.content_hash} contradicts its planned definition"
@@ -420,7 +446,7 @@ class ComponentRegistry:
             plan.stored.definition.name,
             plan.stored.content_hash,
         )
-        if stored is None or stored.definition != plan.stored.definition:
+        if stored is None or not same_definition(stored.definition, plan.stored.definition):
             raise JournalDamaged("planned registration did not produce its exact row")
         return stored
 
@@ -450,17 +476,7 @@ class ComponentRegistry:
                 f"{definition.name!r}: PythonRef.contract_hash does not match the "
                 "declared ports — recompute it from inputs/outputs"
             )
-        for direction, ports in (("input", definition.inputs), ("output", definition.outputs)):
-            for port in ports:
-                if port.json_schema is None:
-                    continue
-                expected_schema_hash = str(digest("json-schema", 1, port.json_schema))
-                if port.schema_hash != expected_schema_hash:
-                    faults.append(
-                        f"{definition.name!r}: {direction} port {port.name!r} declares "
-                        f"schema_hash {port.schema_hash!r}, expected "
-                        f"{expected_schema_hash!r} for its embedded JSON Schema"
-                    )
+        faults.extend(embedded_schema_faults(definition))
         requirements = definition.capability_requirements
         if requirements is not None:
             aliases = [requirement.alias for requirement in requirements]

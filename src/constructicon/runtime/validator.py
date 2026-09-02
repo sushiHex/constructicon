@@ -54,7 +54,7 @@ from constructicon.core.ports import (
     same_boundary,
 )
 from constructicon.core.registry import RegistrySnapshot, StoredVersion
-from constructicon.runtime.registry import CapabilityDescriptor
+from constructicon.runtime.registry import CapabilityDescriptor, embedded_schema_faults
 
 
 @dataclass(frozen=True)
@@ -657,8 +657,10 @@ def _boundary_lies(comp: _Compilation, stored: StoredVersion, *, where: ScopePat
     definition = stored.definition
     if not isinstance(definition.body, Graph):
         return False
-    if same_boundary(definition.inputs, definition.body.inputs) and same_boundary(
-        definition.outputs, definition.body.outputs
+    if (
+        same_boundary(definition.inputs, definition.body.inputs)
+        and same_boundary(definition.outputs, definition.body.outputs)
+        and not embedded_schema_faults(definition)
     ):
         return False
     retained = canonical_json({"component": definition.name, "version": str(stored.content_hash)})

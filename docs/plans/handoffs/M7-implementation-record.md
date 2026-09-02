@@ -1057,22 +1057,13 @@ rows are written.
   filtered or not. It is the system's fixed L0 vocabulary rather than a
   property of the selected components; a per-selection projection would be a
   choice, not a correction.
-- Registration deduplication compares definitions as models
-  (`plan_registration`'s semantic match), so two truthful composites differing
-  only where Python equality is blind — `1` and `true` — dedupe to one retained
-  version despite distinct canonical bytes. Pre-existing; the bytes law for
-  boundaries does not extend to it yet.
-- The legacy fault-scope parser in `_classify_fault` drops scopes containing
-  spaces and truncates those containing colons, both legal in raw Graph names
-  and node ids; typed faults inherit it. Pre-existing.
-- Composite registration never verifies that an embedded `json_schema` hashes
-  to its declared `schema_hash`; that check is confined to atomic
-  `_validate_atomic_identity`. The boundary checks compare the schema bytes a
-  composite declares against its Graph's, not against the digest. One
-  consequence: a composite port may reuse a standard named revision with a
-  different embedded schema, and `describe()` publishes the standard shape for
-  it under that revision, since named documents are published first and a
-  revision is one document.
+- Closed after M7, in one hardening PR: registration deduplication and identity
+  collisions compare definitions as canonical bytes (`same_definition`), not
+  as models; an embedded `json_schema` is bound to its digest on a composite's
+  boundary at registration and re-proved at admission for retained stores, so
+  a composite can no longer reuse a standard named revision with another
+  shape; and the legacy fault-scope parser keeps scopes that contain spaces
+  or colons.
 - Connector liveness is not an admission rule. A connection whose source node
   contributes no resolved binding anywhere beneath the edge is admitted, so a
   member whose stable version later changes contract is silently absent from a

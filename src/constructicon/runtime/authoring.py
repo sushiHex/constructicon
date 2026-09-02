@@ -455,13 +455,22 @@ def _classify_fault(
 
 
 def _scope_from_message(message: str) -> ScopePath | None:
-    match = re.match(r"^(?P<scope>[^:]+?) (?:input|output) port ", message)
+    """The rendered scope a legacy fault begins with.
+
+    A fault reads either ``<scope> input|output port ...`` or ``<scope>: ...``.
+    Graph names and node ids may contain spaces and colons, so only the
+    message's own separator ends the scope: the first `` input port `` or
+    `` output port ``, else the first ``: ``.
+    """
+
+    match = re.match(r"^(?P<scope>.+?) (?:input|output) port ", message)
     if match:
         prefix = match.group("scope").strip()
     else:
-        prefix = message.split(":", 1)[0].strip()
-        if " " in prefix:
+        prefix, separator, _ = message.partition(": ")
+        if not separator:
             return None
+        prefix = prefix.strip()
     segments = tuple(segment for segment in prefix.split("/") if segment)
     return ScopePath(segments=segments) if segments else None
 
