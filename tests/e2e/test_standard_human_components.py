@@ -43,6 +43,7 @@ from constructicon.core.human import (
     approval_decision_payload,
 )
 from constructicon.core.identity import Digest, canonical_json, json_value
+from constructicon.core.panel import PANEL_MEMBER_RESULT_CONTRACT
 from constructicon.core.run import RunStatus
 from constructicon.runtime.registry import CapabilityDescriptor, ComponentRegistry
 from constructicon.sdk.std import (
@@ -51,8 +52,11 @@ from constructicon.sdk.std import (
     APPROVAL_CHANNEL,
     APPROVAL_COMPONENT,
     DURABLE_CHANNEL_KIND,
+    PANEL_BALLOT_COMPONENT,
+    PANEL_QUORUM_COMPONENT,
     definitions,
 )
+from constructicon.sdk.types import DefinitionBundle
 from constructicon.substrate.channels.mailbox import MailboxChannel
 from constructicon.substrate.effects.channel import ChannelSendEffect
 from constructicon.substrate.journal._sqlite_approvals import seal_approval
@@ -187,16 +191,43 @@ def _force_impossible_approval_reply(
         )
 
 
-def test_each_standard_component_declares_exactly_one_input_and_output() -> None:
+def _channel_bound() -> list[DefinitionBundle]:
+    return [bundle for bundle in definitions() if bundle.definition.capability_requirements]
+
+
+def _pure() -> list[DefinitionBundle]:
+    return [bundle for bundle in definitions() if not bundle.definition.capability_requirements]
+
+
+def test_each_channel_bound_component_declares_exactly_one_input_and_output() -> None:
     """Admission compiles the exchange from that pair, so there is nothing to pick.
 
     A second port would mean the request's port — and therefore its derived
-    identity — was chosen at call time rather than sealed at admission.
+    identity — was chosen at call time rather than sealed at admission. The
+    panel components hold no channel and compile no exchange; the quorum takes
+    the members' reports through one `many` port and its policy through one
+    `one` port, which is the shape `panel()` requires of an aggregator.
     """
 
-    for bundle in definitions():
+    assert {bundle.name for bundle in _channel_bound()} == {ADVISOR_COMPONENT, APPROVAL_COMPONENT}
+    for bundle in _channel_bound():
         assert len(bundle.definition.inputs) == 1, bundle.name
         assert len(bundle.definition.outputs) == 1, bundle.name
+
+    by_name = {bundle.name: bundle.definition for bundle in _pure()}
+    assert set(by_name) == {PANEL_BALLOT_COMPONENT, PANEL_QUORUM_COMPONENT}
+    ballot = by_name[PANEL_BALLOT_COMPONENT]
+    assert [port.cardinality for port in ballot.inputs] == ["one"]
+    assert ballot.inputs[0].type_id == ADVICE_REPLY_CONTRACT.type_id
+    quorum = by_name[PANEL_QUORUM_COMPONENT]
+    assert [port.cardinality for port in quorum.inputs] == ["many", "one"]
+    assert (
+        quorum.inputs[0].type_id
+        == ballot.outputs[0].type_id
+        == PANEL_MEMBER_RESULT_CONTRACT.type_id
+    )
+    for definition in by_name.values():
+        assert len(definition.outputs) == 1, definition.name
 
 
 def test_the_standard_ports_are_the_shared_l0_contracts() -> None:
@@ -451,9 +482,7 @@ async def test_the_standard_approval_refuses_a_downgraded_command_plan(
     approval = second.approval(decided.approval_id)
     assert approval is not None
 
-    downgraded = StoredApprovalPlan(
-        plan=ApprovalPlan(approval=approval)
-    ).model_dump_json()
+    downgraded = StoredApprovalPlan(plan=ApprovalPlan(approval=approval)).model_dump_json()
     with sqlite3.connect(database) as connection:
         connection.execute(
             "UPDATE commands SET plan_json = ? WHERE command_id = ?",
@@ -575,8 +604,7 @@ async def test_a_tampered_advice_reply_never_becomes_a_successful_output(
         envelope = json.loads(row[0])
         envelope["payload"]["advice"] = {"verdict": "forged"}
         connection.execute(
-            "UPDATE channel_messages SET command_id = NULL, envelope_json = ?"
-            " WHERE message_id = ?",
+            "UPDATE channel_messages SET command_id = NULL, envelope_json = ? WHERE message_id = ?",
             (json.dumps(envelope), str(reply.message_id)),
         )
         connection.commit()
@@ -597,18 +625,20 @@ def test_each_standard_component_declares_the_capability_it_may_hold() -> None:
     """
 
     for bundle in definitions():
-        required = bundle.definition.capability_requirements
-        assert required is not None, bundle.name
-        assert len(required) == 1, bundle.name
-        assert required[0].kind == DURABLE_CHANNEL_KIND, bundle.name
+        assert bundle.definition.capability_requirements is not None, bundle.name
 
     aliases = {}
-    for bundle in definitions():
+    for bundle in _channel_bound():
         declared = bundle.definition.capability_requirements
         assert declared is not None
+        assert len(declared) == 1, bundle.name
+        assert declared[0].kind == DURABLE_CHANNEL_KIND, bundle.name
         aliases[bundle.name] = declared[0].alias
-    assert aliases[ADVISOR_COMPONENT] == ADVISOR_CHANNEL
-    assert aliases[APPROVAL_COMPONENT] == APPROVAL_CHANNEL
+    assert aliases == {ADVISOR_COMPONENT: ADVISOR_CHANNEL, APPROVAL_COMPONENT: APPROVAL_CHANNEL}
+
+    # The panel components ask for nothing, and `()` is that statement — an
+    # admission that hands them any capability at all is refused.
+    assert {bundle.definition.capability_requirements for bundle in _pure()} == {()}
 
 
 def test_a_graph_may_not_bind_an_undeclared_capability(journal: SqliteJournal) -> None:
