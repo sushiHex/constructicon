@@ -2,11 +2,11 @@
 
 Status: revised after adversarial review of the design (Codex, twelve
 findings; ten accepted, two narrowed), implemented on branch `m7/pr-d-panel`,
-then corrected after nine adversarial reviews of the head (five blockers and
+then corrected after eleven adversarial reviews of the head (five blockers and
 three lower, then three and three, then four and four, then six and two, then
 six classified findings and one pre-existing item, then three and two, then
-two, then one, then none blocking, then two; see the implementation record).
-The
+two, then one, then none blocking, then two, then one; see the implementation
+record). The
 corrections that change this record: no boundary input, the members' request
 included, may carry the result contract, and a member's request and result
 are cardinality `one` (D1); a member may not claim the aggregator's own seat

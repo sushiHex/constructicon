@@ -815,11 +815,13 @@ compared as models at authoring, registration, and admission, fault details
 framed by a forgeable marker, and two ways of not re-deriving a result — are
 each killed. The acceptance lane runs six fakes reporting all six buckets through
 the real graph, then one fake plus one mailbox-backed human across real
-process restarts: the process that asked ends, a child interpreter imports the
-components over the same database file, records the ballot, and its own
-control-plane host wakes the run to conclude the panel; a third interpreter
-records the approval the same way, and nothing crosses a boundary but the
-file. The run's history holds exactly three attempts — the
+process restarts: the process that asked does nothing more, a child
+interpreter imports the components over the same database file, records the
+ballot, and its own control-plane host wakes the run to conclude the panel; a
+third interpreter records the approval the same way, and no application state
+crosses a boundary except through the file. Each resumption's cause is the
+durable reply to that round trip's request, read back from the journal, and
+the vote's copied message id is that reply. The run's history holds exactly three attempts — the
 start and one resumption per reply, each caused by that reply — and exactly
 two requests, two replies, two acknowledgements, and one approval exist
 afterwards. A human who rejects leaves
@@ -1037,6 +1039,15 @@ accepted.
 - The frame law reads `LOOP_BODY_SEGMENT`; the law's digest now includes its
   value, so changing the IR segment changes the standard components'
   identity too.
+
+An eleventh review returned one introduced item, accepted: the child-process
+rewrite had loosened the attempt-cause proof to a copied id and a kind. Both
+causes are now compared to the durable replies read back from the journal,
+and the vote's copied message id is compared to the same reply. Two wording
+corrections went with it. It confirmed that re-assembling in each child is
+honest rehydration: exact registrations resolve as existing and promotion
+finds stable already equal, so no new registry, promotion, or attestation
+rows are written.
 
 ## Open items
 
