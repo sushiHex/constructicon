@@ -345,9 +345,9 @@ member would widen it. The standard aggregator
 `constructicon.std/panel-quorum` is pure and declares no capability; it derives
 each member's node from the member's reported path against its own path —
 same parent scope, the aggregator's loop frames as a prefix of the member's,
-any further frame naming a loop beneath the member's seat — refuses any other
-topology, the aggregator's own seat, or a node reported twice, orders members
-by the
+any further frame naming a loop beneath the member's seat that encloses the
+reporting invocation, nested in order — refuses any other topology, the
+aggregator's own seat, or a node reported twice, orders members by the
 canonical JSON of their path, and concludes one of four explicit outcomes
 (`approved`, `rejected`, `insufficient_responses`, `impossible_quorum`) from an
 explicit quorum input. The result names its aggregator and run and is
@@ -367,7 +367,10 @@ a new version by construction, never a silent change of a retained one. A
 composite's declared boundary is its Graph's — admission exposes the Graph's
 ports, so the registry refuses a declaration that differs, `component()`
 refuses to redeclare one, and admission re-proves a retained store rather than
-trusting it.
+trusting it, as a typed `graph.reference.invalid` fault naming the retained
+version. A boundary is compared as canonical bytes, never as models: `1 ==
+True` is a Python fact, and an embedded schema that differs only there is a
+different boundary.
 The sugar emits unversioned Refs like every combinator: the authoring proof is
 about the bundles as authored, and admission re-proves the gather nominally
 against the one atomic world it seals.

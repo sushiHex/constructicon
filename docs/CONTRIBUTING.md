@@ -34,7 +34,9 @@ changing a shared definition. Compose before you drop a tier (I10).
   produced definition must contain the same `Ref | Graph | Loop` you would
   hand-author. Add an equality test against the direct Graph for new
   combinator behavior. A composite's declared ports are its Graph's; neither
-  `component()` nor the registry accepts a boundary the Graph does not export.
+  `component()` nor the registry nor admission accepts a boundary the Graph
+  does not export, and boundaries are compared as bytes
+  (`core.ports.same_boundary`), never with `==`.
 - `panel()` takes definition bundles, never bare names, because it proves the
   gather exact from declared contracts. A panel member declares one input and
   one output typed by the panel contracts in `core/panel.py`, both of

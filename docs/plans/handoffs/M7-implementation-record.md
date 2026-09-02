@@ -803,13 +803,15 @@ field, validator, placement, tallying, the outcome, or the result's
 self-check is therefore a new version by construction; a test pins the
 closure the digest is taken over.
 
-**Proof.** Eighteen mutants of the aggregation law, the authoring checks, and
+**Proof.** Twenty-two mutants of the aggregation law, the authoring checks, and
 the boundary checks — dropped ordering, sibling check, iteration prefix, a
-frame beneath another seat, duplicate check, the aggregator's own seat, run
-check, both off-by-one thresholds, the ballot bucket, the boundary-contract
-check, the gather-contract check, member cardinality, a composite aggregator,
-a composite's lying boundary at registration and at admission, and two ways
-of not re-deriving a result — are each killed. The acceptance lane runs six fakes reporting all six buckets through
+frame that does not enclose its invocation, frames out of nesting order,
+duplicate check, the aggregator's own seat, run check, both off-by-one
+thresholds, the ballot bucket, the boundary-contract check, the
+gather-contract check, member cardinality, a composite aggregator, a
+composite's lying boundary at registration and at admission, a boundary
+compared as models at authoring, registration, and admission, and two ways of
+not re-deriving a result — are each killed. The acceptance lane runs six fakes reporting all six buckets through
 the real graph, then one fake plus one mailbox-backed human across restarts — a
 fresh journal and system over the same database file, nothing carried in
 memory. The system that asked is discarded; a second records the ballot and its
@@ -940,6 +942,34 @@ already safe by a test, one rejected again with the residual stated exactly.
   does not promise to admit every direct Graph, only to equal the one it
   emits.
 
+A fifth review, asked to classify each finding as introduced here, pre-existing,
+or a design choice, returned four introduced defects, two introduced nits, and
+one pre-existing item; all accepted.
+
+- The three boundary checks compared ports with `==`, and `1 == True` is a
+  Python fact: an embedded schema differing only there passed all three. A
+  boundary is now compared as canonical bytes (`core.ports.same_boundary`) at
+  authoring, registration, and admission, and the members' shared pair is
+  compared the same way.
+- The retained-boundary fault was a legacy string that `admit_graph()`
+  classified as a graph contract fault with a repair aimed at the wrong
+  thing. It is now `graph.reference.invalid`, naming the retained component
+  and version, with a repair that says the retained definition is defective.
+  The Loop-body reference path re-proves the same boundary.
+- A member's extra frame needed only to begin with its seat, so a loop that
+  did not enclose the reporting invocation passed. Each further frame must
+  now name a loop that encloses the invocation, and frames nest in order from
+  the seat; a frame at or beneath the seat follows from that.
+- The law's closure omitted the shared model config and the literal domains.
+  Both are in the digest now: `_PanelModel`'s source and each literal's
+  values.
+- The vocabulary's uniqueness guard counted after a comprehension had already
+  collapsed duplicates; it now counts the entries first. The design record's
+  frame wording is corrected.
+- Pre-existing, recorded below: composite registration never verifies that an
+  embedded `json_schema` hashes to its declared `schema_hash`; that check is
+  confined to atomic identity.
+
 ## Open items
 
 - Kernel-attested source identity on `many` ports and wall-clock timeouts for
@@ -948,6 +978,10 @@ already safe by a test, one rejected again with the residual stated exactly.
   filtered or not. It is the system's fixed L0 vocabulary rather than a
   property of the selected components; a per-selection projection would be a
   choice, not a correction.
+- Composite registration never verifies that an embedded `json_schema` hashes
+  to its declared `schema_hash`; that check is confined to atomic
+  `_validate_atomic_identity`. The boundary checks compare the schema bytes a
+  composite declares against its Graph's, not against the digest.
 - Connector liveness is not an admission rule. A connection whose source node
   contributes no resolved binding anywhere beneath the edge is admitted, so a
   member whose stable version later changes contract is silently absent from a

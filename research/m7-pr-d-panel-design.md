@@ -2,9 +2,10 @@
 
 Status: revised after adversarial review of the design (Codex, twelve
 findings; ten accepted, two narrowed), implemented on branch `m7/pr-d-panel`,
-then corrected after four adversarial reviews of the head (five blockers and
-three lower, then three and three, then four and four, then six and two; see
-the implementation record). The
+then corrected after five adversarial reviews of the head (five blockers and
+three lower, then three and three, then four and four, then six and two, then
+six classified findings and one pre-existing item; see the implementation
+record). The
 corrections that change this record: no boundary input, the members' request
 included, may carry the result contract, and a member's request and result
 are cardinality `one` (D1); a member may not claim the aggregator's own seat
@@ -113,8 +114,10 @@ What the aggregator does check is everything the kernel makes checkable. Let
 `S` be the aggregator's own scope segments and `P = S[:-1]` its parent. Every
 result's `member.scope.segments` must begin with `P` and have a segment at
 index `len(P)`; that segment is the member's `node`. Every result's
-`member.iterations` must equal the aggregator's own, because the walker gives
-each sibling in a loop body the same frame (walker :736). Duplicate exact member
+`member.iterations` must carry the aggregator's own as a prefix, because the
+walker gives each sibling in a loop body the same frame (walker :736); any
+further frame names a loop at or beneath the member's seat that encloses the
+reporting invocation, nested in order. Duplicate exact member
 paths and duplicate derived nodes are contract violations, so a member that
 claims a sibling's identity collides with the sibling rather than replacing
 it. Any other topology is refused: the derivation is defined for members that
@@ -182,12 +185,14 @@ second restart.
 - One advisor round trip and one approval round trip complete across real
   process restarts, credential-free, with one request, reply, ack, approval,
   and wake cause each.
-- Mutation check (shipped): eighteen mutants — no canonical order, no sibling
-  check, iteration prefix, a frame beneath another seat, no duplicate check,
-  the aggregator's own seat, no run check, both threshold off-by-ones, the
-  ballot bucket, the boundary-contract check, the gather-contract check,
-  member cardinality, a composite aggregator, a composite's lying boundary at
-  registration and at admission, and two ways of not re-deriving a result —
+- Mutation check (shipped): twenty-two mutants — no canonical order, no
+  sibling check, iteration prefix, a frame that does not enclose its
+  invocation, frames out of nesting order, no duplicate check, the
+  aggregator's own seat, no run check, both threshold off-by-ones, the ballot
+  bucket, the boundary-contract check, the gather-contract check, member
+  cardinality, a composite aggregator, a composite's lying boundary at
+  registration and at admission, a boundary compared as models at authoring,
+  registration, and admission, and two ways of not re-deriving a result —
   each killed. The law's revision is derived from its source, so an edited
   law is a new revision by construction rather than a mutant to kill.
 - Wake (shipped): resumption after each reply goes through the control
