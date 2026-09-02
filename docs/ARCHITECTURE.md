@@ -582,8 +582,8 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
   standard advisor/approval components, and the panel pattern: `panel()` sugar
   byte-equal to the direct Graph, nominal member/quorum/result contracts, a
   pure deterministic quorum aggregator, and a human member composed from the
-  advisor and a ballot adapter, proven across restarts through the control
-  plane's own host. See
+  advisor and a ballot adapter, proven across real process restarts through
+  the control plane's own host. See
   [ADR 0014](adr/0014-channel-identity-and-delivery.md),
   [ADR 0015](adr/0015-human-authority-on-channels.md), and
   [ADR 0016](adr/0016-positive-durable-facts-and-provenance-eras.md).

@@ -814,11 +814,12 @@ composite's lying boundary at registration and at admission, a boundary
 compared as models at authoring, registration, and admission, fault details
 framed by a forgeable marker, and two ways of not re-deriving a result — are
 each killed. The acceptance lane runs six fakes reporting all six buckets through
-the real graph, then one fake plus one mailbox-backed human across restarts — a
-fresh journal and system over the same database file, nothing carried in
-memory. The system that asked is discarded; a second records the ballot and its
-own control-plane host wakes the run to conclude the panel; a third records the
-approval the same way. The run's history holds exactly three attempts — the
+the real graph, then one fake plus one mailbox-backed human across real
+process restarts: the process that asked ends, a child interpreter imports the
+components over the same database file, records the ballot, and its own
+control-plane host wakes the run to conclude the panel; a third interpreter
+records the approval the same way, and nothing crosses a boundary but the
+file. The run's history holds exactly three attempts — the
 start and one resumption per reply, each caused by that reply — and exactly
 two requests, two replies, two acknowledgements, and one approval exist
 afterwards. A human who rejects leaves
@@ -1024,6 +1025,18 @@ statements in the design record and recorded one pre-existing item below: a
 composite may reuse a standard revision string with a different embedded
 schema, because embedded schemas are verified against their digest only for
 atomics, and `describe()` would then publish the standard shape for it.
+
+A tenth review, confirming the head, returned two introduced items; both
+accepted.
+
+- The plan's slice-D proof says "across a real process restart"; the lane had
+  used fresh objects in one interpreter, as PR C's lanes do. The human lane
+  now runs its reply stage and its approval stage in child interpreters over
+  the same database file, each importing the components afresh, with
+  nothing crossing the boundary but that file.
+- The frame law reads `LOOP_BODY_SEGMENT`; the law's digest now includes its
+  value, so changing the IR segment changes the standard components'
+  identity too.
 
 ## Open items
 

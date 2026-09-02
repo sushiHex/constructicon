@@ -5,7 +5,8 @@ findings; ten accepted, two narrowed), implemented on branch `m7/pr-d-panel`,
 then corrected after nine adversarial reviews of the head (five blockers and
 three lower, then three and three, then four and four, then six and two, then
 six classified findings and one pre-existing item, then three and two, then
-two, then one, then none blocking; see the implementation record). The
+two, then one, then none blocking, then two; see the implementation record).
+The
 corrections that change this record: no boundary input, the members' request
 included, may carry the result contract, and a member's request and result
 are cardinality `one` (D1); a member may not claim the aggregator's own seat
@@ -167,7 +168,7 @@ stamped.
 PANEL_MEMBER_RESULT, reporting any of the four outcomes as data with no
 transport provenance. The credential-free acceptance lane: six fakes covering
 every tally bucket, then one fake plus one
-mailbox-backed human across a restart, the panel result adapted
+mailbox-backed human across a real process restart, the panel result adapted
 into an `ApprovalRequestPayload`, and the existing approval lane across a
 second restart.
 
@@ -200,7 +201,8 @@ second restart.
   each killed. The law's revision is derived from its source, so an edited
   law is a new revision by construction rather than a mutant to kill.
 - Wake (shipped): resumption after each reply goes through the control
-  plane's host; the run's attempt causes are exactly the two replies.
+  plane's host, in a child interpreter that imported the components afresh;
+  the run's attempt causes are exactly the two replies.
 
 ## Deferred, recorded
 
