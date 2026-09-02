@@ -336,15 +336,17 @@ one explicit aggregator gathers every member through an ordinary `many` port.
 The combinator executes nothing, chooses no model, infers no quorum, and hides
 no scheduler; its Graph is byte-equal to the hand-authored one. Exactness is
 proved at authoring from bundles' declared contracts — every member shares one
-request/result pair, the aggregator has exactly one `many` port of that result
-contract, and no boundary input, the request included, carries that contract —
+request/result pair of cardinality one, the aggregator is atomic and has
+exactly one `many` port of that result contract, and no boundary input, the
+request included, carries that contract —
 because the gather is the general connector law: a graph input sits in every
 node's pool, and a compatible graph input or a compatible helper upstream of a
 member would widen it. The standard aggregator
 `constructicon.std/panel-quorum` is pure and declares no capability; it derives
 each member's node from the member's reported path against its own path —
-same parent scope, same loop iteration — refuses any other topology or a
-node reported twice, orders members by the
+same parent scope, the aggregator's loop frames as a prefix of the member's —
+refuses any other topology, the aggregator's own seat, or a node reported
+twice, orders members by the
 canonical JSON of their path, and concludes one of four explicit outcomes
 (`approved`, `rejected`, `insufficient_responses`, `impossible_quorum`) from an
 explicit quorum input. The result names its aggregator and run and is
@@ -359,7 +361,12 @@ durable reply. Member identity is member-reported and shape-checked, not
 kernel-attested; attesting `many`-port sources is deferred. The two panel
 components delegate their behaviour to the law in `core/panel.py`, so its
 revision is stamped into their implementation identity: a changed law is a
-new version, never a silent change of a retained one.
+new version, never a silent change of a retained one. A composite's declared
+boundary is its Graph's — admission exposes the Graph's ports, so the registry
+refuses a declaration that differs and `component()` refuses to redeclare one.
+The sugar emits unversioned Refs like every combinator: the authoring proof is
+about the bundles as authored, and admission re-proves the gather nominally
+against the one atomic world it seals.
 
 A named contract revision is not the digest of a schema, so the registry
 refuses to embed one on a port. `system.describe()` publishes the standard

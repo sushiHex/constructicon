@@ -33,12 +33,15 @@ changing a shared definition. Compose before you drop a tier (I10).
 - Use `component`, `flow`, `harness`, `loop`, and `panel` only as sugar. The
   produced definition must contain the same `Ref | Graph | Loop` you would
   hand-author. Add an equality test against the direct Graph for new
-  combinator behavior.
+  combinator behavior. A composite's declared ports are its Graph's; neither
+  `component()` nor the registry accepts a boundary the Graph does not export.
 - `panel()` takes definition bundles, never bare names, because it proves the
   gather exact from declared contracts. A panel member declares one input and
-  one output typed by the panel contracts in `core/panel.py`, and the two
-  differ; an aggregator declares exactly one `many` input of the members'
-  result contract and no other input of it. A human member is
+  one output typed by the panel contracts in `core/panel.py`, both of
+  cardinality one, and the two differ; an aggregator is atomic — its law
+  reads its own seat, so compose around the panel, not inside its aggregator —
+  and declares exactly one `many` input of the members' result contract and
+  no other input of it. A human member is
   `human_panel_member(name, channel_id)` — the standard advisor and ballot
   composed, registered and promoted like any composite — with one channel id
   per participant, and the request payload you write is what tells the

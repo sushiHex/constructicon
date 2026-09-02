@@ -801,11 +801,13 @@ a task adapter uses, so a change to placement, tallying, the outcome, or the
 result's self-check is a new version rather than a silent change of a retained
 one; a test pins the digest to that stamp.
 
-**Proof.** Fourteen mutants of the aggregation law and the authoring checks —
-dropped ordering, sibling check, iteration check, duplicate check, the
-aggregator's own seat, run check, both off-by-one thresholds, the ballot
-bucket, the boundary-contract check, the gather-contract check, member
-cardinality, and two ways of not re-deriving a result — are each killed. The acceptance lane runs six fakes reporting all six buckets through
+**Proof.** Seventeen mutants of the aggregation law, the authoring checks, and
+the registry's boundary check — dropped ordering, sibling check, iteration
+prefix, duplicate check, the aggregator's own seat, run check, both off-by-one
+thresholds, the ballot bucket, the boundary-contract check, the
+gather-contract check, member cardinality, a composite aggregator, a
+composite's lying boundary, an edited law without a revision bump, and two
+ways of not re-deriving a result — are each killed. The acceptance lane runs six fakes reporting all six buckets through
 the real graph, then one fake plus one mailbox-backed human across restarts — a
 fresh journal and system over the same database file, nothing carried in
 memory. The system that asked is discarded; a second records the ballot and its
@@ -870,6 +872,38 @@ findings; all six were accepted.
   attempt could hide. The lane now asserts the exact attempt sequence: one
   start and one resumption per reply, each caused by that reply.
 
+A third review returned four blockers and four lower findings; three blockers
+and all four lower findings were accepted, one blocker rejected with evidence.
+
+- Rejected: `panel()` emits unversioned Refs, so a later promotion could give a
+  member another contract and the gather would silently omit it. That is
+  every combinator's and every direct Graph's behaviour — `Ref.version` is
+  optional by IR design, the stable pointer is the release law's, and
+  admission seals one atomic world and re-proves the gather nominally against
+  it. The authoring proof is about the bundles as authored. A validator fault
+  for a connection that binds nothing would close the residual for every
+  graph; it is an IR decision and stays open.
+- Accepted: a composite could declare a boundary its Graph does not export,
+  because admission compiles the Graph and ignores the declaration. The
+  registry now refuses such a definition and `component()` refuses to
+  redeclare a Graph's boundary, so a member's advertised `one` result is its
+  body's.
+- Accepted: a composite aggregator wrapping the standard quorum would place
+  nothing, since the quorum's law reads its own seat; `panel()` now requires
+  an atomic aggregator. A member whose internals iterate carries frames
+  beneath its seat; the aggregator's frames must be a prefix of a member's,
+  not equal to them.
+- Accepted: the vocabulary's documents were shared mutable dictionaries. The
+  catalogues now hold the models, every description generates its documents
+  afresh, and documents are keyed by name and revision so two types cannot
+  overwrite one another.
+- Accepted: the identity test verified the digest formula, not that the law's
+  source matches its revision. A golden digest of the four law bodies is now
+  pinned to `panel-law-1`; editing the law without a bump fails it.
+- Accepted: the advice request's schema is generated from a `RootModel` of
+  any JSON value, so its generator is stated truthfully; the design record's
+  result shape names `run_id` and `aggregator`.
+
 ## Open items
 
 - Kernel-attested source identity on `many` ports and wall-clock timeouts for
@@ -878,6 +912,10 @@ findings; all six were accepted.
   filtered or not. It is the system's fixed L0 vocabulary rather than a
   property of the selected components; a per-selection projection would be a
   choice, not a correction.
+- A connection that binds nothing is not an admission fault. A member whose
+  stable version later changes contract is silently absent from a `many`
+  gather; a fault for a dangling connection would close this for every graph
+  and is an IR decision.
 - A message a caller may not act on is refused with `AUTH_REQUIRED_SCOPE` rather
   than reported absent, which confirms that a supplied id exists. Deliberate:
   ids are derived digests over run, path, channel, lane, interaction, and port,

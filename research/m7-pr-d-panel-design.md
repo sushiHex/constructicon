@@ -2,14 +2,17 @@
 
 Status: revised after adversarial review of the design (Codex, twelve
 findings; ten accepted, two narrowed), implemented on branch `m7/pr-d-panel`,
-then corrected after two adversarial reviews of the head (five blockers and
-three lower, then three and three; see the implementation record). The
+then corrected after three adversarial reviews of the head (five blockers and
+three lower, then three and three, then four and four with one blocker
+rejected; see the implementation record). The
 corrections that change this record: no boundary input, the members' request
 included, may carry the result contract, and a member's request and result
 are cardinality `one` (D1); a member may not claim the aggregator's own seat
 (D3); `PanelResult` is self-verifying (D4); the panel law's revision is
-stamped into both pure components' identity (D4, D5); and `describe()`
-publishes every named contract's shape, the ballot's included (D5).
+stamped into both pure components' identity (D4, D5); `describe()`
+publishes every named contract's shape, the ballot's included (D5); the
+aggregator is atomic and a member's frames extend the aggregator's (D1, D3);
+and a composite's boundary is its Graph's, enforced by the registry.
 Approved plan: rev 2 §4 ("unchanged from rev 1 §12"), §7 "Slice D must add".
 This records the decisions the plan leaves open, the constraints the code
 imposes, and what the review changed. The implementation record
@@ -86,8 +89,9 @@ widens the gather; that is the general connector law, tested here as such.
                          timed_out: NonNegativeInt }   # sums to member count
     PanelOutcome       = "approved" | "rejected" | "insufficient_responses"
                        | "impossible_quorum"
-    PanelResult        { schema_version=1, outcome, quorum, tally,
-                         members: tuple[PanelMemberSummary, ...] }
+    PanelResult        { schema_version=1, run_id, aggregator: ExecutionPath,
+                         quorum, outcome, tally,
+                         members: tuple[PanelMemberSummary, ...] }   # self-verifying
     PanelMemberSummary { node: str, result: PanelMemberResult }
     PanelBallotPayload { schema_version=1, outcome: "responded" | "declined",
                          ballot | None, rationale | None }   # extra="forbid"
@@ -178,12 +182,12 @@ second restart.
 - One advisor round trip and one approval round trip complete across real
   process restarts, credential-free, with one request, reply, ack, approval,
   and wake cause each.
-- Mutation check (shipped): fourteen mutants — no canonical order, no sibling
-  check, no iteration check, no duplicate check, the aggregator's own seat,
-  no run check, both threshold off-by-ones, the ballot bucket, the
-  boundary-contract check, the gather-contract check, member cardinality, and
-  two ways of not re-deriving a result — each killed by
-  `tests/core/test_panel.py` and `tests/sdk/test_combinators.py`.
+- Mutation check (shipped): seventeen mutants — no canonical order, no sibling
+  check, iteration prefix, no duplicate check, the aggregator's own seat, no
+  run check, both threshold off-by-ones, the ballot bucket, the
+  boundary-contract check, the gather-contract check, member cardinality, a
+  composite aggregator, a composite's lying boundary, an edited law without a
+  revision bump, and two ways of not re-deriving a result — each killed.
 - Wake (shipped): resumption after each reply goes through the control
   plane's host; the run's attempt causes are exactly the two replies.
 
