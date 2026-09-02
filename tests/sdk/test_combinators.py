@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 import pytest
@@ -14,8 +15,10 @@ from constructicon.core.errors import AdmissionError
 from constructicon.core.graph import Connection, Graph, GraphNode, Loop, Ref
 from constructicon.core.manifest import CONTINUE_TYPE, ExecutionManifest
 from constructicon.core.ports import Port
+from constructicon.core.registry import StoredVersion
 from constructicon.runtime.registry import RegistryError
 from constructicon.sdk import component, flow, harness, loop, panel, port_type, task
+from constructicon.substrate.journal.sqlite import SqliteJournal
 
 
 class Issue(BaseModel):
@@ -210,7 +213,7 @@ def test_panel_is_exactly_the_hand_authored_fan_out_and_fan_in(
     ]
 
 
-def test_a_composites_boundary_is_its_graphs(system: Constructicon) -> None:
+def test_a_composites_boundary_is_its_graphs(system: Constructicon, journal: SqliteJournal) -> None:
     """Admission exposes the Graph's ports, so a declaration that differs is refused twice."""
 
     _promote_all(system, panel_yes)
@@ -235,6 +238,24 @@ def test_a_composites_boundary_is_its_graphs(system: Constructicon) -> None:
     )
     with pytest.raises(RegistryError, match="boundary its Graph does not export"):
         system._register(lying)
+
+    # A store retained from before that rule is re-proved at admission, not trusted.
+    journal.store_version(
+        StoredVersion(
+            definition=lying,
+            content_hash=lying.content_hash(),
+            registered_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+    )
+    system._promote_initial(component=lying.name, version=lying.content_hash())
+    retained = Graph(
+        name="sdk/uses-lying",
+        nodes=(GraphNode(id="member", body=Ref(component=lying.name)),),
+        inputs=panel_yes.definition.inputs,
+        outputs=wider,
+    )
+    with pytest.raises(AdmissionError, match="boundary its Graph does not export"):
+        system.validate(retained, {"request": {"question": "ship?"}})
 
 
 def test_panel_with_explicit_ids_and_a_repeated_member_is_still_the_direct_graph(

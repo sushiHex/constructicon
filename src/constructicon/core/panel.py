@@ -14,7 +14,8 @@ parked; one who will not answer replies ``declined``.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import inspect
+from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Literal
 
@@ -23,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, NonNegativeInt, PositiveInt, model_v
 from constructicon.core.address import ExecutionPath, RunId
 from constructicon.core.channel import ChannelContract
 from constructicon.core.errors import ContractViolation
-from constructicon.core.identity import ActorId, Digest, JsonValue, canonical_json
+from constructicon.core.identity import ActorId, Digest, JsonValue, canonical_json, digest
 
 PanelMemberOutcome = Literal["responded", "declined", "unavailable", "timed_out"]
 PanelBallot = Literal["approve", "reject", "abstain"]
@@ -49,14 +50,6 @@ PANEL_BALLOT_CONTRACT = ChannelContract(
 the generic advice reply. This names what ``panel-ballot`` reads, so that
 ``system.describe()`` can publish the shape a participant has to answer in."""
 
-PANEL_LAW_REVISION = "panel-law-1"
-"""The revision of the aggregation law in this module.
-
-Stamped into the implementation identity of every standard component that
-delegates to it (see ``sdk.std``), because their own source says almost
-nothing. A change to placement, tallying, the outcome, or the result's
-self-check is a new revision, or a retained component would change behaviour
-under an unchanged version."""
 
 
 class _PanelModel(BaseModel):
@@ -224,9 +217,10 @@ def _place(
     Members are the aggregator's siblings by ``panel()`` construction, so each
     result's path must begin with the aggregator's parent scope, have a segment
     at that depth — that segment is the member's node — and carry the
-    aggregator's loop frames as a prefix of its own, since a member's internals
-    may iterate beneath its seat but its seat is in the aggregator's iteration.
-    Any other topology is refused rather than guessed at, and
+    aggregator's loop frames as a prefix of its own, any further frame naming a
+    loop beneath its seat: a member's internals may iterate beneath its seat,
+    but its seat is in the aggregator's iteration and nowhere else. Any other
+    topology is refused rather than guessed at, and
     so is a node claimed twice — whether by one path repeated or by two paths
     beneath it: a member that reports a sibling's identity collides with the
     sibling instead of replacing it, and one that claims the aggregator's own
@@ -252,10 +246,15 @@ def _place(
             )
         segments = result.member.scope.segments
         frames = aggregator.iterations
+        seat = segments[: depth + 1]
         if (
             segments[:depth] != parent
             or len(segments) <= depth
             or result.member.iterations[: len(frames)] != frames
+            or any(
+                frame.loop.segments[: depth + 1] != seat
+                for frame in result.member.iterations[len(frames) :]
+            )
         ):
             raise ContractViolation(
                 f"panel member {result.member.render()} is not a sibling of the "
@@ -320,6 +319,38 @@ CONTRACT_SCHEMAS: Mapping[ChannelContract, type[BaseModel]] = MappingProxyType(
     }
 )
 """Each named contract revision and the model whose shape it names, for ``describe()``."""
+
+
+def _law_source() -> dict[str, str]:
+    """Everything the standard components delegate to: the contracts and the law, by name.
+
+    Whole class bodies, so a field, a default, a validator, or a config change
+    is a change of law too.
+    """
+
+    members: tuple[type[BaseModel] | Callable[..., object], ...] = (
+        PanelBallotPayload,
+        PanelMemberResult,
+        PanelQuorum,
+        PanelTally,
+        PanelMemberSummary,
+        PanelResult,
+        panel_outcome,
+        _member_key,
+        _place,
+        _tally,
+        aggregate_panel,
+    )
+    return {member.__name__: inspect.getsource(member) for member in members}
+
+
+PANEL_LAW_REVISION = str(digest("panel-law", 1, _law_source()))
+"""The revision of the aggregation law in this module: a digest of its bodies.
+
+Stamped into the implementation identity of every standard component that
+delegates to it (see ``sdk.std``), because their own source says almost
+nothing. Derived rather than named, so a change to any law body is a new
+revision by construction, never a silent change of a retained component."""
 
 
 __all__ = [

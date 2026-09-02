@@ -69,7 +69,7 @@ def build_system_description(
         truncated = len(requested) > limit
 
     component_descriptions: list[ComponentDescription] = []
-    schema_by_hash: dict[tuple[str, str], SchemaDocument] = {}
+    schema_by_hash: dict[str, SchemaDocument] = {}
     for key in NAMED_CONTRACT_SCHEMAS:
         _publish(schema_by_hash, _named_document(key))
     for name in selected_names:
@@ -204,7 +204,7 @@ def build_component_description(
     stored = snapshot.get(name, selected)
     if stored is None:
         raise ContractViolation(f"component {name!r} has no version {selected}")
-    schemas: dict[tuple[str, str], SchemaDocument] = {}
+    schemas: dict[str, SchemaDocument] = {}
     return _component_description(
         registry,
         snapshot,
@@ -219,7 +219,7 @@ def _component_description(
     snapshot: RegistrySnapshot,
     definition: ComponentDef,
     version: Digest,
-    schema_by_hash: dict[tuple[str, str], SchemaDocument],
+    schema_by_hash: dict[str, SchemaDocument],
 ) -> ComponentDescription:
     for port in (*definition.inputs, *definition.outputs):
         document = _port_schema(port)
@@ -297,13 +297,10 @@ def _named_document(key: tuple[str, str]) -> SchemaDocument:
     )
 
 
-def _publish(
-    schema_by_hash: dict[tuple[str, str], SchemaDocument],
-    document: SchemaDocument,
-) -> None:
-    """One document per (name, revision): two contracts may not share a revision string."""
+def _publish(schema_by_hash: dict[str, SchemaDocument], document: SchemaDocument) -> None:
+    """One document per revision: `schema_hash` is the public key a port declares."""
 
-    schema_by_hash.setdefault((document.name, document.schema_hash), document)
+    schema_by_hash.setdefault(document.schema_hash, document)
 
 
 def _schema_document(
@@ -334,6 +331,8 @@ NAMED_CONTRACT_SCHEMAS: Mapping[tuple[str, str], type[pydantic.BaseModel]] = Map
         for contract, model in catalog.items()
     }
 )
+if len({schema_hash for _, schema_hash in NAMED_CONTRACT_SCHEMAS}) != len(NAMED_CONTRACT_SCHEMAS):
+    raise RuntimeError("two named contracts share one revision string; the revision is the key")
 """The standard vocabulary: every named contract revision and the model whose shape it names.
 
 A named revision is not the digest of a schema, so the registry refuses to

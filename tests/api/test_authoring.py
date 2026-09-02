@@ -81,6 +81,24 @@ def test_describe_is_bounded_complete_and_secret_free(
         )
         assert document.schema_ and document.schema_hash == port.schema_hash
 
+    # A description owns its documents, embedded port schemas included: a
+    # caller who mutates one changes neither the registered port nor a later
+    # description.
+    port = described.inputs[0]
+    document = next(
+        schema for schema in description.schemas if schema.schema_hash == port.schema_hash
+    )
+    before = system.describe(limit=100).description_digest
+    nested = next(value for value in document.schema_.values() if isinstance(value, dict))
+    assert nested
+    nested.clear()
+    document.schema_.clear()
+    after = system.describe(limit=100)
+    assert after.description_digest == before
+    assert next(
+        schema for schema in after.schemas if schema.schema_hash == port.schema_hash
+    ).schema_
+
     plain_description = next(
         item for item in description.components if item.name == plain.name
     )

@@ -225,7 +225,8 @@ def test_a_member_sits_in_the_aggregators_own_iteration() -> None:
         )
         assert result.outcome == "approved"
     other = IterationFrame(loop=FRAME.loop, index=FRAME.index + 1)
-    for frames in ((), (other,), (inner, FRAME)):
+    elsewhere = IterationFrame(loop=ScopePath(segments=(*PANEL, "bob", "retry")), index=0)
+    for frames in ((), (other,), (inner, FRAME), (FRAME, elsewhere)):
         with pytest.raises(ContractViolation, match="not a sibling"):
             aggregate_panel(
                 (_member("alice", "responded", "approve", iterations=frames),),
@@ -233,6 +234,15 @@ def test_a_member_sits_in_the_aggregators_own_iteration() -> None:
                 aggregator=in_loop,
                 run_id=RUN,
             )
+    # Outside any loop the aggregator has no frames; a member's frames must
+    # still name loops beneath its own seat, not somewhere else.
+    with pytest.raises(ContractViolation, match="not a sibling"):
+        aggregate_panel(
+            (_member("alice", "responded", "approve", iterations=(elsewhere,)),),
+            PanelQuorum(required_approvals=1),
+            aggregator=AGGREGATOR,
+            run_id=RUN,
+        )
 
 
 def test_a_member_from_another_run_is_refused() -> None:

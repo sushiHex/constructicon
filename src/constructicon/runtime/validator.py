@@ -333,6 +333,17 @@ def _compile_node(
             input_sources,
         )
         if isinstance(definition.body, Graph):
+            if (
+                definition.inputs != definition.body.inputs
+                or definition.outputs != definition.body.outputs
+            ):
+                # The registry refuses this at registration; a store retained
+                # from before that rule is re-proved here rather than trusted.
+                comp.faults.append(
+                    f"{instance_scope.render()}: composite {definition.name!r} declares a "
+                    "boundary its Graph does not export"
+                )
+                return {}
             declared = {port.name: port for port in definition.inputs}
             retagged = {
                 name: [
