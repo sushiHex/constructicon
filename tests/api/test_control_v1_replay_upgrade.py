@@ -37,6 +37,7 @@ from constructicon.core.identity import Digest, canonical_json, digest
 from constructicon.core.run import RunStatus
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.conftest import BRIEF, ISSUE, atomic, pipeline_graph, triage_impl
+from tests.migrations.test_sqlite_v6_to_v7 import _downgrade_v7_schema_to_v6
 
 ACTOR = AuthenticatedActor(
     actor_id="static:v1-upgrade",
@@ -50,8 +51,14 @@ def _rewrite_response(
     command_id: str,
     rewrite: Callable[[dict[str, Any]], None],
 ) -> None:
-    """Rewrite a terminal row into the exact JSON shape persisted by main."""
+    """Create exact schema-6 response bytes, then migrate and seal them.
 
+    Terminal responses are immutable in schema 7.  Rewriting a current row and
+    its seal would construct a history no production writer can create; the
+    compatibility boundary under test is the real schema-6 -> schema-7 climb.
+    """
+
+    _downgrade_v7_schema_to_v6(db_path)
     with sqlite3.connect(db_path) as connection:
         row = connection.execute(
             "SELECT response_json FROM commands WHERE command_id = ?", (command_id,)
@@ -67,6 +74,8 @@ def _rewrite_response(
                 command_id,
             ),
         )
+        connection.commit()
+    SqliteJournal(db_path)
 
 
 def _schema_v1(payload: dict[str, Any]) -> None:
@@ -93,6 +102,30 @@ def _prepare_run(world: Any, run_id: RunId) -> None:
     inputs = {"issue": {"title": str(run_id)}}
     manifest = world.validate(pipeline_graph(), inputs)
     world._prepare_run(manifest, run_id=run_id, inputs=inputs)
+
+
+def _prepare_quiescent_run(
+    world: Any,
+    journal: SqliteJournal,
+    run_id: RunId,
+) -> None:
+    """Retain a real terminal run that startup recovery must not execute."""
+
+    _prepare_run(world, run_id)
+    lease = journal.claim_run(run_id, owner_id="v1-fixture", ttl_s=30)
+    journal.transition_run(
+        lease,
+        expected=frozenset({RunStatus.PENDING}),
+        target=RunStatus.RUNNING,
+        event_kind="RunStarted",
+    )
+    journal.transition_run(
+        lease,
+        expected=frozenset({RunStatus.RUNNING}),
+        target=RunStatus.FAILED,
+        event_kind="RunFailed",
+    )
+    journal.release_run(lease)
 
 
 def _candidate(world: Any, component: str) -> tuple[Digest, str]:
@@ -161,13 +194,49 @@ async def test_sqlite_replays_v1_run_submission_as_v3(
     await host.shutdown()
 
 
+async def test_v1_upgrade_does_not_excuse_unrelated_scalar_coercion(
+    world: Any,
+    journal: SqliteJournal,
+    tmp_path: Path,
+) -> None:
+    host = RunHost(world, journal=journal, max_concurrency=1)
+    control = ControlPlane(system=world, store=journal, run_host=host)
+    proposal = pipeline_graph()
+    inputs = {"issue": {"title": "v1-lossless-after-upgrade"}}
+    first = await control.runs_start(
+        ACTOR,
+        proposal=proposal,
+        inputs=inputs,
+        idempotency_key="v1-lossless-after-upgrade",
+    )
+    assert isinstance(first, RunSubmission)
+
+    def damage(payload: dict[str, Any]) -> None:
+        _schema_v1_run_submission(payload)
+        payload["command"]["replayed"] = 0
+
+    _rewrite_response(
+        tmp_path / "journal.db",
+        first.command.command_id,
+        damage,
+    )
+    with pytest.raises(JournalDamaged, match="matches none of the operation models"):
+        await control.runs_start(
+            ACTOR,
+            proposal=proposal,
+            inputs=inputs,
+            idempotency_key="v1-lossless-after-upgrade",
+        )
+    await host.shutdown()
+
+
 async def test_sqlite_replays_v1_cancellation_as_v3(
     world: Any,
     journal: SqliteJournal,
     tmp_path: Path,
 ) -> None:
     run_id = RunId("run-v1-cancel")
-    _prepare_run(world, run_id)
+    _prepare_quiescent_run(world, journal, run_id)
     control = ControlPlane(system=world, store=journal)
     first = await control.runs_cancel(ACTOR, run_id=run_id, idempotency_key="v1-cancel")
     assert isinstance(first, CancellationResult)
@@ -187,7 +256,7 @@ async def test_sqlite_replays_v1_approval_with_digest_bound_detail(
     tmp_path: Path,
 ) -> None:
     run_id = RunId("run-v1-approval")
-    _prepare_run(world, run_id)
+    _prepare_quiescent_run(world, journal, run_id)
     stable = world._registry.stable_version("test/triage")
     assert stable is not None
     subject = ComponentProofSubject(

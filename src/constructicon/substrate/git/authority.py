@@ -32,7 +32,6 @@ yields the same sha. Kernel budget: stdlib subprocess only.
 from __future__ import annotations
 
 import io
-import json
 import os
 import shutil
 import stat
@@ -47,7 +46,7 @@ from constructicon.core.address import GitSha
 from constructicon.core.effect import MergeSubject
 from constructicon.core.envelope import GitRef
 from constructicon.core.errors import ConstructiconError, ContractViolation
-from constructicon.core.identity import Digest, canonical_json, digest
+from constructicon.core.identity import Digest, canonical_json, digest, parse_json_value
 from constructicon.core.workspace import (
     AcquiredCapability,
     Disposition,
@@ -60,6 +59,21 @@ from constructicon.core.workspace import (
 )
 
 MIN_GIT = (2, 38)  # merge-tree --write-tree
+
+
+class _GitLeaseResourceRef(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    acquisition: str
+    candidate_ref: str
+    base: str
+
+
+def _git_lease_resource_ref(raw: str) -> _GitLeaseResourceRef:
+    try:
+        return _GitLeaseResourceRef.model_validate(parse_json_value(raw))
+    except (TypeError, ValueError) as exc:
+        raise ContractViolation("git workspace lease carries an invalid resource ref") from exc
 
 _PINNED_ENV = {
     "LC_ALL": "C",
@@ -599,10 +613,10 @@ class GitWorkspaceCapability:
     async def close(
         self, acquisition: AcquiredCapability, disposition: Disposition
     ) -> LeaseClosure:
-        info = json.loads(acquisition.resource_ref)
-        self._authority.discard_staging(info["acquisition"])
+        info = _git_lease_resource_ref(acquisition.resource_ref)
+        self._authority.discard_staging(info.acquisition)
         if disposition == "discard":
-            self._discard_candidate(info["candidate_ref"])
+            self._discard_candidate(info.candidate_ref)
             return LeaseClosure(disposition="discarded")
         return LeaseClosure(disposition="released")
 
@@ -613,10 +627,10 @@ class GitWorkspaceCapability:
         for item in stale:
             if item.lease.resource_ref is None:
                 continue
-            info = json.loads(item.lease.resource_ref)
-            removed = self._authority.discard_staging(info["acquisition"])
+            info = _git_lease_resource_ref(item.lease.resource_ref)
+            removed = self._authority.discard_staging(info.acquisition)
             if item.disposition == "discard":
-                self._discard_candidate(info["candidate_ref"])
+                self._discard_candidate(info.candidate_ref)
                 removed = True
             if removed:
                 reaped.append(item.lease.resource_ref)

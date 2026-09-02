@@ -49,7 +49,7 @@ the eventual code differs.
 | M6.2 | [Internal compression scope](milestones/M6.2-internal-compression-extracted-scope.md) | Exact extraction from the M6.1 parent plan | Discoverability copy; parent plan remains authoritative for this historical scope |
 | M6.2 | [Durable control-plane closeout and internal compression rev 2](milestones/M6.2-internal-compression-rev2.md) | Current successor reconciled against `main` at `7f33724` after PRs #9–#11 | Approved implementation baseline; result recorded below |
 | M7 | [Channels and panel rev 1](milestones/M7-channels-and-panel-rev1.md) | First full successor plan derived from current authority and the frozen M7 milestone line | Superseded by rev 2 (seven contracts it named could not be built as written) |
-| M7 | [Channels and panel rev 2](milestones/M7-channels-and-panel-rev2.md) | Absorbs the rev 1 defects, records the authority slices A and B established, and plans C and D | Review draft; A and B merged, C and D await a decision |
+| M7 | [Channels and panel rev 2](milestones/M7-channels-and-panel-rev2.md) | Absorbs the rev 1 defects, records the authority slices A and B established, and plans C and D | Approved implementation baseline; A and B merged, C is implemented on draft PR #18, and D remains |
 
 ## Handoffs
 
@@ -57,7 +57,7 @@ the eventual code differs.
 | --- | --- |
 | [M6.1 / M6.2 implementation handoff](handoffs/M6.1-M6.2-implementation-handoff.md) | Preserves an earlier artifact-based implementation handoff and its exact base/checksum assumptions; historical only |
 | [M6.2 implementation record](handoffs/M6.2-implementation-record.md) | Records the completed rev-2 scope, compatibility boundary, strengthened failure proof, and integrated-session sequencing |
-| [M7 implementation record](handoffs/M7-implementation-record.md) | Records the completed M7 PR A/B scope, the plan defects implementation forced, and the sealed-routing and compiled-exchange decisions |
+| [M7 implementation record](handoffs/M7-implementation-record.md) | Living record for merged PRs A/B and draft PR C: deviations, authority decisions, review corrections, and integrity closure; PR D remains |
 
 ## Completeness and recovery notes
 

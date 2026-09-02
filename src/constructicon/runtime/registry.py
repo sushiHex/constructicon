@@ -17,7 +17,12 @@ from threading import RLock
 from typing import Literal
 
 from constructicon.core.address import RunId
-from constructicon.core.channel import ChannelEndpoint, ChannelProfile
+from constructicon.core.channel import (
+    BUILTIN_CHANNEL_DURABILITIES,
+    Channel,
+    ChannelEndpoint,
+    ChannelProfile,
+)
 from constructicon.core.component import ComponentDef, PromotionRecord
 from constructicon.core.effect import (
     Attestation,
@@ -25,6 +30,7 @@ from constructicon.core.effect import (
     CheckResult,
     ComponentProofSubject,
     attestation_id_for,
+    promotion_attestation_faults,
 )
 from constructicon.core.envelope import utc_now
 from constructicon.core.errors import AdmissionError, ConstructiconError, JournalDamaged
@@ -61,6 +67,54 @@ class CapabilityDescriptor:
     endpoint: ChannelEndpoint | None = None
     leased: bool = False
     requires_posture: Posture | None = None
+
+    def __post_init__(self) -> None:
+        channel_kind = self.kind.startswith("channel.")
+        if channel_kind != (self.channel_profile is not None):
+            raise ValueError(
+                "a channel.* capability must carry exactly one ChannelProfile, "
+                "and a non-channel capability must carry none"
+            )
+        expected_durability = BUILTIN_CHANNEL_DURABILITIES.get(self.kind)
+        if (
+            expected_durability is not None
+            and self.channel_profile is not None
+            and self.channel_profile.durability != expected_durability
+        ):
+            raise ValueError(
+                f"reserved channel kind {self.kind!r} requires "
+                f"durability={expected_durability!r}, not "
+                f"{self.channel_profile.durability!r}"
+            )
+        if self.endpoint is not None and not channel_kind:
+            raise ValueError("only a channel.* capability may carry a ChannelEndpoint")
+        if self.executor_profile is not None and channel_kind:
+            raise ValueError("one capability descriptor cannot be both executor and channel")
+        if self.leased and channel_kind:
+            raise ValueError(
+                "channel capabilities are invocation-spanning transports and cannot be leased"
+            )
+
+    def channel_incoherence(self, capability: object | None) -> str | None:
+        """Why this live object cannot realize the descriptor's channel fact."""
+
+        if self.channel_profile is None:
+            return (
+                "the injected object implements Channel but its descriptor does not"
+                if isinstance(capability, Channel)
+                else None
+            )
+        if not isinstance(capability, Channel):
+            return "assembly injected no object implementing the Channel contract"
+        if capability.channel_id != self.capability_id:
+            return f"the injected transport serves {capability.channel_id!r}"
+        if capability.profile != self.channel_profile:
+            return (
+                f"its injected profile {capability.profile.model_dump(mode='json')!r} "
+                "differs from the descriptor profile "
+                f"{self.channel_profile.model_dump(mode='json')!r}"
+            )
+        return None
 
 
 @dataclass(frozen=True)
@@ -178,6 +232,10 @@ class InMemoryRegistryStore:
             self._version_seq[(name, key)] = self._registration_seq
 
     def store_promotion(self, record: PromotionRecord) -> PromotionRecord:
+        if record.channel != "stable":
+            raise JournalDamaged(
+                f"promotion {record.attestation_id!r} names unsupported channel {record.channel!r}"
+            )
         with self._lock:
             for _, prior in self._promotions:
                 if prior.attestation_id == record.attestation_id:
@@ -557,6 +615,12 @@ class ComponentRegistry:
                     f"revision {descriptor.revision!r} differs from the admitted "
                     f"{binding.revision!r}"
                 )
+            elif (descriptor.channel_profile is not None) != (binding.channel is not None):
+                faults.append(
+                    f"{binding.scope.render()}: capability {binding.capability_id!r} "
+                    "does not preserve the manifest's sealed channel shape — "
+                    "refuse, never expose a transport as a generic capability"
+                )
             elif descriptor.endpoint != (
                 binding.channel.endpoint if binding.channel is not None else None
             ):
@@ -605,15 +669,21 @@ class ComponentRegistry:
                     "claim cannot authorize a promotion"
                 ]
             )
-        faults = _verify_promotion_attestation(attestation, component, version)
-        subject = attestation.subject
-        if isinstance(subject, ComponentProofSubject):
-            current = snapshot.stable_version(component)
-            if subject.baseline_version != current:
-                faults.append(
-                    f"promotion baseline moved: attestation binds "
-                    f"{subject.baseline_version}, current stable is {current}"
-                )
+        current = snapshot.stable_version(component)
+        faults = list(
+            promotion_attestation_faults(
+                attestation,
+                component=component,
+                version=version,
+                baseline=current,
+                source_run=attestation.created_by_run,
+            )
+        )
+        if source_run is not None and source_run != attestation.created_by_run:
+            faults.append(
+                f"promotion source run {source_run} differs from the attestation "
+                f"creator {attestation.created_by_run}"
+            )
         if faults:
             raise AdmissionError(faults)
         record = PromotionRecord(
@@ -623,7 +693,7 @@ class ComponentRegistry:
             to_version=version,
             attestation_id=attestation_id,
             actor=actor,
-            source_run=source_run,
+            source_run=attestation.created_by_run,
             created_at=utc_now(),
         )
         return self.store.store_promotion(record)
@@ -894,33 +964,3 @@ def _refs_in(graph: Graph) -> list[str]:
             else:
                 found.extend(_refs_in(body.body))
     return found
-
-
-def _verify_promotion_attestation(
-    attestation: Attestation,
-    component: str,
-    version: Digest,
-) -> list[str]:
-    faults: list[str] = []
-    if attestation.action != "promote":
-        faults.append(
-            f"attestation {attestation.attestation_id!r} authorizes "
-            f"{attestation.action!r}, not a promotion"
-        )
-    subject = attestation.subject
-    if not isinstance(subject, ComponentProofSubject):
-        faults.append("promotion attestation must carry a component subject")
-        return faults
-    if subject.component != component:
-        faults.append(
-            f"attestation subject names {subject.component!r}, promotion targets {component!r}"
-        )
-    if subject.version != version:
-        faults.append(
-            f"attestation binds version {subject.version}, promotion targets {version} — "
-            "identity mismatch is refused, never repaired silently"
-        )
-    if not attestation.ok:
-        failing = [check.name for check in attestation.checks if not check.ok] or ["<none>"]
-        faults.append(f"attestation checks failing: {failing}")
-    return faults

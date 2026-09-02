@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -76,7 +76,7 @@ from constructicon.core.workspace import (
     LeasedCapability,
     StaleAcquisition,
 )
-from constructicon.runtime.context import NodeContext, NodeImpl
+from constructicon.runtime.context import ChannelFacade, NodeContext, NodeImpl
 from constructicon.runtime.registry import (
     BoundExecution,
     CapabilityDescriptor,
@@ -179,6 +179,18 @@ class _BoundChannel:
             reply_port=self.binding.reply_port,
             payload=json_value(payload),
         )
+
+
+class _ChannelFacade:
+    """The sole capability handed to component code: one sealed operation."""
+
+    __slots__ = ("__ask",)
+
+    def __init__(self, ask: Callable[[Any], Awaitable[JsonValue]]) -> None:
+        self.__ask = ask
+
+    async def ask(self, payload: Any) -> JsonValue:
+        return await self.__ask(payload)
 
 
 @dataclass(frozen=True)
@@ -1052,6 +1064,73 @@ class Walker:
                 disposition=closure.disposition,
             )
 
+    @staticmethod
+    async def _discard_unrecorded_acquisition(
+        capability: LeasedCapability,
+        acquisition: AcquiredCapability,
+    ) -> None:
+        """Finish cleanup that has no durable lease row to recover it."""
+        close_task = asyncio.create_task(capability.close(acquisition, "discard"))
+        cancellation: asyncio.CancelledError | None = None
+        while not close_task.done():
+            try:
+                await asyncio.shield(close_task)
+            except asyncio.CancelledError as exc:
+                cancellation = exc
+        close_task.result()
+        if cancellation is not None:
+            raise cancellation
+
+    async def _acquire_invocation_capability(
+        self,
+        capability: LeasedCapability,
+        *,
+        lease: RunLease,
+        binding: CapabilityBinding,
+        path: ExecutionPath,
+        manifest_hash: Digest,
+    ) -> AcquiredCapability:
+        """Acquire once, returning only after its recovery row is durable.
+
+        Keeping this as a nested failure boundary matters: cancellation raised
+        after direct cleanup of an unrecorded acquisition then reaches
+        ``_invoke``'s ordinary cancellation handler, which closes any earlier
+        recorded siblings. Ownership loss remains different—a successor owns
+        those durable siblings, so it stays the primary exception even if
+        best-effort cleanup of this unrecorded resource is interrupted.
+        """
+
+        acquisition = await capability.acquire(
+            LeaseContext(
+                run_lease=lease,
+                binding=binding,
+                path=path,
+                manifest_hash=manifest_hash,
+            )
+        )
+        durable = CapabilityLease(
+            lease_id=acquisition.lease_id,
+            acquisition_epoch=lease.epoch,
+            run_id=lease.run_id,
+            binding_id=binding.binding,
+            path=path,
+            lifetime="invocation",
+            state="active",
+            resource_ref=acquisition.resource_ref,
+        )
+        try:
+            self._journal.record_capability_lease(lease, durable)
+        except OwnershipLost as lost:
+            try:
+                await self._discard_unrecorded_acquisition(capability, acquisition)
+            except (Exception, asyncio.CancelledError) as cleanup:
+                raise lost from cleanup
+            raise
+        except Exception:
+            await self._discard_unrecorded_acquisition(capability, acquisition)
+            raise
+        return acquisition
+
     async def _reconcile_stale_leases(
         self,
         bound: BoundExecution,
@@ -1481,79 +1560,76 @@ class Walker:
             )
 
         capabilities: dict[str, object] = {}
-        channels: dict[str, _BoundChannel] = {}
+        channels: dict[str, ChannelFacade] = {}
         acquired: list[tuple[LeasedCapability, AcquiredCapability]] = []
         boundary = self._effect_boundary(manifest, lease, path, lost, mode=effect_mode)
-        for alias_binding in aliases.get(instance.scope.segments, ()):
-            self._check_run_control(lease, lost)
-            capability = self._capabilities.get(alias_binding.capability_id)
-            if capability is None:
-                raise ContractViolation(
-                    f"{instance.scope.render()}: admitted capability "
-                    f"{alias_binding.capability_id!r} was not injected"
-                )
-            descriptor = self._catalog.get(alias_binding.capability_id)
-            if descriptor is not None and descriptor.leased:
-                if not isinstance(capability, LeasedCapability):
+        try:
+            for alias_binding in aliases.get(instance.scope.segments, ()):
+                self._check_run_control(lease, lost)
+                capability = self._capabilities.get(alias_binding.capability_id)
+                if capability is None:
                     raise ContractViolation(
-                        f"{instance.scope.render()}: capability "
-                        f"{alias_binding.capability_id!r} is declared leased but "
-                        "does not implement LeasedCapability"
+                        f"{instance.scope.render()}: admitted capability "
+                        f"{alias_binding.capability_id!r} was not injected"
                     )
-                acquisition = await capability.acquire(
-                    LeaseContext(
-                        run_lease=lease,
+                descriptor = self._catalog.get(alias_binding.capability_id)
+                exposed_capability = capability
+                if descriptor is not None and descriptor.leased:
+                    if not isinstance(capability, LeasedCapability):
+                        raise ContractViolation(
+                            f"{instance.scope.render()}: capability "
+                            f"{alias_binding.capability_id!r} is declared leased but "
+                            "does not implement LeasedCapability"
+                        )
+                    acquisition = await self._acquire_invocation_capability(
+                        capability,
+                        lease=lease,
                         binding=alias_binding,
                         path=path,
                         manifest_hash=manifest.manifest_hash,
                     )
-                )
-                self._journal.record_capability_lease(
-                    lease,
-                    CapabilityLease(
-                        lease_id=acquisition.lease_id,
-                        acquisition_epoch=lease.epoch,
-                        run_id=lease.run_id,
-                        binding_id=alias_binding.binding,
+                    acquired.append((capability, acquisition))
+                    exposed_capability = acquisition.resource
+                if isinstance(exposed_capability, Channel):
+                    if alias_binding.channel is None:
+                        raise ContractViolation(
+                            f"{instance.scope.render()}: channel transport "
+                            f"{alias_binding.capability_id!r} has no sealed channel binding"
+                        )
+                    exchange = _BoundChannel(
+                        binding=alias_binding.channel,
+                        channel_id=alias_binding.capability_id,
+                        channel_revision=alias_binding.revision,
+                        channel=exposed_capability,
+                        journal=self._journal,
+                        lease=lease,
+                        manifest_hash=manifest.manifest_hash,
                         path=path,
-                        lifetime="invocation",
-                        state="active",
-                        resource_ref=acquisition.resource_ref,
-                    ),
-                )
-                capabilities[alias_binding.binding] = acquisition.resource
-                acquired.append((capability, acquisition))
-            else:
-                capabilities[alias_binding.binding] = capability
-            if alias_binding.channel is not None:
-                if not isinstance(capability, Channel):
+                        effect=boundary,
+                    )
+                    channels[alias_binding.binding] = _ChannelFacade(exchange.ask)
+                elif alias_binding.channel is not None:
                     raise ContractViolation(
                         f"{instance.scope.render()}: capability "
                         f"{alias_binding.capability_id!r} is admitted as a channel but "
                         "does not implement the Channel contract"
                     )
-                channels[alias_binding.binding] = _BoundChannel(
-                    binding=alias_binding.channel,
-                    channel_id=alias_binding.capability_id,
-                    channel_revision=alias_binding.revision,
-                    channel=capability,
-                    journal=self._journal,
-                    lease=lease,
-                    manifest_hash=manifest.manifest_hash,
-                    path=path,
-                    effect=boundary,
-                )
+                else:
+                    # A channel binding grants only the sealed `ask` facade above.
+                    # Putting its transport in this mapping as well would hand the
+                    # component caller-selected actor ids, message ids, and routing
+                    # through `ctx.capability(alias)`, defeating the binding (I3).
+                    capabilities[alias_binding.binding] = exposed_capability
 
-        context = NodeContext(
-            run_id=lease.run_id,
-            path=path,
-            capabilities=capabilities,
-            grants=self_binding.effective_grants,
-            effect=boundary,
-            channels=channels,
-        )
+            context = NodeContext(
+                run_id=lease.run_id,
+                path=path,
+                capabilities=capabilities,
+                grants=self_binding.effective_grants,
+                effect=boundary,
+                channels=channels,
+            )
 
-        try:
             raw_outputs: Mapping[str, Any] = await instance.impl(context, node_inputs)
             if not isinstance(raw_outputs, Mapping):
                 raise ContractViolation(
@@ -1589,7 +1665,13 @@ class Walker:
                     outputs=envelopes,
                 ),
             )
-        except (OwnershipLost, CheckpointConflict):
+        except OwnershipLost:
+            raise
+        except CheckpointConflict:
+            # The current run lease still owns every acquisition recorded
+            # before the contradiction. Discard those resources now; unlike
+            # OwnershipLost, no successor owns their cleanup boundary.
+            await self._close_acquired(lease, acquired, "discard")
             raise
         except (_CancelRequested, asyncio.CancelledError):
             await self._close_acquired(lease, acquired, "discard")
@@ -1664,9 +1746,12 @@ class Walker:
             if not isinstance(normalized, dict):
                 raise ContractViolation("effect subject must be a JSON object")
             key = idempotency_key(manifest.manifest_hash, path, kind, normalized, mode=mode)
-            existing = journal.receipt_for(key)
             terminal_statuses = ("simulated",) if mode == "simulated" else ("committed", "rejected")
-            if existing is not None and existing.status in terminal_statuses:
+
+            def terminal_receipt() -> EffectReceipt | None:
+                existing = journal.receipt_for(key)
+                if existing is None or existing.status not in terminal_statuses:
+                    return None
                 journal.append_event(
                     lease,
                     "EffectDeduplicated",
@@ -1674,12 +1759,16 @@ class Walker:
                     payload={"kind": kind},
                 )
                 return existing
+
+            existing = terminal_receipt()
+            if existing is not None:
+                return existing
             adapter = effects.get(kind)
             if adapter is None:
                 raise ContractViolation(
                     f"no effect adapter for kind {kind!r}; assembled: {sorted(effects)}"
                 )
-            request = EffectRequest(
+            proposed = EffectRequest(
                 run_id=lease.run_id,
                 manifest_hash=manifest.manifest_hash,
                 path=path,
@@ -1689,18 +1778,40 @@ class Walker:
                 attestation_id=attestation_id,
                 mode=mode,
             )
-            if mode == "live" and journal.effect_prepared(key):
+            self._check_run_control(lease, lost)
+            request = journal.record_effect_prepared(lease, proposed)
+            # Another worker may have closed the preparation after the first
+            # receipt lookup and before this transaction observed the row.
+            # Re-read before touching the adapter; a terminal winner is the
+            # same immutable transition, not permission to perform it again.
+            raced = terminal_receipt()
+            if raced is not None:
+                return raced
+
+            def record_outcome(
+                receipt: EffectReceipt,
+                event_kind: str,
+            ) -> EffectReceipt:
+                disposition = journal.record_effect_outcome(
+                    lease,
+                    request,
+                    receipt,
+                    event_kind,
+                )
+                if disposition == "already_recorded":
+                    journal.append_event(
+                        lease,
+                        "EffectDeduplicated",
+                        path=path,
+                        payload={"kind": kind},
+                    )
+                return receipt
+
+            if mode == "live":
                 reconciled = await adapter.reconcile(request)
                 if reconciled is not None:
-                    journal.record_effect_outcome(
-                        lease,
-                        request,
-                        reconciled,
-                        "EffectReconciled",
-                    )
-                    return reconciled
+                    return record_outcome(reconciled, "EffectReconciled")
             self._check_run_control(lease, lost)
-            journal.record_effect_prepared(lease, request)
             if mode == "simulated":
                 if adapter.profile.simulation != "supported":
                     raise ContractViolation(
@@ -1714,8 +1825,7 @@ class Walker:
                 "rejected": "EffectRejected",
                 "simulated": "EffectSimulated",
             }.get(receipt.status, "EffectUnresolved")
-            journal.record_effect_outcome(lease, request, receipt, event_kind)
-            return receipt
+            return record_outcome(receipt, event_kind)
 
         return boundary
 

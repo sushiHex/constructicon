@@ -23,16 +23,21 @@ from constructicon.core.component import ComponentDef
 from constructicon.core.control import (
     ADMIN_SCOPE,
     APPROVE_SCOPE,
+    INTERACTION_SCOPES,
     OPERATE_SCOPE,
     PROMOTE_SCOPE,
     ApprovalCommandResult,
     AuthenticatedActor,
     CancellationResult,
+    ChannelAckResult,
+    ChannelMessagePage,
+    ChannelMessageSummary,
+    ChannelReplyResult,
     CommandSummary,
     ComponentComparison,
     ControlCode,
+    ControlPlaneStore,
     ControlRejected,
-    ControlStore,
     DetailChunk,
     DetailRef,
     EventPage,
@@ -44,13 +49,13 @@ from constructicon.core.control import (
     RunSubmission,
     RunSummary,
     VersionPage,
+    scope_refusal,
 )
 from constructicon.core.effect import ProofSubject
 from constructicon.core.graph import Graph
 from constructicon.core.identity import Digest, JsonValue
 from constructicon.core.introspection import SystemDescription
 from constructicon.core.journal import Journal
-from constructicon.core.registry import RegistryStore
 from constructicon.core.run import RunStatus
 from constructicon.runtime.registry import ComponentRegistry
 from constructicon.sdk.types import DefinitionBundle
@@ -64,7 +69,7 @@ class ControlPlaneClosed(RuntimeError):
 
 
 def _facade_mutation(
-    required_scope: str,
+    required_scope: str | frozenset[str],
     *,
     local_static: bool = False,
 ) -> Callable[
@@ -116,7 +121,7 @@ class ControlPlane:
         self,
         *,
         system: Constructicon,
-        store: ControlStore,
+        store: ControlPlaneStore,
         journal: Journal | None = None,
         registry: ComponentRegistry | None = None,
         run_host: RunHost | None = None,
@@ -125,8 +130,33 @@ class ControlPlane:
         cursor_codec: CursorCodec | None = None,
         fault_probe: Callable[[str], None] | None = None,
     ) -> None:
-        journal_service = journal or cast(Journal, store)
-        registry_service = registry or ComponentRegistry(store=cast(RegistryStore, store))
+        if not isinstance(store, ControlPlaneStore):
+            raise TypeError(
+                "ControlPlane store must co-locate command, approval, and channel "
+                "exchange transactions"
+            )
+        assembled_journal: object = system._journal
+        if journal is not None and journal is not assembled_journal:
+            raise ValueError(
+                "ControlPlane journal must be the exact co-located store, not another world"
+            )
+        if store is not assembled_journal:
+            raise ValueError(
+                "ControlPlane store must be the exact journal assembled into Constructicon"
+            )
+        if registry is not None and registry is not system._registry:
+            raise ValueError(
+                "ControlPlane registry must be the exact registry assembled into Constructicon"
+            )
+        journal_service = cast(Journal, assembled_journal)
+        registry_service = system._registry
+        if run_host is not None:
+            if not isinstance(run_host, RunHost):
+                raise TypeError("ControlPlane run host must be a RunHost")
+            if not run_host.is_assembled_from(system, journal_service):
+                raise ValueError(
+                    "ControlPlane run host must serve the exact Constructicon journal and system"
+                )
         cursor_service = cursor_codec or CursorCodec()
         host_service = run_host or RunHost(system, journal=journal_service)
         detail_service = DetailResolver(
@@ -246,16 +276,9 @@ class ControlPlane:
     def _authorize(
         self,
         actor: AuthenticatedActor,
-        required_scope: str,
+        required_scope: str | frozenset[str],
     ) -> ControlRejected | None:
-        if actor.allows(required_scope):
-            return None
-        return self._fault(
-            ControlCode.AUTH_REQUIRED_SCOPE,
-            f"actor {actor.actor_id!r} lacks required scope {required_scope!r}",
-            f"authenticate with {required_scope} or constructicon:admin",
-            {"required_scope": required_scope},
-        )
+        return scope_refusal(actor, required_scope)
 
     def _authorize_local_admin(
         self,
@@ -352,6 +375,22 @@ class ControlPlane:
         command_id: str,
     ) -> CommandSummary | ControlRejected:
         return self._queries.commands_status(actor, command_id)
+
+    def channels_inbox(
+        self,
+        actor: AuthenticatedActor,
+        *,
+        cursor: str | None = None,
+        limit: int = DEFAULT_PAGE_SIZE,
+    ) -> ChannelMessagePage | ControlRejected:
+        return self._queries.channels_inbox(actor, cursor=cursor, limit=limit)
+
+    def channels_message(
+        self,
+        actor: AuthenticatedActor,
+        message_id: Digest,
+    ) -> ChannelMessageSummary | ControlRejected:
+        return self._queries.channels_message(actor, message_id)
 
     def registry_versions(
         self,
@@ -522,6 +561,7 @@ class ControlPlane:
         decision: str,
         reason: str | None,
         idempotency_key: str,
+        request_message_id: Digest | None = None,
     ) -> ApprovalCommandResult | ControlRejected:
         return await self._commands.runs_approve(
             actor,
@@ -529,6 +569,43 @@ class ControlPlane:
             subject=subject,
             decision=decision,
             reason=reason,
+            idempotency_key=idempotency_key,
+            request_message_id=request_message_id,
+        )
+
+    # Both channel mutations share one door, and it is deliberately coarse. The
+    # exact scope is sealed on the request, so a narrow door here would refuse
+    # an approver for lacking advise — true, but misleading guidance, since
+    # acquiring advise still would not make this the operation that consumes an
+    # approval. The command derives the real scope after it has refused the
+    # wrong interaction, so the honest reason reaches the caller.
+    @_facade_mutation(frozenset(INTERACTION_SCOPES.values()))
+    async def channels_reply(
+        self,
+        actor: AuthenticatedActor,
+        *,
+        message_id: Digest,
+        payload: JsonValue,
+        idempotency_key: str,
+    ) -> ChannelReplyResult | ControlRejected:
+        return await self._commands.channels_reply(
+            actor,
+            message_id=message_id,
+            payload=payload,
+            idempotency_key=idempotency_key,
+        )
+
+    @_facade_mutation(frozenset(INTERACTION_SCOPES.values()))
+    async def channels_ack(
+        self,
+        actor: AuthenticatedActor,
+        *,
+        message_id: Digest,
+        idempotency_key: str,
+    ) -> ChannelAckResult | ControlRejected:
+        return await self._commands.channels_ack(
+            actor,
+            message_id=message_id,
             idempotency_key=idempotency_key,
         )
 

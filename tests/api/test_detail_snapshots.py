@@ -310,6 +310,12 @@ def test_unicode_detail_chunks_always_advance_at_minimum_budget(
 ) -> None:
     run_id = _prepare(world, "unicode-chunks")
     lease = journal.claim_run(run_id, owner_id="unicode-worker", ttl_s=30)
+    journal.transition_run(
+        lease,
+        expected=frozenset({RunStatus.PENDING}),
+        target=RunStatus.RUNNING,
+        event_kind="RunStarted",
+    )
     event = journal.append_event(
         lease,
         "UnicodeEvidence",

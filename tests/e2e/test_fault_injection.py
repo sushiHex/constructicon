@@ -17,6 +17,7 @@ import pytest
 
 from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId
+from constructicon.core.effect import EffectRequest
 from constructicon.core.run import RunStatus
 from constructicon.substrate.effects.fake import FakeAnnounceEffect
 from constructicon.substrate.executors.fake import FakeExecutor
@@ -54,6 +55,81 @@ MATRIX: list[tuple[str, int, bool, str]] = [
     # died inside the RunStarted transition: rollback to PENDING, clean claim
     ("transition.after_status_update", 1, False, "EffectCommitted"),
 ]
+
+
+async def test_reproduction_recovers_the_first_runs_canonical_preparation(
+    world: Constructicon,
+    announce_effect: FakeAnnounceEffect,
+    journal: SqliteJournal,
+) -> None:
+    source = RunId("run-prepared-source")
+    reproduced = RunId("run-prepared-reproduction")
+
+    def crash_after_prepare(name: str) -> None:
+        if name == "effect.after_prepared_commit":
+            raise InjectedCrash(name)
+
+    journal.fault_probe = crash_after_prepare
+    with pytest.raises(InjectedCrash):
+        await world._start_direct(pipeline_graph(), INPUTS, run_id=source)
+    journal.fault_probe = lambda _name: None
+
+    result = await world._reproduce_direct(source, new_run_id=reproduced)
+
+    assert result.status is RunStatus.SUCCEEDED
+    assert len(announce_effect.executions) == 1
+    # The key excludes RunId by design. The reproducing run therefore recovers
+    # and closes the source run's first prepared authority instead of replacing
+    # it with a second request under the same key.
+    assert announce_effect.executions[0].run_id == source
+    kinds = [event.kind for event in journal.events(reproduced, limit=200)]
+    assert "EffectCommitted" in kinds
+
+
+async def test_reproduction_records_a_late_effect_winner_as_deduplicated(
+    world: Constructicon,
+    announce_effect: FakeAnnounceEffect,
+    journal: SqliteJournal,
+    clock: FakeClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = RunId("run-late-effect-source")
+    reproduced = RunId("run-late-effect-reproduction")
+
+    def crash_after_prepare(name: str) -> None:
+        if name == "effect.after_prepared_commit":
+            raise InjectedCrash(name)
+
+    journal.fault_probe = crash_after_prepare
+    with pytest.raises(InjectedCrash):
+        await world._start_direct(pipeline_graph(), INPUTS, run_id=source)
+    journal.fault_probe = lambda _name: None
+    clock.advance(LEASE_TTL_S + 1)
+
+    execute = announce_effect.execute
+
+    async def racing_reconcile(request: EffectRequest):
+        canonical = request
+        winner = journal.claim_run(source, owner_id="effect-race-winner", ttl_s=30)
+        receipt = await execute(canonical)
+        assert journal.record_effect_outcome(
+            winner,
+            canonical,
+            receipt,
+            "EffectReconciled",
+        ) == "recorded"
+        journal.release_run(winner)
+        return receipt
+
+    monkeypatch.setattr(announce_effect, "reconcile", racing_reconcile)
+
+    result = await world._reproduce_direct(source, new_run_id=reproduced)
+
+    assert result.status is RunStatus.SUCCEEDED
+    assert len(announce_effect.executions) == 1
+    kinds = [event.kind for event in journal.events(reproduced, limit=200)]
+    assert "EffectDeduplicated" in kinds
+    assert "EffectReconciled" not in kinds
 
 
 @pytest.mark.parametrize(("probe", "executor_calls", "restored", "effect_event"), MATRIX)

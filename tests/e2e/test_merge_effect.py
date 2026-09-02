@@ -26,9 +26,11 @@ from constructicon.substrate.git.authority import GitAuthority, PreparedMerge
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.conftest import LEASE_TTL_S, FakeClock, InjectedCrash
 from tests.gitworld import GOOD_FIX, build_git_system, build_graph, seed_authority
+from tests.run_attestations import mint_run_attestation
+from tests.run_worlds import sealed_test_manifest
 
 GOAL_INPUT = {"goal": {"title": "add double()", "content": GOOD_FIX}}
-MANIFEST_HASH = digest("manifest", 1, {"world": "test"})
+MANIFEST_HASH = sealed_test_manifest().manifest_hash
 PATH = ExecutionPath(scope=ScopePath(segments=("build", "merge")))
 
 
@@ -54,7 +56,7 @@ def prepared_world(
         check_set_hash=digest("check-set", 1, {"t": 1}),
         manifest_hash=MANIFEST_HASH,
     )
-    attestation = journal.mint_policy_attestation(draft)
+    attestation = mint_run_attestation(journal, RunId("run-forge"), draft)
     effect = MergeVerifiedEffect(journal=journal, authority=authority)
     return authority, effect, subject, attestation.attestation_id
 
@@ -94,7 +96,9 @@ async def test_the_forgery_matrix_leaves_no_receipt_and_moves_nothing(
     # fabricated attestation id
     await refused(request_for(subject, "att-i-made-this-up"), "not journal-minted")
     # a failing attestation cannot authorize
-    failing = journal.mint_policy_attestation(
+    failing = mint_run_attestation(
+        journal,
+        RunId("run-forge"),
         AttestationDraft(
             action="merge",
             subject=subject,
@@ -127,7 +131,9 @@ async def test_the_forgery_matrix_leaves_no_receipt_and_moves_nothing(
     )
     # wrong merge object: attested subject naming a commit whose parents differ
     doctored = subject.model_copy(update={"merge_commit": str(subject.candidate)})
-    doctored_attestation = journal.mint_policy_attestation(
+    doctored_attestation = mint_run_attestation(
+        journal,
+        RunId("run-forge"),
         AttestationDraft(
             action="merge",
             subject=doctored,

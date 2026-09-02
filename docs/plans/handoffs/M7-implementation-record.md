@@ -1,17 +1,21 @@
 # M7 implementation record
 
-**Plan:** [M7 channels and panel rev 1](../milestones/M7-channels-and-panel-rev1.md)  
-**Starting commit:** `0765072b83557aa2367732bb8cd8ec33d4962009`  
-**Nature:** implementation record; the plan remains a review draft, and this
-records the deviations that implementation forced
+**Plans:** [M7 channels and panel rev 1](../milestones/M7-channels-and-panel-rev1.md)
+for PRs A/B; approved
+[rev 2](../milestones/M7-channels-and-panel-rev2.md) for PRs C/D
+
+**Starting commit:** `0765072b83557aa2367732bb8cd8ec33d4962009`
+
+**Nature:** living implementation record; approved plans remain immutable, and
+this records the deviations and decisions that implementation forced
 
 ## Scope completed
 
-Plan slices PR A and PR B. Typed message channels with two transports, routing
-and its exchange sealed into the manifest, proof-carrying sends through the
-existing effect law, typed invocation parking, and reply-driven wake recovery.
-
-PR C (human control surface) and PR D (`panel()`) are not started.
+PR A and PR B are merged. PR C (the human control surface) is implemented on
+draft PR #18. Typed message channels have two transports; routing and exchange
+are sealed into the manifest; sends carry proof through the existing effect
+law; invocation parking is typed; and durable replies drive wake recovery. PR D
+(`panel()`) is not started.
 
 - One L0 `Channel` contract with `InProcessChannel` and `MailboxChannel`,
   exercised by a single parity suite. Both derive messages from the same
@@ -26,12 +30,14 @@ PR C (human control surface) and PR D (`panel()`) are not started.
   historical attestation ids are unchanged.
 - `await ctx.channel(alias).ask(payload)` is the entire component surface.
 - `Journal.parked_waits` plus a bounded PARKED scan wake a run from durable
-  domain facts alone, independent of command state.
+  domain facts without waiting for command completion; immutable command plans
+  remain reply-provenance evidence.
 
 ## Deviations from the plan
 
-Each is a defect in the plan rather than a shortcut in the implementation. A
-rev 2 should absorb them before PR C.
+Each is a defect in the plan rather than a shortcut in the implementation. Rev
+2 absorbed all seven before PR C; the table remains the implementation history
+that forced those corrections.
 
 | Plan says | Why it cannot stand | Implemented |
 | --- | --- | --- |
@@ -68,9 +74,9 @@ requires a channel-bound component to declare exactly one input and one output
 and compiles that pair. Components needing more ports compose (I10).
 
 **One `AttemptCause`, not a second parallel parameter.** M6 continues to
-serialize its exact legacy `resume_command_id`; M7 records `reply_message_id`,
-the immutable fact the scan observed. No command lookup reconstructs a reply
-wake.
+serialize the historical field name `resume_command_id`; M7 records
+`reply_message_id`, the immutable fact the scan observed. No command lookup
+reconstructs a reply wake.
 
 **Identity is a bytes law.** `BaseModel.__eq__` compares payloads with Python
 semantics, where `1 == True` and `1 == 1.0`. Those are distinct canonical JSON
@@ -86,16 +92,632 @@ Beyond the plan's list, these are pinned because review found them broken:
 - only a request's sealed recipient may answer it; one reply per request is a
   hard constraint, so an unchecked actor could have locked the recipient out;
 - a channel revision must be causally coherent, not merely within bounds;
-- one delivery fact has one owning command, so no command id addresses two
-  messages;
+- one explicit acknowledgement command owns at most one delivery fact; a reply
+  command may own its reply and imply that same request's acknowledgement, but
+  no command id crosses to another request;
 - a transport re-derives an intent's message id rather than trusting it, because
   `model_copy` and `model_construct` skip validators;
 - no `ChannelSendIntent` field escapes both the derived id and retry equality —
   a property test, so a future field cannot silently reopen the hole.
 
+## PR C — the human read surface
+
+**An advisor is its own role, not an observer with extra rights.** I9 names
+observer, advisor, and approver as three participations, and `allows()` has no
+scope implication: `constructicon:advise` neither grants nor requires
+`constructicon:read`. `channels_inbox` and `channels_message` therefore
+authorize on the interaction scopes alone, so a human advisor holds one scope
+and reads only its own work.
+
+That relaxation had to be paid for. `details_read` and `resource_read` gated
+every family on read, and the run, event, result, approval, attestation, and
+component branches of `DetailResolver._resolve` carried no actor check because
+that outer gate protected them. Simply opening the door for channel details
+would have handed an advise-only actor every run in the store. The read check
+moved into `_resolve`, where the family that owns a fact holds its own lock; the
+door now only asks whether the actor may read any family at all.
+
+**One authorization law, four surfaces.** `authorized_delivery` is the single
+entry to page, message, detail, reply, and ack. A reply carries no recipient of
+its own — it is addressed to the run, not a person — so `governing_request`
+validates the request it answers in full and authority is read from that. The
+sharing is not tidiness: `ChannelMessageSummary.detail` is a required reference,
+so a page whose law disagreed with the detail resolver's would raise
+`JournalDamaged` on a legitimate page rather than merely refuse a read.
+
+**A cursor is a self-checking envelope, not an authority token.** Its checksum
+detects corruption, never forgery, so an inbox cursor re-validates every field
+it carries and binds both halves of the reader's authority: the codec binds
+`actor_id`, and the normalized authorized-interaction set rides in the query
+hash. A page cannot be resumed across identities, and a scope change refuses
+rather than silently narrowing a stream mid-walk. The cut travels as
+`ActorInboxRevision.model_dump(mode="json")` and is validated by that model, so
+there is no second hand-written schema to drift from it.
+
+**An empty page and a refusal are different claims.** Holding no interaction
+scope is refused; an advise-only actor with only approvals pending gets an empty
+page. The first says the surface is not yours, the second says nothing here is
+your work. Scope filtering happens inside the bounded query, so `limit` counts
+rows the reader may actually see.
+
+**An open request is discoverable, not merely answerable.** A request sealed to
+no recipient is a routing decision assembly made — this is anyone's to take —
+not routing that went missing, so `discoverable_by` puts it in the inbox of
+every actor holding the interaction's scope. Leaving it findable only by whoever
+was handed its digest would make an approved decision reachable by leak alone,
+which I9's discoverability requirement does not permit. Panel members stay
+explicitly addressed in PR D; an open request is the exception, not the pattern.
+
+The predicate names its kind rather than its null:
+
+    recipient_actor_id = :actor_id
+    OR (kind = 'request' AND recipient_actor_id IS NULL)
+
+A reply carries a null recipient too, for the opposite reason — it is addressed
+to the run rather than withheld from a person — so matching nulls alone would
+broadcast every reply to every actor. The `kind` test is the whole guard, and a
+regression pins it in both transports and in the cross-channel inbox.
+
+SQL is a second expression of that one law, so every row a page returns is
+re-checked against `discoverable_by` itself and a disagreement raises
+`JournalDamaged`. Over-inclusion is the direction that leaks, and this is the
+same discipline `validated_reply` applies to a stored pointer: the rule lives in
+one place, and the query answers to it.
+
+## PR C — answering and acknowledging
+
+**One dispatch rule, stated rather than emergent.** `REPLY_CONSUMES` and
+`ACK_CONSUMES` sit beside each other in L0 `core/channel.py` and are imported at
+the command call sites.
+`channels_reply` consumes advice and nothing else: an approval is answered by
+request-bound `runs_approve`, so possessing approve must never turn this into a
+generic reply path. An acknowledgement is a delivery fact and both interactions
+are delivered, so both are ackable, each under the scope its own request seals.
+
+**A reply is actionable by nobody.** No inbox surfaces one, so acknowledging a
+reply would record a delivery that never happened, and replying to one is
+incoherent. `_actionable_request` refuses a reply id for both mutations —
+decided in one place rather than inherited from the shared resolver, which would
+happily govern a reply by the request it answers.
+
+**Refusal order is kind, then interaction, then authority — all before the
+claim.** None of the three is a domain outcome, so none writes a durable command
+record or burns an idempotency key: the same key still works against the
+operation that does consume the message. Order matters as much as timing.
+Refusing an approver for lacking advise would be true and useless, because
+acquiring advise still would not make this the operation that consumes an
+approval. Both channel mutations therefore share one deliberately coarse door —
+any interaction scope — and the exact scope is derived once, from the governing
+request, after the wrong interaction has already been refused.
+
+**The plan decides everything; the caller chose a payload.** Channel, sealed
+interaction, actor, derived reply identity, reply port, run, and the parking
+fence are all read off the request at plan time. Replay re-reads that request and
+refuses a plan that drifted from it, then checks the whole relationship rather
+than mere existence: `channel_reply_for` rebuilds the reply from its request, and
+the stored reply must additionally carry this command's derived id, its sender,
+its planned payload, and the request acknowledgement its transaction guarantees.
+
+**A different command after an admitted reply is a lost race.** One reply per
+request is a hard constraint, so a fresh command that finds a stored reply
+returns `CHANNEL_ALREADY_REPLIED` before applying anything. A command that
+already planned takes the replay path instead, so a crash between plan and apply
+still converges on one fact. The same shape holds for `channels_ack`: one
+delivery fact has one owning command, and a second command over it is a typed
+idempotency conflict, never damage.
+
+**The wake is a courtesy, not the mechanism.** The reply itself is the durable
+wake. `_scan_answered_waits` derives eligibility from domain facts and does not
+wait for command completion, so a death before completion still wakes the run.
+It does validate the immutable writer command and plan as reply provenance. The
+command additionally launches one intent pinned to the fence its plan recorded,
+which only spares the human the scan interval and cannot revive an attempt the
+run has moved past.
+
+## PR C — a decision that is also an answer
+
+**Absent, not null.** A standalone M6 decision must hash to exactly the request
+it always hashed to, so `request_message_id` is omitted from the command request
+rather than serialized as null, keeps `_ApprovalPlan` as its own plan family, and
+`ApprovalCommandResult.reply` uses the wrap serializer that drops the field when
+it is None. Hashing a null would have changed the command id of every decision
+already recorded under an existing idempotency key.
+
+**Bound approval is the mirror of `channels_reply`, not a superset.**
+`APPROVE_CONSUMES` is `{"approval"}`, so an advice request is refused here
+exactly as an approval request is refused there, through the same
+`_actionable_request` law and in the same order: kind, interaction, authority.
+
+**Nominal typing keeps a governance fact out of a lookalike conversation.**
+`APPROVAL_REQUEST_CONTRACT` and `APPROVAL_REPLY_CONTRACT` live in `core/human.py`
+so the executor and the standard component cannot drift: an approval reached
+through `runs_approve` and one reached through `constructicon.std/human-approval`
+are the same exchange or they are not the same exchange at all. A request with an
+approval interaction but different contracts is refused.
+
+**The subject is compared as canonical bytes.** `1 == True` and `1 == 1.0` are
+Python facts rather than JSON ones, so model equality would accept a decision
+about a subject the request never pinned — the same hole `same_message` closed
+for retry equality. `ApprovalRequestPayload.subject` is therefore plain JSON,
+typed as `JsonValue`, precisely so the comparison cannot be written the wrong way.
+
+Contract, payload shape, and subject are all properties of the request rather
+than outcomes of the decision, so all three refuse before the claim: no command
+record is written and the idempotency key stays reusable.
+
+**One exchange, one deciding commit.** `store_approval_exchange` always commits
+the `ApprovalRecord` and reply together. If delivery is new, that transaction
+also writes the request acknowledgement; if the actor acknowledged earlier, it
+preserves that immutable fact rather than stealing its command ownership.
+Composing `store_approval` with `channel_reply` would split the decision across
+two commits, and a death between them would leave an approval authorizing an
+exchange nobody answered. `reply_in_transaction` exists at connection level
+for exactly this: the reply law lives in one place and a second caller composes
+one commit rather than copying it. The deciding actor is read off the approval
+record, so the reply's sender and acknowledgement actor cannot disagree with
+the record that authorizes them.
+
+Reconciliation reads all three back and validates them relationally and
+byte-for-byte. A fresh command that finds another command's reply first requires
+that triple to be whole — a reply whose own sender never acknowledged the request
+could not have committed, so it is damage rather than a race this command lost.
+
+Approved and rejected are ordinary data throughout: nothing branches on the
+decision, and both wake the parked run identically.
+
+**One run, named three ways.** A bound decision names a run, the request belongs
+to a run, and the wake fence is taken from the request. Each was checked against
+its own source, and nothing required them to be the same run — so a request for
+run A could be decided under run B whenever B existed, committing a governance
+record claiming B while the reply it wrote was delivered to and woke A. The
+request's run is now required to equal the command's before the claim, and the
+plan additionally requires `approval.run_id == plan.run_id ==
+sealed.envelope.run_id`. The full-record payload is what made this visible: a
+component returning the record must be able to trust it belongs to its own run.
+
+The pre-claim refusal is pinned by a regression with two real runs — so it
+refuses on authority rather than existence — asserting no command, approval,
+reply, or acknowledgement is written and that the key still works against the
+correct run. The plan-validation equality is defence in depth: with the
+pre-claim boundary in place it is unreachable through the public API, so it is
+deliberately not claimed as test-pinned. It guards a plan written before the
+rule existed or a store edited beneath the command, which is what every other
+branch of `_validate_command_plan` guards.
+
+## A payload is caller-authored; authorship is not
+
+`Channel.ask` hands a component the reply's payload and nothing else. That
+narrowness is the point — widening it would put the whole message inside every
+component's reach — but it means anything a component may *promise* about
+authority has to be written into the payload by the executor, from
+authenticated and stored facts, rather than accepted from whoever answered.
+
+`ApprovalDecisionPayload` therefore carries the whole `ApprovalRecord`, derived
+from the stored record, not a bare decision. The standard component can parse
+it, compare its subject against the one it asked about, and return a governance
+fact an auditor can follow — while the transport and runtime boundary keep
+validating the request, run and path, contract, and sender relationship.
+
+`AdviceReplyPayload` applies the same law to advice: the advisor writes
+`advice`, and the executor stamps `actor_id` from the authenticated command and
+`message_id` from the derived reply identity. An answer that names an actor
+inside its own payload is data, not a claim — the stamped fields overwrite
+nothing and are read from nothing the caller supplied. `message_id` is carried
+rather than recomputed in the component so the reply identity law stays in one
+place.
+
+Only the canonical advice exchange is stamped. `sealed_reply_payload` reads the
+request's sealed reply contract and passes every other advice channel's answer
+through verbatim — the contract decides what a reply is, here as everywhere.
+
+Both payload laws live in `core/human.py` beside the contracts they serve, so
+the executor and the components call the same functions. A plan records the
+*stored* payload, and replay re-derives it from the canonical command request
+rather than trusting what the plan holds: a plan is never its own evidence.
+
+## PR C — the transport and the two standard components
+
+**MCP carries the surface and none of its authority.** Four channel tools, one
+detail resource, and `request_message_id` on `runs_approve`. Three proofs are
+read off the source rather than asserted in prose: every channel handler is a
+single return whose call names the same operation on `control`; none takes an
+actor or a routing argument; and the module contains no identity derivation,
+cursor, revision, transport, journal call, or the authorization law itself. The
+scope matrix then runs through the transport that will actually be used, and
+advise, approve, and read behave as three independent authorities.
+
+**The standard components hold no authority either.** Each declares exactly one
+input and one output — which is what lets admission compile its exchange with
+nothing left to choose at call time — and both ports are typed by the shared L0
+contracts, so executor and component type the same exchange or type nothing.
+Both reach only the narrow facade: no journal, no store, no transport, no
+identity law, one `ask` each.
+
+`human-advisor` returns the authorship the executor stamped, proven by answering
+with `actor_id: static:impostor` and getting `static:advisor` back. It still
+validates what it returns, so a payload written straight to the transport that
+is not an `AdviceReplyPayload` fails the run rather than becoming an output (I4).
+
+`human-approval` returns the trusted `ApprovalRecord` and compares its subject
+against the one it asked about as canonical bytes. The transport already proved
+the reply belongs to this request, run, and path; only the request knows what it
+asked. A record about another subject fails the run.
+
+**Nothing registers at import.** Restart recovery re-imports the module named by
+a stored `PythonRef` precisely because importing must not mutate, so
+`definitions()` returns bundles and a launcher decides. Checked structurally,
+since the module is already imported by the time an assertion could run, and
+proven end to end: one process asks and parks, a second process over the same
+database imports the component, decides, and completes the run.
+
+## PR C — what the complete-head review found
+
+Codex reviewed the whole branch and blocked it. Six findings were real and are
+fixed; three are recorded as accepted, with the reasoning.
+
+**An acknowledgement had been consuming the right to answer.** Acknowledging a
+request wrote a delivery fact owned by that command, and the reply then tried to
+claim the same row under its own command and conflicted — so an actor who
+acknowledged a request before answering it could never answer it, and for an
+addressed request nobody else could take it up. A reply does not *claim* a
+delivery fact, it implies one: an actor that answers a request plainly received
+it. The law split into `_claim_acknowledgement`, which one command owns, and
+`_imply_acknowledgement`, which is satisfied by whoever recorded it first.
+
+**A lost race escaped as an exception.** Preflight and the domain write are not
+one transaction, so two commands could both pass the already-replied check. The
+loser hit `ChannelReplyConflict` uncaught, keeping a planned command whose
+retries hit the same exception. Both reply paths now convert it to
+`CHANNEL_ALREADY_REPLIED`, so a race loser learns it lost the way a late caller
+does.
+
+**The standard components were capability-opaque.** `capability_requirements is
+None` means *historical*, not *authority-free*: admission then validates no
+alias, no kind, and no extra binding, so a graph could bind these newly
+introduced components any capability it liked — an I3 violation, and it made
+"holds no authority of its own" false as encoded. Both now declare the one alias
+they need, of kind `channel.mailbox`. The kind is not incidental: a human waits
+across process death, and `channel.in_process` honestly declares
+`durability="process"`.
+
+**A foreign triple was initially checked through the wrong edge (superseded).**
+`_require_whole_exchange` first verified the reply and acknowledgement but not
+the approval, so a raw transport write producing reply+ack looked complete. The
+round-one fix tried to reach the approval through the acknowledgement's command.
+That contradicted a lawful pre-ack and was removed in the next round: the
+authoritative relation reaches the approval through the reply command, while
+the acknowledgement independently proves delivery.
+
+**A record could claim another run.** `human_approval` compared the subject but
+not the run. The transport proves the *reply* belongs to this run; the record
+inside it is separate data, so it must say so too or the component returns a
+governance fact about another run.
+
+**The result alias resolved before its family authorized.** Moving the read gate
+into `_resolve` left `_canonical_uri` — which reads the run record, its status,
+and its terminal event to pin a result alias — running ahead of it. An
+advise-only actor could distinguish unknown run, non-terminal run, and terminal
+run before being refused. The family lock now applies wherever a URI first
+reaches the journal, not only where it resolves.
+
+### Accepted, not fixed
+
+- **A forged cursor can skip or duplicate the caller's own rows.** The codec
+  says plainly that it is not an authority token, and the review confirmed no
+  route to another actor's or interaction's rows: those come from the
+  authenticated actor on every call, never from the cursor. Making continuation
+  unforgeable needs a keyed MAC, which every paged surface would share; that is
+  a system decision, not a PR C fix.
+- **Administrator asymmetry (superseded later in this record).** At this review
+  point, an administrator could act on an addressed message by id without
+  discovering it in an inbox. The later fan-out proved that the domain itself
+  never admitted that actor, so the wider authorization escape was removed
+  rather than retained as an asymmetry.
+- **`sealed_reply_payload` keys on the reply contract alone.** That is the
+  contract which promises authorship, so it is the one that decides whether a
+  reply carries it. The request contract does not enter into what a reply is.
+
+The review also noted that the byte-identity claim for a standalone decision is
+pinned by field absence and plan kind rather than by comparison against an M6
+golden artifact. The M6 seam tests do compare stored response bytes, so the
+claim is carried by the older suite rather than by the new test.
+
+## PR C — what the second review round found
+
+Four of these are consequences of the first round's own fixes. That is worth
+recording: each fix was locally right and globally incomplete, and only reading
+the branch as a whole surfaced them.
+
+**Reaching the approval through the acknowledgement's command contradicted the
+implied-ack law.** Round one made a reply *imply* an existing acknowledgement,
+and then, separately, made the whole-exchange check reach the approval record
+*through* the acknowledgement's owning command. Together those mean a legitimate
+`channels_ack` followed by `runs_approve` produces an acknowledgement owned by a
+command that wrote no approval — and the next lookup calls that damage. The check
+now reaches the third fact through the reply, which carries the record:
+`ApprovalDecisionPayload` names it, the store must hold an equal one, and its run
+must be the request's. `channel_ack_command` and `approval_for_command` were
+added for the wrong reading and are gone with it.
+
+**A lawfully emitted refusal was not replayable.** The first race loser returned
+`CHANNEL_ALREADY_REPLIED` and its exact retry raised `JournalDamaged` — the
+stored answer called damage. The final law is stronger than a code whitelist:
+channel reply, channel approval, and channel acknowledgement each reconstruct
+one canonical refusal from the immutable plan and independently retained
+foreign fact, and each is tested by asking twice.
+
+**The two transports disagreed.** The implied-ack law landed in SQLite only, so
+acknowledging before replying succeeded through the mailbox and raised through
+the in-process channel — an I6 break. Both now split claim from imply, and the
+scenario lives in the shared contract suite, which is what should have caught it.
+
+**Identical concurrent replies both succeeded.** ADR 0014 admits one reply and
+owes the loser a typed conflict; identical bytes were being treated as an
+idempotent retry no matter which command wrote them, so two commands could both
+report success over one fact. Distinguishing them needs the writer's identity, so
+SQLite advances 6 → 7 with a nullable `command_id` and
+`reply_provenance_version` on `channel_messages`. A current reply writes
+`(command_id, 1)`; true schema-6 history retains `(NULL, NULL)`. This is
+additive: reply rows are not rewritten, and each column is added by inspection
+so a partly-climbed ladder is not damage. The final integrity pass below adds a
+positive acknowledgement-era marker and cutoff rather than relying on NULL as
+historical evidence.
+
+**The archive was edited and its manifest went stale.** Rev 2 is an approved
+plan, and approved plans are immutable: a later decision belongs in an ADR, a
+successor, or an implementation record, all of which already carry it. The edit
+is reverted and rev 2 is byte-identical to `main` again. The manifest records
+new digests only for the archive index and this living implementation record;
+the frozen rev-2 plan remains unchanged.
+
+## PR C — what the third review round found
+
+**A v6 reply is not ownerless, only differently recorded.** Schema 7 records the
+command that wrote a reply, while migration leaves both provenance columns NULL
+for everything written before. But v6 recorded the same fact elsewhere: the
+reply path *claimed* its request's acknowledgement then, so no other command
+could hold that row. A command that crashed under v6 between its domain write
+and its completion would otherwise, on retry after the upgrade, lose a race it
+never entered. One read law returns the writer column for `(command_id, 1)` and
+falls back to the acknowledgement only for `(NULL, NULL)`. A mixed pair is
+damage, so a current writer cannot be erased into apparent legacy. A real v6
+fixture (both columns absent, version rewound) proves the compatibility path.
+
+**Provenance is necessary and was missing; agreement is also necessary.**
+`_require_whole_exchange` confirmed the carried approval existed and shared the
+run, which a standalone decision spliced into an unrelated reply satisfies. The
+reply names the command that wrote it, and that command must be the one that
+wrote *this* approval — that link is what schema 7 makes available. Beyond it,
+the three facts must agree about run, actor, and subject, each of which is
+reachable with the provenance link intact and is now pinned by its own scenario.
+
+**The authoritative documents said schema 6.** `ARCHITECTURE.md`,
+`CONTRIBUTING.md`, and the schema module's own docstring now say 7. The archived
+rev 1 plan still says 6, correctly: it is a historical record of what was planned
+then, and plans are immutable.
+
+## PR C — a narrow role must be able to finish what it started
+
+An adversarial fan-out over the branch found the sharpest regression yet, and it
+was mine: the family lock from the first review round sat inside `_resolve`,
+which is shared between reads a caller asked for and references the system mints
+onto an owner's own response. Every mutating response carries one. So an actor
+holding exactly the scope its mutation requires — approve, operate, or promote,
+with no `constructicon:read` — committed its domain facts, launched its wake, and
+then raised `JournalDamaged` while describing what it had just done. The command
+stranded, and every retry answered `COMMAND_IN_PROGRESS` forever.
+
+`runs_approve` requires approve on paper. Locking the pointer made it require
+read in fact, and fail after the point of no return rather than before it.
+
+The lock therefore moved to the doors a caller reaches — `read`, and a new
+`caller_reference` for a caller-supplied URI — and left resolution entirely.
+Resolution still authorizes what only the owning family can judge: a command's
+visibility, a channel message's governing request. The distinction is who chose
+the URI. A pointer minted onto an owner's own response was earned by holding the
+mutation's scope; a URI a caller supplied is a read.
+
+Three roles now prove it, each holding one scope and nothing else. The same test
+pins the other direction: an approve-only actor may record a decision and still
+may not read the manifest, nor even the detail its own response just handed it —
+reading is a read.
+
+**The addressed read gained the page's door.** `channels_message` derives
+authority from the message, which means reading the message first, so an actor
+with no channel authority at all learned whether an id existed before being told
+the surface was not its to read. It now refuses first, identically for a real id
+and an absent one.
+
+## PR C — what an adversarial fan-out found
+
+Thirty-three agents across seven lenses, each finding adversarially refuted
+before it counted. Sixteen survived, deduplicating to six defects. Two were
+escalations, and both had the same root.
+
+**Contracts and interaction were independent facts, and must not be.** A
+component declares what crosses; assembly's endpoint declares under whose
+authority. `_compiled_channel` took both and never asked whether they agreed.
+Bind `human-approval` — typed by the approval contracts — to an endpoint sealing
+`interaction="advice"`, and the request is answered through `channels_reply`,
+which stamps only *advice* replies and so stores the advisor's payload verbatim.
+A human holding `constructicon:advise` alone would author the entire
+`ApprovalRecord`, actor and decision included, that the component then returns as
+a trusted governance fact. The mirror parks a run forever: an advice exchange
+sealed as approval is refused by `channels_reply` for its interaction and by
+`runs_approve` for its contracts, so nothing can answer it.
+
+`canonical_exchange_fault` lives in `core/human.py` beside the contracts and is
+applied at admission, the only place both facts are visible. It refuses either
+mismatch, and refuses a pair naming one canonical contract without its partner —
+half a canonical exchange is not one half-dressed, it is a mismatch one step
+earlier.
+
+**The authorization predicate was wider than the domain's.**
+`channel_authority_holder` ended its recipient test with `or
+actor.allows(ADMIN_SCOPE)`; `message_for_reply` admits only the sealed recipient
+and has no such clause. So an administrator answering an addressed request was
+authorized, claimed a command, stored a plan, and then raised `ContractViolation`
+out of the public surface — leaving the command `prepared` forever, every retry
+raising again. The escape is gone: one predicate for reading and for answering,
+matching the domain exactly. That also settles the asymmetry recorded earlier —
+an addressed request is no more discoverable in an administrator's inbox than it
+is answerable by one.
+
+**A per-channel cut was validated by a global probe.** The coherence check asked
+whether any acknowledgement below the cut belonged to a message above it, across
+every channel. Once one journal carried a second channel, a transport could
+refuse the cut it had just read itself. The probe is now scoped exactly as the
+cut is.
+
+**The post-plan race loser skipped a proof the pre-plan loser owes.** Whether a
+torn exchange read as damage or as a lost race depended only on when the command
+happened to look. Both paths now require the whole exchange.
+
+Two documentation defects were also caught and fixed: an in-code comment and ADR
+0015 both still described the read check as living in resolution, which the
+narrow-role fix had moved. A record that describes a placement the code no longer
+has is worse than no record.
+
+## PR C — final integrity closure
+
+The final pass stopped treating each damaged row as a local parser problem and
+named the shared laws that make the whole durable world auditable.
+
+**One assembled world.** `ControlPlaneStore` owns the transaction that spans
+commands, approvals, replies, and acknowledgements. `ControlPlane`, its concrete
+`RunHost`, mailbox, send effect, and `Constructicon` share the exact journal; the
+control plane also receives the exact registry object already assembled into
+the system, whether that registry uses the journal or another `RegistryStore`.
+Compatible-looking replacement handles are insufficient. Built-in channel
+kinds have fixed truthful durability, a mailbox proves its journal identity,
+and component code receives only the sealed `ask` facade.
+
+**One lossless durable boundary.** Durable JSON rejects duplicate keys,
+non-finite numbers, and invalid Unicode scalars. Except for an explicitly named
+and fixture-proven historical writer shape, model validation must render to the
+same canonical fact it received, so coercions such as `true` to `1`, a
+deduplicated scope set, or an unproven compatibility default cannot silently
+repair a row. One exact aware-ISO decoder serves stored timestamps from which
+the server mints cursor keys; cursor decoding separately binds their shape and
+query. SQLite booleans and sequences accept only their exact integer forms.
+Run, event, command, approval, channel, effect, capability-lease, registry, and
+attestation projections fail closed through those shared decoders. The retained
+field name `resume_command_id` gains authority only through the relationship
+sealed below.
+
+**An immutable row is not its own evidence.** One mechanical
+`durable_fact_seals` table retains a family-separated positive observation of
+each exact immutable fact, while each owner module defines that fact's bytes,
+primary key, secondary selector, and relationships. Command claim/plan/
+terminal, approval, attestation, registration/promotion, manifest/run world,
+effect preparation, event/checkpoint, channel message/ack/provenance, and the
+resume-attempt relationship all seal in their writer transaction. Current open
+validates each bidirectional inventory and never fills a gap; batch and recovery
+paths call the same sealed projectors as point reads. Deleting a primary row,
+one half of a relationship, or changing either into a second valid fact cannot
+turn a retry into permission to mint new authority.
+Schema migration is the only historical sealing boundary. Before the
+positive-seal chain, it adds `effects.outcome_run_id` and
+`effects.outcome_event_seq`, records the two `channel_provenance` cutoffs,
+stamps retained acknowledgements with era 0, populates
+`runs.creation_command_id` for origin-bearing runs, and records terminal pre-v7
+outcomes in `legacy_effect_seals`. It then seals
+commands → pre-v7 resume-plan evidence → manifests → run worlds → attestations
+→ approvals → registrations/promotions → effect preparations → events
+→ opaque effect-outcome classifications → resume-attempt relationships
+→ checkpoints → channel provenance → messages → acknowledgements. Rows in
+`legacy_capability_lease_seals` follow the event seals. That topology lets later
+facts use the same canonical projectors as current reads. ADR 0016 records the
+shared law.
+
+**Compatibility has named byte eras.** M1/M2 effect requests omit `run_id`,
+`manifest_hash`, and `mode`; M3–M5 carry `run_id` and `manifest_hash` but omit
+`mode`; current requests carry all three. A retained historical terminal
+receipt remains bound to its original request hash, while an unfinished
+preparation may execute through a lossless current view without rewriting the
+stored request. A keyless pre-v7 outcome event requires a migration-only
+`legacy_effect_outcome_pre_v7` seal; current outcomes must carry the exact
+effect key. Schema-5/6 actor scope arrays and pre-sort component set arrays
+likewise retain their original unique order; normalization exists only in the
+typed view and never in the sealed fact.
+
+**Resume provenance has disjoint eras and an atomic receipt.** Schema-7 SQLite
+and in-memory writers accept only typed schema-1 envelopes. A current resume
+domain plan additionally carries exact-v1; a typed pre-domain refusal remains a
+separate plan family with its response embedded. Migration alone marks every
+retained raw `runs_resume` plan and each weak typed schema-6 resume domain plan
+under `resume_plan_pre_v7`, recording whether the command was `prepared` or
+already `terminal`. Prepared evidence binds claim and plan without pretending a
+future response exists; terminal evidence also binds the exact retained
+response. Current plans cannot acquire that marker, and removing exact-v1
+cannot make one historical. Plan creation observes the run row and latest event
+position through one `RunHead` snapshot, so a concurrent transition can only
+supersede a coherent fence. A current attempt atomically co-seals
+`resume_attempt`, binding the command claim, plan, baseline event (or
+sequence-zero PENDING fact), and exact attempt event. Event and command point
+reads validate both halves, global inventory is bijective, and an unfenced
+historical plan cannot own the receipt. `AttemptCause` owns one lossless
+serializer/parser for the mutually exclusive resume-command and channel-reply
+payload keys.
+
+**A request carries an independent authority chain.** The effect preparation
+binds its canonical request; the send attestation binds the exact run manifest
+and every intent field; and the stored request revalidates that chain on every
+read and wake scan. The in-process transport retains a deep first-write intent
+proof, so I6 parity includes the same independent-evidence boundary rather than
+comparing a message with itself. Policy minting remains closed to actions the
+policy actually evaluates; it cannot mint a channel send.
+
+**Reply and acknowledgement provenance have explicit eras.** Schema 7 records
+`channel_messages.command_id`,
+`channel_messages.reply_provenance_version`, and
+`channel_acks.ack_provenance_version`. The singleton `channel_provenance` row
+holds independent immutable `legacy_message_through` and `legacy_ack_through`
+cutoffs. Migration populates the acknowledgement-era marker and the
+creation-command marker for origin-bearing runs; it creates and positively
+seals the cutoff row before advancing the schema version. Historical replies
+lie at or below the message cutoff with both writer fields absent. Historical
+acknowledgements lie at or below their cutoff with version 0. Their command id
+remains an opaque
+historical scalar and is never resolved into a same-named later command.
+Current version-1 replies and acknowledgements lie above their respective
+cutoff and name an extant writer command. Current advice, explicit
+acknowledgement, and request-bound approval each validate through their own
+typed plan family. A schema-6 approval may still recover its retained
+`ChannelApprovalPlan` through the approval row; schema-6 advice remains opaque.
+A current fact cannot be downgraded into either path by erasing a column.
+
+**Contradiction never heals.** An explicit acknowledgement cannot complete a
+torn reply, even for the same actor. A pre-existing acknowledgement may be
+preserved by a later reply, but the reply must prove its own writer and the
+whole exchange. A current atomic reply and implied acknowledgement share one
+observation time when the reply creates the missing delivery fact; a preserved
+earlier acknowledgement and schema-6 history truthfully retain their prior
+observation.
+
+**Recovery is bounded and exact.** Run and event projections share one strict
+decoder. Lost-run selection probes malformed candidates, compares exact UTC
+microseconds inside SQLite, and applies its bound before materialization. Wake
+recovery pages PARKED facts and immutable replies without requiring command
+completion, while still validating the reply's writer plan. A corrupted fact
+fails closed; no watermark, outbox, unbounded query/materialization, or inferred
+repair was introduced. Complete PARKED history is deliberately revisited through
+bounded pages across recovery ticks.
+
+The approved rev-2 plan remains byte-identical to `main`. Decisions discovered
+after approval live here and in ADRs 0014–0016, not in rewritten history.
+
 ## Open items
 
-- PR C and PR D remain.
+- PR D remains: `panel()` sugar, the deterministic quorum aggregator, and the
+  integrated acceptance lane.
+- A message a caller may not act on is refused with `AUTH_REQUIRED_SCOPE` rather
+  than reported absent, which confirms that a supplied id exists. Deliberate:
+  ids are derived digests over run, path, channel, lane, interaction, and port,
+  so an id cannot be guessed without already knowing the message, and a sealed
+  recipient holding the wrong scope needs to be told which scope, not sent
+  chasing a phantom. Ids are identifiers, not bearer secrets; the refusal
+  discloses no payload, recipient, run, or path.
 - Nominal reply-contract checking is enforced at the facade; deep payload-schema
   validation is not attempted and is not claimed.
 - The wake scan fails closed on a damaged parking event, consistent with the M6

@@ -13,6 +13,7 @@ from constructicon.core.identity import Digest
 from constructicon.runtime.context import NodeContext
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.conftest import BRIEF, ISSUE, atomic
+from tests.migrations.test_sqlite_v6_to_v7 import _downgrade_v7_schema_to_v6
 
 
 async def compatibility_impl(
@@ -40,6 +41,7 @@ def test_legacy_component_reregistration_is_semantic_not_byte_exact(
         sort_keys=True,
         indent=2,
     )
+    _downgrade_v7_schema_to_v6(database)
     with sqlite3.connect(database) as connection:
         connection.execute(
             "INSERT INTO components "
@@ -54,6 +56,8 @@ def test_legacy_component_reregistration_is_semantic_not_byte_exact(
         )
         connection.commit()
 
+    # Only the migration may mint positive proof for a retained schema-6 row.
+    journal = SqliteJournal(database)
     system = Constructicon(journal=journal)
     observed = system._register(definition, implementation)
     assert observed == version

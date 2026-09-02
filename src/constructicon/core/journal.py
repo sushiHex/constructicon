@@ -8,12 +8,22 @@ reads for the control plane. Commands and approvals remain a separate
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 from constructicon.core.address import ExecutionPath, RunId
-from constructicon.core.control import RunOrigin, RunRecord
+from constructicon.core.channel import (
+    ActorInboxRevision,
+    Channel,
+    ChannelAck,
+    ChannelAckRecord,
+    ChannelDelivery,
+    ChannelInteraction,
+    ChannelMessage,
+    ChannelMessageWriter,
+)
+from constructicon.core.control import RunHead, RunOrigin, RunRecord
 from constructicon.core.effect import (
     Attestation,
     AttestationDraft,
@@ -21,7 +31,7 @@ from constructicon.core.effect import (
     EffectRequest,
 )
 from constructicon.core.envelope import Envelope
-from constructicon.core.identity import Digest
+from constructicon.core.identity import Digest, JsonValue
 from constructicon.core.manifest import CapabilityLease
 from constructicon.core.run import ParkedWait, RunLease, RunState, RunStatus
 
@@ -105,7 +115,13 @@ class Journal(Protocol):
 
     def record_completion(self, lease: RunLease, checkpoint: Checkpoint) -> None: ...
 
-    def record_effect_prepared(self, lease: RunLease, request: EffectRequest) -> None: ...
+    def record_effect_prepared(
+        self,
+        lease: RunLease,
+        request: EffectRequest,
+    ) -> EffectRequest:
+        """Prepare this key once and return its canonical first request."""
+        ...
 
     def record_effect_outcome(
         self,
@@ -113,11 +129,15 @@ class Journal(Protocol):
         request: EffectRequest,
         receipt: EffectReceipt,
         event_kind: str,
-    ) -> None: ...
+    ) -> Literal["recorded", "already_recorded"]: ...
 
     def run_state(self, run_id: RunId) -> RunState | None: ...
 
     def run_record(self, run_id: RunId) -> RunRecord | None: ...
+
+    def run_head(self, run_id: RunId) -> RunHead | None:
+        """Read a run row and latest event position from one snapshot."""
+        ...
 
     def run_records(
         self,
@@ -166,8 +186,78 @@ class Journal(Protocol):
         """Bounded page of PARKED runs and the requests that would wake them."""
         ...
 
+    def channel_delivery(
+        self,
+        *,
+        message_id: Digest,
+        actor_id: str,
+    ) -> ChannelDelivery | None:
+        """One channel message by identity, with its position and this actor's ack."""
+        ...
+
+    def channel_message_writer(self, *, message_id: Digest) -> ChannelMessageWriter | None:
+        """Who wrote this message, and in which provenance era they wrote it."""
+        ...
+
+    def channel_reply_for(
+        self,
+        *,
+        channel_id: str,
+        request_id: Digest,
+    ) -> ChannelMessage | None:
+        """The complete reply, validated with its request and atomic sender ack."""
+        ...
+
+    def channel_reply(
+        self,
+        *,
+        channel_id: str,
+        request_id: Digest,
+        actor_id: str,
+        payload: JsonValue,
+        command_id: str,
+    ) -> ChannelMessage:
+        """Append the one authenticated reply and its request ack, atomically."""
+        ...
+
+    def channel_acknowledge(
+        self,
+        *,
+        channel_id: str,
+        message_id: Digest,
+        actor_id: str,
+        command_id: str,
+    ) -> ChannelAck:
+        """One delivery fact about one actor, owned by one command."""
+        ...
+
+    def channel_ack(
+        self,
+        *,
+        message_id: Digest,
+        actor_id: str,
+    ) -> ChannelAckRecord | None:
+        """Read one acknowledgement and the command that recorded it."""
+        ...
+
+    def channel_actor_revision(self, *, actor_id: str) -> ActorInboxRevision:
+        """The cut over all retained history this actor's inbox is read at."""
+        ...
+
+    def channel_actor_inbox(
+        self,
+        *,
+        actor_id: str,
+        revision: ActorInboxRevision,
+        interactions: frozenset[ChannelInteraction],
+        after: tuple[int, str] | None,
+        limit: int,
+    ) -> tuple[ChannelDelivery, ...]:
+        """Bounded page of this actor's retained messages it may read, at one cut."""
+        ...
+
     def answered_requests(self, requests: Sequence[Digest]) -> dict[Digest, Digest]:
-        """Map each request that already has a stored reply to that reply's id."""
+        """Map parked requests with replies; a missing/non-request wait is damage."""
         ...
 
     def max_event_seq(self, run_id: RunId) -> int: ...
@@ -175,8 +265,6 @@ class Journal(Protocol):
     def checkpoint(self, run_id: RunId, path: ExecutionPath) -> Checkpoint | None: ...
 
     def receipt_for(self, idempotency_key: Digest) -> EffectReceipt | None: ...
-
-    def effect_prepared(self, idempotency_key: Digest) -> bool: ...
 
     def record_capability_lease(
         self, lease: RunLease, capability_lease: CapabilityLease
@@ -200,3 +288,15 @@ class Journal(Protocol):
     def mint_policy_attestation(self, draft: AttestationDraft) -> Attestation: ...
 
     def load_attestation(self, attestation_id: str) -> Attestation | None: ...
+
+
+@runtime_checkable
+class JournalBackedChannel(Channel, Protocol):
+    """A durable channel that can prove which journal owns its history.
+
+    Structural rather than concrete: a new SQLite-backed transport remains
+    extensible, but ``durability='sqlite_wal'`` is a claim about one exact
+    durable world and therefore owes this assembly proof.
+    """
+
+    def is_assembled_from(self, journal: Journal) -> bool: ...

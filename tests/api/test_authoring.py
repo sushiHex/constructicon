@@ -146,6 +146,20 @@ def test_raw_graph_json_is_fail_closed(system: Constructicon) -> None:
     assert result.faults[0].path == ("invented_semantics",)
 
 
+def test_raw_graph_json_cannot_collapse_duplicate_keys(system: Constructicon) -> None:
+    proposal = (
+        '{"schema_version":1,"name":"shadow","name":"strict",'
+        '"nodes":[],"connections":[],"inputs":[],"outputs":[]}'
+    )
+
+    result = system.admit_graph(proposal, {})
+
+    assert isinstance(result, AdmissionRejected)
+    assert result.graph is None
+    assert result.faults[0].code is AdmissionCode.GRAPH_SCHEMA_INVALID_VALUE
+    assert "repeats key 'name'" in result.faults[0].message
+
+
 def test_non_json_inputs_are_typed_rejection_data(system: Constructicon) -> None:
     graph = Graph(name="input-shape", nodes=())
     result = system.admit_graph(graph, {"value": object()})

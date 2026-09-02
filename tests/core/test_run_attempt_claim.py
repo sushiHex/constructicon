@@ -8,24 +8,20 @@ from pathlib import Path
 import pytest
 
 from constructicon.core.address import RunId
-from constructicon.core.identity import digest
 from constructicon.core.run import RunAttemptSuperseded, RunStatus
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.conftest import LEASE_TTL_S
+from tests.run_worlds import create_test_run, sealed_test_manifest, start_test_run
 
 RUN = RunId("run-attempt-fence")
-MANIFEST_HASH = digest("manifest", 1, {"attempt-fence": True})
-INPUT_HASH = digest("inputs", 1, {"attempt-fence": True})
+_INPUTS = {"attempt_fence": True}
+_MANIFEST = sealed_test_manifest(_INPUTS)
+MANIFEST_HASH = _MANIFEST.manifest_hash
+INPUT_HASH = _MANIFEST.input_hash
 
 
 def _create_run(journal: SqliteJournal, run_id: RunId = RUN) -> None:
-    journal.create_run(
-        run_id,
-        manifest_json='{"attempt_fence":true}',
-        manifest_hash=MANIFEST_HASH,
-        input_hash=INPUT_HASH,
-        inputs={"attempt_fence": True},
-    )
+    create_test_run(journal, run_id, inputs=_INPUTS)
 
 
 def _claim_projection(db_path: Path, run_id: RunId = RUN) -> tuple[object, ...]:
@@ -45,19 +41,24 @@ def test_event_sequence_mismatch_is_atomic_and_matching_fence_claims(
 ) -> None:
     db_path = tmp_path / "journal.db"
     _create_run(journal)
-    first = journal.claim_run(RUN, owner_id="attempt-one", ttl_s=LEASE_TTL_S)
+    first = start_test_run(
+        journal,
+        RUN,
+        owner_id="attempt-one",
+        ttl_s=LEASE_TTL_S,
+    )
     event = journal.append_event(first, "AttemptObserved")
-    assert event.seq == 1
+    assert event.seq == 2
     journal.release_run(first)
     before = _claim_projection(db_path)
 
-    with pytest.raises(RunAttemptSuperseded, match="sequence expected 0, observed 1"):
+    with pytest.raises(RunAttemptSuperseded, match="sequence expected 1, observed 2"):
         journal.claim_run(
             RUN,
             owner_id="stale-candidate",
             ttl_s=LEASE_TTL_S,
-            expected_event_seq=0,
-            expected_statuses=frozenset({RunStatus.PENDING}),
+            expected_event_seq=1,
+            expected_statuses=frozenset({RunStatus.RUNNING}),
         )
 
     assert _claim_projection(db_path) == before
@@ -65,8 +66,8 @@ def test_event_sequence_mismatch_is_atomic_and_matching_fence_claims(
         RUN,
         owner_id="matching-candidate",
         ttl_s=LEASE_TTL_S,
-        expected_event_seq=1,
-        expected_statuses=frozenset({RunStatus.PENDING}),
+        expected_event_seq=2,
+        expected_statuses=frozenset({RunStatus.RUNNING}),
     )
     assert matching.owner_id == "matching-candidate"
     assert matching.epoch == first.epoch + 1

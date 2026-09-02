@@ -11,13 +11,20 @@ import sqlite3
 
 import pytest
 
+from constructicon.api.control import ControlPlane
 from constructicon.core.address import RunId
 from constructicon.core.channel import ChannelMessage
 from constructicon.core.run import RunStatus
 from constructicon.substrate.channels.mailbox import MailboxChannel
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.conftest import FakeClock, InjectedCrash
-from tests.e2e.test_channel_round_trip import ADVISOR, INPUTS, _graph, _world
+from tests.e2e.test_channel_round_trip import (
+    ADVISOR,
+    ADVISOR_ACTOR,
+    INPUTS,
+    _graph,
+    _world,
+)
 
 # Every durable boundary the send crosses, in the order it crosses them.
 SEAMS = (
@@ -116,11 +123,11 @@ async def test_a_death_at_one_send_seam_still_completes_after_a_reply(
     assert (await system._run_prepared(run_id, cancellation="abandon")).status is RunStatus.PARKED
 
     request_id = journal.parked_waits()[0].requests[0]
-    mailbox.reply(
-        request_id=request_id,
-        actor_id=ADVISOR,
+    await ControlPlane(system=system, store=journal).channels_reply(
+        ADVISOR_ACTOR,
+        message_id=request_id,
         payload={"verdict": "ship it"},
-        command_id=f"cmd-{seam}",
+        idempotency_key=f"reply-{seam}",
     )
     resumed = await system._run_prepared(run_id, cancellation="abandon")
     assert resumed.status is RunStatus.SUCCEEDED

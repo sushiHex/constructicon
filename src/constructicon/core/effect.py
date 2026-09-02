@@ -15,11 +15,14 @@ from constructicon.core.address import ExecutionPath, GitSha, RunId
 from constructicon.core.channel import (
     ChannelContract,
     ChannelInteraction,
+    ChannelMessage,
     ChannelSendIntent,
+    message_for_intent,
+    same_message,
 )
 from constructicon.core.control import AuthenticatedActor
 from constructicon.core.envelope import EvidenceRef
-from constructicon.core.identity import Digest, digest
+from constructicon.core.identity import ActorId, Digest, canonical_json, digest, json_value
 
 CheckStatus = Literal[
     "passed",
@@ -71,6 +74,24 @@ class MergeSubject(BaseModel):
     tested_tree: GitSha
 
 
+class HistoricalGitProofSubject(BaseModel):
+    """Read-only M1/M2 git proof shape retained for journal compatibility.
+
+    It is deliberately excluded from ``ProofSubject`` and therefore cannot be
+    minted by any current attestation or approval surface.  Historical rows
+    remain truthfully decodable without pretending their weaker subject was a
+    current exact-merge-tree proof.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["git"] = "git"
+    repository: str
+    commit: GitSha
+    base: GitSha | None = None
+    tested_tree: GitSha | None = None
+
+
 class ComponentProofSubject(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -97,7 +118,7 @@ class ChannelSendSubject(BaseModel):
     channel_revision: str
     lane: str
     interaction: ChannelInteraction
-    recipient_actor_id: str | None
+    recipient_actor_id: ActorId | None
     run_id: RunId
     path: ExecutionPath
     port: str
@@ -133,6 +154,7 @@ def channel_send_subject(intent: ChannelSendIntent) -> ChannelSendSubject:
 
 
 ProofSubject = MergeSubject | ComponentProofSubject | ChannelSendSubject
+AttestationSubject = ProofSubject | HistoricalGitProofSubject
 EffectAction = Literal["merge", "promote", "send"]
 
 
@@ -158,7 +180,7 @@ class Attestation(BaseModel):
 
     attestation_id: str
     action: EffectAction
-    subject: ProofSubject
+    subject: AttestationSubject
     checks: tuple[CheckResult, ...]
     check_set_hash: Digest
     evidence: tuple[EvidenceRef, ...]
@@ -170,6 +192,118 @@ class Attestation(BaseModel):
     @property
     def ok(self) -> bool:
         return bool(self.checks) and all(check.ok for check in self.checks)
+
+
+def promotion_attestation_faults(
+    attestation: Attestation,
+    *,
+    component: str,
+    version: Digest,
+    baseline: Digest | None,
+    source_run: RunId | None,
+) -> tuple[str, ...]:
+    """Explain why one immutable proof cannot authorize one pointer edge.
+
+    Promotion admission and durable registry projection use this same L0 law.
+    A receipt may add observational metadata, but its component, baseline, and
+    target must be exactly the edge the journal-minted proof evaluated.
+    """
+
+    faults: list[str] = []
+    if attestation.action != "promote":
+        faults.append(
+            f"attestation {attestation.attestation_id!r} authorizes "
+            f"{attestation.action!r}, not a promotion"
+        )
+    subject = attestation.subject
+    if not isinstance(subject, ComponentProofSubject):
+        faults.append("promotion attestation must carry a component subject")
+    else:
+        if subject.component != component:
+            faults.append(
+                f"attestation subject names {subject.component!r}, promotion targets {component!r}"
+            )
+        if subject.version != version:
+            faults.append(
+                f"attestation binds version {subject.version}, promotion targets "
+                f"{version} — identity mismatch is refused, never repaired silently"
+            )
+        if subject.baseline_version != baseline:
+            faults.append(
+                f"attestation binds baseline {subject.baseline_version}, "
+                f"promotion receipt names {baseline}"
+            )
+    if not attestation.ok:
+        failing = [check.name for check in attestation.checks if not check.ok] or ["<none>"]
+        faults.append(f"attestation checks failing: {failing}")
+    if attestation.created_by_run != source_run:
+        faults.append(
+            f"attestation was created by {attestation.created_by_run}, "
+            f"promotion receipt names source run {source_run}"
+        )
+    return tuple(faults)
+
+
+def validated_channel_send_attestation(
+    attestation: Attestation,
+    intent: ChannelSendIntent,
+    *,
+    expected_manifest_hash: Digest,
+) -> Attestation:
+    """Prove one run-world attestation authorizes one exact send intent."""
+
+    subject = attestation.subject
+    if (
+        attestation.action != "send"
+        or not isinstance(subject, ChannelSendSubject)
+        or not attestation.ok
+        or attestation.created_by_run != intent.run_id
+        or attestation.manifest_hash != expected_manifest_hash
+    ):
+        raise ValueError("attestation does not authorize this run-world channel send")
+    expected = channel_send_subject(intent)
+    if canonical_json(json_value(subject.model_dump(mode="json"))) != canonical_json(
+        json_value(expected.model_dump(mode="json"))
+    ):
+        raise ValueError("attestation authorizes a different channel send intent")
+    return attestation
+
+
+def validated_attested_channel_request(
+    attestation: Attestation,
+    request: ChannelMessage,
+    *,
+    expected_manifest_hash: Digest,
+) -> ChannelMessage:
+    """Bind one retained request to the exact send authority that admitted it."""
+
+    subject = attestation.subject
+    if request.kind != "request" or not isinstance(subject, ChannelSendSubject):
+        raise ValueError("channel send attestation does not govern a request")
+    intent = ChannelSendIntent(
+        message_id=subject.message_id,
+        channel_id=subject.channel_id,
+        channel_revision=subject.channel_revision,
+        lane=subject.lane,
+        interaction=subject.interaction,
+        recipient_actor_id=subject.recipient_actor_id,
+        contract=subject.contract,
+        reply_contract=subject.reply_contract,
+        run_id=subject.run_id,
+        path=subject.path,
+        port=subject.port,
+        reply_port=subject.reply_port,
+        payload=json_value(request.envelope.payload),
+    )
+    validated_channel_send_attestation(
+        attestation,
+        intent,
+        expected_manifest_hash=expected_manifest_hash,
+    )
+    expected = message_for_intent(intent, created_at=request.envelope.created_at)
+    if not same_message(request, expected):
+        raise ValueError("channel request contradicts its send attestation")
+    return request
 
 
 class ApprovalRecord(BaseModel):

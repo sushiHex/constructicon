@@ -10,7 +10,12 @@ from typing import Any, Literal
 
 from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId
-from constructicon.core.control import CommandRecord, ControlStore, RunRecord
+from constructicon.core.control import (
+    RESUMABLE_RUN_STATUSES,
+    CommandRecord,
+    ControlStore,
+    RunRecord,
+)
 from constructicon.core.errors import ConstructiconError
 from constructicon.core.journal import Journal
 from constructicon.core.run import (
@@ -28,9 +33,6 @@ Clock = Callable[[], datetime]
 Sleeper = Callable[[float], Coroutine[Any, Any, None]]
 _RECOVERY_STATUSES = (RunStatus.PENDING, RunStatus.RUNNING)
 _RECOVERY_STATUS_SET = frozenset(_RECOVERY_STATUSES)
-_RESUMABLE_STATUSES = frozenset(
-    {RunStatus.PENDING, RunStatus.RUNNING, RunStatus.FAILED, RunStatus.PARKED}
-)
 _WorkerTask = asyncio.Task[RunResult | None]
 
 
@@ -119,6 +121,11 @@ class RunHost:
     def active_run_ids(self) -> tuple[RunId, ...]:
         return tuple(sorted(self._tasks))
 
+    def is_assembled_from(self, system: Constructicon, journal: Journal) -> bool:
+        """Whether this host runs the exact world the control plane serves."""
+
+        return self._system is system and self._journal is journal
+
     @property
     def pump_failure(self) -> BaseException | None:
         """The most recent recovery-loop failure, if one stopped the pump."""
@@ -174,7 +181,7 @@ class RunHost:
         intent = _LaunchIntent(
             expected_event_seq=expected_event_seq,
             allowed_statuses=(
-                _RESUMABLE_STATUSES if allowed_statuses is None else allowed_statuses
+                RESUMABLE_RUN_STATUSES if allowed_statuses is None else allowed_statuses
             ),
             cause=cause,
         )
@@ -306,7 +313,7 @@ class RunHost:
         through = self._resume_through
         assert through is not None
         for _ in range(self._resume_pages_per_tick):
-            records = store.committed_commands(
+            records = store.command_records(
                 operation="runs_resume",
                 after=self._resume_after,
                 through=through,
@@ -321,6 +328,8 @@ class RunHost:
                     record.created_at.isoformat(),
                     record.command_id,
                 )
+                if record.state == "prepared":
+                    continue
                 decoded = decoder(record)
                 if decoded is None:
                     continue
@@ -328,7 +337,7 @@ class RunHost:
                 self.launch(
                     run_id,
                     expected_event_seq=baseline,
-                    allowed_statuses=_RESUMABLE_STATUSES,
+                    allowed_statuses=RESUMABLE_RUN_STATUSES,
                     cause=AttemptCause(kind="resume_command", id=command_id),
                 )
             if len(records) < self._recovery_page_size or (
@@ -342,9 +351,11 @@ class RunHost:
     def _scan_answered_waits(self) -> datetime | None:
         """Wake a PARKED run whose request already carries a stored reply.
 
-        Recovery reads durable domain facts, never command state, so a death
-        after a reply's domain transaction but before its command completes
-        still produces the wake — and no command lookup reconstructs it.
+        Recovery derives eligibility from durable domain facts, never command
+        completion, so a death after a reply's domain transaction but before
+        its command completes still produces the wake. Immutable writer command
+        plans are consulted only to prove the reply's provenance; they do not
+        reconstruct it or gate the wake on a terminal command state.
 
         PARKED deliberately never joins the ordinary recovery statuses: a
         parked run is waiting on a human, not on a lost worker, so only an

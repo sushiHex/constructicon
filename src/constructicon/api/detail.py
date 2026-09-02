@@ -8,30 +8,33 @@ from urllib.parse import quote, unquote, urlparse
 from constructicon.api.cursor import CursorCodec, CursorFault
 from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId
+from constructicon.core.channel import (
+    ChannelDelivery,
+    ChannelMessage,
+    governing_request,
+)
 from constructicon.core.control import (
+    INTERACTION_SCOPES,
+    READ_SCOPE,
     AuthenticatedActor,
     ControlCode,
     ControlRejected,
     ControlStore,
     DetailChunk,
     DetailRef,
+    channel_authority_holder,
     command_visible_to,
+    scope_refusal,
 )
 from constructicon.core.errors import ContractViolation, JournalDamaged
 from constructicon.core.identity import Digest, JsonValue, canonical_json, digest, json_value
 from constructicon.core.journal import Journal
-from constructicon.core.run import RunStatus
+from constructicon.core.run import TERMINAL_EVENT_STATUSES, RunStatus
 from constructicon.runtime.registry import ComponentRegistry
 
 DEFAULT_DETAIL_BYTES = 16_000
 MIN_DETAIL_BYTES = 4
 MAX_DETAIL_BYTES = 64_000
-TERMINAL_EVENT_STATUSES = {
-    "RunSucceeded": RunStatus.SUCCEEDED,
-    "RunFailed": RunStatus.FAILED,
-    "RunParked": RunStatus.PARKED,
-    "RunCancelled": RunStatus.CANCELLED,
-}
 IMMUTABLE_RESULT_STATUSES = frozenset(TERMINAL_EVENT_STATUSES.values())
 
 
@@ -67,6 +70,83 @@ class DetailAddress:
     @staticmethod
     def component(name: str, version: Digest) -> str:
         return f"constructicon://components/{quote(name, safe='')}/{quote(str(version), safe='')}"
+
+    @staticmethod
+    def channel_message(message_id: Digest) -> str:
+        return f"constructicon://channels/messages/{quote(str(message_id), safe='')}"
+
+
+def governed_delivery(
+    journal: Journal,
+    actor: AuthenticatedActor,
+    message_id: Digest,
+) -> tuple[ChannelDelivery, ChannelMessage] | ControlRejected:
+    """Load one addressed message and the request whose seal governs it.
+
+    Resolution stops short of authorizing, because a mutation must refuse the
+    wrong *kind* of message before it refuses the actor: telling someone to
+    acquire approve scope is wrong guidance when even holding it would not make
+    this the operation that consumes an approval.
+    """
+
+    delivery = journal.channel_delivery(message_id=message_id, actor_id=actor.actor_id)
+    if delivery is None:
+        return ControlRejected.one_fault(
+            ControlCode.CHANNEL_MESSAGE_UNKNOWN,
+            f"unknown channel message {message_id}",
+            "use a message_id returned by channels_inbox",
+        )
+    answered = (
+        journal.channel_delivery(
+            message_id=delivery.message.reply_to,
+            actor_id=actor.actor_id,
+        )
+        if delivery.message.reply_to is not None
+        else None
+    )
+    return delivery, governing_request(
+        delivery.message,
+        answered.message if answered is not None else None,
+    )
+
+
+def channel_scope_refusal(
+    governing: ChannelMessage,
+    actor: AuthenticatedActor,
+) -> ControlRejected | None:
+    """Refuse an actor the governing request does not admit."""
+
+    if channel_authority_holder(governing, actor):
+        return None
+    required = INTERACTION_SCOPES[governing.interaction]
+    return ControlRejected.one_fault(
+        ControlCode.AUTH_REQUIRED_SCOPE,
+        f"channel message {governing.message_id} is not this actor's to act on",
+        f"authenticate as the request's sealed recipient with {required}",
+        {"required_scope": required},
+    )
+
+
+def authorized_delivery(
+    journal: Journal,
+    actor: AuthenticatedActor,
+    message_id: Digest,
+) -> ChannelDelivery | ControlRejected:
+    """Load one addressed message under the request whose seal governs it.
+
+    Every channel surface — page, message, detail, reply, ack — resolves through
+    `governed_delivery` and authorizes through `channel_scope_refusal`, so none
+    of them can drift into its own reading of who may act. That matters
+    concretely on the read path: a summary's detail reference is required, so a
+    page whose law disagreed with the detail resolver's would not merely refuse
+    a read, it would raise ``JournalDamaged`` on a legitimate page.
+    """
+
+    resolved = governed_delivery(journal, actor, message_id)
+    if isinstance(resolved, ControlRejected):
+        return resolved
+    delivery, governing = resolved
+    return channel_scope_refusal(governing, actor) or delivery
 
 
 class DetailResolver:
@@ -104,6 +184,23 @@ class DetailResolver:
             digest=digest("detail", 1, normalized),
         )
 
+    def caller_reference(
+        self,
+        actor: AuthenticatedActor,
+        uri: str,
+    ) -> DetailRef | ControlRejected:
+        """Mint a reference for a URI the *caller* chose.
+
+        Distinct from `reference` because of who chose the URI. A reference
+        minted onto an owner's own response is a pointer that owner already
+        earned by holding the mutation's scope — locking it would make a
+        successful approval crash while describing itself. A URI a caller
+        supplied is a read, and the family that owns the fact authorizes it
+        before anything is read at all.
+        """
+
+        return self._family_lock(actor, uri) or self.reference(actor, uri)
+
     def required_reference(self, actor: AuthenticatedActor, uri: str) -> DetailRef:
         """Mint a detail reference whose absence would contradict its owner."""
 
@@ -138,6 +235,17 @@ class DetailResolver:
                 ),
                 f"choose max_bytes in {MIN_DETAIL_BYTES}..{MAX_DETAIL_BYTES}",
             )
+        # Every read here is caller-supplied, so the family locks before the
+        # store is touched — pinning a result alias to its terminal attempt is
+        # itself a journal read, and a refusal that distinguished "unknown run"
+        # from "not terminal yet" would report both to someone entitled to
+        # neither.
+        denied = self._family_lock(
+            actor,
+            reference if isinstance(reference, str) else reference.uri,
+        )
+        if denied is not None:
+            return denied
 
         # URI-only reads remain accepted by the resolver for internal resource
         # adapters. Public control surfaces require a typed, digest-bound ref.
@@ -252,6 +360,19 @@ class DetailResolver:
             next_cursor=next_cursor,
         )
 
+    def _family_lock(self, actor: AuthenticatedActor, uri: str) -> ControlRejected | None:
+        """Read is required by every family but `channels`.
+
+        Applied at the doors a caller reaches, never to a reference the system
+        mints onto an owner's own response: `runs_approve` needs approve, not
+        read, and a decision that committed its facts must not then fail while
+        describing itself.
+        """
+
+        if urlparse(uri).netloc == "channels":
+            return None
+        return scope_refusal(actor, READ_SCOPE)
+
     def _canonical_uri(self, uri: str) -> str | ControlRejected:
         """Pin the mutable result alias to its current terminal attempt."""
 
@@ -301,6 +422,11 @@ class DetailResolver:
             return self._not_found(uri, "detail URI must use constructicon://")
         family = parsed.netloc
         parts = [unquote(part) for part in parsed.path.split("/") if part]
+        # Resolution authorizes what only the owning family can judge — a
+        # command's visibility, a channel message's governing request. Whether
+        # the actor may read this family at all was settled at the door it came
+        # through, because a reference minted onto an owner's own response never
+        # passes one: `runs_approve` needs approve, not read.
         try:
             if family == "runs" and len(parts) == 2:
                 run_id = RunId(parts[0])
@@ -385,6 +511,12 @@ class DetailResolver:
                     if attestation is not None
                     else self._not_found(uri, "attestation does not exist")
                 )
+
+            if family == "channels" and len(parts) == 2 and parts[0] == "messages":
+                delivery = authorized_delivery(self._journal, actor, Digest(parts[1]))
+                if isinstance(delivery, ControlRejected):
+                    return delivery
+                return delivery.message.model_dump(mode="json")
 
             if family == "components" and len(parts) == 2:
                 name, version_text = parts

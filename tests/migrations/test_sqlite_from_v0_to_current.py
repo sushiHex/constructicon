@@ -10,13 +10,18 @@ materializable, and both runs projectable — no M1 event or checkpoint lost.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from constructicon.api.system import Constructicon
 from constructicon.core.address import ExecutionPath, RunId, ScopePath
+from constructicon.core.effect import EffectRequest, request_hash
 from constructicon.core.envelope import Envelope, utc_now
+from constructicon.core.errors import JournalDamaged
 from constructicon.core.identity import Digest, canonical_json, digest
 from constructicon.core.journal import Checkpoint
 from constructicon.core.manifest import ExecutionManifest
@@ -30,76 +35,57 @@ from tests.conftest import (
     build_system,
     pipeline_graph,
 )
-
-# The M1 schema, verbatim from the merged M1 substrate/journal/sqlite.py.
-M1_SCHEMA = """
-CREATE TABLE IF NOT EXISTS runs (
-    run_id        TEXT PRIMARY KEY,
-    manifest_hash TEXT NOT NULL,
-    input_hash    TEXT NOT NULL,
-    status        TEXT NOT NULL,
-    created_at    TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS events (
-    run_id     TEXT NOT NULL,
-    seq        INTEGER NOT NULL,
-    kind       TEXT NOT NULL,
-    path_json  TEXT,
-    payload    TEXT,
-    created_at TEXT NOT NULL,
-    PRIMARY KEY (run_id, seq)
-);
-CREATE TABLE IF NOT EXISTS checkpoints (
-    run_id          TEXT NOT NULL,
-    path_key        TEXT NOT NULL,
-    checkpoint_json TEXT NOT NULL,
-    PRIMARY KEY (run_id, path_key)
-);
-CREATE TABLE IF NOT EXISTS manifests (
-    manifest_hash TEXT PRIMARY KEY,
-    manifest_json TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS attestations (
-    attestation_id   TEXT PRIMARY KEY,
-    attestation_json TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS effects (
-    idempotency_key TEXT PRIMARY KEY,
-    run_id          TEXT NOT NULL,
-    request_json    TEXT,
-    receipt_json    TEXT,
-    prepared_at     TEXT NOT NULL,
-    receipted_at    TEXT
-);
-"""
+from tests.migrations.historical_sqlite import (
+    M1_SCHEMA,
+    effect_request_before_m3,
+    historical_effect_receipt,
+    historical_json,
+    historical_manifest_v1,
+)
 
 INPUTS = {"issue": {"title": "retry loop is flaky"}}
 TRIAGE_OUTPUT = TRIAGE_SCRIPT["triage"]
 DONE = RunId("run-m1-done")
 FAILED = RunId("run-m1-failed")
 TS = "2025-12-01T00:00:00+00:00"
+M1_BOOTSTRAP_ATTESTATION_ID = "att-m1-bootstrap-random-id"
+M1_SECOND_ATTESTATION_ID = "att-m1-second-random-id"
 
 
 def node_path(node: str) -> ExecutionPath:
     return ExecutionPath(scope=ScopePath(segments=("issue-to-summary", node)))
 
 
-def checkpoint_json(
-    run_id: RunId, node: str, outputs: dict[str, Any], version: Digest
-) -> str:
-    path = node_path(node)
-    node_inputs = (
-        {"issue": INPUTS["issue"]} if node == "triage" else {"brief": TRIAGE_OUTPUT}
+def m1_effect_facts(
+    manifest: ExecutionManifest,
+) -> tuple[tuple[Digest, dict[str, Any]], tuple[Digest, dict[str, Any]]]:
+    prepared = effect_request_before_m3(
+        manifest_hash=manifest.manifest_hash,
+        path=node_path("announce"),
+        kind="announce",
+        # This is the exact request the failed pipeline will retry after the
+        # migration.  M1 omitted the run world and mode from its stored bytes.
+        subject={"title": TRIAGE_OUTPUT["title"]},
     )
+    terminal = effect_request_before_m3(
+        manifest_hash=manifest.manifest_hash,
+        path=node_path("announce"),
+        kind="announce",
+        subject={"title": "committed before crash"},
+    )
+    return prepared, terminal
+
+
+def checkpoint_json(run_id: RunId, node: str, outputs: dict[str, Any], version: Digest) -> str:
+    path = node_path(node)
+    node_inputs = {"issue": INPUTS["issue"]} if node == "triage" else {"brief": TRIAGE_OUTPUT}
     return Checkpoint(
         run_id=run_id,
         path=path,
         input_hash=digest("inputs", 1, node_inputs),
         resolved_version=version,
         outputs={
-            port: Envelope(
-                run_id=run_id, path=path, port=port, created_at=utc_now(), payload=value
-            )
+            port: Envelope(run_id=run_id, path=path, port=port, created_at=utc_now(), payload=value)
             for port, value in outputs.items()
         },
     ).model_dump_json()
@@ -107,14 +93,13 @@ def checkpoint_json(
 
 def build_m1_database(db: Path, manifest: ExecutionManifest) -> None:
     versions = {
-        r.component.removeprefix("test/"): r.resolved_version
-        for r in manifest.resolved_components
+        r.component.removeprefix("test/"): r.resolved_version for r in manifest.resolved_components
     }
     conn = sqlite3.connect(db)
     conn.executescript(M1_SCHEMA)
     conn.execute(
         "INSERT INTO manifests VALUES (?, ?)",
-        (str(manifest.manifest_hash), manifest.model_dump_json()),
+        (str(manifest.manifest_hash), historical_manifest_v1(manifest)[1]),
     )
 
     def add_run(run_id: RunId, status: str) -> None:
@@ -154,9 +139,7 @@ def build_m1_database(db: Path, manifest: ExecutionManifest) -> None:
     add_event(DONE, 8, "RunSucceeded", None, {"outputs": ["summary", "announced"]})
     add_checkpoint(DONE, "triage", {"brief": TRIAGE_OUTPUT})
     add_checkpoint(DONE, "announce", {"announced": {"reference": "announce/1"}})
-    add_checkpoint(
-        DONE, "summarize", {"summary": {"text": "summary of fix the flaky retry loop"}}
-    )
+    add_checkpoint(DONE, "summarize", {"summary": {"text": "summary of fix the flaky retry loop"}})
 
     add_run(FAILED, "failed")
     add_event(FAILED, 1, "RunStarted", None, {"inputs": INPUTS})
@@ -164,6 +147,64 @@ def build_m1_database(db: Path, manifest: ExecutionManifest) -> None:
     add_event(FAILED, 3, "NodeCompleted", "triage", None)
     add_event(FAILED, 4, "RunFailed", None, None)
     add_checkpoint(FAILED, "triage", {"brief": TRIAGE_OUTPUT})
+
+    prepared, terminal = m1_effect_facts(manifest)
+    prepared_key, prepared_request = prepared
+    terminal_key, terminal_request = terminal
+    conn.execute(
+        "INSERT INTO effects VALUES (?, ?, ?, NULL, ?, NULL)",
+        (
+            str(prepared_key),
+            str(FAILED),
+            historical_json(prepared_request),
+            TS,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO effects VALUES (?, ?, ?, ?, ?, ?)",
+        (
+            str(terminal_key),
+            str(DONE),
+            historical_json(terminal_request),
+            historical_json(historical_effect_receipt(terminal_request)),
+            TS,
+            TS,
+        ),
+    )
+    for index, attestation_id in enumerate(
+        (M1_BOOTSTRAP_ATTESTATION_ID, M1_SECOND_ATTESTATION_ID),
+        start=1,
+    ):
+        bootstrap = {
+            "attestation_id": attestation_id,
+            "action": "promote",
+            "subject": {
+                "kind": "component",
+                "component": f"m1/bootstrap-{index}",
+                "version": str(digest("component", 1, {"m1": index})),
+                "baseline_version": None,
+            },
+            "checks": [
+                {
+                    "name": "bootstrap-initial",
+                    "ok": True,
+                    "detail": "M1 bootstrap policy",
+                    "elapsed_s": 0.0,
+                }
+            ],
+            "check_set_hash": str(digest("check-set", 1, {"policy": "m1", "index": index})),
+            "evidence": [],
+            "manifest_hash": str(manifest.manifest_hash),
+            "created_by_run": "bootstrap",
+            "workspace_id": None,
+            # Pydantic's historical model_dump_json rendered UTC as ``Z``;
+            # relational timestamps came from isoformat and retained +00:00.
+            "created_at": TS.replace("+00:00", "Z"),
+        }
+        conn.execute(
+            "INSERT INTO attestations VALUES (?, ?)",
+            (attestation_id, historical_json(bootstrap)),
+        )
 
     conn.commit()
     conn.close()
@@ -201,7 +242,7 @@ async def test_m1_database_migrates_and_loses_nothing(
     clock: FakeClock,
     tmp_path: Path,
 ) -> None:
-    manifest = world.validate(pipeline_graph(), INPUTS)
+    manifest, _manifest_json = historical_manifest_v1(world.validate(pipeline_graph(), INPUTS))
     m1_db = tmp_path / "m1.db"
     build_m1_database(m1_db, manifest)
 
@@ -210,14 +251,35 @@ async def test_m1_database_migrates_and_loses_nothing(
 
     with sqlite3.connect(m1_db) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
-        identities = [
-            row[0] for row in conn.execute("SELECT identity FROM checkpoints")
-        ]
+        identities = [row[0] for row in conn.execute("SELECT identity FROM checkpoints")]
         assert identities and all(identities)  # backfilled, never empty
-        seqs = dict(
-            conn.execute("SELECT run_id, next_event_seq FROM runs").fetchall()
-        )
+        seqs = dict(conn.execute("SELECT run_id, next_event_seq FROM runs").fetchall())
         assert seqs == {str(DONE): 8, str(FAILED): 4}  # backfilled from MAX(seq)
+        stored_manifest = conn.execute(
+            "SELECT manifest_json FROM manifests WHERE manifest_hash = ?",
+            (str(manifest.manifest_hash),),
+        ).fetchone()[0]
+        assert json.loads(stored_manifest)["schema_version"] == 1
+        assert "resolved_loops" not in json.loads(stored_manifest)
+        for family, table in (("event", "events"), ("checkpoint", "checkpoints")):
+            assert (
+                conn.execute(
+                    "SELECT COUNT(*) FROM durable_fact_seals WHERE family = ?",
+                    (family,),
+                ).fetchone()[0]
+                == conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            )
+
+    prepared, terminal = m1_effect_facts(manifest)
+    assert journal.receipt_for(prepared[0]) is None
+    receipt = journal.receipt_for(terminal[0])
+    assert receipt is not None
+    assert receipt.request_hash == digest("effect-request", 1, terminal[1])
+    for attestation_id in (M1_BOOTSTRAP_ATTESTATION_ID, M1_SECOND_ATTESTATION_ID):
+        bootstrap = journal.load_attestation(attestation_id)
+        assert bootstrap is not None
+        assert bootstrap.attestation_id == attestation_id
+        assert bootstrap.created_by_run == RunId("bootstrap")
 
     # durable inputs backfilled from each run's RunStarted event — once
     assert journal.run_inputs(DONE) == INPUTS
@@ -234,6 +296,40 @@ async def test_m1_database_migrates_and_loses_nothing(
     assert resumed.status is RunStatus.SUCCEEDED
     assert len(executor.calls) == 0  # triage's M1 checkpoint was restored
     assert len(announce_effect.executions) == 1
+    normalized_prepared = EffectRequest(
+        run_id=FAILED,
+        manifest_hash=manifest.manifest_hash,
+        path=node_path("announce"),
+        kind="announce",
+        subject={"title": TRIAGE_OUTPUT["title"]},
+        idempotency_key=prepared[0],
+        mode="live",
+    )
+    migrated_receipt = journal.receipt_for(prepared[0])
+    assert migrated_receipt is not None
+    assert migrated_receipt.request_hash == request_hash(normalized_prepared)
+    assert migrated_receipt.request_hash != digest("effect-request", 1, prepared[1])
+    # Completing a migrated preparation is a current outcome.  Its exact old
+    # request bytes stay untouched and it never acquires a legacy terminal seal.
+    with sqlite3.connect(m1_db) as conn:
+        effect_row = conn.execute(
+            "SELECT request_json, outcome_run_id, outcome_event_seq"
+            " FROM effects WHERE idempotency_key = ?",
+            (str(prepared[0]),),
+        ).fetchone()
+        legacy_seal = conn.execute(
+            "SELECT 1 FROM legacy_effect_seals WHERE idempotency_key = ?",
+            (str(prepared[0]),),
+        ).fetchone()
+    assert effect_row is not None
+    assert effect_row[0] == historical_json(prepared[1])
+    assert effect_row[1] == str(FAILED)
+    assert type(effect_row[2]) is int and effect_row[2] > 0
+    assert legacy_seal is None
+    # The already-terminal M1 fact remains bound to its M1 request shape.
+    retained_terminal = journal.receipt_for(terminal[0])
+    assert retained_terminal is not None
+    assert retained_terminal.request_hash == digest("effect-request", 1, terminal[1])
     kinds = [event.kind for event in journal.events(FAILED, limit=200)]
     assert "NodeRestored" in kinds and "RunResumed" in kinds
 
@@ -250,10 +346,6 @@ async def test_m1_database_migrates_and_loses_nothing(
 
 
 def test_opening_a_newer_schema_is_refused(tmp_path: Path) -> None:
-    import pytest
-
-    from constructicon.core.errors import JournalDamaged
-
     db = tmp_path / "future.db"
     conn = sqlite3.connect(db)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
@@ -261,3 +353,30 @@ def test_opening_a_newer_schema_is_refused(tmp_path: Path) -> None:
     conn.close()
     with pytest.raises(JournalDamaged, match="newer than this build"):
         SqliteJournal(db)
+
+
+def test_m1_migration_never_heals_a_noninteger_event_sequence(
+    world: Constructicon,
+    tmp_path: Path,
+) -> None:
+    manifest, _manifest_json = historical_manifest_v1(world.validate(pipeline_graph(), INPUTS))
+    database = tmp_path / "m1-damaged-sequence.db"
+    build_m1_database(database, manifest)
+    with sqlite3.connect(database) as connection:
+        connection.execute("ALTER TABLE events RENAME TO events_typed")
+        connection.execute(
+            "CREATE TABLE events (run_id TEXT NOT NULL, seq, kind TEXT NOT NULL,"
+            " path_json TEXT, payload TEXT, created_at TEXT NOT NULL,"
+            " PRIMARY KEY (run_id, seq))"
+        )
+        connection.execute(
+            "INSERT INTO events SELECT run_id,"
+            " CASE WHEN run_id = ? AND seq = 2 THEN 2.5 ELSE seq END,"
+            " kind, path_json, payload, created_at FROM events_typed",
+            (str(FAILED),),
+        )
+        connection.execute("DROP TABLE events_typed")
+        connection.commit()
+
+    with pytest.raises(JournalDamaged, match="invalid durable event sequence"):
+        SqliteJournal(database)

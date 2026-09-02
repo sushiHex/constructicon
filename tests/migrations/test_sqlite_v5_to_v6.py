@@ -12,6 +12,7 @@ from constructicon.core.errors import JournalDamaged
 from constructicon.substrate.journal.sqlite import SCHEMA_VERSION, SqliteJournal
 from tests.conftest import FakeClock, pipeline_graph
 from tests.migrations.test_sqlite_from_v3_to_current import _register_pipeline
+from tests.migrations.test_sqlite_v6_to_v7 import _downgrade_v7_schema_to_v6
 
 _CHANNEL_TABLES = {"channel_messages", "channel_acks"}
 
@@ -24,14 +25,32 @@ def _tables(database: Path) -> set[str]:
         }
 
 
-def _dump(database: Path, tables: set[str]) -> dict[str, list[tuple[object, ...]]]:
+def _dump(
+    database: Path,
+    tables: set[str],
+    *,
+    columns: dict[str, tuple[str, ...]] | None = None,
+) -> dict[str, list[tuple[object, ...]]]:
     """Every row of every pre-M7 table, ordered, as plain comparable tuples."""
 
     with sqlite3.connect(database) as connection:
         return {
             table: sorted(
-                tuple(row) for row in connection.execute(f"SELECT * FROM {table}").fetchall()
+                tuple(row)
+                for row in connection.execute(
+                    "SELECT "
+                    + (", ".join(columns[table]) if columns is not None else "*")
+                    + f" FROM {table}"
+                ).fetchall()
             )
+            for table in sorted(tables)
+        }
+
+
+def _columns(database: Path, tables: set[str]) -> dict[str, tuple[str, ...]]:
+    with sqlite3.connect(database) as connection:
+        return {
+            table: tuple(str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})"))
             for table in sorted(tables)
         }
 
@@ -58,8 +77,10 @@ def test_v5_to_v6_adds_empty_channel_tables_and_rewrites_no_historical_row(
     database = tmp_path / "v5.db"
     _seed_v6_database(database, clock)
 
+    _downgrade_v7_schema_to_v6(database)
     legacy_tables = _tables(database) - _CHANNEL_TABLES
-    before = _dump(database, legacy_tables)
+    legacy_columns = _columns(database, legacy_tables)
+    before = _dump(database, legacy_tables, columns=legacy_columns)
     with sqlite3.connect(database) as connection:
         connection.execute("DROP TABLE channel_messages")
         connection.execute("DROP TABLE channel_acks")
@@ -71,7 +92,7 @@ def test_v5_to_v6_adds_empty_channel_tables_and_rewrites_no_historical_row(
     with sqlite3.connect(database) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert _tables(database) >= _CHANNEL_TABLES
-    assert _dump(database, legacy_tables) == before  # additive means additive
+    assert _dump(database, legacy_tables, columns=legacy_columns) == before
 
     with sqlite3.connect(database) as connection:
         counts = {

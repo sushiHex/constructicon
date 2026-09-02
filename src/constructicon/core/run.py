@@ -15,8 +15,10 @@ renderings.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
-from typing import Literal
+from types import MappingProxyType
+from typing import ClassVar, Literal
 
 from pydantic import (
     AwareDatetime,
@@ -24,6 +26,7 @@ from pydantic import (
     ConfigDict,
     NonNegativeInt,
     PositiveInt,
+    field_validator,
     model_validator,
 )
 
@@ -52,6 +55,19 @@ class RunStatus(StrEnum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     PARKED = "parked"
+
+
+TERMINAL_EVENT_STATUSES: Mapping[str, RunStatus] = MappingProxyType(
+    {
+        "RunSucceeded": RunStatus.SUCCEEDED,
+        "RunFailed": RunStatus.FAILED,
+        "RunParked": RunStatus.PARKED,
+        "RunCancelled": RunStatus.CANCELLED,
+    }
+)
+TERMINAL_STATUS_EVENTS: Mapping[RunStatus, str] = MappingProxyType(
+    {status: kind for kind, status in TERMINAL_EVENT_STATUSES.items()}
+)
 
 
 ChannelWaitReason = Literal["awaiting_advisor", "awaiting_approval"]
@@ -116,6 +132,16 @@ class ParkedWait(BaseModel):
         return (self.created_at.isoformat(), str(self.run_id))
 
 
+AttemptCauseKind = Literal["resume_command", "channel_reply"]
+AttemptCausePayloadKey = Literal["resume_command_id", "reply_message_id"]
+
+
+def _invert_attempt_cause_payload_keys(
+    payload_keys: Mapping[AttemptCauseKind, AttemptCausePayloadKey],
+) -> Mapping[AttemptCausePayloadKey, AttemptCauseKind]:
+    return MappingProxyType({key: kind for kind, key in payload_keys.items()})
+
+
 class AttemptCause(BaseModel):
     """Why one attempt started: the exact durable fact a host observed.
 
@@ -125,14 +151,47 @@ class AttemptCause(BaseModel):
     A reply cause needs no command lookup to reconstruct.
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    kind: Literal["resume_command", "channel_reply"]
+    _PAYLOAD_KEYS: ClassVar[Mapping[AttemptCauseKind, AttemptCausePayloadKey]] = MappingProxyType(
+        {
+            "resume_command": "resume_command_id",
+            "channel_reply": "reply_message_id",
+        }
+    )
+    _KINDS_BY_PAYLOAD_KEY: ClassVar[Mapping[AttemptCausePayloadKey, AttemptCauseKind]] = (
+        _invert_attempt_cause_payload_keys(_PAYLOAD_KEYS)
+    )
+
+    kind: AttemptCauseKind
     id: str
 
+    @field_validator("id")
+    @classmethod
+    def _canonical_identity(cls, value: str) -> str:
+        if not value or value.strip() != value:
+            raise ValueError("attempt cause identity must be non-empty and canonical")
+        return value
+
     def payload(self) -> dict[str, str]:
-        key = "resume_command_id" if self.kind == "resume_command" else "reply_message_id"
-        return {key: self.id}
+        return {self._PAYLOAD_KEYS[self.kind]: self.id}
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object] | None) -> AttemptCause | None:
+        """Decode one reserved cause without forbidding unrelated payload facts."""
+
+        if payload is None:
+            return None
+        present = tuple(key for key in cls._KINDS_BY_PAYLOAD_KEY if key in payload)
+        if len(present) > 1:
+            raise ValueError("attempt payload names more than one cause")
+        if not present:
+            return None
+        key = present[0]
+        identity = payload[key]
+        if type(identity) is not str:
+            raise ValueError("attempt payload has an invalid cause identity")
+        return cls(kind=cls._KINDS_BY_PAYLOAD_KEY[key], id=identity)
 
 
 class RunLease(BaseModel):

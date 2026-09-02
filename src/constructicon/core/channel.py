@@ -17,7 +17,9 @@ removes history from runtime recovery.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
+from types import MappingProxyType
 from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import (
@@ -36,7 +38,14 @@ from constructicon.core.errors import (
     ContractViolation,
     JournalDamaged,
 )
-from constructicon.core.identity import Digest, JsonValue, canonical_json, digest
+from constructicon.core.identity import (
+    ActorId,
+    Digest,
+    JsonValue,
+    canonical_json,
+    digest,
+    json_value,
+)
 
 CHANNEL_SCHEMA_VERSION = 1
 
@@ -52,9 +61,26 @@ class ChannelReplyConflict(ConstructiconError):
 class ChannelAckConflict(ConstructiconError):
     """This delivery fact belongs to another command — a duplicate, not damage."""
 
+
 ChannelInteraction = Literal["advice", "approval"]
 ChannelMessageKind = Literal["request", "reply"]
 ChannelDurability = Literal["process", "sqlite_wal"]
+
+MAILBOX_CHANNEL_KIND = "channel.mailbox"
+IN_PROCESS_CHANNEL_KIND = "channel.in_process"
+BUILTIN_CHANNEL_DURABILITIES: Mapping[str, ChannelDurability] = MappingProxyType(
+    {
+        MAILBOX_CHANNEL_KIND: "sqlite_wal",
+        IN_PROCESS_CHANNEL_KIND: "process",
+    }
+)
+
+# One dispatch law for every layer that exposes a channel mutation. Generic
+# reply consumes advice only; request-bound approval owns approval decisions;
+# acknowledgement observes delivery and therefore consumes either interaction.
+REPLY_CONSUMES: frozenset[ChannelInteraction] = frozenset({"advice"})
+APPROVE_CONSUMES: frozenset[ChannelInteraction] = frozenset({"approval"})
+ACK_CONSUMES: frozenset[ChannelInteraction] = frozenset({"advice", "approval"})
 
 CHANNEL_SEND_EFFECT = "channel_send"
 MAX_INBOX_BATCH = 100
@@ -87,7 +113,7 @@ class ChannelEndpoint(_ManifestModel):
 
     lane: str
     interaction: ChannelInteraction
-    recipient_actor_id: str | None
+    recipient_actor_id: ActorId | None
 
 
 class ChannelBinding(_ManifestModel):
@@ -134,7 +160,7 @@ class ChannelSendIntent(_ChannelModel):
     channel_revision: str
     lane: str
     interaction: ChannelInteraction
-    recipient_actor_id: str | None
+    recipient_actor_id: ActorId | None
     contract: ChannelContract
     reply_contract: ChannelContract
     run_id: RunId
@@ -175,8 +201,8 @@ class ChannelMessage(_ChannelModel):
     interaction: ChannelInteraction
     kind: ChannelMessageKind
     reply_to: Digest | None
-    recipient_actor_id: str | None
-    sender_actor_id: str | None
+    recipient_actor_id: ActorId | None
+    sender_actor_id: ActorId | None
     contract: ChannelContract
     reply_contract: ChannelContract | None
     reply_port: str | None
@@ -192,13 +218,34 @@ class ChannelMessage(_ChannelModel):
             return self
         if self.reply_to is None or self.sender_actor_id is None:
             raise ValueError("a channel reply names one request and its authenticated sender")
+        if self.recipient_actor_id is not None:
+            raise ValueError("a channel reply is addressed to the run, not another actor")
         if self.reply_contract is not None or self.reply_port is not None:
             raise ValueError("a channel reply does not pin a further reply")
         return self
 
 
 class ChannelRevision(_ChannelModel):
-    """One vector cut over retained history: no page can shift beneath a reader."""
+    """One vector cut over ONE channel's retained history.
+
+    Scoped so unrelated channel traffic cannot advance it. This is not
+    interchangeable with an `ActorInboxRevision`: a channel-local cut is at or
+    below the global one, so reading a cross-channel inbox at this cut would
+    silently under-bound the page rather than fail. The two domains are
+    therefore distinct types, and mixing them is a type error.
+    """
+
+    message_seq: NonNegativeInt
+    ack_seq: NonNegativeInt
+
+
+class ActorInboxRevision(_ChannelModel):
+    """One vector cut over ALL retained history, for one actor's inbox.
+
+    An actor's inbox spans channels, so the history it reads is the whole of
+    it. Bounding that read with a channel-local cut would omit messages on
+    every other channel without saying so.
+    """
 
     message_seq: NonNegativeInt
     ack_seq: NonNegativeInt
@@ -218,12 +265,45 @@ class ChannelDelivery(_ChannelModel):
     acknowledged: bool
 
 
+class ChannelMessageWriter(_ChannelModel):
+    """Who wrote one stored message, and whether the message itself says so.
+
+    A reply written under schema 7 names its own command. A reply retained from
+    before it does not, and the only writer identity that era left behind is the
+    scalar its request's acknowledgement carries — a historical token, not a
+    reference the current command store can resolve. The two are the same string
+    type and mean entirely different things, so the era travels with the answer
+    rather than being guessed from whether a lookup happened to miss.
+    """
+
+    command_id: str
+    era: Literal["current", "legacy"]
+
+    @property
+    def is_current(self) -> bool:
+        return self.era == "current"
+
+
 class ChannelAck(_ChannelModel):
     """A delivery fact about one actor — never proof of component consumption."""
 
     message_id: Digest
-    actor_id: str
+    actor_id: ActorId
     acked_at: AwareDatetime
+
+
+class ChannelAckRecord(_ChannelModel):
+    """One acknowledgement together with the command that recorded it.
+
+    ``ChannelAck`` remains the public delivery fact.  Command ownership is
+    durable provenance used when the control plane validates an exact replay;
+    keeping it beside rather than inside the fact avoids making an internal
+    command identifier part of the participant-facing channel contract.
+    """
+
+    ack: ChannelAck
+    command_id: str
+    provenance_version: Literal[0, 1]
 
 
 class ChannelProfile(_ChannelModel):
@@ -337,7 +417,10 @@ def message_for_intent(
             path=intent.path,
             port=intent.port,
             created_at=created_at,
-            payload=intent.payload,
+            # Frozen models do not recursively freeze caller-owned dicts and
+            # lists.  Normalize here so every transport receives its own JSON
+            # tree rather than an alias that can rewrite the constructed fact.
+            payload=json_value(intent.payload),
         ),
     )
 
@@ -345,7 +428,7 @@ def message_for_intent(
 def message_for_reply(
     request: ChannelMessage,
     *,
-    actor_id: str,
+    actor_id: ActorId,
     payload: JsonValue,
     created_at: datetime,
 ) -> ChannelMessage:
@@ -385,7 +468,7 @@ def message_for_reply(
             path=request.envelope.path,
             port=request.reply_port,
             created_at=created_at,
-            payload=payload,
+            payload=json_value(payload),
         ),
     )
 
@@ -418,6 +501,49 @@ def validated_reply(request: ChannelMessage, reply: ChannelMessage) -> ChannelMe
     return reply
 
 
+def discoverable_by(message: ChannelMessage, actor_id: ActorId) -> bool:
+    """Whether this actor may find this message in an inbox.
+
+    Deliberately not called "addressed to": an open request is addressed to
+    nobody, and that is precisely why everyone may find it.
+
+    Two shapes qualify, and the second must name its kind. A request sealed to
+    no recipient is an *open* request — assembly deciding that whoever holds the
+    interaction's scope may take it — so it belongs in every such actor's inbox.
+    Leaving it discoverable only to whoever was handed its digest would make an
+    approved routing decision reachable by leak alone (I9).
+
+    A reply also carries no recipient, but for the opposite reason: it is
+    addressed to the run rather than withheld from a person. Matching a null
+    recipient alone would therefore broadcast every reply to every actor, so the
+    kind is tested, not the null.
+    """
+
+    if message.recipient_actor_id is not None:
+        return message.recipient_actor_id == actor_id
+    return message.kind == "request"
+
+
+def governing_request(
+    message: ChannelMessage,
+    request: ChannelMessage | None,
+) -> ChannelMessage:
+    """The request whose seal governs who may act on this message.
+
+    A reply deliberately carries no recipient of its own — it is addressed to
+    the run, not to a person — so authority can never be read off the message
+    actually addressed. It comes from the request the reply answers, validated
+    in full, and one law serves every surface: summary, detail, reply, and ack.
+    """
+
+    if message.kind == "request":
+        return message
+    if request is None:
+        raise JournalDamaged(f"reply {message.message_id} names no stored request to govern it")
+    validated_reply(request, message)
+    return request
+
+
 @runtime_checkable
 class Channel(Protocol):
     """One transport contract, defined by observable behavior rather than SQLite.
@@ -425,6 +551,11 @@ class Channel(Protocol):
     Only a transport may construct a durable message: it accepts the
     timestamp-free intent and stamps the observation time once.
     """
+
+    @property
+    def channel_id(self) -> str:
+        """The exact routing identity this transport instance serves."""
+        ...
 
     @property
     def profile(self) -> ChannelProfile: ...
@@ -445,7 +576,7 @@ class Channel(Protocol):
         self,
         *,
         request_id: Digest,
-        actor_id: str,
+        actor_id: ActorId,
         payload: JsonValue,
         command_id: str,
     ) -> ChannelMessage:
@@ -456,16 +587,16 @@ class Channel(Protocol):
         self,
         *,
         message_id: Digest,
-        actor_id: str,
+        actor_id: ActorId,
         command_id: str,
     ) -> ChannelAck: ...
 
-    def latest_revision(self, actor_id: str) -> ChannelRevision: ...
+    def latest_revision(self, actor_id: ActorId) -> ChannelRevision: ...
 
     def inbox(
         self,
         *,
-        actor_id: str,
+        actor_id: ActorId,
         revision: ChannelRevision,
         after: tuple[int, str] | None,
         limit: int,

@@ -17,6 +17,7 @@ from constructicon.core.channel import (
     ChannelSendIntent,
 )
 from constructicon.core.identity import Digest, JsonValue
+from constructicon.core.journal import Journal
 from constructicon.substrate.journal.sqlite import SqliteJournal
 
 
@@ -37,8 +38,17 @@ class MailboxChannel:
         self._max_batch = max_batch
 
     @property
+    def channel_id(self) -> str:
+        return self._channel_id
+
+    @property
     def profile(self) -> ChannelProfile:
         return ChannelProfile(durability="sqlite_wal", max_batch=self._max_batch)
+
+    def is_assembled_from(self, journal: Journal) -> bool:
+        """Whether retained messages inhabit the system's exact durable world."""
+
+        return self._journal is journal
 
     def append_request(
         self,

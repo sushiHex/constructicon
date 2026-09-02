@@ -15,6 +15,8 @@ MUTATIONS = {
     "runs_reproduce",
     "runs_counterfactual",
     "runs_approve",
+    "channels_reply",
+    "channels_ack",
     "registry_register",
     "registry_promote_initial",
     "registry_promote",

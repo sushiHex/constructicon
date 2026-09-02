@@ -11,7 +11,6 @@ The walker accepts only an ExecutionManifest, never an authored Graph.
 
 from __future__ import annotations
 
-import json
 from typing import Any, Literal
 
 from pydantic import (
@@ -27,7 +26,7 @@ from constructicon.core.address import ExecutionPath, RunId, ScopePath
 from constructicon.core.channel import ChannelBinding
 from constructicon.core.grants import EffectiveGrants
 from constructicon.core.graph import Graph
-from constructicon.core.identity import Digest, digest
+from constructicon.core.identity import Digest, canonical_json, digest, parse_json_value
 from constructicon.core.ports import NodePortAddress, Port, PortAddress
 
 MANIFEST_SCHEMA_VERSION = 2
@@ -234,6 +233,30 @@ def manifest_hash_for(manifest: ExecutionManifest) -> Digest:
     )
 
 
+def source_graph_hash_for(graph: Graph) -> Digest:
+    """Return the one admitted authored-graph identity carried by manifests."""
+
+    return digest("graph", 1, graph.model_dump(mode="json"))
+
+
+def validated_manifest_identity(manifest: ExecutionManifest) -> ExecutionManifest:
+    """Prove both identities that make a manifest one executable world."""
+
+    observed_graph = source_graph_hash_for(manifest.source_graph)
+    if observed_graph != manifest.source_graph_hash:
+        raise ValueError(
+            "manifest source graph identity mismatch: recorded "
+            f"{manifest.source_graph_hash}, recomputed {observed_graph}"
+        )
+    observed = manifest_hash_for(manifest)
+    if observed != manifest.manifest_hash:
+        raise ValueError(
+            f"manifest identity mismatch: recorded {manifest.manifest_hash}, "
+            f"recomputed {observed}"
+        )
+    return manifest
+
+
 def parse_manifest_json(raw: str) -> ExecutionManifest:
     """Parse one persisted manifest with version-aware, fail-closed semantics.
 
@@ -242,10 +265,12 @@ def parse_manifest_json(raw: str) -> ExecutionManifest:
     stored identity is recomputed under the declared version.
     """
 
-    data = json.loads(raw)
+    data = parse_json_value(raw)
     if not isinstance(data, dict):
         raise ValueError("manifest JSON must be an object")
     version = data.get("schema_version", 1)
+    if type(version) is not int:
+        raise ValueError("manifest schema_version must be an exact integer")
     supported = (1, MANIFEST_SCHEMA_VERSION, MANIFEST_CHANNEL_SCHEMA_VERSION)
     if version not in supported:
         raise ValueError(
@@ -258,10 +283,9 @@ def parse_manifest_json(raw: str) -> ExecutionManifest:
             "upgrade the manifest identity to schema version 2"
         )
     manifest = ExecutionManifest.model_validate(data)
-    observed = manifest_hash_for(manifest)
-    if observed != manifest.manifest_hash:
-        raise ValueError(
-            f"manifest identity mismatch: recorded {manifest.manifest_hash}, "
-            f"recomputed {observed}"
-        )
-    return manifest
+    normalized = manifest.model_dump(mode="json")
+    if version == 1 and "resolved_loops" not in data:
+        normalized.pop("resolved_loops")
+    if canonical_json(data) != canonical_json(normalized):
+        raise ValueError("manifest JSON is not a lossless typed encoding")
+    return validated_manifest_identity(manifest)

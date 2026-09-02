@@ -3,19 +3,29 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, cast
+from typing import Any, TypeGuard, cast
 
 from pydantic import ValidationError
 
 from constructicon.api.cursor import CursorCodec, CursorFault
-from constructicon.api.detail import DetailAddress, DetailResolver
+from constructicon.api.detail import DetailAddress, DetailResolver, authorized_delivery
 from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId
 from constructicon.core.admission import AdmissionAccepted, AdmissionRejected
+from constructicon.core.channel import (
+    ActorInboxRevision,
+    ChannelDelivery,
+    ChannelInteraction,
+    InvalidChannelRevision,
+)
 from constructicon.core.control import (
     ADMIN_SCOPE,
+    ADVISE_SCOPE,
+    APPROVE_SCOPE,
     READ_SCOPE,
     AuthenticatedActor,
+    ChannelMessagePage,
+    ChannelMessageSummary,
     CommandSummary,
     ComponentComparison,
     ControlCode,
@@ -32,6 +42,8 @@ from constructicon.core.control import (
     RunSummary,
     VersionPage,
     VersionSummary,
+    channel_reach,
+    scope_refusal,
 )
 from constructicon.core.graph import Graph
 from constructicon.core.identity import Digest, JsonValue, canonical_json, digest, json_value
@@ -48,6 +60,12 @@ from constructicon.runtime.registry import ComponentRegistry
 
 DEFAULT_PAGE_SIZE = 25
 MAX_PAGE_SIZE = 100
+
+
+def _is_index(value: JsonValue) -> TypeGuard[int]:
+    """A JSON number that is a real position: an int, not a bool, not negative."""
+
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 class _ControlQueries:
@@ -339,6 +357,118 @@ class _ControlQueries:
             ),
         )
 
+    def channels_inbox(
+        self,
+        actor: AuthenticatedActor,
+        *,
+        cursor: str | None = None,
+        limit: int = DEFAULT_PAGE_SIZE,
+    ) -> ChannelMessagePage | ControlRejected:
+        """One bounded page of the messages waiting on this actor.
+
+        Whose inbox this is, is never a parameter: it is derived from the
+        authenticated actor, so no caller can read another recipient's queue.
+        Which rows it holds is derived too, from each message's sealed
+        interaction, and that filter is pushed into the bounded query so
+        ``limit`` counts rows the actor may actually see.
+        """
+
+        interactions = self._channel_interactions(actor)
+        if isinstance(interactions, ControlRejected):
+            return interactions
+        invalid = self._limit_fault(limit)
+        if invalid:
+            return invalid
+        # Both halves of the reader's authority are bound into the cursor: the
+        # codec binds `actor_id` itself, and the normalized interaction set
+        # rides in the query hash. A cursor therefore cannot be replayed across
+        # identities, and a page cannot silently continue under scopes the
+        # actor no longer holds.
+        query: JsonValue = {
+            "actor_id": actor.actor_id,
+            "interactions": sorted(interactions),
+        }
+        after: tuple[int, str] | None = None
+        if cursor is None:
+            revision = self._journal.channel_actor_revision(actor_id=actor.actor_id)
+        else:
+            decoded = self._decode_cursor(actor, cursor, kind="channel-inbox", query=query)
+            if isinstance(decoded, ControlRejected):
+                return decoded
+            carried = self._inbox_revision(decoded.upper_bound)
+            after = self._inbox_key(decoded.last_key)
+            # A cursor is a self-checking envelope, not an authority token: its
+            # checksum detects corruption, never forgery. So every field it
+            # carries is re-validated here, including that the continuation
+            # falls inside the bound it claims to continue.
+            if carried is None or after is None or after[0] > carried.message_seq:
+                return self._cursor_shape_fault()
+            revision = carried
+        try:
+            deliveries = self._journal.channel_actor_inbox(
+                actor_id=actor.actor_id,
+                revision=revision,
+                interactions=interactions,
+                after=after,
+                limit=limit + 1,
+            )
+        except InvalidChannelRevision:
+            # A cut just read cannot be ahead of the history it was read from,
+            # and an append-only history never invalidates one it already
+            # issued. Only a carried cut can be stale, forged, or minted
+            # against another store — which is a cursor fault, not damage.
+            if cursor is None:
+                raise
+            return self._cursor_shape_fault()
+        visible = deliveries[:limit]
+        upper: JsonValue = revision.model_dump(mode="json")
+        next_cursor = None
+        if len(deliveries) > limit and visible:
+            last = visible[-1]
+            next_cursor = self._cursors.encode(
+                actor_id=actor.actor_id,
+                kind="channel-inbox",
+                query=query,
+                upper_bound=upper,
+                last_key=[last.message_seq, str(last.message.message_id)],
+            )
+        return ChannelMessagePage(
+            items=tuple(self._channel_summary(actor, delivery) for delivery in visible),
+            page=PageInfo(
+                next_cursor=next_cursor,
+                snapshot_digest=digest(
+                    "channel-inbox-page",
+                    1,
+                    {"query": query, "upper": upper},
+                ),
+                count=len(visible),
+            ),
+        )
+
+    def channels_message(
+        self,
+        actor: AuthenticatedActor,
+        message_id: Digest,
+    ) -> ChannelMessageSummary | ControlRejected:
+        """One exact message, authorized by the request that governs it.
+
+        A reply is addressed to the run rather than to a person, so its
+        authority is the request it answers — resolved through the same law the
+        page and the detail resource apply.
+
+        The door comes first, as it does for the page: an actor holding no
+        channel authority at all is refused before the store is read, rather
+        than being told whether the id it named exists.
+        """
+
+        denied = self._channel_interactions(actor)
+        if isinstance(denied, ControlRejected):
+            return denied
+        delivery = authorized_delivery(self._journal, actor, message_id)
+        if isinstance(delivery, ControlRejected):
+            return delivery
+        return self._channel_summary(actor, delivery)
+
     def registry_versions(
         self,
         actor: AuthenticatedActor,
@@ -565,7 +695,7 @@ class _ControlQueries:
         cursor: str | None = None,
         max_bytes: int = 16_000,
     ) -> DetailChunk | ControlRejected:
-        denied = self._authorize(actor)
+        denied = self._authorize_detail(actor)
         if denied:
             return denied
         if not isinstance(reference, DetailRef):
@@ -588,10 +718,10 @@ class _ControlQueries:
         *,
         max_bytes: int = 64_000,
     ) -> DetailChunk | ControlRejected:
-        denied = self._authorize(actor)
+        denied = self._authorize_detail(actor)
         if denied:
             return denied
-        reference = self._details.reference(actor, uri)
+        reference = self._details.caller_reference(actor, uri)
         if isinstance(reference, ControlRejected):
             return reference
         return self._details.read(actor, reference, max_bytes=max_bytes)
@@ -616,6 +746,109 @@ class _ControlQueries:
             ),
         )
 
+    def _channel_summary(
+        self,
+        actor: AuthenticatedActor,
+        delivery: ChannelDelivery,
+    ) -> ChannelMessageSummary:
+        """One page row and one addressed read render through one law."""
+
+        message = delivery.message
+        return ChannelMessageSummary(
+            message_id=message.message_id,
+            message_seq=delivery.message_seq,
+            channel_id=message.channel_id,
+            lane=message.lane,
+            interaction=message.interaction,
+            kind=message.kind,
+            reply_to=message.reply_to,
+            run_id=message.envelope.run_id,
+            port=message.envelope.port,
+            type_id=message.contract.type_id,
+            schema_hash=message.contract.schema_hash,
+            created_at=message.envelope.created_at,
+            acknowledged=delivery.acknowledged,
+            detail=self._details.required_reference(
+                actor,
+                DetailAddress.channel_message(message.message_id),
+            ),
+        )
+
+    def _channel_interactions(
+        self,
+        actor: AuthenticatedActor,
+    ) -> frozenset[ChannelInteraction] | ControlRejected:
+        """This actor's channel reach, or a refusal when it has none.
+
+        Read is deliberately not required. An advisor is its own role rather
+        than an observer with extra rights (I9), so it holds
+        ``constructicon:advise`` and nothing else, and reads only its own work.
+
+        Holding no interaction scope is refused rather than served an empty
+        page, because the two answers say different things: an empty page says
+        nothing is waiting for you, and this says the surface is not yours to
+        read at all. An advise-only actor with only approvals pending does get
+        the empty page, and that is honest — those messages are not its work.
+        """
+
+        interactions = channel_reach(actor)
+        if not interactions:
+            return self._fault(
+                ControlCode.AUTH_REQUIRED_SCOPE,
+                f"actor {actor.actor_id!r} holds no channel interaction scope",
+                f"authenticate with {ADVISE_SCOPE}, {APPROVE_SCOPE}, or {ADMIN_SCOPE}",
+                {"required_scopes": [ADVISE_SCOPE, APPROVE_SCOPE]},
+            )
+        return interactions
+
+    def _authorize_detail(self, actor: AuthenticatedActor) -> ControlRejected | None:
+        """The detail door admits any reader; each family holds its own lock.
+
+        A channel message is authorized by the request that governs it, so an
+        advisor reads the detail its own inbox handed it without holding read.
+        Every other family still requires read, checked where it resolves — so
+        this door cannot widen one of them, and no URI reaches a store read
+        before the family that owns it has authorized the actor.
+        """
+
+        if actor.allows(READ_SCOPE) or channel_reach(actor):
+            return None
+        return self._fault(
+            ControlCode.AUTH_REQUIRED_SCOPE,
+            f"actor {actor.actor_id!r} may read no detail family",
+            f"authenticate with {READ_SCOPE}, {ADVISE_SCOPE}, {APPROVE_SCOPE}, or {ADMIN_SCOPE}",
+            {"required_scope": READ_SCOPE},
+        )
+
+    @staticmethod
+    def _inbox_revision(value: JsonValue | None) -> ActorInboxRevision | None:
+        """The cross-channel cut a cursor carries, validated by its own model.
+
+        A revision is one named vector, not a pair of loose numbers, so the
+        cursor carries it as one and the model that defines it does the
+        checking — there is no second hand-written schema here to drift from it.
+        """
+
+        try:
+            return ActorInboxRevision.model_validate(value)
+        except ValidationError:
+            return None
+
+    @staticmethod
+    def _inbox_key(value: JsonValue | None) -> tuple[int, str] | None:
+        """Exactly the continuation key ``channel_actor_inbox`` publishes.
+
+        Durable position paired with message id, because an actor's messages
+        are sparse in a shared history: a page-position count would redeliver.
+        """
+
+        if not isinstance(value, list) or len(value) != 2:
+            return None
+        message_seq, message_id = value
+        if not _is_index(message_seq) or not isinstance(message_id, str):
+            return None
+        return (message_seq, message_id)
+
     @staticmethod
     def _bounded_mapping(value: dict[str, JsonValue]) -> dict[str, JsonValue]:
         result: dict[str, JsonValue] = {}
@@ -635,14 +868,7 @@ class _ControlQueries:
         return None
 
     def _authorize(self, actor: AuthenticatedActor) -> ControlRejected | None:
-        if actor.allows(READ_SCOPE):
-            return None
-        return self._fault(
-            ControlCode.AUTH_REQUIRED_SCOPE,
-            f"actor {actor.actor_id!r} lacks required scope {READ_SCOPE!r}",
-            f"authenticate with {READ_SCOPE} or constructicon:admin",
-            {"required_scope": READ_SCOPE},
-        )
+        return scope_refusal(actor, READ_SCOPE)
 
     def _limit_fault(self, limit: int) -> ControlRejected | None:
         if 1 <= limit <= MAX_PAGE_SIZE:

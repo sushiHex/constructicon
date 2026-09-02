@@ -23,6 +23,7 @@ def test_admission_resolves_one_pre_mutation_world(world: Constructicon) -> None
         pipeline_graph(),
         snapshot=snapshot,
         catalog=world._catalog,
+        capabilities=world._capabilities,
         root_grants=DEFAULT_ROOT_GRANTS,
         inputs=INPUTS,
     )
@@ -41,6 +42,7 @@ def test_admission_resolves_one_pre_mutation_world(world: Constructicon) -> None
         pipeline_graph(),
         snapshot=snapshot,
         catalog=world._catalog,
+        capabilities=world._capabilities,
         root_grants=DEFAULT_ROOT_GRANTS,
         inputs=INPUTS,
     )
