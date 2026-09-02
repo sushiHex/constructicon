@@ -42,8 +42,15 @@ changing a shared definition. Compose before you drop a tier (I10).
   `human_panel_member(name, channel_id)` — the standard advisor and ballot
   composed, registered and promoted like any composite — with one channel id
   per participant, and the request payload you write is what tells the
-  participant to answer with a `PanelBallotPayload`. Report `unavailable` and
-  `timed_out` as member data; the kernel infers nothing from elapsed time.
+  participant to answer with a `PanelBallotPayload`, whose shape
+  `system.describe()` publishes. Report `unavailable` and `timed_out` as
+  member data; the kernel infers nothing from elapsed time.
+- A named contract revision (`ChannelContract` with a hand-named
+  `schema_hash`) cannot embed its JSON Schema on a port. Add the contract and
+  its shape to the module's `CONTRACT_SCHEMAS` so `describe()` publishes it,
+  and bump the revision when the shape changes. A pure standard component
+  that delegates its behaviour to an L0 law stamps that law's revision into
+  its implementation identity (`sdk/std.py`, `_under_law`).
 - Architect JSON enters through `system.admit_graph()`. It is strict and bounded;
   rejection is a versioned `AdmissionRejected` with itemized repair data. Never
   add automatic repair or a trusted-SDK bypass. Public execution calls

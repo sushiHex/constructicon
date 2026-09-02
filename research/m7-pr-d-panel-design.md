@@ -2,10 +2,14 @@
 
 Status: revised after adversarial review of the design (Codex, twelve
 findings; ten accepted, two narrowed), implemented on branch `m7/pr-d-panel`,
-then corrected after an adversarial review of the head (five blockers, three
-lower; see the implementation record). Two corrections change this record:
-no boundary input, the members' request included, may carry the result
-contract (D1), and `PanelResult` is self-verifying (D4).
+then corrected after two adversarial reviews of the head (five blockers and
+three lower, then three and three; see the implementation record). The
+corrections that change this record: no boundary input, the members' request
+included, may carry the result contract, and a member's request and result
+are cardinality `one` (D1); a member may not claim the aggregator's own seat
+(D3); `PanelResult` is self-verifying (D4); the panel law's revision is
+stamped into both pure components' identity (D4, D5); and `describe()`
+publishes every named contract's shape, the ballot's included (D5).
 Approved plan: rev 2 §4 ("unchanged from rev 1 §12"), §7 "Slice D must add".
 This records the decisions the plan leaves open, the constraints the code
 imposes, and what the review changed. The implementation record
@@ -154,7 +158,7 @@ stamped.
 **D6 — fake members are ordinary tasks** with input ADVICE_REQUEST and output
 PANEL_MEMBER_RESULT, reporting any of the four outcomes as data with no
 transport provenance. The credential-free acceptance lane: two fakes plus one
-mailbox-backed human across a real process restart, the panel result adapted
+mailbox-backed human across a restart, the panel result adapted
 into an `ApprovalRequestPayload`, and the existing approval lane across a
 second restart.
 
@@ -174,11 +178,12 @@ second restart.
 - One advisor round trip and one approval round trip complete across real
   process restarts, credential-free, with one request, reply, ack, approval,
   and wake cause each.
-- Mutation check (shipped): twelve mutants — no canonical order, no sibling
-  check, no iteration check, no duplicate check, no run check, both threshold
-  off-by-ones, the ballot bucket, the boundary-contract check, the
-  gather-contract check, and two ways of not re-deriving a result — each
-  killed by `tests/core/test_panel.py` and `tests/sdk/test_combinators.py`.
+- Mutation check (shipped): fourteen mutants — no canonical order, no sibling
+  check, no iteration check, no duplicate check, the aggregator's own seat,
+  no run check, both threshold off-by-ones, the ballot bucket, the
+  boundary-contract check, the gather-contract check, member cardinality, and
+  two ways of not re-deriving a result — each killed by
+  `tests/core/test_panel.py` and `tests/sdk/test_combinators.py`.
 - Wake (shipped): resumption after each reply goes through the control
   plane's host; the run's attempt causes are exactly the two replies.
 

@@ -783,26 +783,37 @@ input, one output, one durable channel) from the pure ones.
 
 **What a participant can discover.** The ballot's shape travels inside the
 generic advice reply, so nothing in the exchange announces it: the request
-payload the workflow author writes is what the participant sees, and it has to
+payload the workflow author writes is what the participant sees, and it should
 say that the answer is read as a `PanelBallotPayload`. The panel ports embed no
 JSON Schema, for the same reason the advisor and approval ports embed none: the
 registry binds an embedded schema to its own digest, and a named contract
-revision is not that digest. `system.describe()` therefore reports all six
-standard ports schema-incomplete. Publishing a schema per named revision is an
-introspection change and stays open.
+revision is not that digest. So `describe()` publishes the standard vocabulary
+from L0 catalogues beside the contracts — every named revision and its shape,
+including `constructicon.std/PanelBallot`, which no port names — and reports a
+port's schema available when it embeds one or names a catalogued revision. All
+six standard ports are now complete.
 
-**Proof.** Twelve mutants of the aggregation law and the authoring checks —
-dropped ordering, sibling check, iteration check, duplicate check, run check,
-both off-by-one thresholds, the ballot bucket, the boundary-contract check, the
-gather-contract check, and two ways of not re-deriving a result — are each
-killed. The acceptance lane runs six fakes reporting all six buckets through
+**The law is part of the identity.** `source_digest_for` hashes a component's
+own source, and the two panel components' own source says almost nothing:
+they delegate to `core/panel.py`. Its revision (`PANEL_LAW_REVISION`) is
+stamped into both implementations through the same adapter-revision mechanism
+a task adapter uses, so a change to placement, tallying, the outcome, or the
+result's self-check is a new version rather than a silent change of a retained
+one; a test pins the digest to that stamp.
+
+**Proof.** Fourteen mutants of the aggregation law and the authoring checks —
+dropped ordering, sibling check, iteration check, duplicate check, the
+aggregator's own seat, run check, both off-by-one thresholds, the ballot
+bucket, the boundary-contract check, the gather-contract check, member
+cardinality, and two ways of not re-deriving a result — are each killed. The acceptance lane runs six fakes reporting all six buckets through
 the real graph, then one fake plus one mailbox-backed human across restarts — a
 fresh journal and system over the same database file, nothing carried in
 memory. The system that asked is discarded; a second records the ballot and its
 own control-plane host wakes the run to conclude the panel; a third records the
-approval the same way. The run's history holds exactly two attempt causes, each
-the reply that woke it, and exactly two requests, two replies, two
-acknowledgements, and one approval exist afterwards. A human who rejects leaves
+approval the same way. The run's history holds exactly three attempts — the
+start and one resumption per reply, each caused by that reply — and exactly
+two requests, two replies, two acknowledgements, and one approval exist
+afterwards. A human who rejects leaves
 the panel `rejected`, fails the run at the adapter, and never produces an
 approval request, so the request exists only because the result said so.
 
@@ -838,13 +849,35 @@ evidence.
   component may write; a consumer that needs provenance follows `message_id`
   to the sealed reply. The contract's docstring says so.
 
+A second review of the corrected head returned three blockers and three lower
+findings; all six were accepted.
+
+- A composite member with an `optional` result could seat nobody and one with a
+  `many` result could seat every internal source. A member's request and
+  result must now be cardinality `one`: a seat answers exactly once.
+- The registered identity of the pure components did not cover the law they
+  execute. The law's revision is stamped into both, as recorded above.
+- Deferring discoverability was not acceptable for a milestone marked done.
+  The named-contract catalogue above closes it without touching contract
+  identity; the introspection contract is met for every standard port.
+- A member could report the aggregator's own seat without colliding with
+  anything. That claim is refused outright; the residual — a member may
+  mislabel itself with a name nobody holds — is stated exactly.
+- The result's self-check proves self-consistency, not which run or aggregator
+  produced it; a consumer with a context compares `run_id` and `aggregator`
+  explicitly, as the lane does.
+- The wake assertion counted causes, not attempts, so a cause-less extra
+  attempt could hide. The lane now asserts the exact attempt sequence: one
+  start and one resumption per reply, each caused by that reply.
+
 ## Open items
 
 - Kernel-attested source identity on `many` ports and wall-clock timeouts for
   human members are deferred, as recorded above.
-- The six standard ports embed no JSON Schema and `system.describe()` reports
-  them schema-incomplete; publishing a schema per named contract revision is an
-  introspection change.
+- `describe()` publishes the whole standard vocabulary in every description,
+  filtered or not. It is the system's fixed L0 vocabulary rather than a
+  property of the selected components; a per-selection projection would be a
+  choice, not a correction.
 - A message a caller may not act on is refused with `AUTH_REQUIRED_SCOPE` rather
   than reported absent, which confirms that a supplied id exists. Deliberate:
   ids are derived digests over run, path, channel, lane, interaction, and port,

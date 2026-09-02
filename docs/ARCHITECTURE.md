@@ -356,7 +356,18 @@ human member is `human-advisor` followed by `constructicon.std/panel-ballot`,
 which reads the human's reply strictly as a ballot and carries the actor and
 message id the executor stamped, so the vote can be followed back to its
 durable reply. Member identity is member-reported and shape-checked, not
-kernel-attested; attesting `many`-port sources is deferred.
+kernel-attested; attesting `many`-port sources is deferred. The two panel
+components delegate their behaviour to the law in `core/panel.py`, so its
+revision is stamped into their implementation identity: a changed law is a
+new version, never a silent change of a retained one.
+
+A named contract revision is not the digest of a schema, so the registry
+refuses to embed one on a port. `system.describe()` publishes the standard
+vocabulary instead — every named contract revision and the shape it names,
+from the L0 catalogues beside the contracts — and reports a port's schema
+available when the port embeds one or names a catalogued revision. A shape no
+port carries, such as the ballot inside an advice reply, is published the
+same way (I9).
 
 ## Parking and waking
 
