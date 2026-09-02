@@ -1019,6 +1019,12 @@ both accepted.
 - The authoring preflight described loop-body scopes with a literal; it uses
   `LOOP_BODY_SEGMENT` now, as the validator does.
 
+A ninth classified review found no blocking defect. It corrected two stale
+statements in the design record and recorded one pre-existing item below: a
+composite may reuse a standard revision string with a different embedded
+schema, because embedded schemas are verified against their digest only for
+atomics, and `describe()` would then publish the standard shape for it.
+
 ## Open items
 
 - Kernel-attested source identity on `many` ports and wall-clock timeouts for
@@ -1038,7 +1044,11 @@ both accepted.
 - Composite registration never verifies that an embedded `json_schema` hashes
   to its declared `schema_hash`; that check is confined to atomic
   `_validate_atomic_identity`. The boundary checks compare the schema bytes a
-  composite declares against its Graph's, not against the digest.
+  composite declares against its Graph's, not against the digest. One
+  consequence: a composite port may reuse a standard named revision with a
+  different embedded schema, and `describe()` publishes the standard shape for
+  it under that revision, since named documents are published first and a
+  revision is one document.
 - Connector liveness is not an admission rule. A connection whose source node
   contributes no resolved binding anywhere beneath the edge is admitted, so a
   member whose stable version later changes contract is silently absent from a
