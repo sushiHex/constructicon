@@ -1052,7 +1052,21 @@ rows are written.
 ## Open items
 
 - Kernel-attested source identity on `many` ports and wall-clock timeouts for
-  human members are deferred, as recorded above.
+  human members are deferred, as recorded above. The first is a runtime
+  provenance problem and nothing wider: the manifest knows the actual sources,
+  and the walker drops the source address when it collects them, so a component
+  cannot prove who sent what. It is not the fix for the membership item below,
+  which is about a member that never binds at all.
+- Durable authored membership is an unresolved problem of its own, split out
+  here because it was previously folded into the connector-liveness item. A
+  panel's exactness is proved at authoring from the member bundles' declared
+  contracts, and `panel()` then emits a Graph carrying no trace of what was
+  proved; admission cannot re-prove a claim the graph does not make. So a
+  member whose stable version is later promoted with a different output
+  contract is absent from the gather and no fault is raised. Closing it needs
+  an authored expectation to re-prove, or a rule about boundary-changing
+  promotion; both are stated, and neither is costed, in
+  [M7.1](../milestones/M7.1-connector-liveness-rev1.md).
 - `describe()` publishes the whole standard vocabulary in every description,
   filtered or not. It is the system's fixed L0 vocabulary rather than a
   property of the selected components; a per-selection projection would be a
@@ -1075,11 +1089,21 @@ rows are written.
   (`runtime/registry.py` store path and `_sqlite_registry.py`); the bytes
   law covers registration planning and application, not the store's
   duplicate-row check.
-- Connector liveness is not an admission rule. A connection whose source node
-  contributes no resolved binding anywhere beneath the edge is admitted, so a
-  member whose stable version later changes contract is silently absent from a
-  `many` gather; a fault for that would close this for every graph and is an
-  IR decision.
+- Connector liveness is not an admission rule, and after
+  [M7.1](../milestones/M7.1-connector-liveness-rev1.md) it is decided against
+  rather than open. A connection whose source contributes no resolved binding
+  is still admitted; the two laws that would have refused it are both refuted.
+  The general form — a connection's source must bind something at its
+  destination — refuses the M1 vertical slice, whose transitive-visibility
+  chain is asserted by a validator test, and invalidates the `Connection.map`
+  repair that admission's own ambiguity fault publishes. Narrowing it to
+  destinations declaring a `many` port refuses nothing in this repository's
+  graphs and is still wrong: a helper upstream of a member widens a gather by
+  design, so an edge that carries a producer into scope without matching the
+  gather itself is legitimate. What this item was really about — a member
+  absent from a gather — is the durable-authored-membership item above; a
+  connection is a visibility edge, and membership is not expressible as a
+  property of one.
 - A message a caller may not act on is refused with `AUTH_REQUIRED_SCOPE` rather
   than reported absent, which confirms that a supplied id exists. Deliberate:
   ids are derived digests over run, path, channel, lane, interaction, and port,

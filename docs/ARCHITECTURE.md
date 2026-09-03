@@ -341,7 +341,13 @@ exactly one `many` port of that result contract, and no boundary input, the
 request included, carries that contract —
 because the gather is the general connector law: a graph input sits in every
 node's pool, and a compatible graph input or a compatible helper upstream of a
-member would widen it. The standard aggregator
+member would widen it. That proof holds at authoring and is never re-proved:
+the emitted Graph carries no trace of it, so a member whose stable version is
+later promoted with a different output contract stops matching the gather, and
+the panel admits one member short with no fault. Durable authored membership is
+an open problem, and connector liveness is not its answer — a helper upstream
+of a member widens a gather by design, so an edge that binds nothing at its
+destination is not thereby dead. The standard aggregator
 `constructicon.std/panel-quorum` is pure and declares no capability; it derives
 each member's node from the member's reported path against its own path —
 same parent scope, the aggregator's loop frame as a prefix of the member's,
