@@ -173,6 +173,22 @@ class ComponentDef(BaseModel):
         return digest("component", 2, payload)
 
 
+def same_definition(left: ComponentDef, right: ComponentDef) -> bool:
+    """Whether two definitions are one definition, as canonical bytes.
+
+    Model equality is Python equality, and ``1 == True`` and ``1 == 1.0`` are
+    Python facts: two definitions whose embedded schemas differ only there are
+    equal models and different definitions. The registry deduplicates and
+    checks identity collisions with this, never with ``==``.
+    """
+
+    from constructicon.core.identity import canonical_json
+
+    return canonical_json(left.model_dump(mode="json")) == canonical_json(
+        right.model_dump(mode="json")
+    )
+
+
 class PromotionRecord(BaseModel):
     """Append-only; the current pointer derives from the latest valid record."""
 

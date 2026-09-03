@@ -375,7 +375,10 @@ escapes, so no name can forge or break the frame — under the existing
 `graph.contract.invalid` code, since the code set is the versioned wire
 schema. A boundary is compared as canonical bytes, never as
 models: `1 == True` is a Python fact, and an embedded schema that differs only
-there is a different boundary.
+there is a different boundary. The registry compares whole definitions the
+same way when it deduplicates or checks an identity collision, and an
+embedded schema is bound to its digest on every definition's ports, a
+composite's boundary included.
 The sugar emits unversioned Refs like every combinator: the authoring proof is
 about the bundles as authored, and admission re-proves the gather nominally
 against the one atomic world it seals.

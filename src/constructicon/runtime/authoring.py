@@ -371,11 +371,34 @@ def _classify_fault(
     if fault.code is not AdmissionCode.LEGACY_ADMISSION:
         return fault
     message = fault.message
-    lowered = message.lower()
     code = AdmissionCode.GRAPH_CONTRACT_INVALID
     repair = "repair the named graph contract and resubmit"
     details: dict[str, Any] = {}
+
+    # A fault that carries framed details names its own defect; nothing in its
+    # prose — a port name, a component name — can make it read as another. The
+    # frame is the last separator: the details are canonical JSON, which
+    # escapes the separator, while a rendered scope before it may carry one. A
+    # separator that is not followed by a frame is just a character in a scope,
+    # and the whole message is prose.
+    carried = _framed_details(message)
+    if carried is not None:
+        head, _, _ = message.rpartition(FAULT_DETAILS_SEPARATOR)
+        details = {key: carried[key] for key in ("component", "version") if key in carried}
+        repair = (
+            "the retained definition is defective, not this graph: pin or promote a "
+            "version whose declared boundary is its Graph's and whose embedded schemas "
+            "are their declared revisions'"
+        )
+        return AdmissionFault(
+            code=code,
+            message=message,
+            scope=_scope_from_message(head),
+            repair=repair,
+            details=details,
+        )
     scope = _scope_from_message(message)
+    lowered = message.lower()
 
     if "unknown component" in lowered:
         code = AdmissionCode.GRAPH_REFERENCE_UNKNOWN
@@ -386,21 +409,6 @@ def _classify_fault(
     elif "has no stable version" in lowered:
         code = AdmissionCode.GRAPH_REFERENCE_UNPROMOTED
         repair = "pin an exact retained version or promote one to stable"
-    elif "declares a boundary its graph does not export" in lowered:
-        # The retained definition is what is wrong; the graph that seats it is
-        # not. The defect names it exactly, as an anchored JSON suffix.
-        repair = (
-            "the retained definition is defective, not this graph: pin or promote a "
-            "version whose declared boundary is its Graph's"
-        )
-        _, framed, suffix = message.rpartition(FAULT_DETAILS_SEPARATOR)
-        if framed:
-            try:
-                retained = json.loads(suffix)
-            except ValueError:
-                retained = None
-            if isinstance(retained, dict):
-                details.update(retained)
     elif "no upstream output" in lowered or "needs an initial value" in lowered:
         code = AdmissionCode.GRAPH_PORT_MISSING_SOURCE
         repair = "connect a matching upstream output or graph input"
@@ -454,9 +462,38 @@ def _classify_fault(
     )
 
 
+def _framed_details(message: str) -> dict[str, Any] | None:
+    """The retained-definition frame at the end of a fault, or None if there is none."""
+
+    _, framed, suffix = message.rpartition(FAULT_DETAILS_SEPARATOR)
+    if not framed:
+        return None
+    try:
+        carried = json.loads(suffix)
+    except ValueError:
+        return None
+    if isinstance(carried, dict) and carried.get("defect") == "retained_composite":
+        return carried
+    return None
+
+
 def _scope_from_message(message: str) -> ScopePath | None:
-    match = re.match(r"^(?P<scope>[^:]+?) (?:input|output) port ", message)
-    if match:
+    """The rendered scope a legacy fault begins with, when one can be read.
+
+    A fault reads either ``<scope> input|output port ...`` or ``<scope>: ...``.
+    In the port form the scope ends at the message's own separator, so it may
+    contain spaces and colons. The colon form cannot tell a scope from prose
+    that also contains a colon, so it keeps the legacy rule — up to the first
+    colon, and nothing with a space is a scope — and a scope with a space or a
+    colon there reads as none rather than as a wrong one. Rendered scopes are
+    not injective in ``/`` either; an exact scope needs a framed fact, not a
+    parse.
+    """
+
+    match = re.match(r"^(?P<scope>.+?) (?:input|output) port ", message)
+    if match and ": " not in match.group("scope"):
+        # The port form; a scope never contains the colon form's separator, so
+        # a colon-form message quoting a port elsewhere is not read as one.
         prefix = match.group("scope").strip()
     else:
         prefix = message.split(":", 1)[0].strip()
