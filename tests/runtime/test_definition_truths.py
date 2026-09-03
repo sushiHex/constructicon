@@ -111,6 +111,15 @@ def test_a_composites_embedded_schema_is_bound_to_its_digest(
     assert fault.scope.segments[-1] == "member"
     assert all(" " not in segment for segment in fault.scope.segments)
 
+    # A graph name may carry the frame's own character; the frame is the last
+    # one, which the escaped details can never contain.
+    framed_name = seats.model_copy(update={"name": "truths/seats\x1fframed"})
+    rejected = system.admit_graph(framed_name.model_dump(mode="json"), {"issue": {"title": "x"}})
+    assert isinstance(rejected, AdmissionRejected)
+    fault = next(item for item in rejected.faults if "retained composite" in item.message)
+    assert fault.details == {"component": retained.name, "version": str(retained.content_hash())}
+    assert "embedded schemas are their declared revisions'" in fault.repair
+
 
 async def _impl(ctx: object, inputs: dict[str, object]) -> dict[str, object]:
     return {"out": 1}

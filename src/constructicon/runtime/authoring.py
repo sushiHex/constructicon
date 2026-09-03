@@ -376,8 +376,11 @@ def _classify_fault(
     details: dict[str, Any] = {}
 
     # A fault that carries framed details names its own defect; nothing in its
-    # prose — a port name, a component name — can make it read as another.
-    prose, framed, suffix = message.partition(FAULT_DETAILS_SEPARATOR)
+    # prose — a port name, a component name — can make it read as another. The
+    # frame is the last separator: the details are canonical JSON, which
+    # escapes the separator, while a rendered scope before it may carry one.
+    head, framed, suffix = message.rpartition(FAULT_DETAILS_SEPARATOR)
+    prose = head if framed else message
     scope = _scope_from_message(prose)
     if framed:
         try:
