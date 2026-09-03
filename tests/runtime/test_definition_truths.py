@@ -125,6 +125,28 @@ async def _impl(ctx: object, inputs: dict[str, object]) -> dict[str, object]:
     return {"out": 1}
 
 
+def test_a_separator_inside_a_scope_is_not_a_frame(system: Constructicon) -> None:
+    """An unframed fault whose scope carries the frame's character is classified whole."""
+
+    definition, implementation = atomic(
+        "test/triage", (ISSUE,), (_port("out", {"const": 1}),), _impl
+    )
+    version = system._register(definition, implementation)
+    system._promote_initial(component=definition.name, version=version)
+    unfed = Graph(
+        name="g\x1fseat",
+        nodes=(GraphNode(id="member", body=Ref(component=definition.name)),),
+        inputs=(),
+        outputs=(_port("out", {"const": 1}),),
+    )
+    rejected = system.admit_graph(unfed.model_dump(mode="json"), {})
+    assert isinstance(rejected, AdmissionRejected)
+    fault = next(item for item in rejected.faults if "no upstream output" in item.message)
+    assert fault.code is AdmissionCode.GRAPH_PORT_MISSING_SOURCE
+    assert fault.details == {}
+    assert fault.scope is not None and fault.scope.segments[-1] == "member"
+
+
 @pytest.mark.parametrize(
     ("message", "expected"),
     [

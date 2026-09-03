@@ -1070,7 +1070,11 @@ rows are written.
   prose, so the legacy rule stands there and a scope is exact or absent,
   never wrong; an exact scope in that form needs a framed fact carried by
   the validator, like the retained-definition details, and rendered scopes
-  are not injective in `/` either. Both stay open.
+  are not injective in `/` either. Both stay open, as does the registry
+  store's own idempotency check, which still compares definitions as models
+  (`runtime/registry.py` store path and `_sqlite_registry.py`); the bytes
+  law covers registration planning and application, not the store's
+  duplicate-row check.
 - Connector liveness is not an admission rule. A connection whose source node
   contributes no resolved binding anywhere beneath the edge is admitted, so a
   member whose stable version later changes contract is silently absent from a

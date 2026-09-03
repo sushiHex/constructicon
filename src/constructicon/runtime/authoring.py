@@ -378,30 +378,27 @@ def _classify_fault(
     # A fault that carries framed details names its own defect; nothing in its
     # prose — a port name, a component name — can make it read as another. The
     # frame is the last separator: the details are canonical JSON, which
-    # escapes the separator, while a rendered scope before it may carry one.
-    head, framed, suffix = message.rpartition(FAULT_DETAILS_SEPARATOR)
-    prose = head if framed else message
-    scope = _scope_from_message(prose)
-    if framed:
-        try:
-            carried = json.loads(suffix)
-        except ValueError:
-            carried = None
-        if isinstance(carried, dict) and carried.get("defect") == "retained_composite":
-            details = {key: carried[key] for key in ("component", "version") if key in carried}
-            repair = (
-                "the retained definition is defective, not this graph: pin or promote a "
-                "version whose declared boundary is its Graph's and whose embedded schemas "
-                "are their declared revisions'"
-            )
-            return AdmissionFault(
-                code=code,
-                message=message,
-                scope=scope,
-                repair=repair,
-                details=details,
-            )
-    lowered = prose.lower()
+    # escapes the separator, while a rendered scope before it may carry one. A
+    # separator that is not followed by a frame is just a character in a scope,
+    # and the whole message is prose.
+    carried = _framed_details(message)
+    if carried is not None:
+        head, _, _ = message.rpartition(FAULT_DETAILS_SEPARATOR)
+        details = {key: carried[key] for key in ("component", "version") if key in carried}
+        repair = (
+            "the retained definition is defective, not this graph: pin or promote a "
+            "version whose declared boundary is its Graph's and whose embedded schemas "
+            "are their declared revisions'"
+        )
+        return AdmissionFault(
+            code=code,
+            message=message,
+            scope=_scope_from_message(head),
+            repair=repair,
+            details=details,
+        )
+    scope = _scope_from_message(message)
+    lowered = message.lower()
 
     if "unknown component" in lowered:
         code = AdmissionCode.GRAPH_REFERENCE_UNKNOWN
@@ -463,6 +460,21 @@ def _classify_fault(
         repair=repair,
         details=details,
     )
+
+
+def _framed_details(message: str) -> dict[str, Any] | None:
+    """The retained-definition frame at the end of a fault, or None if there is none."""
+
+    _, framed, suffix = message.rpartition(FAULT_DETAILS_SEPARATOR)
+    if not framed:
+        return None
+    try:
+        carried = json.loads(suffix)
+    except ValueError:
+        return None
+    if isinstance(carried, dict) and carried.get("defect") == "retained_composite":
+        return carried
+    return None
 
 
 def _scope_from_message(message: str) -> ScopePath | None:
