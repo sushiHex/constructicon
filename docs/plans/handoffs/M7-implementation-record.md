@@ -11,12 +11,12 @@ this records the deviations and decisions that implementation forced
 
 ## Scope completed
 
-PRs A, B, and C are merged (C as #18). Typed message channels have two
-transports; routing and exchange are sealed into the manifest; sends carry
+PRs A, B, C, and D are merged (C as #18, D as #19). Typed message channels have
+two transports; routing and exchange are sealed into the manifest; sends carry
 proof through the existing effect law; invocation parking is typed; and durable
-replies drive wake recovery. PR D adds the panel pattern: `panel()` sugar, the
+replies drive wake recovery. PR D added the panel pattern: `panel()` sugar, the
 L0 panel contracts, the pure quorum aggregator and ballot adapter, and the
-credential-free acceptance lane across process restarts.
+credential-free acceptance lane across real process restarts. M7 is complete.
 
 - One L0 `Channel` contract with `InProcessChannel` and `MailboxChannel`,
   exercised by a single parity suite. Both derive messages from the same
