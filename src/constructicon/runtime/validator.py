@@ -665,7 +665,13 @@ def _boundary_lies(comp: _Compilation, stored: StoredVersion, *, where: ScopePat
         reasons.append("declares a boundary its Graph does not export")
     if not reasons:
         return False
-    retained = canonical_json({"component": definition.name, "version": str(stored.content_hash)})
+    retained = canonical_json(
+        {
+            "defect": "retained_composite",
+            "component": definition.name,
+            "version": str(stored.content_hash),
+        }
+    )
     comp.faults.append(
         f"{where.render()}: a retained composite {'; '.join(reasons)}"
         f"{FAULT_DETAILS_SEPARATOR}{retained}"

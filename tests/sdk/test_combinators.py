@@ -268,6 +268,7 @@ def test_a_composites_boundary_is_its_graphs(system: Constructicon, journal: Sql
     assert fault.code is AdmissionCode.GRAPH_CONTRACT_INVALID
     assert fault.details == {"component": lying.name, "version": str(lying.content_hash())}
     assert "retained definition is defective" in fault.repair
+    assert fault.scope is not None and fault.scope.segments[-1] == "member"
 
     # The details are framed by a character canonical JSON always escapes, so
     # neither a scope nor the retained name itself can forge or break the frame.

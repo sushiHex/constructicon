@@ -14,7 +14,7 @@ import pytest
 
 from constructicon.api.system import Constructicon
 from constructicon.core.address import ScopePath
-from constructicon.core.admission import AdmissionRejected
+from constructicon.core.admission import AdmissionCode, AdmissionRejected
 from constructicon.core.component import ComponentDef, same_definition
 from constructicon.core.errors import AdmissionError
 from constructicon.core.graph import Graph, GraphNode, Ref
@@ -72,9 +72,10 @@ def test_a_composites_embedded_schema_is_bound_to_its_digest(
     system._promote_initial(component=definition.name, version=version)
 
     honest = _port("out", {"const": 1})
+    # A port name that reads like another fault's prose must not reclassify this one.
     dishonest = honest.model_copy(
-        update={"json_schema": {"const": 2}}
-    )  # revision names another shape
+        update={"name": "unknown component 'q' has no stable version", "json_schema": {"const": 2}}
+    )
     with pytest.raises(AdmissionError, match="for its embedded JSON Schema"):
         system._register(_composite("truths/lying-schema", declared=dishonest, exported=dishonest))
 
@@ -103,6 +104,12 @@ def test_a_composites_embedded_schema_is_bound_to_its_digest(
     assert "for its embedded JSON Schema" in fault.message
     assert "does not export" not in fault.message
     assert "embedded schemas are their declared revisions'" in fault.repair
+    # Its class comes from its framed details, not from prose a port name can
+    # imitate, and its scope is the seat, never the prose after it.
+    assert fault.code is AdmissionCode.GRAPH_CONTRACT_INVALID
+    assert fault.scope is not None
+    assert fault.scope.segments[-1] == "member"
+    assert all(" " not in segment for segment in fault.scope.segments)
 
 
 async def _impl(ctx: object, inputs: dict[str, object]) -> dict[str, object]:
@@ -122,6 +129,8 @@ async def _impl(ctx: object, inputs: dict[str, object]) -> dict[str, object]:
         ("a b: c/node: unknown component 'q'", None),
         ("run inputs are missing declared inputs: ['x']", None),
         ("no separator at all", None),
+        # A colon-form message that quotes a port elsewhere is still the colon form.
+        ("root/seat: a retained composite 'c': output port 'o' declares x", ("root", "seat")),
     ],
 )
 def test_a_faults_scope_is_exact_or_absent(message: str, expected: tuple[str, ...] | None) -> None:

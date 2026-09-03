@@ -371,11 +371,34 @@ def _classify_fault(
     if fault.code is not AdmissionCode.LEGACY_ADMISSION:
         return fault
     message = fault.message
-    lowered = message.lower()
     code = AdmissionCode.GRAPH_CONTRACT_INVALID
     repair = "repair the named graph contract and resubmit"
     details: dict[str, Any] = {}
-    scope = _scope_from_message(message)
+
+    # A fault that carries framed details names its own defect; nothing in its
+    # prose — a port name, a component name — can make it read as another.
+    prose, framed, suffix = message.partition(FAULT_DETAILS_SEPARATOR)
+    scope = _scope_from_message(prose)
+    if framed:
+        try:
+            carried = json.loads(suffix)
+        except ValueError:
+            carried = None
+        if isinstance(carried, dict) and carried.get("defect") == "retained_composite":
+            details = {key: carried[key] for key in ("component", "version") if key in carried}
+            repair = (
+                "the retained definition is defective, not this graph: pin or promote a "
+                "version whose declared boundary is its Graph's and whose embedded schemas "
+                "are their declared revisions'"
+            )
+            return AdmissionFault(
+                code=code,
+                message=message,
+                scope=scope,
+                repair=repair,
+                details=details,
+            )
+    lowered = prose.lower()
 
     if "unknown component" in lowered:
         code = AdmissionCode.GRAPH_REFERENCE_UNKNOWN
@@ -386,24 +409,6 @@ def _classify_fault(
     elif "has no stable version" in lowered:
         code = AdmissionCode.GRAPH_REFERENCE_UNPROMOTED
         repair = "pin an exact retained version or promote one to stable"
-    elif "a retained composite" in lowered and (
-        "does not export" in lowered or "embedded json schema" in lowered
-    ):
-        # The retained definition is what is wrong; the graph that seats it is
-        # not. The defect names it exactly, as an anchored JSON suffix.
-        repair = (
-            "the retained definition is defective, not this graph: pin or promote a "
-            "version whose declared boundary is its Graph's and whose embedded schemas "
-            "are their declared revisions'"
-        )
-        _, framed, suffix = message.rpartition(FAULT_DETAILS_SEPARATOR)
-        if framed:
-            try:
-                retained = json.loads(suffix)
-            except ValueError:
-                retained = None
-            if isinstance(retained, dict):
-                details.update(retained)
     elif "no upstream output" in lowered or "needs an initial value" in lowered:
         code = AdmissionCode.GRAPH_PORT_MISSING_SOURCE
         repair = "connect a matching upstream output or graph input"
@@ -471,7 +476,9 @@ def _scope_from_message(message: str) -> ScopePath | None:
     """
 
     match = re.match(r"^(?P<scope>.+?) (?:input|output) port ", message)
-    if match:
+    if match and ": " not in match.group("scope"):
+        # The port form; a scope never contains the colon form's separator, so
+        # a colon-form message quoting a port elsewhere is not read as one.
         prefix = match.group("scope").strip()
     else:
         prefix = message.split(":", 1)[0].strip()

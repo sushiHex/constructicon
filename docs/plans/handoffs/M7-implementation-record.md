@@ -1061,7 +1061,9 @@ rows are written.
   collisions compare definitions as canonical bytes (`same_definition`), not
   as models; an embedded `json_schema` is bound to its digest on a composite's
   boundary at registration and re-proved at admission for retained stores —
-  the fault naming which truth failed — so a composite can no longer reuse a
+  the fault naming which truth failed and identifying itself through its
+  framed details, so no port or component name that reads like another
+  fault's prose can reclassify it — so a composite can no longer reuse a
   standard named revision with another shape; and the legacy fault-scope
   parser keeps spaces and colons in the port form, where the message's own
   separator ends the scope. In the colon form a scope cannot be told from
