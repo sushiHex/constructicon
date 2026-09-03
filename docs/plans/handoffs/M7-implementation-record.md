@@ -1060,10 +1060,15 @@ rows are written.
 - Closed after M7, in one hardening PR: registration deduplication and identity
   collisions compare definitions as canonical bytes (`same_definition`), not
   as models; an embedded `json_schema` is bound to its digest on a composite's
-  boundary at registration and re-proved at admission for retained stores, so
-  a composite can no longer reuse a standard named revision with another
-  shape; and the legacy fault-scope parser keeps scopes that contain spaces
-  or colons.
+  boundary at registration and re-proved at admission for retained stores —
+  the fault naming which truth failed — so a composite can no longer reuse a
+  standard named revision with another shape; and the legacy fault-scope
+  parser keeps spaces and colons in the port form, where the message's own
+  separator ends the scope. In the colon form a scope cannot be told from
+  prose, so the legacy rule stands there and a scope is exact or absent,
+  never wrong; an exact scope in that form needs a framed fact carried by
+  the validator, like the retained-definition details, and rendered scopes
+  are not injective in `/` either. Both stay open.
 - Connector liveness is not an admission rule. A connection whose source node
   contributes no resolved binding anywhere beneath the edge is admitted, so a
   member whose stable version later changes contract is silently absent from a

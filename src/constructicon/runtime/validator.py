@@ -646,27 +646,29 @@ def _record_resolution(
 
 
 def _boundary_lies(comp: _Compilation, stored: StoredVersion, *, where: ScopePath) -> bool:
-    """A retained composite whose declared boundary is not its Graph's is re-proved, not trusted.
+    """A retained composite is re-proved, not trusted: its boundary and its schemas.
 
-    The registry refuses such a definition at registration; a store retained
-    from before that rule reaches admission only through here. The fault names
-    the retained version, because the defect is in it and not in the graph
-    that seats it.
+    The registry refuses a definition whose declared boundary is not its
+    Graph's, or whose embedded schema is not its declared revision's; a store
+    retained from before those rules reaches admission only through here. The
+    fault says which truth failed and names the retained version, because the
+    defect is in it and not in the graph that seats it.
     """
 
     definition = stored.definition
     if not isinstance(definition.body, Graph):
         return False
-    if (
-        same_boundary(definition.inputs, definition.body.inputs)
-        and same_boundary(definition.outputs, definition.body.outputs)
-        and not embedded_schema_faults(definition)
+    reasons = list(embedded_schema_faults(definition))
+    if not same_boundary(definition.inputs, definition.body.inputs) or not same_boundary(
+        definition.outputs, definition.body.outputs
     ):
+        reasons.append("declares a boundary its Graph does not export")
+    if not reasons:
         return False
     retained = canonical_json({"component": definition.name, "version": str(stored.content_hash)})
     comp.faults.append(
-        f"{where.render()}: a retained composite declares a boundary its Graph does not "
-        f"export{FAULT_DETAILS_SEPARATOR}{retained}"
+        f"{where.render()}: a retained composite {'; '.join(reasons)}"
+        f"{FAULT_DETAILS_SEPARATOR}{retained}"
     )
     return True
 

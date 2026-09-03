@@ -386,12 +386,15 @@ def _classify_fault(
     elif "has no stable version" in lowered:
         code = AdmissionCode.GRAPH_REFERENCE_UNPROMOTED
         repair = "pin an exact retained version or promote one to stable"
-    elif "declares a boundary its graph does not export" in lowered:
+    elif "a retained composite" in lowered and (
+        "does not export" in lowered or "embedded json schema" in lowered
+    ):
         # The retained definition is what is wrong; the graph that seats it is
         # not. The defect names it exactly, as an anchored JSON suffix.
         repair = (
             "the retained definition is defective, not this graph: pin or promote a "
-            "version whose declared boundary is its Graph's"
+            "version whose declared boundary is its Graph's and whose embedded schemas "
+            "are their declared revisions'"
         )
         _, framed, suffix = message.rpartition(FAULT_DETAILS_SEPARATOR)
         if framed:
@@ -455,22 +458,25 @@ def _classify_fault(
 
 
 def _scope_from_message(message: str) -> ScopePath | None:
-    """The rendered scope a legacy fault begins with.
+    """The rendered scope a legacy fault begins with, when one can be read.
 
     A fault reads either ``<scope> input|output port ...`` or ``<scope>: ...``.
-    Graph names and node ids may contain spaces and colons, so only the
-    message's own separator ends the scope: the first `` input port `` or
-    `` output port ``, else the first ``: ``.
+    In the port form the scope ends at the message's own separator, so it may
+    contain spaces and colons. The colon form cannot tell a scope from prose
+    that also contains a colon, so it keeps the legacy rule — up to the first
+    colon, and nothing with a space is a scope — and a scope with a space or a
+    colon there reads as none rather than as a wrong one. Rendered scopes are
+    not injective in ``/`` either; an exact scope needs a framed fact, not a
+    parse.
     """
 
     match = re.match(r"^(?P<scope>.+?) (?:input|output) port ", message)
     if match:
         prefix = match.group("scope").strip()
     else:
-        prefix, separator, _ = message.partition(": ")
-        if not separator:
+        prefix = message.split(":", 1)[0].strip()
+        if " " in prefix:
             return None
-        prefix = prefix.strip()
     segments = tuple(segment for segment in prefix.split("/") if segment)
     return ScopePath(segments=segments) if segments else None
 

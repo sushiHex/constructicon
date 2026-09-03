@@ -93,12 +93,16 @@ def test_a_composites_embedded_schema_is_bound_to_its_digest(
         inputs=(ISSUE,),
         outputs=(dishonest,),
     )
-    with pytest.raises(AdmissionError, match="boundary its Graph does not export"):
+    with pytest.raises(AdmissionError, match="for its embedded JSON Schema"):
         system.validate(seats, {"issue": {"title": "x"}})
     rejected = system.admit_graph(seats.model_dump(mode="json"), {"issue": {"title": "x"}})
     assert isinstance(rejected, AdmissionRejected)
     fault = next(item for item in rejected.faults if "retained composite" in item.message)
     assert fault.details == {"component": retained.name, "version": str(retained.content_hash())}
+    # The fault says which truth failed: the schema's digest, not the boundary.
+    assert "for its embedded JSON Schema" in fault.message
+    assert "does not export" not in fault.message
+    assert "embedded schemas are their declared revisions'" in fault.repair
 
 
 async def _impl(ctx: object, inputs: dict[str, object]) -> dict[str, object]:
@@ -108,15 +112,18 @@ async def _impl(ctx: object, inputs: dict[str, object]) -> dict[str, object]:
 @pytest.mark.parametrize(
     ("message", "expected"),
     [
+        # The port form ends at the message's own separator: spaces and colons survive.
         ("a b/c:d input port 'x' has no upstream output", ("a b", "c:d")),
         ("a b/c:d output port 'y' ambiguity is an error", ("a b", "c:d")),
-        ("x y/z:w: unknown component 'q'", ("x y", "z:w")),
-        ("root: unknown component 'q'", ("root",)),
+        # The colon form cannot tell a scope from prose, so it keeps the legacy
+        # rule: a prefix with a space is not a scope, and prose gains none.
+        ("root/node: unknown component 'q'", ("root", "node")),
+        ("x y/z:w: unknown component 'q'", None),
+        ("a b: c/node: unknown component 'q'", None),
+        ("run inputs are missing declared inputs: ['x']", None),
         ("no separator at all", None),
     ],
 )
-def test_a_faults_scope_survives_spaces_and_colons(
-    message: str, expected: tuple[str, ...] | None
-) -> None:
+def test_a_faults_scope_is_exact_or_absent(message: str, expected: tuple[str, ...] | None) -> None:
     scope = _scope_from_message(message)
     assert scope == (ScopePath(segments=expected) if expected else None)
