@@ -1,0 +1,3 @@
+{"dst": "panel_tally", "faults_already": false, "graph": "sdk/control-panel", "rule": "gather", "scope": "sdk/control-panel", "src": "panel_yes"}
+{"dst": "panel_tally", "faults_already": false, "graph": "sdk/control-ghost", "index": 2, "rule": "endpoint", "scope": "sdk/control-ghost", "src": "ghost"}
+{"dst": "phantom", "faults_already": false, "graph": "sdk/control-ghost", "index": 3, "rule": "endpoint", "scope": "sdk/control-ghost", "src": "panel_yes"}

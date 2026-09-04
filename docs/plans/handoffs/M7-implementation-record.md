@@ -892,6 +892,10 @@ and all four lower findings were accepted, one blocker rejected with evidence.
   it. The authoring proof is about the bundles as authored. A validator fault
   for a connection that binds nothing would close the residual for every
   graph; it is an IR decision and stays open.
+  *Later refuted by M7.1 in two respects: such a fault does not close the
+  residual, and the omission does not require a later promotion — an
+  unversioned ref can disagree with the already-current stable on first
+  admission.*
 - Accepted: a composite could declare a boundary its Graph does not export,
   because admission compiles the Graph and ignores the declaration. The
   registry now refuses such a definition and `component()` refuses to
@@ -920,6 +924,9 @@ already safe by a test, one rejected again with the residual stated exactly.
   connection's source must contribute a resolved binding somewhere beneath
   its destination — is the right shape for the open IR item, and the item
   now says so; it applies to every graph and is not this slice's.
+  *Later refuted by M7.1: that rule refuses the M1 vertical slice and the
+  `Connection.map` ambiguity repair. The residual is real, and the shape that
+  closes it scopes the gather's pool rather than testing the edge.*
 - Accepted: the registry check covered new registrations only. Admission now
   refuses a retained composite whose declared boundary is not its Graph's,
   proven by storing one past the registry and validating a graph that seats
@@ -1089,21 +1096,21 @@ rows are written.
   (`runtime/registry.py` store path and `_sqlite_registry.py`); the bytes
   law covers registration planning and application, not the store's
   duplicate-row check.
-- Connector liveness is not an admission rule, and after
-  [M7.1](../milestones/M7.1-connector-liveness-rev1.md) it is decided against
-  rather than open. A connection whose source contributes no resolved binding
-  is still admitted; the two laws that would have refused it are both refuted.
-  The general form — a connection's source must bind something at its
-  destination — refuses the M1 vertical slice, whose transitive-visibility
-  chain is asserted by a validator test, and invalidates the `Connection.map`
-  repair that admission's own ambiguity fault publishes. Narrowing it to
-  destinations declaring a `many` port refuses nothing in this repository's
-  graphs and is still wrong: a helper upstream of a member widens a gather by
-  design, so an edge that carries a producer into scope without matching the
-  gather itself is legitimate. What this item was really about — a member
-  absent from a gather — is the durable-authored-membership item above; a
-  connection is a visibility edge, and membership is not expressible as a
-  property of one.
+- Connector liveness is not an admission rule, and
+  [M7.1](../milestones/M7.1-connector-liveness-rev2.md) decides what to do
+  about it. Two forms are refuted. The general form — a connection's source
+  must bind something at its destination — refuses the M1 vertical slice, whose
+  transitive-visibility chain a validator test asserts, and invalidates the
+  `Connection.map` repair that admission's own ambiguity fault publishes.
+  Narrowing it to destinations declaring a `many` port refuses nothing in this
+  repository and is still wrong while the pool is transitive, because a helper
+  upstream of a member widens a gather by design. What rev 2 proposes instead
+  is to change the pool: a `many` port binds the nodes connected directly to
+  it plus whatever an explicit map names, after which liveness at a gather has
+  no counterexample and membership is the connected set. Measurement supports
+  it — every gather in this repository already draws only directly-connected
+  sources, save the one test written to demonstrate that it need not. Rev 1 of
+  that document concluded no such law existed and is superseded.
 - A message a caller may not act on is refused with `AUTH_REQUIRED_SCOPE` rather
   than reported absent, which confirms that a supplied id exists. Deliberate:
   ids are derived digests over run, path, channel, lane, interaction, and port,

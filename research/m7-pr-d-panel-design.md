@@ -144,7 +144,10 @@ output `result` (PANEL_RESULT). The outcome is total and says what happened:
     rejected                otherwise: enough answered, and they did not approve
 
 Same members in any input order give the same bytes. Rev 2 waits for every
-declared member, so the aggregator never sees a partial set. The result
+declared member, so the aggregator never sees a partial set. *(Corrected by
+M7.1: it waits for every member admission put in the gather, which is not
+necessarily every member authored — a seat whose resolved contract differs is
+absent before the wait begins.)* The result
 carries `run_id` and the aggregator path and re-derives placement, tally, and
 outcome from its members on validation, refusing a contradiction (I4).
 

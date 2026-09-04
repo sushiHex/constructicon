@@ -50,7 +50,8 @@ the eventual code differs.
 | M6.2 | [Durable control-plane closeout and internal compression rev 2](milestones/M6.2-internal-compression-rev2.md) | Current successor reconciled against `main` at `7f33724` after PRs #9–#11 | Approved implementation baseline; result recorded below |
 | M7 | [Channels and panel rev 1](milestones/M7-channels-and-panel-rev1.md) | First full successor plan derived from current authority and the frozen M7 milestone line | Superseded by rev 2 (seven contracts it named could not be built as written) |
 | M7 | [Channels and panel rev 2](milestones/M7-channels-and-panel-rev2.md) | Absorbs the rev 1 defects, records the authority slices A and B established, and plans C and D | Approved implementation baseline; A, B, C, and D merged |
-| M7.1 | [Connector liveness rev 1](milestones/M7.1-connector-liveness-rev1.md) | Written against `main` at `83ee65d` to resolve the M7 record's open connector-liveness item; both candidate laws refuted by shadow measurement and cross-review, with the supporting measurement retained in `research/` | Review draft; proposes a documentation-only closure and defers endpoint validation to its own slice |
+| M7.1 | [Connector liveness rev 1](milestones/M7.1-connector-liveness-rev1.md) | Written against `main` at `83ee65d`; refutes both candidate liveness laws by shadow measurement and cross-review | Superseded by rev 2. Its refutations stand; its conclusion that no law can close the defect does not |
+| M7.1 | [Connector liveness rev 2](milestones/M7.1-connector-liveness-rev2.md) | Successor after measuring where gathered sources actually come from; proposes scoping a `many` port to its connections rather than testing the edge | Review draft; requires an ADR before implementation |
 
 ## Handoffs
 
