@@ -346,8 +346,9 @@ because the gather is the general connector law: a graph input sits in every
 node's pool, and a compatible graph input or a compatible helper upstream of a
 member would widen it. That proof holds at authoring and is never re-proved.
 `panel()` connects every authored seat, and admission gathers every compatible
-source in the resolved world; the emitted Graph retains the seat topology but
-no expected per-seat boundary. So where a member's resolved version carries a
+source in the aggregator's pool — the transitive closure of its connections
+plus the graph inputs, and nothing outside it; the emitted Graph retains the
+seat topology but no expected per-seat boundary. So where a member's resolved version carries a
 different result contract — a later promotion, or a bundle that already
 disagreed with the current stable, since the emitted refs are unversioned — that
 seat is absent from the gather and the panel admits one member short with no

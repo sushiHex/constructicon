@@ -1071,9 +1071,13 @@ rows are written.
   proved; admission cannot re-prove a claim the graph does not make. So a
   member whose stable version is later promoted with a different output
   contract is absent from the gather and no fault is raised. Closing it needs
-  an authored expectation to re-prove, or a rule about boundary-changing
-  promotion; both are stated, and neither is costed, in
-  [M7.1](../milestones/M7.1-connector-liveness-rev1.md).
+  an authored expectation to re-prove. [M7.1 rev 3](../milestones/M7.1-connector-liveness-rev3.md)
+  finds that expectation already expressible: `Connection.map` names a port and
+  the selector that fills it, and admission already refuses a selector whose
+  contract does not match. `panel()` proves the gather and then discards the
+  proof instead of writing it as a map, and `_explicit_maps` refuses several
+  maps on one port regardless of cardinality. Rev 3 proposes both corrections
+  and no change to how any pool is built.
 - `describe()` publishes the whole standard vocabulary in every description,
   filtered or not. It is the system's fixed L0 vocabulary rather than a
   property of the selected components; a per-selection projection would be a
@@ -1104,13 +1108,15 @@ rows are written.
   `Connection.map` repair that admission's own ambiguity fault publishes.
   Narrowing it to destinations declaring a `many` port refuses nothing in this
   repository and is still wrong while the pool is transitive, because a helper
-  upstream of a member widens a gather by design. What rev 2 proposes instead
-  is to change the pool: a `many` port binds the nodes connected directly to
-  it plus whatever an explicit map names, after which liveness at a gather has
-  no counterexample and membership is the connected set. Measurement supports
-  it — every gather in this repository already draws only directly-connected
-  sources, save the one test written to demonstrate that it need not. Rev 1 of
-  that document concluded no such law existed and is superseded.
+  upstream of a member widens a gather by design. Rev 2 proposed scoping the
+  pool instead and failed a cross-port counterexample: a member drifting to a
+  contract that binds another aggregator input satisfies node-level liveness
+  while the gather loses it. Every law tested the edge; membership is a claim
+  about a port. Rev 3 makes no law about connections at all: it lets several
+  connections map one `many` port, and has `panel()` map every seat, so the
+  existing contract-mismatch fault re-proves membership at the port. The
+  transitive gather stays as documented for unmapped ports — measurement shows
+  it load-bearing nowhere but the test that demonstrates it.
 - A message a caller may not act on is refused with `AUTH_REQUIRED_SCOPE` rather
   than reported absent, which confirms that a supplied id exists. Deliberate:
   ids are derived digests over run, path, channel, lane, interaction, and port,

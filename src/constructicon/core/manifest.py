@@ -55,8 +55,8 @@ class ResolvedPortBinding(BaseModel):
 
     destination: PortAddress
     # >1 sources only for cardinality="many"; a gathering binding records the
-    # complete set admission resolved (the silent-node-failure defense). That
-    # is what was in the pool, not what the author expected to be there.
+    # complete set admission resolved (the silent-node-failure defense) — from
+    # the pool, or from explicit selectors — not what the author expected.
     sources: tuple[PortAddress, ...]
 
 
