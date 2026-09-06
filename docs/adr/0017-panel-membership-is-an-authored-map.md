@@ -26,8 +26,8 @@ nominal identity without its cardinality.
 
 ## Decision
 
-Panel membership is represented by explicit port maps, not inferred from
-connection liveness or topology.
+Panel gather membership is represented by explicit port maps, not inferred
+from connection liveness or topology.
 
 Several connections may map one destination of cardinality `many`. Distinct
 selectors form an ordered union in graph connection order; repeating the same
@@ -55,6 +55,14 @@ These are truthful authoring-shape rules, independent of the magnetic pool. A
 one-seat workflow composes the member directly; it does not invent metadata or
 a sentinel edge to make one selector prove a `many` boundary.
 
+This decision seals the result side of membership, not member request routing.
+The SDK checks that the supplied bundles share one exact request boundary, but
+the emitted Graph retains no expected member-input boundary. Magnetic binding
+therefore remains authoritative at admission. A request selector alone would
+be insufficient: it cannot distinguish a destination changing from `one` to
+`optional` or `many`. `Ref.bind` remains capability binding and is not
+repurposed as a second data-binding language.
+
 The Graph wire shape does not change, so Graph remains schema 1. An older
 validator rejects the newly lawful multi-map shape and therefore fails closed.
 The scalar-source correction is likewise an admission-law change over the
@@ -66,9 +74,9 @@ and `BindingVocabulary` publishes
 description digest advances to domain version 2. The embedded Graph and
 admission schema documents retain their own version 1.
 
-The exact-membership guarantee applies only to graphs that carry maps. Retained
-pre-change panels remain unmapped. They are neither rewritten nor granted an
-authored claim they never recorded.
+The exact gather-membership guarantee applies only to graphs that carry maps.
+Retained pre-change panels remain unmapped. They are neither rewritten nor
+granted an authored claim they never recorded.
 
 Counterfactual admission separates baseline validity from override
 compatibility. It first validates the exact retained source graph under the
@@ -86,8 +94,11 @@ retained manifest without re-admitting it.
   the one-seat spelling.
 - Undrifted mapped fan-in produces the same resolved binding bytes and source
   order as the prior unmapped panel.
-- Member contract or cardinality drift, aggregator gather drift, an unused map
-  destination, and an unknown endpoint fail during admission.
+- Member result-contract or result-cardinality drift, aggregator gather drift,
+  an unused map destination, and an unknown endpoint fail during admission.
+- Member request compatibility remains an authoring-time SDK proof. Later
+  request-boundary drift may bind magnetically and is outside this decision's
+  exactness guarantee.
 - Bystanders, graph inputs, and transitive helpers cannot widen a mapped panel.
   They retain their documented behavior at an unmapped `many` port.
 - Counterfactual replay re-proves current baseline validity before override
@@ -117,6 +128,16 @@ retained manifest without re-admitting it.
 - **Duplicating a one-member selector as a cardinality sentinel.** Identical
   selectors coalesce by law, while making duplicates significant would turn
   topology noise into execution semantics.
+- **Calling a `$input` request selector an exact member boundary.** It catches a
+  nominal request change but still admits destination-cardinality drift, so it
+  would replace one overclaim with another.
+- **Pinning member versions in `panel()`.** It prevents compatible promoted
+  implementations from reaching future runs rather than re-proving their
+  boundary, changing dependency propagation to avoid representing the claim.
+- **Adding an expected member boundary to Graph in M7.1.** That may be the shape
+  of a future general late-bound-reference contract, but it is a versioned IR
+  decision with consumers beyond panels. It is not smuggled into a scoped
+  gather-membership correction.
 - **Ignoring unused map destinations.** A component rename would erase an
   authored constraint and admit a graph different from the one requested.
 - **Retrofitting maps into retained panels.** It changes immutable source bytes

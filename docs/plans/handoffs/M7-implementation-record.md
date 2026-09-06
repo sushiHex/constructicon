@@ -1064,8 +1064,8 @@ rows are written.
   and the walker drops the source address when it collects them, so a component
   cannot prove who sent what. It is not the fix for the membership item below,
   which is about a member that never binds at all.
-- Durable authored membership is an unresolved problem of its own, split out
-  here because it was previously folded into the connector-liveness item. A
+- Durable authored gather membership is an unresolved problem of its own, split
+  out here because it was previously folded into the connector-liveness item. A
   panel's exactness is proved at authoring from the member bundles' declared
   contracts, and `panel()` then emits a Graph carrying no trace of what was
   proved; admission cannot re-prove a claim the graph does not make. So a
@@ -1084,6 +1084,10 @@ rows are written.
   `runs_start` key replays and repair uses a fresh key; and counterfactual
   admission validates the retained baseline before judging an override, so
   new structural invalidity is never mislabeled as a lock mismatch.
+  A confirming review narrowed the guarantee once more: the maps preserve
+  gather membership and the members' result boundary. They do not preserve the
+  request boundary, which the SDK proves only from the bundles in hand and the
+  current Graph cannot encode exactly without a wider IR decision.
 - `describe()` publishes the whole standard vocabulary in every description,
   filtered or not. It is the system's fixed L0 vocabulary rather than a
   property of the selected components; a per-selection projection would be a
@@ -1119,9 +1123,9 @@ rows are written.
   while the gather loses it. Every law tested the edge; membership is a claim
   about a port. [Rev 4](../milestones/M7.1-panel-membership-rev4.md) makes no
   liveness law: it lets several scalar selectors map one `many` port and has
-  `panel()` map every seat, so admission re-proves membership at that port. It
-  also closes the silent inverse — a map naming a destination absent from the
-  resolved boundary — and includes source cardinality in the explicit
+  `panel()` map every seat, so admission re-proves gather membership at that
+  port. It also closes the silent inverse — a map naming a destination absent
+  from the resolved boundary — and includes source cardinality in the explicit
   boundary. The transitive gather stays as documented for unmapped ports. The
   exactness guarantee begins with mapped graphs; retained pre-change panels
   remain unmapped rather than being granted invented author intent.
