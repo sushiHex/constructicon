@@ -1079,6 +1079,11 @@ rows are written.
   membership, makes mapped fan-in an ordered union of scalar selectors, and
   requires every map destination to be consumed or refused. It leaves the
   unmapped pool alone and explicitly does not retrofit retained panels.
+  Exact-head review tightened three boundaries before any decision: `panel()`
+  is plural so two distinct selectors prove its `many` gather; a rejected
+  `runs_start` key replays and repair uses a fresh key; and counterfactual
+  admission validates the retained baseline before judging an override, so
+  new structural invalidity is never mislabeled as a lock mismatch.
 - `describe()` publishes the whole standard vocabulary in every description,
   filtered or not. It is the system's fixed L0 vocabulary rather than a
   property of the selected components; a per-selection projection would be a

@@ -48,10 +48,12 @@ node or a destination port absent from the resolved boundary is a
 source-cardinality mismatch is the existing `graph.port.contract_mismatch`.
 No explicit entry is silently discarded.
 
-`panel()` writes one map per member to its single gather port. Its member
-request and result contracts must differ, and the gather must be the
-aggregator's only input carrying the member-result contract. These are truthful
-authoring-shape rules, independent of the magnetic pool.
+`panel()` has at least two members and writes one map per member to its single
+gather port. Its member request and result contracts must differ, and the
+gather must be the aggregator's only input carrying the member-result contract.
+These are truthful authoring-shape rules, independent of the magnetic pool. A
+one-seat workflow composes the member directly; it does not invent metadata or
+a sentinel edge to make one selector prove a `many` boundary.
 
 The Graph wire shape does not change, so Graph remains schema 1. An older
 validator rejects the newly lawful multi-map shape and therefore fails closed.
@@ -68,18 +70,32 @@ The exact-membership guarantee applies only to graphs that carry maps. Retained
 pre-change panels remain unmapped. They are neither rewritten nor granted an
 authored claim they never recorded.
 
+Counterfactual admission separates baseline validity from override
+compatibility. It first validates the exact retained source graph under the
+source manifest's resolved-version lock. Baseline failure is `REQUEST_INVALID`
+and names reproduce-or-reauthor repair. Only after that proof succeeds are
+exact overrides applied; a failure there is
+`COUNTERFACTUAL_LOCK_MISMATCH`. `runs_reproduce` continues to execute the
+retained manifest without re-admitting it.
+
 ## Consequences
 
 - A newly authored panel's source Graph and manifest identity change because
   its connections now carry membership maps. Retained runs do not change.
+- `panel()` is plural. Zero and one member are refused; direct composition is
+  the one-seat spelling.
 - Undrifted mapped fan-in produces the same resolved binding bytes and source
   order as the prior unmapped panel.
 - Member contract or cardinality drift, aggregator gather drift, an unused map
   destination, and an unknown endpoint fail during admission.
 - Bystanders, graph inputs, and transitive helpers cannot widen a mapped panel.
   They retain their documented behavior at an unmapped `many` port.
-- Counterfactual replay re-proves membership for mapped source graphs. A
-  pre-change retained panel keeps its historical limitation.
+- Counterfactual replay re-proves current baseline validity before override
+  compatibility. A pre-change retained panel keeps its historical limitation;
+  a source graph invalid under a newer admission law is refused honestly rather
+  than being mislabeled as an override mismatch.
+- Admission rejection follows the existing command law: an exact key retry
+  replays, while a repaired attempt uses a fresh key.
 - Strict schema-1 `SystemDescription` readers reject schema 2 instead of
   silently ignoring a new binding law.
 - The walker, execution manifest shape, admission code set, fault model, and
@@ -95,10 +111,20 @@ authored claim they never recorded.
   a connection as a seat; inference would be a second hidden workflow language.
 - **Flattening `many` sources.** It erases the one-seat/one-answer boundary and
   makes source cardinality drift look compatible.
+- **Adding expected destination cardinality to Graph for one-member panels.**
+  It adds a second boundary declaration solely to preserve a degenerate sugar
+  case. A panel is plural; one member already composes directly.
+- **Duplicating a one-member selector as a cardinality sentinel.** Identical
+  selectors coalesce by law, while making duplicates significant would turn
+  topology noise into execution semantics.
 - **Ignoring unused map destinations.** A component rename would erase an
   authored constraint and admit a graph different from the one requested.
 - **Retrofitting maps into retained panels.** It changes immutable source bytes
   and manufactures historical author intent.
+- **Grandfathering retained source graphs during counterfactual admission.** A
+  caller may supply a resolution lock, so treating it as migration authority
+  would let caller-shaped evidence bypass current validation. Baseline-first
+  admission reports incompatibility without rewriting history.
 - **Bumping Graph solely for the new semantics.** There is no new wire shape,
   and old validators already fail closed on the new combination.
 - **Leaving `SystemDescription` at schema 1.** Its strict readers would either
