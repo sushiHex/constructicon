@@ -57,7 +57,9 @@ a sentinel edge to make one selector prove a `many` boundary.
 
 Because the map's published `node.port` selector form splits at its first dot,
 `panel()` refuses a member node id containing `.` before constructing a Graph.
-It does not escape or reinterpret an otherwise valid general `NodeId`.
+It also refuses an empty member result-port name, which would leave the selector
+without a port segment. It does not escape or reinterpret an otherwise valid
+general `NodeId` or `Port`.
 
 This decision seals each member's mapped result port, not its complete output
 boundary or its request routing. The SDK checks that the supplied bundles share

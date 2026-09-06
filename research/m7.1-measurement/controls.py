@@ -1,8 +1,10 @@
 """Controls for the M7.1 shadow measurement.
 
-Not collected by the suite from here. To run: copy to
-``tests/sdk/test_m71_controls.py``, apply one of the sibling shadow patches,
-run the suite, then revert both.
+Not collected by the suite from here. These controls belong only to the
+three-row liveness artifact: copy this file to
+``tests/sdk/test_m71_controls.py``, apply ``shadow_liveness.py``, run the suite,
+then revert both. The 16-row provenance artifact is corpus-only; apply
+``shadow_gather_provenance.py`` to a clean checkout without copying this file.
 
 Three graphs:
 

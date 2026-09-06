@@ -1091,7 +1091,9 @@ rows are written.
   wider IR decision. A following exact-head pass also required `panel()` to
   reject member ids containing the selector delimiter, both preflight and
   compilation to select through the source lock, and `describe()` to publish
-  scalar-source cardinality independently of mapped-`many` fan-in policy.
+  scalar-source cardinality independently of mapped-`many` fan-in policy. The
+  confirming pass completed the selector rule: a member result-port name must
+  also be non-empty before `panel()` can emit `member.port`.
 - `describe()` publishes the whole standard vocabulary in every description,
   filtered or not. It is the system's fixed L0 vocabulary rather than a
   property of the selected components; a per-selection projection would be a

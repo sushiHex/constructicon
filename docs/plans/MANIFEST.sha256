@@ -1,7 +1,7 @@
 d2c6289be9b785640fbac2e68ab4ca9f2c232655858d1e336a7b7a5963310f76  README.md
 68691a4e27a9db231f34af862c7cb7a5d01a81ff0825d73b3c498d1b2eb9544d  handoffs/M6.1-M6.2-implementation-handoff.md
 4b797b5ff53742226946fc97743099e34a7398a2d6353c5ba47d2eabdcff65bd  handoffs/M6.2-implementation-record.md
-0e9b9d723d3cba4662288329014ec67a4610aeba028e8b078ec6aa7d4536d389  handoffs/M7-implementation-record.md
+8c224d93db9ff3f0586a64752a2727ac06731e319cf5a1dd0e5f879be314bec0  handoffs/M7-implementation-record.md
 3f01e089728c0b4452b018715308cd12bf3ccf67720b48c7f794a3e7defbdb8f  milestones/M1-vertical-slice-recovered-record.md
 7ae920757543603bdfd9be1a3c778ffa83abde9dd5627c962793c5baae073dc1  milestones/M2-crash-resume-hardening-rev2.md
 a283c93a225ac9332b1304e05fc1e33b4e1a205fcee2598e0e5f59b545c5ff87  milestones/M2-crash-resume-hardening.md
@@ -20,7 +20,7 @@ ab4aceb7291374a5d27d6f43d249bb8b29d3235c95ca4e7c2549d6d51797da21  milestones/M7-
 6a5b6fdef81623dbe9e3dff0b174ca346b0d66f7539543bb3bd994d0508071ba  milestones/M7.1-connector-liveness-rev1.md
 83434cbc6c8fd04b40c50640f0913d6ecdbb616ed38749be2a0eeb9406aa6bd5  milestones/M7.1-connector-liveness-rev2.md
 1a1c9c1ee8d784f83c2ec6f0d32edfa2cbeaf5517e9ca987b6f63c31d38dbafc  milestones/M7.1-connector-liveness-rev3.md
-854cf670cbe557aed27596f2b85fd022c88df880650420a469a8e88be14bcbd7  milestones/M7.1-panel-membership-rev4.md
+d73b9011d934c13d3ac61078726aa8945e2edc98cf54d30bdcecb63d638b3a27  milestones/M7.1-panel-membership-rev4.md
 1b3bafad3f246b5cf2b84ea8af9ab4f5de971dcfd38ef7c849dc97706f5dbc4e  system-design/system-design-v12-frozen/00-context-and-decisions.md
 d45c68aa610cc7f1402db894f01eac16b7b254096ec0ffcda840d612c1e09cf2  system-design/system-design-v12-frozen/01-invariants-and-layers.md
 192e9f132c428e207863b24b2a44a49d12480d2e0a8631c20301efa404dc0cca  system-design/system-design-v12-frozen/02-core-contracts.md
