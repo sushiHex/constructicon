@@ -55,13 +55,19 @@ These are truthful authoring-shape rules, independent of the magnetic pool. A
 one-seat workflow composes the member directly; it does not invent metadata or
 a sentinel edge to make one selector prove a `many` boundary.
 
-This decision seals the result side of membership, not member request routing.
-The SDK checks that the supplied bundles share one exact request boundary, but
-the emitted Graph retains no expected member-input boundary. Magnetic binding
-therefore remains authoritative at admission. A request selector alone would
-be insufficient: it cannot distinguish a destination changing from `one` to
-`optional` or `many`. `Ref.bind` remains capability binding and is not
-repurposed as a second data-binding language.
+Because the map's published `node.port` selector form splits at its first dot,
+`panel()` refuses a member node id containing `.` before constructing a Graph.
+It does not escape or reinterpret an otherwise valid general `NodeId`.
+
+This decision seals each member's mapped result port, not its complete output
+boundary or its request routing. The SDK checks that the supplied bundles share
+one exact boundary, but the emitted Graph retains only the result-port map.
+Magnetic binding therefore remains authoritative for the request at admission.
+A request selector alone would be insufficient: it cannot distinguish a
+destination changing from `one` to `optional` or `many`. An unrelated output
+added to a later member version is likewise outside the map's claim. `Ref.bind`
+remains capability binding and is not repurposed as a second data-binding
+language.
 
 The Graph wire shape does not change, so Graph remains schema 1. An older
 validator rejects the newly lawful multi-map shape and therefore fails closed.
@@ -69,10 +75,12 @@ The scalar-source correction is likewise an admission-law change over the
 existing wire shape, not a retained-byte migration; retained definitions are
 inventoried before implementation and never rewritten.
 Truthful introspection does change: `SystemDescription` advances to schema 2
-and `BindingVocabulary` publishes
-`mapped_many_policy="ordered_scalar_selector_union_replaces_pool"`. Its
-description digest advances to domain version 2. The embedded Graph and
-admission schema documents retain their own version 1.
+and `BindingVocabulary` separately publishes
+`explicit_map_source_cardinality="one"` and
+`mapped_many_policy="ordered_scalar_selector_union_replaces_pool"`. The first
+law applies to every explicit map; the second applies only to mapped `many`
+fan-in. The description digest advances to domain version 2. The embedded Graph
+and admission schema documents retain their own version 1.
 
 The exact gather-membership guarantee applies only to graphs that carry maps.
 Retained pre-change panels remain unmapped. They are neither rewritten nor
@@ -86,6 +94,12 @@ exact overrides applied; a failure there is
 `COUNTERFACTUAL_LOCK_MISMATCH`. `runs_reproduce` continues to execute the
 retained manifest without re-admitting it.
 
+The exact lock governs preflight and compilation through one version-selection
+rule. Neither phase may consult current stable when a pin exists, so a promotion
+after the source run cannot substitute another definition during baseline or
+override admission. Compilation remains responsible for lock faults and pin
+accounting.
+
 ## Consequences
 
 - A newly authored panel's source Graph and manifest identity change because
@@ -94,8 +108,9 @@ retained manifest without re-admitting it.
   the one-seat spelling.
 - Undrifted mapped fan-in produces the same resolved binding bytes and source
   order as the prior unmapped panel.
-- Member result-contract or result-cardinality drift, aggregator gather drift,
-  an unused map destination, and an unknown endpoint fail during admission.
+- A mapped member result port's contract or cardinality drift, aggregator gather
+  drift, an unused map destination, and an unknown endpoint fail during
+  admission. An unrelated added member output is outside the authored map.
 - Member request compatibility remains an authoring-time SDK proof. Later
   request-boundary drift may bind magnetically and is outside this decision's
   exactness guarantee.

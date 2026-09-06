@@ -1085,9 +1085,13 @@ rows are written.
   admission validates the retained baseline before judging an override, so
   new structural invalidity is never mislabeled as a lock mismatch.
   A confirming review narrowed the guarantee once more: the maps preserve
-  gather membership and the members' result boundary. They do not preserve the
-  request boundary, which the SDK proves only from the bundles in hand and the
-  current Graph cannot encode exactly without a wider IR decision.
+  gather membership and each member's mapped result port. They preserve neither
+  unrelated outputs nor the request boundary, which the SDK proves only from
+  the bundles in hand and the current Graph cannot encode exactly without a
+  wider IR decision. A following exact-head pass also required `panel()` to
+  reject member ids containing the selector delimiter, both preflight and
+  compilation to select through the source lock, and `describe()` to publish
+  scalar-source cardinality independently of mapped-`many` fan-in policy.
 - `describe()` publishes the whole standard vocabulary in every description,
   filtered or not. It is the system's fixed L0 vocabulary rather than a
   property of the selected components; a per-selection projection would be a
