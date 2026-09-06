@@ -34,6 +34,9 @@ selectors form an ordered union in graph connection order; repeating the same
 selector coalesces at its first position. A destination of cardinality `one` or
 `optional` admits exactly one distinct selector. A mapped destination replaces
 the magnetic pool, while an unmapped port keeps the existing binding rules.
+Within each connection, map entries are visited in lexical destination-port
+order because JSON-object insertion order is not semantic. Canonically identical
+Graphs therefore cannot disagree on ordered or truncated faults.
 
 Every explicit selector must resolve to exactly one source whose source port
 has cardinality `one`, then match the destination's nominal contract. A `many`
@@ -102,6 +105,13 @@ after the source run cannot substitute another definition during baseline or
 override admission. Compilation remains responsible for lock faults and pin
 accounting.
 
+After override admission, every affected scope's final
+`ComponentResolution.contract_hash` must equal the corresponding source
+record's complete contract hash. Graph compatibility at the ports it consumes
+is not enough: an added unrelated output or optional input is still a
+contract-incompatible counterfactual. A mismatch uses the existing
+`COUNTERFACTUAL_LOCK_MISMATCH` and writes no run plan.
+
 ## Consequences
 
 - A newly authored panel's source Graph and manifest identity change because
@@ -122,6 +132,8 @@ accounting.
   compatibility. A pre-change retained panel keeps its historical limitation;
   a source graph invalid under a newer admission law is refused honestly rather
   than being mislabeled as an override mismatch.
+- A successful override compilation still must preserve the complete source
+  contract hash at every affected scope; unused boundary drift fails closed.
 - Admission rejection follows the existing command law: an exact key retry
   replays, while a repaired attempt uses a fresh key.
 - Strict schema-1 `SystemDescription` readers reject schema 2 instead of

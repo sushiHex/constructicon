@@ -1093,7 +1093,11 @@ rows are written.
   compilation to select through the source lock, and `describe()` to publish
   scalar-source cardinality independently of mapped-`many` fan-in policy. The
   confirming pass completed the selector rule: a member result-port name must
-  also be non-empty before `panel()` can emit `member.port`.
+  also be non-empty before `panel()` can emit `member.port`. The following pass
+  restored two global laws around that scoped design: counterfactual overrides
+  must preserve the complete source `contract_hash` at every affected scope,
+  and entries within one map object are ordered by destination key because JSON
+  object insertion order cannot affect faults or bounded truncation.
 - `describe()` publishes the whole standard vocabulary in every description,
   filtered or not. It is the system's fixed L0 vocabulary rather than a
   property of the selected components; a per-selection projection would be a
