@@ -49,8 +49,10 @@ Exactly three constructs, closed under composition:
 
 Ports are nominal (`type_id` + schema hash + cardinality `one|optional|many`).
 The magnetic rules, applied once at admission: exact name + exact type; else
-unique exact type; `many` gathers every exact-type producer and records the
-complete expected set; conversions require an explicit adapter component; zero
+unique exact type; `many` gathers every exact-type producer in the pool and
+records that admitted set — which is not necessarily the set the author
+expected, since the pool spans the transitive closure and the graph inputs;
+conversions require an explicit adapter component; zero
 or multiple candidates is an itemized fault naming the per-port override.
 
 ## Admission → ExecutionManifest
@@ -332,7 +334,8 @@ second host and append a second request.
 
 A panel is a Graph pattern over this, not a primitive. `panel()` emits the
 literal fan-out and fan-in: each member sees the graph's one request input, and
-one explicit aggregator gathers every member through an ordinary `many` port.
+one explicit aggregator is connected to every member through an ordinary `many`
+port.
 The combinator executes nothing, chooses no model, infers no quorum, and hides
 no scheduler; its Graph is byte-equal to the hand-authored one. Exactness is
 proved at authoring from bundles' declared contracts — every member shares one
@@ -341,7 +344,16 @@ exactly one `many` port of that result contract, and no boundary input, the
 request included, carries that contract —
 because the gather is the general connector law: a graph input sits in every
 node's pool, and a compatible graph input or a compatible helper upstream of a
-member would widen it. The standard aggregator
+member would widen it. That proof holds at authoring and is never re-proved.
+`panel()` connects every authored seat, and admission gathers every compatible
+source in the aggregator's pool — the transitive closure of its connections
+plus the graph inputs, and nothing outside it; the emitted Graph retains the
+seat topology but no expected per-seat boundary. So where a member's resolved version carries a
+different result contract — a later promotion, or a bundle that already
+disagreed with the current stable, since the emitted refs are unversioned — that
+seat is absent from the gather and the panel admits one member short with no
+fault. It faults only if no compatible source remains at all. Making that
+membership durable is an open problem. The standard aggregator
 `constructicon.std/panel-quorum` is pure and declares no capability; it derives
 each member's node from the member's reported path against its own path —
 same parent scope, the aggregator's loop frame as a prefix of the member's,
@@ -380,8 +392,9 @@ same way when it deduplicates or checks an identity collision, and an
 embedded schema is bound to its digest on every definition's ports, a
 composite's boundary included.
 The sugar emits unversioned Refs like every combinator: the authoring proof is
-about the bundles as authored, and admission re-proves the gather nominally
-against the one atomic world it seals.
+about the bundles as authored, and admission re-proves nominally what the pool
+of the one atomic world it seals actually offers — the admitted set, not the
+authored one. A seat whose resolved contract differs is simply not in it.
 
 A named contract revision is not the digest of a schema, so the registry
 refuses to embed one on a port. `system.describe()` publishes the standard

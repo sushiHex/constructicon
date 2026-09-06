@@ -892,6 +892,10 @@ and all four lower findings were accepted, one blocker rejected with evidence.
   it. The authoring proof is about the bundles as authored. A validator fault
   for a connection that binds nothing would close the residual for every
   graph; it is an IR decision and stays open.
+  *Later refuted by M7.1 in two respects: such a fault does not close the
+  residual, and the omission does not require a later promotion — an
+  unversioned ref can disagree with the already-current stable on first
+  admission.*
 - Accepted: a composite could declare a boundary its Graph does not export,
   because admission compiles the Graph and ignores the declaration. The
   registry now refuses such a definition and `component()` refuses to
@@ -920,6 +924,9 @@ already safe by a test, one rejected again with the residual stated exactly.
   connection's source must contribute a resolved binding somewhere beneath
   its destination — is the right shape for the open IR item, and the item
   now says so; it applies to every graph and is not this slice's.
+  *Later refuted by M7.1: that rule refuses the M1 vertical slice and the
+  `Connection.map` ambiguity repair. The residual is real, and the shape that
+  closes it scopes the gather's pool rather than testing the edge.*
 - Accepted: the registry check covered new registrations only. Admission now
   refuses a retained composite whose declared boundary is not its Graph's,
   proven by storing one past the registry and validating a graph that seats
@@ -1052,7 +1059,45 @@ rows are written.
 ## Open items
 
 - Kernel-attested source identity on `many` ports and wall-clock timeouts for
-  human members are deferred, as recorded above.
+  human members are deferred, as recorded above. The first is a runtime
+  provenance problem and nothing wider: the manifest knows the actual sources,
+  and the walker drops the source address when it collects them, so a component
+  cannot prove who sent what. It is not the fix for the membership item below,
+  which is about a member that never binds at all.
+- Durable authored gather membership is an unresolved problem of its own, split
+  out here because it was previously folded into the connector-liveness item. A
+  panel's exactness is proved at authoring from the member bundles' declared
+  contracts, and `panel()` then emits a Graph carrying no trace of what was
+  proved; admission cannot re-prove a claim the graph does not make. So a
+  member whose stable version is later promoted with a different output
+  contract is absent from the gather and no fault is raised. Closing it needs
+  an authored expectation to re-prove.
+  [M7.1 rev 4](../milestones/M7.1-panel-membership-rev4.md) finds that
+  expectation already expressible: `Connection.map` names a port and the
+  selector that fills it. `panel()` proves the gather and then discards the
+  proof instead of writing it as a map. Rev 4 narrows the open item to panel
+  membership, makes mapped fan-in an ordered union of scalar selectors, and
+  requires every map destination to be consumed or refused. It leaves the
+  unmapped pool alone and explicitly does not retrofit retained panels.
+  Exact-head review tightened three boundaries before any decision: `panel()`
+  is plural so two distinct selectors prove its `many` gather; a rejected
+  `runs_start` key replays and repair uses a fresh key; and counterfactual
+  admission validates the retained baseline before judging an override, so
+  new structural invalidity is never mislabeled as a lock mismatch.
+  A confirming review narrowed the guarantee once more: the maps preserve
+  gather membership and each member's mapped result port. They preserve neither
+  unrelated outputs nor the request boundary, which the SDK proves only from
+  the bundles in hand and the current Graph cannot encode exactly without a
+  wider IR decision. A following exact-head pass also required `panel()` to
+  reject member ids containing the selector delimiter, both preflight and
+  compilation to select through the source lock, and `describe()` to publish
+  scalar-source cardinality independently of mapped-`many` fan-in policy. The
+  confirming pass completed the selector rule: a member result-port name must
+  also be non-empty before `panel()` can emit `member.port`. The following pass
+  restored two global laws around that scoped design: counterfactual overrides
+  must preserve the complete source `contract_hash` at every affected scope,
+  and entries within one map object are ordered by destination key because JSON
+  object insertion order cannot affect faults or bounded truncation.
 - `describe()` publishes the whole standard vocabulary in every description,
   filtered or not. It is the system's fixed L0 vocabulary rather than a
   property of the selected components; a per-selection projection would be a
@@ -1075,11 +1120,25 @@ rows are written.
   (`runtime/registry.py` store path and `_sqlite_registry.py`); the bytes
   law covers registration planning and application, not the store's
   duplicate-row check.
-- Connector liveness is not an admission rule. A connection whose source node
-  contributes no resolved binding anywhere beneath the edge is admitted, so a
-  member whose stable version later changes contract is silently absent from a
-  `many` gather; a fault for that would close this for every graph and is an
-  IR decision.
+- Connector liveness is not an admission rule, and M7.1 decides against making
+  it one. Two forms are refuted. The general form — a connection's source
+  must bind something at its destination — refuses the M1 vertical slice, whose
+  transitive-visibility chain a validator test asserts, and invalidates the
+  `Connection.map` repair that admission's own ambiguity fault publishes.
+  Narrowing it to destinations declaring a `many` port refuses nothing in this
+  repository and is still wrong while the pool is transitive, because a helper
+  upstream of a member widens a gather by design. Rev 2 proposed scoping the
+  pool instead and failed a cross-port counterexample: a member drifting to a
+  contract that binds another aggregator input satisfies node-level liveness
+  while the gather loses it. Every law tested the edge; membership is a claim
+  about a port. [Rev 4](../milestones/M7.1-panel-membership-rev4.md) makes no
+  liveness law: it lets several scalar selectors map one `many` port and has
+  `panel()` map every seat, so admission re-proves gather membership at that
+  port. It also closes the silent inverse — a map naming a destination absent
+  from the resolved boundary — and includes source cardinality in the explicit
+  boundary. The transitive gather stays as documented for unmapped ports. The
+  exactness guarantee begins with mapped graphs; retained pre-change panels
+  remain unmapped rather than being granted invented author intent.
 - A message a caller may not act on is refused with `AUTH_REQUIRED_SCOPE` rather
   than reported absent, which confirms that a supplied id exists. Deliberate:
   ids are derived digests over run, path, channel, lane, interaction, and port,

@@ -1,0 +1,16 @@
+{"direct": 2, "faults_already": false, "graph": "diamond", "input": 0, "node": "collect", "port": "briefs", "scope": "diamond", "transitive": 0}
+{"direct": 2, "faults_already": false, "graph": "diamond", "input": 0, "node": "collect", "port": "briefs", "scope": "diamond", "transitive": 0}
+{"direct": 6, "faults_already": false, "graph": "test/fake-panel", "input": 0, "node": "panel_quorum", "port": "votes", "scope": "test/fake-panel", "transitive": 0}
+{"direct": 6, "faults_already": false, "graph": "test/fake-panel", "input": 0, "node": "panel_quorum", "port": "votes", "scope": "test/fake-panel", "transitive": 0}
+{"direct": 6, "faults_already": false, "graph": "test/fake-panel", "input": 0, "node": "panel_quorum", "port": "votes", "scope": "test/fake-panel", "transitive": 0}
+{"direct": 2, "faults_already": false, "graph": "test/review-panel", "input": 0, "node": "panel_quorum", "port": "votes", "scope": "test/panel-lane/panel", "transitive": 0}
+{"direct": 2, "faults_already": false, "graph": "test/review-panel", "input": 0, "node": "panel_quorum", "port": "votes", "scope": "test/panel-lane/panel", "transitive": 0}
+{"direct": 0, "faults_already": true, "graph": "many-input", "input": 1, "node": "repeat", "port": "state", "scope": "many-input", "transitive": 0}
+{"direct": 2, "faults_already": false, "graph": "gathering", "input": 0, "node": "collect", "port": "briefs", "scope": "gathering", "transitive": 0}
+{"direct": 2, "faults_already": false, "graph": "sdk/review-panel", "input": 0, "node": "panel_tally", "port": "votes", "scope": "sdk/review-panel", "transitive": 0}
+{"direct": 2, "faults_already": false, "graph": "sdk/review-panel", "input": 0, "node": "panel_tally", "port": "votes", "scope": "sdk/review-panel", "transitive": 0}
+{"direct": 2, "faults_already": false, "graph": "sdk/twice", "input": 0, "node": "tally", "port": "votes", "scope": "sdk/twice", "transitive": 0}
+{"direct": 2, "faults_already": false, "graph": "sdk/twice", "input": 0, "node": "tally", "port": "votes", "scope": "sdk/twice", "transitive": 0}
+{"direct": 2, "faults_already": false, "graph": "sdk/wider", "input": 0, "node": "panel_tally", "port": "votes", "scope": "sdk/wider", "transitive": 0}
+{"direct": 2, "faults_already": false, "graph": "sdk/wider", "input": 1, "node": "panel_tally", "port": "votes", "scope": "sdk/wider", "transitive": 0}
+{"direct": 2, "faults_already": false, "graph": "sdk/wider", "input": 0, "node": "panel_tally", "port": "votes", "scope": "sdk/wider", "transitive": 1}
