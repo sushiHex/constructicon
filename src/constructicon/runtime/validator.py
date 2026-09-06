@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from itertools import islice
 from typing import Any
 
 from constructicon.core.address import LOOP_BODY_SEGMENT, NodeId, ScopePath
@@ -939,10 +940,15 @@ def _bind_node_inputs(
         entries = by_port.get(port.name)
         if entries:
             if port.cardinality != "many" and len(entries) > 1:
+                first, conflict = islice(entries.values(), 2)
                 selectors = ", ".join(repr(selector) for selector in entries)
-                comp.faults.append(
-                    f"{scope.render()}: maps destination port {port.name!r} "
-                    f"twice ({selectors}); cardinality is {port.cardinality!r}"
+                _map_fault(
+                    comp, conflict, scope, "duplicate_map_destination",
+                    f"maps destination port {port.name!r} "
+                    f"twice ({selectors}); cardinality is {port.cardinality!r}",
+                    destination_cardinality=port.cardinality,
+                    first_connection_index=first.connection_index,
+                    first_selector=first.selector,
                 )
                 continue
             selected = [
@@ -1068,10 +1074,16 @@ def _resolve_selector(
     scope: ScopePath,
 ) -> _Source | None:
     node_name, _, port_name = entry.selector.partition(".")
+    if not port_name:
+        _map_fault(
+            comp, entry, scope, "malformed_selector",
+            f"selector {entry.selector!r} must be 'node.port' or '$input.port'",
+        )
+        return None
     if node_name == "$input":
-        sources = input_sources.get(port_name, []) if port_name else []
+        sources = input_sources.get(port_name, [])
     else:
-        sources = node_lookup.get(node_name, {}).get(port_name, []) if port_name else []
+        sources = node_lookup.get(node_name, {}).get(port_name, [])
     if len(sources) != 1:
         _map_fault(
             comp, entry, scope, "explicit_source_contract",

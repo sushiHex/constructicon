@@ -29,6 +29,28 @@ from constructicon.runtime._resolution import select_version
 from constructicon.runtime.registry import CapabilityDescriptor
 from constructicon.runtime.validator import admit
 
+_MAP_FAULTS: dict[str, tuple[AdmissionCode, str]] = {
+    "unused_map_destination": (
+        AdmissionCode.GRAPH_CONTRACT_INVALID,
+        "map a declared destination input; repair the retained definition or pin "
+        "a compatible version when definition_path is present",
+    ),
+    "duplicate_map_destination": (
+        AdmissionCode.GRAPH_CONTRACT_INVALID,
+        "keep one distinct selector for this destination; repair the retained definition "
+        "or pin a compatible version when definition_path is present",
+    ),
+    "malformed_selector": (
+        AdmissionCode.GRAPH_CONTRACT_INVALID,
+        "add a non-empty port segment using 'node.port' or '$input.port'",
+    ),
+    "explicit_source_contract": (
+        AdmissionCode.GRAPH_PORT_CONTRACT_MISMATCH,
+        "select exactly one one-cardinality source with the exact type_id and "
+        "schema_hash; compose a scalar adapter for optional or many producers",
+    ),
+}
+
 
 @dataclass
 class _Preflight:
@@ -379,20 +401,15 @@ def _classify_fault(
     # and the whole message is prose.
     carried = _framed_details(message)
     if carried is not None:
-        if carried["defect"] in {"unused_map_destination", "explicit_source_contract"}:
-            mismatch = carried["defect"] == "explicit_source_contract"
+        map_fault = _MAP_FAULTS.get(carried["defect"])
+        if map_fault is not None:
+            code, repair = map_fault
             return AdmissionFault(
-                code=AdmissionCode.GRAPH_PORT_CONTRACT_MISMATCH if mismatch else code,
+                code=code,
                 message=message,
                 path=tuple(carried.get("path", ())),
                 scope=ScopePath(segments=tuple(carried["scope"])),
-                repair=(
-                    "select exactly one one-cardinality source with the exact type_id and "
-                    "schema_hash; compose a scalar adapter for optional or many producers"
-                    if mismatch else
-                    "map a declared destination input; repair the retained definition or pin "
-                    "a compatible version when definition_path is present"
-                ),
+                repair=repair,
                 details={
                     key: value for key, value in carried.items() if key not in {"path", "scope"}
                 },
@@ -477,7 +494,7 @@ def _classify_fault(
 
 
 def _framed_details(message: str) -> dict[str, Any] | None:
-    """The retained-definition frame at the end of a fault, or None if there is none."""
+    """The recognized details frame at the end of a fault, or None if there is none."""
 
     _, framed, suffix = message.rpartition(FAULT_DETAILS_SEPARATOR)
     if not framed:
@@ -486,9 +503,9 @@ def _framed_details(message: str) -> dict[str, Any] | None:
         carried = json.loads(suffix)
     except ValueError:
         return None
-    if isinstance(carried, dict) and carried.get("defect") in {
-        "retained_composite", "unused_map_destination", "explicit_source_contract",
-    }:
+    if isinstance(carried, dict) and (
+        carried.get("defect") == "retained_composite" or carried.get("defect") in _MAP_FAULTS
+    ):
         return carried
     return None
 

@@ -105,6 +105,18 @@ def test_distinct_scalar_maps_still_refuse_a_non_many_destination(
     system: Constructicon, loop: bool, cardinality: str
 ) -> None:
     graph = membership_graph(system, loop=loop, destination_cardinality=cardinality)
+    result = system.admit_graph(graph.model_dump_json(), INPUTS)
+    assert isinstance(result, AdmissionRejected)
+    fault = next(
+        item for item in result.faults if item.details.get("defect") == "duplicate_map_destination"
+    )
+    assert fault.code == AdmissionCode.GRAPH_CONTRACT_INVALID
+    assert fault.path == ("connections", 1, "map", "briefs")
+    assert fault.details["destination_cardinality"] == cardinality
+    assert fault.details["selector"] == "b.brief"
+    assert fault.details["first_connection_index"] == 0
+    assert fault.details["first_selector"] == "a.brief"
+    assert "one distinct selector" in fault.repair
     with pytest.raises(AdmissionError, match="maps destination port 'briefs' twice"):
         system.validate(graph, INPUTS)
     with pytest.raises(AdmissionError, match="maps destination port 'briefs' twice"):
@@ -171,15 +183,38 @@ def test_map_object_order_is_not_fault_order(system: Constructicon) -> None:
 
 
 @pytest.mark.parametrize("wrapper", ["inline", "loop", "retained", "retained-inline"])
-def test_unused_map_coordinates_follow_the_bytes_that_own_them(
+@pytest.mark.parametrize(
+    ("defect", "cardinality"),
+    [
+        ("unused_map_destination", "many"),
+        ("duplicate_map_destination", "one"),
+        ("duplicate_map_destination", "optional"),
+        ("malformed_selector", "many"),
+    ],
+)
+def test_map_coordinates_follow_the_bytes_that_own_them(
     system: Constructicon,
     wrapper: str,
+    defect: str,
+    cardinality: str,
 ) -> None:
-    inner = membership_graph(system, selectors=("a.brief",))
-    inner = inner.model_copy(
-        update={"connections": (Connection(src="a", dst="gather", map={"lost": "a.brief"}),)}
+    duplicate = defect == "duplicate_map_destination"
+    inner = membership_graph(
+        system,
+        selectors=("a.brief", "a.brief", "b.brief") if duplicate else ("a.brief",),
+        destination_cardinality=cardinality,
     )
-    expected = ("nodes", 0, "body", "connections", 0, "map", "lost")
+    destination = "lost" if defect == "unused_map_destination" else "briefs"
+    if not duplicate:
+        selector = "foo" if defect == "malformed_selector" else "a.brief"
+        inner = inner.model_copy(
+            update={
+                "connections": (Connection(src="a", dst="gather", map={destination: selector}),)
+            }
+        )
+    # A repeated first selector coalesces; the third entry introduces the conflict.
+    coordinate = ("connections", 2 if duplicate else 0, "map", destination)
+    expected = ("nodes", 0, "body", *coordinate)
     definition_version = None
     if wrapper == "loop":
         definition, impl = atomic("maps/continue", (), (CONTINUE,), summarize_impl)
@@ -195,7 +230,7 @@ def test_unused_map_coordinates_follow_the_bytes_that_own_them(
             }
         )
         body = Loop(body=inner, feedback={}, continue_from="continue", max_iterations=1)
-        expected = ("nodes", 0, "body", "body", "connections", 0, "map", "lost")
+        expected = ("nodes", 0, "body", "body", *coordinate)
     elif wrapper.startswith("retained"):
         if wrapper == "retained-inline":
             inner = Graph(
@@ -217,10 +252,7 @@ def test_unused_map_coordinates_follow_the_bytes_that_own_them(
         expected = (
             "body",
             *(("nodes", 0, "body") if wrapper == "retained-inline" else ()),
-            "connections",
-            0,
-            "map",
-            "lost",
+            *coordinate,
         )
     else:
         body = inner
@@ -232,9 +264,7 @@ def test_unused_map_coordinates_follow_the_bytes_that_own_them(
     )
     rejected = system.admit_graph(graph.model_dump_json(), INPUTS)
     assert isinstance(rejected, AdmissionRejected)
-    fault = next(
-        item for item in rejected.faults if item.details.get("defect") == "unused_map_destination"
-    )
+    fault = next(item for item in rejected.faults if item.details.get("defect") == defect)
     assert fault.scope is not None
     assert fault.scope.segments[:2] == ("root/with: punctuation", "nested/instance")
     if definition_version is None:
@@ -245,11 +275,35 @@ def test_unused_map_coordinates_follow_the_bytes_that_own_them(
         assert fault.details["component"] == "maps/composite"
         assert fault.details["version"] == str(definition_version)
         assert fault.details["definition_path"] == list(expected)
-    with pytest.raises(AdmissionError, match="unused_map_destination"):
+    with pytest.raises(AdmissionError, match=defect):
         raw_admit(system, graph)
 
 
-@pytest.mark.parametrize("selector", ["a.missing", "a.", "$input.missing", "a.issue"])
+@pytest.mark.parametrize("loop", [False, True])
+@pytest.mark.parametrize("selector", ["foo", "a.", "$input", "$input.", ""])
+def test_malformed_selector_gets_a_grammar_repair(
+    system: Constructicon, loop: bool, selector: str
+) -> None:
+    graph = membership_graph(system, selectors=("a.brief",), loop=loop)
+    graph = graph.model_copy(
+        update={"connections": (Connection(src="a", dst="gather", map={"briefs": selector}),)}
+    )
+    result = system.admit_graph(graph.model_dump_json(), INPUTS)
+    assert isinstance(result, AdmissionRejected)
+    fault = next(item for item in result.faults if item.details.get("selector") == selector)
+    assert fault.code == AdmissionCode.GRAPH_CONTRACT_INVALID
+    assert fault.details["defect"] == "malformed_selector"
+    assert fault.path == ("connections", 0, "map", "briefs")
+    assert "must be 'node.port' or '$input.port'" in fault.message
+    assert "non-empty port segment" in fault.repair
+    assert "node.port" in fault.repair and "$input.port" in fault.repair
+    assert "scalar adapter" not in fault.repair
+    assert "resolved_count" not in fault.details
+    with pytest.raises(AdmissionError, match=r"must be 'node\.port'"):
+        raw_admit(system, graph)
+
+
+@pytest.mark.parametrize("selector", ["a.missing", "$input.missing", "a.issue"])
 def test_zero_resolved_sources_is_a_selector_contract_fault(
     system: Constructicon, selector: str
 ) -> None:

@@ -15,6 +15,30 @@ import textwrap
 
 MUTANTS = (
     (
+        "duplicate destination coordinate frame",
+        "constructicon.runtime.validator:_map_fault",
+        "location = entry.location.child(",
+        'if defect == "duplicate_map_destination":\n'
+        '        comp.faults.append(f"{scope.render()}: {message}")\n'
+        "        return\n"
+        "    location = entry.location.child(",
+        "tests/runtime/test_explicit_membership.py::test_distinct_scalar_maps_still_refuse_a_non_many_destination",
+    ),
+    (
+        "first conflicting distinct selector",
+        "constructicon.runtime.validator:_bind_node_inputs",
+        'comp, conflict, scope, "duplicate_map_destination",',
+        'comp, first, scope, "duplicate_map_destination",',
+        "tests/runtime/test_explicit_membership.py::test_map_coordinates_follow_the_bytes_that_own_them",
+    ),
+    (
+        "selector grammar refusal",
+        "constructicon.runtime.validator:_resolve_selector",
+        "if not port_name:",
+        "if False:",
+        "tests/runtime/test_explicit_membership.py::test_malformed_selector_gets_a_grammar_repair",
+    ),
+    (
         "unused destination",
         "constructicon.runtime.validator:_bind_node_inputs",
         "if entry.destination_port not in declared:",
