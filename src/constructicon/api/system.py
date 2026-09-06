@@ -497,6 +497,11 @@ class Constructicon:
 
     # -- introspection --------------------------------------------------------
 
+    @property
+    def admission_limits(self) -> AdmissionLimits:
+        """The same immutable bounds used by admission and its control projections."""
+        return self._admission_limits
+
     def describe(
         self,
         *,

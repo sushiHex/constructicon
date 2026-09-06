@@ -174,10 +174,8 @@ def panel(
 
     Literal Graph sugar and nothing more. The graph's inputs reach every member
     without a connection, because a graph input is in every node's binding
-    pool; the members reach the aggregator through one plain connection each,
-    and the aggregator's ``many`` port gathers what its upstream offers. No map
-    is written, because a map names one ``node.port`` and a fan-in of many is
-    exact by construction, not by naming.
+    pool. Each member explicitly maps its scalar result to the aggregator's
+    ``many`` port. Connection order is seat order; those maps replace the pool.
 
     Exact by construction means proved here, at authoring, from declared
     contracts — which is why members and the aggregator are bundles and never
@@ -185,19 +183,18 @@ def panel(
     cardinality ``one`` — a seat answers exactly once — and the same pair as
     every other member; the aggregator is atomic, because its law reads its
     own seat, and declares exactly one ``many``
-    port and it is that result contract; no boundary input — the request or an
-    aggregator policy input — carries that result contract, because a graph
-    input is in every node's pool and would be gathered as a member; and no
-    boundary port name repeats. A member of another contract would not fail —
-    it would be gathered by nobody and silently absent — so it is refused.
+    port and it is that result contract. The request is distinct from the result,
+    no policy input duplicates the gather's nominal role, and no boundary port
+    name repeats. At least two seats make the gather's plurality an admission
+    claim too. Maps seal the named result port, not an unstated request boundary.
 
     The combinator executes nothing, chooses no model, infers no quorum, and
     hides no scheduler. Quorum is the aggregator's ordinary typed input and
     arrives as a graph input beside the request.
     """
 
-    if not members:
-        raise ValueError("panel requires at least one member")
+    if len(members) < 2:
+        raise ValueError("panel requires at least two members; compose a single member directly")
     for member in members:
         if not isinstance(member, DefinitionBundle):
             raise TypeError("panel members must be definition bundles, not bare names")
@@ -213,10 +210,16 @@ def panel(
             "panel rather than inside its aggregator"
         )
     request, result = _one_member_contract(members)
+    if not result.name:
+        raise ValueError("panel requires a non-empty member result-port name for its selector")
+    if _same_contract(request, result):
+        raise TypeError("panel request and result must have distinct nominal contracts")
     gathers, policy_inputs = _aggregator_contract(aggregator, result)
 
     member_refs = tuple(member.ref() for member in members)
     member_ids = _node_ids(member_refs, ids)
+    if any("." in member_id for member_id in member_ids):
+        raise ValueError("panel member selectors require dot-free node ids; pass dot-free ids")
     gather_id = _node_ids((aggregator.ref(),), None)[0] if aggregator_id is None else aggregator_id
     _validate_ids((gather_id,))
     if gather_id in member_ids:
@@ -225,11 +228,11 @@ def panel(
         )
 
     inputs = (request, *policy_inputs)
-    for port in inputs:
+    for port in policy_inputs:
         if _same_contract(port, result):
             raise TypeError(
-                f"panel boundary input {port.name!r} has the members' result contract and "
-                "would be gathered as a member; a graph input is in every node's pool"
+                f"panel policy input {port.name!r} duplicates the gather's result contract; "
+                "the result-typed gather must be unique"
             )
     names = [port.name for port in inputs]
     if len(set(names)) != len(names):
@@ -237,7 +240,6 @@ def panel(
             f"panel boundary port names collide: {names}; the members' request and the "
             "aggregator's inputs must be distinctly named"
         )
-    del gathers  # proved present and matching; it is fed by the members, not the boundary
 
     nodes = (
         *(
@@ -247,7 +249,11 @@ def panel(
         GraphNode(id=NodeId(gather_id), body=aggregator.ref()),
     )
     connections = tuple(
-        Connection(src=NodeId(member_id), dst=NodeId(gather_id)) for member_id in member_ids
+        Connection(
+            src=NodeId(member_id), dst=NodeId(gather_id),
+            map={gathers.name: f"{member_id}.{result.name}"},
+        )
+        for member_id in member_ids
     )
     graph = Graph(
         name=name,

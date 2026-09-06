@@ -180,8 +180,8 @@ def test_panel_is_exactly_the_hand_authored_fan_out_and_fan_in(
             GraphNode(id="panel_tally", body=Ref(component="sdk/panel-tally")),
         ),
         connections=(
-            Connection(src="panel_yes", dst="panel_tally"),
-            Connection(src="panel_no", dst="panel_tally"),
+            Connection(src="panel_yes", dst="panel_tally", map={"votes": "panel_yes.vote"}),
+            Connection(src="panel_no", dst="panel_tally", map={"votes": "panel_no.vote"}),
         ),
         # The request every member asks about, then the aggregator's own
         # typed input: quorum is data the caller supplies, never a default.
@@ -369,8 +369,8 @@ def test_panel_with_explicit_ids_and_a_repeated_member_is_still_the_direct_graph
             GraphNode(id="tally", body=Ref(component="sdk/panel-tally")),
         ),
         connections=(
-            Connection(src="first", dst="tally"),
-            Connection(src="second", dst="tally"),
+            Connection(src="first", dst="tally", map={"votes": "first.vote"}),
+            Connection(src="second", dst="tally", map={"votes": "second.vote"}),
         ),
         inputs=(*panel_yes.definition.inputs, panel_tally.definition.inputs[1]),
         outputs=panel_tally.definition.outputs,
@@ -419,12 +419,19 @@ def test_a_second_compatible_producer_is_gathered_by_many_and_ambiguous_for_one(
         }
     )
     assert _gathered(system.validate(with_bystander, inputs)) == ["panel_no", "panel_yes"]
+    connected_bystander = with_bystander.model_copy(update={"connections": (
+        *with_bystander.connections, Connection(src="bystander", dst="panel_tally"),
+    )})
+    assert _gathered(system.validate(connected_bystander, inputs)) == ["panel_no", "panel_yes"]
+    unmapped_bystander = connected_bystander.model_copy(update={"connections": tuple(
+        connection.model_copy(update={"map": {}}) for connection in connected_bystander.connections
+    )})
+    assert _gathered(system.validate(unmapped_bystander, inputs)) == [
+        "bystander", "panel_no", "panel_yes",
+    ]
 
-    # The gather is the general connector law, not a panel privilege: a graph
-    # input of the members' contract is in every pool, and a compatible helper
-    # upstream of a member is in the aggregator's transitive closure. Both
-    # widen it. `panel()` never emits either shape; a hand-authored graph that
-    # does gets exactly what it connected.
+    # Explicit membership excludes a compatible graph input or transitive
+    # helper. Removing the maps restores the unchanged magnetic gather law.
     seed = Port(
         name="seed", type_id="sdk/Vote", schema_hash=panel_yes.definition.outputs[0].schema_hash
     )
@@ -432,7 +439,11 @@ def test_a_second_compatible_producer_is_gathered_by_many_and_ambiguous_for_one(
         update={"inputs": (*wider.definition.body.inputs, seed)}
     )
     seeded = {**inputs, "seed": {"approve": True}}
-    assert _gathered(system.validate(with_input, seeded)) == ["$input", "panel_no", "panel_yes"]
+    assert _gathered(system.validate(with_input, seeded)) == ["panel_no", "panel_yes"]
+    unmapped_input = with_input.model_copy(update={"connections": tuple(
+        connection.model_copy(update={"map": {}}) for connection in with_input.connections
+    )})
+    assert _gathered(system.validate(unmapped_input, seeded)) == ["$input", "panel_no", "panel_yes"]
 
     with_helper = wider.definition.body.model_copy(
         update={
@@ -446,7 +457,13 @@ def test_a_second_compatible_producer_is_gathered_by_many_and_ambiguous_for_one(
             ),
         }
     )
-    assert _gathered(system.validate(with_helper, inputs)) == ["helper", "panel_no", "panel_yes"]
+    assert _gathered(system.validate(with_helper, inputs)) == ["panel_no", "panel_yes"]
+    unmapped_helper = with_helper.model_copy(update={"connections": tuple(
+        connection.model_copy(update={"map": {}}) for connection in with_helper.connections
+    )})
+    assert _gathered(system.validate(unmapped_helper, inputs)) == [
+        "helper", "panel_no", "panel_yes",
+    ]
 
     # An aggregator without a `many` port cannot gather at all, so `panel()`
     # refuses it at authoring — and the hand-authored equivalent is the
@@ -528,15 +545,13 @@ def test_panel_refuses_what_would_be_gathered_wrongly_or_not_at_all() -> None:
     # A `many` port of another contract would gather none of the members and
     # admit an empty panel.
     with pytest.raises(TypeError, match="but the members produce"):
-        panel("sdk/deaf", panel_yes, aggregator=panel_tally_tallies)
+        panel("sdk/deaf", panel_yes, panel_yes, aggregator=panel_tally_tallies)
 
-    # A boundary input carrying the members' result contract sits in every
-    # node's pool and would be gathered as a member — whether it is a policy
-    # input of the aggregator or the members' own request.
-    with pytest.raises(TypeError, match="would be gathered as a member"):
-        panel("sdk/seeded", panel_yes, aggregator=panel_tally_seeded)
-    with pytest.raises(TypeError, match="would be gathered as a member"):
-        panel("sdk/echo", panel_echo, aggregator=panel_tally)
+    # One distinct question/result pair and one result-typed gather role.
+    with pytest.raises(TypeError, match="result-typed gather must be unique"):
+        panel("sdk/seeded", panel_yes, panel_yes, aggregator=panel_tally_seeded)
+    with pytest.raises(TypeError, match="distinct nominal contracts"):
+        panel("sdk/echo", panel_echo, panel_echo, aggregator=panel_tally)
 
     # A seat answers exactly once: a composite member whose result is `many`
     # would seat every internal source it gathers, and one whose result is
@@ -554,29 +569,31 @@ def test_panel_refuses_what_would_be_gathered_wrongly_or_not_at_all() -> None:
             ),
         )
         with pytest.raises(TypeError, match="one-cardinality request and result"):
-            panel(f"sdk/{cardinality}-member", wide, aggregator=panel_tally)
+            panel(f"sdk/{cardinality}-member", wide, wide, aggregator=panel_tally)
 
     # The aggregator's law reads its own seat; wrapped in a composite it would
     # sit beneath the aggregator node and place nothing.
     wrapped = component("sdk/panel-tally-wrapped", panel_tally)
     with pytest.raises(TypeError, match="must be atomic"):
-        panel("sdk/wrapped", panel_yes, aggregator=wrapped)
+        panel("sdk/wrapped", panel_yes, panel_yes, aggregator=wrapped)
 
     # Shape refusals: no members, a member of the wrong arity, an aggregator
     # with two gathers, and an aggregator id that is also a member id.
-    with pytest.raises(ValueError, match="at least one member"):
+    with pytest.raises(ValueError, match="at least two members"):
         panel("sdk/empty", aggregator=panel_tally)
+    with pytest.raises(ValueError, match="compose a single member directly"):
+        panel("sdk/single", panel_yes, aggregator=panel_tally)
     with pytest.raises(TypeError, match="exactly one input and one output"):
-        panel("sdk/arity", panel_tally, aggregator=panel_tally)
+        panel("sdk/arity", panel_tally, panel_tally, aggregator=panel_tally)
     with pytest.raises(TypeError, match="exactly one many-cardinality input"):
-        panel("sdk/twice", panel_yes, aggregator=panel_tally_twice)
+        panel("sdk/twice", panel_yes, panel_yes, aggregator=panel_tally_twice)
     with pytest.raises(ValueError, match="collides with a member id"):
-        panel("sdk/ids", panel_yes, aggregator=panel_tally, ids=("panel_tally",))
+        panel("sdk/ids", panel_yes, panel_yes, aggregator=panel_tally, ids=("panel_tally", "b"))
 
     # The members' request and the aggregator's policy share a boundary name.
     with pytest.raises(TypeError, match="boundary port names collide"):
-        panel("sdk/collide", panel_yes, aggregator=panel_tally_request)
+        panel("sdk/collide", panel_yes, panel_yes, aggregator=panel_tally_request)
 
     # A bare name carries no contract to prove anything from.
     with pytest.raises(TypeError, match="definition bundles"):
-        panel("sdk/bare", "sdk/panel-yes", aggregator=panel_tally)  # type: ignore[arg-type]
+        panel("sdk/bare", "sdk/panel-yes", panel_yes, aggregator=panel_tally)  # type: ignore[arg-type]
