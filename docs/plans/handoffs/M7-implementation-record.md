@@ -1071,13 +1071,14 @@ rows are written.
   proved; admission cannot re-prove a claim the graph does not make. So a
   member whose stable version is later promoted with a different output
   contract is absent from the gather and no fault is raised. Closing it needs
-  an authored expectation to re-prove. [M7.1 rev 3](../milestones/M7.1-connector-liveness-rev3.md)
-  finds that expectation already expressible: `Connection.map` names a port and
-  the selector that fills it, and admission already refuses a selector whose
-  contract does not match. `panel()` proves the gather and then discards the
-  proof instead of writing it as a map, and `_explicit_maps` refuses several
-  maps on one port regardless of cardinality. Rev 3 proposes both corrections
-  and no change to how any pool is built.
+  an authored expectation to re-prove.
+  [M7.1 rev 4](../milestones/M7.1-panel-membership-rev4.md) finds that
+  expectation already expressible: `Connection.map` names a port and the
+  selector that fills it. `panel()` proves the gather and then discards the
+  proof instead of writing it as a map. Rev 4 narrows the open item to panel
+  membership, makes mapped fan-in an ordered union of scalar selectors, and
+  requires every map destination to be consumed or refused. It leaves the
+  unmapped pool alone and explicitly does not retrofit retained panels.
 - `describe()` publishes the whole standard vocabulary in every description,
   filtered or not. It is the system's fixed L0 vocabulary rather than a
   property of the selected components; a per-selection projection would be a
@@ -1100,9 +1101,8 @@ rows are written.
   (`runtime/registry.py` store path and `_sqlite_registry.py`); the bytes
   law covers registration planning and application, not the store's
   duplicate-row check.
-- Connector liveness is not an admission rule, and
-  [M7.1](../milestones/M7.1-connector-liveness-rev2.md) decides what to do
-  about it. Two forms are refuted. The general form — a connection's source
+- Connector liveness is not an admission rule, and M7.1 decides against making
+  it one. Two forms are refuted. The general form — a connection's source
   must bind something at its destination — refuses the M1 vertical slice, whose
   transitive-visibility chain a validator test asserts, and invalidates the
   `Connection.map` repair that admission's own ambiguity fault publishes.
@@ -1112,11 +1112,14 @@ rows are written.
   pool instead and failed a cross-port counterexample: a member drifting to a
   contract that binds another aggregator input satisfies node-level liveness
   while the gather loses it. Every law tested the edge; membership is a claim
-  about a port. Rev 3 makes no law about connections at all: it lets several
-  connections map one `many` port, and has `panel()` map every seat, so the
-  existing contract-mismatch fault re-proves membership at the port. The
-  transitive gather stays as documented for unmapped ports — measurement shows
-  it load-bearing nowhere but the test that demonstrates it.
+  about a port. [Rev 4](../milestones/M7.1-panel-membership-rev4.md) makes no
+  liveness law: it lets several scalar selectors map one `many` port and has
+  `panel()` map every seat, so admission re-proves membership at that port. It
+  also closes the silent inverse — a map naming a destination absent from the
+  resolved boundary — and includes source cardinality in the explicit
+  boundary. The transitive gather stays as documented for unmapped ports. The
+  exactness guarantee begins with mapped graphs; retained pre-change panels
+  remain unmapped rather than being granted invented author intent.
 - A message a caller may not act on is refused with `AUTH_REQUIRED_SCOPE` rather
   than reported absent, which confirms that a supplied id exists. Deliberate:
   ids are derived digests over run, path, channel, lane, interaction, and port,

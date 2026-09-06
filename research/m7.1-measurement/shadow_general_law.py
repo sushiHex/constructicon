@@ -1,4 +1,10 @@
-"""Shadow-instrument the validator to measure connector liveness.
+"""WITHDRAWN first-pass connector-liveness instrument.
+
+Retained unchanged in mechanism as historical provenance, not as supporting
+evidence. Its module-global ``id()`` ledger permits object-id reuse, and graph
+output binding leaks into the same liveness set. Consequently its JSONL and
+counts are invalid. See ``../m7.1-connector-liveness-measurement.md`` for the
+correction. Do not use this script to support an architectural claim.
 
 Records, for every connection in every graph admission compiles, whether the
 source contributed a source object that was actually bound at the destination.

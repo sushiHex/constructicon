@@ -52,7 +52,8 @@ the eventual code differs.
 | M7 | [Channels and panel rev 2](milestones/M7-channels-and-panel-rev2.md) | Absorbs the rev 1 defects, records the authority slices A and B established, and plans C and D | Approved implementation baseline; A, B, C, and D merged |
 | M7.1 | [Connector liveness rev 1](milestones/M7.1-connector-liveness-rev1.md) | Written against `main` at `83ee65d`; refutes both candidate liveness laws by shadow measurement and cross-review | Superseded by rev 2. Its refutations stand; its conclusion that no law can close the defect does not |
 | M7.1 | [Connector liveness rev 2](milestones/M7.1-connector-liveness-rev2.md) | Successor after measuring where gathered sources actually come from; proposed scoping a `many` port to its connections | Superseded by rev 3. Its measurement stands; its exactness claim failed a cross-port counterexample and its scoping broke composite boundaries |
-| M7.1 | [Connector liveness rev 3](milestones/M7.1-connector-liveness-rev3.md) | Successor that leaves the pool alone: several connections may map one `many` port, and `panel()` states its membership through them, re-proved by the existing contract-mismatch fault | Review draft; requires an ADR with PR A |
+| M7.1 | [Connector liveness rev 3](milestones/M7.1-connector-liveness-rev3.md) | Successor that leaves the pool alone: several connections may map one `many` port, and `panel()` states its membership through them, re-proved by the existing contract-mismatch fault | Superseded by rev 4. Its core survived; its destination-totality, cardinality, counterfactual, and schema claims did not |
+| M7.1 | [Panel membership rev 4](milestones/M7.1-panel-membership-rev4.md) | Successor that narrows the scope to authored panel membership, makes mapped fan-in an ordered union of scalar selectors, validates every map, and decides the Graph/description version boundary | Review draft; requires acceptance of proposed ADR 0017 before implementation |
 
 ## Handoffs
 
