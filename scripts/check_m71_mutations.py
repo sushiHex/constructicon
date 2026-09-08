@@ -15,6 +15,13 @@ import textwrap
 
 MUTANTS = (
     (
+        "empty node remains a representable selector",
+        "constructicon.runtime.validator:_resolve_selector",
+        "if not port_name:",
+        "if not node_name or not port_name:",
+        "tests/runtime/test_membership_compatibility.py::test_empty_node_selector_preserves_the_base_manifest",
+    ),
+    (
         "duplicate destination coordinate frame",
         "constructicon.runtime.validator:_map_fault",
         "location = entry.location.child(",
