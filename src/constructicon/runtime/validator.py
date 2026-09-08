@@ -254,6 +254,8 @@ def _compile_graph(
 ) -> dict[str, list[_Source]]:
     """Compile one graph level and return its declared output sources."""
 
+    if not _validate_connection_endpoints(comp, graph, scope=scope, location=location):
+        return {}
     _validate_unique_ports(comp, graph.inputs, where=f"{scope.render()} graph inputs")
     _validate_unique_ports(comp, graph.outputs, where=f"{scope.render()} graph outputs")
 
@@ -1040,16 +1042,29 @@ def _map_fault(
     message: str,
     **evidence: Any,
 ) -> None:
-    location = entry.location.child(
-        "connections", entry.connection_index, "map", entry.destination_port
+    _located_fault(
+        comp,
+        entry.location.child("connections", entry.connection_index, "map", entry.destination_port),
+        scope, defect, message,
+        connection_index=entry.connection_index,
+        destination_node=entry.destination_node,
+        destination_port=entry.destination_port,
+        selector=entry.selector,
+        **evidence,
     )
+
+
+def _located_fault(
+    comp: _Compilation,
+    location: _GraphLocation,
+    scope: ScopePath,
+    defect: str,
+    message: str,
+    **evidence: Any,
+) -> None:
     details = {
         "defect": defect,
         "scope": list(scope.segments),
-        "connection_index": entry.connection_index,
-        "destination_node": entry.destination_node,
-        "destination_port": entry.destination_port,
-        "selector": entry.selector,
         **evidence,
     }
     if location.retained is None:
@@ -1193,11 +1208,34 @@ def _compile_grants(
     )
 
 
+def _validate_connection_endpoints(
+    comp: _Compilation,
+    graph: Graph,
+    *,
+    scope: ScopePath,
+    location: _GraphLocation,
+) -> bool:
+    declared = {node.id for node in graph.nodes}
+    valid = True
+    for index, connection in enumerate(graph.connections):
+        missing = [
+            role for role, name in (("src", connection.src), ("dst", connection.dst))
+            if name not in declared
+        ]
+        if missing:
+            valid = False
+            _located_fault(
+                comp, location.child("connections", index), scope, "unknown_connection_node",
+                f"connection {index} names undeclared endpoint roles {missing!r}",
+                connection_index=index, source_node=connection.src,
+                destination_node=connection.dst, missing_roles=missing,
+            )
+    return valid
+
+
 def _upstream_closure(graph: Graph) -> dict[str, list[str]]:
     direct: dict[str, list[str]] = {node.id: [] for node in graph.nodes}
     for connection in graph.connections:
-        if connection.src not in direct or connection.dst not in direct:
-            continue
         direct[connection.dst].append(connection.src)
     closure: dict[str, list[str]] = {}
 
