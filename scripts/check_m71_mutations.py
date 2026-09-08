@@ -1,4 +1,4 @@
-"""Run the PR A law mutations in isolated interpreters; never edit the checkout.
+"""Run the M7.1 law mutations in isolated interpreters; never edit the checkout.
 
 Each replacement is confined to one function's code object. Imported aliases
 therefore see it too. A pytest assertion failure kills a mutant; collection or
@@ -15,13 +15,90 @@ import textwrap
 
 MUTANTS = (
     (
+        "endpoint validation is mandatory",
+        "constructicon.runtime.validator:_compile_graph",
+        "if not _validate_connection_endpoints(comp, graph, scope=scope, location=location):",
+        "if False:",
+        "tests/runtime/test_connection_endpoints.py::test_unknown_endpoints_have_one_exact_fault_per_connection",
+    ),
+    (
+        "endpoint-invalid graph stops before compilation",
+        "constructicon.runtime.validator:_compile_graph",
+        "raise AdmissionError(comp.faults)",
+        "pass",
+        "tests/runtime/test_connection_endpoints.py::test_bad_endpoints_stop_before_reachability_and_node_compilation",
+    ),
+    (
+        "failed boundary is not an empty output set",
+        "constructicon.runtime.validator:_compile_graph",
+        "raise AdmissionError(comp.faults)",
+        "return {}",
+        "tests/runtime/test_connection_endpoints.py::test_endpoint_failure_unwinds_parent_compilation",
+    ),
+    (
+        "retained inner Loop keeps its body coordinate at admission",
+        "constructicon.runtime.validator:_compile_loop",
+        'location=location.child("body"),\n        )\n    member_order',
+        "location=location,\n        )\n    member_order",
+        "tests/runtime/test_connection_endpoints.py::test_unknown_endpoints_have_one_exact_fault_per_connection[False-missing_roles2-retained-with-loop]",
+    ),
+    (
+        "retained inner Loop keeps its body coordinate in counterfactual refusal",
+        "constructicon.runtime.validator:_compile_loop",
+        'location=location.child("body"),\n        )\n    member_order',
+        "location=location,\n        )\n    member_order",
+        "tests/api/test_endpoint_admission.py::test_historical_endpoint_fault_is_baseline_invalid_and_reproduce_stays_exact[False-retained-with-loop]",
+    ),
+    (
+        "source endpoint is accounted for",
+        "constructicon.runtime.validator:_validate_connection_endpoints",
+        "if name not in declared",
+        'if role == "dst" and name not in declared',
+        "tests/runtime/test_connection_endpoints.py::test_unknown_endpoints_have_one_exact_fault_per_connection",
+    ),
+    (
+        "destination endpoint is accounted for",
+        "constructicon.runtime.validator:_validate_connection_endpoints",
+        "if name not in declared",
+        'if role == "src" and name not in declared',
+        "tests/runtime/test_connection_endpoints.py::test_unknown_endpoints_have_one_exact_fault_per_connection",
+    ),
+    (
+        "missing endpoint roles retain their order",
+        "constructicon.runtime.validator:_validate_connection_endpoints",
+        '(("src", connection.src), ("dst", connection.dst))',
+        '(("dst", connection.dst), ("src", connection.src))',
+        "tests/runtime/test_connection_endpoints.py::test_unknown_endpoints_have_one_exact_fault_per_connection",
+    ),
+    (
+        "endpoint coordinate names the connection",
+        "constructicon.runtime.validator:_validate_connection_endpoints",
+        'location.child("connections", index)',
+        "location",
+        "tests/runtime/test_connection_endpoints.py::test_unknown_endpoints_have_one_exact_fault_per_connection",
+    ),
+    (
+        "historical endpoints are baseline failures",
+        "constructicon.api._control_commands:_CommandExecutor._admit_counterfactual",
+        "manifest = self._system.validate(source.source_graph, inputs, resolution_lock=lock)",
+        "manifest = source",
+        "tests/api/test_endpoint_admission.py::test_historical_endpoint_fault_is_baseline_invalid_and_reproduce_stays_exact",
+    ),
+    (
+        "empty node remains a representable selector",
+        "constructicon.runtime.validator:_resolve_selector",
+        "if not port_name:",
+        "if not node_name or not port_name:",
+        "tests/runtime/test_membership_compatibility.py::test_empty_node_selector_preserves_the_base_manifest",
+    ),
+    (
         "duplicate destination coordinate frame",
-        "constructicon.runtime.validator:_map_fault",
-        "location = entry.location.child(",
+        "constructicon.runtime.validator:_located_fault",
+        "details = {",
         'if defect == "duplicate_map_destination":\n'
         '        comp.faults.append(f"{scope.render()}: {message}")\n'
         "        return\n"
-        "    location = entry.location.child(",
+        "    details = {",
         "tests/runtime/test_explicit_membership.py::test_distinct_scalar_maps_still_refuse_a_non_many_destination",
     ),
     (

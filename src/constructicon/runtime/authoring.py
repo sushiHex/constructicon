@@ -29,7 +29,12 @@ from constructicon.runtime._resolution import select_version
 from constructicon.runtime.registry import CapabilityDescriptor
 from constructicon.runtime.validator import admit
 
-_MAP_FAULTS: dict[str, tuple[AdmissionCode, str]] = {
+_LOCATED_FAULTS: dict[str, tuple[AdmissionCode, str]] = {
+    "unknown_connection_node": (
+        AdmissionCode.GRAPH_CONTRACT_INVALID,
+        "name a declared node for each connection endpoint; repair the retained definition "
+        "or pin a compatible version when definition_path is present",
+    ),
     "unused_map_destination": (
         AdmissionCode.GRAPH_CONTRACT_INVALID,
         "map a declared destination input; repair the retained definition or pin "
@@ -401,9 +406,9 @@ def _classify_fault(
     # and the whole message is prose.
     carried = _framed_details(message)
     if carried is not None:
-        map_fault = _MAP_FAULTS.get(carried["defect"])
-        if map_fault is not None:
-            code, repair = map_fault
+        located_fault = _LOCATED_FAULTS.get(carried["defect"])
+        if located_fault is not None:
+            code, repair = located_fault
             return AdmissionFault(
                 code=code,
                 message=message,
@@ -504,7 +509,7 @@ def _framed_details(message: str) -> dict[str, Any] | None:
     except ValueError:
         return None
     if isinstance(carried, dict) and (
-        carried.get("defect") == "retained_composite" or carried.get("defect") in _MAP_FAULTS
+        carried.get("defect") == "retained_composite" or carried.get("defect") in _LOCATED_FAULTS
     ):
         return carried
     return None
