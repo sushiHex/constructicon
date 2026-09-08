@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from itertools import islice
 from typing import Any
 
 from constructicon.core.address import LOOP_BODY_SEGMENT, NodeId, ScopePath
@@ -26,7 +27,7 @@ from constructicon.core.grants import (
     ModelSelection,
     Posture,
 )
-from constructicon.core.graph import Connection, Graph, GraphNode, Loop, Ref
+from constructicon.core.graph import Graph, GraphNode, Loop, Ref
 from constructicon.core.human import canonical_exchange_fault
 from constructicon.core.identity import canonical_json, digest, json_value
 from constructicon.core.manifest import (
@@ -54,6 +55,7 @@ from constructicon.core.ports import (
     same_boundary,
 )
 from constructicon.core.registry import RegistrySnapshot, StoredVersion
+from constructicon.runtime._resolution import select_version
 from constructicon.runtime.registry import CapabilityDescriptor, embedded_schema_faults
 
 
@@ -61,6 +63,26 @@ from constructicon.runtime.registry import CapabilityDescriptor, embedded_schema
 class _Source:
     address: PortAddress
     port: Port
+
+
+@dataclass(frozen=True)
+class _GraphLocation:
+    """An exact coordinate in the proposal or one retained definition's bytes."""
+
+    path: tuple[str | int, ...] = ()
+    retained: tuple[str, str] | None = None
+
+    def child(self, *parts: str | int) -> _GraphLocation:
+        return _GraphLocation((*self.path, *parts), self.retained)
+
+
+@dataclass(frozen=True)
+class _MapEntry:
+    connection_index: int
+    destination_node: str
+    destination_port: str
+    selector: str
+    location: _GraphLocation
 
 
 @dataclass
@@ -144,6 +166,7 @@ def admit(
         input_sources=input_sources,
         grants=root_grants,
         loop_depth=0,
+        location=_GraphLocation(),
     )
 
     for port in graph.outputs:
@@ -227,6 +250,7 @@ def _compile_graph(
     input_sources: dict[str, list[_Source]],
     grants: EffectiveGrants,
     loop_depth: int,
+    location: _GraphLocation,
 ) -> dict[str, list[_Source]]:
     """Compile one graph level and return its declared output sources."""
 
@@ -235,7 +259,10 @@ def _compile_graph(
 
     upstream = _upstream_closure(graph)
     node_outputs: dict[str, dict[str, list[_Source]]] = {}
-    explicit = _explicit_maps(graph)
+    explicit: dict[str, list[_MapEntry]] = {}
+    for entry in _explicit_maps(graph, location):
+        explicit.setdefault(entry.destination_node, []).append(entry)
+    node_indices = {node.id: index for index, node in enumerate(graph.nodes)}
 
     for node in _ordered_nodes(graph, upstream):
         pool: list[_Source] = []
@@ -250,11 +277,12 @@ def _compile_graph(
             node,
             level_scope=scope,
             pool=pool,
-            explicit=explicit.get(node.id, {}),
+            explicit=explicit.get(node.id, []),
             node_lookup=node_outputs,
             input_sources=input_sources,
             grants=grants,
             loop_depth=loop_depth,
+            location=location.child("nodes", node_indices[node.id], "body"),
         )
 
     outputs: dict[str, list[_Source]] = {}
@@ -288,11 +316,12 @@ def _compile_node(
     *,
     level_scope: ScopePath,
     pool: list[_Source],
-    explicit: dict[str, str],
+    explicit: list[_MapEntry],
     node_lookup: dict[str, dict[str, list[_Source]]],
     input_sources: dict[str, list[_Source]],
     grants: EffectiveGrants,
     loop_depth: int,
+    location: _GraphLocation,
 ) -> dict[str, list[_Source]]:
     body = node.body
     instance_scope = level_scope.child(node.id)
@@ -315,6 +344,7 @@ def _compile_node(
             node_lookup=node_lookup,
             input_sources=input_sources,
             grants=grants,
+            location=location,
         )
 
     if isinstance(body, Ref):
@@ -352,6 +382,9 @@ def _compile_node(
                 input_sources=retagged,
                 grants=node_grants,
                 loop_depth=loop_depth,
+                location=_GraphLocation(
+                    ("body",), (definition.name, str(stored.content_hash))
+                ),
             )
         return _register_atomic(
             comp,
@@ -382,6 +415,7 @@ def _compile_node(
         input_sources=bound_inputs,
         grants=grants,
         loop_depth=loop_depth,
+        location=location,
     )
 
 
@@ -392,10 +426,11 @@ def _compile_loop(
     *,
     level_scope: ScopePath,
     pool: list[_Source],
-    explicit: dict[str, str],
+    explicit: list[_MapEntry],
     node_lookup: dict[str, dict[str, list[_Source]]],
     input_sources: dict[str, list[_Source]],
     grants: EffectiveGrants,
+    location: _GraphLocation,
 ) -> dict[str, list[_Source]]:
     """Compile one loop into a complete, sealed mini-program."""
 
@@ -469,39 +504,12 @@ def _compile_loop(
 
     initial_bindings: list[ResolvedPortBinding] = []
     boundary_sources: dict[str, list[_Source]] = {}
+    bound_inputs = _bind_node_inputs(
+        comp, node, body_inputs, level_scope, pool, explicit, node_lookup,
+        input_sources, feedback=frozenset(loop.feedback), boundary=True,
+    )
     for port in body_inputs:
-        selected: list[_Source] | None
-        if port.name in explicit:
-            selected = _resolve_selector(
-                comp,
-                explicit[port.name],
-                node_lookup,
-                input_sources,
-                where=f"{loop_scope.render()} boundary",
-            )
-            if selected is not None:
-                selected = _validate_explicit_sources(
-                    comp,
-                    port,
-                    selected,
-                    where=f"{loop_scope.render()} boundary",
-                )
-        else:
-            compatible = [source for source in pool if _source_matches(source, port)]
-            if not compatible and port.name in loop.feedback:
-                comp.faults.append(
-                    f"{loop_scope.render()}: feedback port {port.name!r} needs an "
-                    "initial value at the outer level; connect a matching seed or "
-                    "add a per-port map override"
-                )
-                selected = None
-            else:
-                selected = _bind_port(
-                    comp,
-                    port,
-                    pool,
-                    where=f"{loop_scope.render()} boundary",
-                )
+        selected = bound_inputs.get(port.name)
         if selected is None:
             continue
         destination = GraphInputAddress(scope=body_scope, port=port.name)
@@ -521,11 +529,12 @@ def _compile_loop(
             synthetic,
             level_scope=body_scope,
             pool=[source for sources in boundary_sources.values() for source in sources],
-            explicit={},
+            explicit=[],
             node_lookup={},
             input_sources=boundary_sources,
             grants=grants,
             loop_depth=1,
+            location=location.child("body"),
         )
     else:
         body_outputs = _compile_graph(
@@ -535,6 +544,7 @@ def _compile_loop(
             input_sources=boundary_sources,
             grants=grants,
             loop_depth=1,
+            location=location.child("body"),
         )
     member_order = tuple(comp.atomic_scopes[atomic_start:])
     if not member_order:
@@ -685,6 +695,7 @@ def _resolve_ref(
     """Resolve a Ref against the admission's one immutable snapshot (I12)."""
 
     snapshot = comp.snapshot
+    stored = select_version(snapshot, ref, where, comp.resolution_lock)
     if comp.resolution_lock is not None:
         pin = comp.resolution_lock.get(where.segments)
         if pin is None:
@@ -700,7 +711,6 @@ def _resolve_ref(
                 f"{pin.component!r}, graph resolves {ref.component!r} — topology changed"
             )
             return None
-        stored = snapshot.get(pin.component, pin.version)
         if stored is None:
             comp.faults.append(
                 f"{where.render()}: resolution lock requires retained exact version "
@@ -725,14 +735,12 @@ def _resolve_ref(
                 "(registration never propagates; promotion does)"
             )
             return None
-        stored = snapshot.get(ref.component, stable)
         if stored is None:
             comp.faults.append(
                 f"{where.render()}: component {ref.component!r} stable pointer "
                 f"{str(stable)!r} names no stored version — registry damage"
             )
         return stored
-    stored = snapshot.versions.get(ref.component, {}).get(ref.version)
     if stored is None:
         registered = list(snapshot.order.get(ref.component, ()))
         comp.faults.append(
@@ -908,25 +916,54 @@ def _bind_node_inputs(
     inputs: tuple[Port, ...],
     level_scope: ScopePath,
     pool: list[_Source],
-    explicit: dict[str, str],
+    explicit: list[_MapEntry],
     node_lookup: dict[str, dict[str, list[_Source]]],
     input_sources: dict[str, list[_Source]],
+    *,
+    feedback: frozenset[str] = frozenset(),
+    boundary: bool = False,
 ) -> dict[str, list[_Source]]:
     bound: dict[str, list[_Source]] = {}
-    where = f"{level_scope.child(node.id).render()} input"
-    for port in inputs:
-        if port.name in explicit:
-            sources = _resolve_selector(
-                comp,
-                explicit[port.name],
-                node_lookup,
-                input_sources,
-                where=where,
+    scope = level_scope.child(node.id)
+    where = f"{scope.render()} {'boundary' if boundary else 'input'}"
+    declared = {port.name for port in inputs}
+    by_port: dict[str, dict[str, _MapEntry]] = {}
+    for entry in explicit:
+        if entry.destination_port not in declared:
+            _map_fault(
+                comp, entry, scope, "unused_map_destination",
+                f"map destination {entry.destination_port!r} names no declared input",
             )
-            if sources is not None:
-                validated = _validate_explicit_sources(comp, port, sources, where=where)
-                if validated is not None:
-                    bound[port.name] = validated
+        else:
+            by_port.setdefault(entry.destination_port, {}).setdefault(entry.selector, entry)
+    for port in inputs:
+        entries = by_port.get(port.name)
+        if entries:
+            if port.cardinality != "many" and len(entries) > 1:
+                first, conflict = islice(entries.values(), 2)
+                selectors = ", ".join(repr(selector) for selector in entries)
+                _map_fault(
+                    comp, conflict, scope, "duplicate_map_destination",
+                    f"maps destination port {port.name!r} "
+                    f"twice ({selectors}); cardinality is {port.cardinality!r}",
+                    destination_cardinality=port.cardinality,
+                    first_connection_index=first.connection_index,
+                    first_selector=first.selector,
+                )
+                continue
+            selected = [
+                _resolve_selector(comp, entry, port, node_lookup, input_sources, scope=scope)
+                for entry in entries.values()
+            ]
+            if all(source is not None for source in selected):
+                bound[port.name] = [source for source in selected if source is not None]
+            continue
+        if port.name in feedback and not any(_source_matches(source, port) for source in pool):
+            comp.faults.append(
+                f"{scope.render()}: feedback port {port.name!r} needs an "
+                "initial value at the outer level; connect a matching seed or "
+                "add a per-port map override"
+            )
             continue
         sources = _bind_port(comp, port, pool, where=where)
         if sources is not None:
@@ -995,54 +1032,88 @@ def _bind_port(
     return None
 
 
-def _validate_explicit_sources(
+def _map_fault(
     comp: _Compilation,
-    port: Port,
-    sources: list[_Source],
-    *,
-    where: str,
-) -> list[_Source] | None:
-    incompatible = [source for source in sources if not _source_matches(source, port)]
-    if incompatible:
-        comp.faults.append(
-            f"{where} port {port.name!r}: explicit selector names "
-            f"{sorted(_describe(source) for source in incompatible)}, but the port "
-            f"requires {port.type_id!r}@{port.schema_hash!r}"
+    entry: _MapEntry,
+    scope: ScopePath,
+    defect: str,
+    message: str,
+    **evidence: Any,
+) -> None:
+    location = entry.location.child(
+        "connections", entry.connection_index, "map", entry.destination_port
+    )
+    details = {
+        "defect": defect,
+        "scope": list(scope.segments),
+        "connection_index": entry.connection_index,
+        "destination_node": entry.destination_node,
+        "destination_port": entry.destination_port,
+        "selector": entry.selector,
+        **evidence,
+    }
+    if location.retained is None:
+        details["path"] = list(location.path)
+    else:
+        details.update(
+            component=location.retained[0], version=location.retained[1],
+            definition_path=list(location.path),
         )
-        return None
-    if port.cardinality != "many" and len(sources) != 1:
-        comp.faults.append(
-            f"{where} port {port.name!r}: explicit selector resolves to "
-            f"{len(sources)} sources but cardinality is {port.cardinality!r}"
-        )
-        return None
-    return sources
+    comp.faults.append(
+        f"{scope.render()}: {message}{FAULT_DETAILS_SEPARATOR}{canonical_json(details)}"
+    )
 
 
 def _resolve_selector(
     comp: _Compilation,
-    selector: str,
+    entry: _MapEntry,
+    port: Port,
     node_lookup: dict[str, dict[str, list[_Source]]],
     input_sources: dict[str, list[_Source]],
     *,
-    where: str,
-) -> list[_Source] | None:
-    node_name, _, port_name = selector.partition(".")
+    scope: ScopePath,
+) -> _Source | None:
+    node_name, _, port_name = entry.selector.partition(".")
     if not port_name:
-        comp.faults.append(
-            f"{where}: selector {selector!r} must be 'node.port' or '$input.port'"
+        _map_fault(
+            comp, entry, scope, "malformed_selector",
+            f"selector {entry.selector!r} must be 'node.port' or '$input.port'",
         )
         return None
     if node_name == "$input":
-        sources = input_sources.get(port_name)
+        sources = input_sources.get(port_name, [])
     else:
-        sources = node_lookup.get(node_name, {}).get(port_name)
-    if not sources:
-        comp.faults.append(
-            f"{where}: selector {selector!r} names no known upstream output"
+        sources = node_lookup.get(node_name, {}).get(port_name, [])
+    if len(sources) != 1:
+        _map_fault(
+            comp, entry, scope, "explicit_source_contract",
+            f"explicit selector {entry.selector!r} resolves to {len(sources)} sources; "
+            "each selector must name exactly one scalar producer",
+            resolved_count=len(sources),
         )
         return None
-    return sources
+    source = sources[0]
+    if source.port.cardinality != "one":
+        _map_fault(
+            comp, entry, scope, "explicit_source_contract",
+            f"explicit selector {entry.selector!r} has source cardinality "
+            f"{source.port.cardinality!r}; requires 'one' — compose a scalar adapter",
+            source_cardinality=source.port.cardinality,
+        )
+        return None
+    if not _source_matches(source, port):
+        _map_fault(
+            comp, entry, scope, "explicit_source_contract",
+            f"explicit selector {entry.selector!r} offers {source.port.type_id!r}@"
+            f"{source.port.schema_hash!r}, but destination requires "
+            f"{port.type_id!r}@{port.schema_hash!r}",
+            source_contract={
+                "type_id": source.port.type_id, "schema_hash": source.port.schema_hash,
+            },
+            destination_contract={"type_id": port.type_id, "schema_hash": port.schema_hash},
+        )
+        return None
+    return source
 
 
 def _compile_grants(
@@ -1176,26 +1247,12 @@ def _ordered_nodes(graph: Graph, upstream: dict[str, list[str]]) -> list[GraphNo
     return ordered
 
 
-def _explicit_maps(graph: Graph) -> dict[str, dict[str, str]]:
-    maps: dict[str, dict[str, str]] = {}
-    for connection in _connections(graph):
-        if connection.map:
-            destination = maps.setdefault(connection.dst, {})
-            for port, selector in connection.map.items():
-                prior = destination.get(port)
-                if prior is not None and prior != selector:
-                    raise AdmissionError(
-                        [
-                            f"graph {graph.name!r} maps destination port {port!r} "
-                            f"twice ({prior!r}, {selector!r})"
-                        ]
-                    )
-                destination[port] = selector
-    return maps
-
-
-def _connections(graph: Graph) -> tuple[Connection, ...]:
-    return graph.connections
+def _explicit_maps(graph: Graph, location: _GraphLocation) -> tuple[_MapEntry, ...]:
+    return tuple(
+        _MapEntry(index, connection.dst, port, selector, location)
+        for index, connection in enumerate(graph.connections)
+        for port, selector in sorted(connection.map.items())
+    )
 
 
 def _validate_unique_ports(

@@ -13,7 +13,7 @@ settles what a message is, and
 [ADR 0015](0015-human-authority-on-channels.md), which settles who may read and
 answer one. [ADR 0016](0016-positive-durable-facts-and-provenance-eras.md)
 settles how immutable facts remain distinguishable from absence and how exact
-historical writer eras retain only their original authority. Proposed
+historical writer eras retain only their original authority. Accepted
 [ADR 0017](0017-panel-membership-is-an-authored-map.md) records the M7.1
 decision that exact panel membership is an authored port map, not inferred
 connector liveness.

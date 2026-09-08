@@ -1,6 +1,6 @@
 # 0017 — Panel membership is an authored map
 
-**Status:** proposed (M7.1) — acceptance gates implementation
+**Status:** accepted (M7.1), 2026-09-06 — rev 4 approved and PR #22 merged
 
 ## Context
 

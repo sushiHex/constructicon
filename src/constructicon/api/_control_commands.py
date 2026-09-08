@@ -148,6 +148,22 @@ def _same_json_fact(left: object, right: object) -> bool:
         raise JournalDamaged("durable JSON fact is not canonical") from exc
 
 
+def _resolution_lock_for(
+    source: ExecutionManifest, overrides: Mapping[str, Digest],
+) -> ResolutionLock:
+    return ResolutionLock(
+        source_manifest_hash=source.manifest_hash,
+        pins=tuple(
+            ResolutionPin(
+                scope=resolution.scope,
+                component=resolution.component,
+                version=overrides.get(resolution.component, resolution.resolved_version),
+            )
+            for resolution in source.resolved_components
+        ),
+    )
+
+
 class _PlanModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
@@ -1756,32 +1772,12 @@ class _CommandExecutor:
                             f"override {name!r}@{version} is not retained",
                             "choose an exact version returned by registry_versions",
                         )
-                lock = ResolutionLock(
-                    source_manifest_hash=source_manifest.manifest_hash,
-                    pins=tuple(
-                        ResolutionPin(
-                            scope=resolution.scope,
-                            component=resolution.component,
-                            version=normalized_overrides.get(
-                                resolution.component, resolution.resolved_version
-                            ),
-                        )
-                        for resolution in source_manifest.resolved_components
-                    ),
+                admitted = self._admit_counterfactual(
+                    claim, source_manifest, source_inputs, normalized_overrides,
                 )
-                try:
-                    manifest = self._system.validate(
-                        source_manifest.source_graph,
-                        source_inputs,
-                        resolution_lock=lock,
-                    )
-                except AdmissionError as exc:
-                    return self._terminal_control_fault(
-                        claim,
-                        ControlCode.COUNTERFACTUAL_LOCK_MISMATCH,
-                        str(exc),
-                        "use a contract-compatible exact override; topology changes wait for M9",
-                    )
+                if isinstance(admitted, ControlRejected):
+                    return admitted
+                manifest, lock = admitted
                 mode = "simulated"
                 capability_mode = "discard"
             run_id = run_id_for_command(claim.command_id)
@@ -1829,6 +1825,65 @@ class _CommandExecutor:
         self._complete_command(claim, response)
         self._launch_new_run(run_id)
         return response
+
+    def _admit_counterfactual(
+        self,
+        claim: CommandClaim,
+        source: ExecutionManifest,
+        inputs: dict[str, Any],
+        overrides: dict[str, Digest],
+    ) -> tuple[ExecutionManifest, ResolutionLock] | ControlRejected:
+        """Prove the exact baseline before judging any changed world.
+
+        Maps prove consumed ports. M6's override promise is stronger: every
+        affected instance retains its complete published boundary identity.
+        """
+
+        lock = _resolution_lock_for(source, {})
+        try:
+            manifest = self._system.validate(source.source_graph, inputs, resolution_lock=lock)
+        except AdmissionError as exc:
+            return self._terminal_control_fault(
+                claim, ControlCode.REQUEST_INVALID, str(exc),
+                "use runs_reproduce for the retained behavior, or re-author a graph that "
+                "satisfies current admission law before requesting a counterfactual run",
+                {"admission_faults": [fault.model_dump(mode="json") for fault in exc.faults]},
+            )
+        if not overrides:
+            return manifest, lock
+        lock = _resolution_lock_for(source, overrides)
+        repair = "use a contract-compatible exact override; topology changes wait for M9"
+        try:
+            manifest = self._system.validate(source.source_graph, inputs, resolution_lock=lock)
+        except AdmissionError as exc:
+            return self._terminal_control_fault(
+                claim, ControlCode.COUNTERFACTUAL_LOCK_MISMATCH, str(exc), repair,
+                {"admission_faults": [fault.model_dump(mode="json") for fault in exc.faults]},
+            )
+        final = {
+            resolution.scope.segments: resolution for resolution in manifest.resolved_components
+        }
+        changes: list[JsonValue] = []
+        for before in sorted(source.resolved_components, key=lambda item: item.scope.segments):
+            if before.component not in overrides:
+                continue
+            # Successful locked admission proves the exact scope inventory.
+            after = final[before.scope.segments]
+            if before.contract_hash != after.contract_hash:
+                changes.append({
+                    "scope": list(before.scope.segments), "component": before.component,
+                    "source_contract_hash": str(before.contract_hash),
+                    "override_contract_hash": str(after.contract_hash),
+                })
+        if changes:
+            limit = self._system.admission_limits.max_fault_detail_items
+            return self._terminal_control_fault(
+                claim, ControlCode.COUNTERFACTUAL_LOCK_MISMATCH,
+                "exact overrides change the complete source component boundary", repair,
+                {"affected_scopes": changes[:limit], "affected_total": len(changes),
+                 "truncated": len(changes) > limit},
+            )
+        return manifest, lock
 
     # -- command law ------------------------------------------------------
 
@@ -2159,20 +2214,7 @@ class _CommandExecutor:
                 ):
                     raise JournalDamaged("reproduce plan changed its source world")
                 return
-            expected_lock = ResolutionLock(
-                source_manifest_hash=source_manifest.manifest_hash,
-                pins=tuple(
-                    ResolutionPin(
-                        scope=resolution.scope,
-                        component=resolution.component,
-                        version=overrides.get(
-                            resolution.component,
-                            resolution.resolved_version,
-                        ),
-                    )
-                    for resolution in source_manifest.resolved_components
-                ),
-            )
+            expected_lock = _resolution_lock_for(source_manifest, overrides)
             if source_lock.resolution_lock != expected_lock:
                 raise JournalDamaged("counterfactual resolution lock contradicts its request")
             return

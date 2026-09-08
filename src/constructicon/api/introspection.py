@@ -17,6 +17,7 @@ from constructicon.core.graph import Graph
 from constructicon.core.human import CONTRACT_SCHEMAS as _HUMAN_CONTRACT_SCHEMAS
 from constructicon.core.identity import Digest, digest
 from constructicon.core.introspection import (
+    DESCRIPTION_SCHEMA_VERSION,
     AdmissionLimits,
     AuthoringVocabulary,
     BindingVocabulary,
@@ -170,7 +171,7 @@ def build_system_description(
     )
     schemas = tuple(schema_by_hash[key] for key in sorted(schema_by_hash))
     body: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": DESCRIPTION_SCHEMA_VERSION,
         "graph_schema": graph_schema.model_dump(mode="json"),
         "admission_schema": admission_schema.model_dump(mode="json"),
         "components": [item.model_dump(mode="json") for item in component_descriptions],
@@ -185,7 +186,7 @@ def build_system_description(
     }
     return SystemDescription(
         **body,
-        description_digest=digest("system-description", 1, body),
+        description_digest=digest("system-description", DESCRIPTION_SCHEMA_VERSION, body),
     )
 
 

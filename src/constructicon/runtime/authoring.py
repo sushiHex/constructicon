@@ -18,15 +18,38 @@ from typing import Any
 
 from constructicon.core.address import LOOP_BODY_SEGMENT, ScopePath
 from constructicon.core.admission import FAULT_DETAILS_SEPARATOR, AdmissionCode, AdmissionFault
-from constructicon.core.control import ResolutionLock
+from constructicon.core.control import ResolutionLock, ResolutionPin
 from constructicon.core.errors import AdmissionError
 from constructicon.core.grants import EffectiveGrants
 from constructicon.core.graph import Graph, Loop, Ref
 from constructicon.core.introspection import AdmissionLimits
 from constructicon.core.manifest import ExecutionManifest
-from constructicon.core.registry import RegistrySnapshot, StoredVersion
+from constructicon.core.registry import RegistrySnapshot
+from constructicon.runtime._resolution import select_version
 from constructicon.runtime.registry import CapabilityDescriptor
 from constructicon.runtime.validator import admit
+
+_MAP_FAULTS: dict[str, tuple[AdmissionCode, str]] = {
+    "unused_map_destination": (
+        AdmissionCode.GRAPH_CONTRACT_INVALID,
+        "map a declared destination input; repair the retained definition or pin "
+        "a compatible version when definition_path is present",
+    ),
+    "duplicate_map_destination": (
+        AdmissionCode.GRAPH_CONTRACT_INVALID,
+        "keep one distinct selector for this destination; repair the retained definition "
+        "or pin a compatible version when definition_path is present",
+    ),
+    "malformed_selector": (
+        AdmissionCode.GRAPH_CONTRACT_INVALID,
+        "add a non-empty port segment using 'node.port' or '$input.port'",
+    ),
+    "explicit_source_contract": (
+        AdmissionCode.GRAPH_PORT_CONTRACT_MISMATCH,
+        "select exactly one one-cardinality source with the exact type_id and "
+        "schema_hash; compose a scalar adapter for optional or many producers",
+    ),
+}
 
 
 @dataclass
@@ -35,6 +58,7 @@ class _Preflight:
     catalog: dict[str, CapabilityDescriptor]
     limits: AdmissionLimits
     faults: list[AdmissionFault]
+    resolution_lock: dict[tuple[str, ...], ResolutionPin] | None = None
     node_count: int = 0
 
 
@@ -56,6 +80,10 @@ def admit_authored_graph(
         catalog=catalog,
         limits=limits,
         faults=[],
+        resolution_lock=(
+            {pin.scope.segments: pin for pin in resolution_lock.pins}
+            if resolution_lock is not None else None
+        ),
     )
     _preflight_graph(
         preflight,
@@ -209,7 +237,7 @@ def _preflight_ref(
     depth: int,
     component_stack: tuple[tuple[str, str], ...],
 ) -> None:
-    stored = _resolve_for_preflight(state.snapshot, ref)
+    stored = select_version(state.snapshot, ref, scope, state.resolution_lock)
     if stored is None:
         return
     definition = stored.definition
@@ -352,16 +380,6 @@ def _preflight_ref(
         )
 
 
-def _resolve_for_preflight(
-    snapshot: RegistrySnapshot,
-    ref: Ref,
-) -> StoredVersion | None:
-    if ref.version is None:
-        stable = snapshot.stable_version(ref.component)
-        return snapshot.get(ref.component, stable) if stable is not None else None
-    return snapshot.versions.get(ref.component, {}).get(ref.version)
-
-
 def _classify_fault(
     fault: AdmissionFault,
     *,
@@ -383,6 +401,19 @@ def _classify_fault(
     # and the whole message is prose.
     carried = _framed_details(message)
     if carried is not None:
+        map_fault = _MAP_FAULTS.get(carried["defect"])
+        if map_fault is not None:
+            code, repair = map_fault
+            return AdmissionFault(
+                code=code,
+                message=message,
+                path=tuple(carried.get("path", ())),
+                scope=ScopePath(segments=tuple(carried["scope"])),
+                repair=repair,
+                details={
+                    key: value for key, value in carried.items() if key not in {"path", "scope"}
+                },
+            )
         head, _, _ = message.rpartition(FAULT_DETAILS_SEPARATOR)
         details = {key: carried[key] for key in ("component", "version") if key in carried}
         repair = (
@@ -463,7 +494,7 @@ def _classify_fault(
 
 
 def _framed_details(message: str) -> dict[str, Any] | None:
-    """The retained-definition frame at the end of a fault, or None if there is none."""
+    """The recognized details frame at the end of a fault, or None if there is none."""
 
     _, framed, suffix = message.rpartition(FAULT_DETAILS_SEPARATOR)
     if not framed:
@@ -472,7 +503,9 @@ def _framed_details(message: str) -> dict[str, Any] | None:
         carried = json.loads(suffix)
     except ValueError:
         return None
-    if isinstance(carried, dict) and carried.get("defect") == "retained_composite":
+    if isinstance(carried, dict) and (
+        carried.get("defect") == "retained_composite" or carried.get("defect") in _MAP_FAULTS
+    ):
         return carried
     return None
 

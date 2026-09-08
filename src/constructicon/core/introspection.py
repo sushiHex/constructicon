@@ -18,7 +18,7 @@ from constructicon.core.grants import EffectiveGrants, Posture
 from constructicon.core.identity import Digest
 from constructicon.core.registry import Loadability
 
-DESCRIPTION_SCHEMA_VERSION = 1
+DESCRIPTION_SCHEMA_VERSION = 2
 
 
 class SchemaDocument(BaseModel):
@@ -117,6 +117,10 @@ class BindingVocabulary(BaseModel):
     )
     selector_forms: tuple[str, ...] = ("node.port", "$input.port")
     map_destination: Literal["node_input"] = "node_input"
+    explicit_map_source_cardinality: Literal["one"] = "one"
+    mapped_many_policy: Literal["ordered_scalar_selector_union_replaces_pool"] = (
+        "ordered_scalar_selector_union_replaces_pool"
+    )
     ambiguity_policy: Literal["reject"] = "reject"
     reserved_node_prefix: str = "$"
 
@@ -142,7 +146,7 @@ class AuthoringVocabulary(BaseModel):
 class SystemDescription(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     graph_schema: SchemaDocument
     admission_schema: SchemaDocument
     components: tuple[ComponentDescription, ...]
