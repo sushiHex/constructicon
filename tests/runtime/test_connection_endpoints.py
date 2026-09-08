@@ -20,7 +20,10 @@ from tests.runtime.test_loop_validator import CONTINUE
 
 ROOT = "endpoint/root: \x1f"
 INSTANCE = "nested/instance"
-WRAPPERS = ("root", "inline", "loop", "retained", "retained-inline", "retained-loop")
+WRAPPERS = (
+    "root", "inline", "loop", "retained", "retained-inline",
+    "retained-loop", "retained-with-loop",
+)
 PATHS = {
     "root": ("connections", 1),
     "inline": ("nodes", 0, "body", "connections", 1),
@@ -28,6 +31,7 @@ PATHS = {
     "retained": ("body", "connections", 1),
     "retained-inline": ("body", "nodes", 0, "body", "connections", 1),
     "retained-loop": ("body", "connections", 1),
+    "retained-with-loop": ("body", "nodes", 0, "body", "body", "connections", 1),
 }
 SCOPES = {
     "root": (ROOT,),
@@ -36,6 +40,7 @@ SCOPES = {
     "retained": (ROOT, INSTANCE),
     "retained-inline": (ROOT, INSTANCE, "inside/graph"),
     "retained-loop": (ROOT, INSTANCE, "body", "$body"),
+    "retained-with-loop": (ROOT, INSTANCE, "inside/loop", "body"),
 }
 
 
@@ -62,7 +67,7 @@ def endpoint_graph(
     )
     if wrapper == "root":
         return inner
-    if wrapper in {"loop", "retained-loop"}:
+    if wrapper in {"loop", "retained-loop", "retained-with-loop"}:
         definition, impl = atomic("endpoints/continue", (), (CONTINUE,), summarize_impl)
         version = system._register(definition, impl)
         system._promote_initial(component=definition.name, version=version)
@@ -83,6 +88,18 @@ def endpoint_graph(
                 nodes=(GraphNode(id="inside/graph", body=inner),),
                 inputs=inner.inputs,
                 outputs=inner.outputs,
+            )
+        elif wrapper == "retained-with-loop":
+            inner = Graph(
+                name="retained-loop-wrapper",
+                nodes=(GraphNode(
+                    id="inside/loop",
+                    body=Loop(
+                        body=inner, feedback={}, continue_from="continue", max_iterations=1,
+                    ),
+                ),),
+                inputs=inner.inputs,
+                outputs=(SUMMARY,),
             )
         definition = ComponentDef(
             name="endpoints/composite",
@@ -116,9 +133,9 @@ def test_unknown_endpoints_have_one_exact_fault_per_connection(
     graph = endpoint_graph(system, wrapper=wrapper, missing_roles=missing_roles, mapped=mapped)
     result = system.admit_graph(graph.model_dump_json(), INPUTS)
     assert isinstance(result, AdmissionRejected)
-    faults = [f for f in result.faults if f.details.get("defect") == "unknown_connection_node"]
-    assert len(faults) == 1
-    fault = faults[0]
+    assert len(result.faults) == 1
+    fault = result.faults[0]
+    assert fault.details["defect"] == "unknown_connection_node"
     assert fault.code == AdmissionCode.GRAPH_CONTRACT_INVALID
     assert fault.scope is not None and fault.scope.segments == SCOPES[wrapper]
     assert fault.details["missing_roles"] == list(missing_roles)
@@ -138,15 +155,90 @@ def test_unknown_endpoints_have_one_exact_fault_per_connection(
         assert "component" not in fault.details and "definition_path" not in fault.details
     with pytest.raises(AdmissionError) as caught:
         raw_admit(system, graph)
+    assert len(caught.value.faults) == 1
+    assert caught.value.faults[0].message == fault.message
     raw = [
         json.loads(f.message.rpartition(FAULT_DETAILS_SEPARATOR)[2])
         for f in caught.value.faults
-        if f.message == fault.message
     ]
     expected = {"scope": list(SCOPES[wrapper]), **fault.details}
     if not wrapper.startswith("retained"):
         expected["path"] = list(PATHS[wrapper])
     assert raw == [expected]
+
+
+@pytest.mark.parametrize("wrapper", ["retained-loop", "retained-with-loop"])
+def test_retained_loop_fixtures_pin_both_ownership_directions(
+    system: Constructicon, wrapper: str,
+) -> None:
+    graph = endpoint_graph(system, wrapper=wrapper)
+    snapshot = system._registry.snapshot()
+    definition = snapshot.versions["endpoints/composite"][
+        snapshot.stable["endpoints/composite"]
+    ].definition
+    assert isinstance(definition.body, Graph)
+    if wrapper == "retained-loop":
+        # Preserve the original fixture: a Loop around a retained composite.
+        outer = graph.nodes[0].body
+        assert isinstance(outer, Loop) and isinstance(outer.body, Ref)
+        assert outer.body.component == definition.name
+    else:
+        outer = graph.nodes[0].body
+        assert isinstance(outer, Ref) and outer.component == definition.name
+        inner = definition.body.nodes[0].body
+        assert isinstance(inner, Loop) and isinstance(inner.body, Graph)
+    # The asserted coordinate indexes the actual serialized definition, not a
+    # rendered scope or a fixture label.
+    located = definition.model_dump(mode="json")
+    for part in PATHS[wrapper]:
+        located = located[part]
+    assert located["src"] == "missing/src: loop"
+    assert located["dst"] == "missing/dst: explicit selector"
+
+
+@pytest.mark.parametrize("wrapper", WRAPPERS)
+@pytest.mark.parametrize("limit", [1, 2, 20])
+def test_endpoint_failure_unwinds_parent_compilation(
+    system: Constructicon, monkeypatch: pytest.MonkeyPatch, wrapper: str, limit: int,
+) -> None:
+    inner = endpoint_graph(system, wrapper=wrapper)
+    definition, impl = atomic("endpoints/consumer", (SUMMARY,), (SUMMARY,), summarize_impl)
+    version = system._register(definition, impl)
+    system._promote_initial(component=definition.name, version=version)
+    graph = Graph(
+        name="outer",
+        nodes=(
+            GraphNode(id="nested", body=inner),
+            GraphNode(id="consumer", body=Ref(component=definition.name)),
+        ),
+        connections=(Connection(src="nested", dst="consumer"),),
+        inputs=inner.inputs,
+        outputs=inner.outputs,
+    )
+    compiled = []
+    original = validator._compile_node
+
+    def observe(comp, node, **kwargs):
+        compiled.append(node.id)
+        return original(comp, node, **kwargs)
+
+    monkeypatch.setattr(validator, "_compile_node", observe)
+    system._admission_limits = AdmissionLimits(max_faults=limit)
+    result = system.admit_graph(graph.model_dump_json(), INPUTS)
+    assert isinstance(result, AdmissionRejected)
+    assert len(result.faults) == 1
+    fault = result.faults[0]
+    assert fault.code == AdmissionCode.GRAPH_CONTRACT_INVALID
+    assert fault.details["defect"] == "unknown_connection_node"
+    assert "declared node" in fault.repair
+    assert fault.scope is not None
+    assert fault.scope.segments == ("outer", "nested", *SCOPES[wrapper][1:])
+    if wrapper.startswith("retained"):
+        assert fault.path == ()
+        assert fault.details["definition_path"] == list(PATHS[wrapper])
+    else:
+        assert fault.path == ("nodes", 0, "body", *PATHS[wrapper])
+    assert "consumer" not in compiled
 
 
 def test_bad_endpoints_stop_before_reachability_and_node_compilation(

@@ -2314,6 +2314,534 @@
       "input_hash": "sha256:740b4f9b80938be5feed084bf5293d9a1f77e4e8926c952a405d9fe74ea6a09d",
       "world_hash": "sha256:c368f12d50ce3e47585360f130c5f0cd2a3d00f46064e605e9c8c368a0b57c05",
       "manifest_hash": "sha256:4269dd1c5665e8e9e94a44983350ffefe030be734d0b7b1eb974ee681b0e08a3"
+    },
+    "retained-with-loop": {
+      "schema_version": 2,
+      "source_graph": {
+        "schema_version": 1,
+        "name": "endpoint/root: \u001f",
+        "nodes": [
+          {
+            "id": "nested/instance",
+            "body": {
+              "component": "endpoints/composite",
+              "version": null,
+              "bind": {},
+              "grants": null
+            }
+          }
+        ],
+        "connections": [],
+        "inputs": [
+          {
+            "name": "issue",
+            "type_id": "test/Issue",
+            "schema_hash": "s1",
+            "json_schema": null,
+            "cardinality": "one"
+          },
+          {
+            "name": "brief",
+            "type_id": "test/Brief",
+            "schema_hash": "s1",
+            "json_schema": null,
+            "cardinality": "one"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "summary",
+            "type_id": "test/Summary",
+            "schema_hash": "s1",
+            "json_schema": null,
+            "cardinality": "one"
+          }
+        ]
+      },
+      "source_graph_hash": "sha256:ba557a5b8a31ab11b848d0224a4d556929cc6538c6927d4569f6efae05fce536",
+      "resolved_components": [
+        {
+          "scope": {
+            "segments": [
+              "endpoint/root: \u001f",
+              "nested/instance"
+            ]
+          },
+          "component": "endpoints/composite",
+          "requested_version": null,
+          "resolved_version": "sha256:29642969b829898b500ee956283ec15988254d9c0182219ba9f3ad30d9cd372f",
+          "contract_hash": "sha256:1aa5338f80b82d0bd18ccbc1bc716ad8eb40fbccd79a64ab37e115089f7a2f00",
+          "implementation_digest": null
+        },
+        {
+          "scope": {
+            "segments": [
+              "endpoint/root: \u001f",
+              "nested/instance",
+              "inside/loop",
+              "body",
+              "a"
+            ]
+          },
+          "component": "maps/source",
+          "requested_version": null,
+          "resolved_version": "sha256:66e18ce7c66292963383bebf602ddc31d51a02553e728a5ff38dc7bfa36203ff",
+          "contract_hash": "sha256:4937e79de4b1dea3baa7b5170b4dc8a28c632e92119ec07720bd72b6f23209be",
+          "implementation_digest": "sha256:e64b537a3e3d836304a2fa9672af99890d699e78f4a784a172e0198abf60f110"
+        },
+        {
+          "scope": {
+            "segments": [
+              "endpoint/root: \u001f",
+              "nested/instance",
+              "inside/loop",
+              "body",
+              "b"
+            ]
+          },
+          "component": "maps/source",
+          "requested_version": null,
+          "resolved_version": "sha256:66e18ce7c66292963383bebf602ddc31d51a02553e728a5ff38dc7bfa36203ff",
+          "contract_hash": "sha256:4937e79de4b1dea3baa7b5170b4dc8a28c632e92119ec07720bd72b6f23209be",
+          "implementation_digest": "sha256:e64b537a3e3d836304a2fa9672af99890d699e78f4a784a172e0198abf60f110"
+        },
+        {
+          "scope": {
+            "segments": [
+              "endpoint/root: \u001f",
+              "nested/instance",
+              "inside/loop",
+              "body",
+              "gather"
+            ]
+          },
+          "component": "maps/gather",
+          "requested_version": null,
+          "resolved_version": "sha256:03f75f35de4bb6d954e6ac9a53de4b5440ebf59d3c3938a1fd4f68e09130ad9c",
+          "contract_hash": "sha256:58cfde366256ebf21fdebbe36e3dcd1ff0acd119919536c18d4f7869f2083333",
+          "implementation_digest": "sha256:e64b537a3e3d836304a2fa9672af99890d699e78f4a784a172e0198abf60f110"
+        },
+        {
+          "scope": {
+            "segments": [
+              "endpoint/root: \u001f",
+              "nested/instance",
+              "inside/loop",
+              "body",
+              "continue"
+            ]
+          },
+          "component": "endpoints/continue",
+          "requested_version": null,
+          "resolved_version": "sha256:bcf251ea45601da97a0a3c15e366449d5e519e325029bcc655d1b2862449a742",
+          "contract_hash": "sha256:bcee331ccecbabdfc536c1fa3607264fccfcdcb4cefdfbd0e7dff0943adf333e",
+          "implementation_digest": "sha256:e64b537a3e3d836304a2fa9672af99890d699e78f4a784a172e0198abf60f110"
+        }
+      ],
+      "resolved_connections": [
+        {
+          "destination": {
+            "kind": "node_port",
+            "scope": {
+              "segments": [
+                "endpoint/root: \u001f",
+                "nested/instance",
+                "inside/loop",
+                "body"
+              ]
+            },
+            "node": "a",
+            "port": "issue"
+          },
+          "sources": [
+            {
+              "kind": "graph_input",
+              "scope": {
+                "segments": [
+                  "endpoint/root: \u001f",
+                  "nested/instance",
+                  "inside/loop",
+                  "body"
+                ]
+              },
+              "port": "issue"
+            }
+          ]
+        },
+        {
+          "destination": {
+            "kind": "node_port",
+            "scope": {
+              "segments": [
+                "endpoint/root: \u001f",
+                "nested/instance",
+                "inside/loop",
+                "body"
+              ]
+            },
+            "node": "b",
+            "port": "issue"
+          },
+          "sources": [
+            {
+              "kind": "graph_input",
+              "scope": {
+                "segments": [
+                  "endpoint/root: \u001f",
+                  "nested/instance",
+                  "inside/loop",
+                  "body"
+                ]
+              },
+              "port": "issue"
+            }
+          ]
+        },
+        {
+          "destination": {
+            "kind": "node_port",
+            "scope": {
+              "segments": [
+                "endpoint/root: \u001f",
+                "nested/instance",
+                "inside/loop",
+                "body"
+              ]
+            },
+            "node": "gather",
+            "port": "briefs"
+          },
+          "sources": [
+            {
+              "kind": "node_port",
+              "scope": {
+                "segments": [
+                  "endpoint/root: \u001f",
+                  "nested/instance",
+                  "inside/loop",
+                  "body"
+                ]
+              },
+              "node": "a",
+              "port": "brief"
+            }
+          ]
+        },
+        {
+          "destination": {
+            "kind": "graph_output",
+            "scope": {
+              "segments": [
+                "endpoint/root: \u001f"
+              ]
+            },
+            "port": "summary"
+          },
+          "sources": [
+            {
+              "kind": "node_port",
+              "scope": {
+                "segments": [
+                  "endpoint/root: \u001f",
+                  "nested/instance"
+                ]
+              },
+              "node": "inside/loop",
+              "port": "summary"
+            }
+          ]
+        }
+      ],
+      "capability_bindings": [
+        {
+          "scope": {
+            "segments": [
+              "endpoint/root: \u001f",
+              "nested/instance",
+              "inside/loop",
+              "body",
+              "a"
+            ]
+          },
+          "binding": "__node__",
+          "capability_id": "__node__",
+          "revision": "0",
+          "effective_grants": {
+            "posture": "read",
+            "model_selection": {
+              "kind": "backend_default",
+              "model": null
+            },
+            "effort": null,
+            "allowed_tools": [],
+            "env_allowlist": [],
+            "network": "none",
+            "timeout_s": 600
+          },
+          "lifetime": "invocation"
+        },
+        {
+          "scope": {
+            "segments": [
+              "endpoint/root: \u001f",
+              "nested/instance",
+              "inside/loop",
+              "body",
+              "b"
+            ]
+          },
+          "binding": "__node__",
+          "capability_id": "__node__",
+          "revision": "0",
+          "effective_grants": {
+            "posture": "read",
+            "model_selection": {
+              "kind": "backend_default",
+              "model": null
+            },
+            "effort": null,
+            "allowed_tools": [],
+            "env_allowlist": [],
+            "network": "none",
+            "timeout_s": 600
+          },
+          "lifetime": "invocation"
+        },
+        {
+          "scope": {
+            "segments": [
+              "endpoint/root: \u001f",
+              "nested/instance",
+              "inside/loop",
+              "body",
+              "gather"
+            ]
+          },
+          "binding": "__node__",
+          "capability_id": "__node__",
+          "revision": "0",
+          "effective_grants": {
+            "posture": "read",
+            "model_selection": {
+              "kind": "backend_default",
+              "model": null
+            },
+            "effort": null,
+            "allowed_tools": [],
+            "env_allowlist": [],
+            "network": "none",
+            "timeout_s": 600
+          },
+          "lifetime": "invocation"
+        },
+        {
+          "scope": {
+            "segments": [
+              "endpoint/root: \u001f",
+              "nested/instance",
+              "inside/loop",
+              "body",
+              "continue"
+            ]
+          },
+          "binding": "__node__",
+          "capability_id": "__node__",
+          "revision": "0",
+          "effective_grants": {
+            "posture": "read",
+            "model_selection": {
+              "kind": "backend_default",
+              "model": null
+            },
+            "effort": null,
+            "allowed_tools": [],
+            "env_allowlist": [],
+            "network": "none",
+            "timeout_s": 600
+          },
+          "lifetime": "invocation"
+        }
+      ],
+      "resolved_loops": [
+        {
+          "scope": {
+            "segments": [
+              "endpoint/root: \u001f",
+              "nested/instance",
+              "inside/loop"
+            ]
+          },
+          "body_scope": {
+            "segments": [
+              "endpoint/root: \u001f",
+              "nested/instance",
+              "inside/loop",
+              "body"
+            ]
+          },
+          "max_iterations": 1,
+          "input_ports": [
+            {
+              "name": "issue",
+              "type_id": "test/Issue",
+              "schema_hash": "s1",
+              "json_schema": null,
+              "cardinality": "one"
+            },
+            {
+              "name": "brief",
+              "type_id": "test/Brief",
+              "schema_hash": "s1",
+              "json_schema": null,
+              "cardinality": "one"
+            }
+          ],
+          "initial_bindings": [
+            {
+              "destination": {
+                "kind": "graph_input",
+                "scope": {
+                  "segments": [
+                    "endpoint/root: \u001f",
+                    "nested/instance",
+                    "inside/loop",
+                    "body"
+                  ]
+                },
+                "port": "issue"
+              },
+              "sources": [
+                {
+                  "kind": "graph_input",
+                  "scope": {
+                    "segments": [
+                      "endpoint/root: \u001f"
+                    ]
+                  },
+                  "port": "issue"
+                }
+              ]
+            },
+            {
+              "destination": {
+                "kind": "graph_input",
+                "scope": {
+                  "segments": [
+                    "endpoint/root: \u001f",
+                    "nested/instance",
+                    "inside/loop",
+                    "body"
+                  ]
+                },
+                "port": "brief"
+              },
+              "sources": [
+                {
+                  "kind": "graph_input",
+                  "scope": {
+                    "segments": [
+                      "endpoint/root: \u001f"
+                    ]
+                  },
+                  "port": "brief"
+                }
+              ]
+            }
+          ],
+          "feedback_bindings": [],
+          "continue_source": {
+            "kind": "node_port",
+            "scope": {
+              "segments": [
+                "endpoint/root: \u001f",
+                "nested/instance",
+                "inside/loop",
+                "body"
+              ]
+            },
+            "node": "continue",
+            "port": "continue"
+          },
+          "exports": [
+            {
+              "port": {
+                "name": "summary",
+                "type_id": "test/Summary",
+                "schema_hash": "s1",
+                "json_schema": null,
+                "cardinality": "one"
+              },
+              "destination": {
+                "kind": "node_port",
+                "scope": {
+                  "segments": [
+                    "endpoint/root: \u001f",
+                    "nested/instance"
+                  ]
+                },
+                "node": "inside/loop",
+                "port": "summary"
+              },
+              "sources": [
+                {
+                  "kind": "node_port",
+                  "scope": {
+                    "segments": [
+                      "endpoint/root: \u001f",
+                      "nested/instance",
+                      "inside/loop",
+                      "body"
+                    ]
+                  },
+                  "node": "gather",
+                  "port": "summary"
+                }
+              ]
+            }
+          ],
+          "member_order": [
+            {
+              "segments": [
+                "endpoint/root: \u001f",
+                "nested/instance",
+                "inside/loop",
+                "body",
+                "a"
+              ]
+            },
+            {
+              "segments": [
+                "endpoint/root: \u001f",
+                "nested/instance",
+                "inside/loop",
+                "body",
+                "b"
+              ]
+            },
+            {
+              "segments": [
+                "endpoint/root: \u001f",
+                "nested/instance",
+                "inside/loop",
+                "body",
+                "gather"
+              ]
+            },
+            {
+              "segments": [
+                "endpoint/root: \u001f",
+                "nested/instance",
+                "inside/loop",
+                "body",
+                "continue"
+              ]
+            }
+          ]
+        }
+      ],
+      "input_hash": "sha256:740b4f9b80938be5feed084bf5293d9a1f77e4e8926c952a405d9fe74ea6a09d",
+      "world_hash": "sha256:0c61fa0a21ff6d8f5890a11a3a21ecf2e34921e04a805b844af9a3098428d685",
+      "manifest_hash": "sha256:7110852686c0b612312c4398e514dce831dbae581d6db341536b5a021144d35e"
     }
   }
 }

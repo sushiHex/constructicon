@@ -255,7 +255,9 @@ def _compile_graph(
     """Compile one graph level and return its declared output sources."""
 
     if not _validate_connection_endpoints(comp, graph, scope=scope, location=location):
-        return {}
+        # An invalid level has no compiled boundary. Unwind before parents bind
+        # its outputs, loops inspect its body, or unvisited pins look unused.
+        raise AdmissionError(comp.faults)
     _validate_unique_ports(comp, graph.inputs, where=f"{scope.render()} graph inputs")
     _validate_unique_ports(comp, graph.outputs, where=f"{scope.render()} graph outputs")
 

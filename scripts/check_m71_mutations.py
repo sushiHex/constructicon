@@ -24,10 +24,30 @@ MUTANTS = (
     (
         "endpoint-invalid graph stops before compilation",
         "constructicon.runtime.validator:_compile_graph",
-        "if not _validate_connection_endpoints(comp, graph, scope=scope, location=location):\n"
-        "        return {}",
-        "_validate_connection_endpoints(comp, graph, scope=scope, location=location)",
+        "raise AdmissionError(comp.faults)",
+        "pass",
         "tests/runtime/test_connection_endpoints.py::test_bad_endpoints_stop_before_reachability_and_node_compilation",
+    ),
+    (
+        "failed boundary is not an empty output set",
+        "constructicon.runtime.validator:_compile_graph",
+        "raise AdmissionError(comp.faults)",
+        "return {}",
+        "tests/runtime/test_connection_endpoints.py::test_endpoint_failure_unwinds_parent_compilation",
+    ),
+    (
+        "retained inner Loop keeps its body coordinate at admission",
+        "constructicon.runtime.validator:_compile_loop",
+        'location=location.child("body"),\n        )\n    member_order',
+        "location=location,\n        )\n    member_order",
+        "tests/runtime/test_connection_endpoints.py::test_unknown_endpoints_have_one_exact_fault_per_connection[False-missing_roles2-retained-with-loop]",
+    ),
+    (
+        "retained inner Loop keeps its body coordinate in counterfactual refusal",
+        "constructicon.runtime.validator:_compile_loop",
+        'location=location.child("body"),\n        )\n    member_order',
+        "location=location,\n        )\n    member_order",
+        "tests/api/test_endpoint_admission.py::test_historical_endpoint_fault_is_baseline_invalid_and_reproduce_stays_exact[False-retained-with-loop]",
     ),
     (
         "source endpoint is accounted for",

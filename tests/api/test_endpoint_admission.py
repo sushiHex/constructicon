@@ -67,13 +67,10 @@ async def test_historical_endpoint_fault_is_baseline_invalid_and_reproduce_stays
         fault = result.faults[0]
         assert fault.code == ControlCode.REQUEST_INVALID
         assert "runs_reproduce" in fault.repair and "re-author" in fault.repair
-        endpoints = [
-            f
-            for f in fault.details["admission_faults"]
-            if f["details"].get("defect") == "unknown_connection_node"
-        ]
+        endpoints = fault.details["admission_faults"]
         assert len(endpoints) == 1
         endpoint = endpoints[0]
+        assert endpoint["details"]["defect"] == "unknown_connection_node"
         assert endpoint["scope"]["segments"] == list(SCOPES[wrapper])
         assert endpoint["details"]["missing_roles"] == ["src", "dst"]
         if wrapper.startswith("retained"):
