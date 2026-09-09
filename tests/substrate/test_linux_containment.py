@@ -112,6 +112,13 @@ fds = {}
 for value in Path('/proc/self/fd').iterdir():
     try: fds[value.name] = os.readlink(value)
     except FileNotFoundError: pass
+try:
+    core_fd = os.open('/dev/core', os.O_RDONLY)
+except (PermissionError, FileNotFoundError):
+    core_denied = True
+else:
+    os.close(core_fd)
+    core_denied = False
 print(json.dumps({
     'ns': {n: os.readlink('/proc/self/ns/' + n) for n in ('user','mnt','pid','ipc','uts','net')},
     'profile': Path('/proc/self/attr/current').read_text().strip(),
@@ -122,6 +129,7 @@ print(json.dumps({
     'uid_map': Path('/proc/self/uid_map').read_text().split(),
     'gid_map': Path('/proc/self/gid_map').read_text().split(),
     'devices': sorted(p.name for p in Path('/dev').iterdir()),
+    'core_link': os.readlink('/dev/core'), 'core_denied': core_denied,
     'limits': {name: resource.getrlimit(getattr(resource, 'RLIMIT_' + name))
                for name in ('CORE', 'NOFILE', 'FSIZE', 'AS')},
 }))
@@ -143,10 +151,12 @@ print(json.dumps({
     # not host root. These are single-ID maps, not a host identity range.
     assert facts["uid_map"] == [str(os.getuid()), "0", "1"]
     assert facts["gid_map"] == [str(os.getgid()), "0", "1"]
-    assert set(facts["devices"]) <= {
-        "console", "fd", "full", "null", "ptmx", "pts", "random", "shm",
+    assert set(facts["devices"]) == {
+        "core", "fd", "full", "null", "ptmx", "pts", "random", "shm",
         "stderr", "stdin", "stdout", "tty", "urandom", "zero",
     }
+    # bubblewrap 0.9.0 emits this legacy alias; presence is not access.
+    assert facts["core_link"] == "/proc/kcore" and facts["core_denied"] is True
     assert facts["limits"] == {
         "CORE": [0, 0], "NOFILE": [256, 256], "FSIZE": [134217728, 134217728],
         "AS": [2147483648, 2147483648],
