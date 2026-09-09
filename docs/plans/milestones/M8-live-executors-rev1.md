@@ -422,6 +422,22 @@ it does not credit their eager allocations with M8 crash safety. The new
 providers and genuine deferred-resource doubles exercise the post-record
 phase. No durable schema or extra acquisition state is introduced.
 
+There are two different cleanup inputs. `close` receives the local handle:
+if materialization has never entered, it only marks that handle locally
+closed and returns the requested disposition. It performs no persistent I/O,
+creates no guard/closure marker, and does not call gateway close-by-key.
+This is the path the existing walker uses when lease recording fails.
+Entry to materialization checks local closure and marks itself started before
+its first await or I/O, so a closed inert handle can never start later. Once
+started, close applies the full physical closure law, even after partial
+failure. Legacy eager providers retain their ordinary cleanup.
+
+`reconcile`, by contrast, receives an authoritative durable row and cannot
+infer whether the old handle ever started. It always applies the external
+closure fence, even to absent resources, before reporting recovery complete.
+The local phase distinguishes safe inert close from possibly allocated work;
+it is not recovery authority and creates no new journal phase.
+
 Retype `Executor.execute(workspace=...)` to `WorkspaceView | None`. Keep the
 existing synchronous `WriteWorkspace` for historical assemblies; the contained
 WRITE resource in section 4.4 exposes the same view with explicit async capture.
@@ -686,7 +702,9 @@ descriptor coherence, schema-3 description, typed workspace seam, and the
 generic post-record materialization phase. Exercise the policy with
 `FakeExecutor` and a genuine unavailable-provider double; deferred-resource
 doubles prove record-before-materialize, cleanup enrollment, refusal, and
-legacy behavior through the walker.
+legacy behavior through the walker. Inject recording failure and assert an
+inert close creates no external fact and prevents later materialization;
+reconciliation of a recorded but never-started handle must still fence it.
 Prove exact-grant refusals, descriptor disagreement, strict reader versioning,
 and unchanged historical profiles/manifests. Define no OS or gateway success
 by a boolean in that double. No Linux launcher, gateway, or real backend ships
@@ -905,7 +923,7 @@ Use barriers and deterministic fake children rather than timing guesses.
 | Bounds | One huge line, many small lines, stderr saturation and a blocked stdin cannot deadlock or allocate unboundedly |
 | Telemetry | Requested-but-unobserved model stays `None`; cumulative usage is not added twice; estimates do not become billing facts |
 | Descendants | `setsid`, double-fork, ignored TERM, and held pipe descriptors do not survive return/cancel/deadline |
-| Allocation | No persistent work before the lease row; death during materialization leaves an exactly recoverable row; recording/materialization failure preserves cleanup and legacy behavior |
+| Allocation | No persistent work before the lease row, including close after recording failure; closed inert handles cannot materialize; a recorded never-started handle still reconciles with an external fence; death during materialization leaves an exactly recoverable row |
 | Allocation race | Close a never-started or partly materialized acquisition while an old producer is paused; no late local creation or gateway allocation; child-owned guard outlives Python death; new epoch untouched |
 | Owner death | Kill the host before/after lease recording and after spawn; no CLI survives the proved parent-death chain |
 | Repeated cancellation | Cleanup completes once, cancellation propagates, and no false successful checkpoint is written |
@@ -925,7 +943,8 @@ read-only mount, root visibility restriction, network isolation, descriptor
 comparison, revision input, tool-set check, environment filter, final-status
 check, damage latch, byte bound, usage accounting, process-tree teardown,
 epoch check, staging-Git containment, pack verification/candidate publication,
-record-before-materialize, cleanup enrollment, child-owned allocation guard,
+record-before-materialize, inert close and closed-handle entry refusal,
+cleanup enrollment, child-owned allocation guard,
 acquisition-closure transaction and absence checks, remote close-by-key,
 workspace/gate coherence,
 host-policy prerequisite, gateway

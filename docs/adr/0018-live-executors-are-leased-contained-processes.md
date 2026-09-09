@@ -91,6 +91,15 @@ persistent allocation; after recording, recovery can dispose even a partially
 materialized or never-started acquisition. No cleanup-only `finally` is
 credited with surviving process death.
 
+Closing a local handle that never entered materialization is non-persistent:
+mark it locally closed, refuse later materialization, and create no external
+marker, guard, or gateway tombstone. This preserves the walker's cleanup call
+when recording fails without allocating unrecorded state through cleanup.
+Materialization marks entry before its first await/I/O; after entry, close
+uses the full physical fence. Reconciliation has a different input, a durable
+row: it always fences even an absent resource, since it cannot trust an old
+process's local phase. Legacy eager-provider cleanup remains unchanged.
+
 Git-backed acquisitions use the closure marker below and one acquisition
 file lock for physical creation/use/removal. Producers check closure under
 the lock before touching resource paths. Disposal commits closure, waits for

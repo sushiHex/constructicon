@@ -332,6 +332,15 @@ implementation requirements, not executed cleanup guarantees. PR A proves the
 generic ordering with genuine deferred doubles; PR B owns physical death/race
 proof, and PR E owns the native gateway's allocation/closure conformance.
 
+Confirmation of `ddb5bd1` caught the cleanup consequence of that correction:
+the existing walker calls close even when recording fails. A universally
+persistent close would create an unrecorded marker/guard or remote tombstone
+despite inert acquisition. The draft now distinguishes local inert close
+(no persistent work, later materialization refused) from durable-row
+reconciliation (always fence, even if resources are absent). Materialization
+marks local entry before I/O. This preserves legacy eager cleanup and adds
+explicit failure/mutation probes to PR A; no implementation is claimed here.
+
 The 1,531-test baseline covers the unchanged implementation, not these future
 containment, gateway, or backend guarantees.
 
