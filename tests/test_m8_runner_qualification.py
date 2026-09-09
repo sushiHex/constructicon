@@ -18,8 +18,8 @@ HOST = {name: f"{name}:[1]" for name in probe.NAMESPACES}
 CHILD = {
     "uid": 1001,
     "gid": 1001,
-    "uid_map": "1001 1001 1",
-    "gid_map": "1001 1001 1",
+    "uid_map": "1001 0 1",
+    "gid_map": "1001 0 1",
     "namespaces": {name: f"{name}:[2]" for name in probe.NAMESPACES},
     "write_errno": 30,
     "host_home_visible": False,
@@ -49,7 +49,7 @@ def test_every_namespace_must_be_distinct(namespace: str) -> None:
     [
         ("uid", 0, "UID/GID"),
         ("gid", 0, "UID/GID"),
-        ("uid_map", "1001 0 1", "exactly one UID/GID"),
+        ("uid_map", "1001 1001 1", "exactly one UID/GID"),
         ("gid_map", "1001 1001 2", "exactly one UID/GID"),
         ("write_errno", None, "read-only mount"),
         ("write_errno", 13, "read-only mount"),
@@ -81,6 +81,24 @@ def test_unsupported_host_is_explicit_failure(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(sys, "platform", "win32")
     with pytest.raises(ValueError, match="not exercised"):
         probe.qualify({})
+
+
+@pytest.mark.parametrize(
+    ("returncode", "message", "expected"),
+    [
+        (1, "bwrap: Creating new namespace failed: Permission denied\n", True),
+        (1, "bwrap: Creating new namespace failed: Operation not permitted\n", True),
+        (0, "bwrap: Creating new namespace failed: Permission denied\n", False),
+        (2, "bwrap: Creating new namespace failed: Permission denied\n", False),
+        (1, "bwrap: execvp /usr/bin/python3: Permission denied\n", False),
+        (1, "bwrap: mount: Operation not permitted\n", False),
+        (1, "bwrap: unknown option\n", False),
+    ],
+)
+def test_namespace_refusal_names_the_operation(
+    returncode: int, message: str, expected: bool
+) -> None:
+    assert probe.namespace_refused(returncode, message) is expected
 
 
 @pytest.mark.parametrize(
@@ -220,6 +238,12 @@ def test_workflow_is_exact_head_read_only_and_credential_free() -> None:
     assert 'test "$RUNNER_ENVIRONMENT" = github-hosted' in workflow
     assert f"sudo install -m 0555 /usr/bin/bwrap {probe.BWRAP}" in workflow
     assert "apparmor_parser --add --skip-cache /etc/apparmor.d/constructicon-m8-bwrap" in workflow
+    for target, install in (
+        ("/opt/constructicon-m8-qualification", "sudo install -d"),
+        ("/etc/apparmor.d/constructicon-m8-bwrap", "sudo install -m 0444 scripts/ci/constructicon"),
+    ):
+        assert workflow.index(f"test ! -e {target}") < workflow.index(install)
+        assert workflow.index(f"test ! -L {target}") < workflow.index(install)
     for prohibited in (
         "pull_request_target",
         "secrets.",

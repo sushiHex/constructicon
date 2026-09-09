@@ -37,7 +37,7 @@ MUTANTS = (
             ),
             (
                 "identity mapping",
-                'child["uid_map"].split() == [str(uid), str(uid), "1"]',
+                'child["uid_map"].split() == [str(uid), "0", "1"]',
                 "test_each_observed_boundary_is_required",
             ),
             (
@@ -47,8 +47,7 @@ MUTANTS = (
             ),
             (
                 "nested denial",
-                'child["nested_returncode"] != 0 and '
-                '"Operation not permitted" in child["nested_stderr"]',
+                'namespace_refused(child["nested_returncode"], child["nested_stderr"])',
                 "test_each_observed_boundary_is_required",
             ),
             (
@@ -101,6 +100,13 @@ MUTANTS = (
                 "test_host_refusals_precede_namespace_launch",
             ),
         )
+    ),
+    (
+        "permission error is the namespace operation",
+        MODULE + "namespace_refused",
+        "stderr.strip() in (",
+        '"Permission denied" in stderr or stderr.strip() in (',
+        TESTS + "test_namespace_refusal_names_the_operation",
     ),
     (
         "truthful exit status",

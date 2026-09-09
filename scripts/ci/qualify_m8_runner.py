@@ -62,6 +62,15 @@ def artifact_digest(path: Path, expected: str) -> str:
     return digest
 
 
+def namespace_refused(returncode: int, stderr: str) -> bool:
+    # AppArmor's explicit deny returns EACCES; the global gate may use EPERM.
+    # A permission failure at exec, mount, or an unrelated operation is not proof.
+    return returncode == 1 and stderr.strip() in (
+        "bwrap: Creating new namespace failed: Permission denied",
+        "bwrap: Creating new namespace failed: Operation not permitted",
+    )
+
+
 def sandbox_argv(workspace: Path, script: str) -> list[str]:
     # This minimal diagnostic root borrows system userspace read-only. It is NOT
     # PR B's content-pinned runtime or final launcher; no untrusted input runs.
@@ -154,9 +163,11 @@ print(json.dumps(state, sort_keys=True))
 
 def validate_child(child: dict, host: dict, uid: int, gid: int) -> None:
     require(child["uid"] == uid and child["gid"] == gid, "service UID/GID mapping changed")
+    # Pinned bwrap's --dev setup maps the service ID through UID/GID 0 in
+    # an intermediate user namespace. Column two is that parent, NOT host root.
     require(
-        child["uid_map"].split() == [str(uid), str(uid), "1"]
-        and child["gid_map"].split() == [str(gid), str(gid), "1"],
+        child["uid_map"].split() == [str(uid), "0", "1"]
+        and child["gid_map"].split() == [str(gid), "0", "1"],
         "service identity mapping is not exactly one UID/GID",
     )
     require(
@@ -176,7 +187,7 @@ def validate_child(child: dict, host: dict, uid: int, gid: int) -> None:
         "exact enforcing child AppArmor attachment is absent",
     )
     require(
-        child["nested_returncode"] != 0 and "Operation not permitted" in child["nested_stderr"],
+        namespace_refused(child["nested_returncode"], child["nested_stderr"]),
         "nested bubblewrap did not produce the expected permission refusal",
     )
     interfaces = [line.split(":", 1)[0].strip() for line in child["net_dev"].splitlines()[2:]]
@@ -235,7 +246,7 @@ def qualify(evidence: dict) -> None:
         evidence["unprofiled_returncode"] = denied.returncode
         evidence["unprofiled_stderr"] = denied.stderr[:2048]
         require(
-            denied.returncode != 0 and "Operation not permitted" in denied.stderr,
+            namespace_refused(denied.returncode, denied.stderr),
             "unprofiled launch did not produce the expected permission refusal",
         )
     require(read(RESTRICTION) == "1", "global restriction changed during probe")

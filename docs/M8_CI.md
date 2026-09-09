@@ -39,11 +39,16 @@ report the exact two-profile stack in enforce mode. A byte-identical
 copy outside the policy's attachment path must fail with a permission refusal.
 That negative probe never removes the system's policy.
 
+UID/GID map columns are namespace-relative. The pinned bubblewrap's `--dev`
+setup maps the service identity through zero in an intermediate namespace;
+zero there is not host root. Both refusal probes require bubblewrap's specific
+namespace-creation error (EACCES or EPERM), not an arbitrary failed command.
+
 Only fixed benign diagnostics run here. Bounded subprocess timeouts and a
 ten-minute job deadline are not a proof of the future hostile-output pump or
 process-tree teardown. This diagnostic root mounts installed `/usr` read-only;
-PR B still needs its small, immutable, content-pinned runtime root. No model,
-repository-controlled payload, or untrusted shell instruction executes in it.
+PR B still needs its small, immutable, content-pinned runtime root. The payload
+is this PR's fixed diagnostic code, not a workload repository or model output.
 
 The job uploads only `m8-qualification.json`, retained for seven days. It
 contains selected public host facts and bounded diagnostics, not an environment
@@ -56,3 +61,8 @@ evidence. After merge, `workflow_dispatch` allows requalification without a
 code change. A green result qualifies only the observed prerequisites on that
 job's host. It does not replace any accepted M8 physical test or provide an
 always-on host for parked runs. No gateway has been provisioned.
+
+Implementation references: [bubblewrap 0.9.0](https://github.com/containers/bubblewrap/blob/v0.9.0/bubblewrap.c)
+for its device-setup mappings; [Linux UID maps](https://man7.org/linux/man-pages/man7/user_namespaces.7.html)
+for reader-relative columns; [AppArmor exec transitions](https://github.com/torvalds/linux/blob/v6.17/security/apparmor/domain.c)
+for named-stack selection versus a leading-`&` executable attachment search.
