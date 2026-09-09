@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import stat
 import sys
@@ -22,6 +23,21 @@ from constructicon.core.identity import Digest, digest
 
 SUPERVISOR = Path(__file__).with_name("_supervisor.py")
 BWRAP_SHA256 = "52231e1caf55bcbc667b269f49c63599a6f7db4767ae6a039580d0ff853db712"
+_PROBE = """
+import ctypes, errno, json, os
+from pathlib import Path
+libc = ctypes.CDLL(None, use_errno=True)
+nested = libc.unshare(0x10000000)
+print(json.dumps({
+    'namespaces': {n: os.readlink('/proc/self/ns/' + n)
+                   for n in ('user', 'mnt', 'pid', 'ipc', 'uts', 'net')},
+    'profile': Path('/proc/self/attr/current').read_text().strip(),
+    'status': '\\n'.join(line for line in Path('/proc/self/status').read_text().splitlines()
+                        if line.startswith(('NoNewPrivs:', 'CapEff:'))),
+    'nested_denied': nested == -1 and ctypes.get_errno() in (errno.EACCES, errno.EPERM),
+    'sys_absent': not Path('/sys').exists(),
+}))
+"""
 
 
 def _sha(path: Path) -> str:
@@ -176,11 +192,57 @@ class LinuxLauncher:
     ) -> ProcessResult:
         """The caller holds and validates the acquisition before entering here."""
 
+        await self.probe()
+        return await self._run(
+            command, workspace=workspace, posture=posture, guard_fds=guard_fds,
+            stdin=stdin, timeout_s=timeout_s,
+        )
+
+    async def probe(self) -> None:
+        """Benign, mount-free prerequisite proof through the identical recipe.
+
+        An anonymous lifetime fd is not a persistent pre-record allocation.
+        No cached boolean can skip the next launch's physical recheck.
+        """
+
+        self.check_artifacts()
+        if sys.platform != "linux":
+            raise ContractViolation("physical launch probes require Linux")
+        fd = os.memfd_create("constructicon-availability", os.MFD_CLOEXEC)
+        try:
+            result = await self._run(
+                ("/usr/bin/python3", "-I", "-c", _PROBE), workspace=None,
+                posture=Posture.READ, guard_fds=(fd,), timeout_s=10,
+            )
+        finally:
+            os.close(fd)
+        if result.returncode or result.timed_out or result.bound_exceeded:
+            raise ContractViolation("the physical Linux launch probe failed")
+        try:
+            facts = json.loads(result.stdout)
+            correct = (
+                facts["profile"] == "constructicon-m8-launch//&constructicon-m8-workload (enforce)"
+                and facts["nested_denied"] and facts["sys_absent"]
+                and "NoNewPrivs:\t1" in facts["status"]
+                and "CapEff:\t0000000000000000" in facts["status"]
+                and all(
+                    facts["namespaces"][name] != os.readlink(f"/proc/self/ns/{name}")
+                    for name in ("user", "mnt", "pid", "ipc", "uts", "net")
+                )
+            )
+        except (KeyError, ValueError, TypeError) as exc:
+            raise ContractViolation("the physical Linux launch probe is malformed") from exc
+        if not correct:
+            raise ContractViolation("the physical Linux launch probe contradicts containment")
+
+    async def _run(
+        self, command: tuple[str, ...], *, workspace: Path | None, posture: Posture,
+        guard_fds: tuple[int, ...], stdin: bytes = b"", timeout_s: float,
+    ) -> ProcessResult:
         if len(stdin) > self.limits.input_bytes or timeout_s <= 0:
             raise ContractViolation("contained input/deadline exceeds the launch contract")
         if not guard_fds or len(set(guard_fds)) != len(guard_fds):
             raise ContractViolation("contained work requires its distinct acquisition guards")
-        self.check_artifacts()
         args = self.argv(command, workspace=workspace, posture=posture)
         owner_read, owner_write = os.pipe()
         process: asyncio.subprocess.Process | None = None

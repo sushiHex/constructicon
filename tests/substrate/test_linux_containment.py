@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import json
 import os
+import signal
 import sys
 from pathlib import Path
 
@@ -19,7 +20,14 @@ from constructicon.core.grants import Posture
 from constructicon.core.identity import Digest
 from constructicon.core.workspace import acquisition_id_for
 from constructicon.substrate.executors.linux import LinuxLauncher, ProcessLimits
-from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisition_guard
+from constructicon.substrate.git.acquisition import (
+    AcquisitionClosure,
+    AcquisitionPaths,
+    acquisition_guard,
+    dispose_acquisition,
+)
+from constructicon.substrate.git.authority import GitAuthority
+from tests.gitworld import seed_authority
 
 
 @pytest.fixture
@@ -193,3 +201,56 @@ async def test_runtime_drift_refuses_before_any_child_starts(launcher, tmp_path)
     launcher.expected_runtime = Digest("sha256:" + "0" * 64)
     with pytest.raises(Exception, match="runtime content differs"):
         await run(launcher, tmp_path, "print('must not launch')")
+
+
+async def test_controller_death_cannot_release_the_reapers_guard_before_quiescence(
+    launcher, tmp_path,
+):
+    authority = GitAuthority(seed_authority(tmp_path / "git"), tmp_path / "legacy")
+    closure = AcquisitionClosure(authority)
+    paths = AcquisitionPaths(tmp_path / "owned", acquisition_id_for("lease-owner-death", 1))
+    fresh = AcquisitionPaths(tmp_path / "owned", acquisition_id_for("lease-owner-death", 2))
+    fresh.payload.mkdir(parents=True)
+    (fresh.payload / "untouched").write_text("new epoch")
+    owner = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "tests.substrate._linux_owner", str(paths.root),
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    reaper = None
+    cleanup = None
+    try:
+        async with asyncio.timeout(15):
+            while not (paths.payload / "live").exists():
+                if owner.returncode is not None:
+                    pytest.fail(f"owner failed before launch: {await owner.stderr.read()!r}")
+                await asyncio.sleep(.01)
+        children = Path(f"/proc/{owner.pid}/task/{owner.pid}/children").read_text().split()
+        assert len(children) == 1
+        reaper = int(children[0])
+        os.kill(reaper, signal.SIGSTOP)
+        owner.kill()
+        await owner.wait()
+        cleanup = asyncio.create_task(dispose_acquisition(closure, paths))
+        # Observe the durable fence rather than assuming when cleanup ran.
+        async with asyncio.timeout(5):
+            while not closure.is_closed(paths):
+                await asyncio.sleep(.01)
+        await asyncio.sleep(.05)
+        assert not cleanup.done(), "controller death released a still-live child's guard"
+        assert (paths.payload / "live").exists()
+        os.kill(reaper, signal.SIGCONT)
+        reaper = None
+        assert await asyncio.wait_for(cleanup, 10)
+        assert not paths.payload.exists() and paths.guard.is_file()
+        assert closure.is_closed(paths) and not closure.is_closed(fresh)
+        assert (fresh.payload / "untouched").read_text() == "new epoch"
+        await asyncio.sleep(.1)
+        assert not paths.payload.exists(), "old producer recreated a disposed acquisition"
+    finally:
+        if reaper is not None:
+            os.kill(reaper, signal.SIGCONT)
+        if owner.returncode is None:
+            owner.kill()
+        await owner.wait()
+        if cleanup is not None:
+            await cleanup
