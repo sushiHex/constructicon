@@ -1,0 +1,28 @@
+abi <abi/4.0>,
+
+# Provisioned only on the disposable Linux proof runner. The mount recipe,
+# not broad file grants here, owns filesystem isolation. No host-wide change.
+profile constructicon-m8-launch /opt/constructicon-m8-launch/bwrap flags=(attach_disconnected,mediate_deleted) {
+  allow capability,
+  allow userns,
+  allow mount,
+  allow umount,
+  allow pivot_root,
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow signal,
+  allow ptrace,
+  allow px /** -> constructicon-m8-launch//&constructicon-m8-workload,
+}
+
+profile constructicon-m8-workload flags=(attach_disconnected,mediate_deleted) {
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow signal,
+  allow ptrace,
+  allow ix /**,
+  deny capability,
+  deny userns,
+}

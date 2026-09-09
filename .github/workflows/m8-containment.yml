@@ -1,0 +1,64 @@
+name: M8 Linux containment
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: m8-containment-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  containment:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+        with:
+          python-version: "3.11"
+      - run: uv sync --dev
+      - name: Provision the explicitly authorized disposable Linux host
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1
+          sudo apt-get -q update
+          sudo apt-get -q -y install --no-install-recommends bubblewrap=0.9.0-1ubuntu0.1
+          sudo useradd --create-home --shell /bin/sh m8-service
+          test ! -e /opt/constructicon-m8-launch
+          test ! -L /opt/constructicon-m8-launch
+          sudo install -d -m 0755 /opt/constructicon-m8-launch
+          sudo install -m 0555 /usr/bin/bwrap /opt/constructicon-m8-launch/bwrap
+          test ! -e /etc/apparmor.d/constructicon-m8-launch
+          test ! -L /etc/apparmor.d/constructicon-m8-launch
+          sudo install -m 0444 scripts/ci/constructicon-m8-launch.apparmor /etc/apparmor.d/constructicon-m8-launch
+          sudo apparmor_parser --add --skip-cache /etc/apparmor.d/constructicon-m8-launch
+          sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" scripts/ci/build_m8_runtime.py /opt/constructicon-m8-launch/runtime \
+            | tee "$RUNNER_TEMP/m8-runtime.json"
+          sudo install -m 0444 "$RUNNER_TEMP/m8-runtime.json" /opt/constructicon-m8-launch/runtime.json
+          sudo chmod o+x /home/runner /home/runner/work /home/runner/work/constructicon
+      - name: Prove containment as the non-sudo service user
+        shell: bash
+        env:
+          EVIDENCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          printf 'commit=%s image=%s/%s kernel=%s\n' "$EVIDENCE_COMMIT" "$ImageOS" "$ImageVersion" "$(uname -r)"
+          sudo cat /sys/kernel/security/apparmor/profiles | awk '/constructicon-m8-/ {print}'
+          sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
+            M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/opt/constructicon-m8-launch \
+            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_linux_containment.py -v --tb=short
+      - name: Report bounded launch-policy denials
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo dmesg --color=never | awk '/apparmor="DENIED"/ && /constructicon-m8-/ {if (count++ < 32) print}'
