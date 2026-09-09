@@ -7,11 +7,7 @@ setup errors are not credited as proof. Run with ``uv run python scripts/check_m
 
 from __future__ import annotations
 
-import importlib
-import inspect
-import subprocess
-import sys
-import textwrap
+from _mutations import run
 
 MUTANTS = (
     (
@@ -19,7 +15,7 @@ MUTANTS = (
         "constructicon.runtime.validator:_compile_graph",
         "if not _validate_connection_endpoints(comp, graph, scope=scope, location=location):",
         "if False:",
-        "tests/runtime/test_connection_endpoints.py::test_unknown_endpoints_have_one_exact_fault_per_connection",
+        "tests/runtime/test_connection_endpoints.py::test_unknown_endpoints_have_one_exact_fault_per_connection[False-missing_roles0-inline]",
     ),
     (
         "endpoint-invalid graph stops before compilation",
@@ -61,7 +57,7 @@ MUTANTS = (
         "constructicon.runtime.validator:_validate_connection_endpoints",
         "if name not in declared",
         'if role == "src" and name not in declared',
-        "tests/runtime/test_connection_endpoints.py::test_unknown_endpoints_have_one_exact_fault_per_connection",
+        "tests/runtime/test_connection_endpoints.py::test_unknown_endpoints_have_one_exact_fault_per_connection[False-missing_roles2-root]",
     ),
     (
         "missing endpoint roles retain their order",
@@ -80,8 +76,10 @@ MUTANTS = (
     (
         "historical endpoints are baseline failures",
         "constructicon.api._control_commands:_CommandExecutor._admit_counterfactual",
-        "manifest = self._system.validate(source.source_graph, inputs, resolution_lock=lock)",
-        "manifest = source",
+        "lock = _resolution_lock_for(source, {})\n    try:\n"
+        "        manifest = self._system.validate(source.source_graph, "
+        "inputs, resolution_lock=lock)",
+        "lock = _resolution_lock_for(source, {})\n    try:\n        manifest = source",
         "tests/api/test_endpoint_admission.py::test_historical_endpoint_fault_is_baseline_invalid_and_reproduce_stays_exact",
     ),
     (
@@ -195,8 +193,10 @@ MUTANTS = (
     (
         "baseline-first",
         "constructicon.api._control_commands:_CommandExecutor._admit_counterfactual",
-        "manifest = self._system.validate(source.source_graph, inputs, resolution_lock=lock)",
-        "manifest = source",
+        "lock = _resolution_lock_for(source, {})\n    try:\n"
+        "        manifest = self._system.validate(source.source_graph, "
+        "inputs, resolution_lock=lock)",
+        "lock = _resolution_lock_for(source, {})\n    try:\n        manifest = source",
         "tests/api/test_membership_admission.py::test_retained_non_scalar_map_is_baseline_invalid_not_an_override_mismatch",
     ),
     (
@@ -212,7 +212,7 @@ MUTANTS = (
         '"authoring": authoring.model_dump(mode="json"),',
         '"authoring": authoring.model_dump(mode="json", '
         'exclude={"bindings": {"explicit_map_source_cardinality"}}),',
-        "tests/api/test_membership_admission.py::test_description_publishes_both_laws_in_schema_two",
+        "tests/api/test_membership_admission.py::test_description_preserves_both_membership_laws",
     ),
     (
         "fan-in vocabulary",
@@ -220,50 +220,10 @@ MUTANTS = (
         '"authoring": authoring.model_dump(mode="json"),',
         '"authoring": authoring.model_dump(mode="json", '
         'exclude={"bindings": {"mapped_many_policy"}}),',
-        "tests/api/test_membership_admission.py::test_description_publishes_both_laws_in_schema_two",
+        "tests/api/test_membership_admission.py::test_description_preserves_both_membership_laws",
     ),
 )
 
 
-def child(index: int) -> int:
-    import pytest
-
-    _, target, before, after, test = MUTANTS[index]
-    module_name, attribute = target.split(":")
-    module = importlib.import_module(module_name)
-    function = module
-    for part in attribute.split("."):
-        function = getattr(function, part)
-    source = textwrap.dedent(inspect.getsource(function))
-    if before not in source:
-        raise RuntimeError(f"mutation no longer matches {target}")
-    namespace = dict(function.__globals__)
-    exec(
-        compile(source.replace(before, after, 1), function.__code__.co_filename, "exec"), namespace
-    )
-    function.__code__ = namespace[function.__name__].__code__
-    return int(pytest.main(["-q", "--tb=short", test]))
-
-
-def main() -> int:
-    if len(sys.argv) == 2:
-        return child(int(sys.argv[1]))
-    failed = False
-    for index, (name, *_) in enumerate(MUTANTS):
-        result = subprocess.run(
-            [sys.executable, __file__, str(index)],
-            capture_output=True,
-            text=True,
-        )
-        killed = (
-            result.returncode == 1 and "FAILED " in result.stdout and "ERROR " not in result.stdout
-        )
-        print(f"{name}: {'KILLED' if killed else 'NOT PROVEN'}", flush=True)
-        if not killed:
-            print(result.stdout[-3000:], result.stderr[-3000:])
-            failed = True
-    return int(failed)
-
-
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run(MUTANTS))

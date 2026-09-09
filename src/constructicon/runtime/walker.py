@@ -1589,6 +1589,8 @@ class Walker:
                         manifest_hash=manifest.manifest_hash,
                     )
                     acquired.append((capability, acquisition))
+                    if acquisition.materialize is not None:
+                        await acquisition.materialize()
                     exposed_capability = acquisition.resource
                 if isinstance(exposed_capability, Channel):
                     if alias_binding.channel is None:

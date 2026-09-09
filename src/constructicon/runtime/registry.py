@@ -34,10 +34,10 @@ from constructicon.core.effect import (
 )
 from constructicon.core.envelope import utc_now
 from constructicon.core.errors import AdmissionError, ConstructiconError, JournalDamaged
-from constructicon.core.executor import ExecutorProfile
+from constructicon.core.executor import ExecutorLaunchIdentity, ExecutorProfile, ExecutorProvider
 from constructicon.core.grants import Posture
 from constructicon.core.graph import Graph, Loop, Ref
-from constructicon.core.identity import Digest, digest
+from constructicon.core.identity import Digest, canonical_json, digest
 from constructicon.core.journal import Journal
 from constructicon.core.manifest import SELF_BINDING, ExecutionManifest
 from constructicon.core.ports import same_boundary
@@ -116,6 +116,53 @@ class CapabilityDescriptor:
                 f"{self.channel_profile.model_dump(mode='json')!r}"
             )
         return None
+
+    def executor_incoherence(self, capability: object | None) -> str | None:
+        """Compare declared executor authority with its actual L0 provider facts.
+
+        Missing providers may remain discoverable as unavailable. A present
+        provider cannot conceal its complete policy behind legacy metadata.
+        """
+        profile = self.executor_profile
+        complete = profile is not None and profile.grant_policy is not None
+        provider = isinstance(capability, ExecutorProvider)
+        if not complete:
+            return (
+                "an executor provider requires a complete descriptor profile" if provider else None
+            )
+        if self.kind != "executor" or not self.leased:
+            return "a complete executor descriptor must have kind 'executor' and be leased"
+        if capability is None:
+            return None
+        if not provider:
+            return "the injected executor does not implement ExecutorProvider"
+        assert isinstance(capability, ExecutorProvider)
+        identity = capability.identity
+        if not isinstance(identity, ExecutorLaunchIdentity):
+            return "the provider supplies no ExecutorLaunchIdentity"
+        if canonical_json(identity.profile) != canonical_json(profile):
+            return "the provider profile differs from the descriptor profile"
+        if identity.revision != self.revision:
+            return "the provider's content-derived revision differs from the descriptor revision"
+        reasons = capability.unavailable_reasons
+        if type(reasons) is not tuple or any(
+            type(reason) is not str or not reason for reason in reasons
+        ):
+            return "provider availability must be a tuple of non-empty refusal reasons"
+        return None
+
+    def executor_unavailability(self, capability: object | None) -> tuple[str, ...]:
+        """Cached, non-I/O provider facts shared by admission and describe()."""
+        incoherence = self.executor_incoherence(capability)
+        if incoherence is not None:
+            return (incoherence,)
+        profile = self.executor_profile
+        if profile is None or profile.grant_policy is None:
+            return ()  # Historical lazy assemblies retain their existing law.
+        if capability is None:
+            return ("no executor provider is assembled",)
+        assert isinstance(capability, ExecutorProvider)
+        return capability.unavailable_reasons
 
 
 @dataclass(frozen=True)

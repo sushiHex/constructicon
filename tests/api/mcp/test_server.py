@@ -68,7 +68,7 @@ async def test_mcp_lists_typed_tools_without_caller_auth_arguments(system, journ
         identity = _structured(await client.call_tool("whoami", {}))
         assert identity["actor_id"] == "static:test-agent"
         described = _structured(await client.call_tool("system_describe", {}))
-        assert described["schema_version"] == 2
+        assert described["schema_version"] == 3
 
 
 async def test_retried_mcp_start_returns_one_run_and_stored_response(world, journal) -> None:

@@ -48,10 +48,10 @@ class _V1Description(SystemDescription):
     schema_version: Literal[1] = 1  # type: ignore[assignment]
 
 
-def test_description_publishes_both_laws_in_schema_two(system: Constructicon) -> None:
+def test_description_preserves_both_membership_laws(system: Constructicon) -> None:
     description = system.describe()
     payload = description.model_dump(mode="json")
-    assert description.schema_version == DESCRIPTION_SCHEMA_VERSION == 2
+    assert description.schema_version == DESCRIPTION_SCHEMA_VERSION == 3
     assert description.graph_schema.version == description.admission_schema.version == 1
     assert payload["authoring"]["bindings"]["explicit_map_source_cardinality"] == "one"
     assert payload["authoring"]["bindings"]["mapped_many_policy"] == (
@@ -61,12 +61,12 @@ def test_description_publishes_both_laws_in_schema_two(system: Constructicon) ->
     with pytest.raises(ValidationError):
         _V1Description.model_validate(payload)
     body = {key: value for key, value in payload.items() if key != "description_digest"}
-    assert description.description_digest == digest("system-description", 2, body)
+    assert description.description_digest == digest("system-description", 3, body)
     assert description.description_digest != digest("system-description", 1, body)
     for field in ("explicit_map_source_cardinality", "mapped_many_policy"):
         changed = description.model_dump(mode="json", exclude={"description_digest"})
         del changed["authoring"]["bindings"][field]
-        assert digest("system-description", 2, changed) != description.description_digest
+        assert digest("system-description", 3, changed) != description.description_digest
 
 
 @pytest.mark.parametrize("nested", [False, True])
@@ -111,7 +111,10 @@ def test_preflight_inspects_the_exact_pin_not_current_stable(
     with pytest.raises(AdmissionError) as caught:
         system.validate(graph, {"issue": {}})
     assert caught.value.faults[0].code == AdmissionCode.GRAPH_CAPABILITY_MISSING_BINDING
-    manifest = system.validate(graph, {"issue": {}}, resolution_lock=lock)
+    try:
+        manifest = system.validate(graph, {"issue": {}}, resolution_lock=lock)
+    except AdmissionError as exc:
+        pytest.fail(f"the compatible pinned version must admit independently of stable: {exc}")
     assert manifest.resolved_components[0].resolved_version == version_a
     # No missing or mismatched lock may acquire authority from B's preflight.
     for pins in ((), (lock.pins[0].model_copy(update={"component": "other"}),)):

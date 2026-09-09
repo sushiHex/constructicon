@@ -180,6 +180,12 @@ class Constructicon:
                     f"{descriptor.capability_id!r}"
                 )
             capability = self._capabilities.get(capability_id)
+            executor_incoherence = descriptor.executor_incoherence(capability)
+            if executor_incoherence is not None:
+                raise ValueError(
+                    f"capability {capability_id!r} is incoherent with assembly: "
+                    f"{executor_incoherence}"
+                )
             if capability_id not in self._capabilities and descriptor.channel_profile is None:
                 # Non-channel descriptors retain their existing optional/lazy
                 # assembly semantics. A sealed channel, by contrast, must have
@@ -513,7 +519,12 @@ class Constructicon:
             registry=self._registry,
             snapshot=snapshot,
             catalog=self._catalog,
-            available_capabilities=frozenset(self._capabilities),
+            available_capabilities=frozenset(
+                capability_id
+                for capability_id, capability in self._capabilities.items()
+                if (descriptor := self._catalog.get(capability_id)) is None
+                or not descriptor.executor_unavailability(capability)
+            ),
             root_grants=self._root_grants,
             limits=self._admission_limits,
             component_names=component_names,

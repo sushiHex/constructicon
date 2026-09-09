@@ -18,7 +18,7 @@ from constructicon.core.grants import EffectiveGrants, Posture
 from constructicon.core.identity import Digest
 from constructicon.core.registry import Loadability
 
-DESCRIPTION_SCHEMA_VERSION = 2
+DESCRIPTION_SCHEMA_VERSION = 3
 
 
 class SchemaDocument(BaseModel):
@@ -146,7 +146,7 @@ class AuthoringVocabulary(BaseModel):
 class SystemDescription(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[2] = 2
+    schema_version: Literal[3] = 3
     graph_schema: SchemaDocument
     admission_schema: SchemaDocument
     components: tuple[ComponentDescription, ...]
