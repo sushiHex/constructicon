@@ -25,10 +25,17 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get -q update
-          sudo apt-get -q install --no-install-recommends bubblewrap=0.9.0-1ubuntu0.1
+          sudo apt-get -q -y install --no-install-recommends bubblewrap=0.9.0-1ubuntu0.1
           sudo useradd --create-home --shell /bin/sh m8-probe
           sudo install -d -m 0755 /opt/constructicon-m8-qualification
           sudo install -m 0444 scripts/ci/qualify_m8_runner.py /opt/constructicon-m8-qualification/probe.py
+      - name: Inspect packaged and loaded bubblewrap policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          dpkg-query -W -f='${Package} ${Version}\n' apparmor bubblewrap
+          find /etc/apparmor.d -maxdepth 2 -iname '*bwrap*' -print
+          sudo cat /sys/kernel/security/apparmor/profiles | awk '/bwrap/ {print; count++; if (count == 32) exit}'
       - name: Qualify as an unprivileged service user
         shell: bash
         env:

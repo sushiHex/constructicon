@@ -1,0 +1,104 @@
+"""Portable refusal-law mutations; no mutation is credited as a Linux proof."""
+
+from _mutations import run
+
+MODULE = "scripts.ci.qualify_m8_runner:"
+TESTS = "tests/test_m8_runner_qualification.py::"
+
+MUTANTS = (
+    *(
+        (label, MODULE + "validate_child", condition, "True", TESTS + test)
+        for label, condition, test in (
+            (
+                "namespace separation",
+                'all(child["namespaces"][n] != host[n] for n in NAMESPACES)',
+                "test_every_namespace_must_be_distinct",
+            ),
+            (
+                "UID/GID",
+                'child["uid"] == uid and child["gid"] == gid',
+                "test_each_observed_boundary_is_required",
+            ),
+            (
+                "read-only errno",
+                'child["write_errno"] == 30',
+                "test_each_observed_boundary_is_required",
+            ),
+            (
+                "host visibility",
+                'not child["host_home_visible"] and not child["sys_visible"]',
+                "test_each_observed_boundary_is_required",
+            ),
+            (
+                "privilege reduction",
+                '"NoNewPrivs:\\t1" in child["status"] and '
+                '"CapEff:\\t0000000000000000" in child["status"]',
+                "test_each_observed_boundary_is_required",
+            ),
+            (
+                "policy attachment",
+                '"bwrap" in child["apparmor"] and "unpriv" in child["apparmor"]',
+                "test_each_observed_boundary_is_required",
+            ),
+            (
+                "nested denial",
+                'child["nested_returncode"] != 0 and '
+                '"Operation not permitted" in child["nested_stderr"]',
+                "test_each_observed_boundary_is_required",
+            ),
+            (
+                "network interface",
+                'interfaces == ["lo"]',
+                "test_each_observed_boundary_is_required",
+            ),
+        )
+    ),
+    *(
+        (label, MODULE + "qualify", condition, "True", TESTS + test)
+        for label, condition, test in (
+            (
+                "root refusal",
+                "uid != 0 and gid != 0",
+                "test_root_is_never_a_qualification_fallback",
+            ),
+            (
+                "sudo refusal",
+                'run(["/usr/bin/sudo", "-n", "/usr/bin/true"]).returncode != 0',
+                "test_host_refusals_precede_namespace_launch",
+            ),
+            (
+                "AppArmor prerequisite",
+                'evidence["apparmor_enabled"] == "Y"',
+                "test_host_refusals_precede_namespace_launch",
+            ),
+            (
+                "restriction prerequisite",
+                'evidence["userns_restriction"] == "1"',
+                "test_host_refusals_precede_namespace_launch",
+            ),
+            (
+                "package pin",
+                "package.returncode == 0 and package.stdout == PACKAGE",
+                "test_host_refusals_precede_namespace_launch",
+            ),
+        )
+    ),
+    (
+        "truthful exit status",
+        MODULE + "main",
+        'return 0 if evidence["qualified"] else 1',
+        "return 0",
+        TESTS + "test_report_cannot_claim_production_availability",
+    ),
+    (
+        "no production availability",
+        MODULE + "main",
+        '"production_available": False',
+        '"production_available": True',
+        TESTS + "test_report_cannot_claim_production_availability",
+    ),
+)
+
+
+if __name__ == "__main__":
+    raise SystemExit(run(MUTANTS))

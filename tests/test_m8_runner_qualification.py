@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -72,7 +73,60 @@ def test_root_is_never_a_qualification_fallback(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(probe.os, "getuid", lambda: 0, raising=False)
     monkeypatch.setattr(probe.os, "getgid", lambda: 0, raising=False)
     monkeypatch.setattr(probe.os, "getgroups", lambda: [0], raising=False)
+
+    def unexpected_command(argv: list[str]) -> None:
+        pytest.fail("root refusal must precede any subprocess")
+
+    monkeypatch.setattr(probe, "run", unexpected_command)
     with pytest.raises(ValueError, match="must not run as root"):
+        probe.qualify({})
+
+
+@pytest.mark.parametrize(
+    ("broken", "fault"),
+    [
+        ("sudo", "passwordless sudo"),
+        ("distribution", "expected Ubuntu"),
+        ("apparmor", "AppArmor is not enabled"),
+        ("restriction", "restriction is not enabled"),
+        ("package", "package drift"),
+    ],
+)
+def test_host_refusals_precede_namespace_launch(
+    broken: str, fault: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(probe.os, "getuid", lambda: 1001, raising=False)
+    monkeypatch.setattr(probe.os, "getgid", lambda: 1001, raising=False)
+    monkeypatch.setattr(probe.os, "getgroups", lambda: [1001], raising=False)
+    monkeypatch.setattr(
+        probe.platform,
+        "freedesktop_os_release",
+        lambda: {"ID": "other" if broken == "distribution" else "ubuntu", "VERSION_ID": "24.04"},
+    )
+
+    def reading(path: Path) -> str:
+        if path == probe.RESTRICTION:
+            return "0" if broken == "restriction" else "1"
+        return "N" if broken == "apparmor" else "Y"
+
+    def running(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        if argv[0] == "/usr/bin/sudo":
+            return subprocess.CompletedProcess(argv, int(broken != "sudo"), "", "")
+        assert argv[0] == "/usr/bin/dpkg-query", "must not launch a namespace"
+        return subprocess.CompletedProcess(
+            argv, 0, "other" if broken == "package" else probe.PACKAGE
+        )
+
+    def path_for(value: str) -> Path:
+        if value == probe.BWRAP:
+            raise ValueError("crossed the host-prerequisite boundary")
+        return Path(value)
+
+    monkeypatch.setattr(probe, "read", reading)
+    monkeypatch.setattr(probe, "run", running)
+    monkeypatch.setattr(probe, "Path", path_for)
+    with pytest.raises(ValueError, match=fault):
         probe.qualify({})
 
 
