@@ -17,3 +17,9 @@ historical writer eras retain only their original authority. Accepted
 [ADR 0017](0017-panel-membership-is-an-authored-map.md) records the M7.1
 decision that exact panel membership is an authored port map, not inferred
 connector liveness.
+
+Proposed [ADR 0018](0018-live-executors-are-leased-contained-processes.md)
+and the [M8 review draft](../plans/milestones/M8-live-executors-rev1.md)
+propose a Linux-first leased process boundary, explicit credential delegation,
+and complete live executor profiles. They are not accepted decisions or
+implemented guarantees.
