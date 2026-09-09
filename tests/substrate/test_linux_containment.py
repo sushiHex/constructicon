@@ -443,12 +443,16 @@ def test_buffered_start_does_not_authorize_launch_after_observed_owner_death(mon
             pid, status = os.waitpid(child, os.WNOHANG)
             if pid:
                 reaped = True
-                assert os.waitstatus_to_exitcode(status) == 125, (
+                code = os.waitstatus_to_exitcode(status)
+                if code == 92:
+                    raise RuntimeError("native supervisor test failed before its observation")
+                assert code == 125, (
                     "buffered start plus POLLHUP reached process creation"
                 )
                 break
             time.sleep(.01)
-        assert reaped, "supervisor failed to observe the already-closed owner pipe"
+        if not reaped:
+            raise TimeoutError("native supervisor test exceeded its observation bound")
     finally:
         if not reaped:
             os.kill(child, signal.SIGKILL)
