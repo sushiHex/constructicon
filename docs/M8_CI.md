@@ -1,7 +1,7 @@
 # M8 hosted-runner qualification
 
 This is a prerequisite investigation, not the PR B containment gate and not a
-live execution service. See [proposed ADR 0019](adr/0019-hosted-linux-runners-are-requalified-not-image-pinned.md).
+live execution service. See [accepted ADR 0019](adr/0019-hosted-linux-runners-are-requalified-not-image-pinned.md).
 
 The owner chose GitHub Actions instead of installing virtualization on the
 Windows development PC. `M8 runner qualification` uses a fresh standard
