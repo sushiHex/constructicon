@@ -10,10 +10,12 @@ import asyncio
 import hashlib
 import json
 import os
+import select
 import signal
 import socket
 import sys
 import time
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 
 import pytest
@@ -24,7 +26,7 @@ from constructicon.core.identity import Digest, digest
 from constructicon.core.manifest import CapabilityLease
 from constructicon.core.run import RunStatus
 from constructicon.core.workspace import acquisition_id_for
-from constructicon.substrate.executors import _supervisor
+from constructicon.substrate.executors import _supervisor, linux
 from constructicon.substrate.executors.linux import (
     SUPERVISOR_PATH,
     LinuxLauncher,
@@ -80,6 +82,22 @@ def test_runtime_cannot_execute_a_symlink_target_outside_its_hashed_closure(tmp_
     (root / "supervisor").symlink_to(outside)
     with pytest.raises(ContractViolation, match="leaves the immutable closure"):
         runtime_digest(root, require_immutable=False)
+
+
+@pytest.mark.parametrize("field", [
+    "runtime_root", "expected_runtime", "bubblewrap", "policy", "expected_policy_sha256", "limits",
+])
+def test_launcher_configuration_cannot_change_across_an_await(tmp_path, field):
+    launcher = LinuxLauncher(
+        runtime_root=tmp_path, expected_runtime=Digest("sha256:" + "1" * 64),
+        bubblewrap=tmp_path / "bwrap", policy=tmp_path / "policy",
+        expected_policy_sha256="2" * 64,
+    )
+    with pytest.raises(FrozenInstanceError):
+        setattr(launcher, field, getattr(launcher, field))
+    changed = replace(launcher, limits=replace(launcher.limits, stdout_bytes=1000))
+    assert changed.revision != launcher.revision
+    assert launcher.limits.stdout_bytes != changed.limits.stdout_bytes
 
 
 async def run(
@@ -222,8 +240,9 @@ print('confined')
 
 @pytest.mark.parametrize("shape", ["line", "many", "stderr", "stdin"])
 async def test_output_and_blocked_input_are_bounded_without_deadlock(launcher, tmp_path, shape):
-    launcher.limits = ProcessLimits(input_bytes=1024 * 1024, stdout_bytes=4096, record_bytes=1024,
-                                    stderr_bytes=512)
+    launcher = replace(launcher, limits=ProcessLimits(
+        input_bytes=1024 * 1024, stdout_bytes=4096, record_bytes=1024, stderr_bytes=512,
+    ))
     source = {
         "line": "import os; os.write(1,b'x'*8192)",
         "many": "import os; os.write(1,b'x\\n'*8192)",
@@ -280,7 +299,7 @@ print('ready',flush=True)
 
 
 async def test_runtime_drift_refuses_before_any_child_starts(launcher, tmp_path):
-    launcher.expected_runtime = Digest("sha256:" + "0" * 64)
+    launcher = replace(launcher, expected_runtime=Digest("sha256:" + "0" * 64))
     with pytest.raises(Exception, match="runtime content differs"):
         await run(launcher, tmp_path, "print('must not launch')")
 
@@ -314,11 +333,11 @@ async def test_the_call_deadline_includes_probe_and_spawn(launcher, tmp_path, mo
     if phase == "probe":
         probe = launcher.probe
 
-        async def delayed_probe():
+        async def delayed_probe(_self, *, deadline=None):
             await asyncio.sleep(1.5)
-            await probe()
+            await probe(deadline=deadline)
 
-        monkeypatch.setattr(launcher, "probe", delayed_probe)
+        monkeypatch.setattr(LinuxLauncher, "probe", delayed_probe)
     else:
         spawn = asyncio.create_subprocess_exec
         calls = 0
@@ -351,11 +370,11 @@ async def test_the_call_deadline_includes_probe_and_spawn(launcher, tmp_path, mo
 async def test_successful_call_elapsed_time_includes_availability(launcher, tmp_path, monkeypatch):
     probe = launcher.probe
 
-    async def delayed_probe():
+    async def delayed_probe(_self, *, deadline=None):
         await asyncio.sleep(.2)
-        await probe()
+        await probe(deadline=deadline)
 
-    monkeypatch.setattr(launcher, "probe", delayed_probe)
+    monkeypatch.setattr(LinuxLauncher, "probe", delayed_probe)
     result = await run(launcher, tmp_path, "print('complete')")
     assert result.returncode == 0 and result.stdout.strip() == b"complete", result.stderr
     assert result.elapsed_s >= .2
@@ -457,6 +476,52 @@ def test_buffered_start_does_not_authorize_launch_after_observed_owner_death(mon
         if not reaped:
             os.kill(child, signal.SIGKILL)
             os.waitpid(child, 0)
+
+
+async def test_probe_reaper_uses_the_call_deadline_when_the_controller_stalls(
+    launcher, tmp_path, monkeypatch,
+):
+    # Extend a real physical probe after it emits its namespace observation.
+    # Its private stdout and a pidfd provide barriers without a workspace mount.
+    monkeypatch.setattr(linux, "_PROBE", linux._PROBE + (
+        "\nimport sys, time\nsys.stdout.flush()\ntime.sleep(100)\n"
+    ))
+    observed = asyncio.Event()
+    lifetime_fd = None
+    spawn = asyncio.create_subprocess_exec
+
+    async def observe_spawn(*args, **kwargs):
+        nonlocal lifetime_fd
+        process = await spawn(*args, **kwargs)
+        lifetime_fd = os.pidfd_open(process.pid)
+        read = process.stdout.read
+
+        async def observe_read(n):
+            data = await read(n)
+            if data:
+                observed.set()
+            return data
+
+        monkeypatch.setattr(process.stdout, "read", observe_read)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", observe_spawn)
+    task = asyncio.create_task(run(launcher, tmp_path, "print('must not start')", timeout_s=1))
+    try:
+        await asyncio.wait_for(observed.wait(), 5)
+        assert lifetime_fd is not None
+        poller = select.poll()
+        poller.register(lifetime_fd, select.POLLIN)
+        time.sleep(2)
+        assert poller.poll(0), "probe outlived the caller deadline while asyncio was stalled"
+        result = await asyncio.wait_for(task, 5)
+        assert result.timed_out and result.stdout == b""
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        if lifetime_fd is not None:
+            os.close(lifetime_fd)
 
 
 async def test_controller_dies_while_a_real_setup_child_holds_the_guard(launcher, tmp_path):
@@ -646,7 +711,7 @@ async def test_instruction_and_argv_metacharacters_are_only_data(launcher, tmp_p
 
 
 async def test_missing_profile_attachment_refuses_before_the_requested_payload(launcher, tmp_path):
-    launcher.bubblewrap = launcher.bubblewrap.with_name("unprofiled-bwrap")
+    launcher = replace(launcher, bubblewrap=launcher.bubblewrap.with_name("unprofiled-bwrap"))
     with pytest.raises(Exception, match="physical Linux launch probe failed"):
         await run(launcher, tmp_path, "open('/workspace/backend-started','w').write('bad')")
     assert not (tmp_path / "workspace/backend-started").exists()

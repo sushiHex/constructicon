@@ -114,25 +114,20 @@ class ProcessResult:
 DEFAULT_PROCESS_LIMITS = ProcessLimits()
 
 
+@dataclass(frozen=True, kw_only=True)
 class LinuxLauncher:
     """A trusted assembly binds exact artifacts before any acquired call."""
 
-    def __init__(
-        self,
-        *,
-        runtime_root: Path,
-        expected_runtime: Digest,
-        bubblewrap: Path,
-        policy: Path,
-        expected_policy_sha256: str,
-        limits: ProcessLimits = DEFAULT_PROCESS_LIMITS,
-    ) -> None:
-        self.root = runtime_root
-        self.expected_runtime = expected_runtime
-        self.bubblewrap = bubblewrap
-        self.policy = policy
-        self.expected_policy_sha256 = expected_policy_sha256
-        self.limits = limits
+    runtime_root: Path
+    expected_runtime: Digest
+    bubblewrap: Path
+    policy: Path
+    expected_policy_sha256: str
+    limits: ProcessLimits = DEFAULT_PROCESS_LIMITS
+
+    @property
+    def root(self) -> Path:
+        return self.runtime_root
 
     def check_artifacts(self) -> None:
         if sys.platform != "linux" or os.getuid() == 0:
@@ -209,7 +204,7 @@ class LinuxLauncher:
             raise ContractViolation("contained input/deadline exceeds the launch contract")
         try:
             async with asyncio.timeout_at(deadline):
-                await self.probe()
+                await self.probe(deadline=deadline)
         except TimeoutError:
             return ProcessResult(125, b"", b"", time.monotonic() - started, timed_out=True)
         result = await self._run(
@@ -218,13 +213,15 @@ class LinuxLauncher:
         )
         return replace(result, elapsed_s=time.monotonic() - started)
 
-    async def probe(self) -> None:
+    async def probe(self, *, deadline: float | None = None) -> None:
         """Benign, mount-free prerequisite proof through the identical recipe.
 
         An anonymous lifetime fd is not a persistent pre-record allocation.
         No cached boolean can skip the next launch's physical recheck.
         """
 
+        if deadline is None:
+            deadline = asyncio.get_running_loop().time() + 10
         self.check_artifacts()
         if sys.platform != "linux":
             raise ContractViolation("physical launch probes require Linux")
@@ -233,11 +230,13 @@ class LinuxLauncher:
             result = await self._run(
                 ("/usr/bin/python3", "-I", "-c", _PROBE), workspace=None,
                 posture=Posture.READ, guard_fds=(fd,),
-                deadline=asyncio.get_running_loop().time() + 10,
+                deadline=deadline,
             )
         finally:
             os.close(fd)
-        if result.returncode or result.timed_out or result.bound_exceeded:
+        if result.timed_out:
+            raise TimeoutError("the physical Linux launch probe expired")
+        if result.returncode or result.bound_exceeded:
             raise ContractViolation("the physical Linux launch probe failed")
         try:
             facts = json.loads(result.stdout)

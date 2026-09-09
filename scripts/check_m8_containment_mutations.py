@@ -17,6 +17,11 @@ FACT = "tests/substrate/test_acquisition_closure.py::"
 
 MUTANTS = (
     (
+        "availability gets an independent deadline", LAUNCH + "run",
+        "await self.probe(deadline=deadline)", "await self.probe()",
+        OS + "test_probe_reaper_uses_the_call_deadline_when_the_controller_stalls",
+    ),
+    (
         "buffered start survives observed owner death",
         "constructicon.substrate.executors._supervisor:supervise",
         "if any(flags & (select.POLLHUP | select.POLLERR) for _, flags in events):",

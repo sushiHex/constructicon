@@ -268,6 +268,19 @@ bound or missing terminal result: those conditions alone invent no malformed
 record. Dedicated regressions and three additional mutations cover these
 corrections. Final exact-head confirmation remains the PR's gate.
 
+Review of `999fe7e` found that availability still transferred its independent
+ten-second deadline to the reaper and that launcher fields could be reloaded
+across the probe await. The launch configuration is now one frozen value;
+reconfiguration creates a new value and revision, never changes an admitted
+call midway. Each configurable field has a refusal test. Its immutability is
+the standard dataclass contract, not an independently mutated custom guard.
+`run` passes its deadline through `probe` to that same reaper. Standalone
+qualification alone supplies a default deadline. A native probe emits its
+actual namespace observation, then stalls; a pidfd proves its reaper exits
+on the caller deadline even while the controller event loop is blocked.
+Removing the deadline transfer is a separate native mutation. Expiry is
+reported as timeout rather than as an unrelated prerequisite failure.
+
 ### Backend extensibility and subscription intent
 
 The owner reaffirmed that Claude Code, Codex, and Pi are the starting adapters,

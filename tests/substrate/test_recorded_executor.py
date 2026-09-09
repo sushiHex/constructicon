@@ -159,7 +159,7 @@ async def test_runtime_configuration_drift_cannot_retain_the_recorded_provider_i
     acquired = await executor.acquire(context(binding="executor"))
     await workspace.materialize()
     await acquired.materialize()
-    launcher.limits = replace(launcher.limits, stdout_bytes=1000)
+    executor.launcher = replace(launcher, limits=replace(launcher.limits, stdout_bytes=1000))
     with pytest.raises(ContractViolation, match="identity drifted"):
         await acquired.resource.execute(
             TaskSpec(instruction="test"), workspace=workspace.resource,
