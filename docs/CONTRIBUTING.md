@@ -54,6 +54,7 @@ changing a shared definition. Compose before you drop a tier (I10).
 - `panel()` takes at least two definition bundles, never bare names; compose
   a single member directly. Members share one exact one-input/one-output
   boundary, both ports of cardinality `one`, with distinct nominal contracts.
+  The emitted input-boundary names are unique.
   The standard panel vocabulary lives in `core/panel.py`. An aggregator is
   atomic — its law reads its own seat, so compose around the panel, not inside
   its aggregator —
@@ -88,9 +89,11 @@ Read the versioned vocabulary instead of inferring new rules from an old
 description. `SystemDescription` and its digest domain are version 2, with
 `explicit_map_source_cardinality="one"` and
 `mapped_many_policy="ordered_scalar_selector_union_replaces_pool"` published
-separately. The embedded Graph and admission schemas remain version 1. Strict
-version-1 description readers must be updated rather than having their unknown
-field checks loosened. See [ADR 0017](adr/0017-panel-membership-is-an-authored-map.md).
+separately. The embedded Graph and admission schemas remain version 1.
+Contributor guidance: update version-1 readers to understand version 2 instead
+of loosening unknown-field checks. This is integration policy, not runtime
+enforcement over external readers. See
+[ADR 0017](adr/0017-panel-membership-is-an-authored-map.md).
 
 ## Adding a control operation (L0/L4)
 

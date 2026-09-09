@@ -385,9 +385,9 @@ hand-authored one.
 Authoring requires at least two member bundles sharing one exact request/result
 boundary, both ports of cardinality `one`, with distinct nominal contracts.
 The aggregator declares exactly one `many` input, of that result contract, and
-no other input with the same nominal role. Boundary names are unique. Member
-ids must be dot-free and result-port names non-empty so the selectors are
-representable; general Graph identifier syntax is unchanged.
+no other input with the same nominal role. The emitted input-boundary names
+are unique. Member ids must be dot-free and result-port names non-empty so the
+selectors are representable; general Graph identifier syntax is unchanged.
 
 The maps retain membership as authored intent. Admission requires every named
 result to supply one scalar of the resolved gather contract, so an incompatible
