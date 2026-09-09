@@ -41,8 +41,10 @@ That negative probe never removes the system's policy.
 
 UID/GID map columns are namespace-relative. The pinned bubblewrap's `--dev`
 setup maps the service identity through zero in an intermediate namespace;
-zero there is not host root. Both refusal probes require bubblewrap's specific
-namespace-creation error (EACCES or EPERM), not an arbitrary failed command.
+zero there is not host root. Nested bubblewrap must fail specifically at
+namespace creation. The unprofiled copy may instead be stopped by capability
+restrictions at loopback setup; its exact refusal stage is recorded. Only the
+named operation's permission error counts, not an arbitrary failed command.
 
 Only fixed benign diagnostics run here. Bounded subprocess timeouts and a
 ten-minute job deadline are not a proof of the future hostile-output pump or

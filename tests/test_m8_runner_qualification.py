@@ -68,6 +68,11 @@ def test_every_namespace_must_be_distinct(namespace: str) -> None:
         ),
         ("nested_returncode", 0, "permission refusal"),
         ("nested_stderr", "bwrap: unknown option", "permission refusal"),
+        (
+            "nested_stderr",
+            "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted",
+            "permission refusal",
+        ),
         ("net_dev", "header\nheader\n lo: 0\n eth0: 0\n", "non-loopback"),
     ],
 )
@@ -86,19 +91,24 @@ def test_unsupported_host_is_explicit_failure(monkeypatch: pytest.MonkeyPatch) -
 @pytest.mark.parametrize(
     ("returncode", "message", "expected"),
     [
-        (1, "bwrap: Creating new namespace failed: Permission denied\n", True),
-        (1, "bwrap: Creating new namespace failed: Operation not permitted\n", True),
-        (0, "bwrap: Creating new namespace failed: Permission denied\n", False),
-        (2, "bwrap: Creating new namespace failed: Permission denied\n", False),
-        (1, "bwrap: execvp /usr/bin/python3: Permission denied\n", False),
-        (1, "bwrap: mount: Operation not permitted\n", False),
-        (1, "bwrap: unknown option\n", False),
+        (1, "bwrap: Creating new namespace failed: Permission denied\n", "namespace_creation"),
+        (
+            1,
+            "bwrap: Creating new namespace failed: Operation not permitted\n",
+            "namespace_creation",
+        ),
+        (1, "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\n", "loopback_setup"),
+        (0, "bwrap: Creating new namespace failed: Permission denied\n", None),
+        (2, "bwrap: Creating new namespace failed: Permission denied\n", None),
+        (1, "bwrap: execvp /usr/bin/python3: Permission denied\n", None),
+        (1, "bwrap: mount: Operation not permitted\n", None),
+        (1, "bwrap: unknown option\n", None),
     ],
 )
-def test_namespace_refusal_names_the_operation(
-    returncode: int, message: str, expected: bool
+def test_permission_refusal_names_the_operation(
+    returncode: int, message: str, expected: str | None
 ) -> None:
-    assert probe.namespace_refused(returncode, message) is expected
+    assert probe.permission_refusal(returncode, message) == expected
 
 
 @pytest.mark.parametrize(

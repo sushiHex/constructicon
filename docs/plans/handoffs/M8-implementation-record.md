@@ -137,8 +137,8 @@ a non-sudo service account, and a reviewed profile attached only to a private,
 root-owned executable copy. A separate non-root probe checks the exact kernel
 profile stack, six namespace identities, service identity, read-only mount,
 private loopback, missing host home/sysfs, reduced privileges, and refusal of
-nested and unprofiled namespace creation. Add-only loading, absent-path guards,
-and unchanged global restrictions prevent provisioning from silently replacing
+nested namespace creation and an unprofiled launch. Add-only loading,
+absent-path guards, and unchanged global restrictions prevent silently replacing
 policy. Nothing is installed on Windows or imported by Constructicon runtime.
 
 The first two jobs refused because the host supplied no bubblewrap profile.
@@ -148,12 +148,15 @@ removes that search entirely; it does not add an inheritance or unconfined
 fallback. The next job launched with the expected enforcing stack and exposed
 two incorrect probe assumptions: `--dev` uses an intermediate user namespace,
 so the child map's parent-side zero is not host root; explicit AppArmor userns
-denial reports EACCES rather than the global gate's possible EPERM. The final
-checks name the exact namespace operation and the pinned mapping recipe.
+denial reports EACCES rather than the global gate's possible EPERM. On this
+kernel, the unprofiled copy creates namespaces but loses the capability needed
+for loopback setup. Its refusal is recorded at that stage, not falsely at
+namespace creation. The final checks name each operation and the pinned
+mapping recipe.
 Both corrections were traced to upstream source, not accepted merely to make
 the probe pass. References and operation are in [the runbook](../../M8_CI.md).
 
-The 50 portable tests and 20 assertion-killed mutations test the probe's
+The 52 portable tests and 20 assertion-killed mutations test the probe's
 refusal logic, not Linux containment. Actual job links, image/commit evidence,
 and exact-head gate results belong in PR #28. Its JSON always says
 `runner_prerequisites_only` and `production_available: false`. The benign

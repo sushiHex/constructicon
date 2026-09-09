@@ -47,7 +47,8 @@ MUTANTS = (
             ),
             (
                 "nested denial",
-                'namespace_refused(child["nested_returncode"], child["nested_stderr"])',
+                'permission_refusal(child["nested_returncode"], child["nested_stderr"])\n'
+                '        == "namespace_creation"',
                 "test_each_observed_boundary_is_required",
             ),
             (
@@ -102,11 +103,11 @@ MUTANTS = (
         )
     ),
     (
-        "permission error is the namespace operation",
-        MODULE + "namespace_refused",
-        "stderr.strip() in (",
-        '"Permission denied" in stderr or stderr.strip() in (',
-        TESTS + "test_namespace_refusal_names_the_operation",
+        "permission error names the operation",
+        MODULE + "permission_refusal",
+        "stages.get(stderr.strip())",
+        '"namespace_creation"',
+        TESTS + "test_permission_refusal_names_the_operation",
     ),
     (
         "truthful exit status",

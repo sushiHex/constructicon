@@ -62,13 +62,16 @@ def artifact_digest(path: Path, expected: str) -> str:
     return digest
 
 
-def namespace_refused(returncode: int, stderr: str) -> bool:
-    # AppArmor's explicit deny returns EACCES; the global gate may use EPERM.
-    # A permission failure at exec, mount, or an unrelated operation is not proof.
-    return returncode == 1 and stderr.strip() in (
-        "bwrap: Creating new namespace failed: Permission denied",
-        "bwrap: Creating new namespace failed: Operation not permitted",
-    )
+def permission_refusal(returncode: int, stderr: str) -> str | None:
+    # Explicit userns denial is EACCES; global restrictions may instead strip
+    # capabilities, stopping the unprofiled launcher at loopback setup (EPERM).
+    # Never count a different operation's failure as the expected refusal.
+    stages = {
+        "bwrap: Creating new namespace failed: Permission denied": "namespace_creation",
+        "bwrap: Creating new namespace failed: Operation not permitted": "namespace_creation",
+        "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted": "loopback_setup",
+    }
+    return stages.get(stderr.strip()) if returncode == 1 else None
 
 
 def sandbox_argv(workspace: Path, script: str) -> list[str]:
@@ -187,7 +190,8 @@ def validate_child(child: dict, host: dict, uid: int, gid: int) -> None:
         "exact enforcing child AppArmor attachment is absent",
     )
     require(
-        namespace_refused(child["nested_returncode"], child["nested_stderr"]),
+        permission_refusal(child["nested_returncode"], child["nested_stderr"])
+        == "namespace_creation",
         "nested bubblewrap did not produce the expected permission refusal",
     )
     interfaces = [line.split(":", 1)[0].strip() for line in child["net_dev"].splitlines()[2:]]
@@ -245,8 +249,9 @@ def qualify(evidence: dict) -> None:
         denied = run(argv)
         evidence["unprofiled_returncode"] = denied.returncode
         evidence["unprofiled_stderr"] = denied.stderr[:2048]
+        evidence["unprofiled_refusal_stage"] = permission_refusal(denied.returncode, denied.stderr)
         require(
-            namespace_refused(denied.returncode, denied.stderr),
+            evidence["unprofiled_refusal_stage"] is not None,
             "unprofiled launch did not produce the expected permission refusal",
         )
     require(read(RESTRICTION) == "1", "global restriction changed during probe")
