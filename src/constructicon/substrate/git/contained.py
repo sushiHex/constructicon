@@ -12,8 +12,10 @@ import io
 import os
 import shutil
 import tarfile
+import weakref
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -54,20 +56,34 @@ class _WorkspaceReference(BaseModel):
     base: str
 
 
-class ContainedWorkspace:
-    """A provider-minted WorkspaceView, not a mount authority supplied by a task."""
+@dataclass
+class _WorkspacePhase:
+    entered: bool = False
+    ready: bool = False
+    closed: bool = False
 
-    def __init__(
-        self, provider: ContainedWorkspaceProvider, context: LeaseContext,
-        paths: AcquisitionPaths, base: GitSha,
-    ) -> None:
-        self.provider = provider
-        self.context = context
-        self.paths = paths
-        self.base = base
-        self.entered = False
-        self.ready = False
-        self.closed = False
+
+@dataclass(frozen=True, eq=False)
+class ContainedWorkspace:
+    """A provider-minted WorkspaceView with immutable acquisition coordinates."""
+
+    provider: ContainedWorkspaceProvider
+    context: LeaseContext
+    paths: AcquisitionPaths
+    base: GitSha
+    _phase: _WorkspacePhase = field(default_factory=_WorkspacePhase)
+
+    @property
+    def entered(self) -> bool:
+        return self._phase.entered
+
+    @property
+    def ready(self) -> bool:
+        return self._phase.ready
+
+    @property
+    def closed(self) -> bool:
+        return self._phase.closed
 
     @property
     def path(self) -> str:
@@ -81,20 +97,18 @@ class ContainedWorkspace:
             raise ContractViolation("locally closed workspace cannot materialize")
         if self.entered:
             raise ContractViolation("workspace materialization already entered")
-        self.entered = True  # Before the first await or persistent operation.
+        self._phase.entered = True  # Before the first await or persistent operation.
         async with acquisition_guard(self.paths) as guard:
             self.provider.closure.require_open(self.paths)
             Path(self.path).mkdir(parents=True, exist_ok=False)
             await self.provider.populate(self, guard)
-            self.ready = True
+            self._phase.ready = True
 
     @asynccontextmanager
     async def use(self) -> AsyncIterator[int]:
-        if self.closed or not self.ready:
-            raise ContractViolation("workspace is not an open materialized acquisition")
+        self.provider.owned_view(self, self.context)
         async with acquisition_guard(self.paths) as guard:
-            if self.closed:
-                raise ContractViolation("workspace closed while awaiting its guard")
+            self.provider.owned_view(self, self.context)
             self.provider.closure.require_open(self.paths)
             if Path(self.path).is_symlink() or not Path(self.path).is_dir():
                 raise ContractViolation("workspace mount is no longer its owned directory")
@@ -113,6 +127,7 @@ class ContainedWorkspaceProvider:
         self.posture = posture
         self.launcher = launcher
         self.closure = AcquisitionClosure(authority)
+        self._views: weakref.WeakSet[ContainedWorkspace] = weakref.WeakSet()
         git = shutil.which("git")
         if git is None:
             raise ContractViolation("trusted Git executable is unavailable")
@@ -126,6 +141,7 @@ class ContainedWorkspaceProvider:
         paths = AcquisitionPaths(self.root, acquisition)
         base = self.authority.resolve_ref(self.target_ref)
         workspace = ContainedWorkspace(self, context, paths, base)
+        self._views.add(workspace)
         reference = _WorkspaceReference(
             acquisition=acquisition, provider=self.provider_id, base=base,
         )
@@ -136,15 +152,21 @@ class ContainedWorkspaceProvider:
         )
 
     def owned_view(self, view: WorkspaceView | None, context: LeaseContext) -> ContainedWorkspace:
-        if not isinstance(view, ContainedWorkspace) or view.provider is not self:
+        if (
+            not isinstance(view, ContainedWorkspace)
+            or view.provider is not self or view not in self._views
+        ):
             raise ContractViolation("workspace must be minted by the assembled provider")
         actual = view.context
+        logical = lease_id_for(actual.run_lease.run_id, actual.path, actual.binding.binding)
+        expected = AcquisitionPaths(self.root, acquisition_id_for(logical, actual.run_lease.epoch))
         if (
             actual.run_lease.run_id != context.run_lease.run_id
             or actual.run_lease.epoch != context.run_lease.epoch
             or actual.path != context.path
             or actual.manifest_hash != context.manifest_hash
             or context.binding.effective_grants.posture is not self.posture
+            or view.paths != expected
             or view.closed or not view.ready
         ):
             raise ContractViolation("workspace does not own this open invocation and epoch")
@@ -154,9 +176,12 @@ class ContainedWorkspaceProvider:
         self, acquisition: AcquiredCapability, disposition: Disposition,
     ) -> LeaseClosure:
         workspace = acquisition.resource
-        if not isinstance(workspace, ContainedWorkspace) or workspace.provider is not self:
+        if (
+            not isinstance(workspace, ContainedWorkspace)
+            or workspace.provider is not self or workspace not in self._views
+        ):
             raise ContractViolation("workspace close requires its provider's acquisition")
-        workspace.closed = True
+        workspace._phase.closed = True
         if workspace.entered:
             await dispose_acquisition(self.closure, workspace.paths)
         return LeaseClosure(disposition="released" if disposition == "release" else "discarded")

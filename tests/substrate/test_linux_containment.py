@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import signal
+import socket
 import sys
 from pathlib import Path
 
@@ -254,3 +255,101 @@ async def test_controller_death_cannot_release_the_reapers_guard_before_quiescen
         await owner.wait()
         if cleanup is not None:
             await cleanup
+
+
+async def test_host_files_sockets_and_inheritable_descriptors_are_absent(launcher, tmp_path):
+    sentinel = tmp_path / "host-private"
+    sentinel.write_text("host-only-secret")
+    fd = os.open(sentinel, os.O_RDONLY)
+    os.set_inheritable(fd, True)
+    server = socket.socket(socket.AF_UNIX)
+    server.bind(str(tmp_path / "host-service.sock"))
+    server.listen()
+    source = f"""
+import os, socket
+from pathlib import Path
+assert not Path({str(sentinel)!r}).exists()
+assert not Path({str(tmp_path / 'host-service.sock')!r}).exists()
+assert not Path('/proc/{os.getpid()}/root').exists()
+for value in Path('/proc/self/fd').iterdir():
+    try: target = os.readlink(value)
+    except FileNotFoundError: continue
+    assert 'host-private' not in target and 'host-service' not in target
+assert not Path('/dev/tty').exists() or not os.isatty(0)
+print('absent')
+"""
+    try:
+        result = await run(launcher, tmp_path, source)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == b"absent"
+        assert sentinel.read_text() == "host-only-secret"
+    finally:
+        server.close()
+        os.close(fd)
+
+
+async def test_child_and_grandchild_cannot_reach_the_host_loopback_service(launcher, tmp_path):
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen()
+    port = server.getsockname()[1]
+    source = f"""
+import os, socket
+def denied():
+    with socket.socket() as stream:
+        stream.settimeout(.2)
+        try: stream.connect(('127.0.0.1', {port}))
+        except OSError: return True
+        return False
+assert denied()
+pid = os.fork()
+if pid == 0: os._exit(0 if denied() else 9)
+assert os.waitpid(pid, 0)[1] == 0
+print('network denied')
+"""
+    try:
+        result = await run(launcher, tmp_path, source)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == b"network denied"
+        server.setblocking(False)
+        with pytest.raises(BlockingIOError):
+            server.accept()
+    finally:
+        server.close()
+
+
+async def test_workspace_symlink_cannot_enlarge_the_mount(launcher, tmp_path):
+    outside = tmp_path / "protected"
+    outside.write_text("unchanged")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "escape").symlink_to(outside)
+    source = """
+from pathlib import Path
+try: Path('/workspace/escape').write_text('escaped')
+except OSError: print('denied')
+else: print('escaped')
+"""
+    result = await run(launcher, tmp_path, source, posture=Posture.WRITE)
+    assert result.returncode == 0 and result.stdout.strip() == b"denied", result.stderr
+    assert outside.read_text() == "unchanged"
+
+
+async def test_instruction_and_argv_metacharacters_are_only_data(launcher, tmp_path):
+    values = ("--help", "quotes'\"", "$(touch escaped)", "one\ntwo", "unicode:\u2603")
+    source = "import json,sys; print(json.dumps([sys.argv[1:],sys.stdin.read()]))"
+    paths = AcquisitionPaths(tmp_path, acquisition_id_for("lease-argv", 1))
+    async with acquisition_guard(paths) as guard:
+        result = await launcher.run(
+            ("/usr/bin/python3", "-I", "-c", source, *values), workspace=None,
+            posture=Posture.READ, guard_fds=(guard,), stdin="\n".join(values).encode(), timeout_s=5,
+        )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == [list(values), "\n".join(values)]
+
+
+async def test_missing_profile_attachment_refuses_before_the_requested_payload(launcher, tmp_path):
+    launcher.bubblewrap = launcher.bubblewrap.with_name("unprofiled-bwrap")
+    with pytest.raises(Exception, match="physical Linux launch probe failed"):
+        await run(launcher, tmp_path, "open('/workspace/backend-started','w').write('bad')")
+    assert not (tmp_path / "workspace/backend-started").exists()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import sys
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -158,7 +159,7 @@ async def test_recovery_waits_for_started_materialization_then_removes_it(provid
 
 @LINUX
 @pytest.mark.parametrize("mismatch", [
-    "none", "path", "provider", "epoch", "run", "posture", "closed",
+    "none", "path", "forged", "relocated", "provider", "epoch", "run", "posture", "closed",
 ])
 async def test_mount_authority_comes_from_the_provider_and_exact_invocation(provider, mismatch):
     ctx = context()
@@ -171,8 +172,14 @@ async def test_mount_authority_comes_from_the_provider_and_exact_invocation(prov
         view = None
     elif mismatch == "path":
         view = SimpleNamespace(path=acquired.resource.path, git_ref=acquired.resource.git_ref)
+    elif mismatch == "forged":
+        view = copy.copy(view)
+    elif mismatch == "relocated":
+        view = replace(view, paths=AcquisitionPaths(
+            provider.root / "other", view.paths.acquisition_id,
+        ))
     elif mismatch == "provider":
-        view.provider = object()
+        view = replace(view, provider=object())
     elif mismatch == "epoch":
         call = context(epoch=2, binding="executor")
     elif mismatch == "run":
