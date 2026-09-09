@@ -6,8 +6,9 @@ not an implementation record or an approved deployment profile.
 Observed on 2026-09-09 UTC against Constructicon
 `71c4fe38ec8898d8af0f463c56ff34f3850bf63e`. No real model invocation,
 credential access, sandbox installation, or host security-policy change was
-performed. Repository and upstream reads plus local CLI help/version commands
-are the evidence described here.
+performed. Repository/upstream reads, local CLI help, and the bounded local
+probes explicitly described below are the evidence; none proves Linux
+containment or a live backend.
 
 ## Repository observations
 
@@ -38,6 +39,9 @@ The source inspection covered:
   check commands as host subprocesses; `_compute_check_set_hash` also runs
   tool-version subprocesses. Snapshot content verification and process-group
   termination are present, but neither is whole-process hostile-code isolation.
+- `substrate/git/authority.py`: `StagedWriteWorkspace.commit_all` runs host Git
+  against local staging config, including hooks/filters. The staging directory
+  is deliberately writable; process teardown does not sanitize its metadata.
 - `api/introspection.py`: profiles appear in `SystemDescription`, explaining
   why adding complete live policy needs an explicit description version decision.
 - ADR 0009: exported snapshots use file permissions and content verification,
@@ -175,6 +179,27 @@ No systemd service, OCI daemon, or cgroup manager is selected merely to mirror
 the executor abstraction. Additional OS machinery would need a demonstrated
 failure the chosen ownership boundary cannot handle, followed by review.
 
+### Mutable Git and native routing
+
+- [Git upload-pack security](https://git-scm.com/docs/git-upload-pack#_security):
+  most Git commands must not run against untrusted Git metadata. Even its
+  deliberately narrower server path documents avoiding lazy fetch because
+  source configuration/hooks can execute commands. This supports containing
+  metadata interpretation, not assuming every host Git command is safe.
+- [Git index-pack](https://git-scm.com/docs/git-index-pack): strict object/link
+  checks and input-size limits are available in Git. The draft chooses a
+  self-contained pack handoff plus trusted quarantine, preserving exact object
+  identity without a new Python Git parser. No contained import proof ran here.
+- [Claude secure deployment](https://code.claude.com/docs/en/agent-sdk/secure-deployment):
+  the model base URL covers sampling requests, not every network operation;
+  private-loopback plaintext HTTP with upstream authentication/TLS at a proxy
+  is documented. That is evidence for a candidate route, not verification of
+  every pinned CLI. Each backend still needs its full egress/failure inventory.
+- [Bubblewrap option reference](https://github.com/containers/bubblewrap/blob/main/bwrap.xml):
+  additional user-namespace and seccomp controls exist, but `no_new_privs` is
+  not a syscall filter. The draft explicitly excludes kernel-exploit and
+  resource-denial protection rather than presenting untested controls as proof.
+
 ## Provenance discipline
 
 ADR 0005 names ideas from `sushiHex/hardline-mcp@6d1187a` and
@@ -229,8 +254,37 @@ contract stays legacy; a thread wrapper is not credited with cancellation
 ownership. These are proposed implementation requirements, not a claim that
 gate execution is now cancellable or contained.
 
-These edits iterate an unapproved review draft. They neither accept ADR 0018
-nor claim that the second independent design review has completed. The
+The separately dispatched review was recovered through the durable review-job
+history on 2026-09-09, job `job_3cc2b77bd645` (completed at 06:25:58 UTC).
+It reviewed an earlier draft; its source premises were rechecked at `8342827`.
+Its gate-window blocker was already addressed by the revised ordering. Its
+other blocker was not: hostile staging Git metadata still reached host Git.
+Earlier status reports saying this review was inaccessible were incomplete;
+the durable job-result interface made the report recoverable.
+
+A bounded Windows reproduction used a new temporary bare authority, seed,
+and staging repository. A local `core.hooksPath` selected a harmless pre-commit
+hook that printed `M8_STAGING_HOOK_EXECUTED` and exited nonzero. Calling the
+actual `StagedWriteWorkspace.commit_all` raised `ContractViolation` containing
+that marker; no candidate ref was imported. It read no credential, reached no
+network endpoint, and changed no project source or operator Git configuration.
+This proves the current host-Git dispatch premise, not a Linux sandbox escape.
+
+The draft now contains mutable staging Git, exports an immutable exact-OID
+pack, and validates it in a trusted quarantine before candidate publication.
+Safe capture has its own PR C, with a new async workspace contract and legacy
+compatibility; gates/gateway/backends shift to D/E/F-H. ADR 0009's repository,
+candidate identity/history, lease disposal, and sole install path stand.
+The review's remaining observations are explicit acceptance requirements:
+mount/FD mapping; no workspace FD in the bridge; server-owned route lease
+identity/expiry; ancillary-FD refusal; plaintext private-loopback/upstream-TLS
+placement; and per-backend egress inventories. A general seccomp/cgroup
+framework was not adopted: kernel and denial-of-service protection remain
+stated non-goals. No observation is credited as executed Linux evidence.
+
+These edits iterate an unapproved review draft. They do not accept ADR 0018.
+The recovered review is complete, but confirmation of these newer corrections
+is a separate exact-head gate. The
 1,531-test baseline covers the unchanged implementation, not these future
 containment, gateway, or backend guarantees.
 

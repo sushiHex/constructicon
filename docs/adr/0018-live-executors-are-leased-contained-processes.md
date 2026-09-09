@@ -50,6 +50,12 @@ session or process group. Backend cancellation is not the proof. Namespace
 support, effective mounts, and safe process cleanup are tested prerequisites;
 failure refuses availability or launch, never selects an unsandboxed fallback.
 Host-kernel compromise and resource-denial resistance are not claimed.
+The proof records the actual mount/FD/UID map, including private `/proc`,
+absent `/sys`, minimal private `/dev`, and private mount propagation. There
+is no optional namespace fallback. No general seccomp policy is selected;
+`no_new_privs` does not imply one. A hostile invocation can exhaust this
+dedicated runner; stronger VM/cgroup availability isolation is separate
+operator work, not an inferred guarantee.
 
 The initial recipe has one OS-isolation owner: Constructicon. It disables
 the CLI's internal sandbox through controlled, revision-bound configuration;
@@ -114,6 +120,12 @@ ambient host-login reuse or reliance on redaction to contain a known secret.
 The route is reached through one acquisition-specific socket and an
 invocation-owned loopback byte bridge, not a host TCP listener shared with
 other services. The bridge carries native bytes and has no provider policy.
+It holds no workspace descriptor; the endpoint rejects ancillary FD passing.
+The initial CLI-to-bridge leg is private-loopback plaintext HTTP, with
+upstream TLS at the external gateway. An incompatible CLI is unavailable,
+not a reason to add TLS interception or a general proxy. Each pinned backend
+must inventory all egress attempts and prove denied auxiliary traffic does
+not break the supported operation; a model base URL alone is not that proof.
 The gateway is an environment prerequisite, not a new Constructicon model
 provider API: backend requests and responses retain their native protocol.
 Constructicon neither translates completions nor builds account-login,
@@ -121,6 +133,12 @@ credential-refresh, or general HTTP-proxy infrastructure. The route supplies
 upstream authentication host-side; child-supplied headers cannot redirect it
 or expose its credentials. Revocation and expiry close existing streams as
 well as refusing new ones. The trusted provisioning interface is never mounted.
+
+The existing durable lease records a non-secret server-minted route lease id
+and acquisition epoch. The gateway associates every request and stream with
+that lease, never client identity, peer UID, or a reusable socket path. Its
+own clock enforces expiry after host death; the maximum orphan window is the
+remaining granted lifetime. No second durable route ledger is introduced.
 
 The fake service proves the allocation/revocation contract, not production
 enforcement. Before any live profile is available, the operator must select
@@ -136,6 +154,35 @@ Subscription authentication remains a separately gated mode:
 if it needs a raw reusable account secret in an untrusted child, it is not
 eligible under this decision. Owner acceptance of this limitation is required.
 
+### Contain mutable Git before importing its candidate
+
+ADR 0009's staging repository stays a repository: the agent may commit and
+move its refs. But local Git config, hooks, filters, helpers, and object-store
+locators are hostile data. Every operation that interprets mutable staging
+metadata runs inside the same proved launcher, including reset, candidate
+capture, and export. A denylist of Git execution knobs is not the boundary.
+
+After the model's writers are reaped, contained capture resolves the exact
+candidate. After capture's writers are reaped, a read-only contained export
+emits a bounded self-contained Git pack. Trusted import receives immutable
+bytes, not a staging path, refspec, or command stream. A fresh trusted
+quarantine verifies object format, hashes/types, closure, and the exact OID,
+with no lazy fetch, copied local configuration, or alternate object store.
+Only verified objects cross into the authority under its existing write-once
+candidate ref. The candidate's OID/history and the sole attested install
+transaction remain unchanged. The temporary quarantine belongs to the
+existing acquisition, not a new durable authority or an attestation service.
+
+The contained resource exposes L0 `AsyncWriteWorkspace`: the existing
+`WorkspaceView` plus async `reset_to` and `commit_all`, with unchanged value
+contracts. Its contained provider and a controllable fake exercise it.
+`workspace.contained` and new awaiting component versions distinguish it
+from the historical synchronous `WriteWorkspace`; the latter stays legacy.
+Cancellation/ownership loss quiesces work before returning, and is observed
+before candidate publication. Existing lease reconciliation retains or
+discards an uncheckpointed candidate after response loss; no new journal
+schema or blocking-importer thread wrapper is introduced.
+
 ### Contain checks before offering live WRITE
 
 The M3 gate runner currently executes repository-controlled code in host
@@ -143,12 +190,14 @@ subprocesses with inherited environment. Containing the model while leaving
 its generated tests uncontained would reopen the same host authority at the
 next step. M8 accepts no such rollout window.
 
-Before a live WRITE profile is available, gates use the same concrete launcher
+Before a live WRITE profile is available, safe candidate capture is required
+and gates use the same concrete launcher
 over the prepared merge snapshot, with private scratch, a pinned runtime,
 clean environment, and no network or provider route. They finish descendant
 cleanup before integrity checks and attestation minting. The live assembly
-refuses uncontained gate bindings. The launcher has a genuine second consumer;
-gates do not become model executors, and the walker gains no gate policy.
+refuses legacy workspace capture and uncontained gate bindings. The launcher
+has genuine additional consumers; gates do not become model executors, and
+the walker gains no gate policy.
 Existing check results, exact merge subjects, and journal-minted authority
 remain the contracts. Historical fake-only assemblies are not relabeled as
 contained, and historical attestation identities are not rewritten.
@@ -214,8 +263,9 @@ gateway-only initial auth posture are owner decisions, not inferred consent.
 
 Accepting this ADR approves those boundaries, not the claim that bubblewrap,
 an installed CLI, or a green transcript suite has already proved containment.
-Separate slices establish contracts, Linux containment, gate containment,
-and deployed gateway conformance before the Claude Code, Codex, and Pi slices.
+Separate slices establish contracts, Linux containment, safe WRITE capture,
+gate containment, and deployed gateway conformance before the Claude Code,
+Codex, and Pi slices.
 Each proof has its own acceptance gate; none inherits credit from the other
 or from documentation. M7.1's scoped-out provenance and human timeout work
 stays separate.

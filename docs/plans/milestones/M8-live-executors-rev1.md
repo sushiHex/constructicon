@@ -56,9 +56,10 @@ The source audit found:
 | `runtime/validator.py::_register_atomic` | Posture/profile check | Check the complete declared live policy before admitting |
 | `api/system.py` | Channel assembly coherence; other capabilities can be lazy | Establish exact live executor descriptor/object coherence |
 | `runtime/registry.py::activate` | Sealed capability revision equality | Keep it; require the revision to bind actual launch content |
-| `core/workspace.py` | `WorkspaceView`, `WriteWorkspace`, invocation leases | Reuse workspace and acquisition identities |
+| `core/workspace.py` | `WorkspaceView`, synchronous `WriteWorkspace`, invocation leases | Reuse views/identities; keep the synchronous contract legacy and give contained capture an explicit async contract |
 | `runtime/walker.py` | Acquire → durable lease → invoke → close; checkpoint recovery | No backend-specific scheduling or session recovery |
 | `substrate/executors/fake.py` | The only current executor | Preserve the fake and add a genuine subprocess test double |
+| `substrate/git/authority.py` | `commit_all` runs Git against mutable staging metadata on the host | Contain staging Git and validate its immutable object export before authority import |
 | `substrate/gates/runner.py` | Repository checks run as host subprocesses with inherited environment | Contain checks before offering live WRITE, not at milestone closeout |
 | `api/introspection.py` | Published executor profiles at description schema 2 | Publish the expanded profile honestly at schema 3 |
 
@@ -147,6 +148,16 @@ implementation must test the complete parent-death chain and launch races,
 not infer it from that kernel fact. External references are evidence for the
 candidate mechanism, not an executed Constructicon proof.
 
+PR B records and asserts the actual mount/FD table: fresh PID-local `/proc`,
+no `/sys`, minimal private `/dev`, private mount propagation, explicit service
+UID/GID mapping, and only the named standard-I/O/control descriptors. The
+launcher must not use optional namespace fallbacks such as `--unshare-user-try`.
+`no_new_privs` is not a seccomp policy. No additional general syscall filter is
+selected here; the trusted-kernel and resource-exhaustion exclusions below are
+intentional. Namespace rearrangement by a child does not authorize a host
+namespace FD or additional host mount. Test that boundary, including nested
+namespace attempts, rather than inferring it from backend sandbox settings.
+
 Always use a private network namespace. For `network="none"`, expose no
 external route or inherited network-capable socket. This also prevents model
 access. The initial remote-backed profiles accept only `allow`; a denied
@@ -167,6 +178,9 @@ No defense against host-kernel exploits, side channels, or resource exhaustion
 is claimed. Acceptance uses bounded hostile children, not a real fork bomb.
 Per-process limits and output/deadline limits are still required, but do not
 become a claim of multi-tenant denial-of-service isolation.
+A hostile invocation may exhaust the dedicated runner and disrupt its other
+runs. Operators needing stronger availability must provision a separately
+reviewed VM/cgroup resource boundary; this plan does not silently supply one.
 
 ### 3.3 Environment, authentication, and configuration
 
@@ -195,6 +209,12 @@ policy, provider translation, credential issuance, or routing selection. The
 external gateway owns all route/auth enforcement. The bridge is a concrete
 subprocess detail with all three CLIs as consumers, not a new public protocol.
 It is killed with the invocation and exists only for `network="allow"`.
+The initial transport is plaintext HTTP on namespace-private loopback, with
+upstream TLS owned by the external gateway. Each pinned CLI must prove it
+supports that base URL. No TLS interception, added CA, general proxy, or CONNECT
+fallback is introduced to accommodate an incompatible backend. The bridge
+holds no workspace descriptor and transfers bytes only; the endpoint rejects
+ancillary descriptor passing rather than importing new capabilities.
 
 The gateway must not offer arbitrary CONNECT, client-selected upstreams,
 redirects to unapproved origins, admin routes, or account mutation. Its fixed
@@ -213,6 +233,11 @@ must stop existing connections as well as new ones. The configured integration
 must supply a genuine fake exercising the same lease contract; no generic gateway
 manager or second durable store is introduced. A socket path is a locator,
 not evidence of ownership; a stale acquisition cannot revoke a newer route.
+The durable lease's `resource_ref` records the non-secret, server-minted route
+lease id and its acquisition epoch. The gateway binds each accepted request
+and open stream to that lease, not client-supplied identity, peer UID, or a
+reused socket path. Gateway time enforces the deadline even after host death;
+the maximum orphan window is the remaining granted lifetime, never indefinite.
 
 Two proofs are separate. Credential-free CI exercises allocation, mounted-route
 access, close, expiry, and stale-owner behavior against the fake. Before a live
@@ -231,7 +256,7 @@ drift and pin the proved policy for the route's lifetime. A deployment that
 cannot establish those facts remains unavailable. This is an operator-owned
 prerequisite, not caller-supplied attestation or a second durable authority
 store. No concrete production integration is selected or proved by this draft;
-PR D cannot be accepted without one. Accepting the gateway-only posture is not
+PR E cannot be accepted without one. Accepting the gateway-only posture is not
 accepting an unspecified gateway as safe.
 
 This is an external transport prerequisite, not permission to implement a
@@ -256,6 +281,14 @@ an executable configuration source. Exercise malicious user, project, local,
 and managed configuration independently. A convenience flag is not sufficient
 when another precedence layer can override it. No prompt or task field may
 select CLI flags, model routes, host paths, or a resume session.
+
+Each pinned backend also needs an egress inventory: attempted endpoint,
+disable/routing control, and expected refusal or harmless failure. A model
+base URL is not a promise that updates, telemetry, authentication, and other
+traffic use it. Observe connect attempts in the isolated namespace during
+startup, a tool call, and completion; prove necessary traffic uses the one
+route and denied auxiliary traffic does not prevent the supported operation.
+Otherwise the configuration is unavailable, not eligible for wider egress.
 
 ### 3.4 One outer boundary; no required nested sandbox
 
@@ -282,8 +315,8 @@ Changing this composition would need a separately reviewed, proved recipe.
 
 PR B must exercise an outer launch on the selected restrictive image and
 record whether a child can initialize a nested `bwrap`. Do not equate lack
-of child capabilities with rejection of the `userns` syscall itself. PRs E
-and F must then run the actual pinned CLI against a credential-free fake
+of child capabilities with rejection of the `userns` syscall itself. PRs F
+and G must then run the actual pinned CLI against a credential-free fake
 provider on an image where nested `bwrap` initialization is denied. Require
 an actual shell tool, driven by a scripted provider response, to complete
 inside the outer boundary. Assert no inner launcher attempt and unchanged
@@ -365,8 +398,10 @@ launch the untrusted CLI. The walker records the capability lease before
 passing its acquired `Executor` to component code. A bound executor rejects
 grants differing from that acquisition's sealed grants.
 
-Retype `Executor.execute(workspace=...)` to `WorkspaceView | None`, using the
-existing `WriteWorkspace` for a WRITE acquisition. No caller-authored string,
+Retype `Executor.execute(workspace=...)` to `WorkspaceView | None`. Keep the
+existing synchronous `WriteWorkspace` for historical assemblies; the contained
+WRITE resource in section 4.4 exposes the same view with explicit async capture.
+No caller-authored string,
 `TaskSpec` field, `ArtifactRef.locator`, or arbitrary path becomes a mount.
 The live provider validates workspace ownership against the assembled workspace
 provider and the same invocation/acquisition epoch. READ needs an exported
@@ -404,7 +439,65 @@ either be explicitly supported with isolated call resources or be refused
 before launch; the first implementation serializes them. Closing an
 acquisition prevents any new call before tearing down existing resources.
 
-### 4.4 Task data and observation
+### 4.4 Mutable staging never becomes host execution authority
+
+The existing `StagedWriteWorkspace.commit_all` runs `git add`, `status`, and
+`commit` on the host against the staging repository's local configuration.
+A harmless hook probe confirmed execution there. Containing the preceding
+model process does not sanitize `.git`, attributes, hooks, filters, helpers,
+or an object-store locator. The whole stage remains untrusted after teardown.
+
+Preserve ADR 0009: a WRITE acquisition is a separate repository, the agent may
+commit and move its refs, and the exact candidate commit crosses as `GitRef`.
+Do not replace this with a worktree-only importer that invents a different
+commit or deletes the agent's history. Instead use the same concrete launcher
+for every Git operation that reads mutable staging metadata, including reset,
+capture, and export. These processes get no authority repository, host home,
+network/provider route, or arbitrary inherited descriptor. Disabling known
+hooks is defense in depth, not proof that every Git execution surface is gone.
+
+Teardown of the model call precedes capture. The contained capture commits
+and resolves the candidate, then reaps every writer. A subsequent read-only
+contained export produces a bounded, self-contained Git pack for that exact
+commit; no staging writer or bridge-held workspace handle survives across
+this boundary. Missing objects, stale locks, malformed output, cancellation,
+or an export that does not contain the named commit fail capture. Resetting
+uses a trusted pack of the exact admitted `GitRef`, not host access from the
+dirty repository to the authority. No host `git -C <stage>`, local fetch from
+it, config copying, or filesystem walk through its `.git` is permitted.
+
+Trusted import accepts immutable pack bytes, never a command stream, archive
+path list, client refspec, or staging pathname. Use a fresh substrate-owned
+quarantine with clean metadata, outside all child mounts, to verify object
+format, object hashes/types, complete reachable closure, and the exact
+candidate OID. Git's strict pack/object validation is the mechanism, not a new
+Python Git parser. Reject traversal/symlink redirection, alternates/promisor
+dependencies, malformed packs, and size/object-count bounds without fetching
+anything. Only verified immutable objects may enter the authority, whose
+existing write-once candidate-ref operation pins the same OID. Neither the
+target branch nor the installation receipt changes. The quarantine is an
+acquisition-owned temporary import buffer, not another durable repository of
+record or a second attestation authority.
+
+Expose `AsyncWriteWorkspace` in L0 as `WorkspaceView` plus async `reset_to`
+and `commit_all`, with the existing arguments/results. The contained provider
+and a genuine controllable fake exercise this contract. A distinct
+`workspace.contained` capability kind and new awaiting component versions
+separate it from legacy synchronous `WriteWorkspace`; never silently change
+a retained call convention or wrap the blocking legacy importer in a thread.
+The capture path keeps the event loop responsive, observes ownership and
+cancellation before publishing its candidate ref, and quiesces all work
+before cleanup returns. Existing acquisition/lease identities and disposal
+rules own staging, quarantine, and any uncheckpointed candidate. Publication
+followed by response loss reuses the same candidate or discards it under the
+existing lease law; it does not create a new effect or journal schema.
+
+The live WRITE assembly requires both this safe workspace provider and the
+contained gates. Neither the launcher-only slice nor a fake may enable a
+model-written stage to reach legacy `commit_all`, gates, or effects. Historical
+trusted/fake-only assemblies keep their exact bytes and stated scope.
+
+### 4.5 Task data and observation
 
 `TaskSpec.instruction` enters as stdin data, not shell text or a CLI option.
 Arguments are an argv vector with fixed delimiters; launch uses no shell.
@@ -496,8 +589,8 @@ not authorize a paid call or the acquisition of any credential.
 ## 6. Reviewable implementation slices
 
 These are separate PRs with separate acceptance evidence, not subcommits of
-the former omnibus PR A. A → B → C → D establish the prerequisites; only then
-may E → F → G offer live adapters. No intermediate slice advertises a live
+the former omnibus PR A. A → B → C → D → E establish the prerequisites; only
+then may F → G → H offer live adapters. No intermediate slice advertises a live
 WRITE configuration while repository-controlled gates still run on the host.
 
 ### PR A — contracts, coherence, and publication
@@ -526,9 +619,33 @@ verification remains runnable and reports that containment was not exercised.
 Approval requires reproducible native Linux evidence. No backend or gateway
 integration is bundled into this boundary review.
 
-### PR C — contain repository-controlled gates
+### PR C — safe WRITE capture and immutable Git handoff
 
-The contained gate runner is a second production consumer of the concrete
+Implement section 4.4 independently of gate containment. This slice owns the
+async workspace contract/double, contained staging operations, read-only pack
+export, trusted quarantine/import, and exact candidate identity. Keep all
+resource ownership within the existing lease; no new durable schema or
+alternate installation path. The Linux launcher is already proved by B.
+
+Credential-free tests plant hooks, config includes, filters, fsmonitor and
+credential helpers, alternate object stores, symlinked Git paths, stale locks,
+and detached writers in the stage. Assert no host sentinel is read, executed,
+or changed; capture either succeeds entirely inside the boundary or fails
+without publishing a candidate. A valid candidate arrives byte-identically
+with its exact OID and history; malformed/truncated/oversized packs and a
+mismatched named OID publish nothing. Cover reset after a hostile call,
+repeated cancellation, owner death, and response loss around candidate-ref
+publication, including old/new epochs and counterfactual discard. Mutate
+containment, immutable handoff, verification, and the live-assembly guard
+independently. Existing synchronous fixtures retain their historical identity.
+
+No live WRITE profile is offered yet: contained gates in D and the gateway
+in E are still prerequisites. B's hostile-child proof remains a disposable
+test, not permission to run its output through legacy capture or gates.
+
+### PR D — contain repository-controlled gates
+
+The contained gate runner is another production consumer of the concrete
 launcher, not an `Executor` wrapper or another process protocol. Separate two
 phases: assembly identifies the installed check runtime; invocation checks a
 candidate. Any tool-version probe runs during assembly in that pinned runtime,
@@ -585,7 +702,7 @@ across candidates. Mutate the phase separation, async cancellation boundary,
 assembly guard, and gate launcher independently.
 No live model is needed to close this exposure before the first adapter.
 
-### PR D — gateway integration and conformance
+### PR E — gateway integration and conformance
 
 Select and document the concrete externally provisioned integration. Implement
 only its lease allocation/revocation binding and the namespace-local byte
@@ -601,7 +718,7 @@ smoke test is not this gate. If no concrete deployment can supply the proof,
 this slice is blocked and no live profile becomes available. Linux containment
 and gate isolation are already proved; this review owns only routed authority.
 
-### PR E — Claude Code, first real adapter
+### PR F — Claude Code, first real adapter
 
 Add its native decoder, argv/config generation, tested exact tool-set inventory,
 and the first gateway-backed configuration under READ and WRITE identities.
@@ -617,7 +734,7 @@ plane. Do not modify historical component source merely to make the demo generic
 The component's ports explicitly carry the outcome when partial/failure is data;
 a success-only component must refuse non-success rather than mint success output.
 
-### PR F — Codex, the substitutability proof
+### PR G — Codex, the substitutability proof
 
 Add the second native decoder/configuration and run the **same** acceptance
 component and process contract. Share only mechanically identical lifecycle
@@ -627,7 +744,7 @@ fixtures, including section 3.4's external-boundary-only shell-tool proof.
 A backend-specific permission exception cannot leak into the common
 grant law. Use a new capability binding, not a new orchestration API.
 
-### PR G — Pi and integrated closeout
+### PR H — Pi and integrated closeout
 
 Add Pi's native event decoder and explicit resource-discovery controls. Prove
 delta/final accounting and honest refusal of unsupported schema/tool requests.
@@ -636,10 +753,10 @@ incompatible profile is part of substitutability, not a reason to weaken it.
 
 The credential-free acceptance lane exercises READ analysis and a staged WRITE
 candidate, deterministic checks, proof-gated installation, and restart recovery
-through `ControlPlane`/`RunHost`. It composes the already-contained gates from
-C and the route boundary from D; it does not postpone either security proof
-until closeout. A test reassembles the lane with a legacy uncontained gate
-runner and requires refusal before any live WRITE child starts.
+through `ControlPlane`/`RunHost`. It composes safe capture from C, contained
+gates from D, and the route boundary from E; it postpones none of those proofs
+until closeout. Tests reassemble the lane with a legacy workspace importer
+or uncontained gate runner and require refusal before any live WRITE child.
 
 Run resume/reproduce/counterfactual cases: checkpoints prevent replay of
 completed invocation computation; an interrupted CLI may be invoked again;
@@ -685,18 +802,21 @@ Use barriers and deterministic fake children rather than timing guesses.
 | Repeated cancellation | Cleanup completes once, cancellation propagates, and no false successful checkpoint is written |
 | Recovery | Restart with a new owner; only stale owned resources are reaped; current epochs and PID reuse are safe |
 | WRITE completion | No descendant can mutate candidate bytes after executor return or while gates attest them |
+| WRITE capture | Hostile Git metadata is read only inside containment; immutable pack handoff preserves exact OID/history; malformed objects, dependency fetching, wrong OID, or cancellation publish no candidate |
+| Capture recovery | Reset and capture never use host Git against a dirty stage; candidate-ref response loss, owner death, and stale epochs retain/discard only their own immutable candidate |
 | Gate containment | Repository-controlled checks cannot access host authority, secrets, sockets, or network; detached children die before attestation; uncontained assembly refuses live WRITE |
 | Gate phases | Contained runtime probing completes before admission with no candidate mount; check identity is candidate-independent; only actual checks mount the prepared snapshot |
 | Gate cancellation | A blocked async check permits heartbeat/cancellation delivery; cancellation and ownership loss quiesce work before cleanup returns and produce no attestation/checkpoint; legacy synchronous consumers remain compatible |
 | Command law | Existing plan/domain/completion response-loss probes remain green; no new mutation bypass |
-| Compatibility | Pre-M8 manifests and absent profile fields retain exact bytes/digests; v2 description reader rejects v3 |
+| Compatibility | Pre-M8 manifests and absent profile fields retain exact bytes/digests; synchronous workspace/gate consumers keep their contracts; v2 description reader rejects v3 |
 | Integration | Three compatible adapters run one component; incompatible profiles refuse; deterministic effect is the sole install path |
 
 Mutation inventory must remove each enforcement boundary independently:
 read-only mount, root visibility restriction, network isolation, descriptor
 comparison, revision input, tool-set check, environment filter, final-status
 check, damage latch, byte bound, usage accounting, process-tree teardown,
-epoch check, gate containment/coherence, host-policy prerequisite, gateway
+epoch check, staging-Git containment, pack verification/candidate publication,
+workspace/gate coherence, host-policy prerequisite, gateway
 deployment-evidence binding, route revocation, and controlled no-nesting
 configuration. A collection error, timeout of the test harness, or incidental
 failure is not a killed mutant. If a guard cannot be independently pinned,
@@ -738,10 +858,11 @@ mini-language, or mirrored registry to make the file tree look symmetrical.
    login until a supported credential-isolated mode is proved.
 3. Accept finite supported tool sets, explicit remote-network grants, and
    description schema 3 rather than silently enriching schema 2.
-4. Accept seven separately reviewed slices: contracts → Linux containment →
-   gate containment → gateway conformance → Claude Code → Codex → Pi/closeout.
-   Both gates and the selected deployment's route must be proved before the
-   first live WRITE profile is available, not merely before milestone closure.
+4. Accept eight separately reviewed slices: contracts → Linux containment →
+   safe WRITE capture → gate containment → gateway conformance → Claude Code →
+   Codex → Pi/closeout. Capture, gates, and the selected deployment's route
+   must all be proved before the first live WRITE profile is available, not
+   merely before milestone closure.
 
 These are proposals, not decisions made by merging a draft. Approval without
 redlines freezes this revision and accepts ADR 0018 explicitly. Approval with
