@@ -54,6 +54,7 @@ the eventual code differs.
 | M7.1 | [Connector liveness rev 2](milestones/M7.1-connector-liveness-rev2.md) | Successor after measuring where gathered sources actually come from; proposed scoping a `many` port to its connections | Superseded by rev 3. Its measurement stands; its exactness claim failed a cross-port counterexample and its scoping broke composite boundaries |
 | M7.1 | [Connector liveness rev 3](milestones/M7.1-connector-liveness-rev3.md) | Successor that leaves the pool alone: several connections may map one `many` port, and `panel()` states its membership through them, re-proved by the existing contract-mismatch fault | Superseded by rev 4. Its core survived; its destination-totality, cardinality, counterfactual, and schema claims did not |
 | M7.1 | [Panel membership rev 4](milestones/M7.1-panel-membership-rev4.md) | Successor that narrows the scope to authored panel membership, makes mapped fan-in an ordered union of scalar selectors, validates every map, and decides the Graph/description version boundary | Complete: PR A #23 and PR B #24 merged; ADR 0017 accepted. Preserved draft wording records the decision requested, not its current status |
+| M8 | [Live executors rev 1](milestones/M8-live-executors-rev1.md) | Reconciled against M7.1 closure at `71c4fe3`; technical proposal confirmed at `8f0c2e5` with source-grounded review corrections | Approved: ADR 0018 accepted; PR A authorized. Plan bytes are frozen; preserved pre-decision wording is historical, not its current approval status. Linux target and gateway remain separate operator prerequisites |
 
 ## Handoffs
 
@@ -63,6 +64,7 @@ the eventual code differs.
 | [M6.2 implementation record](handoffs/M6.2-implementation-record.md) | Records the completed rev-2 scope, compatibility boundary, strengthened failure proof, and integrated-session sequencing |
 | [M7 implementation record](handoffs/M7-implementation-record.md) | Living record for PRs A–D: deviations, authority decisions, review corrections, integrity closure, and the panel pattern |
 | [M7.1 implementation record](handoffs/M7.1-implementation-record.md) | Completed authored membership and endpoint slices, exact-head approvals and merges, proof inventory, compatibility boundaries, and post-merge documentation closure |
+| [M8 planning evidence](handoffs/M8-planning-evidence.md) | Repository and CLI-interface observations, primary source pins, proposed deployment boundaries, and an explicit inventory of proofs not yet executed |
 
 ## Completeness and recovery notes
 
