@@ -88,6 +88,35 @@ async def test_incompatible_posture_is_refused_without_allocation(provider):
     assert not provider.root.exists()
 
 
+async def test_crash_helper_graph_is_admissible_without_a_linux_host(provider, tmp_path):
+    from constructicon.api.system import Constructicon
+    from constructicon.core.control import RunSubmission
+    from constructicon.runtime.registry import CapabilityDescriptor
+    from constructicon.substrate.journal.sqlite import SqliteJournal
+    from tests.api.test_control_response_loss import RUN_ACTOR, _fresh_control, _PassiveHost
+    from tests.substrate._lease_owner import register_read
+
+    journal = SqliteJournal(tmp_path / "portable.sqlite")
+    system = Constructicon(journal=journal, capabilities={"snapshot": provider}, catalog={
+        "snapshot": CapabilityDescriptor(
+            capability_id="snapshot", kind="workspace.snapshot", leased=True,
+            revision="test-snapshot", requires_posture=Posture.READ,
+        ),
+    })
+    control = _fresh_control(system, journal, "portable", run_host=_PassiveHost())
+    await control.startup()
+    try:
+        graph = await register_read(control)
+        submitted = await control.runs_start(
+            RUN_ACTOR, proposal=graph, inputs={"issue": {"title": "physical lease"}},
+            idempotency_key="portable-admission",
+        )
+        assert isinstance(submitted, RunSubmission), submitted
+        assert not provider.root.exists()  # Admission is not materialization.
+    finally:
+        await control.shutdown()
+
+
 @LINUX
 async def test_recorded_never_started_acquisition_is_fenced_without_current_base(provider):
     old = context()
