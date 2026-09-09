@@ -107,9 +107,11 @@ def test_distinct_scalar_maps_still_refuse_a_non_many_destination(
     graph = membership_graph(system, loop=loop, destination_cardinality=cardinality)
     result = system.admit_graph(graph.model_dump_json(), INPUTS)
     assert isinstance(result, AdmissionRejected)
-    fault = next(
+    faults = [
         item for item in result.faults if item.details.get("defect") == "duplicate_map_destination"
-    )
+    ]
+    assert len(faults) == 1
+    fault = faults[0]
     assert fault.code == AdmissionCode.GRAPH_CONTRACT_INVALID
     assert fault.path == ("connections", 1, "map", "briefs")
     assert fault.details["destination_cardinality"] == cardinality

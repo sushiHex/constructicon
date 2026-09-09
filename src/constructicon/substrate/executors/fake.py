@@ -14,6 +14,7 @@ from typing import Any
 from constructicon.core.executor import (
     ExecutorError,
     ExecutorFailure,
+    ExecutorGrantPolicy,
     ExecutorOutcome,
     ExecutorProfile,
     ExecutorSuccess,
@@ -21,6 +22,7 @@ from constructicon.core.executor import (
 )
 from constructicon.core.grants import EffectiveGrants, IsolationProfile, Posture
 from constructicon.core.identity import canonical_json
+from constructicon.core.workspace import WorkspaceView
 from constructicon.substrate.external.fake import FakeExternalLedger
 
 
@@ -31,7 +33,10 @@ class FakeExecutor:
         *,
         name: str = "fake",
         ledger: FakeExternalLedger | None = None,
+        grant_policy: ExecutorGrantPolicy | None = None,
     ) -> None:
+        if grant_policy is not None and grant_policy.network_access != "none":
+            raise ValueError("the fake executor offers no provider route")
         self._script = dict(script)
         self._profile = ExecutorProfile(
             name=name,
@@ -43,6 +48,7 @@ class FakeExecutor:
                 environment_allowlisted=True,
                 network_enforced=True,
             ),
+            grant_policy=grant_policy,
         )
         self.ledger = ledger if ledger is not None else FakeExternalLedger()
 
@@ -60,6 +66,8 @@ class FakeExecutor:
         return self._profile
 
     def validate_grants(self, grants: EffectiveGrants) -> tuple[str, ...]:
+        if self._profile.grant_policy is not None:
+            return self._profile.grant_faults(grants)
         if grants.posture not in self._profile.postures:
             return (f"fake executor offers no {grants.posture.value!r} posture",)
         return ()
@@ -68,12 +76,18 @@ class FakeExecutor:
         self,
         task: TaskSpec,
         *,
-        workspace: object | None,
+        workspace: WorkspaceView | None,
         grants: EffectiveGrants,
     ) -> ExecutorOutcome:
         started = time.monotonic()
         self.ledger.record_executor_call(self._profile.name, task.model_dump_json())
         problems = self.validate_grants(grants)
+        policy = self._profile.grant_policy
+        if (
+            policy is not None and policy.workspace_required
+            and not isinstance(workspace, WorkspaceView)
+        ):
+            problems += ("executor requires a WorkspaceView",)
         if problems:
             return ExecutorFailure(
                 error=ExecutorError(kind="unavailable", detail="; ".join(problems)),

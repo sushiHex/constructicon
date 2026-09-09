@@ -1,7 +1,7 @@
 """Workspace and leased-capability contracts (M3/M4).
 
-The walker owns every ``CapabilityLease`` transition, but knows only acquire,
-close, and reconcile — never git, paths, or worktrees. Lease identity is the
+The walker owns every ``CapabilityLease`` transition: acquire, record, optional
+materialization, close, and reconcile — never git, paths, or worktrees. Lease identity is the
 full dynamic ``ExecutionPath`` so loop iterations cannot collide.
 
 Code crosses between nodes as ``GitRef`` (I5). A repair iteration receives the
@@ -11,6 +11,7 @@ ref, never a shared worktree, carries state across iterations.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
@@ -54,12 +55,17 @@ class LeaseContext:
 
 @dataclass(frozen=True)
 class AcquiredCapability:
-    """One live physical acquisition plus its computed identities."""
+    """An acquisition handle and its complete, immutable recovery identity.
+
+    M8 providers acquire inert handles, then materialize only after recording.
+    None preserves eager legacy behavior, not a claim of deferred crash safety.
+    """
 
     resource: object
     lease_id: str
     acquisition_id: str
     resource_ref: str
+    materialize: Callable[[], Awaitable[None]] | None = None
 
 
 @dataclass(frozen=True)

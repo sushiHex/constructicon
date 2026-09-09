@@ -135,7 +135,7 @@ def test_unknown_endpoints_have_one_exact_fault_per_connection(
     assert isinstance(result, AdmissionRejected)
     assert len(result.faults) == 1
     fault = result.faults[0]
-    assert fault.details["defect"] == "unknown_connection_node"
+    assert fault.details.get("defect") == "unknown_connection_node"
     assert fault.code == AdmissionCode.GRAPH_CONTRACT_INVALID
     assert fault.scope is not None and fault.scope.segments == SCOPES[wrapper]
     assert fault.details["missing_roles"] == list(missing_roles)

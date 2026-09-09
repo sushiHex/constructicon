@@ -86,11 +86,12 @@ changing a shared definition. Compose before you drop a tier (I10).
   which admits again while creating the durable command and run.
 
 Read the versioned vocabulary instead of inferring new rules from an old
-description. `SystemDescription` and its digest domain are version 2, with
+description. `SystemDescription` and its digest domain are version 3, with
+complete executor grant policy and the existing
 `explicit_map_source_cardinality="one"` and
 `mapped_many_policy="ordered_scalar_selector_union_replaces_pool"` published
 separately. The embedded Graph and admission schemas remain version 1.
-Contributor guidance: update version-1 readers to understand version 2 instead
+Contributor guidance: update version-1/2 readers to understand version 3 instead
 of loosening unknown-field checks. This is integration policy, not runtime
 enforcement over external readers. See
 [ADR 0017](adr/0017-panel-membership-is-an-authored-map.md).
@@ -210,12 +211,40 @@ a run. After repairing a rejected request, use a fresh idempotency key.
 1. Implement the `constructicon.core.executor.Executor` protocol: `profile`
    (including an honest `IsolationProfile` — admission rejects postures the
    executor cannot mechanically enforce; never overstate), `validate_grants`,
-   and `execute` returning a discriminated `ExecutorOutcome`.
-2. Truthful telemetry is law (I4): fields the backend does not emit stay
+   and `execute(task, workspace=WorkspaceView | None, grants=...)` returning a
+   discriminated `ExecutorOutcome`. Reuse the workspace contract; no host-path
+   string or second workspace abstraction.
+2. New complete providers declare `ExecutorGrantPolicy`. List exact supported
+   tool sets (including empty only if supported), network modes/access, eligible
+   environment names, and workspace presence. `validate_grants` delegates to
+   `profile.grant_faults`; dynamic task/host checks stay in the adapter. Never
+   infer completeness from a legacy profile whose policy is absent.
+3. Implement `ExecutorProvider` over the existing lease seam. Its trusted
+   factory derives `ExecutorLaunchIdentity` from actual immutable content,
+   configuration, limits, and any proved provider route; its revision already
+   binds the shared executor law. Match the descriptor's complete profile,
+   revision, kind `executor`, and leased status. Expose cached unavailability
+   reasons without runtime I/O and recheck physical prerequisites before use.
+   Fake evidence never enables a production profile.
+4. New acquisition is inert: compute the complete recovery reference before
+   returning `AcquiredCapability`, and put persistent work in its optional
+   `materialize` callback. The walker records and enrolls cleanup first. Local
+   close before entry writes nothing and prevents later entry; mark entry
+   before the first await/I/O. Started cleanup and durable reconciliation fence
+   the acquisition even if no resource yet exists. Do not add a second lease
+   ledger. The walker rechecks run control after materialization and joins the
+   whole recorded cleanup batch despite repeated cancellation, preserving
+   cleanup failures and checkpoint-selected disposition. Legacy eager providers
+   keep their existing convention.
+5. Truthful telemetry is law (I4): fields the backend does not emit stay
    `None`; damaged streams return `ExecutorPartial`; timeouts salvage partial
    output into `ExecutorFailure`.
-3. Tests: recorded transcripts, argv capture, damaged-stream demotion — no
-   live calls in CI. Copy `substrate/executors/fake.py` as the shape.
+6. Tests: exact-grant and descriptor refusals, record/materialize failure and
+   cancellation seams, durable successor cleanup, and legacy byte compatibility.
+   Live adapters additionally need recorded transcripts, argv capture,
+   damaged-stream demotion and physical containment proof under ADR 0018 — no
+   credentials in CI. `substrate/executors/fake.py` exercises the policy, not
+   the unimplemented Linux boundary.
 
 ## Adding a gate / check producer (L1)
 

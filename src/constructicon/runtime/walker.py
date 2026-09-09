@@ -1053,16 +1053,22 @@ class Walker:
         acquired: list[tuple[LeasedCapability, AcquiredCapability]],
         disposition: Disposition,
     ) -> None:
-        for capability, acquisition in acquired:
-            closure = await capability.close(acquisition, disposition)
-            self._journal.transition_capability_lease(
-                lease,
-                lease_id=acquisition.lease_id,
-                acquisition_epoch=lease.epoch,
-                expected=frozenset({"active"}),
-                target="closed",
-                disposition=closure.disposition,
-            )
+        if not acquired:
+            return
+
+        async def close_all() -> None:
+            for capability, acquisition in acquired:
+                closure = await capability.close(acquisition, disposition)
+                self._journal.transition_capability_lease(
+                    lease,
+                    lease_id=acquisition.lease_id,
+                    acquisition_epoch=lease.epoch,
+                    expected=frozenset({"active"}),
+                    target="closed",
+                    disposition=closure.disposition,
+                )
+
+        await self._finish_cleanup(close_all())
 
     @staticmethod
     async def _discard_unrecorded_acquisition(
@@ -1070,7 +1076,16 @@ class Walker:
         acquisition: AcquiredCapability,
     ) -> None:
         """Finish cleanup that has no durable lease row to recover it."""
-        close_task = asyncio.create_task(capability.close(acquisition, "discard"))
+        await Walker._finish_cleanup(capability.close(acquisition, "discard"))
+
+    @staticmethod
+    async def _finish_cleanup(work: Awaitable[object]) -> None:
+        """Join one cleanup despite repeated cancellation; never suppress its failure.
+
+        A recorded batch includes all siblings and their fenced row transitions.
+        Delaying cancellation per resource would leave later siblings unfinished.
+        """
+        close_task = asyncio.ensure_future(work)
         cancellation: asyncio.CancelledError | None = None
         while not close_task.done():
             try:
@@ -1589,6 +1604,9 @@ class Walker:
                         manifest_hash=manifest.manifest_hash,
                     )
                     acquired.append((capability, acquisition))
+                    if acquisition.materialize is not None:
+                        await acquisition.materialize()
+                        self._check_run_control(lease, lost)
                     exposed_capability = acquisition.resource
                 if isinstance(exposed_capability, Channel):
                     if alias_binding.channel is None:

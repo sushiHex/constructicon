@@ -94,6 +94,42 @@ Executors declare an `IsolationProfile`; admission rejects a live execution
 whose executor cannot mechanically satisfy the requested posture — it never
 degrades to "best effort".
 
+M8's complete `ExecutorProfile.grant_policy` adds a finite, normalized inventory
+of exact tool sets, network modes/access, inheritable environment names, and
+workspace presence. `ExecutorProfile.grant_faults` is the one pure predicate
+used by admission and complete-policy adapters: posture/isolation, tools,
+network/enforcement, environment, explicit effort, and nonempty explicit model.
+An absent policy stays absent in serialized historical profiles; it is not
+evidence of complete enforcement.
+
+An `ExecutorProvider` extends the existing `LeasedCapability` contract with a
+content-derived `ExecutorLaunchIdentity` and cached unavailability reasons.
+Assembly compares its actual profile and revision with the descriptor and
+requires kind `executor` and leased injection. Missing or known-unavailable
+complete providers remain discoverable as unavailable and are refused by
+admission; legacy lazy descriptors keep their historical behavior. These are
+non-I/O L0 facts, not permission for runtime to probe the host. The identity
+binds backend/runtime, adapter/decoder, recipe/configuration/limits, profile,
+and any provider-route build/configuration/policy/conformance revision. It
+also binds the source-derived shared executor law automatically. A production
+factory must obtain these facts from its actual artifacts and recheck them
+before use; constructing the identity model proves no physical containment.
+
+`Executor.execute` accepts the existing `WorkspaceView | None`. The optional
+in-memory `AcquiredCapability.materialize` callback adds no durable state:
+acquire handle → record lease → enroll cleanup → await materialization → expose
+resource. The walker does not interpret its provider work. Recording failure
+closes an inert new handle locally without external I/O; once materialization
+enters, cleanup applies the provider's complete closure law. After the await,
+the existing run-control check refuses observed ownership loss or cooperative
+cancellation before exposure. Recorded cleanup joins the entire batch of
+resource closes and fenced row transitions despite repeated task cancellation,
+then propagates cancellation; cleanup failure is never suppressed. The same
+waiting mechanism serves unrecorded cleanup, with its original disposition.
+Recovery always uses the durable row, including when materialization never began. Legacy
+callbacks default to `None` and retain their eager behavior. PR A proves this
+sequence with genuine deferred-resource doubles, not Linux processes.
+
 ## Agent authoring and introspection
 
 M5 adds surfaces, never another workflow representation:
@@ -147,11 +183,12 @@ components remain usable but are marked honestly as capability-opaque or
 schema-opaque where applicable. See
 [adr/0011](adr/0011-agent-authoring-and-introspection.md).
 
-`SystemDescription` and its digest domain are version 2. Binding vocabulary
+`SystemDescription` and its digest domain are version 3, publishing complete
+executor policy without silently extending version 2. Binding vocabulary
 separately publishes `explicit_map_source_cardinality="one"` and
 `mapped_many_policy="ordered_scalar_selector_union_replaces_pool"`; strict
-version-1 description readers refuse the new description. The embedded Graph
-and admission schemas remain version 1. Graph's wire shape is unchanged; older
+version-1 and version-2 description readers refuse the new description. The
+embedded Graph and admission schemas remain version 1. Graph's wire shape is unchanged; older
 validators reject the newly lawful multi-map fan-in rather than misread it.
 
 ## Identity
@@ -653,8 +690,13 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
   PR A merged as #23 and PR B as #24. Unmapped pools and retained execution
   bytes are unchanged. See [ADR 0017](adr/0017-panel-membership-is-an-authored-map.md)
   and the [implementation record](plans/handoffs/M7.1-implementation-record.md).
-- **M8** — live CLI executors (ClaudeCode, Codex, Pi) once isolation profiles
-  are enforceable; recorded-transcript contract suites.
+- **M8 (in progress)** — PR A supplies complete executor policy, content identity,
+  assembly/admission coherence, schema-3 introspection, and post-record
+  materialization. Linux containment, safe WRITE capture, contained gates,
+  gateway conformance, and ClaudeCode/Codex/Pi adapters remain separate slices;
+  no live adapter is available from these contracts alone. See
+  [ADR 0018](adr/0018-live-executors-are-leased-contained-processes.md) and the
+  [implementation record](plans/handoffs/M8-implementation-record.md).
 - **M9** — self-improvement phase 1 (prompt/context skills); see
   [designs/SELF_IMPROVEMENT.md](designs/SELF_IMPROVEMENT.md).
 

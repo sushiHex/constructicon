@@ -65,6 +65,7 @@ the eventual code differs.
 | [M7 implementation record](handoffs/M7-implementation-record.md) | Living record for PRs A–D: deviations, authority decisions, review corrections, integrity closure, and the panel pattern |
 | [M7.1 implementation record](handoffs/M7.1-implementation-record.md) | Completed authored membership and endpoint slices, exact-head approvals and merges, proof inventory, compatibility boundaries, and post-merge documentation closure |
 | [M8 planning evidence](handoffs/M8-planning-evidence.md) | Repository and CLI-interface observations, primary source pins, proposed deployment boundaries, and an explicit inventory of proofs not yet executed |
+| [M8 implementation record](handoffs/M8-implementation-record.md) | PR A contracts, compatibility, materialization evidence, and the remaining Linux/operator prerequisites; not a live-executor completion claim |
 
 ## Completeness and recovery notes
 

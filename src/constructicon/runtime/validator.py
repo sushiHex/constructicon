@@ -16,7 +16,7 @@ from itertools import islice
 from typing import Any
 
 from constructicon.core.address import LOOP_BODY_SEGMENT, NodeId, ScopePath
-from constructicon.core.admission import FAULT_DETAILS_SEPARATOR
+from constructicon.core.admission import FAULT_DETAILS_SEPARATOR, AdmissionCode, AdmissionFault
 from constructicon.core.channel import ChannelBinding, ChannelContract
 from constructicon.core.component import ComponentDef
 from constructicon.core.control import ResolutionLock, ResolutionPin
@@ -90,7 +90,7 @@ class _Compilation:
     snapshot: RegistrySnapshot
     catalog: dict[str, CapabilityDescriptor]
     capabilities: Mapping[str, object]
-    faults: list[str] = field(default_factory=list)
+    faults: list[AdmissionFault | str] = field(default_factory=list)
     resolutions: list[ComponentResolution] = field(default_factory=list)
     bindings: list[ResolvedPortBinding] = field(default_factory=list)
     capability_bindings: list[CapabilityBinding] = field(default_factory=list)
@@ -860,7 +860,37 @@ def _register_atomic(
             )
             continue
         profile = descriptor.executor_profile
-        if profile is not None:
+        for reason in descriptor.executor_unavailability(comp.capabilities.get(capability_id)):
+            comp.faults.append(
+                AdmissionFault(
+                    code=AdmissionCode.GRAPH_CONTRACT_INVALID,
+                    scope=instance_scope,
+                    message=f"executor {capability_id!r} is unavailable: {reason}",
+                    repair="assemble the exact described provider and satisfy its prerequisites",
+                    details={
+                        "defect": "executor_unavailable", "capability_id": capability_id,
+                        "alias": alias,
+                    },
+                )
+            )
+        if profile is not None and profile.grant_policy is not None:
+            for reason in profile.grant_faults(node_grants):
+                comp.faults.append(
+                    AdmissionFault(
+                        code=AdmissionCode.GRAPH_CONTRACT_INVALID,
+                        scope=instance_scope,
+                        message=f"executor {capability_id!r}: {reason}",
+                        repair=(
+                            "select a described executor whose complete policy supports "
+                            "these exact grants"
+                        ),
+                        details={
+                            "defect": "executor_grants", "capability_id": capability_id,
+                            "alias": alias,
+                        },
+                    )
+                )
+        elif profile is not None:
             if node_grants.posture not in profile.postures:
                 comp.faults.append(
                     f"{instance_scope.render()}: executor {capability_id!r} does not "
