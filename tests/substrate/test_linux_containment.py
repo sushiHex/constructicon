@@ -46,7 +46,7 @@ async def run(launcher, tmp_path, source, *, posture=Posture.READ, stdin=b"", ti
     async with acquisition_guard(paths) as guard:
         return await launcher.run(
             ("/usr/bin/python3", "-I", "-c", source), workspace=workspace,
-            posture=posture, guard_fd=guard, stdin=stdin, timeout_s=timeout_s,
+            posture=posture, guard_fds=(guard,), stdin=stdin, timeout_s=timeout_s,
         )
 
 

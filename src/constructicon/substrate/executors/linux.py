@@ -170,7 +170,7 @@ class LinuxLauncher:
         *,
         workspace: Path | None,
         posture: Posture,
-        guard_fd: int,
+        guard_fds: tuple[int, ...],
         stdin: bytes = b"",
         timeout_s: float,
     ) -> ProcessResult:
@@ -178,6 +178,8 @@ class LinuxLauncher:
 
         if len(stdin) > self.limits.input_bytes or timeout_s <= 0:
             raise ContractViolation("contained input/deadline exceeds the launch contract")
+        if not guard_fds or len(set(guard_fds)) != len(guard_fds):
+            raise ContractViolation("contained work requires its distinct acquisition guards")
         self.check_artifacts()
         args = self.argv(command, workspace=workspace, posture=posture)
         owner_read, owner_write = os.pipe()
@@ -246,10 +248,10 @@ class LinuxLauncher:
                 "--library-path",
                 f"{self.root}/lib/x86_64-linux-gnu:{self.root}/usr/lib/x86_64-linux-gnu",
                 str(self.root / "usr/bin/python3.12"), "-I", str(SUPERVISOR),
-                str(owner_read), str(guard_fd), *args,
+                str(owner_read), ",".join(str(fd) for fd in guard_fds), *args,
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE, close_fds=True,
-                pass_fds=(owner_read, guard_fd), env={"LANG": "C.UTF-8"},
+                pass_fds=(owner_read, *guard_fds), env={"LANG": "C.UTF-8"},
             ))
             cancelled = False
             while True:

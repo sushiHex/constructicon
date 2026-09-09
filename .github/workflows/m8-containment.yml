@@ -33,18 +33,18 @@ jobs:
           sudo apt-get -q update
           sudo apt-get -q -y install --no-install-recommends bubblewrap=0.9.0-1ubuntu0.1
           sudo useradd --create-home --shell /bin/sh m8-service
-          test ! -e /opt/constructicon-m8-launch
-          test ! -L /opt/constructicon-m8-launch
-          sudo install -d -m 0755 /opt/constructicon-m8-launch
-          sudo install -m 0555 /usr/bin/bwrap /opt/constructicon-m8-launch/bwrap
-          stat -c '%a %u %g %n' / /opt /opt/constructicon-m8-launch /usr /usr/bin /etc /etc/apparmor.d
+          test ! -e /var/lib/constructicon-m8-launch
+          test ! -L /var/lib/constructicon-m8-launch
+          sudo install -d -m 0755 /var/lib/constructicon-m8-launch
+          sudo install -m 0555 /usr/bin/bwrap /var/lib/constructicon-m8-launch/bwrap
+          stat -c '%a %u %g %n' / /var /var/lib /var/lib/constructicon-m8-launch /etc/apparmor.d
           test ! -e /etc/apparmor.d/constructicon-m8-launch
           test ! -L /etc/apparmor.d/constructicon-m8-launch
           sudo install -m 0444 scripts/ci/constructicon-m8-launch.apparmor /etc/apparmor.d/constructicon-m8-launch
           sudo apparmor_parser --add --skip-cache /etc/apparmor.d/constructicon-m8-launch
-          sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" scripts/ci/build_m8_runtime.py /opt/constructicon-m8-launch/runtime \
+          sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" scripts/ci/build_m8_runtime.py /var/lib/constructicon-m8-launch/runtime \
             | tee "$RUNNER_TEMP/m8-runtime.json"
-          sudo install -m 0444 "$RUNNER_TEMP/m8-runtime.json" /opt/constructicon-m8-launch/runtime.json
+          sudo install -m 0444 "$RUNNER_TEMP/m8-runtime.json" /var/lib/constructicon-m8-launch/runtime.json
           sudo chmod o+x /home/runner /home/runner/work /home/runner/work/constructicon
       - name: Prove containment as the non-sudo service user
         shell: bash
@@ -55,8 +55,8 @@ jobs:
           printf 'commit=%s image=%s/%s kernel=%s\n' "$EVIDENCE_COMMIT" "$ImageOS" "$ImageVersion" "$(uname -r)"
           sudo cat /sys/kernel/security/apparmor/profiles | awk '/constructicon-m8-/ {print}'
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
-            M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/opt/constructicon-m8-launch \
-            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_linux_containment.py -v --tb=short
+            M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
+            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_linux_containment.py -v --tb=short -p no:cacheprovider
       - name: Report bounded launch-policy denials
         if: always()
         shell: bash

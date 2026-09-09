@@ -98,11 +98,13 @@ def supervise(owner_fd: int, argv: list[str]) -> int:
 
 
 def main() -> int:
-    owner_fd, guard_fd = int(sys.argv[1]), int(sys.argv[2])
+    owner_fd = int(sys.argv[1])
+    guards = tuple(int(value) for value in sys.argv[2].split(","))
     # Validate both inherited handles before launching anything. Their only
     # ownership transfer is pass_fds into this interpreter, never into a child.
     os.fstat(owner_fd)
-    os.fstat(guard_fd)
+    for guard in guards:
+        os.fstat(guard)
     try:
         return supervise(owner_fd, sys.argv[3:])
     except OSError as exc:
@@ -110,7 +112,8 @@ def main() -> int:
         return 125
     finally:
         os.close(owner_fd)
-        os.close(guard_fd)
+        for guard in guards:
+            os.close(guard)
 
 
 if __name__ == "__main__":
