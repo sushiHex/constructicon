@@ -116,7 +116,7 @@ def test_policy_pin_and_private_attachment_match_reviewed_file() -> None:
     assert hashlib.sha256(data).hexdigest() == probe.POLICY_SHA256
     text = data.decode()
     assert f"profile constructicon-m8-bwrap {probe.BWRAP} " in text
-    assert "allow px /** -> &constructicon-m8-bwrap//&constructicon-m8-payload," in text
+    assert "allow px /** -> constructicon-m8-bwrap//&constructicon-m8-payload," in text
     assert "allow ix /**," in text
     assert "deny capability," in text and "deny userns," in text
     rules = "\n".join(line for line in text.splitlines() if not line.startswith("#"))

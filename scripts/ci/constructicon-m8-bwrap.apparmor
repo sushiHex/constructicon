@@ -14,7 +14,7 @@ profile constructicon-m8-bwrap /opt/constructicon-m8-qualification/bwrap flags=(
   allow unix,
   allow signal,
   allow ptrace,
-  allow px /** -> &constructicon-m8-bwrap//&constructicon-m8-payload,
+  allow px /** -> constructicon-m8-bwrap//&constructicon-m8-payload,
 }
 
 profile constructicon-m8-payload flags=(attach_disconnected,mediate_deleted) {

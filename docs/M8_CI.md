@@ -22,7 +22,9 @@ The profile attaches only to `/opt/constructicon-m8-qualification/bwrap`, not
 the system executable. The launcher may establish its namespaces; at payload
 exec, an additional profile denies capabilities and further user namespaces.
 Stacking retains the original confinement under no-new-privileges. A mandatory
-named transition has no unconfined fallback or local policy override. Loading
+named transition has no executable-profile search, fallback, or local policy
+override. The launch profile permits namespace setup; the fixed bubblewrap
+recipe, not these broad file rules, supplies filesystem/network isolation. Loading
 uses `apparmor_parser --add --skip-cache`: an existing name is an error, not
 permission to replace a profile. The probe verifies reviewed executable and
 policy hashes and records the distribution-supplied AppArmor ABI digest.

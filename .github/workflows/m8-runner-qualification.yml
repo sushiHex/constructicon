@@ -58,6 +58,12 @@ jobs:
             /usr/bin/python3 /opt/constructicon-m8-qualification/probe.py \
             --commit "$EVIDENCE_COMMIT" --image "$ImageOS/$ImageVersion" \
             | tee "$RUNNER_TEMP/m8-qualification.json"
+      - name: Report qualification profile denials
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo dmesg --color=never | awk '/apparmor="DENIED"/ && /constructicon-m8-/ {if (count++ < 32) print}'
       - name: Preserve bounded qualification evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
