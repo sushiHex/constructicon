@@ -10,18 +10,21 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import os
 import stat
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
+from typing import Literal
 
 from constructicon.core.errors import ContractViolation
 from constructicon.core.grants import Posture
 from constructicon.core.identity import Digest, digest
+from constructicon.substrate._lifetime import finish_owned
 
-SUPERVISOR = Path(__file__).with_name("_supervisor.py")
+SUPERVISOR_PATH = Path("usr/libexec/constructicon-supervisor.py")
 BWRAP_SHA256 = "52231e1caf55bcbc667b269f49c63599a6f7db4767ae6a039580d0ff853db712"
 _PROBE = """
 import ctypes, errno, json, os
@@ -79,6 +82,7 @@ def runtime_digest(root: Path, *, require_immutable: bool = True) -> Digest:
 @dataclass(frozen=True)
 class ProcessLimits:
     input_bytes: int = 1024 * 1024
+    artifact_bytes: int = 16 * 1024 * 1024
     stdout_bytes: int = 32 * 1024 * 1024
     record_bytes: int = 4 * 1024 * 1024
     stderr_bytes: int = 64 * 1024
@@ -120,7 +124,6 @@ class LinuxLauncher:
         self.policy = policy
         self.expected_policy_sha256 = expected_policy_sha256
         self.limits = limits
-        self._supervisor_digest = _sha(SUPERVISOR)
 
     def check_artifacts(self) -> None:
         if sys.platform != "linux" or os.getuid() == 0:
@@ -137,8 +140,6 @@ class LinuxLauncher:
             raise ContractViolation("bubblewrap content differs from the supported build")
         if _sha(self.policy) != self.expected_policy_sha256:
             raise ContractViolation("launch policy content changed")
-        if _sha(SUPERVISOR) != self._supervisor_digest:
-            raise ContractViolation("supervisor implementation changed")
         if runtime_digest(self.root) != self.expected_runtime:
             raise ContractViolation("runtime content differs from the admitted identity")
         restriction = Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
@@ -150,7 +151,6 @@ class LinuxLauncher:
         return digest("linux-launch", 1, {
             "runtime": self.expected_runtime,
             "bubblewrap": BWRAP_SHA256,
-            "supervisor": self._supervisor_digest,
             "recipe": _sha(Path(__file__)),
             "policy": self.expected_policy_sha256,
             "limits": asdict(self.limits),
@@ -188,15 +188,26 @@ class LinuxLauncher:
         posture: Posture,
         guard_fds: tuple[int, ...],
         stdin: bytes = b"",
+        input_kind: Literal["task", "artifact"] = "task",
         timeout_s: float,
     ) -> ProcessResult:
         """The caller holds and validates the acquisition before entering here."""
 
-        await self.probe()
-        return await self._run(
+        started = time.monotonic()
+        deadline = asyncio.get_running_loop().time() + timeout_s
+        limit = self.limits.artifact_bytes if input_kind == "artifact" else self.limits.input_bytes
+        if len(stdin) > limit or not math.isfinite(timeout_s) or timeout_s <= 0:
+            raise ContractViolation("contained input/deadline exceeds the launch contract")
+        try:
+            async with asyncio.timeout_at(deadline):
+                await self.probe()
+        except TimeoutError:
+            return ProcessResult(125, b"", b"", time.monotonic() - started, timed_out=True)
+        result = await self._run(
             command, workspace=workspace, posture=posture, guard_fds=guard_fds,
-            stdin=stdin, timeout_s=timeout_s,
+            stdin=stdin, deadline=deadline,
         )
+        return replace(result, elapsed_s=time.monotonic() - started)
 
     async def probe(self) -> None:
         """Benign, mount-free prerequisite proof through the identical recipe.
@@ -212,7 +223,8 @@ class LinuxLauncher:
         try:
             result = await self._run(
                 ("/usr/bin/python3", "-I", "-c", _PROBE), workspace=None,
-                posture=Posture.READ, guard_fds=(fd,), timeout_s=10,
+                posture=Posture.READ, guard_fds=(fd,),
+                deadline=asyncio.get_running_loop().time() + 10,
             )
         finally:
             os.close(fd)
@@ -237,12 +249,12 @@ class LinuxLauncher:
 
     async def _run(
         self, command: tuple[str, ...], *, workspace: Path | None, posture: Posture,
-        guard_fds: tuple[int, ...], stdin: bytes = b"", timeout_s: float,
+        guard_fds: tuple[int, ...], stdin: bytes = b"", deadline: float,
     ) -> ProcessResult:
-        if len(stdin) > self.limits.input_bytes or timeout_s <= 0:
-            raise ContractViolation("contained input/deadline exceeds the launch contract")
         if not guard_fds or len(set(guard_fds)) != len(guard_fds):
             raise ContractViolation("contained work requires its distinct acquisition guards")
+        if asyncio.get_running_loop().time() >= deadline:
+            return ProcessResult(125, b"", b"", 0, timed_out=True)
         args = self.argv(command, workspace=workspace, posture=posture)
         owner_read, owner_write = os.pipe()
         process: asyncio.subprocess.Process | None = None
@@ -309,13 +321,22 @@ class LinuxLauncher:
                 str(self.root / "lib64/ld-linux-x86-64.so.2"),
                 "--library-path",
                 f"{self.root}/lib/x86_64-linux-gnu:{self.root}/usr/lib/x86_64-linux-gnu",
-                str(self.root / "usr/bin/python3.12"), "-I", str(SUPERVISOR),
+                str(self.root / "usr/bin/python3.12"), "-I", str(self.root / SUPERVISOR_PATH),
                 str(owner_read), ",".join(str(fd) for fd in guard_fds), *args,
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE, close_fds=True,
                 pass_fds=(owner_read, *guard_fds), env={"LANG": "C.UTF-8"},
             ))
             cancelled = False
+            try:
+                async with asyncio.timeout_at(deadline):
+                    process = await asyncio.shield(spawn)
+            except TimeoutError:
+                timed_out = True
+                stop()
+            except asyncio.CancelledError:
+                cancelled = True
+                stop()
             while True:
                 try:
                     process = await asyncio.shield(spawn)
@@ -334,7 +355,7 @@ class LinuxLauncher:
                 raise asyncio.CancelledError
             completion = asyncio.create_task(finish())
             try:
-                async with asyncio.timeout(max(0, timeout_s - (time.monotonic() - started))):
+                async with asyncio.timeout_at(deadline):
                     await asyncio.shield(completion)
             except TimeoutError:
                 timed_out = True
@@ -342,15 +363,7 @@ class LinuxLauncher:
             os.close(owner_read)
             stop()
             cleanup = completion or asyncio.create_task(finish())
-            interrupted = False
-            while not cleanup.done():
-                try:
-                    await asyncio.shield(cleanup)
-                except asyncio.CancelledError:
-                    interrupted = True
-            cleanup.result()
-            if interrupted:
-                raise asyncio.CancelledError
+            await finish_owned(cleanup)
         assert process is not None and process.returncode is not None
         return ProcessResult(
             process.returncode, bytes(stdout), bytes(stderr_head + stderr_tail),

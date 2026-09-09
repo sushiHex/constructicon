@@ -49,14 +49,18 @@ def main() -> None:
         for value in re.findall(r"(?:=>\s+)?(/[\w./+-]+)", result.stdout):
             copy(Path(value))
     (destination / "usr/bin/python3").symlink_to("python3.12")
+    from constructicon.substrate.executors import _supervisor
+    from constructicon.substrate.executors.linux import SUPERVISOR_PATH, runtime_digest
+
+    supervisor = destination / SUPERVISOR_PATH
+    supervisor.parent.mkdir(parents=True)
+    shutil.copyfile(_supervisor.__file__, supervisor)
     for name in ("proc", "dev", "tmp", "workspace"):
         (destination / name).mkdir()
     for path in [*destination.rglob("*"), destination]:
         if not path.is_symlink():
             path.chmod(0o555 if path.is_dir() or path.stat().st_mode & 0o111 else 0o444)
-    # The installed package supplies the one identity algorithm used at launch.
-    from constructicon.substrate.executors.linux import runtime_digest
-
+    # The supervisor is content in this immutable closure, not a checkout path.
     print(json.dumps({"runtime_digest": str(runtime_digest(destination))}, sort_keys=True))
 
 

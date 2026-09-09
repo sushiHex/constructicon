@@ -165,6 +165,51 @@ diagnostic root borrows `/usr`; it is not PR B's pinned runtime. No hostile
 process-tree cleanup, complete filesystem/FD exclusion, gateway, live model
 call, or production availability is claimed by qualification.
 
+## PR B — implementation in progress
+
+The concrete networkless launcher, deferred READ/WRITE workspaces, permanent
+Git closure marker, and retained acquisition guard are under review in PR #30.
+It is stacked on PR #29's already-authorized ADR 0019 acceptance record. The
+trusted single-call subreaper keeps guard descriptors outside the payload's
+PID namespace until its children are reaped; neither a Python controller's
+death nor the bubblewrap monitor's return proves quiescence by itself.
+
+The runtime is a curated immutable closure, not a mount of the host's `/usr`.
+Provisioning moved from `/opt` to `/var/lib` after a hosted image's world-writable
+`/opt` correctly failed the ancestor check. No check or host directory mode was
+weakened to accommodate it. The service has no sudo or provider credentials.
+
+An early independent review identified four concrete corrections: install the
+supervisor source in that immutable closure; separate the 16 MiB artifact bound
+from the 1 MiB task-input bound; include availability and spawn in the call's
+deadline and elapsed observation; and keep deletion off the event loop while
+retaining the acquisition guard through repeated cancellation and completion.
+The Git export also drains after stopping its producer, so a full pipe cannot
+strand bounded materialization cleanup. Only symlink-safe filesystem deletion
+uses a worker thread, not a legacy Git importer or verifier.
+
+Native regressions exercise those boundaries and real control-plane deaths
+before lease recording, after recording, and during materialization. They are
+pending exact-head Linux confirmation at this revision; Windows skips are
+explicitly not physical evidence. The mutation inventory, full-head review,
+and complete proof evidence remain readiness gates, not inherited credit.
+
+### Backend extensibility and subscription intent
+
+The owner reaffirmed that Claude Code, Codex, and Pi are the starting adapters,
+with future cloud and local models using the same task-shaped executor seam.
+This follows ADR 0005: API models enter through a compatible harness, not a
+completion-level provider abstraction in the kernel. No CLI-specific base
+class, provider enum, model switch in the walker, or alternate workspace
+contract is required by this launcher. Adapter profiles and launch identity
+continue to state exactly what is supported and enforced.
+
+The owner's primary solo-developer motivation includes subscription reuse.
+That intent does not establish a working or authorized authentication route:
+accepted ADR 0018 still requires gateway-only initial authentication. Resolving
+subscription-backed access is an explicit prerequisite decision before the
+live Claude Code/Codex slices, not something PR B claims or silently enables.
+
 ## Remaining slices and operator prerequisites
 
 PR B still needs its complete physical proofs under the actual Linux service

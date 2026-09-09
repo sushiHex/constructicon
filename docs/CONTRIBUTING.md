@@ -208,6 +208,15 @@ a run. After repairing a rejected request, use a fresh idempotency key.
 
 ## Adding an executor (L1)
 
+Claude Code, Codex, and Pi are initial adapters, not a closed backend list.
+Future cloud APIs and local models enter through a compatible task harness
+using this same seam ([ADR 0005](adr/0005-executor-seam.md)). Backend
+flags, native streams, authentication, and model routing stay in its adapter;
+the graph language, walker, leases, and governance do not grow provider
+switches. Do not introduce a completion-level provider abstraction. Each
+adapter must prove its declared capabilities; interchangeability is conditional
+on those capabilities, not on a shared model name.
+
 1. Implement the `constructicon.core.executor.Executor` protocol: `profile`
    (including an honest `IsolationProfile` — admission rejects postures the
    executor cannot mechanically enforce; never overstate), `validate_grants`,

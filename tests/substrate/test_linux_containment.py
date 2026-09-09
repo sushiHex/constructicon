@@ -13,14 +13,17 @@ import os
 import signal
 import socket
 import sys
+import time
 from pathlib import Path
 
 import pytest
 
 from constructicon.core.grants import Posture
 from constructicon.core.identity import Digest
+from constructicon.core.manifest import CapabilityLease
+from constructicon.core.run import RunStatus
 from constructicon.core.workspace import acquisition_id_for
-from constructicon.substrate.executors.linux import LinuxLauncher, ProcessLimits
+from constructicon.substrate.executors.linux import SUPERVISOR_PATH, LinuxLauncher, ProcessLimits
 from constructicon.substrate.git.acquisition import (
     AcquisitionClosure,
     AcquisitionPaths,
@@ -204,6 +207,76 @@ async def test_runtime_drift_refuses_before_any_child_starts(launcher, tmp_path)
         await run(launcher, tmp_path, "print('must not launch')")
 
 
+async def test_supervisor_source_is_loaded_only_from_the_immutable_closure(
+    launcher, tmp_path, monkeypatch,
+):
+    commands = []
+    spawn = asyncio.create_subprocess_exec
+
+    async def observe(*args, **kwargs):
+        commands.append(args)
+        return await spawn(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", observe)
+    result = await run(launcher, tmp_path, "print('done')")
+    assert result.returncode == 0, result.stderr
+    assert len(commands) == 2  # Physical probe and requested payload.
+    for args in commands:
+        assert str(launcher.root / SUPERVISOR_PATH) in args
+        assert not any(value.endswith("executors/_supervisor.py") for value in args)
+    script = launcher.root / SUPERVISOR_PATH
+    assert script.stat().st_uid == 0 and not script.stat().st_mode & 0o222
+    with pytest.raises(PermissionError):
+        script.open("ab")
+
+
+@pytest.mark.parametrize("phase", ["probe", "spawn"])
+async def test_the_call_deadline_includes_probe_and_spawn(launcher, tmp_path, monkeypatch, phase):
+    """Delay a real operation, not a fake process or a fake isolation result."""
+    if phase == "probe":
+        probe = launcher.probe
+
+        async def delayed_probe():
+            await asyncio.sleep(.35)
+            await probe()
+
+        monkeypatch.setattr(launcher, "probe", delayed_probe)
+    else:
+        spawn = asyncio.create_subprocess_exec
+        calls = 0
+
+        async def delayed_spawn(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                await asyncio.sleep(1.5)
+            return await spawn(*args, **kwargs)
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", delayed_spawn)
+    started = time.monotonic()
+    result = await run(
+        launcher, tmp_path, "open('/workspace/started','w').write('bad')",
+        posture=Posture.WRITE, timeout_s=.2 if phase == "probe" else 1,
+    )
+    elapsed = time.monotonic() - started
+    assert result.timed_out, "setup was outside the requested deadline"
+    assert not (tmp_path / "workspace/started").exists(), "an expired call launched its payload"
+    assert abs(result.elapsed_s - elapsed) < .1, "telemetry omitted setup or owned cleanup"
+
+
+async def test_successful_call_elapsed_time_includes_availability(launcher, tmp_path, monkeypatch):
+    probe = launcher.probe
+
+    async def delayed_probe():
+        await asyncio.sleep(.2)
+        await probe()
+
+    monkeypatch.setattr(launcher, "probe", delayed_probe)
+    result = await run(launcher, tmp_path, "print('complete')")
+    assert result.returncode == 0 and result.stdout.strip() == b"complete", result.stderr
+    assert result.elapsed_s >= .2
+
+
 async def test_controller_death_cannot_release_the_reapers_guard_before_quiescence(
     launcher, tmp_path,
 ):
@@ -353,3 +426,58 @@ async def test_missing_profile_attachment_refuses_before_the_requested_payload(l
     with pytest.raises(Exception, match="physical Linux launch probe failed"):
         await run(launcher, tmp_path, "open('/workspace/backend-started','w').write('bad')")
     assert not (tmp_path / "workspace/backend-started").exists()
+
+
+@pytest.mark.parametrize("phase", ["before_record", "after_record", "during_materialization"])
+async def test_real_controller_death_on_both_sides_of_the_durable_lease(launcher, tmp_path, phase):
+    from constructicon.api.control import ControlPlane
+    from tests.substrate._lease_owner import assemble
+
+    seed_authority(tmp_path)
+    owner = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "tests.substrate._lease_owner", str(tmp_path), phase,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        line = await asyncio.wait_for(owner.stdout.readline(), 20)
+        if not line:
+            pytest.fail(f"controller did not reach its seam: {await owner.stderr.read()!r}")
+        event = json.loads(line)
+        assert event["phase"] == phase
+        row = CapabilityLease.model_validate(event["lease"])
+        old = AcquisitionPaths(tmp_path / "owned", acquisition_id_for(
+            row.lease_id, row.acquisition_epoch,
+        ))
+        assert old.payload.exists() == (phase == "during_materialization")
+        if phase == "before_record":
+            assert not old.root.exists()
+        owner.kill()
+        await owner.wait()
+        system, journal, provider = assemble(tmp_path, "successor-controller")
+        retained = journal.capability_leases(row.run_id)
+        assert len(retained) == (0 if phase == "before_record" else 1)
+        if retained:
+            assert retained[0].resource_ref == row.resource_ref
+        async with asyncio.timeout(5):
+            while journal.run_state(row.run_id).liveness != "lost":
+                await asyncio.sleep(.01)
+        control = ControlPlane(system=system, store=journal)
+        await control.startup()
+        try:
+            async with asyncio.timeout(15):
+                while journal.run_state(row.run_id).status not in (
+                    RunStatus.SUCCEEDED, RunStatus.FAILED,
+                ):
+                    await asyncio.sleep(.01)
+            assert journal.run_state(row.run_id).status is RunStatus.SUCCEEDED
+            assert not old.payload.exists()
+            assert provider.closure.is_closed(old) == (phase != "before_record")
+            rows = journal.capability_leases(row.run_id)
+            assert all(item.state == "closed" for item in rows)
+            assert max(item.acquisition_epoch for item in rows) > row.acquisition_epoch
+        finally:
+            await control.shutdown()
+    finally:
+        if owner.returncode is None:
+            owner.kill()
+        await owner.wait()

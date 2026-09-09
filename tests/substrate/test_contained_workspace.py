@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import random
 import sys
+import threading
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -23,7 +25,7 @@ from constructicon.substrate.executors.linux import ProcessLimits
 from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisition_guard
 from constructicon.substrate.git.authority import GitAuthority
 from constructicon.substrate.git.contained import ContainedWorkspaceProvider
-from tests.gitworld import seed_authority
+from tests.gitworld import push_to_main, seed_authority
 from tests.substrate.test_linux_containment import launcher as launcher
 
 LINUX = pytest.mark.skipif(
@@ -228,3 +230,94 @@ async def test_staging_is_initialized_through_the_actual_contained_launcher(prov
     await provider.close(acquired, "discard")
     assert not view.paths.payload.exists() and provider.closure.is_closed(view.paths)
     assert provider.authority.resolve_ref("refs/heads/main") == before
+
+
+@pytest.fixture
+def large_repository(provider):
+    # Incompressible enough that both the tar and Git pack exceed TaskSpec's
+    # 1 MiB, while fitting the separately declared artifact bound.
+    content = random.Random(8).randbytes(2 * 1024 * 1024).hex()
+    push_to_main(Path(provider.authority.repository_id), {"large.txt": content}, "large fixture")
+    return content
+
+
+async def test_export_has_an_artifact_bound_not_the_task_input_bound(provider, large_repository):
+    base = provider.authority.resolve_ref("refs/heads/main")
+    for args, stdin in (
+        (("archive", "--format=tar", base), b""),
+        (("pack-objects", "--stdout", "--revs"), f"{base}\n".encode()),
+    ):
+        content = await provider._export(*args, stdin=stdin)
+        assert provider.launcher.limits.input_bytes < len(content)
+        assert len(content) <= provider.launcher.limits.artifact_bytes
+    provider.launcher.limits = ProcessLimits(artifact_bytes=8192)
+    with pytest.raises(ContractViolation, match="materialization bound"):
+        async with asyncio.timeout(5):
+            await provider._export("archive", "--format=tar", base)
+
+
+@pytest.mark.parametrize("posture", [Posture.READ, Posture.WRITE])
+async def test_large_materialization_keeps_artifact_and_task_limits_separate(
+    provider, launcher, large_repository, posture,
+):
+    provider.launcher = launcher
+    provider.posture = posture
+    acquired = await provider.acquire(context(posture=posture))
+    try:
+        await acquired.materialize()
+        assert Path(acquired.resource.path, "large.txt").read_text() == large_repository
+        async with acquired.resource.use() as guard:
+            with pytest.raises(ContractViolation, match="input/deadline"):
+                await launcher.run(
+                    ("/usr/bin/python3", "-c", "print('should not start')"),
+                    workspace=Path(acquired.resource.path), posture=posture,
+                    guard_fds=(guard,), stdin=b"x" * (launcher.limits.input_bytes + 1), timeout_s=5,
+                )
+    finally:
+        await provider.close(acquired, "discard")
+
+
+@LINUX
+async def test_deletion_yields_but_keeps_its_guard_through_repeated_cancellation(
+    provider, monkeypatch,
+):
+    from constructicon.substrate.git import acquisition
+
+    acquired = await provider.acquire(context())
+    await acquired.materialize()
+    started, finish = threading.Event(), threading.Event()
+    remove = acquisition.shutil.rmtree
+
+    def blocked_remove(path):
+        started.set()
+        finish.wait(5)  # A watchdog, not the event-loop synchronization mechanism.
+        remove(path)
+
+    blocked_remove.avoids_symlink_attacks = remove.avoids_symlink_attacks
+    monkeypatch.setattr(acquisition.shutil, "rmtree", blocked_remove)
+    closing = asyncio.create_task(provider.close(acquired, "discard"))
+    waiting = None
+
+    async def next_guard():
+        async with acquisition_guard(acquired.resource.paths):
+            return "quiescent"
+
+    try:
+        async with asyncio.timeout(2):
+            while not started.is_set():
+                await asyncio.sleep(.001)
+        assert not closing.done(), "deletion monopolized the event loop until completion"
+        waiting = asyncio.create_task(next_guard())
+        for _ in range(2):
+            closing.cancel()
+            await asyncio.sleep(.02)
+            assert not closing.done() and not waiting.done(), "deletion abandoned its guard"
+        finish.set()
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+        assert await waiting == "quiescent"
+        assert not acquired.resource.paths.payload.exists()
+        assert provider.closure.is_closed(acquired.resource.paths)
+    finally:
+        finish.set()
+        await asyncio.gather(closing, *(t for t in (waiting,) if t), return_exceptions=True)

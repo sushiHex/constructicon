@@ -37,6 +37,7 @@ from constructicon.core.workspace import (
     acquisition_id_for,
     lease_id_for,
 )
+from constructicon.substrate._lifetime import finish_owned
 from constructicon.substrate.executors.linux import LinuxLauncher
 from constructicon.substrate.git.acquisition import (
     AcquisitionClosure,
@@ -214,37 +215,42 @@ class ContainedWorkspaceProvider:
     async def _export(self, *args: str, stdin: bytes = b"") -> bytes:
         """Bounded read of the trusted authority; it writes no acquisition path."""
 
-        process = await asyncio.create_subprocess_exec(
+        spawn = asyncio.create_task(asyncio.create_subprocess_exec(
             self.git, *args, cwd=self.authority.repository_id,
             env={"PATH": os.environ.get("PATH", os.defpath), **_PINNED_ENV},
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
-        )
-        assert process.stdin is not None and process.stdout is not None
-        process.stdin.write(stdin)
-        process.stdin.close()
+        ))
+        process: asyncio.subprocess.Process | None = None
         output = bytearray()
+
+        async def stop_and_drain() -> None:
+            # Spawn may have completed after the caller was cancelled. Do not
+            # discard that handle or wait on pipes nobody is reading.
+            owned = process or await spawn
+            if owned.stdin is not None:
+                owned.stdin.close()
+            if owned.returncode is None:
+                owned.kill()
+            assert owned.stdout is not None
+            while await owned.stdout.read(8192):
+                pass
+            await owned.wait()
+
         try:
             async with asyncio.timeout(30):
+                process = await asyncio.shield(spawn)
+                assert process.stdin is not None and process.stdout is not None
+                process.stdin.write(stdin)
+                process.stdin.close()
                 while chunk := await process.stdout.read(8192):
-                    if len(output) + len(chunk) > self.launcher.limits.input_bytes:
+                    if len(output) + len(chunk) > self.launcher.limits.artifact_bytes:
                         raise ContractViolation("workspace export exceeds materialization bound")
                     output.extend(chunk)
                 if await process.wait() != 0:
                     raise ContractViolation("trusted authority export failed")
         finally:
-            if process.returncode is None:
-                process.kill()
-            cleanup = asyncio.create_task(process.wait())
-            interrupted = False
-            while not cleanup.done():
-                try:
-                    await asyncio.shield(cleanup)
-                except asyncio.CancelledError:
-                    interrupted = True
-            cleanup.result()
-            if interrupted:
-                raise asyncio.CancelledError
+            await finish_owned(asyncio.create_task(stop_and_drain()))
         return bytes(output)
 
     async def populate(self, workspace: ContainedWorkspace, guard: int) -> None:
@@ -268,6 +274,7 @@ class ContainedWorkspaceProvider:
         result = await self.launcher.run(
             ("/usr/bin/python3", "-I", "-c", setup), workspace=Path(workspace.path),
             posture=Posture.WRITE, guard_fds=(guard,), stdin=content, timeout_s=30,
+            input_kind="artifact",
         )
         if result.returncode or result.timed_out or result.bound_exceeded:
             raise ContractViolation("contained staging initialization failed")

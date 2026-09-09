@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from constructicon.core.errors import ContractViolation
+from constructicon.substrate._lifetime import finish_owned
 from constructicon.substrate.git.authority import GitAuthority, GitAuthorityDamaged
 
 
@@ -137,5 +138,8 @@ async def dispose_acquisition(closure: AcquisitionClosure, paths: AcquisitionPat
         # Linux's fd-based rmtree never follows payload-authored symlinks.
         if not shutil.rmtree.avoids_symlink_attacks:
             raise ContractViolation("symlink-safe acquisition disposal is unavailable")
-        shutil.rmtree(paths.payload)
+        # Cancellation cannot release the guard while this worker still has
+        # filesystem authority. Only deletion runs in a thread, never an
+        # uncontained Git importer or verifier.
+        await finish_owned(asyncio.create_task(asyncio.to_thread(shutil.rmtree, paths.payload)))
         return True
