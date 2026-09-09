@@ -51,7 +51,7 @@ InjectedCrash is a unit seam, not process-death or Linux containment evidence.
 
 ## Proof inventory and limits
 
-PR A adds 63 tests. The 26-case mutation inventory in
+The initial PR A head added 63 tests. Its 26-case mutation inventory in
 `scripts/check_m8_mutations.py` independently removes grant checks, shared-law
 and content identity, descriptor checks, availability, admission delegation,
 record/materialize ordering, cleanup enrollment, inert-close discipline,
@@ -81,6 +81,46 @@ golden from `8262d4f`, using each historical validator with current dependencies
 Exact-head full-gate, CI, and independent-review results belong in the PR's
 review record before readiness. A green baseline alone proves none of these
 new laws; conversely, these contract tests prove no physical boundary.
+
+## PR A review corrections
+
+The independent review of `daf8577` reported two P1 lifecycle gaps. Both were
+reproduced on that head before changing production code; the first regression
+also demonstrated a cooperative cancel ignored during materialization.
+
+1. A materializer can return normally after the heartbeat has observed that
+   another owner claimed the run. The component was then invoked before its
+   completion hit the journal fence. The existing `_check_run_control` now runs
+   immediately after the await, before resource exposure. Tests pause a real
+   materializer, expire/claim the actual run lease, wait for the actual heartbeat
+   refusal, and require zero executor calls/checkpoints. The successor alone
+   reconciles the old acquisition and completes under its fresh one. A
+   cooperative cancellation at the same barrier must cancel, not succeed.
+2. A second task cancellation could interrupt an enrolled acquisition's close.
+   One `_finish_cleanup` mechanism now joins both unrecorded cleanup and the
+   entire recorded batch, including each fenced journal transition. Shielding
+   one resource at a time would still abandon siblings. The existing
+   checkpoint/disposition law is unchanged: successful checkpoints retain
+   release; unfinished work discards. An empty batch adds no scheduling point.
+   Cleanup failure or ownership loss remains observable rather than being
+   converted to cancellation or a false closed row.
+
+`test_materialization_control.py` adds 12 barrier-based cases: observed
+ownership/cooperative cancellation; repeated task cancellation during
+materialization cleanup and post-checkpoint release; one or two acquisitions;
+user cancellation versus shutdown abandonment; provider-close failure and
+fenced-transition ownership loss followed by real successor reconciliation.
+The last two queue cleanup completion before delivery of another cancellation,
+proving the already-terminal cleanup result must still be observed. This
+strengthening followed an initially surviving result-observation mutation;
+ordinary await failure propagation had masked that separate guarantee.
+
+The totals are 75 new PR A tests and 33 M8 mutations, all assertion-killed on
+the corrected implementation. The seven new mutations remove post-await
+control, recorded-batch shielding, shield isolation, repeated joining,
+cancellation propagation, sibling coverage, and terminal failure observation
+independently. Exact-head local/CI/review confirmation is recorded on PR #27;
+these tests remain lifecycle proofs, not Linux process containment.
 
 ## Remaining slices and operator prerequisites
 

@@ -11,6 +11,7 @@ COHERENCE = "constructicon.runtime.registry:CapabilityDescriptor.executor_incohe
 CORE = "tests/core/test_executor_policy.py::"
 API = "tests/api/test_executor_admission.py::"
 LIFECYCLE = "tests/runtime/test_materialization.py::"
+CONTROL = "tests/runtime/test_materialization_control.py::"
 
 MUTANTS = (
     *(
@@ -164,9 +165,11 @@ MUTANTS = (
         "constructicon.runtime.walker:Walker._invoke",
         "acquired.append((capability, acquisition))\n"
         "                if acquisition.materialize is not None:\n"
-        "                    await acquisition.materialize()",
+        "                    await acquisition.materialize()\n"
+        "                    self._check_run_control(lease, lost)",
         "if acquisition.materialize is not None:\n"
         "                    await acquisition.materialize()\n"
+        "                    self._check_run_control(lease, lost)\n"
         "                acquired.append((capability, acquisition))",
         LIFECYCLE + "test_materialization_failure_discards_the_enrolled_acquisition",
     ),
@@ -197,6 +200,55 @@ MUTANTS = (
         "if self.ledger.close(key):",
         "if key in self.ledger.resources and self.ledger.close(key):",
         LIFECYCLE + "test_recovery_fences_a_recorded_acquisition_even_if_it_never_started",
+    ),
+    (
+        "control is rechecked after materialization",
+        "constructicon.runtime.walker:Walker._invoke",
+        "await acquisition.materialize()\n                    self._check_run_control(lease, lost)",
+        "await acquisition.materialize()",
+        CONTROL + "test_control_changed_during_materialization_prevents_invocation",
+    ),
+    (
+        "recorded cleanup joins the cancellation barrier",
+        "constructicon.runtime.walker:Walker._close_acquired",
+        "await self._finish_cleanup(close_all())",
+        "await close_all()",
+        CONTROL + "test_repeated_cancellation_finishes_recorded_cleanup",
+    ),
+    (
+        "cancellation cannot reach the cleanup task",
+        "constructicon.runtime.walker:Walker._finish_cleanup",
+        "await asyncio.shield(close_task)",
+        "await close_task",
+        CONTROL + "test_repeated_cancellation_finishes_recorded_cleanup",
+    ),
+    (
+        "cleanup is joined after every cancellation",
+        "constructicon.runtime.walker:Walker._finish_cleanup",
+        "while not close_task.done():",
+        "if not close_task.done():",
+        CONTROL + "test_repeated_cancellation_finishes_recorded_cleanup",
+    ),
+    (
+        "cancellation propagates after cleanup",
+        "constructicon.runtime.walker:Walker._finish_cleanup",
+        "raise cancellation",
+        "return",
+        CONTROL + "test_repeated_cancellation_finishes_recorded_cleanup",
+    ),
+    (
+        "cleanup retains every enrolled sibling",
+        "constructicon.runtime.walker:Walker._close_acquired",
+        "for capability, acquisition in acquired:",
+        "for capability, acquisition in acquired[:1]:",
+        CONTROL + "test_repeated_cancellation_finishes_recorded_cleanup",
+    ),
+    (
+        "cleanup failure outranks pending cancellation",
+        "constructicon.runtime.walker:Walker._finish_cleanup",
+        "close_task.result()",
+        "pass",
+        CONTROL + "test_cleanup_failure_is_not_laundered_into_cancellation",
     ),
 )
 

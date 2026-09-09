@@ -232,7 +232,10 @@ a run. After repairing a rejected request, use a fresh idempotency key.
    close before entry writes nothing and prevents later entry; mark entry
    before the first await/I/O. Started cleanup and durable reconciliation fence
    the acquisition even if no resource yet exists. Do not add a second lease
-   ledger. Legacy eager providers keep their existing convention.
+   ledger. The walker rechecks run control after materialization and joins the
+   whole recorded cleanup batch despite repeated cancellation, preserving
+   cleanup failures and checkpoint-selected disposition. Legacy eager providers
+   keep their existing convention.
 5. Truthful telemetry is law (I4): fields the backend does not emit stay
    `None`; damaged streams return `ExecutorPartial`; timeouts salvage partial
    output into `ExecutorFailure`.

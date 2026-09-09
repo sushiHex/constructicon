@@ -120,8 +120,13 @@ in-memory `AcquiredCapability.materialize` callback adds no durable state:
 acquire handle → record lease → enroll cleanup → await materialization → expose
 resource. The walker does not interpret its provider work. Recording failure
 closes an inert new handle locally without external I/O; once materialization
-enters, cleanup applies the provider's complete closure law. Recovery always
-uses the durable row, including when materialization never began. Legacy
+enters, cleanup applies the provider's complete closure law. After the await,
+the existing run-control check refuses observed ownership loss or cooperative
+cancellation before exposure. Recorded cleanup joins the entire batch of
+resource closes and fenced row transitions despite repeated task cancellation,
+then propagates cancellation; cleanup failure is never suppressed. The same
+waiting mechanism serves unrecorded cleanup, with its original disposition.
+Recovery always uses the durable row, including when materialization never began. Legacy
 callbacks default to `None` and retain their eager behavior. PR A proves this
 sequence with genuine deferred-resource doubles, not Linux processes.
 
