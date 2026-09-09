@@ -271,8 +271,9 @@ corrections. Final exact-head confirmation remains the PR's gate.
 Review of `999fe7e` found that availability still transferred its independent
 ten-second deadline to the reaper and that launcher fields could be reloaded
 across the probe await. The launch configuration is now one frozen value;
-reconfiguration creates a new value and revision, never changes an admitted
-call midway. Each configurable field has a refusal test. Its immutability is
+reconfiguration creates a new value, never changes an admitted call midway.
+Identity-bearing changes also change its revision; relocating identical
+artifacts does not. Each configurable field has a refusal test. Immutability is
 the standard dataclass contract, not an independently mutated custom guard.
 `run` passes its deadline through `probe` to that same reaper. Standalone
 qualification alone supplies a default deadline. A native probe emits its
