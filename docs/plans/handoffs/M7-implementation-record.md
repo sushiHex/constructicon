@@ -18,6 +18,11 @@ replies drive wake recovery. PR D added the panel pattern: `panel()` sugar, the
 L0 panel contracts, the pure quorum aggregator and ballot adapter, and the
 credential-free acceptance lane across real process restarts. M7 is complete.
 
+The later [M7.1 closure](M7.1-implementation-record.md) supersedes PR D's
+authoring-only membership proof below: PRs #23 and #24 now retain membership
+through explicit scalar result maps. The earlier review entries remain history,
+not a claim that newly authored panels still discard their member expectations.
+
 - One L0 `Channel` contract with `InProcessChannel` and `MailboxChannel`,
   exercised by a single parity suite. Both derive messages from the same
   contract-level constructors, so parity is structural rather than a duplicated
@@ -1056,48 +1061,41 @@ honest rehydration: exact registrations resolve as existing and promotion
 finds stable already equal, so no new registry, promotion, or attestation
 rows are written.
 
+## M7.1 — authored membership closure
+
+The durable-membership item is closed for mapped graphs by PR A (#23,
+`b5ff31f`) and PR B (#24, `7081c51`), under approved
+[rev 4](../milestones/M7.1-panel-membership-rev4.md) and
+[ADR 0017](../../adr/0017-panel-membership-is-an-authored-map.md).
+`panel()` now writes one scalar result selector per member. Distinct selectors
+form an ordered union at the gather, replacing its magnetic pool, and every
+connection endpoint and map destination is accounted for. An incompatible
+mapped result cannot disappear silently. The panel is plural, with at least
+two members; its ids and result names must form representable selectors.
+
+The guarantee is intentionally narrower than a complete member boundary:
+request binding remains magnetic, unrelated outputs are not frozen, and
+retained pre-change panels stay unmapped. General connector liveness remains
+rejected. The historical PR D proof and the rejected proposals recorded above
+are not the current admission law.
+
+Counterfactual admission validates the exact retained baseline before applying
+overrides; invalid history is `REQUEST_INVALID`, not an override mismatch.
+Both compiler phases share the source lock. A successful override must still
+preserve the complete source `contract_hash` at every affected scope.
+`SystemDescription` and its digest domain are version 2 and publish scalar
+source cardinality separately from mapped-many fan-in. Graph remains version 1.
+The [M7.1 record](M7.1-implementation-record.md) carries the review corrections,
+compatibility boundaries, historical fixtures, and verified failure proofs.
+
 ## Open items
 
 - Kernel-attested source identity on `many` ports and wall-clock timeouts for
   human members are deferred, as recorded above. The first is a runtime
   provenance problem and nothing wider: the manifest knows the actual sources,
   and the walker drops the source address when it collects them, so a component
-  cannot prove who sent what. It is not the fix for the membership item below,
-  which is about a member that never binds at all.
-- Durable authored gather membership is an unresolved problem of its own, split
-  out here because it was previously folded into the connector-liveness item. A
-  panel's exactness is proved at authoring from the member bundles' declared
-  contracts, and `panel()` then emits a Graph carrying no trace of what was
-  proved; admission cannot re-prove a claim the graph does not make. So a
-  member whose stable version is later promoted with a different output
-  contract is absent from the gather and no fault is raised. Closing it needs
-  an authored expectation to re-prove.
-  [M7.1 rev 4](../milestones/M7.1-panel-membership-rev4.md) finds that
-  expectation already expressible: `Connection.map` names a port and the
-  selector that fills it. `panel()` proves the gather and then discards the
-  proof instead of writing it as a map. Rev 4 narrows the open item to panel
-  membership, makes mapped fan-in an ordered union of scalar selectors, and
-  requires every map destination to be consumed or refused. It leaves the
-  unmapped pool alone and explicitly does not retrofit retained panels.
-  Exact-head review tightened three boundaries before any decision: `panel()`
-  is plural so two distinct selectors prove its `many` gather; a rejected
-  `runs_start` key replays and repair uses a fresh key; and counterfactual
-  admission validates the retained baseline before judging an override, so
-  new structural invalidity is never mislabeled as a lock mismatch.
-  A confirming review narrowed the guarantee once more: the maps preserve
-  gather membership and each member's mapped result port. They preserve neither
-  unrelated outputs nor the request boundary, which the SDK proves only from
-  the bundles in hand and the current Graph cannot encode exactly without a
-  wider IR decision. A following exact-head pass also required `panel()` to
-  reject member ids containing the selector delimiter, both preflight and
-  compilation to select through the source lock, and `describe()` to publish
-  scalar-source cardinality independently of mapped-`many` fan-in policy. The
-  confirming pass completed the selector rule: a member result-port name must
-  also be non-empty before `panel()` can emit `member.port`. The following pass
-  restored two global laws around that scoped design: counterfactual overrides
-  must preserve the complete source `contract_hash` at every affected scope,
-  and entries within one map object are ordered by destination key because JSON
-  object insertion order cannot affect faults or bounded truncation.
+  cannot prove who sent what. This is separate from the authored membership
+  closed by M7.1 above, which is about a member that never binds at all.
 - `describe()` publishes the whole standard vocabulary in every description,
   filtered or not. It is the system's fixed L0 vocabulary rather than a
   property of the selected components; a per-selection projection would be a

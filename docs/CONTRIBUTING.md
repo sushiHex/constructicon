@@ -37,13 +37,35 @@ changing a shared definition. Compose before you drop a tier (I10).
   `component()` nor the registry nor admission accepts a boundary the Graph
   does not export, and boundaries are compared as bytes
   (`core.ports.same_boundary`), never with `==`.
-- `panel()` takes definition bundles, never bare names, because it proves the
-  gather exact from declared contracts. A panel member declares one input and
-  one output typed by the panel contracts in `core/panel.py`, both of
-  cardinality one, and the two differ; an aggregator is atomic — its law
-  reads its own seat, so compose around the panel, not inside its aggregator —
+- For explicit membership, use `Connection.map` from destination input to
+  `node.port` or `$input.port`. Each distinct selector must resolve to one
+  source whose port is cardinality `one` and matches the destination's nominal
+  contract. Map several connections into one `many` input for ordered fan-in;
+  repeated identical selectors coalesce at their first position. A mapped
+  `one` or `optional` input accepts only one distinct selector. Maps replace
+  that input's magnetic pool; unmapped inputs keep the existing rules. Use a
+  scalar adapter for a `many` or `optional` producer, never implicit flattening.
+- Every connection endpoint must name a declared node at that Graph level,
+  and every map destination must name a resolved input. `$input` is a selector
+  prefix, not a connection endpoint. Repair the exact proposal `path` or the
+  retained `{component, version, definition_path}` reported in the fault;
+  diagnostics are bounded and a structural refusal may stop before siblings
+  are checked. Connection order governs fan-in; map-object key order does not.
+- `panel()` takes at least two definition bundles, never bare names; compose
+  a single member directly. Members share one exact one-input/one-output
+  boundary, both ports of cardinality `one`, with distinct nominal contracts.
+  The emitted input-boundary names are unique.
+  The standard panel vocabulary lives in `core/panel.py`. An aggregator is
+  atomic — its law reads its own seat, so compose around the panel, not inside
+  its aggregator —
   and declares exactly one `many` input of the members' result contract and
-  no other input of it. A human member is
+  no other input of it. The emitted Graph maps every named result into that
+  gather; admission checks those scalar results against the resolved gather,
+  excluding bystanders and graph-input seeds. Use dot-free member ids and
+  non-empty result-port names so `node.port` is representable. This does not
+  change general Graph identifier syntax. Request binding remains magnetic at
+  admission; the maps do not freeze unrelated outputs or the whole request
+  boundary. Retained unmapped panels are not retrofitted. A human member is
   `human_panel_member(name, channel_id)` — the standard advisor and ballot
   composed, registered and promoted like any composite — with one channel id
   per participant, and the request payload you write is what tells the
@@ -62,6 +84,16 @@ changing a shared definition. Compose before you drop a tier (I10).
   add automatic repair or a trusted-SDK bypass. Public execution calls
   `ControlPlane.runs_start(actor, proposal=graph, inputs=..., idempotency_key=...)`,
   which admits again while creating the durable command and run.
+
+Read the versioned vocabulary instead of inferring new rules from an old
+description. `SystemDescription` and its digest domain are version 2, with
+`explicit_map_source_cardinality="one"` and
+`mapped_many_policy="ordered_scalar_selector_union_replaces_pool"` published
+separately. The embedded Graph and admission schemas remain version 1.
+Contributor guidance: update version-1 readers to understand version 2 instead
+of loosening unknown-field checks. This is integration policy, not runtime
+enforcement over external readers. See
+[ADR 0017](adr/0017-panel-membership-is-an-authored-map.md).
 
 ## Adding a control operation (L0/L4)
 
@@ -148,9 +180,16 @@ actor scope plus existing Constructicon admission/effect rules.
 
 Counterfactual replay is deliberately narrower than general graph migration:
 
+- current admission first validates the source Graph under its exact retained
+  version lock; both preflight and compilation use those pins, not current stable;
+- an invalid baseline is `REQUEST_INVALID`: use `runs_reproduce` for the
+  retained manifest or re-author for current admission, never retrofit stored
+  history or exempt it merely because a caller supplied a lock;
 - the source topology and every non-overridden scope remain exact;
 - overrides name exact retained component versions and must preserve the source
-  contract at every affected scope;
+  component's complete `contract_hash` at every affected scope, including
+  unused boundary ports; override-admission or boundary failure is
+  `COUNTERFACTUAL_LOCK_MISMATCH`, not baseline invalidity;
 - live effect identities remain unchanged, while simulated effects use their own
   namespace and `EffectAdapter.simulate()`;
 - a counterfactual boundary must never call `execute()` or `reconcile()` on an
@@ -162,6 +201,9 @@ Counterfactual replay is deliberately narrower than general graph migration:
 
 An adapter that cannot simulate truthfully declares simulation unsupported and
 causes admission/control refusal before external I/O.
+
+Both refusal families replay under the existing command law without creating
+a run. After repairing a rejected request, use a fresh idempotency key.
 
 ## Adding an executor (L1)
 

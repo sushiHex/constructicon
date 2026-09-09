@@ -53,7 +53,7 @@ the eventual code differs.
 | M7.1 | [Connector liveness rev 1](milestones/M7.1-connector-liveness-rev1.md) | Written against `main` at `83ee65d`; refutes both candidate liveness laws by shadow measurement and cross-review | Superseded by rev 2. Its refutations stand; its conclusion that no law can close the defect does not |
 | M7.1 | [Connector liveness rev 2](milestones/M7.1-connector-liveness-rev2.md) | Successor after measuring where gathered sources actually come from; proposed scoping a `many` port to its connections | Superseded by rev 3. Its measurement stands; its exactness claim failed a cross-port counterexample and its scoping broke composite boundaries |
 | M7.1 | [Connector liveness rev 3](milestones/M7.1-connector-liveness-rev3.md) | Successor that leaves the pool alone: several connections may map one `many` port, and `panel()` states its membership through them, re-proved by the existing contract-mismatch fault | Superseded by rev 4. Its core survived; its destination-totality, cardinality, counterfactual, and schema claims did not |
-| M7.1 | [Panel membership rev 4](milestones/M7.1-panel-membership-rev4.md) | Successor that narrows the scope to authored panel membership, makes mapped fan-in an ordered union of scalar selectors, validates every map, and decides the Graph/description version boundary | Approved implementation baseline in PR #22; ADR 0017 accepted. Preserved draft wording records the decision requested, not its current status |
+| M7.1 | [Panel membership rev 4](milestones/M7.1-panel-membership-rev4.md) | Successor that narrows the scope to authored panel membership, makes mapped fan-in an ordered union of scalar selectors, validates every map, and decides the Graph/description version boundary | Complete: PR A #23 and PR B #24 merged; ADR 0017 accepted. Preserved draft wording records the decision requested, not its current status |
 
 ## Handoffs
 
@@ -62,7 +62,7 @@ the eventual code differs.
 | [M6.1 / M6.2 implementation handoff](handoffs/M6.1-M6.2-implementation-handoff.md) | Preserves an earlier artifact-based implementation handoff and its exact base/checksum assumptions; historical only |
 | [M6.2 implementation record](handoffs/M6.2-implementation-record.md) | Records the completed rev-2 scope, compatibility boundary, strengthened failure proof, and integrated-session sequencing |
 | [M7 implementation record](handoffs/M7-implementation-record.md) | Living record for PRs A–D: deviations, authority decisions, review corrections, integrity closure, and the panel pattern |
-| [M7.1 implementation record](handoffs/M7.1-implementation-record.md) | Acceptance of rev 4 and ADR 0017, authored-membership implementation, proof inventory, and the separate endpoint slice |
+| [M7.1 implementation record](handoffs/M7.1-implementation-record.md) | Completed authored membership and endpoint slices, exact-head approvals and merges, proof inventory, compatibility boundaries, and post-merge documentation closure |
 
 ## Completeness and recovery notes
 
