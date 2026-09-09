@@ -190,6 +190,10 @@ failure the chosen ownership boundary cannot handle, followed by review.
   checks and input-size limits are available in Git. The draft chooses a
   self-contained pack handoff plus trusted quarantine, preserving exact object
   identity without a new Python Git parser. No contained import proof ran here.
+- [Git update-ref](https://git-scm.com/docs/git-update-ref) and
+  [hash-object](https://git-scm.com/docs/git-hash-object) provide native object
+  creation and atomic reference checks. A closure ref need not name a commit;
+  the selected empty-blob value is independent of a later merge subject.
 - [Claude secure deployment](https://code.claude.com/docs/en/agent-sdk/secure-deployment):
   the model base URL covers sampling requests, not every network operation;
   private-loopback plaintext HTTP with upstream authentication/TLS at a proxy
@@ -340,6 +344,20 @@ despite inert acquisition. The draft now distinguishes local inert close
 reconciliation (always fence, even if resources are absent). Materialization
 marks local entry before I/O. This preserves legacy eager cleanup and adds
 explicit failure/mutation probes to PR A; no implementation is claimed here.
+
+The review of `7628f1a` identified a false gate anchor: the current runner
+discovers its actual merge base inside `verify(candidate)`, so an immutable
+pre-recorded reference cannot name that later observation. The marker now
+points to a fixed empty-blob sentinel, independent of any merge subject.
+This avoids prematurely pinning the gate base or adding a journal phase.
+
+A bounded probe in the same disposable bare repository created an empty blob
+and a non-dereferencing ref transaction pointing to it, then confirmed that
+an atomic absence check refused. The native Git object is a blob, not a
+commit. The existing `GitAuthority.read_ref` returned `None` for that marker
+because it peels to a commit; the plan therefore explicitly requires a literal
+sentinel lookup and fail-closed validation. This proves the Git primitive and
+lookup distinction, not the future moving-base gate or Linux recovery tests.
 
 The 1,531-test baseline covers the unchanged implementation, not these future
 containment, gateway, or backend guarantees.

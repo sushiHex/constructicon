@@ -561,11 +561,22 @@ cancellation, and quiesces all work before cleanup returns. A check before
 publication is not an atomic ownership fence. Reuse the Git-owned closure
 fact introduced with resource materialization: an immutable marker named
 from the existing acquisition id (which includes the epoch), under a reserved
-authority ref namespace. It points to that acquisition's trusted base commit.
-Its absence permits physical work/publication; its presence revokes them.
-For a gate the anchor is its admitted base, not a candidate discovered later.
-It never reopens,
-and initial M8 performs no marker GC: deletion could authorize a late writer.
+authority ref namespace. Every marker points to the same empty-blob sentinel
+in that authority's Git object format. Its OID is computable without any base,
+candidate, time, or acquisition output; closure ensures the constant object
+exists before its ref transaction. Inert close still writes nothing.
+The marker carries only revocation, never a merge subject. A gate continues
+to discover the actual current base in `verify(candidate)`; moving the target
+between acquisition and verification changes that subject, not its recovery
+reference or closure marker. No base is frozen early to satisfy cleanup.
+
+Read/verify marker refs as literal, non-symbolic object refs with the exact
+sentinel value. The existing commit-peeling `GitAuthority.read_ref` is not
+that operation: it reads a blob marker as absent. Unexpected values or symbolic
+refs fail closed, never become permission to allocate. Marker transactions
+must not dereference a symbolic ref. Absence permits work/publication;
+presence revokes them. A marker never reopens, and initial M8 performs no
+marker GC: deletion could authorize a late writer.
 This is an explicit extension of ADR 0009's external lifecycle evidence,
 not a SQLite schema change, process ledger, or new install effect.
 
@@ -823,7 +834,11 @@ and cleanup through the public async merge-evaluation path. While a check is
 held at a barrier, prove heartbeats and cancellation still run, then assert
 no surviving child, attestation, or successful checkpoint after cancellation
 or owner death. Prove assembly needs no candidate and its identity stays fixed
-across candidates. Mutate the phase separation, async cancellation boundary,
+across candidates. Move the target between lease recording and verification:
+the merge subject uses the actual current base, while the recovery reference
+and fixed marker value remain unchanged. Recovery before the first verify
+must also close without discovering a candidate or merge base. Mutate the
+phase separation, marker's subject independence, async cancellation boundary,
 assembly guard, and gate launcher independently.
 No live model is needed to close this exposure before the first adapter.
 
@@ -932,7 +947,7 @@ Use barriers and deterministic fake children rather than timing guesses.
 | WRITE capture | Hostile Git metadata is read only inside containment; immutable pack handoff preserves exact OID/history; malformed objects, dependency fetching, wrong OID, or cancellation publish no candidate |
 | Capture recovery | Reset/capture never use host Git against a dirty stage; both publication-vs-closure orders, closure crash/retry, response loss, and stale epochs obey the existing disposition; a closed acquisition can never publish late |
 | Gate containment | Repository-controlled checks cannot access host authority, secrets, sockets, or network; detached children die before attestation; uncontained assembly refuses live WRITE |
-| Gate phases | Contained runtime probing completes before admission with no candidate mount; check identity is candidate-independent; only actual checks mount the prepared snapshot |
+| Gate phases | Candidate-free assembly identity and closure sentinel; only checks mount the prepared snapshot; a target move after acquisition changes the actual merge subject, not the recovery reference/marker; recovery before first verify needs no merge subject |
 | Gate cancellation | A blocked async check permits heartbeat/cancellation delivery; cancellation and ownership loss quiesce work before cleanup returns and produce no attestation/checkpoint; legacy synchronous consumers remain compatible |
 | Command law | Existing plan/domain/completion response-loss probes remain green; no new mutation bypass |
 | Compatibility | Pre-M8 manifests and absent profile fields retain exact bytes/digests; synchronous workspace/gate consumers keep their contracts; v2 description reader rejects v3 |
@@ -945,7 +960,8 @@ check, damage latch, byte bound, usage accounting, process-tree teardown,
 epoch check, staging-Git containment, pack verification/candidate publication,
 record-before-materialize, inert close and closed-handle entry refusal,
 cleanup enrollment, child-owned allocation guard,
-acquisition-closure transaction and absence checks, remote close-by-key,
+acquisition-closure transaction, literal sentinel lookup and absence checks,
+marker/merge-subject separation, remote close-by-key,
 workspace/gate coherence,
 host-policy prerequisite, gateway
 deployment-evidence binding, route revocation, and controlled no-nesting

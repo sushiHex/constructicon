@@ -221,7 +221,14 @@ Cancellation/ownership loss quiesces work before returning, and is observed
 before candidate publication. That check alone cannot fence a later Git
 write. Reuse one immutable acquisition-closure ref, established with deferred
 resource allocation, derived from the existing epoch-specific acquisition id
-and pointing to its trusted base commit (the admitted base for a gate).
+and pointing to a fixed empty-blob sentinel in the authority's object format.
+The value is independent of base, candidate, and invocation observations;
+closure ensures that constant object exists before its ref transaction.
+Read marker refs literally and require the exact sentinel, not through the
+existing commit-peeling lookup; unexpected values or symbolic refs fail
+closed. Marker transactions do not follow symbolic refs. A gate still prepares
+against the actual current base at verification time, not a base pinned early
+to make recovery possible. Its recovery reference never needs that subject.
 Publication atomically verifies this marker's absence and creates/verifies
 the exact candidate. Close/reconcile atomically creates/verifies the marker
 and retains or CAS-deletes/verifies absence of the candidate according to the
