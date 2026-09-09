@@ -108,6 +108,14 @@ profile must fail availability and its negative test. A host failing these
 prerequisites is unavailable, not a degraded live backend. No working image
 or loaded profile has been proved in this planning session.
 
+Before advertising availability, the substrate must run a bounded benign
+probe through the exact outer launch recipe under that service user. Prove
+namespace setup and the effective mount/process restrictions, not just that
+`unshare(CLONE_NEWUSER)` succeeds. Missing or denied policy makes the profile
+unavailable before task execution. Recheck the prerequisites before launch;
+a subsequent setup failure still prevents the backend from starting. No
+availability result licenses a direct-host retry.
+
 ### 3.2 Threat and trust boundary
 
 Treat repository content, task text, backend output, and all model-generated
@@ -248,6 +256,41 @@ an executable configuration source. Exercise malicious user, project, local,
 and managed configuration independently. A convenience flag is not sufficient
 when another precedence layer can override it. No prompt or task field may
 select CLI flags, model routes, host paths, or a resume session.
+
+### 3.4 One outer boundary; no required nested sandbox
+
+The initial Linux configurations disable backend-internal OS sandboxing
+where present. Constructicon's proved outer launcher remains mandatory for the
+whole CLI and every descendant. Tool selection and noninteractive approval
+policy remain separate, explicitly tested controls. This is a fixed launch
+decision, not an automatic fallback after an inner sandbox fails.
+
+The supported configuration candidates are Codex's
+`--sandbox danger-full-access` with `approval_policy="never"`, and Claude
+Code's `sandbox.enabled=false` in controlled settings. Official documentation
+describes these controls; the evidence record links it. The pinned Linux
+versions must prove their effective behavior. These settings apply only
+inside the acquired outer boundary, never to the operator's current CLI or
+host configuration. Neither changes the admitted READ/WRITE or network grant.
+
+Do not enable weaker nested-sandbox modes, add another sandbox-policy
+abstraction, or relax AppArmor/capabilities to make an inner launcher work.
+If the pinned CLI or applicable managed policy requires nested isolation,
+that configuration is unavailable; do not bypass the managed requirement.
+The effective backend configuration is already part of launch identity.
+Changing this composition would need a separately reviewed, proved recipe.
+
+PR B must exercise an outer launch on the selected restrictive image and
+record whether a child can initialize a nested `bwrap`. Do not equate lack
+of child capabilities with rejection of the `userns` syscall itself. PRs E
+and F must then run the actual pinned CLI against a credential-free fake
+provider on an image where nested `bwrap` initialization is denied. Require
+an actual shell tool, driven by a scripted provider response, to complete
+inside the outer boundary. Assert no inner launcher attempt and unchanged
+READ/WRITE/network restrictions. Config/argv capture alone is insufficient.
+Malicious project configuration and forced managed-policy incompatibility
+must not silently change the chosen mode or cause a retry outside the outer
+boundary.
 
 ## 4. Contracts and authority placement
 
@@ -531,7 +574,9 @@ Add its native decoder, argv/config generation, tested exact tool-set inventory,
 and the first gateway-backed configuration under READ and WRITE identities.
 Run it through the same pump/lease tests using recorded output and fake-provider
 sessions. Prove every discovery layer disabled and backend failures classified
-honestly. Real auth is an explicitly requested local smoke test only.
+honestly. Include section 3.4's actual-CLI shell-tool proof with internal
+sandboxing disabled and nested launch unavailable. Real auth is an explicitly
+requested local smoke test only.
 
 Add an ordinary restart-importable acceptance component that consumes
 `Executor`, not `isinstance(FakeExecutor)`. Register/promote through the control
@@ -545,7 +590,8 @@ Add the second native decoder/configuration and run the **same** acceptance
 component and process contract. Share only mechanically identical lifecycle
 code. Prove config precedence, no approval escalation, missing terminal events,
 stderr saturation, schema output, and model/usage attribution with its actual
-fixtures. A backend-specific permission exception cannot leak into the common
+fixtures, including section 3.4's external-boundary-only shell-tool proof.
+A backend-specific permission exception cannot leak into the common
 grant law. Use a new capability binding, not a new orchestration API.
 
 ### PR G — Pi and integrated closeout
@@ -587,6 +633,7 @@ Use barriers and deterministic fake children rather than timing guesses.
 | Network none | Child and grandchild cannot reach a local sentinel server; remote-backed admission refuses before spawn |
 | Network allow | Only the leased provider route is reachable; direct TCP/UDP, DNS, host loopback, redirects, CONNECT and forged upstreams fail |
 | Host prerequisite | Missing/denied AppArmor attachment refuses under the service user; no global policy change or privileged fallback |
+| Sandbox composition | Outer launch succeeds while nested `bwrap` is unavailable; actual Claude/Codex shell tools complete without an inner launch; incompatible effective settings refuse and outer failure starts no backend |
 | Credentials | Provider/gateway sentinel secrets never reach the child/bridge; public placeholder cannot authorize outside its mounted route |
 | Gateway conformance | The selected deployment rejects hostile routing/auth requests, closes expired/revoked streams, and refuses effective-policy drift; fake-only evidence cannot enable it |
 | Config discovery | Malicious host/project/local/managed hook, plugin, MCP and extension fixtures do not execute |
@@ -615,9 +662,9 @@ read-only mount, root visibility restriction, network isolation, descriptor
 comparison, revision input, tool-set check, environment filter, final-status
 check, damage latch, byte bound, usage accounting, process-tree teardown,
 epoch check, gate containment/coherence, host-policy prerequisite, gateway
-deployment-evidence binding, and route revocation. A collection error, timeout
-of the test harness, or incidental failure is not a killed mutant. If a guard
-cannot be independently pinned,
+deployment-evidence binding, route revocation, and controlled no-nesting
+configuration. A collection error, timeout of the test harness, or incidental
+failure is not a killed mutant. If a guard cannot be independently pinned,
 record its actual defensive strength rather than crediting another test.
 
 ## 8. Compatibility, publication, and gate
@@ -650,7 +697,8 @@ mini-language, or mirrored registry to make the file tree look symmetrical.
 ## 9. Decisions requested
 
 1. Accept the Linux-first physical boundary and unsupported native-host policy,
-   with explicit operator provisioning and no global AppArmor relaxation.
+   with explicit operator provisioning, no global AppArmor relaxation, and
+   backend OS sandboxing disabled only inside the mandatory outer boundary.
 2. Accept gateway-only initial authentication; do not promise subscription
    login until a supported credential-isolated mode is proved.
 3. Accept finite supported tool sets, explicit remote-network grants, and

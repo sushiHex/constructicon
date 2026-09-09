@@ -92,6 +92,12 @@ digests that produced their bytes.
   and approval policy are distinct; Linux/WSL use bubblewrap-related facilities,
   while native Windows is a different implementation. This does not establish
   Constructicon's whole-process boundary.
+- [Agent approvals and security](https://learn.chatgpt.com/docs/agent-approvals-security):
+  documents `--sandbox danger-full-access` inside a container that owns the
+  intended boundary, avoiding a second sandbox layer. The
+  [CLI reference](https://learn.chatgpt.com/docs/cli/reference) distinguishes
+  sandbox and approval controls. Local `codex exec --help` at `0.153.4` confirms
+  the sandbox option exists; this is not a Linux execution result.
 - [Advanced configuration](https://learn.chatgpt.com/docs/config-file/config-advanced):
   native model-provider base URLs and wire/auth configuration are configurable.
   This makes a controlled route a candidate; it does not prove a gateway's
@@ -117,6 +123,12 @@ the browser's text extractor rejected their content type.
 - [Bash sandboxing](https://code.claude.com/docs/en/sandboxing): the upstream
   sandbox is useful defense in depth; Constructicon still owns the physical
   launch boundary required by ADR 0008.
+- [Settings reference](https://code.claude.com/docs/en/settings-reference#sandbox-enabled):
+  `sandbox.enabled=false` disables the Bash sandbox; managed settings can
+  constrain effective values. The documented weaker-nesting setting changes
+  inner `/proc` handling, not proof that arbitrary nested namespaces work.
+  The M8 proposal chooses no internal OS sandbox and refuses incompatible
+  effective policy. The Markdown source was read when HTML extraction failed.
 
 ### Pi
 
@@ -142,6 +154,12 @@ Pinned source examined:
   selective permissions and a purpose-built `bwrap` profile are documented;
   administrator expertise is required. This supports explicit provisioning,
   not a claim that this session installed a compatible profile or tested one.
+- [Upstream bwrap AppArmor profile](https://gitlab.com/apparmor/apparmor/-/blob/master/profiles/apparmor/profiles/extras/bwrap-userns-restrict):
+  source read on 2026-09-09 permits `userns` in its child profile but denies
+  capabilities there. A probe must exercise actual nested launcher setup,
+  not assume which syscall fails. This is a mutable upstream-source
+  observation, not verification of a particular Ubuntu package or the date
+  it first shipped. Acceptance must record the exact installed policy bytes.
 - [Bubblewrap README](https://github.com/containers/bubblewrap/blob/4df8ddc7f6bb2080637aa26bf7b205321f504bfc/README.md),
   pinned at `4df8ddc7f6bb2080637aa26bf7b205321f504bfc`: bubblewrap is a tool for
   building a policy, not a complete policy. Its documentation explains empty
@@ -188,6 +206,14 @@ containment, and gateway conformance before the three backend slices. Live
 WRITE cannot be offered with uncontained gate bindings. The Ubuntu policy
 question is answered by an explicit operator provisioning prerequisite,
 without relaxing global AppArmor policy or changing this machine.
+
+A subsequent relayed redline identified the unmade nested-sandbox decision.
+The draft now explicitly chooses the mandatory outer boundary with backend
+OS sandboxing disabled through supported, pinned configuration. Official
+OpenAI documentation and Claude Code settings supplied the concrete controls;
+they do not prove their interaction with this image. The future acceptance
+test must run actual backend shell tools where nested `bwrap` cannot start,
+and must keep outer containment and exact grants intact. No such test ran here.
 
 These edits iterate an unapproved review draft. They neither accept ADR 0018
 nor claim that the second independent design review has completed. The

@@ -51,6 +51,18 @@ support, effective mounts, and safe process cleanup are tested prerequisites;
 failure refuses availability or launch, never selects an unsandboxed fallback.
 Host-kernel compromise and resource-denial resistance are not claimed.
 
+The initial recipe has one OS-isolation owner: Constructicon. It disables
+the CLI's internal sandbox through controlled, revision-bound configuration;
+it never depends on permission to create a second namespace boundary. Prove
+actual backend shell-tool execution on the selected image with nested
+`bwrap` unavailable. Tool allowlists and approval policy remain separate.
+An incompatible pinned backend or managed requirement refuses availability;
+there is no weakened nested mode, host-policy relaxation, or direct-host
+fallback. The outer launcher must pass a bounded benign availability probe
+and refuse setup failures before it starts any backend. These decisions do
+not change the operator's CLI settings or claim nested behavior was tested
+in this planning session.
+
 ### Existing capabilities carry the lifecycle
 
 A live executor provider uses `LeasedCapability`. Its acquisition returns a
