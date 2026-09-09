@@ -253,7 +253,8 @@ on those capabilities, not on a shared model name.
    Live adapters additionally need recorded transcripts, argv capture,
    damaged-stream demotion and physical containment proof under ADR 0018 — no
    credentials in CI. `substrate/executors/fake.py` exercises the policy, not
-   the unimplemented Linux boundary.
+   physical isolation. `substrate/executors/linux.py` supplies the networkless
+   boundary; its required native CI proof is described in [M8_CI.md](M8_CI.md).
 
 ## Adding a gate / check producer (L1)
 

@@ -692,9 +692,11 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
   and the [implementation record](plans/handoffs/M7.1-implementation-record.md).
 - **M8 (in progress)** — PR A supplies complete executor policy, content identity,
   assembly/admission coherence, schema-3 introspection, and post-record
-  materialization. Linux containment, safe WRITE capture, contained gates,
-  gateway conformance, and ClaudeCode/Codex/Pi adapters remain separate slices;
-  no live adapter is available from these contracts alone. See
+  materialization. PR B supplies the networkless Linux launcher, immutable
+  per-call reaper, deferred READ/WRITE materialization and acquisition closure.
+  Safe WRITE capture, contained gates, gateway conformance, and
+  ClaudeCode/Codex/Pi adapters remain separate slices; no live model adapter
+  is available yet. Native CI evidence is described in [M8_CI.md](M8_CI.md). See
   [ADR 0018](adr/0018-live-executors-are-leased-contained-processes.md) and the
   [implementation record](plans/handoffs/M8-implementation-record.md).
 - **M9** — self-improvement phase 1 (prompt/context skills); see
