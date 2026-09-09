@@ -53,6 +53,17 @@ def supervise(owner_fd: int, argv: list[str]) -> int:
         raise OSError("child supervision requires Linux")
     _subreaper()
     os.setsid()
+    import resource
+
+    # Per-process bounds, not a claim of per-tenant CPU/memory/PID isolation.
+    # The pinned supervisor source includes these fixed limits in launch identity.
+    for kind, value in (
+        (resource.RLIMIT_CORE, 0),
+        (resource.RLIMIT_NOFILE, 256),
+        (resource.RLIMIT_FSIZE, 128 * 1024 * 1024),
+        (resource.RLIMIT_AS, 2 * 1024 * 1024 * 1024),
+    ):
+        resource.setrlimit(kind, (value, value))
     stopping = False
 
     def stop(_signum: int, _frame: object) -> None:

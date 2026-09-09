@@ -59,6 +59,7 @@ jobs:
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_linux_containment.py \
               tests/substrate/test_contained_workspace.py tests/substrate/test_acquisition_closure.py \
+              tests/substrate/test_recorded_executor.py \
               -v --tb=short -p no:cacheprovider
       - name: Report bounded launch-policy denials
         if: always()
