@@ -1,0 +1,29 @@
+# Disposable CI qualification only; not Constructicon's production policy.
+# Stack at exec so no-new-privileges preserves the launcher's confinement.
+# No local includes or unconfined fallback may extend this reviewed policy.
+abi <abi/4.0>,
+
+profile constructicon-m8-bwrap /opt/constructicon-m8-qualification/bwrap flags=(attach_disconnected,mediate_deleted) {
+  allow capability,
+  allow userns,
+  allow mount,
+  allow umount,
+  allow pivot_root,
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow signal,
+  allow ptrace,
+  allow px /** -> constructicon-m8-bwrap//&constructicon-m8-payload,
+}
+
+profile constructicon-m8-payload flags=(attach_disconnected,mediate_deleted) {
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow signal,
+  allow ptrace,
+  allow ix /**,
+  deny capability,
+  deny userns,
+}

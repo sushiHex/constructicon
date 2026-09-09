@@ -1,10 +1,10 @@
 # M8 implementation record
 
-Status: PR A implementation; not milestone completion.
+Status: PR A merged; hosted-runner qualification; not milestone completion.
 
 Authority: [accepted ADR 0018](../../adr/0018-live-executors-are-leased-contained-processes.md)
 and [frozen rev 1](../milestones/M8-live-executors-rev1.md). PR #26 merged as
-`3ee1beb6a58fac0bab85841a1f34d96b514c3c34`, this branch's exact base. The merged
+`3ee1beb6a58fac0bab85841a1f34d96b514c3c34`, PR A's exact base. The merged
 tree equals its reviewed head `8308cf8`. Approval does not provision Linux or
 a gateway. Neither the frozen plan nor its planning evidence is edited here.
 
@@ -122,13 +122,54 @@ cancellation propagation, sibling coverage, and terminal failure observation
 independently. Exact-head local/CI/review confirmation is recorded on PR #27;
 these tests remain lifecycle proofs, not Linux process containment.
 
+## Hosted-runner qualification — PR #28
+
+PR #27 merged as `d5a8a94`. The owner selected standard GitHub Actions runners
+instead of enabling virtualization on the Windows PC, then explicitly
+authorized a scoped bubblewrap AppArmor profile on those disposable runners.
+[Proposed ADR 0019](../../adr/0019-hosted-linux-runners-are-requalified-not-image-pinned.md)
+separates the rolling host we observe from launch artifacts we control. That
+evidence-location decision still needs acceptance before PR B can use it as
+its acceptance environment. Accepted ADR 0018 and frozen rev 1 are unchanged.
+
+One credential-free workflow provisions a fixed Ubuntu bubblewrap package,
+a non-sudo service account, and a reviewed profile attached only to a private,
+root-owned executable copy. A separate non-root probe checks the exact kernel
+profile stack, six namespace identities, service identity, read-only mount,
+private loopback, missing host home/sysfs, reduced privileges, and refusal of
+nested namespace creation and an unprofiled launch. Add-only loading,
+absent-path guards, and unchanged global restrictions prevent silently replacing
+policy. Nothing is installed on Windows or imported by Constructicon runtime.
+
+The first two jobs refused because the host supplied no bubblewrap profile.
+After operator authorization, the first profile loaded but its exec rule
+requested an additional executable attachment search. The fixed named stack
+removes that search entirely; it does not add an inheritance or unconfined
+fallback. The next job launched with the expected enforcing stack and exposed
+two incorrect probe assumptions: `--dev` uses an intermediate user namespace,
+so the child map's parent-side zero is not host root; explicit AppArmor userns
+denial reports EACCES rather than the global gate's possible EPERM. On this
+kernel, the unprofiled copy creates namespaces but loses the capability needed
+for loopback setup. Its refusal is recorded at that stage, not falsely at
+namespace creation. The final checks name each operation and the pinned
+mapping recipe.
+Both corrections were traced to upstream source, not accepted merely to make
+the probe pass. References and operation are in [the runbook](../../M8_CI.md).
+
+The 52 portable tests and 20 assertion-killed mutations test the probe's
+refusal logic, not Linux containment. Actual job links, image/commit evidence,
+and exact-head gate results belong in PR #28. Its JSON always says
+`runner_prerequisites_only` and `production_available: false`. The benign
+diagnostic root borrows `/usr`; it is not PR B's pinned runtime. No hostile
+process-tree cleanup, complete filesystem/FD exclusion, gateway, live model
+call, or production availability is claimed by qualification.
+
 ## Remaining slices and operator prerequisites
 
-PR B needs a selected, explicitly provisioned Linux target and physical tests
-under its actual service account/AppArmor policy. This Windows machine has
-not been modified to supply one. No installer, security-policy change, secret
-access, paid request, or account login is authorized by the contract work.
-Target selection remains with the operator.
+PR B still needs its complete physical proofs under the actual Linux service
+account and production policy. Hosted-runner qualification supplies only
+prerequisite evidence. The Windows machine remains unchanged; no gateway,
+secret access, paid request, or account login has been authorized.
 
 B: Linux launcher and containment. C: safe async WRITE capture. D: contained
 async gates. E: selected gateway integration and deployment-specific
