@@ -199,6 +199,9 @@ failure the chosen ownership boundary cannot handle, followed by review.
   additional user-namespace and seccomp controls exist, but `no_new_privs` is
   not a syscall filter. The draft explicitly excludes kernel-exploit and
   resource-denial protection rather than presenting untested controls as proof.
+  Its `--sync-fd` also documents holding a descriptor during sandbox lifetime;
+  that supports the proposed acquisition guard, not a proof of its setup/death
+  ordering or absence from the payload. PR B must establish both on its build.
 
 ## Provenance discipline
 
@@ -306,8 +309,30 @@ not an implemented M8 resource or a cross-process Linux proof. The mandatory
 future race probe also covers host death, real ownership transfer, and closure
 retry; none of those concurrency claims is credited to these sequential probes.
 
-The
-1,531-test baseline covers the unchanged implementation, not these future
+The GitHub confirmation of `153d402` found an earlier allocation gap:
+`_acquire_invocation_capability` awaits provider acquisition before recording
+its lease, while stale reconciliation enumerates only recorded rows. The
+current workspace provider creates its staging repository inside `acquire`.
+Death between those operations leaves no durable inventory entry; a
+deterministic name and an in-process cleanup path do not make it discoverable.
+Source confirms that ordering. No real process-death probe ran in this audit.
+
+The draft now makes M8 acquisition inert and adds one generic post-record
+materialization callback to the existing L0 handle. The walker enrolls cleanup
+before awaiting it. Persistent resources fit a root/allocation key recorded
+before I/O; no reservation table or extra durable state is added. This also
+corrects the route reference: recovery records the idempotent allocation key,
+not a server id that cannot exist until after allocation.
+
+The correction covers late creation as well as missing inventory. Git-backed
+providers reuse the closure marker with a child-lifetime acquisition guard;
+the native gateway must refuse allocation after close-by-key, even if close
+found no route. Guard inodes and markers have no initial GC. These are explicit
+implementation requirements, not executed cleanup guarantees. PR A proves the
+generic ordering with genuine deferred doubles; PR B owns physical death/race
+proof, and PR E owns the native gateway's allocation/closure conformance.
+
+The 1,531-test baseline covers the unchanged implementation, not these future
 containment, gateway, or backend guarantees.
 
 ## What remains to be proved

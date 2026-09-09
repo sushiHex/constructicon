@@ -57,7 +57,7 @@ The source audit found:
 | `api/system.py` | Channel assembly coherence; other capabilities can be lazy | Establish exact live executor descriptor/object coherence |
 | `runtime/registry.py::activate` | Sealed capability revision equality | Keep it; require the revision to bind actual launch content |
 | `core/workspace.py` | `WorkspaceView`, synchronous `WriteWorkspace`, invocation leases | Reuse views/identities; keep the synchronous contract legacy and give contained capture an explicit async contract |
-| `runtime/walker.py` | Acquire → durable lease → invoke → close; checkpoint recovery | No backend-specific scheduling or session recovery |
+| `runtime/walker.py` | Acquire → durable lease → invoke → close; checkpoint recovery | Add generic post-record materialization; no backend scheduling or session recovery |
 | `substrate/executors/fake.py` | The only current executor | Preserve the fake and add a genuine subprocess test double |
 | `substrate/git/authority.py` | `commit_all` runs Git against mutable staging metadata on the host | Contain staging Git and validate its immutable object export before authority import |
 | `substrate/gates/runner.py` | Repository checks run as host subprocesses with inherited environment | Contain checks before offering live WRITE, not at milestone closeout |
@@ -233,11 +233,16 @@ must stop existing connections as well as new ones. The configured integration
 must supply a genuine fake exercising the same lease contract; no generic gateway
 manager or second durable store is introduced. A socket path is a locator,
 not evidence of ownership; a stale acquisition cannot revoke a newer route.
-The durable lease's `resource_ref` records the non-secret, server-minted route
-lease id and its acquisition epoch. The gateway binds each accepted request
-and open stream to that lease, not client-supplied identity, peer UID, or a
-reused socket path. Gateway time enforces the deadline even after host death;
-the maximum orphan window is the remaining granted lifetime, never indefinite.
+Before allocation, the durable lease's `resource_ref` records a non-secret
+allocation key derived from its existing acquisition identity and epoch.
+The gateway must support idempotent allocation and closure by that key;
+closure permanently refuses a later allocation even if no route existed yet.
+A lookup returning absent is not revocation. The server-minted route lease id
+is returned to the live handle, not required to discover it after a lost reply
+or written back as a second lease-record phase. The gateway binds each request
+and stream to its server-owned lease, not client-supplied identity, peer UID,
+or a reused socket path. Its clock enforces the granted deadline even after
+host death; the maximum orphan window is the remaining granted lifetime.
 
 Two proofs are separate. Credential-free CI exercises allocation, mounted-route
 access, close, expiry, and stale-owner behavior against the fake. Before a live
@@ -392,11 +397,30 @@ typed unavailability/refusal before child execution, not a manifest rewrite.
 
 ### 4.3 Reuse invocation leases and workspace types
 
-Use the existing `LeasedCapability` protocol for live providers. `acquire`
-allocates a bounded resource handle and binds `LeaseContext`; it does not
-launch the untrusted CLI. The walker records the capability lease before
-passing its acquired `Executor` to component code. A bound executor rejects
-grants differing from that acquisition's sealed grants.
+Use the existing `LeasedCapability` protocol for live providers. For M8,
+`acquire` constructs an inert resource handle, binds `LeaseContext`, and
+computes the complete recovery reference. It creates no persistent directory,
+snapshot, quarantine, or provider route, and launches no CLI. Add one optional
+in-memory field to L0 `AcquiredCapability`:
+
+```text
+materialize: Callable[[], Awaitable[None]] | None = None
+```
+
+The generic sequence is acquire handle → record lease → enroll in cleanup →
+await materialization → expose resource. Materialization prepares the already
+returned handle; it does not replace its identity or mutate `resource_ref`.
+The walker awaits it only after durable recording and adding the acquisition
+to its ordinary cleanup set. Recording failure never calls it; materialization
+failure/cancellation uses that cleanup boundary, and ownership loss leaves
+the durable row for successor reconciliation. The callback contains provider
+work, not a walker choice about Git, processes, or gateways. A bound executor
+still rejects grants differing from its acquisition's sealed grants.
+
+The default `None` preserves legacy providers' call convention and behavior;
+it does not credit their eager allocations with M8 crash safety. The new
+providers and genuine deferred-resource doubles exercise the post-record
+phase. No durable schema or extra acquisition state is introduced.
 
 Retype `Executor.execute(workspace=...)` to `WorkspaceView | None`. Keep the
 existing synchronous `WriteWorkspace` for historical assemblies; the contained
@@ -416,12 +440,42 @@ Cancellation cleanup must withstand repeated cancellation, then propagate
 lease mechanism, never scan-and-kill arbitrary PIDs. Reused PIDs and a new
 epoch are not the old resource. Do not reuse backend session ids on recovery.
 
-Namespace-private scratch dies with its processes. Any host-side resource
-allocated before the durable lease must be either immediately cleaned on
-failure or recoverable by exact acquisition identity. Add process-death probes
-on both sides of allocation and lease recording. No new persistent process
-ledger is needed; if the chosen launch mechanism makes one necessary, stop
-and revise this decision rather than introducing it under a helper name.
+Namespace-private scratch dies with its processes. Every persistent resource
+starts after lease recording and is recoverable from that row alone: local
+resources stay under its predetermined acquisition root, and remote resources
+use its predetermined allocation key. This includes later call resources,
+gate snapshots, and import quarantines, not only initial workspace creation.
+Random unrecorded paths and a cleanup-only `finally` do not satisfy this law.
+Before the row exists there is nothing persistent to recover; after it exists
+the successor can close a never-started, partial, or complete materialization.
+
+Late materialization must not recreate a disposed resource. Git-backed READ,
+WRITE, and gate acquisitions reuse the immutable closure marker in section
+4.4. One acquisition-scoped filesystem guard serializes physical use/creation
+with removal. A producer checks that marker under the guard before creating
+or using any path; closure commits the marker first, waits for guarded work
+to quiesce, and then removes its owned resources. It cannot report disposal
+complete while a previous producer can still write. A late producer must
+observe closed and refuse, including one already waiting for the guard.
+
+Use a concrete Linux advisory file lock outside child mounts. Its lifetime
+must cover the actual work, not just the Python coroutine: transfer the held
+descriptor to the trusted launcher supervisor while a subprocess can write,
+without passing it to the untrusted payload. Parent death must not release
+the guard before the child boundary is quiescent. The selected bubblewrap
+build's `--sync-fd` is the candidate primitive; PR B must prove its lifetime
+and non-exposure, including death during setup. Guard files are stable
+coordination inodes, not payload storage; initial M8 retains them with the
+closure markers. Never unlink/recreate a guard while an old waiter could
+still hold its inode. Async waiting and cancellation must leave the event
+loop responsive. Gateway allocation
+uses its native close-by-key fence from section 3.3, not this filesystem lock.
+
+The row is the recovery inventory; the marker is the external revocation fact;
+the lock only serializes physical work. None is a second scheduler or process
+ledger. Death probes cover both sides of recording and materialization, and
+both orders of late production versus reconciliation. A failure to quiesce
+leaves the lease unreconciled for retry rather than claiming successful cleanup.
 
 Executor teardown cannot depend on the lexical order of capability aliases.
 `execute` finishes cleanup before its caller can commit/release a WRITE
@@ -488,11 +542,13 @@ separate it from legacy synchronous `WriteWorkspace`; never silently change
 a retained call convention or wrap the blocking legacy importer in a thread.
 The capture path keeps the event loop responsive, observes ownership and
 cancellation, and quiesces all work before cleanup returns. A check before
-publication is not an atomic ownership fence. Use one additional Git-owned
-fact: an immutable acquisition-closure marker, named from the existing
-acquisition id (which includes the epoch), under a reserved authority ref
-namespace. It points to that acquisition's trusted base commit. Its absence
-permits publication; its presence permanently revokes it. It never reopens,
+publication is not an atomic ownership fence. Reuse the Git-owned closure
+fact introduced with resource materialization: an immutable marker named
+from the existing acquisition id (which includes the epoch), under a reserved
+authority ref namespace. It points to that acquisition's trusted base commit.
+Its absence permits physical work/publication; its presence revokes them.
+For a gate the anchor is its admitted base, not a candidate discovered later.
+It never reopens,
 and initial M8 performs no marker GC: deletion could authorize a late writer.
 This is an explicit extension of ADR 0009's external lifecycle evidence,
 not a SQLite schema change, process ledger, or new install effect.
@@ -518,9 +574,9 @@ lease unreconciled for retry, never reports disposal complete.
 
 Existing acquisition/lease identities own staging and quarantine. Publication
 followed by response loss reuses the same candidate while open or follows the
-existing release/discard law once closed. Only protected candidate refs and
-closure markers change; installation still requires the existing attestation
-and effect transaction.
+existing release/discard law once closed. Of authority refs, only protected
+candidate refs and closure markers change; installation still requires the
+existing attestation and effect transaction.
 
 The live WRITE assembly requires both this safe workspace provider and the
 contained gates. Neither the launcher-only slice nor a fake may enable a
@@ -626,8 +682,11 @@ WRITE configuration while repository-controlled gates still run on the host.
 ### PR A — contracts, coherence, and publication
 
 Implement the complete profile/predicate, derived capability-identity contract,
-descriptor coherence, schema-3 description, and typed workspace seam. Exercise
-the policy with `FakeExecutor` and a genuine unavailable-provider double.
+descriptor coherence, schema-3 description, typed workspace seam, and the
+generic post-record materialization phase. Exercise the policy with
+`FakeExecutor` and a genuine unavailable-provider double; deferred-resource
+doubles prove record-before-materialize, cleanup enrollment, refusal, and
+legacy behavior through the walker.
 Prove exact-grant refusals, descriptor disagreement, strict reader versioning,
 and unchanged historical profiles/manifests. Define no OS or gateway success
 by a boolean in that double. No Linux launcher, gateway, or real backend ships
@@ -635,8 +694,9 @@ in this slice; profiles remain unavailable without proved implementations.
 
 ### PR B — Linux launcher and physical containment proof
 
-Implement the concrete launcher, leased READ snapshots, workspace ownership,
-bounded subprocess pump, and recorded-subprocess double. The double runs
+Implement the concrete launcher, deferred READ snapshots and staging,
+workspace ownership, acquisition closure/guard, bounded subprocess pump, and
+recorded-subprocess double. The double runs
 actual hostile child processes through the production boundary, with no
 external route. Demonstrate READ denial, WRITE confinement, no ambient
 authority, kill-tree cleanup, owner death, closed handles, and epoch separation.
@@ -649,11 +709,19 @@ verification remains runnable and reports that containment was not exercised.
 Approval requires reproducible native Linux evidence. No backend or gateway
 integration is bundled into this boundary review.
 
+Kill real hosts before recording, after recording, and during materialization.
+Assert no pre-record allocation and exact post-record recovery. Pause a
+producer before its guarded work and race successor reconciliation; also kill
+the Python owner while its setup child retains the guard. Both orders must
+leave the old acquisition closed, no resource recreated after disposal, and
+the new epoch untouched. Remove each ordering/guard check independently.
+
 ### PR C — safe WRITE capture and immutable Git handoff
 
 Implement section 4.4 independently of gate containment. This slice owns the
 async workspace contract/double, contained staging operations, read-only pack
-export, trusted quarantine/import, and exact candidate identity. Keep all
+export, trusted quarantine/import, and exact candidate identity. Extend B's
+same closure transaction to candidate publication/disposition. Keep all
 resource ownership within the existing lease; no new durable schema or
 alternate installation path. The Linux launcher is already proved by B.
 
@@ -837,6 +905,8 @@ Use barriers and deterministic fake children rather than timing guesses.
 | Bounds | One huge line, many small lines, stderr saturation and a blocked stdin cannot deadlock or allocate unboundedly |
 | Telemetry | Requested-but-unobserved model stays `None`; cumulative usage is not added twice; estimates do not become billing facts |
 | Descendants | `setsid`, double-fork, ignored TERM, and held pipe descriptors do not survive return/cancel/deadline |
+| Allocation | No persistent work before the lease row; death during materialization leaves an exactly recoverable row; recording/materialization failure preserves cleanup and legacy behavior |
+| Allocation race | Close a never-started or partly materialized acquisition while an old producer is paused; no late local creation or gateway allocation; child-owned guard outlives Python death; new epoch untouched |
 | Owner death | Kill the host before/after lease recording and after spawn; no CLI survives the proved parent-death chain |
 | Repeated cancellation | Cleanup completes once, cancellation propagates, and no false successful checkpoint is written |
 | Recovery | Restart with a new owner; only stale owned resources are reaped; current epochs and PID reuse are safe |
@@ -855,7 +925,9 @@ read-only mount, root visibility restriction, network isolation, descriptor
 comparison, revision input, tool-set check, environment filter, final-status
 check, damage latch, byte bound, usage accounting, process-tree teardown,
 epoch check, staging-Git containment, pack verification/candidate publication,
-acquisition-closure transaction and absence checks, workspace/gate coherence,
+record-before-materialize, cleanup enrollment, child-owned allocation guard,
+acquisition-closure transaction and absence checks, remote close-by-key,
+workspace/gate coherence,
 host-policy prerequisite, gateway
 deployment-evidence binding, route revocation, and controlled no-nesting
 configuration. A collection error, timeout of the test harness, or incidental

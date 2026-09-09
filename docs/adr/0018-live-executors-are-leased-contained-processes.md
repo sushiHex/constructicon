@@ -76,7 +76,32 @@ bound `Executor` with the invocation's existing lease/acquisition identities
 and sealed grants. `execute()` remains task-shaped; its workspace becomes
 `WorkspaceView | None`, not a path string or a new workspace abstraction.
 The provider closes and reconciles its own resources through the existing
-lease law. It starts no CLI before the acquisition is durably recorded.
+lease law. M8 `acquire` is inert: it returns the handle and its complete
+recovery reference before creating persistent resources. An optional L0
+`AcquiredCapability.materialize` async callback supplies one generic phase:
+record the lease, enroll the acquisition in cleanup, await materialization,
+then expose the resource. The default absent callback preserves legacy
+provider behavior, not a claim that eager legacy allocation is crash-safe.
+Real providers and deferred-resource doubles exercise the same lifecycle.
+
+All persistent resources, including later snapshots and quarantines, are
+owned by the predetermined root/key in that durable row. The callback cannot
+change its identity or recovery reference. Before recording there is no
+persistent allocation; after recording, recovery can dispose even a partially
+materialized or never-started acquisition. No cleanup-only `finally` is
+credited with surviving process death.
+
+Git-backed acquisitions use the closure marker below and one acquisition
+file lock for physical creation/use/removal. Producers check closure under
+the lock before touching resource paths. Disposal commits closure, waits for
+guarded work to quiesce, and then removes the payload resources. The trusted
+launcher holds the guard through actual subprocess lifetime, not merely its
+parent coroutine; the untrusted payload receives no guard descriptor. Linux
+death/race probes must prove this, including setup. Initial M8 retains guard
+inodes with closure markers rather than allowing old waiters and replacement
+inodes to disagree. The lock serializes work; the marker revokes it; neither
+decides lease disposition or replaces the journal's recovery inventory.
+Remote allocation uses the gateway's native close-by-key fence instead.
 No executor journal, session scheduler, or backend conversation recovery is
 introduced. Uncheckpointed computation may run again; model charges are not
 claimed to be exactly once.
@@ -134,11 +159,16 @@ upstream authentication host-side; child-supplied headers cannot redirect it
 or expose its credentials. Revocation and expiry close existing streams as
 well as refusing new ones. The trusted provisioning interface is never mounted.
 
-The existing durable lease records a non-secret server-minted route lease id
-and acquisition epoch. The gateway associates every request and stream with
-that lease, never client identity, peer UID, or a reusable socket path. Its
-own clock enforces expiry after host death; the maximum orphan window is the
-remaining granted lifetime. No second durable route ledger is introduced.
+Before allocation, the existing durable lease records a non-secret allocation
+key derived from its acquisition identity and epoch. Gateway allocation and
+closure are idempotent by that key; closure permanently refuses late allocation
+even when no route existed. An absent lookup alone is not closure. The
+server-minted route id belongs to the live handle and is recoverable by key
+after response loss, without a second journal phase. The gateway associates
+each request/stream with its server-owned lease, never client identity, peer
+UID, or a reusable socket path. Its clock enforces expiry after host death;
+the maximum orphan window is the remaining granted lifetime. No second
+Constructicon route ledger is introduced.
 
 The fake service proves the allocation/revocation contract, not production
 enforcement. Before any live profile is available, the operator must select
@@ -180,8 +210,9 @@ contracts. Its contained provider and a controllable fake exercise it.
 from the historical synchronous `WriteWorkspace`; the latter stays legacy.
 Cancellation/ownership loss quiesces work before returning, and is observed
 before candidate publication. That check alone cannot fence a later Git
-write. Add one immutable acquisition-closure ref, derived from the existing
-epoch-specific acquisition id and pointing to its trusted base commit.
+write. Reuse one immutable acquisition-closure ref, established with deferred
+resource allocation, derived from the existing epoch-specific acquisition id
+and pointing to its trusted base commit (the admitted base for a gate).
 Publication atomically verifies this marker's absence and creates/verifies
 the exact candidate. Close/reconcile atomically creates/verifies the marker
 and retains or CAS-deletes/verifies absence of the candidate according to the
