@@ -1,6 +1,25 @@
 # 0018 — Live executors are leased, contained processes
 
-**Status:** proposed (M8); not accepted and not authority to implement
+**Status:** accepted (M8), 2026-09-09; implementation proofs remain required
+
+## Decision record
+
+The owner delegated completion of the review, design acceptance, and planning
+merge in this session: "continue with 1-4. make utterly elegant design
+decisions." The technical proposal at `8f0c2e5bc3be2b39fe63a120ce43eefc00e0b02d`
+passed exact-head confirmation, CI, and the local 1,531-test baseline. This
+record accepts its Linux-first boundary, gateway-only initial authentication,
+complete finite grant policy, description schema 3, and eight separately gated
+implementation slices. It does not claim the owner independently reviewed
+that exact commit or that baseline tests prove M8 behavior.
+
+The reviewed [rev-1 plan](../plans/milestones/M8-live-executors-rev1.md) is
+frozen byte-for-byte. Its pre-decision draft wording is historical; this ADR
+and the planning index record its approval. PR A may implement the accepted
+contracts; each later slice still requires its own proof. No Linux target or
+production gateway has been selected here. Installing a distribution, changing
+operator security policy, acquiring credentials, or making paid requests
+requires separate explicit direction, not this design acceptance.
 
 ## Context
 
@@ -17,7 +36,7 @@ string, and executor descriptor/live-object coherence is not checked like
 channel coherence. The launch workspace is still typed `object | None`.
 These are the specific seams M8 needs to close.
 
-## Proposed decision
+## Decision
 
 ### One supported boundary first
 
@@ -141,7 +160,7 @@ backend-default exception, or hidden provider bypass is introduced. Generic
 network tools are not offered; shell commands cannot bypass simulated effect
 adapters with independent outbound requests.
 
-The proposed first authentication mode uses a narrowly scoped, externally
+The initial authentication mode uses a narrowly scoped, externally
 provisioned provider gateway. Provider and gateway credentials stay outside
 the CLI, its bridge, its environment, its home, and its descendants. The
 invocation receives authority through possession of one mounted route, not a
@@ -186,7 +205,7 @@ build and effective route/auth policy, using controlled upstreams without
 paid calls. The build, configuration, policy, and conformance suite revision
 participate in capability identity. Assembly and allocation refuse an
 unproved or drifted deployment; a route pins that policy for its lifetime.
-No deployment is selected or proved by this proposal. Gateway conformance is
+No deployment is selected or proved by this decision. Gateway conformance is
 a separate blocking implementation slice, not an optional model smoke test.
 
 Subscription authentication remains a separately gated mode:
@@ -314,13 +333,14 @@ remain the public executor contract. There is no universal backend event bus.
 - Persisting backend session ids as resume authority instead of checkpoints.
 - Updating current-truth architecture documents before these guarantees exist.
 
-## Consequences and approval
+## Consequences
 
 The [M8 plan](../plans/milestones/M8-live-executors-rev1.md) defines the
 implementation slices and failure proof; the
 [evidence record](../plans/handoffs/M8-planning-evidence.md) distinguishes
-observed interfaces from proposed guarantees. Linux-first support and the
-gateway-only initial auth posture are owner decisions, not inferred consent.
+observed interfaces from unimplemented guarantees. The decision record above
+accepts Linux-first support and gateway-only initial authentication; it grants
+no implicit provisioning authority.
 
 Accepting this ADR approves those boundaries, not the claim that bubblewrap,
 an installed CLI, or a green transcript suite has already proved containment.

@@ -18,8 +18,9 @@ historical writer eras retain only their original authority. Accepted
 decision that exact panel membership is an authored port map, not inferred
 connector liveness.
 
-Proposed [ADR 0018](0018-live-executors-are-leased-contained-processes.md)
-and the [M8 review draft](../plans/milestones/M8-live-executors-rev1.md)
-propose a Linux-first leased process boundary, explicit credential delegation,
-and complete live executor profiles. They are not accepted decisions or
-implemented guarantees.
+Accepted [ADR 0018](0018-live-executors-are-leased-contained-processes.md)
+and the [frozen M8 plan](../plans/milestones/M8-live-executors-rev1.md)
+define a Linux-first leased process boundary, gateway-only initial
+authentication, and complete live executor profiles. PR A is authorized;
+physical containment and deployed gateway conformance remain unimplemented
+proof gates, and operator provisioning requires a separately selected target.

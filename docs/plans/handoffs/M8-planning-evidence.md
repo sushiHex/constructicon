@@ -370,6 +370,22 @@ was executed in this planning session. Those are mandatory implementation
 gates, with named probes in the plan. Documentation and `--help` observations
 cannot substitute for them.
 
-The owner must decide Linux-first support, gateway-only initial authentication,
-finite supported tool sets, and the schema-3 description boundary. Until that
-decision and the implementation proof, live profiles remain proposals.
+## Decision outcome
+
+The exact-head GitHub confirmation of `8f0c2e5` completed at 10:43:44 UTC on
+2026-09-09 and reported no major issues. CI passed on that head; local
+`uv run verify` passed Ruff, strict mypy, four import contracts, and 1,531 tests
+in 434.65 seconds. Archive checks verified all 33 hashes, all 51 relative links
+in the changed Markdown, and preservation of all 30 prior archived records.
+
+Under the owner's instruction to complete steps 1-4 and make the design
+decisions, ADR 0018 now records delegated acceptance. The rev-1 plan's exact
+reviewed bytes remain frozen, including its pre-decision wording; the ADR and
+index carry current approval. This is not a claim of an independent owner
+review of the exact head. PR A is authorized after the planning merge.
+
+Linux-first support, gateway-only initial auth, finite supported tool sets,
+and description schema 3 are accepted boundaries, not implemented guarantees.
+No Linux target or production gateway is selected. Operator provisioning,
+credentials, paid calls, and every physical implementation proof remain
+separately gated; this decision supplies none of them.
