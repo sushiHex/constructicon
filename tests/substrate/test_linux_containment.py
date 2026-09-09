@@ -34,7 +34,7 @@ def launcher():
     pinned = json.loads((root / "runtime.json").read_text())["runtime_digest"]
     return LinuxLauncher(
         runtime_root=root / "runtime", expected_runtime=Digest(pinned),
-        bubblewrap=root / "bwrap", interpreter=Path("/usr/bin/python3.12"),
+        bubblewrap=root / "bwrap",
         policy=policy, expected_policy_sha256=hashlib.sha256(policy.read_bytes()).hexdigest(),
     )
 

@@ -37,6 +37,7 @@ jobs:
           test ! -L /opt/constructicon-m8-launch
           sudo install -d -m 0755 /opt/constructicon-m8-launch
           sudo install -m 0555 /usr/bin/bwrap /opt/constructicon-m8-launch/bwrap
+          stat -c '%a %u %g %n' / /opt /opt/constructicon-m8-launch /usr /usr/bin /etc /etc/apparmor.d
           test ! -e /etc/apparmor.d/constructicon-m8-launch
           test ! -L /etc/apparmor.d/constructicon-m8-launch
           sudo install -m 0444 scripts/ci/constructicon-m8-launch.apparmor /etc/apparmor.d/constructicon-m8-launch

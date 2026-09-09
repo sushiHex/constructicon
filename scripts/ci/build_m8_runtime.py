@@ -36,6 +36,8 @@ def main() -> None:
     executable = Path("/usr/bin/python3.12")
     copy(executable)
     binaries.append(executable)
+    copy(Path("/usr/bin/git"))
+    binaries.append(Path("/usr/bin/git"))
     library = Path("/usr/lib/python3.12")
     shutil.copytree(
         library, destination / "usr/lib/python3.12",

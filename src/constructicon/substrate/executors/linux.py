@@ -94,7 +94,6 @@ class LinuxLauncher:
         runtime_root: Path,
         expected_runtime: Digest,
         bubblewrap: Path,
-        interpreter: Path,
         policy: Path,
         expected_policy_sha256: str,
         limits: ProcessLimits = DEFAULT_PROCESS_LIMITS,
@@ -102,31 +101,26 @@ class LinuxLauncher:
         self.root = runtime_root
         self.expected_runtime = expected_runtime
         self.bubblewrap = bubblewrap
-        self.interpreter = interpreter
         self.policy = policy
         self.expected_policy_sha256 = expected_policy_sha256
         self.limits = limits
         self._supervisor_digest = _sha(SUPERVISOR)
-        self._interpreter_digest = _sha(interpreter)
 
     def check_artifacts(self) -> None:
         if sys.platform != "linux" or os.getuid() == 0:
             raise ContractViolation("Linux containment requires a non-root Linux service user")
-        for path in (self.bubblewrap, self.policy, self.interpreter):
+        for path in (self.bubblewrap, self.policy, self.root):
             info = path.stat()
             if path.is_symlink() or info.st_uid != 0 or info.st_mode & 0o6022:
                 raise ContractViolation("launcher artifacts must be fixed root-owned files")
-            if any(
-                parent.stat().st_uid != 0 or parent.stat().st_mode & 0o022
-                for parent in path.parents
-            ):
-                raise ContractViolation("launcher artifact ancestors must be root-owned")
+            for parent in path.parents:
+                info = parent.stat()
+                if info.st_uid != 0 or info.st_mode & 0o022:
+                    raise ContractViolation(f"launcher ancestor {parent} must be root-owned")
         if _sha(self.bubblewrap) != BWRAP_SHA256:
             raise ContractViolation("bubblewrap content differs from the supported build")
         if _sha(self.policy) != self.expected_policy_sha256:
             raise ContractViolation("launch policy content changed")
-        if _sha(self.interpreter) != self._interpreter_digest:
-            raise ContractViolation("supervisor interpreter content changed")
         if _sha(SUPERVISOR) != self._supervisor_digest:
             raise ContractViolation("supervisor implementation changed")
         if runtime_digest(self.root) != self.expected_runtime:
@@ -140,7 +134,6 @@ class LinuxLauncher:
         return digest("linux-launch", 1, {
             "runtime": self.expected_runtime,
             "bubblewrap": BWRAP_SHA256,
-            "interpreter": self._interpreter_digest,
             "supervisor": self._supervisor_digest,
             "recipe": _sha(Path(__file__)),
             "policy": self.expected_policy_sha256,
@@ -196,6 +189,7 @@ class LinuxLauncher:
         bound: str | None = None
         timed_out = False
         tasks: list[asyncio.Task[None]] = []
+        completion: asyncio.Task[None] | None = None
 
         def stop() -> None:
             nonlocal owner_write
@@ -248,7 +242,10 @@ class LinuxLauncher:
             # Shield spawn so cancellation cannot discard a successfully created
             # supervisor handle. Its private pipe also covers owner death here.
             spawn = asyncio.create_task(asyncio.create_subprocess_exec(
-                str(self.interpreter), "-I", str(SUPERVISOR),
+                str(self.root / "lib64/ld-linux-x86-64.so.2"),
+                "--library-path",
+                f"{self.root}/lib/x86_64-linux-gnu:{self.root}/usr/lib/x86_64-linux-gnu",
+                str(self.root / "usr/bin/python3.12"), "-I", str(SUPERVISOR),
                 str(owner_read), str(guard_fd), *args,
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE, close_fds=True,
@@ -271,15 +268,16 @@ class LinuxLauncher:
             ]
             if cancelled:
                 raise asyncio.CancelledError
+            completion = asyncio.create_task(finish())
             try:
                 async with asyncio.timeout(max(0, timeout_s - (time.monotonic() - started))):
-                    await asyncio.shield(asyncio.create_task(finish()))
+                    await asyncio.shield(completion)
             except TimeoutError:
                 timed_out = True
         finally:
             os.close(owner_read)
             stop()
-            cleanup = asyncio.create_task(finish())
+            cleanup = completion or asyncio.create_task(finish())
             interrupted = False
             while not cleanup.done():
                 try:
