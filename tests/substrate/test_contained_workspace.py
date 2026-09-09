@@ -158,6 +158,33 @@ async def test_waiting_materializer_cannot_recreate_disposed_payload(provider):
 
 
 @LINUX
+async def test_reconciliation_commits_revocation_before_waiting_for_physical_quiescence(provider):
+    old = context()
+    acquired = await provider.acquire(old)
+    await acquired.materialize()
+    paths = acquired.resource.paths
+    recovery = None
+    try:
+        async with acquisition_guard(paths):
+            recovery = asyncio.create_task(provider.reconcile(
+                context(epoch=2), (stale_row(acquired, old),),
+            ))
+            # The marker must commit while the producer's guard is still held.
+            # A bound on this observation is not a wait for the blocked operation.
+            for _ in range(100):
+                if provider.closure.is_closed(paths):
+                    break
+                await asyncio.sleep(.01)
+            assert provider.closure.is_closed(paths), "revocation waited behind physical use"
+            assert not recovery.done(), "disposal passed a live producer's guard"
+            assert paths.payload.exists()
+    finally:
+        if recovery is not None:
+            await recovery
+    assert not paths.payload.exists() and paths.guard.is_file()
+
+
+@LINUX
 async def test_recovery_waits_for_started_materialization_then_removes_it(provider):
     old = context()
     acquired = await provider.acquire(old)

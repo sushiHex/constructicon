@@ -38,7 +38,8 @@ MUTANTS = (
     ),
     (
         "payload start before spawn ownership", LAUNCH + "_run",
-        "cancelled = False", "os.write(owner_write, b'\\x01'); cancelled = False",
+        "cancelled = False",
+        "if workspace is not None: os.write(owner_write, b'\\x01')\n        cancelled = False",
         OS + "test_payload_waits_for_controller_ownership_of_the_real_spawn_handle",
     ),
     (
@@ -73,6 +74,25 @@ MUTANTS = (
         "literal sentinel accepts symbolic alias", CLOSURE + "is_closed",
         "if symbolic.returncode != 1:", "if False:",
         FACT + "test_wrong_or_symbolic_closure_is_damage_never_open_or_repaired[True]",
+    ),
+    (
+        "durably closed view can be used",
+        "constructicon.substrate.git.contained:ContainedWorkspace.use.__wrapped__",
+        "self.provider.closure.require_open(self.paths)", "pass",
+        LEASE + "test_recovery_waits_for_started_materialization_then_removes_it",
+    ),
+    (
+        "guard does not serialize physical work",
+        "constructicon.substrate.git.acquisition:acquisition_guard.__wrapped__",
+        "fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)", "pass",
+        LEASE + "test_reconciliation_commits_revocation_before_waiting_for_physical_quiescence",
+    ),
+    (
+        "closure waits behind the producer",
+        "constructicon.substrate.git.acquisition:dispose_acquisition",
+        "closure.commit(paths)\n    async with acquisition_guard(paths):",
+        "async with acquisition_guard(paths):\n        closure.commit(paths)",
+        LEASE + "test_reconciliation_commits_revocation_before_waiting_for_physical_quiescence",
     ),
     (
         "absence means closed", CLOSURE + "is_closed",

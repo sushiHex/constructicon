@@ -208,11 +208,13 @@ async def test_write_changes_only_its_explicit_workspace(launcher, tmp_path):
 from pathlib import Path
 Path('/workspace/change').write_text('owned')
 assert not Path({str(outside)!r}).exists()
+assert not Path('/workspace/authority-sentinel').exists()
 print('confined')
 """
     result = await run(launcher, tmp_path, source, posture=Posture.WRITE)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == b"confined"
+    assert (tmp_path / "workspace/change").is_file(), "write escaped its selected workspace"
     assert (tmp_path / "workspace/change").read_text() == "owned"
     assert outside.read_text() == "protected"
 

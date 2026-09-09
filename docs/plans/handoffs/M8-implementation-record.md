@@ -1,6 +1,6 @@
 # M8 implementation record
 
-Status: PR A merged; hosted-runner qualification; not milestone completion.
+Status: PR A and hosted-runner decision merged; PR B under review.
 
 Authority: [accepted ADR 0018](../../adr/0018-live-executors-are-leased-contained-processes.md)
 and [frozen rev 1](../milestones/M8-live-executors-rev1.md). PR #26 merged as
@@ -165,11 +165,11 @@ diagnostic root borrows `/usr`; it is not PR B's pinned runtime. No hostile
 process-tree cleanup, complete filesystem/FD exclusion, gateway, live model
 call, or production availability is claimed by qualification.
 
-## PR B — implementation in progress
+## PR B — Linux containment and acquisition lifetime
 
 The concrete networkless launcher, deferred READ/WRITE workspaces, permanent
 Git closure marker, and retained acquisition guard are under review in PR #30.
-It is stacked on PR #29's already-authorized ADR 0019 acceptance record. The
+PR #29 merged as `efe63c2`; PR #30 is based directly on main. The
 trusted single-call subreaper keeps guard descriptors outside the payload's
 PID namespace until its children are reaped; neither a Python controller's
 death nor the bubblewrap monitor's return proves quiescence by itself.
@@ -188,11 +188,66 @@ The Git export also drains after stopping its producer, so a full pipe cannot
 strand bounded materialization cleanup. Only symlink-safe filesystem deletion
 uses a worker thread, not a legacy Git importer or verifier.
 
-Native regressions exercise those boundaries and real control-plane deaths
-before lease recording, after recording, and during materialization. They are
-pending exact-head Linux confirmation at this revision; Windows skips are
-explicitly not physical evidence. The mutation inventory, full-head review,
-and complete proof evidence remain readiness gates, not inherited credit.
+The existing owner pipe now authorizes start only after the controller owns
+the real spawn handle, then witnesses controller lifetime. A setup child
+retains the acquisition guard while waiting; death before that authorization
+cannot start a payload. The reaper also receives the remaining deadline in
+the shared monotonic clock. It enforces expiry independently of asyncio,
+including when the controller's event loop is stalled. Elapsed observation
+includes setup and joined cleanup; expired cleanup cannot report success.
+The reaper kills its exact children immediately on termination rather than
+using the plan's proposed two-second cooperative grace. No additional backend
+work is authorized during cleanup. The process boundary remains one local
+owner, not another scheduler, persistent PID ledger, or journal phase.
+
+The runtime digest and retained inventory use one projection. Symlinks cannot
+reach executable content outside that immutable closure. The physical proof
+records six namespaces, single-ID UID/GID maps, exact minimal devices,
+no-new-privileges, zero effective capabilities, process limits, private mounts,
+an allowlisted environment, and only standard payload descriptors. The pinned
+bubblewrap emits `/dev/core` as a legacy `/proc/kcore` alias; the assertion
+requires that exact link and proves opening it is denied, rather than claiming
+the name is absent. No kernel memory is read by this test.
+
+Native regressions cover READ refusal, WRITE confinement, host file/socket/FD
+exclusion, private network, hostile detached descendants and held pipes,
+timeouts, repeated cancellation, controller death during setup and execution,
+and real control-plane deaths before recording, after recording, and during
+materialization. Recovery proves exact closure and epoch separation. A
+recorded-subprocess Executor double exercises the same task, grant, lease,
+workspace and outcome contracts without a provider request.
+
+The required CI lane uses the actual non-sudo service user. Its artifacts retain
+the exact runtime inventory/digest, bubblewrap and AppArmor policy/ABI digests,
+commit, observed runner/kernel/service facts, and the child boundary projection.
+They contain no host environment dump or credentials and expire after seven
+days. [The runbook](../../M8_CI.md) distinguishes this from qualification.
+Windows skips remain explicitly not physical evidence. Exact-head local/CI,
+mutation, compatibility and independent-review results are recorded on PR #30
+before readiness, not inferred from the implementation's existence.
+
+### Mutation coverage and independent defensive strength
+
+The native inventory removes READ mount protection, network isolation,
+workspace mount selection, runtime link containment, deadline transfer,
+start ordering, elapsed accounting, export bounds, permanent-closure checks,
+literal sentinel semantics, the closure transaction, physical serialization,
+revocation-before-wait ordering, and deletion cancellation/loop discipline.
+Network/visibility payloads additionally test the recipe directly after
+artifact validation, so an availability refusal cannot masquerade as proof
+that an attempted escape was physically stopped. Only assertion failures
+count; setup errors and harness timeouts do not.
+
+Some checks are intentionally redundant and are not independently credited:
+the controller's spawn timeout is now backed by the reaper's transferred
+deadline; post-wait local view checks are backed by the durable closure check;
+and bubblewrap's parent-death mechanism is backed by the external reaper's
+exact-child termination. In-memory controller mutations do not modify the
+installed immutable reaper. Its descendant-reap and inherited-guard code is
+proved by actual stopped-reaper/controller-death experiments, not falsely
+claimed as independently mutation-killed source. Killing the trusted reaper
+itself, kernel compromise, and aggregate multi-tenant resource isolation are
+not promised. Per-process limits do not establish a tenant-wide quota.
 
 ### Backend extensibility and subscription intent
 
@@ -209,12 +264,17 @@ That intent does not establish a working or authorized authentication route:
 accepted ADR 0018 still requires gateway-only initial authentication. Resolving
 subscription-backed access is an explicit prerequisite decision before the
 live Claude Code/Codex slices, not something PR B claims or silently enables.
+The [authentication feasibility record](../../designs/EXECUTOR_AUTHENTICATION.md)
+separates documented native CLI login from credential intermediation. It
+recommends an explicit successor-design investigation before choosing a
+gateway that would serve API billing rather than the owner's subscription goal;
+it changes no accepted authentication policy.
 
 ## Remaining slices and operator prerequisites
 
-PR B still needs its complete physical proofs under the actual Linux service
-account and production policy. Hosted-runner qualification supplies only
-prerequisite evidence. The Windows machine remains unchanged; no gateway,
+PR B's readiness gate requires its physical proofs under the actual Linux
+service account and production policy. Hosted-runner qualification supplies
+only prerequisite evidence. The Windows machine remains unchanged; no gateway,
 secret access, paid request, or account login has been authorized.
 
 B: Linux launcher and containment. C: safe async WRITE capture. D: contained
