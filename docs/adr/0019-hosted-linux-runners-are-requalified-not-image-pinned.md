@@ -11,6 +11,23 @@ GitHub Actions as the evidence environment and the per-host qualification law
 below. It does not credit qualification as production containment or authorize
 a live provider, gateway, paid runner, or changes to the Windows host.
 
+### Exact scope of supersession
+
+This is an owner-authorized successor decision, not evidence that a rolling
+runner satisfies the earlier pinned-image requirement. It supersedes only
+the immutable CI-host-image selection in M8 rev 1 section 3.1 and its use as
+the host prerequisite for PR B, as incorporated by ADR 0018. For this selected
+environment, repeatable execution of the complete native proof suite on each
+observed host replaces the promise of reproducing an identical VM image.
+
+The archived plan and ADR 0018 retain their exact historical bytes. All other
+requirements remain governing: the pinned runtime, launcher and policy closure;
+non-root Linux execution; unchanged global restrictions; physical containment,
+death/race and mutation proofs; and refusal when prerequisites fail. No earlier
+host's result qualifies a later host. Gateway-only authentication is unaffected.
+This ADR governs the named host-image conflict; it does not waive a proof or
+grant the implementation discretion to change another frozen requirement.
+
 ## Context
 
 The owner selected GitHub Actions on 2026-09-09: "Continue with GitHub Actions.
