@@ -2,8 +2,8 @@
 
 No fake OS result and no rewrite of the immutable reaper. These mutations
 replace the owning controller's code objects; the real boundary and children
-still execute. Assertion failures alone count. This is an expanding inventory,
-not yet the complete PR B physical proof matrix.
+still execute. Assertion failures alone count. Independently masked guards
+are documented in the implementation record, never credited as killed.
 """
 
 from _mutations import run
@@ -12,6 +12,8 @@ LAUNCH = "constructicon.substrate.executors.linux:LinuxLauncher."
 WORKSPACE = "constructicon.substrate.git.contained:ContainedWorkspaceProvider."
 OS = "tests/substrate/test_linux_containment.py::"
 LEASE = "tests/substrate/test_contained_workspace.py::"
+CLOSURE = "constructicon.substrate.git.acquisition:AcquisitionClosure."
+FACT = "tests/substrate/test_acquisition_closure.py::"
 
 MUTANTS = (
     (
@@ -30,12 +32,65 @@ MUTANTS = (
         OS + "test_the_call_deadline_includes_probe_and_spawn[probe]",
     ),
     (
-        "spawn outside call deadline", LAUNCH + "_run",
-        "async with asyncio.timeout_at(deadline):\n"
-        "                process = await asyncio.shield(spawn)",
-        "async with asyncio.timeout(10):\n"
-        "                process = await asyncio.shield(spawn)",
-        OS + "test_the_call_deadline_includes_probe_and_spawn[spawn]",
+        "deadline never reaches the reaper", LAUNCH + "_run",
+        "str(child_deadline)", "str(child_deadline + 100)",
+        OS + "test_reaper_enforces_expiry_while_the_controller_event_loop_is_stalled",
+    ),
+    (
+        "payload start before spawn ownership", LAUNCH + "_run",
+        "cancelled = False", "os.write(owner_write, b'\\x01'); cancelled = False",
+        OS + "test_payload_waits_for_controller_ownership_of_the_real_spawn_handle",
+    ),
+    (
+        "READ snapshot becomes writable", LAUNCH + "argv",
+        '"--ro-bind" if posture is Posture.READ else "--bind"', '"--bind"',
+        OS + "test_read_writes_fail_physically_and_leave_the_snapshot_exact"
+        "[p.write_text('changed')]",
+    ),
+    (
+        "network namespace removed", LAUNCH + "argv",
+        '"--unshare-uts", "--unshare-net",', '"--unshare-uts",',
+        OS + "test_child_and_grandchild_cannot_reach_the_host_loopback_service",
+    ),
+    (
+        "workspace mounts the host parent", LAUNCH + "argv",
+        'str(workspace), "/workspace"', 'str(workspace.parent), "/workspace"',
+        OS + "test_write_changes_only_its_explicit_workspace",
+    ),
+    (
+        "runtime link targets escape the hashed closure",
+        "constructicon.substrate.executors.linux:runtime_inventory",
+        "if not path.resolve().is_relative_to(root.resolve()):", "if False:",
+        OS + "test_runtime_cannot_execute_a_symlink_target_outside_its_hashed_closure",
+    ),
+    (
+        "closed materializer can create again",
+        "constructicon.substrate.git.contained:ContainedWorkspace.materialize",
+        "self.provider.closure.require_open(self.paths)", "pass",
+        LEASE + "test_waiting_materializer_cannot_recreate_disposed_payload",
+    ),
+    (
+        "literal sentinel accepts symbolic alias", CLOSURE + "is_closed",
+        "if symbolic.returncode != 1:", "if False:",
+        FACT + "test_wrong_or_symbolic_closure_is_damage_never_open_or_repaired[True]",
+    ),
+    (
+        "absence means closed", CLOSURE + "is_closed",
+        "return False", "return True",
+        FACT + "test_closure_is_inert_until_committed_and_names_no_merge_subject",
+    ),
+    (
+        "closed lookup accepts a commit", CLOSURE + "is_closed",
+        "result.returncode != 0 or result.stdout.strip() != self.sentinel",
+        "result.returncode != 0",
+        FACT + "test_wrong_or_symbolic_closure_is_damage_never_open_or_repaired[False]",
+    ),
+    (
+        "closure omits its durable transaction", CLOSURE + "commit",
+        'actual = self.authority._run("hash-object", "-w", "--stdin", '
+        'input_text="").stdout.strip()',
+        "return",
+        FACT + "test_closure_is_idempotent_and_different_epochs_never_reopen_one_another",
     ),
     (
         "elapsed observation omits availability", LAUNCH + "run",

@@ -7,6 +7,7 @@ The resulting content digest is the exact pin supplied to this job's assembly.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -50,7 +51,11 @@ def main() -> None:
             copy(Path(value))
     (destination / "usr/bin/python3").symlink_to("python3.12")
     from constructicon.substrate.executors import _supervisor
-    from constructicon.substrate.executors.linux import SUPERVISOR_PATH, runtime_digest
+    from constructicon.substrate.executors.linux import (
+        SUPERVISOR_PATH,
+        runtime_digest,
+        runtime_inventory,
+    )
 
     supervisor = destination / SUPERVISOR_PATH
     supervisor.parent.mkdir(parents=True)
@@ -61,7 +66,17 @@ def main() -> None:
         if not path.is_symlink():
             path.chmod(0o555 if path.is_dir() or path.stat().st_mode & 0o111 else 0o444)
     # The supervisor is content in this immutable closure, not a checkout path.
-    print(json.dumps({"runtime_digest": str(runtime_digest(destination))}, sort_keys=True))
+    policy = Path("/etc/apparmor.d/constructicon-m8-launch")
+    abi = Path("/etc/apparmor.d/abi/4.0")
+    print(json.dumps({
+        "runtime_digest": str(runtime_digest(destination)),
+        "entries": runtime_inventory(destination),
+        "bubblewrap_sha256": hashlib.sha256(
+            (destination.parent / "bwrap").read_bytes(),
+        ).hexdigest(),
+        "apparmor_policy_sha256": hashlib.sha256(policy.read_bytes()).hexdigest(),
+        "apparmor_abi_sha256": hashlib.sha256(abi.read_bytes()).hexdigest(),
+    }, sort_keys=True))
 
 
 if __name__ == "__main__":

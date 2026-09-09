@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ctypes
 import errno
+import math
 import os
 import select
 import signal
@@ -48,7 +49,7 @@ def _terminate_owned_children() -> None:
             os.close(fd)
 
 
-def supervise(owner_fd: int, argv: list[str]) -> int:
+def supervise(owner_fd: int, deadline: float, argv: list[str]) -> int:
     if sys.platform != "linux":
         raise OSError("child supervision requires Linux")
     _subreaper()
@@ -74,12 +75,22 @@ def supervise(owner_fd: int, argv: list[str]) -> int:
     signal.signal(signal.SIGINT, stop)
     poller = select.poll()
     poller.register(owner_fd, select.POLLIN | select.POLLHUP | select.POLLERR)
-    if poller.poll(0):
-        return 125  # The owner died even before our interpreter started.
+    # The same private pipe grants start and then witnesses owner lifetime.
+    # Until Python owns the spawn handle, this setup child only holds guards.
+    # Its independent monotonic deadline also covers a stalled controller.
+    while not poller.poll(10):
+        if stopping or time.monotonic() >= deadline:
+            return 125
+    if os.read(owner_fd, 1) != b"\x01" or stopping or time.monotonic() >= deadline:
+        return 125
     child = subprocess.Popen(argv, close_fds=True, env=dict(os.environ))
     result = 125
     try:
         while True:
+            if poller.poll(0) or time.monotonic() >= deadline:
+                stopping = True
+            if stopping:
+                _terminate_owned_children()
             try:
                 pid, status = os.waitpid(-1, os.WNOHANG)
             except ChildProcessError:
@@ -90,10 +101,7 @@ def supervise(owner_fd: int, argv: list[str]) -> int:
                     child.returncode = result
                     stopping = True
                 continue
-            if poller.poll(10):
-                stopping = True
-            if stopping:
-                _terminate_owned_children()
+            poller.poll(10)
     finally:
         # An internal failure is not permission to return over living children.
         # Retain the guard throughout this exact-child reap as on normal exit.
@@ -111,13 +119,16 @@ def supervise(owner_fd: int, argv: list[str]) -> int:
 def main() -> int:
     owner_fd = int(sys.argv[1])
     guards = tuple(int(value) for value in sys.argv[2].split(","))
+    deadline = float(sys.argv[3])
+    if not math.isfinite(deadline):
+        raise ValueError("a finite monotonic deadline is required")
     # Validate both inherited handles before launching anything. Their only
     # ownership transfer is pass_fds into this interpreter, never into a child.
     os.fstat(owner_fd)
     for guard in guards:
         os.fstat(guard)
     try:
-        return supervise(owner_fd, sys.argv[3:])
+        return supervise(owner_fd, deadline, sys.argv[4:])
     except OSError as exc:
         print(f"constructicon supervisor refused: errno={exc.errno or errno.EIO}", file=sys.stderr)
         return 125

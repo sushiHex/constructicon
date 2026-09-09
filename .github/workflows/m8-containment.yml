@@ -46,6 +46,7 @@ jobs:
           sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" scripts/ci/build_m8_runtime.py /var/lib/constructicon-m8-launch/runtime \
             | tee "$RUNNER_TEMP/m8-runtime.json"
           sudo install -m 0444 "$RUNNER_TEMP/m8-runtime.json" /var/lib/constructicon-m8-launch/runtime.json
+          sudo install -d -o m8-service -g m8-service -m 0755 /home/m8-service/evidence
           sudo chmod o+x /home/runner /home/runner/work /home/runner/work/constructicon
       - name: Prove containment as the non-sudo service user
         shell: bash
@@ -54,9 +55,13 @@ jobs:
         run: |
           set -euo pipefail
           printf 'commit=%s image=%s/%s kernel=%s\n' "$EVIDENCE_COMMIT" "$ImageOS" "$ImageVersion" "$(uname -r)"
+          printf 'commit=%s image=%s/%s kernel=%s\n' "$EVIDENCE_COMMIT" "$ImageOS" "$ImageVersion" "$(uname -r)" > "$RUNNER_TEMP/m8-host.txt"
+          id m8-service >> "$RUNNER_TEMP/m8-host.txt"
+          sudo cat /sys/kernel/security/apparmor/profiles | awk '/constructicon-m8-/ {print}' >> "$RUNNER_TEMP/m8-host.txt"
           sudo cat /sys/kernel/security/apparmor/profiles | awk '/constructicon-m8-/ {print}'
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
+            M8_EVIDENCE_DIRECTORY=/home/m8-service/evidence \
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_linux_containment.py \
               tests/substrate/test_contained_workspace.py tests/substrate/test_acquisition_closure.py \
               tests/substrate/test_recorded_executor.py \
@@ -67,7 +72,19 @@ jobs:
           set -euo pipefail
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
+            PYTEST_ADDOPTS=-pno:cacheprovider \
             "$PWD/.venv/bin/python" scripts/check_m8_containment_mutations.py
+      - name: Preserve exact runtime and observed boundary evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: m8-containment-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/m8-runtime.json
+            ${{ runner.temp }}/m8-host.txt
+            /home/m8-service/evidence/boundary.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Report bounded launch-policy denials
         if: always()
         shell: bash

@@ -19,6 +19,7 @@ from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisitio
 async def main():
     root = Path(os.environ["M8_LINUX_ROOT"])
     owned = Path(sys.argv[1])
+    phase = sys.argv[2] if len(sys.argv) > 2 else "running"
     paths = AcquisitionPaths(owned, acquisition_id_for("lease-owner-death", 1))
     paths.payload.mkdir(parents=True)
     policy = Path("/etc/apparmor.d/constructicon-m8-launch")
@@ -28,6 +29,22 @@ async def main():
         bubblewrap=root / "bwrap", policy=policy,
         expected_policy_sha256=hashlib.sha256(policy.read_bytes()).hexdigest(),
     )
+    if phase == "setup":
+        spawn = asyncio.create_subprocess_exec
+        calls = 0
+
+        async def held_spawn(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            process = await spawn(*args, **kwargs)
+            if calls == 2:
+                # A real OS setup child holds the inherited guards, but the
+                # controller does not yet own its handle or authorize start.
+                print(json.dumps({"reaper": process.pid}), flush=True)
+                await asyncio.Event().wait()
+            return process
+
+        asyncio.create_subprocess_exec = held_spawn
     source = """
 import os, signal, time
 if os.fork() == 0:

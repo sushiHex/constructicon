@@ -18,12 +18,19 @@ from pathlib import Path
 
 import pytest
 
+from constructicon.core.errors import ContractViolation
 from constructicon.core.grants import Posture
-from constructicon.core.identity import Digest
+from constructicon.core.identity import Digest, digest
 from constructicon.core.manifest import CapabilityLease
 from constructicon.core.run import RunStatus
 from constructicon.core.workspace import acquisition_id_for
-from constructicon.substrate.executors.linux import SUPERVISOR_PATH, LinuxLauncher, ProcessLimits
+from constructicon.substrate.executors.linux import (
+    SUPERVISOR_PATH,
+    LinuxLauncher,
+    ProcessLimits,
+    runtime_digest,
+    runtime_inventory,
+)
 from constructicon.substrate.git.acquisition import (
     AcquisitionClosure,
     AcquisitionPaths,
@@ -51,11 +58,46 @@ def launcher():
     )
 
 
-async def run(launcher, tmp_path, source, *, posture=Posture.READ, stdin=b"", timeout_s=5):
+def test_runtime_inventory_is_the_digest_input_and_binds_content(tmp_path):
+    root = tmp_path / "runtime"
+    root.mkdir()
+    payload = root / "payload"
+    payload.write_bytes(b"first")
+    inventory = runtime_inventory(root, require_immutable=False)
+    before = runtime_digest(root, require_immutable=False)
+    assert before == digest("linux-runtime-root", 1, inventory)
+    payload.write_bytes(b"other")
+    assert runtime_digest(root, require_immutable=False) != before
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="native runtime link topology")
+def test_runtime_cannot_execute_a_symlink_target_outside_its_hashed_closure(tmp_path):
+    root = tmp_path / "runtime"
+    root.mkdir()
+    outside = tmp_path / "unhashed-code"
+    outside.write_text("untrusted")
+    (root / "supervisor").symlink_to(outside)
+    with pytest.raises(ContractViolation, match="leaves the immutable closure"):
+        runtime_digest(root, require_immutable=False)
+
+
+async def run(
+    launcher, tmp_path, source, *, posture=Posture.READ, stdin=b"", timeout_s=5,
+    probe=True,
+):
     paths = AcquisitionPaths(tmp_path, acquisition_id_for("lease-os-proof", 1))
     workspace = tmp_path / "workspace"
     workspace.mkdir(exist_ok=True)
     async with acquisition_guard(paths) as guard:
+        if not probe:
+            # Independent recipe proof: availability must not mask removal of
+            # the very mount/network rule this hostile payload tests.
+            launcher.check_artifacts()
+            return await launcher._run(
+                ("/usr/bin/python3", "-I", "-c", source), workspace=workspace,
+                posture=posture, guard_fds=(guard,), stdin=stdin,
+                deadline=asyncio.get_running_loop().time() + timeout_s,
+            )
         return await launcher.run(
             ("/usr/bin/python3", "-I", "-c", source), workspace=workspace,
             posture=posture, guard_fds=(guard,), stdin=stdin, timeout_s=timeout_s,
@@ -64,7 +106,7 @@ async def run(launcher, tmp_path, source, *, posture=Posture.READ, stdin=b"", ti
 
 async def test_native_namespace_mount_privilege_and_descriptor_table(launcher, tmp_path):
     source = """
-import json, os
+import json, os, resource
 from pathlib import Path
 fds = {}
 for value in Path('/proc/self/fd').iterdir():
@@ -77,6 +119,11 @@ print(json.dumps({
     'uid': os.getuid(), 'gid': os.getgid(), 'home': os.environ['HOME'],
     'sys': Path('/sys').exists(), 'mounts': Path('/proc/self/mountinfo').read_text(),
     'environment': dict(os.environ),
+    'uid_map': Path('/proc/self/uid_map').read_text().split(),
+    'gid_map': Path('/proc/self/gid_map').read_text().split(),
+    'devices': sorted(p.name for p in Path('/dev').iterdir()),
+    'limits': {name: resource.getrlimit(getattr(resource, 'RLIMIT_' + name))
+               for name in ('CORE', 'NOFILE', 'FSIZE', 'AS')},
 }))
 """
     result = await run(launcher, tmp_path, source)
@@ -92,6 +139,24 @@ print(json.dumps({
     assert facts["sys"] is False and facts["home"] == "/tmp/home"
     assert set(facts["environment"]) <= {"HOME", "PATH", "LANG", "PWD", "LC_CTYPE"}
     assert " shared:" not in facts["mounts"]
+    # --dev introduces an intermediate user namespace; parent-side zero is
+    # not host root. These are single-ID maps, not a host identity range.
+    assert facts["uid_map"] == [str(os.getuid()), "0", "1"]
+    assert facts["gid_map"] == [str(os.getgid()), "0", "1"]
+    assert set(facts["devices"]) <= {
+        "console", "fd", "full", "null", "ptmx", "pts", "random", "shm",
+        "stderr", "stdin", "stdout", "tty", "urandom", "zero",
+    }
+    assert facts["limits"] == {
+        "CORE": [0, 0], "NOFILE": [256, 256], "FSIZE": [134217728, 134217728],
+        "AS": [2147483648, 2147483648],
+    }
+    evidence = os.environ.get("M8_EVIDENCE_DIRECTORY")
+    if evidence:
+        directory = Path(evidence)
+        directory.mkdir(parents=True, exist_ok=True)
+        # This is the explicit child projection above, never the host's env.
+        (directory / "boundary.json").write_text(json.dumps(facts, sort_keys=True) + "\n")
 
 
 @pytest.mark.parametrize("operation", [
@@ -283,6 +348,106 @@ async def test_successful_call_elapsed_time_includes_availability(launcher, tmp_
     assert result.elapsed_s >= .2
 
 
+async def test_payload_waits_for_controller_ownership_of_the_real_spawn_handle(
+    launcher, tmp_path, monkeypatch,
+):
+    spawn = asyncio.create_subprocess_exec
+    calls = 0
+    escaped = None
+
+    async def held_spawn(*args, **kwargs):
+        nonlocal calls, escaped
+        calls += 1
+        process = await spawn(*args, **kwargs)
+        if calls == 2:
+            await asyncio.sleep(.3)
+            escaped = (tmp_path / "workspace/started").exists()
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", held_spawn)
+    result = await run(
+        launcher, tmp_path, "open('/workspace/started','w').write('owned')",
+        posture=Posture.WRITE,
+    )
+    assert escaped is False, "payload began while the spawn handle was still unowned"
+    assert result.returncode == 0 and (tmp_path / "workspace/started").read_text() == "owned"
+
+
+async def test_reaper_enforces_expiry_while_the_controller_event_loop_is_stalled(
+    launcher, tmp_path,
+):
+    source = """
+from pathlib import Path
+import time
+Path('/workspace/ready').touch()
+time.sleep(1.5)
+Path('/workspace/expired-write').touch()
+time.sleep(100)
+"""
+    task = asyncio.create_task(run(
+        launcher, tmp_path, source, posture=Posture.WRITE, timeout_s=1,
+    ))
+    try:
+        async with asyncio.timeout(10):
+            while not (tmp_path / "workspace/ready").exists():
+                assert not task.done(), "the real payload never reached its barrier"
+                await asyncio.sleep(.01)
+        # Intentional: asyncio cannot deliver cancellation in this interval.
+        # Only the separate reaper can stop the actual payload before its write.
+        time.sleep(2.5)
+        assert not (tmp_path / "workspace/expired-write").exists(), (
+            "a stalled controller let a payload outlive its authority"
+        )
+        result = await asyncio.wait_for(task, 5)
+        assert result.timed_out
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_controller_dies_while_a_real_setup_child_holds_the_guard(launcher, tmp_path):
+    authority = GitAuthority(seed_authority(tmp_path / "git"), tmp_path / "legacy")
+    closure = AcquisitionClosure(authority)
+    paths = AcquisitionPaths(tmp_path / "owned", acquisition_id_for("lease-owner-death", 1))
+    owner = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "tests.substrate._linux_owner", str(paths.root), "setup",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    reaper = None
+    cleanup = None
+    try:
+        line = await asyncio.wait_for(owner.stdout.readline(), 15)
+        assert line, f"setup owner failed: {await owner.stderr.read()!r}"
+        reaper = json.loads(line)["reaper"]
+        os.kill(reaper, signal.SIGSTOP)
+        children = Path(f"/proc/{reaper}/task/{reaper}/children").read_text().split()
+        assert children == [], "payload started before controller acquired the spawn handle"
+        owner.kill()
+        await owner.wait()
+        cleanup = asyncio.create_task(dispose_acquisition(closure, paths))
+        async with asyncio.timeout(5):
+            while not closure.is_closed(paths):
+                await asyncio.sleep(.01)
+        await asyncio.sleep(.05)
+        assert not cleanup.done(), "setup child did not retain its inherited guard"
+        assert not (paths.payload / "live").exists()
+        os.kill(reaper, signal.SIGCONT)
+        reaper = None
+        assert await asyncio.wait_for(cleanup, 10)
+        assert not paths.payload.exists() and paths.guard.is_file()
+        await asyncio.sleep(.1)
+        assert not paths.payload.exists(), "an abandoned setup later launched a producer"
+    finally:
+        if reaper is not None:
+            os.kill(reaper, signal.SIGCONT)
+        if owner.returncode is None:
+            owner.kill()
+        await owner.wait()
+        if cleanup is not None:
+            await cleanup
+
+
 async def test_controller_death_cannot_release_the_reapers_guard_before_quiescence(
     launcher, tmp_path,
 ):
@@ -358,7 +523,7 @@ assert not Path('/dev/tty').exists() or not os.isatty(0)
 print('absent')
 """
     try:
-        result = await run(launcher, tmp_path, source)
+        result = await run(launcher, tmp_path, source, probe=False)
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == b"absent"
         assert sentinel.read_text() == "host-only-secret"
@@ -387,7 +552,7 @@ assert os.waitpid(pid, 0)[1] == 0
 print('network denied')
 """
     try:
-        result = await run(launcher, tmp_path, source)
+        result = await run(launcher, tmp_path, source, probe=False)
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == b"network denied"
         server.setblocking(False)

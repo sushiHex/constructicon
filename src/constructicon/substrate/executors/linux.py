@@ -15,6 +15,7 @@ import os
 import stat
 import sys
 import time
+from contextlib import suppress
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Literal
@@ -48,7 +49,7 @@ def _sha(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def runtime_digest(root: Path, *, require_immutable: bool = True) -> Digest:
+def runtime_inventory(root: Path, *, require_immutable: bool = True) -> list[tuple[str, int, str]]:
     """Hash actual installed content and topology, never version text or paths.
 
     The operator supplies a dedicated root-owned closure. Symlink targets are
@@ -68,6 +69,8 @@ def runtime_digest(root: Path, *, require_immutable: bool = True) -> Digest:
             raise ContractViolation("runtime content must be root-owned and immutable")
         name = path.relative_to(root).as_posix()
         if stat.S_ISLNK(info.st_mode):
+            if not path.resolve().is_relative_to(root.resolve()):
+                raise ContractViolation("runtime symlink leaves the immutable closure")
             content = "link:" + os.readlink(path)
         elif stat.S_ISDIR(info.st_mode):
             content = "directory"
@@ -76,7 +79,13 @@ def runtime_digest(root: Path, *, require_immutable: bool = True) -> Digest:
         else:
             raise ContractViolation("runtime contains a non-file entry")
         entries.append((name, mode, content))
-    return digest("linux-runtime-root", 1, entries)
+    return entries
+
+
+def runtime_digest(root: Path, *, require_immutable: bool = True) -> Digest:
+    return digest(
+        "linux-runtime-root", 1, runtime_inventory(root, require_immutable=require_immutable),
+    )
 
 
 @dataclass(frozen=True)
@@ -256,6 +265,9 @@ class LinuxLauncher:
         if asyncio.get_running_loop().time() >= deadline:
             return ProcessResult(125, b"", b"", 0, timed_out=True)
         args = self.argv(command, workspace=workspace, posture=posture)
+        # asyncio may use another clock origin; the child needs Linux's shared
+        # monotonic clock, with only the already-remaining budget transferred.
+        child_deadline = time.monotonic() + (deadline - asyncio.get_running_loop().time())
         owner_read, owner_write = os.pipe()
         process: asyncio.subprocess.Process | None = None
         started = time.monotonic()
@@ -322,7 +334,8 @@ class LinuxLauncher:
                 "--library-path",
                 f"{self.root}/lib/x86_64-linux-gnu:{self.root}/usr/lib/x86_64-linux-gnu",
                 str(self.root / "usr/bin/python3.12"), "-I", str(self.root / SUPERVISOR_PATH),
-                str(owner_read), ",".join(str(fd) for fd in guard_fds), *args,
+                str(owner_read), ",".join(str(fd) for fd in guard_fds),
+                str(child_deadline), *args,
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE, close_fds=True,
                 pass_fds=(owner_read, *guard_fds), env={"LANG": "C.UTF-8"},
@@ -353,6 +366,10 @@ class LinuxLauncher:
             ]
             if cancelled:
                 raise asyncio.CancelledError
+            if owner_write >= 0:
+                # Refused/expired setup retains its observable exit status.
+                with suppress(BrokenPipeError):
+                    os.write(owner_write, b"\x01")
             completion = asyncio.create_task(finish())
             try:
                 async with asyncio.timeout_at(deadline):
@@ -367,5 +384,6 @@ class LinuxLauncher:
         assert process is not None and process.returncode is not None
         return ProcessResult(
             process.returncode, bytes(stdout), bytes(stderr_head + stderr_tail),
-            time.monotonic() - started, timed_out, bound,
+            time.monotonic() - started,
+            timed_out or asyncio.get_running_loop().time() >= deadline, bound,
         )
