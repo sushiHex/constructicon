@@ -29,6 +29,13 @@ the same Linux probes pass; its presence alone establishes nothing. The
 control process, journal, authority repository, and acquisitions live in that
 Linux environment. M8 adds neither remote dispatch nor a Windows path bridge.
 
+The proposed Ubuntu 24.04 image needs an operator-approved, loaded AppArmor
+profile permitting the pinned launcher under the actual service user. Image
+provisioning is explicit and separately reviewed. Constructicon never adjusts
+host security policy; disabling the global user-namespace restriction, running
+as root, or selecting a privileged fallback is not a supported repair. A
+distribution label or profile file alone is not containment evidence.
+
 The substrate launches the **whole CLI**, not only commands the CLI labels
 as shell tools, inside its own boundary. It supplies a small, immutable
 runtime root and one acquired workspace. READ exposes that workspace through
@@ -83,12 +90,14 @@ network tools are not offered; shell commands cannot bypass simulated effect
 adapters with independent outbound requests.
 
 The proposed first authentication mode uses a narrowly scoped, externally
-provisioned provider gateway. The real provider credential is not given to the
-CLI, its environment, its home, or its descendants. The delegated gateway
-credential is explicitly usable by the whole invocation, limited to its route
-and lifetime; it is not advertised as secret from that invocation. Gateway
-credentials and request bodies never enter public descriptions or test
-fixtures. There is no ambient host-login reuse.
+provisioned provider gateway. Provider and gateway credentials stay outside
+the CLI, its bridge, its environment, its home, and its descendants. The
+invocation receives authority through possession of one mounted route, not a
+bearer secret it could encode into output or a candidate. A backend may use a
+fixed public API-key placeholder only if it grants no authority outside that
+route. Hostile code can use the route during its authorized lifetime; no
+promise of model-usage isolation within the invocation is made. There is no
+ambient host-login reuse or reliance on redaction to contain a known secret.
 
 The route is reached through one acquisition-specific socket and an
 invocation-owned loopback byte bridge, not a host TCP listener shared with
@@ -96,11 +105,41 @@ other services. The bridge carries native bytes and has no provider policy.
 The gateway is an environment prerequisite, not a new Constructicon model
 provider API: backend requests and responses retain their native protocol.
 Constructicon neither translates completions nor builds account-login,
-credential-refresh, or general HTTP-proxy infrastructure. Actual gateway
-policy and revocation are tested against a local fake service before a route
-is offered. Subscription authentication remains a separately gated mode:
+credential-refresh, or general HTTP-proxy infrastructure. The route supplies
+upstream authentication host-side; child-supplied headers cannot redirect it
+or expose its credentials. Revocation and expiry close existing streams as
+well as refusing new ones. The trusted provisioning interface is never mounted.
+
+The fake service proves the allocation/revocation contract, not production
+enforcement. Before any live profile is available, the operator must select
+a concrete integration and provide conformance evidence against its deployed
+build and effective route/auth policy, using controlled upstreams without
+paid calls. The build, configuration, policy, and conformance suite revision
+participate in capability identity. Assembly and allocation refuse an
+unproved or drifted deployment; a route pins that policy for its lifetime.
+No deployment is selected or proved by this proposal. Gateway conformance is
+a separate blocking implementation slice, not an optional model smoke test.
+
+Subscription authentication remains a separately gated mode:
 if it needs a raw reusable account secret in an untrusted child, it is not
 eligible under this decision. Owner acceptance of this limitation is required.
+
+### Contain checks before offering live WRITE
+
+The M3 gate runner currently executes repository-controlled code in host
+subprocesses with inherited environment. Containing the model while leaving
+its generated tests uncontained would reopen the same host authority at the
+next step. M8 accepts no such rollout window.
+
+Before a live WRITE profile is available, gates use the same concrete launcher
+over the prepared merge snapshot, with private scratch, a pinned runtime,
+clean environment, and no network or provider route. They finish descendant
+cleanup before integrity checks and attestation minting. The live assembly
+refuses uncontained gate bindings. The launcher has a genuine second consumer;
+gates do not become model executors, and the walker gains no gate policy.
+Existing check results, exact merge subjects, and journal-minted authority
+remain the contracts. Historical fake-only assemblies are not relabeled as
+contained, and historical attestation identities are not rewritten.
 
 ### Published evolution is explicit
 
@@ -148,5 +187,8 @@ gateway-only initial auth posture are owner decisions, not inferred consent.
 
 Accepting this ADR approves those boundaries, not the claim that bubblewrap,
 an installed CLI, or a green transcript suite has already proved containment.
-The first implementation slice must produce that proof before a real backend
-is enabled. M7.1's scoped-out provenance and human timeout work stays separate.
+Separate slices establish contracts, Linux containment, gate containment,
+and deployed gateway conformance before the Claude Code, Codex, and Pi slices.
+Each proof has its own acceptance gate; none inherits credit from the other
+or from documentation. M7.1's scoped-out provenance and human timeout work
+stays separate.

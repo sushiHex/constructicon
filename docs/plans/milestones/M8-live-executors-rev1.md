@@ -59,6 +59,7 @@ The source audit found:
 | `core/workspace.py` | `WorkspaceView`, `WriteWorkspace`, invocation leases | Reuse workspace and acquisition identities |
 | `runtime/walker.py` | Acquire → durable lease → invoke → close; checkpoint recovery | No backend-specific scheduling or session recovery |
 | `substrate/executors/fake.py` | The only current executor | Preserve the fake and add a genuine subprocess test double |
+| `substrate/gates/runner.py` | Repository checks run as host subprocesses with inherited environment | Contain checks before offering live WRITE, not at milestone closeout |
 | `api/introspection.py` | Published executor profiles at description schema 2 | Publish the expanded profile honestly at schema 3 |
 
 The audit also matters negatively: `network_enforced` is not consulted by
@@ -90,10 +91,22 @@ journal, authority repository, and acquisitions stay on the Linux filesystem,
 not on a mounted Windows checkout. This session has no installed WSL
 distribution; no Linux containment result is claimed here.
 
-No installer silently enables user namespaces, changes AppArmor policy, starts
-a privileged service, or installs a distribution. Provisioning is an explicit
-operator action. A host failing prerequisites is unavailable with a repair
-reason, not a degraded live backend.
+Ubuntu 24.04's default AppArmor user-namespace restriction is an explicit
+prerequisite, not something the launcher may bypass. Canonical documents a
+purpose-built `bwrap` profile; see the primary sources in the evidence record.
+An operator must approve and provision the exact image's compatible profile,
+or choose another reviewed environment before the containment slice proceeds.
+The evidence must identify the loaded policy and executable attachment, not
+only a profile file on disk, and run the probes as the actual service user.
+
+Constructicon's installer, runtime, and test runner never change AppArmor,
+sysctls, privileges, or installed distributions. Explicit image provisioning
+is separate, reviewed operator work. The proposed Ubuntu lane keeps the global
+user-namespace restriction enabled; a global disable, root execution, setuid
+fallback, or broad shell exemption is not an accepted repair. A denied/missing
+profile must fail availability and its negative test. A host failing these
+prerequisites is unavailable, not a degraded live backend. No working image
+or loaded profile has been proved in this planning session.
 
 ### 3.2 Threat and trust boundary
 
@@ -156,12 +169,15 @@ come from the launch recipe, not the host's values. Loader/interpreter injection
 host auth, git helpers, and endpoint-routing variables cannot arrive through
 an ordinary environment grant. Unsupported names are refused, not ignored.
 
-The proposed initial auth mode is a provisioned provider gateway with an
-invocation-scoped credential. The actual provider/account secret stays outside
-the child. The delegated credential is intentionally available to the whole
-invocation and authorizes only the configured native provider route during
-its lifetime. Revoke it on close, cap its lifetime at the granted deadline,
-and refuse cross-invocation reuse. Host death must not leave indefinite access.
+The proposed initial auth mode is a provisioned provider gateway reached by an
+invocation-owned route. Provider/account credentials and any gateway bearer
+credentials stay in trusted host-side provisioning, outside the child and its
+bridge. Possession of the mounted route is the invocation's delegated network
+authority; no bearer secret is needed inside it. A CLI that requires a nonempty
+API-key setting may receive a fixed, public placeholder only when that exact
+integration proves it grants no authority outside the mounted route. Otherwise
+that bootstrap is unavailable. Do not claim redaction can keep a credential
+secret from hostile code that received it.
 
 Provision an acquisition-specific Unix-domain route socket outside the
 namespace; mount only that endpoint, not its parent or a general gateway
@@ -173,19 +189,42 @@ subprocess detail with all three CLIs as consumers, not a new public protocol.
 It is killed with the invocation and exists only for `network="allow"`.
 
 The gateway must not offer arbitrary CONNECT, client-selected upstreams,
-redirects to unapproved origins, admin routes, or account mutation. Prove its
-route, expiration, and revocation properties with a local fake service. Tokens
-must be unguessable, never used as identity digests, and absent from argv,
-public metadata, logs, and recorded fixtures. The child can already use its
-token; do not call this protection of a token from its holder.
+redirects to unapproved origins, admin routes, or account mutation. Its fixed
+route supplies upstream authentication outside the namespace; child-supplied
+auth, host, path, and forwarding headers cannot change that authority or cause
+it to be returned in responses. No privileged credential belongs in argv,
+child environment/files, public metadata, logs, or fixtures. The whole
+invocation can use its route, including hostile shell code; this is bounded
+provider access, not protection of model usage from that invocation.
 
 Route allocation/revocation uses the gateway's trusted provisioning interface
 from the executor lease provider, never an interface mounted into the child.
 Its handle belongs to the existing acquisition, is idempotently closed, and
-expires without a live host. The configured integration must supply a genuine
-fake implementation exercising the same lease contract; no generic gateway
+expires without a live host, no later than its granted deadline. Revocation
+must stop existing connections as well as new ones. The configured integration
+must supply a genuine fake exercising the same lease contract; no generic gateway
 manager or second durable store is introduced. A socket path is a locator,
 not evidence of ownership; a stale acquisition cannot revoke a newer route.
+
+Two proofs are separate. Credential-free CI exercises allocation, mounted-route
+access, close, expiry, and stale-owner behavior against the fake. Before a live
+profile is available, an operator must select a concrete production integration
+and supply deployment-specific conformance evidence for the actual gateway
+build and effective route/auth policy. Exercise the same adversarial requests
+against that deployed enforcement, including header/path substitution,
+redirects, CONNECT, cross-route access, expiry, and revocation of open streams.
+Use controlled upstreams and sentinel credentials; no paid call is necessary
+to prove the policy. A fake or a successful model smoke call cannot replace it.
+
+Bind the integration build/configuration, effective policy, and conformance
+suite revision into the secret-free launch identity. Trusted assembly verifies
+the configured deployment matches that evidence; allocation must refuse policy
+drift and pin the proved policy for the route's lifetime. A deployment that
+cannot establish those facts remains unavailable. This is an operator-owned
+prerequisite, not caller-supplied attestation or a second durable authority
+store. No concrete production integration is selected or proved by this draft;
+PR D cannot be accepted without one. Accepting the gateway-only posture is not
+accepting an unspecified gateway as safe.
 
 This is an external transport prerequisite, not permission to implement a
 Constructicon completion API or an account manager. Native request/response
@@ -258,7 +297,8 @@ The live factory builds one secret-free launch identity containing:
 1. backend and runtime-root content digests, not a version string alone;
 2. adapter/decoder law revision and the complete profile;
 3. isolation recipe revision, controlled configuration, and fixed limits;
-4. provider-route and credential-delegation policy, excluding credential values.
+4. gateway integration build/configuration, effective route/auth policy, and
+   conformance suite revision, excluding credential values and route locators.
 
 Its canonical digest is the existing `CapabilityDescriptor.revision`. Host
 installation paths are locators, not portable identity. Cache verification only
@@ -412,27 +452,80 @@ not authorize a paid call or the acquisition of any credential.
 
 ## 6. Reviewable implementation slices
 
-### PR A — launch law and hostile subprocess proof
+These are separate PRs with separate acceptance evidence, not subcommits of
+the former omnibus PR A. A → B → C → D establish the prerequisites; only then
+may E → F → G offer live adapters. No intermediate slice advertises a live
+WRITE configuration while repository-controlled gates still run on the host.
 
-Implement the complete profile/predicate, derived live capability identity,
-descriptor coherence, schema-3 description, typed workspace seam, leased
-READ snapshots, and one concrete Linux launcher. Add the recorded-subprocess
-test double and bounded stream runner. No real backend is offered yet.
+### PR A — contracts, coherence, and publication
 
-The test double runs actual child processes through the production launch
-boundary. Demonstrate READ denial, WRITE confinement, no ambient authority,
-exact-grant refusals, kill-tree cleanup, owner death, closed-handle rejection,
-epoch separation, and unchanged historical manifests. Add a required Linux
-containment CI lane with explicit prerequisites; no skip may count as proof.
-Ordinary unsupported-host verification remains runnable and reports that
-containment was not exercised.
+Implement the complete profile/predicate, derived capability-identity contract,
+descriptor coherence, schema-3 description, and typed workspace seam. Exercise
+the policy with `FakeExecutor` and a genuine unavailable-provider double.
+Prove exact-grant refusals, descriptor disagreement, strict reader versioning,
+and unchanged historical profiles/manifests. Define no OS or gateway success
+by a boolean in that double. No Linux launcher, gateway, or real backend ships
+in this slice; profiles remain unavailable without proved implementations.
 
-This slice also specifies and exercises the gateway contract against a local
-fake service. It does not implement a production gateway or enable a live
-route. If the proposed deployment cannot provision one, surface that before
-PR B. Approval of A requires reproducible native Linux containment evidence.
+### PR B — Linux launcher and physical containment proof
 
-### PR B — Claude Code, first real adapter
+Implement the concrete launcher, leased READ snapshots, workspace ownership,
+bounded subprocess pump, and recorded-subprocess double. The double runs
+actual hostile child processes through the production boundary, with no
+external route. Demonstrate READ denial, WRITE confinement, no ambient
+authority, kill-tree cleanup, owner death, closed handles, and epoch separation.
+
+Operator provisioning from section 3.1 is a prerequisite to this PR's proof.
+Record the exact image, loaded AppArmor policy, service user, runtime root,
+and executable digests. Add a required Linux containment CI lane; missing
+prerequisites or a skipped probe cannot count as passing. Unsupported-host
+verification remains runnable and reports that containment was not exercised.
+Approval requires reproducible native Linux evidence. No backend or gateway
+integration is bundled into this boundary review.
+
+### PR C — contain repository-controlled gates
+
+Make the existing gate runner a second production consumer of the concrete
+launcher, not an `Executor` wrapper or another process protocol. Every check
+subprocess, including any tool-version probe, uses a pinned runtime, an
+environment built from scratch, the prepared merge snapshot mounted read-only,
+private scratch, and no network/provider route. Host authority, journal,
+credentials, and other acquisitions remain absent. Finish descendant cleanup
+before integrity verification and attestation minting; a timeout, output bound,
+or teardown failure cannot produce a passed check.
+
+Preserve `CheckResult`, the complete merge subject, exact-tree verification,
+and journal-minted authority. Bind the contained runtime and launch law into
+the new check-set/capability identity; do not rewrite historical attestations
+or relabel the M3 runner as contained. The supported live assembly must refuse
+an uncontained gate binding before making a live WRITE executor available.
+This is L4 coherence over assembled services, not a walker rule or a search
+for gates in a graph. Historical fake-only assemblies keep their stated scope.
+
+Use a malicious staged test/plugin as the credential-free regression: it
+attempts host writes, environment-secret reads, socket access, network egress,
+and detached children while gating the exact prepared commit. Assert denial
+and cleanup through the public merge-evaluation path, including owner death
+and cancellation. Mutate the assembly guard and gate launcher independently.
+No live model is needed to close this exposure before the first adapter.
+
+### PR D — gateway integration and conformance
+
+Select and document the concrete externally provisioned integration. Implement
+only its lease allocation/revocation binding and the namespace-local byte
+bridge; exercise the same lifecycle against its genuine local fake. Keep
+privileged credentials entirely host-side and prove the public placeholder,
+if needed, confers no authority outside a mounted route.
+
+Acceptance also requires the deployment-specific conformance proof in section
+3.3 and its revision binding, not just the fake contract. Test the actual
+gateway enforcement with controlled upstreams, including existing-stream
+revocation and configuration drift. CI remains credential-free; a paid model
+smoke test is not this gate. If no concrete deployment can supply the proof,
+this slice is blocked and no live profile becomes available. Linux containment
+and gate isolation are already proved; this review owns only routed authority.
+
+### PR E — Claude Code, first real adapter
 
 Add its native decoder, argv/config generation, tested exact tool-set inventory,
 and the first gateway-backed configuration under READ and WRITE identities.
@@ -446,7 +539,7 @@ plane. Do not modify historical component source merely to make the demo generic
 The component's ports explicitly carry the outcome when partial/failure is data;
 a success-only component must refuse non-success rather than mint success output.
 
-### PR C — Codex, the substitutability proof
+### PR F — Codex, the substitutability proof
 
 Add the second native decoder/configuration and run the **same** acceptance
 component and process contract. Share only mechanically identical lifecycle
@@ -455,7 +548,7 @@ stderr saturation, schema output, and model/usage attribution with its actual
 fixtures. A backend-specific permission exception cannot leak into the common
 grant law. Use a new capability binding, not a new orchestration API.
 
-### PR D — Pi and integrated closeout
+### PR G — Pi and integrated closeout
 
 Add Pi's native event decoder and explicit resource-discovery controls. Prove
 delta/final accounting and honest refusal of unsupported schema/tool requests.
@@ -464,11 +557,10 @@ incompatible profile is part of substitutability, not a reason to weaken it.
 
 The credential-free acceptance lane exercises READ analysis and a staged WRITE
 candidate, deterministic checks, proof-gated installation, and restart recovery
-through `ControlPlane`/`RunHost`. Gates executing repository-controlled code
-must use the same proved process boundary before this lane claims adversarial
-end-to-end containment; existing unsandboxed gate runners remain explicitly
-outside that claim until integrated here. They are a genuine additional
-consumer of the concrete process launcher, not a second executor protocol.
+through `ControlPlane`/`RunHost`. It composes the already-contained gates from
+C and the route boundary from D; it does not postpone either security proof
+until closeout. A test reassembles the lane with a legacy uncontained gate
+runner and requires refusal before any live WRITE child starts.
 
 Run resume/reproduce/counterfactual cases: checkpoints prevent replay of
 completed invocation computation; an interrupted CLI may be invoked again;
@@ -494,7 +586,9 @@ Use barriers and deterministic fake children rather than timing guesses.
 | Host visibility | Sentinel host home/file/socket/descriptor absent; no host proc traversal or terminal injection |
 | Network none | Child and grandchild cannot reach a local sentinel server; remote-backed admission refuses before spawn |
 | Network allow | Only the leased provider route is reachable; direct TCP/UDP, DNS, host loopback, redirects, CONNECT and forged upstreams fail |
-| Credentials | Unrelated sentinel secrets never reach argv/env/files/output; scoped token cannot use another route or survive expiry/revocation |
+| Host prerequisite | Missing/denied AppArmor attachment refuses under the service user; no global policy change or privileged fallback |
+| Credentials | Provider/gateway sentinel secrets never reach the child/bridge; public placeholder cannot authorize outside its mounted route |
+| Gateway conformance | The selected deployment rejects hostile routing/auth requests, closes expired/revoked streams, and refuses effective-policy drift; fake-only evidence cannot enable it |
 | Config discovery | Malicious host/project/local/managed hook, plugin, MCP and extension fixtures do not execute |
 | Tool narrowing | Empty and supported exact sets work; unknown, wildcard, prefix, and unsupported subsets refuse before spawn |
 | Profile coherence | Lying descriptor, changed profile, missing provider, false leased flag, or unavailable host refuses |
@@ -511,6 +605,7 @@ Use barriers and deterministic fake children rather than timing guesses.
 | Repeated cancellation | Cleanup completes once, cancellation propagates, and no false successful checkpoint is written |
 | Recovery | Restart with a new owner; only stale owned resources are reaped; current epochs and PID reuse are safe |
 | WRITE completion | No descendant can mutate candidate bytes after executor return or while gates attest them |
+| Gate containment | Repository-controlled checks cannot access host authority, secrets, sockets, or network; detached children die before attestation; uncontained assembly refuses live WRITE |
 | Command law | Existing plan/domain/completion response-loss probes remain green; no new mutation bypass |
 | Compatibility | Pre-M8 manifests and absent profile fields retain exact bytes/digests; v2 description reader rejects v3 |
 | Integration | Three compatible adapters run one component; incompatible profiles refuse; deterministic effect is the sole install path |
@@ -518,9 +613,11 @@ Use barriers and deterministic fake children rather than timing guesses.
 Mutation inventory must remove each enforcement boundary independently:
 read-only mount, root visibility restriction, network isolation, descriptor
 comparison, revision input, tool-set check, environment filter, final-status
-check, damage latch, byte bound, usage accounting, process-tree teardown, and
-epoch check. A collection error, timeout of the test harness, or incidental
-failure is not a killed mutant. If a guard cannot be independently pinned,
+check, damage latch, byte bound, usage accounting, process-tree teardown,
+epoch check, gate containment/coherence, host-policy prerequisite, gateway
+deployment-evidence binding, and route revocation. A collection error, timeout
+of the test harness, or incidental failure is not a killed mutant. If a guard
+cannot be independently pinned,
 record its actual defensive strength rather than crediting another test.
 
 ## 8. Compatibility, publication, and gate
@@ -552,14 +649,16 @@ mini-language, or mirrored registry to make the file tree look symmetrical.
 
 ## 9. Decisions requested
 
-1. Accept the Linux-first physical boundary and unsupported native-host policy.
+1. Accept the Linux-first physical boundary and unsupported native-host policy,
+   with explicit operator provisioning and no global AppArmor relaxation.
 2. Accept gateway-only initial authentication; do not promise subscription
    login until a supported credential-isolated mode is proved.
 3. Accept finite supported tool sets, explicit remote-network grants, and
    description schema 3 rather than silently enriching schema 2.
-4. Accept A → B → C → D, with physical containment required before offering
-   a real executor and the existing gate runner included before claiming
-   adversarial end-to-end WRITE acceptance.
+4. Accept seven separately reviewed slices: contracts → Linux containment →
+   gate containment → gateway conformance → Claude Code → Codex → Pi/closeout.
+   Both gates and the selected deployment's route must be proved before the
+   first live WRITE profile is available, not merely before milestone closure.
 
 These are proposals, not decisions made by merging a draft. Approval without
 redlines freezes this revision and accepts ADR 0018 explicitly. Approval with

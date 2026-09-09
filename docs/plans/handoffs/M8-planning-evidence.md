@@ -34,6 +34,10 @@ The source inspection covered:
 - `substrate/executors/`: only `FakeExecutor` is present. The existing triage
   fixture asserts that concrete type, so it is not yet backend-substitution
   evidence.
+- `substrate/gates/runner.py`: `_run_check` copies `os.environ` and launches
+  check commands as host subprocesses; `_compute_check_set_hash` also runs
+  tool-version subprocesses. Snapshot content verification and process-group
+  termination are present, but neither is whole-process hostile-code isolation.
 - `api/introspection.py`: profiles appear in `SystemDescription`, explaining
   why adding complete live policy needs an explicit description version decision.
 - ADR 0009: exported snapshots use file permissions and content verification,
@@ -131,6 +135,13 @@ Pinned source examined:
 
 ### Linux containment candidate
 
+- [Ubuntu 24.04 release notes](https://documentation.ubuntu.com/release-notes/24.04/#unprivileged-user-namespace-restrictions):
+  AppArmor restricts unprivileged user namespaces by default. A selected
+  distribution therefore does not imply the launcher will be permitted.
+- [Canonical's AppArmor explanation](https://discourse.ubuntu.com/t/understanding-apparmor-user-namespace-restriction/58007):
+  selective permissions and a purpose-built `bwrap` profile are documented;
+  administrator expertise is required. This supports explicit provisioning,
+  not a claim that this session installed a compatible profile or tested one.
 - [Bubblewrap README](https://github.com/containers/bubblewrap/blob/4df8ddc7f6bb2080637aa26bf7b205321f504bfc/README.md),
   pinned at `4df8ddc7f6bb2080637aa26bf7b205321f504bfc`: bubblewrap is a tool for
   building a policy, not a complete policy. Its documentation explains empty
@@ -159,6 +170,29 @@ Before implementation reuses source or patterns, read the pinned license and
 relevant source, record files-copied versus ideas-reimplemented, preserve
 required notices, and document local changes and update procedure. Do not
 fetch a moving upstream head and attribute it to the old pinned revision.
+
+## Pre-decision review corrections
+
+The first GitHub design review examined PR #26 at
+`d008c3014ba616a3e6b16bc4143f18689812afc2`. It found two real gaps: a fake
+gateway cannot prove production routing restrictions, and giving a hostile
+child a delegated token contradicts a promise that the token never reaches
+persisted output. The draft now requires deployment-specific conformance
+bound to launch identity and gives the child only a mounted route, never a
+privileged bearer credential. These are corrected proposed requirements,
+not executed security proofs. No production gateway has been selected.
+
+The owner's review also requested independent slices and earlier gate
+containment. The draft separates contracts, Linux containment, gate
+containment, and gateway conformance before the three backend slices. Live
+WRITE cannot be offered with uncontained gate bindings. The Ubuntu policy
+question is answered by an explicit operator provisioning prerequisite,
+without relaxing global AppArmor policy or changing this machine.
+
+These edits iterate an unapproved review draft. They neither accept ADR 0018
+nor claim that the second independent design review has completed. The
+1,531-test baseline covers the unchanged implementation, not these future
+containment, gateway, or backend guarantees.
 
 ## What remains to be proved
 
