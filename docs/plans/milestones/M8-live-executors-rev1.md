@@ -528,14 +528,43 @@ integration is bundled into this boundary review.
 
 ### PR C — contain repository-controlled gates
 
-Make the existing gate runner a second production consumer of the concrete
-launcher, not an `Executor` wrapper or another process protocol. Every check
-subprocess, including any tool-version probe, uses a pinned runtime, an
-environment built from scratch, the prepared merge snapshot mounted read-only,
-private scratch, and no network/provider route. Host authority, journal,
-credentials, and other acquisitions remain absent. Finish descendant cleanup
-before integrity verification and attestation minting; a timeout, output bound,
-or teardown failure cannot produce a passed check.
+The contained gate runner is a second production consumer of the concrete
+launcher, not an `Executor` wrapper or another process protocol. Separate two
+phases: assembly identifies the installed check runtime; invocation checks a
+candidate. Any tool-version probe runs during assembly in that pinned runtime,
+with private scratch and no candidate or repository mount. It must finish
+before publishing the check-set/capability revision or admitting a manifest.
+That identity is independent of the candidate; checking different candidates
+cannot change it. Immutable tool content, not version text alone, binds it.
+
+Only the invocation's checks mount the prepared merge snapshot read-only.
+Both phases use a clean environment and no network/provider route. Host
+authority, journal, credentials, and other acquisitions remain absent. Finish
+descendant cleanup before integrity verification and attestation minting; a
+timeout, output bound, or teardown failure cannot produce a passed check.
+
+The contained resource exposes `async verify(candidate) -> MergeEvaluation`.
+Define this task-level gate contract in L0 as `MergeGate`, with the existing
+`target_ref` property. Move the existing `MergeEvaluation` data contract there
+unchanged and re-export it from its old import location; never define it twice.
+The contained provider and a genuine controllable fake exercise this contract.
+The process launcher remains the same concrete mechanism used by executors.
+
+Preserve the existing synchronous `GateRunner`/`BoundGateRunner.verify` as
+legacy trusted/fake-only behavior. The new provider uses the distinct
+`gates.contained` capability kind and new component versions that explicitly
+await `verify`; do not change a retained consumer's call convention, silently
+rebind it, or return sometimes-a-value/sometimes-an-awaitable from one method.
+Retained fake-only worlds keep their exact descriptors and reproduction path.
+Do not adapt the blocking legacy verifier with `asyncio.run` or `to_thread`:
+cancelling that wrapper would not own and quiesce its work.
+
+The async path keeps the event loop responsive through preparation, process
+execution, and cleanup. Cancellation, shutdown abandonment, or ownership loss
+terminates and reaps the owned boundary, quiesces any offloaded trusted work,
+releases its transient snapshot, and propagates control flow without minting
+an attestation or returning successful output. Observe cancellation and check
+ownership before minting. Repeated cancellation cannot interrupt cleanup.
 
 Preserve `CheckResult`, the complete merge subject, exact-tree verification,
 and journal-minted authority. Bind the contained runtime and launch law into
@@ -548,8 +577,12 @@ for gates in a graph. Historical fake-only assemblies keep their stated scope.
 Use a malicious staged test/plugin as the credential-free regression: it
 attempts host writes, environment-secret reads, socket access, network egress,
 and detached children while gating the exact prepared commit. Assert denial
-and cleanup through the public merge-evaluation path, including owner death
-and cancellation. Mutate the assembly guard and gate launcher independently.
+and cleanup through the public async merge-evaluation path. While a check is
+held at a barrier, prove heartbeats and cancellation still run, then assert
+no surviving child, attestation, or successful checkpoint after cancellation
+or owner death. Prove assembly needs no candidate and its identity stays fixed
+across candidates. Mutate the phase separation, async cancellation boundary,
+assembly guard, and gate launcher independently.
 No live model is needed to close this exposure before the first adapter.
 
 ### PR D — gateway integration and conformance
@@ -653,6 +686,8 @@ Use barriers and deterministic fake children rather than timing guesses.
 | Recovery | Restart with a new owner; only stale owned resources are reaped; current epochs and PID reuse are safe |
 | WRITE completion | No descendant can mutate candidate bytes after executor return or while gates attest them |
 | Gate containment | Repository-controlled checks cannot access host authority, secrets, sockets, or network; detached children die before attestation; uncontained assembly refuses live WRITE |
+| Gate phases | Contained runtime probing completes before admission with no candidate mount; check identity is candidate-independent; only actual checks mount the prepared snapshot |
+| Gate cancellation | A blocked async check permits heartbeat/cancellation delivery; cancellation and ownership loss quiesce work before cleanup returns and produce no attestation/checkpoint; legacy synchronous consumers remain compatible |
 | Command law | Existing plan/domain/completion response-loss probes remain green; no new mutation bypass |
 | Compatibility | Pre-M8 manifests and absent profile fields retain exact bytes/digests; v2 description reader rejects v3 |
 | Integration | Three compatible adapters run one component; incompatible profiles refuse; deterministic effect is the sole install path |

@@ -153,6 +153,21 @@ Existing check results, exact merge subjects, and journal-minted authority
 remain the contracts. Historical fake-only assemblies are not relabeled as
 contained, and historical attestation identities are not rewritten.
 
+Runtime identity is an assembly fact, not a candidate observation. Contained
+tool-version probes have no candidate mount and complete before publishing
+the check-set/capability revision. The prepared merge snapshot exists only
+at invocation time and is mounted only for the checks themselves.
+
+Contained gates have an async `MergeGate.verify` contract in L0, exercised by
+the contained provider and a controllable fake. `MergeEvaluation` remains one
+unchanged data contract, re-exported at its old import path. The existing
+synchronous gate resource remains explicitly legacy; a new `gates.contained`
+kind and new awaiting component versions keep the two call conventions
+unambiguous. There is no blocking-verifier thread wrapper or change to
+retained consumer definitions. The async path delivers cancellation and
+ownership loss while a check runs, finishes resource cleanup, and observes
+control flow before minting; it cannot turn cancelled work into authority.
+
 ### Published evolution is explicit
 
 `ExecutorProfile` gains one optional, versioned `grant_policy` contract. `None`

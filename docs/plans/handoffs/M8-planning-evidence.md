@@ -215,6 +215,20 @@ they do not prove their interaction with this image. The future acceptance
 test must run actual backend shell tools where nested `bwrap` cannot start,
 and must keep outer containment and exact grants intact. No such test ran here.
 
+The GitHub review of `75be4ddadbadfd3c4457ca88a65b0f6c6f116089` found two
+gate-sequencing contradictions. Source and bounded, process-free probes
+confirmed that construction computes check identity before any candidate
+exists, and that the synchronous check path returns a passed result before
+an event-loop-queued cancellation can be delivered. The probes mocked
+subprocesses; they produced no OS child, candidate mutation, or attestation.
+
+The correction separates candidate-free assembly probes from invocation
+checks, and gives contained gates an explicit async contract with a distinct
+capability kind and awaiting consumer versions. The existing synchronous
+contract stays legacy; a thread wrapper is not credited with cancellation
+ownership. These are proposed implementation requirements, not a claim that
+gate execution is now cancellable or contained.
+
 These edits iterate an unapproved review draft. They neither accept ADR 0018
 nor claim that the second independent design review has completed. The
 1,531-test baseline covers the unchanged implementation, not these future
