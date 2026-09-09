@@ -464,7 +464,8 @@ this boundary. Missing objects, stale locks, malformed output, cancellation,
 or an export that does not contain the named commit fail capture. Resetting
 uses a trusted pack of the exact admitted `GitRef`, not host access from the
 dirty repository to the authority. No host `git -C <stage>`, local fetch from
-it, config copying, or filesystem walk through its `.git` is permitted.
+it, config copying, or import-time walk through its `.git` is permitted.
+Symlink-safe disposal of the acquisition is cleanup, not Git interpretation.
 
 Trusted import accepts immutable pack bytes, never a command stream, archive
 path list, client refspec, or staging pathname. Use a fresh substrate-owned
@@ -486,11 +487,40 @@ and a genuine controllable fake exercise this contract. A distinct
 separate it from legacy synchronous `WriteWorkspace`; never silently change
 a retained call convention or wrap the blocking legacy importer in a thread.
 The capture path keeps the event loop responsive, observes ownership and
-cancellation before publishing its candidate ref, and quiesces all work
-before cleanup returns. Existing acquisition/lease identities and disposal
-rules own staging, quarantine, and any uncheckpointed candidate. Publication
-followed by response loss reuses the same candidate or discards it under the
-existing lease law; it does not create a new effect or journal schema.
+cancellation, and quiesces all work before cleanup returns. A check before
+publication is not an atomic ownership fence. Use one additional Git-owned
+fact: an immutable acquisition-closure marker, named from the existing
+acquisition id (which includes the epoch), under a reserved authority ref
+namespace. It points to that acquisition's trusted base commit. Its absence
+permits publication; its presence permanently revokes it. It never reopens,
+and initial M8 performs no marker GC: deletion could authorize a late writer.
+This is an explicit extension of ADR 0009's external lifecycle evidence,
+not a SQLite schema change, process ledger, or new install effect.
+
+Publication uses one `update-ref --stdin` transaction that verifies the
+closure marker is absent and creates the write-once candidate ref, or verifies
+its identical OID on an exact retry. Close/reconcile uses the same Git
+transaction boundary to create/verify the closure marker and either retain
+the checkpointed candidate (`release`) or CAS-delete/verify absence of the
+uncheckpointed candidate (`discard`). A concurrent change retries the complete
+transaction against the observed ref values; it must not skip an absent
+candidate without verifying that absence. Marker and candidate identity come
+from the trusted acquisition, never a supplied refspec.
+
+Thus publication either precedes closure and is seen by disposal, or follows
+closure and is refused by Git. This is not claimed to be atomic with SQLite's
+ownership transfer. Reconciliation cannot finish before the external closure
+transaction commits, and no late old-epoch publication can cross it, even if
+the old host dies before post-publication cleanup. A fresh epoch has different
+refs. Use the existing lease's authoritative disposition; the marker adds no
+new rule deciding which candidate a checkpoint retains. Failure leaves the
+lease unreconciled for retry, never reports disposal complete.
+
+Existing acquisition/lease identities own staging and quarantine. Publication
+followed by response loss reuses the same candidate while open or follows the
+existing release/discard law once closed. Only protected candidate refs and
+closure markers change; installation still requires the existing attestation
+and effect transaction.
 
 The live WRITE assembly requires both this safe workspace provider and the
 contained gates. Neither the launcher-only slice nor a fake may enable a
@@ -638,6 +668,15 @@ repeated cancellation, owner death, and response loss around candidate-ref
 publication, including old/new epochs and counterfactual discard. Mutate
 containment, immutable handoff, verification, and the live-assembly guard
 independently. Existing synchronous fixtures retain their historical identity.
+
+The closure marker is mandatory external state, not a process-local flag.
+At a barrier after the old worker's ownership check, let a successor reclaim
+and finish discard, then release the old publication and kill its host: Git
+must refuse the late ref, with no candidate left. Prove the reverse order too:
+publication wins, then closure removes it. A crash/retry of closure, exact
+publication retries, release retaining a checkpointed candidate, and a fresh
+epoch remain lawful. Remove the marker absence check and the transactional
+candidate-absence check independently; each mutant must fail this lane.
 
 No live WRITE profile is offered yet: contained gates in D and the gateway
 in E are still prerequisites. B's hostile-child proof remains a disposable
@@ -803,7 +842,7 @@ Use barriers and deterministic fake children rather than timing guesses.
 | Recovery | Restart with a new owner; only stale owned resources are reaped; current epochs and PID reuse are safe |
 | WRITE completion | No descendant can mutate candidate bytes after executor return or while gates attest them |
 | WRITE capture | Hostile Git metadata is read only inside containment; immutable pack handoff preserves exact OID/history; malformed objects, dependency fetching, wrong OID, or cancellation publish no candidate |
-| Capture recovery | Reset and capture never use host Git against a dirty stage; candidate-ref response loss, owner death, and stale epochs retain/discard only their own immutable candidate |
+| Capture recovery | Reset/capture never use host Git against a dirty stage; both publication-vs-closure orders, closure crash/retry, response loss, and stale epochs obey the existing disposition; a closed acquisition can never publish late |
 | Gate containment | Repository-controlled checks cannot access host authority, secrets, sockets, or network; detached children die before attestation; uncontained assembly refuses live WRITE |
 | Gate phases | Contained runtime probing completes before admission with no candidate mount; check identity is candidate-independent; only actual checks mount the prepared snapshot |
 | Gate cancellation | A blocked async check permits heartbeat/cancellation delivery; cancellation and ownership loss quiesce work before cleanup returns and produce no attestation/checkpoint; legacy synchronous consumers remain compatible |
@@ -816,7 +855,8 @@ read-only mount, root visibility restriction, network isolation, descriptor
 comparison, revision input, tool-set check, environment filter, final-status
 check, damage latch, byte bound, usage accounting, process-tree teardown,
 epoch check, staging-Git containment, pack verification/candidate publication,
-workspace/gate coherence, host-policy prerequisite, gateway
+acquisition-closure transaction and absence checks, workspace/gate coherence,
+host-policy prerequisite, gateway
 deployment-evidence binding, route revocation, and controlled no-nesting
 configuration. A collection error, timeout of the test harness, or incidental
 failure is not a killed mutant. If a guard cannot be independently pinned,
@@ -826,9 +866,12 @@ record its actual defensive strength rather than crediting another test.
 
 This planning PR changes no source, tests, workflow, schema, or accepted ADR.
 Implementation preserves Graph/admission schema 1, manifest schemas 2/3, and
-SQLite 7. The one planned publication change is `SystemDescription` 3 and
+SQLite 7. The public schema change is `SystemDescription` 3 and
 description digest domain 3 for complete live grant policy. Old profile
 serialization omits absent policy; old manifests are not rehashed.
+Git additionally retains the acquisition-closure markers defined in section
+4.4. That external lifecycle change is explicit; no existing candidate,
+effect-marker, or historical attestation is rewritten.
 
 A pre-M8 profile remains readable but cannot establish a new live executor's
 M8 eligibility. The historical fake path retains its exact behavior/revision

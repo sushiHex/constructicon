@@ -284,7 +284,29 @@ stated non-goals. No observation is credited as executed Linux evidence.
 
 These edits iterate an unapproved review draft. They do not accept ADR 0018.
 The recovered review is complete, but confirmation of these newer corrections
-is a separate exact-head gate. The
+is a separate exact-head gate.
+
+The GitHub confirmation of `8337e3d` identified a publication/reconciliation
+race: checking journal ownership before Git publication cannot prevent a
+late candidate appearing after the successor's one disposal pass. The current
+`import_candidate` and workspace reconciliation have no shared external
+fence. A deterministic ordering probe paused the current import before its
+candidate-ref creation, ran the real `_discard_candidate` to completion on
+the absent ref, then resumed the real Git creation. The late candidate remained
+anchored. This reused the disposable repositories, not a project authority.
+
+The draft now requires a Git-owned immutable acquisition-closure ref
+checked atomically with candidate publication and written atomically with
+release/discard. This is one newly explicit external lifecycle fact, with no
+initial GC, not a claim that the current implementation already fences it.
+An additional probe exercised both orders with real `update-ref --stdin`
+transactions: closure first refused the late publication; publication first
+was atomically marked closed and removed. These demonstrate the Git primitive,
+not an implemented M8 resource or a cross-process Linux proof. The mandatory
+future race probe also covers host death, real ownership transfer, and closure
+retry; none of those concurrency claims is credited to these sequential probes.
+
+The
 1,531-test baseline covers the unchanged implementation, not these future
 containment, gateway, or backend guarantees.
 

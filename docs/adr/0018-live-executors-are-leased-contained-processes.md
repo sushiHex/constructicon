@@ -179,9 +179,23 @@ contracts. Its contained provider and a controllable fake exercise it.
 `workspace.contained` and new awaiting component versions distinguish it
 from the historical synchronous `WriteWorkspace`; the latter stays legacy.
 Cancellation/ownership loss quiesces work before returning, and is observed
-before candidate publication. Existing lease reconciliation retains or
-discards an uncheckpointed candidate after response loss; no new journal
-schema or blocking-importer thread wrapper is introduced.
+before candidate publication. That check alone cannot fence a later Git
+write. Add one immutable acquisition-closure ref, derived from the existing
+epoch-specific acquisition id and pointing to its trusted base commit.
+Publication atomically verifies this marker's absence and creates/verifies
+the exact candidate. Close/reconcile atomically creates/verifies the marker
+and retains or CAS-deletes/verifies absence of the candidate according to the
+existing lease disposition. Contention retries the whole ref transaction.
+
+Publication either precedes closure and is disposed as required, or is
+refused after closure. Reconciliation cannot complete before this external
+fence commits; a dead old host cannot publish behind it. This is not an atomic
+transaction with SQLite ownership transfer, nor a new disposition authority.
+The marker never reopens and has no initial GC, because deleting it would
+permit a late writer. This explicitly extends ADR 0009's Git lifecycle facts;
+existing candidate/effect identities and the SQLite schema stay unchanged.
+No blocking-importer thread wrapper or new persistent process ledger is
+introduced.
 
 ### Contain checks before offering live WRITE
 
