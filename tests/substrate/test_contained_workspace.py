@@ -337,9 +337,15 @@ async def test_deletion_yields_but_keeps_its_guard_through_repeated_cancellation
             return "quiescent"
 
     try:
-        async with asyncio.timeout(2):
-            while not started.is_set():
-                await asyncio.sleep(.001)
+        try:
+            async with asyncio.timeout(2):
+                while not started.is_set():
+                    await asyncio.sleep(.001)
+        except TimeoutError:
+            # The worker's watchdog has returned, but the loop was unable to
+            # observe entry while deletion owned it. This is the latency law,
+            # not a harness timeout or an incidental process failure.
+            pytest.fail("the event loop could not observe deletion entry within its deadline")
         assert not closing.done(), "deletion monopolized the event loop until completion"
         waiting = asyncio.create_task(next_guard())
         for _ in range(2):

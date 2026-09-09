@@ -31,10 +31,10 @@ MUTANTS = (
     ),
     (
         "spawn outside call deadline", LAUNCH + "_run",
-        "async with asyncio.timeout_at(deadline):\n            "
-        "        process = await asyncio.shield(spawn)",
+        "async with asyncio.timeout_at(deadline):\n"
+        "                process = await asyncio.shield(spawn)",
         "async with asyncio.timeout(10):\n"
-        "                    process = await asyncio.shield(spawn)",
+        "                process = await asyncio.shield(spawn)",
         OS + "test_the_call_deadline_includes_probe_and_spawn[spawn]",
     ),
     (
