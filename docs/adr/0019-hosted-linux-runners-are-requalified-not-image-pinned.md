@@ -1,6 +1,15 @@
 # 0019 — Hosted Linux runners are requalified, not image-pinned
 
-Status: proposed; runner investigation authorized, PR B acceptance not implied.
+Status: accepted, 2026-09-09; PR B's implementation proofs remain required.
+
+## Decision record
+
+Following PR #28's merge, the owner authorized the next four steps: record
+this acceptance, start PR B, prove process lifetime and acquisition ownership,
+then complete its Linux containment and review gates. This accepts standard
+GitHub Actions as the evidence environment and the per-host qualification law
+below. It does not credit qualification as production containment or authorize
+a live provider, gateway, paid runner, or changes to the Windows host.
 
 ## Context
 
@@ -15,7 +24,7 @@ Their initial immutable Ubuntu CI-image assumption cannot literally be met by
 a standard hosted runner: `ubuntu-24.04` fixes the OS release, not an image
 build. Pro does not supply the larger-runner custom-image feature.
 
-## Proposed qualification decision
+## Qualification decision
 
 Separate the host we observe from the launch artifacts we control. Record the
 exact hosted image, kernel, service identity, executable bytes, and effective
@@ -58,10 +67,10 @@ attachment. It does not establish complete host/FD exclusion, process-death
 cleanup, runtime immutability, allocation races, or gateway conformance.
 
 A positive result cannot enable a live provider. PR B's complete physical and
-mutation gates remain mandatory, followed by C/D/E before live WRITE. Before
-crediting hosted CI as PR B acceptance, accept this evidence-location and
-rolling-host qualification decision. Retain the frozen plan, not an edited
-history that claims it originally specified this model.
+mutation gates remain mandatory, followed by C/D/E before live WRITE. This
+acceptance permits hosted CI to supply those proofs, not inherit them from
+qualification. The frozen plan is retained, not edited to claim it originally
+specified this model.
 
 ## Sources
 

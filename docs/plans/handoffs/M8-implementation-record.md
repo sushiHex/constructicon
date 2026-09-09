@@ -127,10 +127,11 @@ these tests remain lifecycle proofs, not Linux process containment.
 PR #27 merged as `d5a8a94`. The owner selected standard GitHub Actions runners
 instead of enabling virtualization on the Windows PC, then explicitly
 authorized a scoped bubblewrap AppArmor profile on those disposable runners.
-[Proposed ADR 0019](../../adr/0019-hosted-linux-runners-are-requalified-not-image-pinned.md)
+[Accepted ADR 0019](../../adr/0019-hosted-linux-runners-are-requalified-not-image-pinned.md)
 separates the rolling host we observe from launch artifacts we control. That
-evidence-location decision still needs acceptance before PR B can use it as
-its acceptance environment. Accepted ADR 0018 and frozen rev 1 are unchanged.
+evidence-location decision was accepted after PR #28 merged as `1b999be`:
+the owner authorized PR B and its independent physical proof on these runners.
+Accepted ADR 0018 and frozen rev 1 are unchanged; no PR B proof is inherited.
 
 One credential-free workflow provisions a fixed Ubuntu bubblewrap package,
 a non-sudo service account, and a reviewed profile attached only to a private,

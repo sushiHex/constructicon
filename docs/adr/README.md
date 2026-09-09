@@ -25,7 +25,7 @@ authentication, and complete live executor profiles. PR A is authorized;
 physical containment and deployed gateway conformance remain unimplemented
 proof gates, and operator provisioning requires a separately selected target.
 
-Proposed [ADR 0019](0019-hosted-linux-runners-are-requalified-not-image-pinned.md)
+Accepted [ADR 0019](0019-hosted-linux-runners-are-requalified-not-image-pinned.md)
 records the owner's GitHub Actions selection and the explicit adjustment from
 an immutable hosted image to per-host qualification. The
 [qualification workflow](../M8_CI.md) investigates prerequisites only; it does
