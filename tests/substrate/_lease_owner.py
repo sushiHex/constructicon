@@ -13,7 +13,7 @@ from pathlib import Path
 from constructicon.api.control import ControlPlane
 from constructicon.api.system import Constructicon
 from constructicon.core.component import CapabilityRequirement
-from constructicon.core.control import RunSubmission
+from constructicon.core.control import RegistrationCommandResult, RunSubmission
 from constructicon.core.grants import Posture
 from constructicon.core.graph import Graph, GraphNode, Ref
 from constructicon.core.identity import Digest, digest
@@ -66,6 +66,10 @@ def pause(phase, row):
 
 
 async def main():
+    # This process runs as __main__; the durable PythonRef must instead name
+    # the importable module that the successor can resolve independently.
+    from tests.substrate._lease_owner import read_workspace as implementation
+
     root, phase = Path(sys.argv[1]), sys.argv[2]
     system, journal, provider = assemble(root, "doomed-controller")
     record = journal.record_capability_lease
@@ -89,13 +93,14 @@ async def main():
         provider.populate = populate_at_seam
     control = ControlPlane(system=system, store=journal)
     await control.startup()
-    definition, _ = atomic("test/leased-read", (ISSUE,), (SUMMARY,), read_workspace)
+    definition, _ = atomic("test/leased-read", (ISSUE,), (SUMMARY,), implementation)
     definition = definition.model_copy(update={"capability_requirements": (
         CapabilityRequirement(alias="workspace", kind="workspace.snapshot"),
     )})
     registered = await control.registry_register(
         LOCAL_ADMIN, definition=definition, idempotency_key="register-read",
     )
+    assert isinstance(registered, RegistrationCommandResult), registered
     await control.registry_promote_initial(
         LOCAL_ADMIN, component=definition.name, version=registered.version,
         idempotency_key="promote-read",

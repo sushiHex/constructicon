@@ -237,7 +237,7 @@ async def test_the_call_deadline_includes_probe_and_spawn(launcher, tmp_path, mo
         probe = launcher.probe
 
         async def delayed_probe():
-            await asyncio.sleep(.35)
+            await asyncio.sleep(1.5)
             await probe()
 
         monkeypatch.setattr(launcher, "probe", delayed_probe)
@@ -248,20 +248,26 @@ async def test_the_call_deadline_includes_probe_and_spawn(launcher, tmp_path, mo
         async def delayed_spawn(*args, **kwargs):
             nonlocal calls
             calls += 1
+            process = await spawn(*args, **kwargs)
             if calls == 2:
-                await asyncio.sleep(1.5)
-            return await spawn(*args, **kwargs)
+                # The OS child exists, but Python has not returned its handle.
+                # Expiry must close its owner pipe even in this interval.
+                await asyncio.sleep(2.5)
+            return process
 
         monkeypatch.setattr(asyncio, "create_subprocess_exec", delayed_spawn)
     started = time.monotonic()
     result = await run(
-        launcher, tmp_path, "open('/workspace/started','w').write('bad')",
+        launcher, tmp_path,
+        "import time; time.sleep(1.5); open('/workspace/started','w').write('bad')",
         posture=Posture.WRITE, timeout_s=.2 if phase == "probe" else 1,
     )
     elapsed = time.monotonic() - started
     assert result.timed_out, "setup was outside the requested deadline"
     assert not (tmp_path / "workspace/started").exists(), "an expired call launched its payload"
     assert abs(result.elapsed_s - elapsed) < .1, "telemetry omitted setup or owned cleanup"
+    if phase == "probe":
+        assert elapsed < 1, "the call waited for an independent availability deadline"
 
 
 async def test_successful_call_elapsed_time_includes_availability(launcher, tmp_path, monkeypatch):

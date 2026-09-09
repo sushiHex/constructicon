@@ -247,7 +247,12 @@ async def test_export_has_an_artifact_bound_not_the_task_input_bound(provider, l
         (("archive", "--format=tar", base), b""),
         (("pack-objects", "--stdout", "--revs"), f"{base}\n".encode()),
     ):
-        content = await provider._export(*args, stdin=stdin)
+        try:
+            content = await provider._export(*args, stdin=stdin)
+        except ContractViolation as exc:
+            if "materialization bound" not in str(exc):
+                raise
+            pytest.fail("a valid artifact was refused at the task-input boundary")
         assert provider.launcher.limits.input_bytes < len(content)
         assert len(content) <= provider.launcher.limits.artifact_bytes
     provider.launcher.limits = ProcessLimits(artifact_bytes=8192)

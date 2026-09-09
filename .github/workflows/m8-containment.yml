@@ -61,6 +61,13 @@ jobs:
               tests/substrate/test_contained_workspace.py tests/substrate/test_acquisition_closure.py \
               tests/substrate/test_recorded_executor.py \
               -v --tb=short -p no:cacheprovider
+      - name: Kill the native review-regression mutants
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
+            M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
+            "$PWD/.venv/bin/python" scripts/check_m8_containment_mutations.py
       - name: Report bounded launch-policy denials
         if: always()
         shell: bash
