@@ -19,7 +19,7 @@ first-class user; humans are observer, advisor, and approver.
 ```
 L4  api        ControlPlane · typed describe/admission · MCP server · CLI skin ·
                injection root: constructs L1, hands it to L2
-L3  sdk        @task · component/flow/harness/loop sugar — process-local
+L3  sdk        @task · component/flow/harness/loop/panel sugar — process-local
                authoring carriers compiling immediately to the core IR
 L2  runtime    graph IR · registry/resolution · authoring preflight + validator
                → ExecutionManifest · walker · resume/effects [L0 only]
@@ -47,13 +47,31 @@ Exactly three constructs, closed under composition:
   after each completed iteration, exports the final iteration's non-control
   outputs, and parks with `policy_exhausted` on exhaustion.
 
-Ports are nominal (`type_id` + schema hash + cardinality `one|optional|many`).
-The magnetic rules, applied once at admission: exact name + exact type; else
-unique exact type; `many` gathers every exact-type producer in the pool and
-records that admitted set — which is not necessarily the set the author
-expected, since the pool spans the transitive closure and the graph inputs;
-conversions require an explicit adapter component; zero
-or multiple candidates is an itemized fault naming the per-port override.
+Ports declare a nominal contract (`type_id` + schema hash) and cardinality
+`one|optional|many`. At admission, unmapped scalar ports prefer a unique exact
+name plus nominal-contract match, else a unique nominal-contract match;
+`optional` also permits absence. An unmapped `many` port gathers every
+nominally compatible producer in the pool and requires at least one. That
+admitted set is not necessarily the set the author expected: the pool spans
+the transitive closure and graph inputs. Conversions require an explicit
+adapter; missing required sources or ambiguous scalar matches produce an
+itemized fault naming the per-port override.
+
+`Connection.map` names a destination input and its `node.port` or `$input.port`
+selector. Every selector must resolve to exactly one source whose port has
+cardinality `one` and matches the destination's nominal contract. Several
+connections may map one `many` input: distinct selectors form an ordered union
+in connection-array order, with identical selectors coalescing at their first
+position. A mapped `one` or `optional` input accepts one distinct selector.
+Maps replace the pool for that destination; they never add to it. Map-object
+entries are visited by destination key, not insertion order.
+
+Every connection endpoint must name a declared node at its own graph level;
+every map destination must name an input on the resolved boundary. Neither
+unknown nodes nor unused destinations are silently discarded. These checks do
+not require a connection's own source to bind a value at its destination:
+transitive visibility and explicit selection remain valid. See
+[ADR 0017](adr/0017-panel-membership-is-an-authored-map.md).
 
 ## Admission → ExecutionManifest
 
@@ -90,9 +108,9 @@ Architect JSON ───┘
 `ComponentDef` and an importable async adapter. The adapter's source identity
 covers both the user function and the SDK adapter revision, so a persisted task
 can be activated by a fresh process without receiving an in-memory closure.
-`component`, `flow`, `harness`, and loop sugar emit only `Ref`, `Graph`, and
-`Loop`; `DefinitionBundle` is process-local registration convenience and never
-crosses admission.
+`component`, `flow`, `harness`, loop, and panel sugar emit only `Ref`, `Graph`,
+and `Loop`; `DefinitionBundle` is process-local registration convenience and
+never crosses admission.
 
 Graph JSON is strict (`extra=forbid`, exact schema version, `$`-prefixed ids
 reserved). `system.admit_graph()` accepts JSON, mappings, or canonical Graphs,
@@ -104,6 +122,14 @@ AdmissionFault{code, message, path, scope, repair, details}
 AdmissionAccepted{graph, manifest}
 AdmissionRejected{graph?, faults}
 ```
+
+Endpoint and map faults retain exact coordinates: proposal-owned faults use
+`path`; retained definitions use `{component, version, definition_path}` in
+framed details, including through nested Graph and Loop bodies. Endpoint
+validation collects the failing level's faults, then unwinds compilation before
+parents can invent missing-output or unused-pin cascades. Diagnostics are
+bounded, not exhaustive across sibling levels; a repair may reveal another
+structural fault on the next admission.
 
 Semantic rejection returns the canonical parsed Graph. Constructicon never
 auto-repairs: the caller edits and resubmits. An accepted manifest is an
@@ -120,6 +146,13 @@ and content identities for the snapshot, catalog, and description. Legacy
 components remain usable but are marked honestly as capability-opaque or
 schema-opaque where applicable. See
 [adr/0011](adr/0011-agent-authoring-and-introspection.md).
+
+`SystemDescription` and its digest domain are version 2. Binding vocabulary
+separately publishes `explicit_map_source_cardinality="one"` and
+`mapped_many_policy="ordered_scalar_selector_union_replaces_pool"`; strict
+version-1 description readers refuse the new description. The embedded Graph
+and admission schemas remain version 1. Graph's wire shape is unchanged; older
+validators reject the newly lawful multi-map fan-in rather than misread it.
 
 ## Identity
 
@@ -255,6 +288,17 @@ checksum, snapshot bound, and continuation key. The checksum detects accidental
 corruption; it grants no authority. Run/event pages use immutable upper bounds,
 registry pages use `RegistryRevision`, and detail chunks remain digest-bound.
 
+Counterfactual admission first validates the retained source Graph under the
+source manifest's exact version lock. Preflight and compilation share one
+version-selection rule; neither substitutes current stable for a pin. An
+invalid baseline is `REQUEST_INVALID`, with reproduce-or-reauthor repair.
+Only a valid baseline reaches override admission, where invalidity is
+`COUNTERFACTUAL_LOCK_MISMATCH`. Successful override compilation must also
+preserve the complete `ComponentResolution.contract_hash` at every affected
+scope, including boundary ports the graph does not consume. Refusals follow
+the existing durable command law and create no run. `runs_reproduce` retains
+the old manifest without re-admitting its Graph; history is not retrofitted.
+
 ## Channels
 
 A channel makes a participant on another rhythm an ordinary typed participant in
@@ -332,28 +376,25 @@ only `await ctx.channel(alias).ask(payload)`, and pinned source is not pinned
 behavior: a component free to name its own port could branch differently on a
 second host and append a second request.
 
-A panel is a Graph pattern over this, not a primitive. `panel()` emits the
-literal fan-out and fan-in: each member sees the graph's one request input, and
-one explicit aggregator is connected to every member through an ordinary `many`
-port.
-The combinator executes nothing, chooses no model, infers no quorum, and hides
-no scheduler; its Graph is byte-equal to the hand-authored one. Exactness is
-proved at authoring from bundles' declared contracts — every member shares one
-request/result pair of cardinality one, the aggregator is atomic and has
-exactly one `many` port of that result contract, and no boundary input, the
-request included, carries that contract —
-because the gather is the general connector law: a graph input sits in every
-node's pool, and a compatible graph input or a compatible helper upstream of a
-member would widen it. That proof holds at authoring and is never re-proved.
-`panel()` connects every authored seat, and admission gathers every compatible
-source in the aggregator's pool — the transitive closure of its connections
-plus the graph inputs, and nothing outside it; the emitted Graph retains the
-seat topology but no expected per-seat boundary. So where a member's resolved version carries a
-different result contract — a later promotion, or a bundle that already
-disagreed with the current stable, since the emitted refs are unversioned — that
-seat is absent from the gather and the panel admits one member short with no
-fault. It faults only if no compatible source remains at all. Making that
-membership durable is an open problem. The standard aggregator
+A panel is a Graph pattern over this, not a primitive. `panel()` emits literal
+fan-out and mapped fan-in, with one result selector per member into the atomic
+aggregator's `many` input. The combinator executes nothing, chooses no model,
+infers no quorum, and hides no scheduler; its Graph is byte-equal to the
+hand-authored one.
+
+Authoring requires at least two member bundles sharing one exact request/result
+boundary, both ports of cardinality `one`, with distinct nominal contracts.
+The aggregator declares exactly one `many` input, of that result contract, and
+no other input with the same nominal role. Boundary names are unique. Member
+ids must be dot-free and result-port names non-empty so the selectors are
+representable; general Graph identifier syntax is unchanged.
+
+The maps retain membership as authored intent. Admission requires every named
+result to supply one scalar of the resolved gather contract, so an incompatible
+result cannot silently vanish into the pool. Bystanders, graph inputs, and
+transitive helpers cannot widen that mapped gather. Two distinct member
+selectors also make a gather drifting to `one` or `optional` a refusal. This
+is the general map law, not a panel-specific validator. The standard aggregator
 `constructicon.std/panel-quorum` is pure and declares no capability; it derives
 each member's node from the member's reported path against its own path —
 same parent scope, the aggregator's loop frame as a prefix of the member's,
@@ -391,10 +432,12 @@ there is a different boundary. The registry compares whole definitions the
 same way when it deduplicates or checks an identity collision, and an
 embedded schema is bound to its digest on every definition's ports, a
 composite's boundary included.
-The sugar emits unversioned Refs like every combinator: the authoring proof is
-about the bundles as authored, and admission re-proves nominally what the pool
-of the one atomic world it seals actually offers — the admitted set, not the
-authored one. A seat whose resolved contract differs is simply not in it.
+The sugar still emits unversioned Refs, so compatible promotions reach future
+runs. Its maps constrain the named result ports, not the members' complete
+boundaries: request binding remains magnetic at admission, and unrelated added
+outputs are outside the map's claim. Retained pre-M7.1 panels remain unmapped,
+with their historical omission behavior; neither reproduce nor counterfactual
+invents maps for them. See [ADR 0017](adr/0017-panel-membership-is-an-authored-map.md).
 
 A named contract revision is not the digest of a schema, so the registry
 refuses to embed one on a port. `system.describe()` publishes the standard
@@ -603,6 +646,13 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
   [ADR 0014](adr/0014-channel-identity-and-delivery.md),
   [ADR 0015](adr/0015-human-authority-on-channels.md), and
   [ADR 0016](adr/0016-positive-durable-facts-and-provenance-eras.md).
+- **M7.1 (done)** — authored panel membership through ordered scalar maps;
+  complete endpoint and map-destination validation with exact nested/retained
+  coordinates; plural panel authoring; schema-2 introspection; baseline-first,
+  lock-aware counterfactual admission and complete override-boundary checks.
+  PR A merged as #23 and PR B as #24. Unmapped pools and retained execution
+  bytes are unchanged. See [ADR 0017](adr/0017-panel-membership-is-an-authored-map.md)
+  and the [implementation record](plans/handoffs/M7.1-implementation-record.md).
 - **M8** — live CLI executors (ClaudeCode, Codex, Pi) once isolation profiles
   are enforceable; recorded-transcript contract suites.
 - **M9** — self-improvement phase 1 (prompt/context skills); see
@@ -616,6 +666,9 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
 | Channels | A freshly registered candidate never resolves from a bare reference |
 | Promotion | Mismatched subject identity or missing evidence → refused |
 | Port binding | A second compatible producer → itemized ambiguity error, never a rebind |
+| Explicit maps | Ordered scalar fan-in replaces the pool; a missing destination, non-scalar source, or incompatible mapped result → exact admission fault (M7.1) |
+| Connection endpoints | Unknown nodes → exact proposal or retained-definition fault, including inside Loops; no parent diagnostic cascade under a small fault cap (M7.1) |
+| Counterfactual admission | Invalid retained baseline → `REQUEST_INVALID`; incompatible override, including an unused boundary change → `COUNTERFACTUAL_LOCK_MISMATCH`; reproduce preserves retained bytes (M7.1) |
 | Nested graphs | Reused local node ids stay distinct via scope paths |
 | Journal | Crash between event and checkpoint → recoverable, truthful state |
 | Effects | Crash after external success, before receipt → reconcile, no duplicate |
