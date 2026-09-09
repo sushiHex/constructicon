@@ -26,11 +26,20 @@ no skipped Linux test counts as passing. A new image cannot inherit an old
 image's physical evidence, and reproducing its exact VM is not promised.
 
 Keep trusted CI provisioning separate from the non-root probe and from the
-Constructicon installer/runtime. The initial investigation installs only a
-fixed Ubuntu bubblewrap package and a dedicated non-sudo account on the
-disposable runner. It neither changes sysctls nor loads, relaxes, or unloads
-AppArmor policy. The packaged policy must already be effective. Any required
-policy provisioning returns for an explicit, separately reviewed decision.
+Constructicon installer/runtime. The first two hosted runs found AppArmor and
+the global restriction enabled but no packaged or loaded bubblewrap profile;
+both refused before namespace creation. The owner then explicitly authorized
+the bubblewrap profile. Provision it only on the disposable hosted runner,
+alongside the fixed package and non-sudo account. Do not change sysctls,
+replace an existing profile, or modify Windows.
+
+Attach the reviewed qualification profile to a private, root-owned copy of
+the pinned executable. At payload exec, retain the launch profile and stack
+a profile denying capabilities and further user namespaces. Require that
+exact enforcing attachment and the refusal of an identical unprofiled copy.
+Use an explicit named transition without fallback, and add policy without
+using caches or optional local overrides. This is qualification-only policy;
+PR B must still bind and prove its actual complete launch closure.
 
 Windows keeps the cross-platform local verification gate. Native Linux CI
 supplies the OS evidence; it is not described as having run on Windows. This
@@ -64,3 +73,9 @@ history that claims it originally specified this model.
   actual image-version pinning is a larger-runner feature.
 - [Ubuntu AppArmor](https://documentation.ubuntu.com/security/security-features/privilege-restriction/apparmor/):
   profiles authorize unprivileged user namespaces.
+- [AppArmor's bubblewrap profile](https://gitlab.com/apparmor/apparmor/-/blob/8e431ebcd915216a03ebc8d01e72b1741bb2f855/profiles/apparmor/profiles/extras/bwrap-userns-restrict):
+  precedent for stacking a restricted payload profile under no-new-privileges.
+  Our qualification profile uses a private attachment and denies child userns
+  directly; it is not a copy or claim about the stock Ubuntu profile.
+- [AppArmor parser](https://manpages.ubuntu.com/manpages/noble/man8/apparmor_parser.8.html):
+  add-only loading and cache bypass.

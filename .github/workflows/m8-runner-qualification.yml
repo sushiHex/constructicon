@@ -24,11 +24,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1
           sudo apt-get -q update
           sudo apt-get -q -y install --no-install-recommends bubblewrap=0.9.0-1ubuntu0.1
           sudo useradd --create-home --shell /bin/sh m8-probe
           sudo install -d -m 0755 /opt/constructicon-m8-qualification
           sudo install -m 0444 scripts/ci/qualify_m8_runner.py /opt/constructicon-m8-qualification/probe.py
+          sudo install -m 0555 /usr/bin/bwrap /opt/constructicon-m8-qualification/bwrap
       - name: Inspect packaged and loaded bubblewrap policy
         shell: bash
         run: |
@@ -36,6 +39,15 @@ jobs:
           dpkg-query -W -f='${Package} ${Version}\n' apparmor bubblewrap
           find /etc/apparmor.d -maxdepth 2 -iname '*bwrap*' -print
           sudo cat /sys/kernel/security/apparmor/profiles | awk '/bwrap/ {print; count++; if (count == 32) exit}'
+      - name: Load the reviewed qualification profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1
+          sudo install -m 0444 scripts/ci/constructicon-m8-bwrap.apparmor /etc/apparmor.d/constructicon-m8-bwrap
+          sudo apparmor_parser --add --skip-cache /etc/apparmor.d/constructicon-m8-bwrap
+          sudo cat /sys/kernel/security/apparmor/profiles | awk '/constructicon-m8-/ {print}'
       - name: Qualify as an unprivileged service user
         shell: bash
         env:

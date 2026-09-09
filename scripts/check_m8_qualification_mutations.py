@@ -36,8 +36,13 @@ MUTANTS = (
                 "test_each_observed_boundary_is_required",
             ),
             (
+                "identity mapping",
+                'child["uid_map"].split() == [str(uid), str(uid), "1"]',
+                "test_each_observed_boundary_is_required",
+            ),
+            (
                 "policy attachment",
-                '"bwrap" in child["apparmor"] and "unpriv" in child["apparmor"]',
+                'child["apparmor"] == CHILD_PROFILE',
                 "test_each_observed_boundary_is_required",
             ),
             (
@@ -51,6 +56,20 @@ MUTANTS = (
                 'interfaces == ["lo"]',
                 "test_each_observed_boundary_is_required",
             ),
+        )
+    ),
+    *(
+        (
+            label,
+            MODULE + "artifact_digest",
+            condition,
+            "True",
+            TESTS + "test_artifacts_require_ownership_mode_and_reviewed_bytes",
+        )
+        for label, condition in (
+            ("artifact owner", "metadata.st_uid == 0"),
+            ("artifact mode", "metadata.st_mode & 0o6022 == 0"),
+            ("artifact bytes", "digest == expected"),
         )
     ),
     *(

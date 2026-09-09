@@ -18,9 +18,12 @@ import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-BWRAP = "/usr/bin/bwrap"
+BWRAP = "/opt/constructicon-m8-qualification/bwrap"
 PACKAGE = "0.9.0-1ubuntu0.1"
-POLICY = Path("/etc/apparmor.d/bwrap-userns-restrict")
+BWRAP_SHA256 = "52231e1caf55bcbc667b269f49c63599a6f7db4767ae6a039580d0ff853db712"
+POLICY = Path("/etc/apparmor.d/constructicon-m8-bwrap")
+POLICY_SHA256 = "39cf68590d8a258cd746c23144c09c5dbef3a3c14512888006c96b810cd16c6d"
+CHILD_PROFILE = "constructicon-m8-bwrap//&constructicon-m8-payload (enforce)"
 RESTRICTION = Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
 NAMESPACES = ("user", "mnt", "pid", "ipc", "uts", "net")
 
@@ -46,6 +49,17 @@ def run(argv: list[str]) -> subprocess.CompletedProcess[str]:
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
+
+
+def artifact_digest(path: Path, expected: str) -> str:
+    metadata = path.stat()
+    require(
+        metadata.st_uid == 0 and metadata.st_mode & 0o6022 == 0,
+        f"artifact is not root-owned, read-only to others, and non-set-ID: {path}",
+    )
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    require(digest == expected, f"reviewed artifact drift: {path}")
+    return digest
 
 
 def sandbox_argv(workspace: Path, script: str) -> list[str]:
@@ -76,6 +90,9 @@ def sandbox_argv(workspace: Path, script: str) -> list[str]:
         "--ro-bind",
         "/usr",
         "/usr",
+        "--ro-bind",
+        BWRAP,
+        "/bwrap",
         "--symlink",
         "usr/bin",
         "/bin",
@@ -126,7 +143,7 @@ try:
 except OSError as e:
     state["write_errno"] = e.errno
 nested = subprocess.run(
-    ["/usr/bin/bwrap", "--unshare-user", "--ro-bind", "/", "/", "/bin/true"],
+    ["/bwrap", "--unshare-user", "--ro-bind", "/", "/", "/bin/true"],
     stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5,
 )
 state["nested_returncode"] = nested.returncode
@@ -137,6 +154,11 @@ print(json.dumps(state, sort_keys=True))
 
 def validate_child(child: dict, host: dict, uid: int, gid: int) -> None:
     require(child["uid"] == uid and child["gid"] == gid, "service UID/GID mapping changed")
+    require(
+        child["uid_map"].split() == [str(uid), str(uid), "1"]
+        and child["gid_map"].split() == [str(gid), str(gid), "1"],
+        "service identity mapping is not exactly one UID/GID",
+    )
     require(
         all(child["namespaces"][n] != host[n] for n in NAMESPACES),
         "required namespace remained shared",
@@ -150,8 +172,8 @@ def validate_child(child: dict, host: dict, uid: int, gid: int) -> None:
         "no-new-privileges or dropped capabilities missing",
     )
     require(
-        "bwrap" in child["apparmor"] and "unpriv" in child["apparmor"],
-        "packaged child AppArmor attachment is absent",
+        child["apparmor"] == CHILD_PROFILE,
+        "exact enforcing child AppArmor attachment is absent",
     )
     require(
         child["nested_returncode"] != 0 and "Operation not permitted" in child["nested_stderr"],
@@ -185,13 +207,11 @@ def qualify(evidence: dict) -> None:
     package = run(["/usr/bin/dpkg-query", "-W", "-f=${Version}", "bubblewrap"])
     evidence["bubblewrap_package"] = package.stdout
     require(package.returncode == 0 and package.stdout == PACKAGE, "bubblewrap package drift")
-    executable = Path(BWRAP)
-    require(
-        executable.stat().st_uid == 0 and executable.stat().st_mode & 0o6022 == 0,
-        "bubblewrap is writable or set-ID",
-    )
-    evidence["bubblewrap_sha256"] = hashlib.sha256(executable.read_bytes()).hexdigest()
-    evidence["policy_sha256"] = hashlib.sha256(POLICY.read_bytes()).hexdigest()
+    evidence["bubblewrap_sha256"] = artifact_digest(Path(BWRAP), BWRAP_SHA256)
+    evidence["policy_sha256"] = artifact_digest(POLICY, POLICY_SHA256)
+    evidence["apparmor_abi_sha256"] = hashlib.sha256(
+        Path("/etc/apparmor.d/abi/4.0").read_bytes()
+    ).hexdigest()
     evidence["host_namespaces"] = {n: os.readlink("/proc/self/ns/" + n) for n in NAMESPACES}
     with TemporaryDirectory(prefix="m8-qualification-") as directory:
         workspace = Path(directory)
@@ -204,7 +224,7 @@ def qualify(evidence: dict) -> None:
         evidence["child"] = child
         validate_child(child, evidence["host_namespaces"], uid, gid)
         require(read(workspace / "sentinel") == "unchanged", "host sentinel changed")
-        # Same executable and dependencies, but no /usr/bin/bwrap attachment.
+        # Same executable and dependencies, but no private-path attachment.
         # Do not unload a host policy just to test its absence.
         unprofiled = workspace / "unprofiled-bwrap"
         shutil.copyfile(BWRAP, unprofiled)
