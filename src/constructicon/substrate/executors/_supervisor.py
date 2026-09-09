@@ -78,9 +78,11 @@ def supervise(owner_fd: int, deadline: float, argv: list[str]) -> int:
     # The same private pipe grants start and then witnesses owner lifetime.
     # Until Python owns the spawn handle, this setup child only holds guards.
     # Its independent monotonic deadline also covers a stalled controller.
-    while not poller.poll(10):
+    while not (events := poller.poll(10)):
         if stopping or time.monotonic() >= deadline:
             return 125
+    if any(flags & (select.POLLHUP | select.POLLERR) for _, flags in events):
+        return 125  # Buffered permission cannot outlive observed owner death.
     if os.read(owner_fd, 1) != b"\x01" or stopping or time.monotonic() >= deadline:
         return 125
     child = subprocess.Popen(argv, close_fds=True, env=dict(os.environ))

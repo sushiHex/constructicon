@@ -17,6 +17,26 @@ FACT = "tests/substrate/test_acquisition_closure.py::"
 
 MUTANTS = (
     (
+        "buffered start survives observed owner death",
+        "constructicon.substrate.executors._supervisor:supervise",
+        "if any(flags & (select.POLLHUP | select.POLLERR) for _, flags in events):",
+        "if False:",
+        OS + "test_buffered_start_does_not_authorize_launch_after_observed_owner_death",
+    ),
+    (
+        "recording changes behind its identity", "tests.containedworld:RecordedExecutor.execute",
+        "if actual_program != self.provider.identity.configuration_digest:",
+        "if False:",
+        "tests/substrate/test_recorded_executor.py::"
+        "test_recorded_program_cannot_change_after_its_identity_was_admitted",
+    ),
+    (
+        "malformed counts are invented", "tests.containedworld:decode",
+        "malformed_records=malformed", "malformed_records=1",
+        "tests/substrate/test_recorded_executor.py::"
+        "test_recorded_damage_counts_observed_malformed_records_only",
+    ),
+    (
         "supervisor from mutable checkout", LAUNCH + "_run",
         "str(self.root / SUPERVISOR_PATH)", "str(Path(__file__).with_name('_supervisor.py'))",
         OS + "test_supervisor_source_is_loaded_only_from_the_immutable_closure",

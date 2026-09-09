@@ -249,6 +249,25 @@ claimed as independently mutation-killed source. Killing the trusted reaper
 itself, kernel compromise, and aggregate multi-tenant resource isolation are
 not promised. Per-process limits do not establish a tenant-wide quota.
 
+### PR B confirming-review corrections
+
+Review of `78d83c8` found three additional defects. A start byte buffered before
+owner death arrived as `POLLIN | POLLHUP`; consuming the byte discarded the
+observed death. The supervisor now refuses HUP/ERR before process creation.
+A native fork test inherits the actual function and observes whether Popen
+is reached with a real buffered-and-closed pipe. Its code-object mutation
+discriminates that branch without racing a payload against its later kill.
+This is a native owner-pipe law proof, not a rewrite of the installed reaper.
+
+The recorded double now captures and checks the exact program against its
+admitted configuration digest after acquiring both guards; the same local
+string enters the command. Launch-revision checking also occurs after the
+workspace wait. A changed recording cannot run behind an old identity. The
+decoder counts actual malformed/contradictory records separately from a byte
+bound or missing terminal result: those conditions alone invent no malformed
+record. Dedicated regressions and three additional mutations cover these
+corrections. Final exact-head confirmation remains the PR's gate.
+
 ### Backend extensibility and subscription intent
 
 The owner reaffirmed that Claude Code, Codex, and Pi are the starting adapters,

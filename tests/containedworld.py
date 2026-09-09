@@ -43,6 +43,7 @@ def decode(result, model):
     output = None
     seen = False
     damage = result.bound_exceeded
+    malformed = 0
     for line in result.stdout.split(b"\n"):
         if not line:
             continue
@@ -55,6 +56,7 @@ def decode(result, model):
             output = record["output"]
             seen = True
         except (ValueError, UnicodeError) as exc:
+            malformed += 1
             damage = damage or str(exc)
     observation = dict(
         output=output, raw_reply=result.stdout.decode("utf-8", errors="replace"),
@@ -70,7 +72,7 @@ def decode(result, model):
         ))
     if damage or not seen:
         return ExecutorPartial(**observation, damage=TransportDamage(
-            malformed_records=1, first_error=damage or "missing terminal result",
+            malformed_records=malformed, first_error=damage or "missing terminal result",
             evidence_excerpt=result.stderr.decode("utf-8", errors="replace")[:256],
         ))
     return ExecutorSuccess(**observation)
@@ -117,13 +119,17 @@ class RecordedExecutor:
             if self.closed:
                 raise ContractViolation("recorded executor closed while awaiting its guard")
             self.provider.workspaces.closure.require_open(self.paths)
-            if self.provider.launcher.revision != self.provider.launch_revision:
-                raise ContractViolation("recorded launch identity drifted")
             async with view.use() as workspace_guard:
                 if self.closed:
                     raise ContractViolation("recorded executor closed before launch")
+                if self.provider.launcher.revision != self.provider.launch_revision:
+                    raise ContractViolation("recorded launch identity drifted")
+                program = self.provider.program
+                actual_program = digest("recorded-program", 1, program)
+                if actual_program != self.provider.identity.configuration_digest:
+                    raise ContractViolation("recorded program identity drifted")
                 self.active = asyncio.create_task(self.provider.launcher.run(
-                    ("/usr/bin/python3", "-I", "-c", self.provider.program),
+                    ("/usr/bin/python3", "-I", "-c", program),
                     workspace=Path(view.path), posture=grants.posture,
                     guard_fds=(executor_guard, workspace_guard), stdin=data,
                     timeout_s=grants.timeout_s,

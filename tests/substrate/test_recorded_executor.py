@@ -65,6 +65,41 @@ async def test_one_recorded_task_holds_both_leases_and_closes_before_return(prov
                                         grants=grants)
 
 
+@pytest.mark.parametrize("raw,bound,count", [
+    (b'broken\nwrong\n{"type":"result","output":42}\n', None, 2),
+    (b'{"type":"result","output":42}\n', "stdout", 0),
+    (b'', None, 0),
+    (b'{"type":"result","output":42}\n{"type":"result","output":43}\n', None, 1),
+])
+def test_recorded_damage_counts_observed_malformed_records_only(raw, bound, count):
+    result = decode(ProcessResult(0, raw, b"", .25, bound_exceeded=bound), "requested")
+    assert result.status == "partial"
+    assert result.damage.malformed_records == count
+
+
+async def test_recorded_program_cannot_change_after_its_identity_was_admitted(provider, launcher):
+    provider.launcher = launcher
+    executor = RecordedExecutorProvider(launcher, provider, PROGRAM)
+    await executor.qualify()
+    workspace = await provider.acquire(context())
+    acquired = await executor.acquire(context(binding="executor"))
+    await workspace.materialize()
+    await acquired.materialize()
+    identity = executor.identity.revision
+    executor.program = "print('{\"type\":\"result\",\"output\":\"replacement\"}')"
+    assert executor.identity.revision == identity  # The retained admission is unchanged.
+    try:
+        with pytest.raises(ContractViolation, match="program identity drifted"):
+            await acquired.resource.execute(
+                TaskSpec(instruction="test"), workspace=workspace.resource,
+                grants=acquired.resource.context.binding.effective_grants,
+            )
+        assert acquired.resource.active is None
+    finally:
+        await executor.close(acquired, "discard")
+        await provider.close(workspace, "discard")
+
+
 @pytest.mark.parametrize("mismatch", ["network", "posture", "environment", "tool", "timeout"])
 async def test_call_cannot_widen_the_acquisitions_sealed_grants(provider, launcher, mismatch):
     provider.launcher = launcher

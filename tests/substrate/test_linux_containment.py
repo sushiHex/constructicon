@@ -24,6 +24,7 @@ from constructicon.core.identity import Digest, digest
 from constructicon.core.manifest import CapabilityLease
 from constructicon.core.run import RunStatus
 from constructicon.core.workspace import acquisition_id_for
+from constructicon.substrate.executors import _supervisor
 from constructicon.substrate.executors.linux import (
     SUPERVISOR_PATH,
     LinuxLauncher,
@@ -416,6 +417,42 @@ time.sleep(100)
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="real Linux owner-pipe event semantics")
+def test_buffered_start_does_not_authorize_launch_after_observed_owner_death(monkeypatch):
+    read_fd, write_fd = os.pipe()
+    os.write(write_fd, b"\x01")
+    os.close(write_fd)
+    child = os.fork()
+    if child == 0:
+        # The native fork inherits the real implementation (and a code-object
+        # mutant). Observe whether Popen is reached, without racing a payload
+        # against the subsequent kill or replacing Linux's poll/read behavior.
+        try:
+            monkeypatch.setattr(_supervisor.subprocess, "Popen", lambda *a, **kw: os._exit(91))
+            code = _supervisor.supervise(read_fd, time.monotonic() + 1, ["must-not-start"])
+        except BaseException:
+            os._exit(92)
+        os._exit(code)
+    os.close(read_fd)
+    reaped = False
+    try:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            pid, status = os.waitpid(child, os.WNOHANG)
+            if pid:
+                reaped = True
+                assert os.waitstatus_to_exitcode(status) == 125, (
+                    "buffered start plus POLLHUP reached process creation"
+                )
+                break
+            time.sleep(.01)
+        assert reaped, "supervisor failed to observe the already-closed owner pipe"
+    finally:
+        if not reaped:
+            os.kill(child, signal.SIGKILL)
+            os.waitpid(child, 0)
 
 
 async def test_controller_dies_while_a_real_setup_child_holds_the_guard(launcher, tmp_path):
