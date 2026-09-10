@@ -95,3 +95,28 @@ and an earlier job does not qualify a later rolling image.
 This lane demonstrates the networkless boundary, not an always-on execution
 host, provider gateway, live subscription login, safe candidate import, or
 contained gate implementation. Those retain their separate M8 slice gates.
+
+## PR C: capture on the same native boundary
+
+PR C extends this job with real Git pack verification, hostile staging
+metadata, READ export, public capture/counterfactual lifecycles, repeated
+cancellation, and literal controller-death seams. The paused publisher probe
+lets recovery finish before the old process attempts its Git transaction.
+A stopped trusted importer proves its inherited guard outlives Python owner
+death; the successor cannot remove the quarantine until that child quiesces.
+The separate `check_m8_capture_mutations.py` inventory changes code objects in
+isolated test processes. Assertion failures count; skips, timeouts, or broken
+mutation instruments do not. Both PR B and PR C inventories must pass.
+
+Contained Git and its system-Python bootstrap use the launcher's existing
+fixed-artifact rule too: executables and ancestors must be root-owned and
+not service-writable. The application venv is not selected for bootstrap. A
+service-owned executable is unavailable, even with its write bits cleared.
+Operators replace tools between deployed worlds, not during a running one;
+new installed content requires a new admitted revision. These are the same
+trusted-runtime assumptions as the launcher, not protection from a privileged
+operator modifying a live installation.
+
+These additions do not offer a live model route or execute candidate gates
+on the host. The original PR B evidence proves its boundary only; capture
+claims require the new exact-head tests and their mutation results.

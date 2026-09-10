@@ -306,14 +306,16 @@ Milestones M1 through M7.1 are complete:
 | M7 | Durable channels, human advice and approval, restart-safe waiting, and deterministic panels |
 | M7.1 | Explicit panel membership, ordered mapped fan-in, exact endpoint diagnostics, and strengthened counterfactual admission |
 
-**M8 is in progress.** Merged work includes complete executor grant policy,
+**M8 is in progress.** Implemented work includes complete executor grant policy,
 content-bound launch identity, record-before-materialization leases, a
 networkless Linux launcher, owned READ/WRITE workspaces, and process cleanup
 that survives controller death. Failure of the trusted reaper itself is outside
 that recovery guarantee. The physical boundary is tested on GitHub Actions with
-hostile fixtures, not live model calls.
+hostile fixtures, not live model calls. Async WRITE capture runs staging Git
+inside that boundary, verifies an immutable pack, and atomically fences its
+exact candidate against acquisition closure.
 
-Still outstanding: safe asynchronous WRITE capture, contained gate execution,
+Still outstanding: contained gate execution,
 provider-route conformance, and the live adapters. A networkless launcher is
 not a working subscription integration or a live coding-agent backend. Track
 the remaining work in the [M8 implementation record](docs/plans/handoffs/M8-implementation-record.md)

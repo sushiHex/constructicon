@@ -172,6 +172,7 @@ from constructicon.core.run import (
 )
 from constructicon.core.workspace import (
     AcquiredCapability,
+    AsyncWriteWorkspace,
     LeaseClosure,
     LeaseContext,
     LeasedCapability,
@@ -201,6 +202,7 @@ __all__ = [
     "AdmissionResult",
     "ApprovalRecord",
     "ArtifactRef",
+    "AsyncWriteWorkspace",
     "Attestation",
     "AttestationDraft",
     "AttestationSubject",

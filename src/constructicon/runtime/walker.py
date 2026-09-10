@@ -1104,6 +1104,7 @@ class Walker:
         binding: CapabilityBinding,
         path: ExecutionPath,
         manifest_hash: Digest,
+        check_control: Callable[[], None] | None = None,
     ) -> AcquiredCapability:
         """Acquire once, returning only after its recovery row is durable.
 
@@ -1121,6 +1122,7 @@ class Walker:
                 binding=binding,
                 path=path,
                 manifest_hash=manifest_hash,
+                check_control=check_control,
             )
         )
         durable = CapabilityLease(
@@ -1602,6 +1604,7 @@ class Walker:
                         binding=alias_binding,
                         path=path,
                         manifest_hash=manifest.manifest_hash,
+                        check_control=lambda: self._check_run_control(lease, lost),
                     )
                     acquired.append((capability, acquisition))
                     if acquisition.materialize is not None:

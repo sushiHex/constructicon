@@ -1,6 +1,6 @@
 # M8 implementation record
 
-Status: PR A and hosted-runner decision merged; PR B under review.
+Status: PR A and PR B merged; PR C safe WRITE capture in progress.
 
 Authority: [accepted ADR 0018](../../adr/0018-live-executors-are-leased-contained-processes.md)
 and [frozen rev 1](../milestones/M8-live-executors-rev1.md). PR #26 merged as
@@ -407,6 +407,114 @@ generation. These establish possible integration points, not complete native
 tool mediation or subscription availability. The proposed next experiment
 keeps scripted driver proof separate from actual native CLI proof. No successor
 ADR, credential access, or changed authentication policy follows from it.
+
+## PR C — safe async WRITE capture (in progress)
+
+The new `AsyncWriteWorkspace` has an explicitly awaiting consumer and a
+controllable fake. `workspace.contained` uses the existing acquisition,
+launcher, and Git authority. Legacy synchronous capture remains unchanged.
+Mutable staging Git executes inside the launcher, followed by a separate READ
+export. A fresh acquisition-owned quarantine validates immutable pack bytes
+before trusted import; only the exact candidate OID is published.
+
+Publication and disposition extend the existing closure transaction, including
+the candidate-absence comparison. No SQLite schema, scheduler, or installation
+path changes. The physical guard ends only after import and quarantine cleanup;
+publication needs no payload path and is fenced by the Git transaction itself.
+`LeaseContext.check_control` exposes the walker's existing in-memory control
+check before publication, not a second ownership law or an atomic SQLite/Git
+transaction. New WRITE process assemblies refuse legacy capture/gate resources,
+including relabeled instances. No live provider is enabled by this slice.
+
+The explicit revision is a string, as the manifest requires. It binds the
+provider's source closure, installed trusted Git, launcher, object format,
+target ref and limits. Portable admission tests exercise that real descriptor
+without materializing anything. New awaiting component definitions enter the
+normal canonical registration path; no retained component is rewritten.
+
+The native lane exercises hostile hooks, includes, filters, fsmonitor,
+credential helpers, alternates, symlinked Git metadata and stale locks;
+detached capture writers; a physically READ-only export; reset after hostile
+metadata; and repeated cancellation. Actual child processes run through the
+production launcher, not substituted OS results. Quarantine Git also inherits
+fixed Linux address-space/file/CPU limits before parsing compressed objects.
+Its exact open guard survives the Python owner's death, so recovery cannot
+delete an import root while that child still owns it.
+
+Public-control tests cover capture and counterfactual discard, plus literal
+controller death during import, after publication and after checkpointing.
+The late-publisher barrier is after the local control and literal marker reads:
+the successor finishes discard before the old host attempts its Git
+transaction and is killed. The reverse order preserves the existing
+checkpoint-selected release/discard law. Portable tests separately pin both
+atomic absence comparisons, closure response loss, SHA-1/SHA-256 handoffs,
+malformed/oversized packs, missing history and exact OID/type checks. The
+controllable fake proves that the walker awaits capture before checkpointing.
+
+### PR C review corrections and scope
+
+The first independent review found permanent authority `.keep` files after
+import. Removed them rather than adding a second recovery inventory. Verified
+objects may await publication without becoming immortal: normal Git GC can
+reclaim unreferenced imports, and Git refuses a ref transaction if an external
+prune removed its target first. A real-Git test pins reclaimability. Mutable
+buffers are refused at the handoff, preventing verification/import drift.
+
+The next review found a real identity gap: the provider pinned one Git binary,
+but authority ref operations still looked up bare `git` through current PATH.
+`GitAuthority` now owns one resolved executable and checks its content before
+use; the contained provider reads that same fact instead of discovering or
+retaining a second locator. PATH changes cannot redirect candidate/closure
+operations or snapshot export, and a changed executable refuses. The new
+regressions and mutants pin all three boundaries. Historical Git values and
+call conventions do not change.
+
+The follow-up check/use review exposed an unsupported input that was not yet
+refused: a service-replaceable host Git installation. Contained providers now
+reuse the launcher's exact fixed-artifact check for Git and its ancestors;
+even a mode-0555 tool owned by the service is not immutable. The shared check
+keeps its existing behavior and messages. Historical authorities still accept
+operator-supplied Git; they are not silently relabeled as contained.
+Privileged operators must not replace a live world's installed tools. Racing
+such a replacement is outside the same fixed-runtime assumption used by B,
+not a guarantee supplied by executing a pathname or by an open descriptor.
+No new cross-platform execution mechanism or process owner is introduced.
+
+The confirming pass found the companion bootstrap gap: the resource-limit
+trampoline still selected the application's possibly service-writable Python.
+It now uses fixed system Python on Linux through the same artifact predicate,
+and the capture revision binds those interpreter bytes. The application venv
+is not a trusted subprocess locator. A native shim proves replacement of that
+locator cannot execute, while a separate identity mutation proves interpreter
+content is not omitted from the sealed revision. Windows does not use this
+trampoline and retains its existing path.
+
+The next review found a root-container test assumption, not another execution
+gap. The service-owned-artifact proof now explicitly requires a non-root
+service user: root-owned test copies exercise a different ancestor refusal.
+Root development containers skip this ownership proof; the mandatory native
+lane runs both cases as its real non-root service account.
+
+A native rerun also exposed a weak existing guard proof: a metadata thread
+could leave reconciliation unfinished even when locking was removed. The
+test now opens a second file description and requires the actual kernel lock
+to refuse it while the producer holds its guard, before testing revocation.
+No added delay or production change substitutes for that exclusion proof.
+
+The same review proposed requiring both contained workspace and gate instances
+in every WRITE provider assembly. That broader rule was not adopted: accepted
+ADR 0018 refuses legacy capture/uncontained gate bindings, which assembly now
+enforces, but PR C defines no production live provider. Requiring a PR D gate
+to instantiate the credential-free capture-only double would add an invented
+gate or collapse the approved slice sequence. Such a graph does not run checks
+or install its candidate. D/E remain prerequisites for the live F/G/H
+factories; this scope reading is explicitly included in the confirming review.
+
+Pre-M8 compatibility was reproduced against full base
+`3ee1beb6a58fac0bab85841a1f34d96b514c3c34`: seven checks pass in both trees;
+the historical fake profile and six manifest goldens are byte-identical.
+Exact-head native/mutation/local/CI results and the confirming review remain
+acceptance gates in PR #34; Windows skips are not physical evidence.
 
 ## Remaining slices and operator prerequisites
 

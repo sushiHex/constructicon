@@ -34,6 +34,7 @@ from constructicon.core.component import ComponentDef, PromotionRecord
 from constructicon.core.control import ResolutionLock, RunOrigin
 from constructicon.core.effect import EffectAdapter
 from constructicon.core.errors import AdmissionError, ContractViolation
+from constructicon.core.executor import ExecutorProvider
 from constructicon.core.grants import EffectiveGrants, ModelSelection, Posture
 from constructicon.core.graph import Graph, parse_graph_json
 from constructicon.core.identity import (
@@ -170,6 +171,22 @@ class Constructicon:
         self.owner_id = owner_id or f"worker-{os.getpid()}-{uuid.uuid4().hex[:8]}"
         self._capabilities = dict(capabilities or {})
         self._catalog = dict(catalog or {})
+        # A new WRITE process provider cannot lend safety claims to the old
+        # host-executed capture/check pipeline. Check the actual resources too:
+        # changing a descriptor label does not contain its implementation.
+        if any(
+            isinstance(resource, ExecutorProvider)
+            and Posture.WRITE in resource.identity.profile.postures
+            for resource in self._capabilities.values()
+        ) and (
+            any(isinstance(resource, (GitWorkspaceCapability, GateRunner))
+                for resource in self._capabilities.values())
+            or any(descriptor.kind in {"workspace", "gates"}
+                   for descriptor in self._catalog.values())
+        ):
+            raise ValueError(
+                "WRITE process providers require contained workspace and gate bindings",
+            )
         for capability_id in sorted(self._capabilities.keys() | self._catalog.keys()):
             descriptor = self._catalog.get(capability_id)
             if descriptor is None:

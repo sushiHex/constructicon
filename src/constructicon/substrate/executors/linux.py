@@ -50,6 +50,18 @@ def _sha(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def require_fixed_artifact(path: Path) -> None:
+    """The service cannot replace a trusted tool or any of its ancestors."""
+
+    info = path.stat()
+    if path.is_symlink() or info.st_uid != 0 or info.st_mode & 0o6022:
+        raise ContractViolation("launcher artifacts must be fixed root-owned files")
+    for parent in path.parents:
+        info = parent.stat()
+        if info.st_uid != 0 or info.st_mode & 0o022:
+            raise ContractViolation(f"launcher ancestor {parent} must be root-owned")
+
+
 def runtime_inventory(root: Path, *, require_immutable: bool = True) -> list[tuple[str, int, str]]:
     """Hash actual installed content and topology, never version text or paths.
 
@@ -134,13 +146,7 @@ class LinuxLauncher:
         if sys.platform != "linux" or os.getuid() == 0:
             raise ContractViolation("Linux containment requires a non-root Linux service user")
         for path in (self.bubblewrap, self.policy, self.root):
-            info = path.stat()
-            if path.is_symlink() or info.st_uid != 0 or info.st_mode & 0o6022:
-                raise ContractViolation("launcher artifacts must be fixed root-owned files")
-            for parent in path.parents:
-                info = parent.stat()
-                if info.st_uid != 0 or info.st_mode & 0o022:
-                    raise ContractViolation(f"launcher ancestor {parent} must be root-owned")
+            require_fixed_artifact(path)
         if _sha(self.bubblewrap) != BWRAP_SHA256:
             raise ContractViolation("bubblewrap content differs from the supported build")
         if _sha(self.policy) != self.expected_policy_sha256:

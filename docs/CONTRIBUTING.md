@@ -261,6 +261,27 @@ on those capabilities, not on a shared model name.
 Implement `CheckResult` production over a workspace; the runner mints the
 `Attestation`. A red check is data, not an error.
 
+## Consuming a contained WRITE workspace (L0/L1)
+
+Declare capability kind `workspace.contained`, obtain `AsyncWriteWorkspace`,
+and await `reset_to(GitRef)` / `commit_all(message)`. Publish a new component
+version for this call convention; never relabel a retained synchronous consumer.
+The controllable fake in `tests/captureworld.py` proves awaiting, not isolation.
+
+Reuse `ContainedWriteWorkspaceProvider` and its existing acquisition closure.
+Every staging-Git operation belongs inside the launcher. Only immutable,
+bounded, self-contained packs cross to trusted Git; quarantine verification
+precedes authority import. No local fetch, copied `.git`, host stage walk,
+alternate object store, or blocking legacy-importer wrapper is permitted.
+The walker supplies `LeaseContext.check_control`; invoke that existing check
+before publication, and let the external Git closure transaction fence races.
+Quarantines and child processes belong to the recorded acquisition. Do not add
+unowned persistent pack keeps or another cleanup ledger.
+
+WRITE process assemblies refuse legacy capture and gate bindings. A recorded
+process test without a gate proves only capture; it neither enables a live
+adapter nor substitutes for PR D's contained gate proof.
+
 ## Adding an effect adapter (L1)
 
 Implement `constructicon.core.effect.EffectAdapter`:

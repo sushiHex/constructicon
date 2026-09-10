@@ -9,8 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import io
-import os
-import shutil
+import sys
 import tarfile
 import weakref
 from collections.abc import AsyncIterator
@@ -38,14 +37,15 @@ from constructicon.core.workspace import (
     lease_id_for,
 )
 from constructicon.substrate._lifetime import finish_owned
-from constructicon.substrate.executors.linux import LinuxLauncher
+from constructicon.substrate.executors.linux import LinuxLauncher, require_fixed_artifact
 from constructicon.substrate.git.acquisition import (
     AcquisitionClosure,
     AcquisitionPaths,
     acquisition_guard,
     dispose_acquisition,
 )
-from constructicon.substrate.git.authority import _PINNED_ENV, GitAuthority
+from constructicon.substrate.git.authority import GitAuthority
+from constructicon.substrate.git.process import GitProcess
 
 
 class _WorkspaceReference(BaseModel):
@@ -62,6 +62,7 @@ class _WorkspacePhase:
     entered: bool = False
     ready: bool = False
     closed: bool = False
+    head: GitSha | None = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -133,10 +134,13 @@ class ContainedWorkspaceProvider:
         self.launcher = launcher
         self.closure = AcquisitionClosure(authority)
         self._views: weakref.WeakSet[ContainedWorkspace] = weakref.WeakSet()
-        git = shutil.which("git")
-        if git is None:
-            raise ContractViolation("trusted Git executable is unavailable")
-        self.git = git
+
+    @property
+    def git(self) -> str:
+        executable = self.authority.git_executable
+        if sys.platform == "linux":
+            require_fixed_artifact(Path(executable))
+        return executable
 
     async def acquire(self, context: LeaseContext) -> AcquiredCapability:
         if context.binding.effective_grants.posture is not self.posture:
@@ -147,7 +151,7 @@ class ContainedWorkspaceProvider:
         base = await finish_owned(asyncio.create_task(asyncio.to_thread(
             self.authority.resolve_ref, self.target_ref,
         )))
-        workspace = ContainedWorkspace(self, context, paths, base)
+        workspace = self._workspace(context, paths, base)
         self._views.add(workspace)
         reference = _WorkspaceReference(
             acquisition=acquisition, provider=self.provider_id, base=base,
@@ -157,6 +161,11 @@ class ContainedWorkspaceProvider:
             resource_ref=canonical_json(reference.model_dump(mode="json")),
             materialize=workspace.materialize,
         )
+
+    def _workspace(
+        self, context: LeaseContext, paths: AcquisitionPaths, base: GitSha,
+    ) -> ContainedWorkspace:
+        return ContainedWorkspace(self, context, paths, base)
 
     def owned_view(self, view: WorkspaceView | None, context: LeaseContext) -> ContainedWorkspace:
         if (
@@ -190,8 +199,13 @@ class ContainedWorkspaceProvider:
             raise ContractViolation("workspace close requires its provider's acquisition")
         workspace._phase.closed = True
         if workspace.entered:
-            await dispose_acquisition(self.closure, workspace.paths)
+            await self._dispose(workspace.paths, workspace.context.run_lease.run_id, disposition)
         return LeaseClosure(disposition="released" if disposition == "release" else "discarded")
+
+    async def _dispose(
+        self, paths: AcquisitionPaths, run_id: str, disposition: Disposition,
+    ) -> None:
+        await dispose_acquisition(self.closure, paths)
 
     async def reconcile(
         self, context: LeaseContext, stale: tuple[StaleAcquisition, ...],
@@ -214,50 +228,19 @@ class ContainedWorkspaceProvider:
             ):
                 raise ContractViolation("workspace recovery reference contradicts its durable row")
             # No current base lookup: a never-started lease is fully recoverable.
-            await dispose_acquisition(self.closure, AcquisitionPaths(self.root, acquisition))
+            await self._dispose(
+                AcquisitionPaths(self.root, acquisition), context.run_lease.run_id,
+                item.disposition,
+            )
             reaped.append(row.resource_ref)
         return LeaseReconciliation(reaped=tuple(reaped))
 
     async def _export(self, *args: str, stdin: bytes = b"") -> bytes:
         """Bounded read of the trusted authority; it writes no acquisition path."""
 
-        spawn = asyncio.create_task(asyncio.create_subprocess_exec(
-            self.git, *args, cwd=self.authority.repository_id,
-            env={"PATH": os.environ.get("PATH", os.defpath), **_PINNED_ENV},
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        ))
-        process: asyncio.subprocess.Process | None = None
-        output = bytearray()
-
-        async def stop_and_drain() -> None:
-            # Spawn may have completed after the caller was cancelled. Do not
-            # discard that handle or wait on pipes nobody is reading.
-            owned = process or await spawn
-            if owned.stdin is not None:
-                owned.stdin.close()
-            if owned.returncode is None:
-                owned.kill()
-            assert owned.stdout is not None
-            while await owned.stdout.read(8192):
-                pass
-            await owned.wait()
-
-        try:
-            async with asyncio.timeout(30):
-                process = await asyncio.shield(spawn)
-                assert process.stdin is not None and process.stdout is not None
-                process.stdin.write(stdin)
-                process.stdin.close()
-                while chunk := await process.stdout.read(8192):
-                    if len(output) + len(chunk) > self.launcher.limits.artifact_bytes:
-                        raise ContractViolation("workspace export exceeds materialization bound")
-                    output.extend(chunk)
-                if await process.wait() != 0:
-                    raise ContractViolation("trusted authority export failed")
-        finally:
-            await finish_owned(asyncio.create_task(stop_and_drain()))
-        return bytes(output)
+        return await GitProcess(self.git, self.launcher.limits).run(
+            *args, cwd=self.authority.repository_id, stdin=stdin,
+        )
 
     async def populate(self, workspace: ContainedWorkspace, guard: int) -> None:
         if self.posture is Posture.READ:

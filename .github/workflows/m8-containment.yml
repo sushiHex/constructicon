@@ -65,6 +65,11 @@ jobs:
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_linux_containment.py \
               tests/substrate/test_contained_workspace.py tests/substrate/test_acquisition_closure.py \
               tests/substrate/test_recorded_executor.py \
+              tests/substrate/test_contained_capture.py tests/substrate/test_git_pack.py \
+              tests/substrate/test_capture_lifecycle.py \
+              tests/substrate/test_git_process.py \
+              tests/substrate/test_git_executable.py \
+              tests/runtime/test_async_workspace.py tests/api/test_capture_assembly.py \
               -v --tb=short -p no:cacheprovider
       - name: Kill the native review-regression mutants
         shell: bash
@@ -74,6 +79,10 @@ jobs:
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
             PYTEST_ADDOPTS=-pno:cacheprovider \
             "$PWD/.venv/bin/python" scripts/check_m8_containment_mutations.py
+          sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
+            M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
+            PYTEST_ADDOPTS=-pno:cacheprovider \
+            "$PWD/.venv/bin/python" scripts/check_m8_capture_mutations.py
       - name: Preserve exact runtime and observed boundary evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

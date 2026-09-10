@@ -22,7 +22,11 @@ BASE_READ = (
     "await finish_owned(asyncio.create_task(asyncio.to_thread(\n"
     "        self.authority.resolve_ref, self.target_ref,\n    )))"
 )
-COMMIT = "await finish_owned(asyncio.create_task(asyncio.to_thread(closure.commit, paths)))"
+COMMIT = (
+    "await finish_owned(asyncio.create_task(asyncio.to_thread(\n"
+    "        closure.commit, paths, candidate_ref=candidate_ref, disposition=disposition,\n"
+    "    )))"
+)
 METADATA = (
     ("acquire", WORKSPACE + "acquire", BASE_READ,
      "self.authority.resolve_ref(self.target_ref)"),
@@ -138,7 +142,9 @@ MUTANTS = (
     ),
     (
         "workspace uses task-input bound", WORKSPACE + "_export",
-        "self.launcher.limits.artifact_bytes", "self.launcher.limits.input_bytes",
+        "GitProcess(self.git, self.launcher.limits)",
+        "GitProcess(self.git, type(self.launcher.limits)("
+        "artifact_bytes=self.launcher.limits.input_bytes))",
         LEASE + "test_export_has_an_artifact_bound_not_the_task_input_bound",
     ),
     (
