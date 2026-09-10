@@ -5,6 +5,7 @@ import json
 import os
 import struct
 import sys
+import tomllib
 import zlib
 from pathlib import Path
 from types import SimpleNamespace
@@ -188,6 +189,27 @@ send({'method': 'turn/completed', 'params': {
     'threadId': 'thread', 'turn': {'id': 'turn', 'status': 'completed'}}})
 time.sleep(60)
 '''
+
+
+@pytest.mark.parametrize("model", ["probe-model", "gpt-5.5", "gpt-5.6-sol"])
+async def test_model_selection_reaches_configuration_and_thread(tmp_path, model):
+    config = tmp_path / "config"
+    config.mkdir()
+    native_probe.argv_for((Path("pinned-codex"), {"CODEX_HOME": str(config)}),
+                          tmp_path, "http://127.0.0.1:1/v1", images=False, model=model)
+    assert tomllib.loads((config / "config.toml").read_text())["model"] == model
+    program = PEER.replace("MODE", "pass").replace(
+        "assert read()['method'] == 'thread/start'",
+        f"request = read(); assert request['params']['model'] == {model!r}",
+    )
+
+    async def worker(program):
+        return "ok"
+
+    env = {key: os.environ[key] for key in ("SYSTEMROOT",) if key in os.environ}
+    result = await run_probe([sys.executable, "-I", "-u", "-c", program],
+                             cwd=tmp_path, env=env, worker=worker, model=model, timeout=5)
+    assert result["calls"] == ["call"]
 
 
 @pytest.mark.parametrize("mode", ["success", "eof", "stderr", "timeout", "cancel"])

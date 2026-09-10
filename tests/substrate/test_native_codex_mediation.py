@@ -41,8 +41,8 @@ PROGRAM = (
 )
 
 
-def events(items):
-    response = {"id": "resp_probe", "object": "response", "model": "probe-model",
+def events(items, *, model="probe-model"):
+    response = {"id": "resp_probe", "object": "response", "model": model,
                 "status": "in_progress", "output": []}
     yield {"type": "response.created", "response": response}
     for index, item in enumerate(items):
@@ -58,7 +58,7 @@ def events(items):
 
 
 @asynccontextmanager
-async def fake_provider(tool, arguments):
+async def fake_provider(tool, arguments, *, model="probe-model"):
     requests, failures = [], []
     handlers = set()
 
@@ -77,16 +77,21 @@ async def fake_provider(tool, arguments):
                 request = parse_json_value((await reader.readexactly(size)).decode())
                 requests.append(request)
                 assert len(requests) <= 2, "unexpected retry or extra turn"
+                assert request["model"] == model
                 if len(requests) == 1:
-                    items = [{"id": "fc_probe", "type": "function_call", "call_id": "call_probe",
-                              "name": tool, "arguments": json.dumps(arguments)}]
+                    item = {"id": "fc_probe", "call_id": "call_probe", "name": tool}
+                    if tool == "apply_patch":
+                        items = [{**item, "type": "custom_tool_call", "input": arguments["patch"]}]
+                    else:
+                        items = [{**item, "type": "function_call",
+                                  "arguments": json.dumps(arguments)}]
                 else:
                     items = [{"id": "msg_probe", "type": "message", "role": "assistant",
                               "status": "completed", "content": [
                                   {"type": "output_text", "text": "fixture complete"}]}]
                 payload = b"".join(
                     ("event: " + event["type"] + "\ndata: " + json.dumps(event) + "\n\n").encode()
-                    for event in events(items)
+                    for event in events(items, model=model)
                 )
                 writer.write(
                     b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n"
@@ -144,10 +149,10 @@ def write_evidence(name, value):
         (Path(directory) / name).write_text(json.dumps(value, sort_keys=True, indent=2) + "\n")
 
 
-def argv_for(native, cwd, endpoint, *, images):
+def argv_for(native, cwd, endpoint, *, images, model="probe-model"):
     binary, env = native
     configuration = f'''
-model = "probe-model"
+model = "{model}"
 model_provider = "probe"
 model_context_window = 32768
 model_auto_compact_token_limit = 30000
@@ -201,10 +206,17 @@ def test_pinned_native_schema_inventory(native, tmp_path):
     assert "thread/start" in methods and "turn/start" in methods
 
 
-@pytest.mark.parametrize("operation", ["contained_python", "exec_command", "view_image"])
+@pytest.mark.parametrize("model,operation", [
+    *(("probe-model", operation) for operation in (
+        "contained_python", "exec_command", "view_image",
+    )),
+    *((model, operation) for model in ("gpt-5.5", "gpt-5.6-sol") for operation in (
+        "contained_python", "exec_command", "view_image", "apply_patch",
+    )),
+])
 @pytest.mark.parametrize("images", [True, False], ids=["image-control", "image-disabled"])
 async def test_native_dynamic_dispatch_and_builtin_probe(
-    native, tmp_path, provider, launcher, operation, images,
+    native, tmp_path, provider, launcher, model, operation, images,
 ):
     provider.launcher = launcher
     executor = RecordedExecutorProvider(launcher, provider, WORKER)
@@ -227,6 +239,7 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
     # A canary in the harness home is NOT a credential. A disabled built-in
     # reaching it would refute exclusive mediation despite a successful callback.
     canary = Path(native[1]["HOME"]) / "builtin-bypass"
+    patch_canary = Path(native[1]["HOME"]) / "native-patch-fixture.txt"
     image_canary = Path(native[1]["HOME"]) / "private.png"
     image_canary.write_bytes(CANARY_PNG)
     arguments = {
@@ -234,24 +247,31 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
                              f"assert not pathlib.Path({str(image_canary)!r}).exists()\n"},
         "exec_command": {"cmd": f"printf bypass > {canary}", "max_output_tokens": 100},
         "view_image": {"path": str(image_canary)},
+        "apply_patch": {"patch": f"*** Begin Patch\n*** Add File: {patch_canary}\n"
+                                 "+fixture only\n*** End Patch\n"},
     }[operation]
     try:
-        async with fake_provider(operation, arguments) as (endpoint, requests, failures):
-            argv = argv_for(native, tmp_path, endpoint, images=images)
-            result = await run_probe(argv, cwd=tmp_path, env=native[1], worker=worker)
-            evidence = {"probe": operation, "images_enabled": images,
+        async with fake_provider(operation, arguments, model=model) as exchange:
+            endpoint, requests, failures = exchange
+            argv = argv_for(native, tmp_path, endpoint, images=images, model=model)
+            result = await run_probe(argv, cwd=tmp_path, env=native[1], worker=worker, model=model)
+            evidence = {"probe": operation, "model": model, "images_enabled": images,
                         "protocol": result, "requests": requests,
                         "server_failures": failures, "worker_outputs": observed,
-                        "builtin_canary_written": canary.exists()}
-            write_evidence(f"codex-{operation}-images-{str(images).lower()}.json", evidence)
+                        "builtin_canary_written": canary.exists(),
+                        "native_patch_written": patch_canary.exists()}
+            write_evidence(f"codex-{model}-{operation}-images-{str(images).lower()}.json", evidence)
             assert not failures, failures
             assert len(requests) == 2
             expected_tools = {"request_user_input", "contained_python"}
             if images:
                 expected_tools.add("view_image")
+            if model != "probe-model":
+                expected_tools.add("apply_patch")
+                assert "missing model metadata" not in result["stderr_observed"].lower()
             assert {tool["name"] for tool in requests[0]["tools"]} == expected_tools
             outputs = [item for item in requests[1]["input"]
-                       if item.get("type") == "function_call_output"]
+                       if item.get("type") in {"function_call_output", "custom_tool_call_output"}]
             assert len(outputs) == 1
             if operation == "contained_python":
                 assert result["calls"] == ["call_probe"]
@@ -259,7 +279,9 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
             else:
                 assert not observed
                 assert not result["calls"]
-                if operation == "exec_command" or not images:
+                if operation == "apply_patch":
+                    assert patch_canary.read_text() == "fixture only\n"
+                elif operation == "exec_command" or not images:
                     assert outputs[0]["output"] == f"unsupported call: {operation}"
                     assert not canary.exists()
                 else:
