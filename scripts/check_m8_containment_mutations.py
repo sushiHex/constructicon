@@ -142,7 +142,9 @@ MUTANTS = (
     ),
     (
         "workspace uses task-input bound", WORKSPACE + "_export",
-        "self.launcher.limits.artifact_bytes", "self.launcher.limits.input_bytes",
+        "GitProcess(self.git, self.launcher.limits)",
+        "GitProcess(self.git, type(self.launcher.limits)("
+        "artifact_bytes=self.launcher.limits.input_bytes))",
         LEASE + "test_export_has_an_artifact_bound_not_the_task_input_bound",
     ),
     (

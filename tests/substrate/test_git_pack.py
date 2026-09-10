@@ -6,6 +6,7 @@ import hashlib
 import shutil
 import struct
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -69,6 +70,16 @@ async def test_verified_pack_preserves_exact_commit_history_without_moving_any_r
         assert expected == await git.run(*args, cwd=authority.repository_id)
     assert list(root.iterdir()) == []
     assert content.startswith(b"PACK")
+
+
+async def test_unpublished_verified_objects_remain_reclaimable_by_authority_gc(handoff):
+    _, authority, _, _, candidate, _ = handoff
+    await receive(handoff)
+    assert not list(Path(authority.repository_id, "objects/pack").glob("*.keep"))
+    # Disposable fixture only: reclaim objects without refs just as for an
+    # interrupted legacy import. There is no immortal per-capture pack keep.
+    authority._run("gc", "--prune=now")
+    assert authority._run("cat-file", "-e", candidate, check=False).returncode != 0
 
 
 @pytest.mark.parametrize(

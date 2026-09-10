@@ -92,7 +92,6 @@ async def import_pack(
             raise ContractViolation("Git pack exceeds the expanded-object bound")
         await git.run(
             "index-pack", "--stdin", "--strict", "--threads=1",
-            "--keep=constructicon verified candidate pack",
             f"--max-input-size={git.limits.artifact_bytes}",
             cwd=authority.repository_id, stdin=pack, guard=guard,
         )

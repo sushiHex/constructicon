@@ -42,7 +42,15 @@ async def terminal(journal, run_id):
     assert state.status is RunStatus.SUCCEEDED, (state, journal.events(run_id))
 
 
-@pytest.mark.parametrize("phase", ["before_publication", "after_publication", "after_checkpoint"])
+@pytest.mark.parametrize(
+    "phase",
+    [
+        "during_import",
+        "before_publication",
+        "after_publication",
+        "after_checkpoint",
+    ],
+)
 async def test_dead_owner_and_reconciled_late_publisher_cannot_leave_an_old_candidate(
     launcher,
     tmp_path,
@@ -74,13 +82,25 @@ async def test_dead_owner_and_reconciled_late_publisher_cannot_leave_an_old_cand
             await owner.wait()
         system, journal, provider = assemble(tmp_path, "successor-capture-owner")
         old_candidate = provider.closure.candidate(reference)
-        assert (old_candidate is None) == (phase == "before_publication")
+        assert (old_candidate is None) == (phase in {"during_import", "before_publication"})
         async with asyncio.timeout(5):
             while journal.run_state(row.run_id).liveness != "lost":
                 await asyncio.sleep(0.01)
         control = ControlPlane(system=system, store=journal)
         await control.startup()
         try:
+            if phase == "during_import":
+                import fcntl
+
+                async with asyncio.timeout(5):
+                    while not provider.closure.is_closed(old):
+                        await asyncio.sleep(0.01)
+                try:
+                    assert list(old.payload.glob("quarantine-*"))
+                    with old.guard.open("rb") as guard, pytest.raises(BlockingIOError):
+                        fcntl.flock(guard.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                finally:
+                    os.kill(event["child_pid"], signal.SIGCONT)
             await terminal(journal, row.run_id)
             assert provider.closure.is_closed(old) and not old.payload.exists()
             assert provider.closure.candidate(reference) == (

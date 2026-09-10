@@ -109,6 +109,17 @@ MUTANTS = (
         "tests/api/test_capture_assembly.py::"
         "test_new_write_provider_refuses_legacy_resources_even_when_relabeled",
     ),
+    (
+        "trusted importer loses its acquisition guard on owner death", PROCESS,
+        "pass_fds=(guard,) if guard is not None else (),", "pass_fds=(),",
+        "tests/substrate/test_git_process.py::test_actual_git_process_inherits_the_same_guard_inode",
+    ),
+    (
+        "verified imports are kept forever", PACK,
+        'cwd=authority.repository_id, stdin=pack, guard=guard,',
+        '"--keep=leaked", cwd=authority.repository_id, stdin=pack, guard=guard,',
+        HANDOFF + "test_unpublished_verified_objects_remain_reclaimable_by_authority_gc",
+    ),
 )
 
 if __name__ == "__main__":

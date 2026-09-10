@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shlex
 import shutil
 import sys
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
 from constructicon.core.errors import ContractViolation
+from constructicon.core.workspace import acquisition_id_for
 from constructicon.substrate.executors.linux import ProcessLimits
+from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisition_guard
 from constructicon.substrate.git.process import GitProcess
 from tests.substrate.test_contained_workspace import LINUX
 
@@ -92,3 +96,42 @@ async def test_git_parser_limits_are_present_in_the_actual_child_before_parsing(
         [30, 30],
         [0, 0],
     ]
+
+
+@LINUX
+async def test_actual_git_process_inherits_the_same_guard_inode(tmp_path, monkeypatch):
+    native_spawn = asyncio.create_subprocess_exec
+    started, release = asyncio.Event(), asyncio.Event()
+    handles = []
+
+    async def held_return(*args, **kwargs):
+        handle = await native_spawn(*args, **kwargs)
+        handles.append(handle)
+        started.set()
+        await release.wait()
+        return handle
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", held_return)
+    paths = AcquisitionPaths(tmp_path, acquisition_id_for("lease-importer", 1))
+    git = shutil.which("git")
+    async with acquisition_guard(paths) as guard:
+        task = asyncio.create_task(
+            GitProcess(git, ProcessLimits()).run(
+                "hash-object",
+                "--stdin",
+                cwd=tmp_path,
+                guard=guard,
+            )
+        )
+        try:
+            await started.wait()
+            process = handles[0]
+            async with asyncio.timeout(5):
+                while Path(f"/proc/{process.pid}/exe").resolve() != Path(git).resolve():
+                    await asyncio.sleep(0.001)
+            inherited = Path(f"/proc/{process.pid}/fd/{guard}")
+            observed = inherited.stat().st_ino if inherited.exists() else None
+        finally:
+            release.set()
+            await task
+        assert observed == os.fstat(guard).st_ino, "actual Git lost the acquisition's open guard"

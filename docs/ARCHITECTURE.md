@@ -130,6 +130,42 @@ Recovery always uses the durable row, including when materialization never began
 callbacks default to `None` and retain their eager behavior. PR A proves this
 sequence with genuine deferred-resource doubles, not Linux processes.
 
+### Contained WRITE capture
+
+`AsyncWriteWorkspace` preserves the existing `GitRef`/`GitSha` values but
+requires awaiting `reset_to` and `commit_all`. `workspace.contained` and new
+consumer versions distinguish it from legacy synchronous `WriteWorkspace`.
+`substrate/git/capture.py` reuses the deferred provider in `contained.py`:
+staging Git runs inside the Linux launcher, every writer is reaped, and a
+separate READ launch exports immutable pack bytes for the exact candidate.
+Reset imports an authority-exported pack inside containment; no host Git
+interprets the stage or copies its configuration.
+
+`pack.py` verifies the pack in a fresh acquisition-owned quarantine outside
+the staging mount. Git checks object format, hashes/types and reachable
+closure; framing, byte/count/expanded bounds and exact candidate OID are
+checked before authority import. `process.py` supplies bounded asynchronous
+trusted Git plumbing, with Linux parser memory/file/CPU limits and inherited
+physical guards. Quarantine cleanup joins before the guard is released.
+Verified objects carry no permanent `.keep`; normal authority GC may reclaim
+unreferenced imports. No target branch or installation receipt changes.
+
+`acquisition.py` owns one external fence: publication atomically verifies the
+closure marker is absent and creates/verifies the candidate. Close/reconcile
+atomically closes the acquisition and retains or CAS-deletes/verifies absence
+of its candidate according to the existing lease disposition. Physical work
+is quiescent before publication, so successor disposal may finish while an
+old publisher is paused; Git must then refuse that publisher. The walker's
+in-memory `LeaseContext.check_control` observes cancellation/ownership loss
+before publication, but is not an atomic SQLite/Git fence. Counterfactual
+captures discard their own candidates, never the source run's.
+
+New WRITE process providers cannot be assembled with legacy workspace or gate
+bindings, including relabeled concrete instances. This does not create a live
+provider or require a gate in a credential-free capture-only test graph.
+Contained gates and routed authority remain prerequisites for the live adapter
+slices; no live WRITE configuration is offered here.
+
 ## Agent authoring and introspection
 
 M5 adds surfaces, never another workflow representation:
@@ -694,7 +730,8 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
   assembly/admission coherence, schema-3 introspection, and post-record
   materialization. PR B supplies the networkless Linux launcher, immutable
   per-call reaper, deferred READ/WRITE materialization and acquisition closure.
-  Safe WRITE capture, contained gates, gateway conformance, and
+  PR C implements asynchronous contained capture, immutable pack verification,
+  and atomic candidate closure. Contained gates, gateway conformance, and
   ClaudeCode/Codex/Pi adapters remain separate slices; no live model adapter
   is available yet. Native CI evidence is described in [M8_CI.md](M8_CI.md). See
   [ADR 0018](adr/0018-live-executors-are-leased-contained-processes.md) and the
@@ -719,6 +756,7 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
 | Git proof | Base moves after gates pass → refused or revalidated (M3) |
 | Forgery | A caller-authored all-green result cannot authorize any effect |
 | READ isolation | Shell writes fail physically, or the executor is inadmissible (M3/M8) |
+| WRITE capture | Hostile staging metadata never executes on the host; immutable verified packs preserve exact candidate history; late publication cannot cross committed closure (M8) |
 | Gather | One producer fails → complete producer-status report, never a hang (M2) |
 | Agent authoring | Unknown Graph fields are refused; a serialized architect repairs schema and magnetic ambiguity faults using describe + rejection data only (M5) |
 | SDK identity | A persisted decorated task activates in a fresh process; SDK/direct/repaired Graphs produce one manifest identity (M5) |

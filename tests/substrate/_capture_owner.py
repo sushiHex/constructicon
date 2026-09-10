@@ -57,10 +57,29 @@ async def main():
         record(lease, row)
         row_seen = row
 
-    def pause():
+    def pause(**evidence):
         assert row_seen is not None
-        print(json.dumps({"phase": phase, "lease": row_seen.model_dump(mode="json")}), flush=True)
+        print(
+            json.dumps({"phase": phase, "lease": row_seen.model_dump(mode="json"), **evidence}),
+            flush=True,
+        )
         os.kill(os.getpid(), signal.SIGSTOP)
+
+    spawn = asyncio.create_subprocess_exec
+
+    async def spawn_at_seam(*args, **kwargs):
+        process = await spawn(*args, **kwargs)
+        if (
+            phase == "during_import"
+            and "index-pack" in args
+            and Path(kwargs["cwd"]).name.startswith("quarantine-")
+        ):
+            # Freeze the actual trusted child, then its Python owner. Killing
+            # only the owner must not let recovery bypass the child's guard.
+            os.kill(process.pid, signal.SIGSTOP)
+            pause(child_pid=process.pid)
+            raise AssertionError("a killed importer owner resumed")
+        return process
 
     publish = provider.closure.publish
 
@@ -96,6 +115,7 @@ async def main():
     journal.record_completion = completion_at_seam
     provider.closure.publish = publish_at_seam
     provider.authority._ref_transaction = transaction_at_seam
+    asyncio.create_subprocess_exec = spawn_at_seam
     control = ControlPlane(system=system, store=journal)
     await control.startup()
     graph = await register_capture(control)
