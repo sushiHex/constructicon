@@ -460,6 +460,14 @@ reclaim unreferenced imports, and Git refuses a ref transaction if an external
 prune removed its target first. A real-Git test pins reclaimability. Mutable
 buffers are refused at the handoff, preventing verification/import drift.
 
+The next review found a real identity gap: the provider pinned one Git binary,
+but authority ref operations still looked up bare `git` through current PATH.
+`GitAuthority` now owns one resolved executable and checks its content before
+use; the contained provider reads that same fact instead of discovering or
+retaining a second locator. PATH changes cannot redirect candidate/closure
+operations, and a changed executable refuses. The new regressions and mutants
+pin both boundaries. Historical Git values and call conventions do not change.
+
 The same review proposed requiring both contained workspace and gate instances
 in every WRITE provider assembly. That broader rule was not adopted: accepted
 ADR 0018 refuses legacy capture/uncontained gate bindings, which assembly now

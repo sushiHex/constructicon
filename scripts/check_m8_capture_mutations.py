@@ -125,6 +125,20 @@ MUTANTS = (
         "if type(pack) is not bytes:", "if False:",
         HANDOFF + "test_mutable_handoffs_are_refused_before_any_await_or_import[bytearray]",
     ),
+    (
+        "privileged Git follows mutable PATH",
+        "constructicon.substrate.git.authority:GitAuthority._run",
+        "[self.git_executable, *args]", '["git", *args]',
+        "tests/substrate/test_git_executable.py::"
+        "test_path_changes_cannot_redirect_candidate_or_closure_operations",
+    ),
+    (
+        "installed Git changes behind its authority identity",
+        "constructicon.substrate.git.authority:GitAuthority.git_executable",
+        "if observed != self._git_digest:", "if False:",
+        "tests/substrate/test_git_executable.py::"
+        "test_modified_pinned_git_is_refused_before_any_authority_operation",
+    ),
 )
 
 if __name__ == "__main__":

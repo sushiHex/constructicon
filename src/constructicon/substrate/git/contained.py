@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import io
-import shutil
 import tarfile
 import weakref
 from collections.abc import AsyncIterator
@@ -134,10 +133,10 @@ class ContainedWorkspaceProvider:
         self.launcher = launcher
         self.closure = AcquisitionClosure(authority)
         self._views: weakref.WeakSet[ContainedWorkspace] = weakref.WeakSet()
-        git = shutil.which("git")
-        if git is None:
-            raise ContractViolation("trusted Git executable is unavailable")
-        self.git = git
+
+    @property
+    def git(self) -> str:
+        return self.authority.git_executable
 
     async def acquire(self, context: LeaseContext) -> AcquiredCapability:
         if context.binding.effective_grants.posture is not self.posture:

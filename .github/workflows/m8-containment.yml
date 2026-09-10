@@ -68,6 +68,7 @@ jobs:
               tests/substrate/test_contained_capture.py tests/substrate/test_git_pack.py \
               tests/substrate/test_capture_lifecycle.py \
               tests/substrate/test_git_process.py \
+              tests/substrate/test_git_executable.py \
               tests/runtime/test_async_workspace.py tests/api/test_capture_assembly.py \
               -v --tb=short -p no:cacheprovider
       - name: Kill the native review-regression mutants

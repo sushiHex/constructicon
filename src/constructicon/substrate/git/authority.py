@@ -31,6 +31,7 @@ yields the same sha. Kernel budget: stdlib subprocess only.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import os
 import shutil
@@ -251,6 +252,12 @@ class StagedWriteWorkspace:
 
 class GitAuthority:
     def __init__(self, repo_path: Path | str, workspaces_root: Path | str) -> None:
+        executable = shutil.which("git")
+        if executable is None:
+            raise ContractViolation("trusted Git executable is unavailable")
+        self._git_executable = Path(executable).resolve()
+        with self._git_executable.open("rb") as stream:
+            self._git_digest = hashlib.file_digest(stream, "sha256").digest()
         self._repo = Path(repo_path)
         self._root = Path(workspaces_root)
         self._root.mkdir(parents=True, exist_ok=True)
@@ -296,6 +303,19 @@ class GitAuthority:
 
     # -- plumbing -------------------------------------------------------------
 
+    @property
+    def git_executable(self) -> str:
+        """One installed Git owns both immutable import and privileged refs."""
+
+        try:
+            with self._git_executable.open("rb") as stream:
+                observed = hashlib.file_digest(stream, "sha256").digest()
+        except OSError as exc:
+            raise ContractViolation("trusted Git executable changed or became unavailable") from exc
+        if observed != self._git_digest:
+            raise ContractViolation("trusted Git executable content changed")
+        return str(self._git_executable)
+
     def _run(
         self,
         *args: str,
@@ -307,7 +327,7 @@ class GitAuthority:
         env.update(_PINNED_ENV)
         directory = self._repo if cwd == "AUTHORITY" else cwd
         raw_result = subprocess.run(  # never a shell; messages via exact bytes
-            ["git", *args],
+            [self.git_executable, *args],
             cwd=directory,
             env=env,
             input=input_text.encode("utf-8") if input_text is not None else None,
