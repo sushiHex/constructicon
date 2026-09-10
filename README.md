@@ -308,9 +308,10 @@ Milestones M1 through M7.1 are complete:
 
 **M8 is in progress.** Merged work includes complete executor grant policy,
 content-bound launch identity, record-before-materialization leases, a
-networkless Linux launcher, owned READ/WRITE workspaces, and crash-safe process
-cleanup. The physical boundary is tested on GitHub Actions with hostile
-fixtures, not live model calls.
+networkless Linux launcher, owned READ/WRITE workspaces, and process cleanup
+that survives controller death. Failure of the trusted reaper itself is outside
+that recovery guarantee. The physical boundary is tested on GitHub Actions with
+hostile fixtures, not live model calls.
 
 Still outstanding: safe asynchronous WRITE capture, contained gate execution,
 provider-route conformance, and the live adapters. A networkless launcher is
