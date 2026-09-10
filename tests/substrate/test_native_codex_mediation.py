@@ -8,6 +8,7 @@ documented custom-provider protocol; it does not emulate authentication.
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import os
@@ -28,9 +29,15 @@ from tests.substrate.test_linux_containment import launcher as launcher
 
 WORKER = "import sys; exec(sys.stdin.read())"
 PROGRAM = (
-    "import json, pathlib; "
-    "assert not pathlib.Path('/etc/shadow').exists(); "
-    "print(json.dumps({'type':'result','output':{'contained':True}}))"
+    "import json, pathlib\n"
+    "assert not pathlib.Path('/etc/shadow').exists()\n"
+    "try:\n"
+    "    pathlib.Path('/workspace/forbidden-write').write_text('must refuse')\n"
+    "except OSError as exc:\n"
+    "    assert exc.errno == 30\n"
+    "else:\n"
+    "    raise AssertionError('READ mount was writable')\n"
+    "print(json.dumps({'type':'result','output':{'contained':True}}))\n"
 )
 
 
@@ -216,7 +223,8 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
     image_canary = Path(native[1]["HOME"]) / "private.png"
     image_canary.write_bytes(CANARY_PNG)
     arguments = {
-        "contained_python": {"program": PROGRAM},
+        "contained_python": {"program": PROGRAM +
+                             f"assert not pathlib.Path({str(image_canary)!r}).exists()\n"},
         "exec_command": {"cmd": f"printf bypass > {canary}", "max_output_tokens": 100},
         "view_image": {"path": str(image_canary)},
     }[operation]
@@ -230,16 +238,29 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
             write_evidence(f"codex-{operation}.json", evidence)
             assert not failures, failures
             assert len(requests) == 2
-            assert any(item.get("type") == "function_call_output"
-                       for item in requests[1]["input"])
+            assert {tool["name"] for tool in requests[0]["tools"]} == {
+                "request_user_input", "view_image", "contained_python",
+            }
+            outputs = [item for item in requests[1]["input"]
+                       if item.get("type") == "function_call_output"]
+            assert len(outputs) == 1
             if operation == "contained_python":
                 assert result["calls"] == ["call_probe"]
                 assert observed == [{"contained": True}]
             else:
-                # This is a measurement, not a guarantee that every builtin is
-                # disabled. A bypass is retained evidence, never hidden as a skip.
                 assert not observed
                 assert not result["calls"]
+                if operation == "exec_command":
+                    assert outputs[0]["output"] == "unsupported call: exec_command"
+                    assert not canary.exists()
+                else:
+                    # A PASS reproduces the negative result: this native reader
+                    # bypasses the worker and exports an unmounted harness file.
+                    image = outputs[0]["output"][0]
+                    assert image["type"] == "input_image"
+                    assert image["image_url"].startswith("data:image/png;base64,")
+                    assert base64.b64decode(image["image_url"].split(",", 1)[1],
+                                            validate=True) == CANARY_PNG
     finally:
         await executor.close(acquired, "discard")
         await provider.close(workspace, "discard")

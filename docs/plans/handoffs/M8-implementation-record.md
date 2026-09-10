@@ -611,3 +611,14 @@ under the repository's [issue-first workflow](../../WORK_TRACKING.md).
 No live WRITE profile is enabled before routed authority and its adapter are
 also proved. Public model contracts and completed containment slices are not
 substitutes for those proofs.
+
+## Native mediation and OpenRouter investigation
+
+The [credential-free Linux probe](M8-native-mediation-probe.md) follows the
+earlier Windows/interface feasibility record without rewriting it. It exercises
+the native app-server against a loopback fake, reuses the contained worker and
+existing acquisition cleanup, and inventories native tools separately from
+client RPCs. Its observations do not qualify subscription authentication or
+complete slice E. The [OpenRouter assessment](../../designs/OPENROUTER.md)
+proposes configuration of the planned Pi harness rather than another executor
+or kernel abstraction. It is not an approved expansion of M8.
