@@ -527,8 +527,9 @@ Runtime identification has no candidate mount and finishes before publishing
 the check-set identity. Verification uses the existing authority merge law at
 the current target, an acquisition-owned exported snapshot, and the existing
 READ-only networkless Linux launcher. The candidate never supplies runtime
-identity. Anonymous assembly descriptors allocate no persistent lease; gate
-recovery references carry only the provider and acquisition, never a base.
+identity. Anonymous assembly descriptors allocate no persistent lease. Private
+gate recovery references carry the provider, acquisition and normalized storage
+locator, never a base; host locators do not enter the portable runtime digest.
 
 Trusted metadata and filesystem workers are joined, not a wrapped legacy
 verifier. The bound operation observes the existing invocation control callback
@@ -541,6 +542,31 @@ Lossy exports and unsupported gitlinks refuse; legacy gate behavior is unchanged
 Tests and native acceptance proofs are being added. No local skip, scripted
 launcher, or prior slice's test count is credited as PR D containment evidence.
 Exact-head gate results, mutation results, and independent review remain pending.
+
+### PR D review corrections
+
+The first independent review found three introduced gaps. Assembly now proves
+that a contained gate and the real merge effect share the exact journal and
+authority objects. The effect also refuses a subject for another repository
+before execution, reconciliation or simulation: mirrored Git objects confer no
+authority over a different repository. The positive public-control lane runs
+the contained gate and installs its exact attested subject through the effect.
+
+Recovery previously selected its guard from the current configured root. A
+changed root could falsely report an old acquisition reaped while its payload
+and guard remained elsewhere. The private durable reference now pins that
+locator and refuses a mismatched restart before closure or disposal. The
+original root still recovers normally; no new ledger or path-dependent launch
+identity is introduced. Relocating live acquisition storage is not supported.
+
+Exit codes 125--127 are valid check exits, not evidence that setup failed. The
+trusted namespace reaper now reports the actual payload exit through its
+existing private control socket and an anonymous report pipe owned by the
+launcher. Repository code inherits neither descriptor. Missing or contradictory
+exit evidence is an infrastructure failure; a completed nonzero check is a
+check failure, including 125--127. This extends the shared launcher observation
+instead of inventing a gate-specific child supervisor. All existing B/C proofs
+and inventories must pass again alongside the new D regressions.
 
 ## Remaining slices and operator prerequisites
 

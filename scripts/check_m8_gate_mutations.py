@@ -14,7 +14,7 @@ MUTANTS = (
     ),
     (
         "failed runtime probe qualifies", GATE + "create",
-        "if result.returncode or result.timed_out or result.bound_exceeded:", "if False:",
+        'raise ContractViolation("contained gate runtime identification failed")', "pass",
         TEST + "test_failed_runtime_identification_never_qualifies[exit]",
     ),
     (
@@ -34,8 +34,8 @@ MUTANTS = (
     ),
     (
         "output overflow is reported passed", GATE + "_check",
-        'status = "infrastructure_error"\n        detail =',
-        'status = "passed"\n        detail =',
+        'elif result.bound_exceeded:\n        status = "infrastructure_error"',
+        'elif result.bound_exceeded:\n        status = "passed"',
         TEST + "test_native_output_overflow_cannot_pass[stdout]",
     ),
     (
@@ -89,6 +89,37 @@ MUTANTS = (
         "a locally closed gate still mints", GATE + "_control",
         "if handle._phase.closed:", "if False:",
         TEST + "test_local_close_observed_at_mint_boundary_prevents_authority",
+    ),
+    (
+        "gate and effect can use different authority objects",
+        "constructicon.api.system:Constructicon.__init__",
+        "or not merge.is_assembled_from(journal, resource.authority)", "",
+        TEST + "test_gate_and_merge_effect_share_one_exact_world[same-path]",
+    ),
+    (
+        "mirrored objects confer authority over another repository",
+        "constructicon.substrate.effects.git:MergeVerifiedEffect._subject",
+        "if subject.repository != self._authority.repository_id:", "if False:",
+        "tests/e2e/test_merge_effect.py::"
+        "test_mirrored_objects_never_authorize_another_repository[execute]",
+    ),
+    (
+        "recovery reports the wrong storage root reaped", GATE + "reconcile",
+        "or reference.storage_root != str(self.root)", "",
+        TEST + "test_recovery_never_reports_the_wrong_storage_root_reaped",
+    ),
+    (
+        "reserved check exit is guessed to be infrastructure failure", GATE + "_check",
+        "elif result.payload_returncode is None or result.returncode != result.payload_returncode:",
+        "elif result.returncode in (125, 126, 127) or result.payload_returncode is None "
+        "or result.returncode != result.payload_returncode:",
+        TEST + "test_native_nonpassing_checks_remain_typed_data[exit125]",
+    ),
+    (
+        "a missing private exit fact is accepted", GATE + "_check",
+        "elif result.payload_returncode is None or result.returncode != result.payload_returncode:",
+        "elif False:",
+        TEST + "test_missing_or_contradictory_private_exit_is_not_a_pass[None]",
     ),
 )
 

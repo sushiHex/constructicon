@@ -128,6 +128,10 @@ hostile repository code, stdout/stderr bounds, repeated cancellation and real
 owner-death recovery. The public lifecycle proves heartbeat advancement while
 checks run, then no successful checkpoint or attestation after cancellation or
 ownership loss. Recovery before first verification needs no candidate or base.
+It refuses a changed storage locator before cleanup. A positive public-control
+lane also installs the gate's exact subject through the same-world merge effect.
+Private launcher exit evidence distinguishes setup failure from legitimate
+check exits 125--127 without trusting repository output.
 
 `check_m8_gate_mutations.py` independently challenges phase separation, runtime
 drift, physical READ mounts, output truthfulness, exact exported bytes, control

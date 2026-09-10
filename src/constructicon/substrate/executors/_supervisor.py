@@ -145,9 +145,13 @@ def supervise_namespace(control: socket.socket, deadline: float, argv: list[str]
             control.send(struct.pack("!d", when))
         return when
 
-    return _reap(
+    result = _reap(
         child, control.fileno(), shutdown, begin_term, lambda: _signal_namespace(True),
     )
+    # This descriptor belongs to trusted PID 1, never the repository check.
+    # Four-byte exit facts are distinct from the existing eight-byte TERM ack.
+    control.send(struct.pack("!i", result))
+    return result
 
 
 def _subreaper() -> None:
@@ -177,7 +181,9 @@ def _terminate_owned_children() -> None:
             os.close(fd)
 
 
-def supervise(owner_fd: int, deadline: float, argv: list[str]) -> int:
+def supervise(
+    owner_fd: int, deadline: float, argv: list[str], *, report_fd: int | None = None,
+) -> int:
     if sys.platform != "linux":
         raise OSError("child supervision requires Linux")
     _subreaper()
@@ -218,6 +224,19 @@ def supervise(owner_fd: int, deadline: float, argv: list[str]) -> int:
     with control, namespace:
         control.setblocking(False)
         requested = False
+        payload_exit: int | None = None
+        term_time: float | None = None
+
+        def read_control() -> None:
+            nonlocal payload_exit, term_time
+            with suppress(BlockingIOError, ConnectionResetError):
+                while message := control.recv(9):
+                    if len(message) == 8:
+                        term_time = float(struct.unpack("!d", message)[0])
+                    elif len(message) == 4 and payload_exit is None:
+                        payload_exit = int(struct.unpack("!i", message)[0])
+                    else:
+                        raise OSError("invalid private namespace report")
 
         def begin_term() -> float | None:
             nonlocal requested
@@ -227,11 +246,8 @@ def supervise(owner_fd: int, deadline: float, argv: list[str]) -> int:
                 with suppress(OSError):
                     control.shutdown(socket.SHUT_WR)
                 requested = True
-            with suppress(BlockingIOError, ConnectionResetError):
-                message = control.recv(8)
-                if len(message) == 8:
-                    return float(struct.unpack("!d", message)[0])
-            return None
+            read_control()
+            return term_time
 
         namespace_fd = namespace.fileno()
         split = argv.index("--")
@@ -246,7 +262,11 @@ def supervise(owner_fd: int, deadline: float, argv: list[str]) -> int:
             command, close_fds=True, pass_fds=(namespace_fd,), env=dict(os.environ),
         )
         namespace.close()
-        return _reap(child, owner_fd, shutdown, begin_term, _terminate_owned_children)
+        result = _reap(child, owner_fd, shutdown, begin_term, _terminate_owned_children)
+        read_control()
+        if report_fd is not None and payload_exit is not None:
+            os.write(report_fd, struct.pack("!i", payload_exit))
+        return result
 
 
 def main() -> int:
@@ -267,8 +287,13 @@ def main() -> int:
     os.fstat(owner_fd)
     for guard in guards:
         os.fstat(guard)
+    report_fd = None
+    arguments = sys.argv[4:]
+    if arguments and arguments[0].startswith("--report-fd="):
+        report_fd = int(arguments.pop(0).split("=", 1)[1])
+        os.fstat(report_fd)
     try:
-        return supervise(owner_fd, deadline, sys.argv[4:])
+        return supervise(owner_fd, deadline, arguments, report_fd=report_fd)
     except OSError as exc:
         print(f"constructicon supervisor refused: errno={exc.errno or errno.EIO}", file=sys.stderr)
         return 125
@@ -276,6 +301,8 @@ def main() -> int:
         os.close(owner_fd)
         for guard in guards:
             os.close(guard)
+        if report_fd is not None:
+            os.close(report_fd)
 
 
 if __name__ == "__main__":

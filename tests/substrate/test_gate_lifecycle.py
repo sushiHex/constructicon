@@ -15,14 +15,23 @@ from pathlib import Path
 import pytest
 
 from constructicon.api.control import ControlPlane
-from constructicon.core.control import RunSubmission
+from constructicon.core.control import (
+    PromotionCommandResult,
+    RegistrationCommandResult,
+    RunSubmission,
+)
+from constructicon.core.graph import Connection, GraphNode, Ref
 from constructicon.core.manifest import CapabilityLease
 from constructicon.core.run import RunStatus
 from constructicon.core.workspace import acquisition_id_for
+from constructicon.substrate.effects.git import MergeVerifiedEffect
 from constructicon.substrate.git.acquisition import AcquisitionPaths
-from tests.api.test_control_response_loss import RUN_ACTOR
+from constructicon.substrate.journal.sqlite import SqliteJournal
+from tests.api.test_control_response_loss import LOCAL_ADMIN, RUN_ACTOR
+from tests.conftest import atomic
 from tests.gateworld import register_gate
-from tests.runtime.test_async_gates import until
+from tests.gitworld import EVALUATION, MERGED, merge_impl
+from tests.runtime.test_async_gates import gate_system, until
 from tests.substrate._gate_owner import assemble
 from tests.substrate.test_contained_gates import candidate, unqualified
 from tests.substrate.test_contained_gates import qualify as qualify_gate
@@ -67,6 +76,47 @@ async def succeeded(journal, run_id):
         while journal.run_state(run_id).status not in (RunStatus.FAILED, RunStatus.SUCCEEDED):
             await asyncio.sleep(0.01)
     assert journal.run_state(run_id).status is RunStatus.SUCCEEDED, journal.events(run_id)
+
+
+async def test_contained_gate_attestation_installs_through_the_public_effect_path(
+    launcher, tmp_path,
+):
+    journal = SqliteJournal(tmp_path / "control.sqlite")
+    runner = await qualify_gate(unqualified(tmp_path, launcher, journal=journal))
+    sha = candidate(runner)
+    expected = runner.authority.prepare_merge(sha, runner.target_ref).subject
+    effect = MergeVerifiedEffect(journal=journal, authority=runner.authority)
+    system = gate_system(journal, runner, effects={"merge_verified": effect})
+    control = ControlPlane(system=system, store=journal)
+    await control.startup()
+    try:
+        graph = await register_gate(control)
+        definition, _ = atomic("test/gated-merge", (EVALUATION,), (MERGED,), merge_impl)
+        registered = await control.registry_register(
+            LOCAL_ADMIN, definition=definition, idempotency_key="register-merge",
+        )
+        assert isinstance(registered, RegistrationCommandResult), registered
+        promoted = await control.registry_promote_initial(
+            LOCAL_ADMIN, component=definition.name, version=registered.version,
+            idempotency_key="promote-merge",
+        )
+        assert isinstance(promoted, PromotionCommandResult), promoted
+        graph = graph.model_copy(update={
+            "outputs": (MERGED,),
+            "nodes": (*graph.nodes, GraphNode(id="merge", body=Ref(component=definition.name))),
+            "connections": (Connection(src="check", dst="merge"),),
+        })
+        submitted = await control.runs_start(
+            RUN_ACTOR, proposal=graph, inputs={"candidate": {"commit": sha}},
+            idempotency_key="contained-merge",
+        )
+        assert isinstance(submitted, RunSubmission), submitted
+        await succeeded(journal, submitted.run_id)
+        assert runner.authority.resolve_ref(runner.target_ref) == expected.merge_commit
+        assert durable_counts(tmp_path, submitted.run_id) == (1, 2)
+        assert any(event.kind == "EffectCommitted" for event in journal.events(submitted.run_id))
+    finally:
+        await control.shutdown()
 
 
 @pytest.mark.parametrize("phase", ["before_verify", "during_check"])

@@ -32,6 +32,15 @@ class MergeVerifiedEffect:
             simulation="supported",
         )
 
+    def is_assembled_from(self, journal: Journal, authority: GitAuthority) -> bool:
+        return self._journal is journal and self._authority is authority
+
+    def _subject(self, request: EffectRequest) -> MergeSubject:
+        subject = MergeSubject.model_validate(request.subject)
+        if subject.repository != self._authority.repository_id:
+            raise ContractViolation("merge subject belongs to another Git authority")
+        return subject
+
     async def execute(self, request: EffectRequest) -> EffectReceipt:
         subject = self._verified_subject(request)
         outcome = self._authority.install(subject, request.idempotency_key)
@@ -57,7 +66,7 @@ class MergeVerifiedEffect:
         )
 
     async def reconcile(self, request: EffectRequest) -> EffectReceipt | None:
-        subject = MergeSubject.model_validate(request.subject)
+        subject = self._subject(request)
         committed = self._authority.reconcile_install(subject, request.idempotency_key)
         if committed:
             return EffectReceipt(
@@ -85,7 +94,7 @@ class MergeVerifiedEffect:
         )
 
     def _verified_subject(self, request: EffectRequest) -> MergeSubject:
-        subject = MergeSubject.model_validate(request.subject)
+        subject = self._subject(request)
         if request.attestation_id is None:
             raise ContractViolation(
                 "merge_verified requires an attestation id — authority is never implicit"

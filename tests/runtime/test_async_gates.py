@@ -18,14 +18,14 @@ from tests.gitworld import WRITE_GRANTS
 from tests.runtime.test_async_workspace import until
 
 
-def gate_system(journal, provider, *, owner="gate-owner", lease_ttl_s=30):
+def gate_system(journal, provider, *, owner="gate-owner", lease_ttl_s=30, effects=None):
     return Constructicon(
         journal=journal, root_grants=WRITE_GRANTS, capabilities={"gate": provider},
         catalog={"gate": CapabilityDescriptor(
             capability_id="gate", kind="gates.contained", revision=provider.revision,
             leased=True,
         )}, owner_id=owner, lease_ttl_s=lease_ttl_s,
-        heartbeat_interval_s=min(1, lease_ttl_s / 5),
+        heartbeat_interval_s=min(1, lease_ttl_s / 5), effects=effects,
     )
 
 

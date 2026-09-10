@@ -197,6 +197,15 @@ class Constructicon:
                     or not resource.is_assembled_from(journal)
             ):
                 raise ValueError("contained gates require their exact descriptor and journal")
+            if isinstance(resource, ContainedGateRunner) and (
+                merge := (effects or {}).get("merge_verified")
+            ) is not None and (
+                not isinstance(merge, MergeVerifiedEffect)
+                or not merge.is_assembled_from(journal, resource.authority)
+            ):
+                raise ValueError(
+                    "contained gates and merge effect require the same authority/journal",
+                )
             if (
                 descriptor is not None and descriptor.kind == "gates.contained"
                 and isinstance(resource, (GateRunner, BoundGateRunner))

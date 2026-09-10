@@ -37,7 +37,7 @@ class ObservedLauncher:
 
     def __init__(self):
         self.calls = []
-        self.result = ProcessResult(0, b"python fixture\n", b"", 0)
+        self.result = ProcessResult(0, b"python fixture\n", b"", 0, payload_returncode=0)
 
     async def run(self, command, **kwargs):
         self.calls.append((command, kwargs))
@@ -183,6 +183,35 @@ async def test_recovery_before_verify_has_no_subject_or_current_base_dependency(
         await acquired.resource.verify("a" * 40)
 
 
+@LINUX
+async def test_recovery_never_reports_the_wrong_storage_root_reaped(tmp_path):
+    from constructicon.substrate.git.acquisition import acquisition_guard
+
+    runner = await qualify(unqualified(tmp_path))
+    acquired = await started(runner)
+    ctx = acquired.resource.context
+    old = acquired.resource.paths
+    old.payload.mkdir(parents=True)
+    sentinel = old.payload / "owned"
+    sentinel.write_bytes(b"still owned by the old guard")
+    successor = await ContainedGateRunner.create(
+        journal=runner._journal, authority=runner.authority, root=tmp_path / "different-root",
+        target_ref=runner.target_ref, provider_id=runner.provider_id,
+        launcher=runner.launcher, checks=runner.checks,
+    )
+    assert successor.revision == runner.revision  # Host locators never enter this digest.
+    async with acquisition_guard(old):
+        with pytest.raises(ContractViolation, match="recovery reference"):
+            await successor.reconcile(gate_context(successor, epoch=2), (stale_row(acquired, ctx),))
+        assert sentinel.read_bytes() == b"still owned by the old guard"
+        assert not successor.root.exists() and not runner.closure.is_closed(old)
+    # The genuine successor uses the recorded root and the same guard.
+    same = await qualify(runner)
+    result = await same.reconcile(gate_context(same, epoch=2), (stale_row(acquired, ctx),))
+    assert result.reaped == (acquired.resource_ref,)
+    assert runner.closure.is_closed(old) and not old.payload.exists()
+
+
 async def test_native_checks_use_exact_prepared_snapshot_and_fixed_runtime(launcher, tmp_path):
     runner = await qualify(unqualified(tmp_path, launcher))
     sha = candidate(runner)
@@ -221,11 +250,12 @@ async def test_native_output_overflow_cannot_pass(launcher, tmp_path, stream):
     await runner.close(acquired, "discard")
 
 
-@pytest.mark.parametrize("case", ["red", "timeout", "missing"])
+@pytest.mark.parametrize("case", ["red", "timeout", "missing", "exit125", "exit126", "exit127"])
 async def test_native_nonpassing_checks_remain_typed_data(launcher, tmp_path, case):
     runner = unqualified(tmp_path, launcher)
-    if case == "red":
-        runner.checks = (CheckSpec("red", (PYTHON, "-c", "raise SystemExit(2)")),)
+    if case == "red" or case.startswith("exit"):
+        code = int(case.removeprefix("exit")) if case.startswith("exit") else 2
+        runner.checks = (CheckSpec("red", (PYTHON, "-c", f"raise SystemExit({code})")),)
     elif case == "timeout":
         runner.checks = (CheckSpec("hang", (PYTHON, "-c", "import time; time.sleep(60)"), 1),)
     else:
@@ -238,6 +268,15 @@ async def test_native_nonpassing_checks_remain_typed_data(launcher, tmp_path, ca
     assert result.checks[0].status == ("timeout" if case == "timeout" else "failed")
     assert not acquired.resource.paths.payload.exists()
     await runner.close(acquired, "discard")
+
+
+@pytest.mark.parametrize("report", [None, 1])
+async def test_missing_or_contradictory_private_exit_is_not_a_pass(tmp_path, report):
+    runner = await qualify(unqualified(tmp_path))
+    runner.launcher.result = ProcessResult(0, b"passed", b"", 0, payload_returncode=report)
+    with open(__file__, "rb") as guard:
+        result = await runner._check(PASS, tmp_path, guard.fileno())
+    assert result.status == "infrastructure_error" and not result.ok
 
 
 async def test_hostile_repository_check_is_physically_confined(launcher, tmp_path, monkeypatch):
@@ -462,6 +501,31 @@ async def test_contained_gate_assembly_requires_exact_facts(tmp_path, change):
     with pytest.raises(ValueError, match="exact descriptor and journal"):
         Constructicon(journal=journal, capabilities={"gates": runner},
                       catalog={} if change == "absent" else {"gates": descriptor})
+
+
+@pytest.mark.parametrize("world", ["same", "journal", "authority", "same-path", "adapter"])
+async def test_gate_and_merge_effect_share_one_exact_world(tmp_path, world):
+    from constructicon.substrate.effects.git import MergeVerifiedEffect
+    from constructicon.substrate.journal.sqlite import SqliteJournal
+    from tests.runtime.test_async_gates import gate_system
+
+    journal = SqliteJournal(tmp_path / "run.sqlite")
+    runner = await qualify(unqualified(tmp_path, journal=journal))
+    effect_journal, authority = journal, runner.authority
+    if world == "journal":
+        effect_journal = SqliteJournal(tmp_path / "other.sqlite")
+    elif world == "authority":
+        authority = GitAuthority(seed_authority(tmp_path / "other"), tmp_path / "other-legacy")
+    elif world == "same-path":
+        authority = GitAuthority(Path(authority.repository_id), tmp_path / "other-legacy")
+    effect = MergeVerifiedEffect(journal=effect_journal, authority=authority)
+    if world == "adapter":
+        effect = SimpleNamespace(profile=effect.profile)
+    if world == "same":
+        gate_system(journal, runner, effects={"merge_verified": effect})
+    else:
+        with pytest.raises(ValueError, match="same authority/journal"):
+            gate_system(journal, runner, effects={"merge_verified": effect})
 
 
 @LINUX

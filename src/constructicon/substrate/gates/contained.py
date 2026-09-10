@@ -68,6 +68,7 @@ class _GateReference(BaseModel):
 
     acquisition: str
     provider: str
+    storage_root: str
 
 
 @dataclass
@@ -138,7 +139,7 @@ class ContainedGateRunner:
                 raise ContractViolation("contained checks require fixed argv and positive timeouts")
         self._journal = journal
         self.authority = authority
-        self.root = root
+        self.root = root.resolve()
         self.target_ref = target_ref
         self.provider_id = provider_id
         self.launcher = launcher
@@ -174,7 +175,10 @@ class ContainedGateRunner:
                     ("/usr/bin/python3", "-I", "-c", _CHECK, *probe),
                     workspace=None, posture=Posture.READ, guard_fds=(read_fd,), timeout_s=30,
                 )
-                if result.returncode or result.timed_out or result.bound_exceeded:
+                if (
+                    result.returncode or result.timed_out or result.bound_exceeded
+                    or result.payload_returncode != 0
+                ):
                     raise ContractViolation("contained gate runtime identification failed")
                 versions.append(_bounded(result.stdout.decode(errors="replace")))
         finally:
@@ -230,7 +234,10 @@ class ContainedGateRunner:
         acquired = acquisition_id_for(logical, context.run_lease.epoch)
         handle = BoundContainedGate(self, context, AcquisitionPaths(self.root, acquired))
         self._handles.add(handle)
-        reference = _GateReference(acquisition=acquired, provider=self.provider_id)
+        # A private recovery locator, not part of the portable launch identity.
+        reference = _GateReference(
+            acquisition=acquired, provider=self.provider_id, storage_root=str(self.root),
+        )
         return AcquiredCapability(
             resource=handle, lease_id=logical, acquisition_id=acquired,
             resource_ref=canonical_json(reference.model_dump(mode="json")),
@@ -289,6 +296,7 @@ class ContainedGateRunner:
             acquired = acquisition_id_for(logical, row.acquisition_epoch)
             if (
                 reference.acquisition != acquired or reference.provider != self.provider_id
+                or reference.storage_root != str(self.root)
                 or canonical_json(reference.model_dump(mode="json")) != row.resource_ref
             ):
                 raise ContractViolation("gate recovery reference contradicts its durable row")
@@ -357,10 +365,11 @@ class ContainedGateRunner:
         elif result.bound_exceeded:
             status = "infrastructure_error"
             detail = f"check exceeded {result.bound_exceeded} output bound\n" + detail
-        elif result.returncode in (125, 126, 127):
+        elif result.payload_returncode is None or result.returncode != result.payload_returncode:
             status = "infrastructure_error"
+            detail = "launcher did not report a complete check exit\n" + detail
         else:
-            status = "passed" if result.returncode == 0 else "failed"
+            status = "passed" if result.payload_returncode == 0 else "failed"
         return CheckResult(
             name=spec.name, status=status, detail=_bounded(detail), elapsed_s=result.elapsed_s,
         )
