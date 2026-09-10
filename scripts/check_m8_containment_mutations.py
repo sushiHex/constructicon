@@ -17,6 +17,18 @@ FACT = "tests/substrate/test_acquisition_closure.py::"
 
 MUTANTS = (
     (
+        "artifact hashing monopolizes the event loop", LAUNCH + "probe",
+        "await finish_owned(asyncio.create_task(asyncio.to_thread(self.check_artifacts)))",
+        "self.check_artifacts()",
+        OS + "test_artifact_verification_yields_and_joins_before_return",
+    ),
+    (
+        "artifact hashing outlives its owner", LAUNCH + "probe",
+        "await finish_owned(asyncio.create_task(asyncio.to_thread(self.check_artifacts)))",
+        "await asyncio.to_thread(self.check_artifacts)",
+        OS + "test_artifact_verification_yields_and_joins_before_return",
+    ),
+    (
         "availability gets an independent deadline", LAUNCH + "run",
         "await self.probe(deadline=deadline)", "await self.probe()",
         OS + "test_probe_reaper_uses_the_call_deadline_when_the_controller_stalls",

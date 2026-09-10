@@ -14,6 +14,7 @@ import select
 import signal
 import socket
 import sys
+import threading
 import time
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
@@ -98,6 +99,64 @@ def test_launcher_configuration_cannot_change_across_an_await(tmp_path, field):
     changed = replace(launcher, limits=replace(launcher.limits, stdout_bytes=1000))
     assert changed.revision != launcher.revision
     assert launcher.limits.stdout_bytes != changed.limits.stdout_bytes
+
+
+@pytest.mark.parametrize("termination", ["deadline", "repeated-cancellation"])
+async def test_artifact_verification_yields_and_joins_before_return(
+    tmp_path, monkeypatch, termination,
+):
+    # Portable ownership proof, not a substitute for native artifact validation.
+    launcher = LinuxLauncher(
+        runtime_root=tmp_path, expected_runtime=Digest("sha256:" + "1" * 64),
+        bubblewrap=tmp_path / "bwrap", policy=tmp_path / "policy",
+        expected_policy_sha256="2" * 64,
+    )
+    entered, release, finished = (threading.Event() for _ in range(3))
+
+    def slow_verification(_self):
+        entered.set()
+        try:
+            release.wait(2)
+        finally:
+            finished.set()
+
+    launches = []
+
+    async def unexpected_launch(*args, **kwargs):
+        launches.append(args)
+        raise AssertionError("expired artifact verification must not launch a child")
+
+    monkeypatch.setattr(LinuxLauncher, "check_artifacts", slow_verification)
+    monkeypatch.setattr(LinuxLauncher, "_run", unexpected_launch)
+    call = asyncio.create_task(launcher.run(
+        ("/usr/bin/python3",), workspace=None, posture=Posture.READ, guard_fds=(0,),
+        timeout_s=.05 if termination == "deadline" else 10,
+    ))
+    try:
+        async with asyncio.timeout(3):
+            while not entered.is_set():
+                await asyncio.sleep(0)
+        assert not finished.is_set(), "artifact verification monopolized the event loop"
+        if termination == "deadline":
+            await asyncio.sleep(.1)
+        else:
+            call.cancel()
+            await asyncio.sleep(0)
+            call.cancel()
+            await asyncio.sleep(0)
+        assert not call.done(), "artifact verification outlived its owner"
+        release.set()
+        if termination == "deadline":
+            result = await call
+            assert result.timed_out and result.stdout == b""
+        else:
+            with pytest.raises(asyncio.CancelledError):
+                await call
+        assert finished.is_set()
+        assert launches == []
+    finally:
+        release.set()
+        await asyncio.gather(call, return_exceptions=True)
 
 
 async def run(

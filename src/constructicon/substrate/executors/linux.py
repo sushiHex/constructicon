@@ -222,7 +222,9 @@ class LinuxLauncher:
 
         if deadline is None:
             deadline = asyncio.get_running_loop().time() + 10
-        self.check_artifacts()
+        # Hashing trusted artifacts must not stall heartbeats. Join the read-only
+        # worker before propagating expiry/cancellation; it can never launch work.
+        await finish_owned(asyncio.create_task(asyncio.to_thread(self.check_artifacts)))
         if sys.platform != "linux":
             raise ContractViolation("physical launch probes require Linux")
         fd = os.memfd_create("constructicon-availability", os.MFD_CLOEXEC)

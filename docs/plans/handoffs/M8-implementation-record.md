@@ -282,6 +282,17 @@ on the caller deadline even while the controller event loop is blocked.
 Removing the deadline transfer is a separate native mutation. Expiry is
 reported as timeout rather than as an unrelated prerequisite failure.
 
+Review of `b8256a6` found synchronous runtime hashing before the probe's first
+await. Artifact verification now uses the existing owned-work join around a
+read-only worker thread. Heartbeats and cancellation remain deliverable while
+storage is busy. Expiry or repeated cancellation joins that worker before
+returning and cannot start a probe or payload afterward. This is not a hard
+wall-clock bound on a stalled host filesystem: joining an in-progress read is
+cleanup latency, not additional authorized execution. A portable barrier test
+proves both responsiveness and ownership; moving hashing back onto the loop
+or abandoning the worker on cancellation is independently assertion-killed.
+Native tests continue to validate the actual artifacts and launch recipe.
+
 ### Backend extensibility and subscription intent
 
 The owner reaffirmed that Claude Code, Codex, and Pi are the starting adapters,
