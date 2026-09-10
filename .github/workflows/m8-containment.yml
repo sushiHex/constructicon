@@ -77,6 +77,7 @@ jobs:
               "$1/.venv/bin/python" -m pytest tests/substrate/test_native_codex_mediation.py \
                 -v --tb=short -p no:cacheprovider
           ' sh "$PWD"
+          uv run python scripts/check_native_codex_probe_mutations.py
       - name: Prove containment as the non-sudo service user
         shell: bash
         env:

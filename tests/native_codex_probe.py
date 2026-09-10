@@ -80,6 +80,7 @@ class Wire:
         self.sent = 0
         self.sequence = 0
         self.observed_methods = set()
+        self.warnings = []
 
     async def read(self):
         try:
@@ -99,6 +100,8 @@ class Wire:
             if not isinstance(value["method"], str):
                 raise ProbeRefused("invalid method")
             self.observed_methods.add(value["method"])
+            if value["method"] in {"warning", "configWarning"}:
+                self.warnings.append(value)
         return value
 
     async def send(self, value):
@@ -153,7 +156,8 @@ async def conversation(wire, cwd, worker):
                 or params["turn"]["status"] != "completed"
             ):
                 raise ProbeRefused(f"turn failed or changed identity: {params}")
-            return {"calls": sorted(dispatch.seen), "methods": sorted(wire.observed_methods)}
+            return {"calls": sorted(dispatch.seen), "methods": sorted(wire.observed_methods),
+                    "warnings": wire.warnings}
 
 
 async def run_probe(argv, *, cwd, env, worker, timeout=30):

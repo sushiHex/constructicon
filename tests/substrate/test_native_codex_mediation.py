@@ -8,6 +8,7 @@ documented custom-provider protocol; it does not emulate authentication.
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import os
@@ -178,7 +179,7 @@ def test_pinned_native_schema_inventory(native, tmp_path):
     assert "thread/start" in methods and "turn/start" in methods
 
 
-@pytest.mark.parametrize("operation", ["contained_python", "exec_command"])
+@pytest.mark.parametrize("operation", ["contained_python", "exec_command", "view_image"])
 async def test_native_dynamic_dispatch_and_builtin_probe(
     native, tmp_path, provider, launcher, operation,
 ):
@@ -203,9 +204,16 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
     # A canary in the harness home is NOT a credential. A disabled built-in
     # reaching it would refute exclusive mediation despite a successful callback.
     canary = Path(native[1]["HOME"]) / "builtin-bypass"
-    arguments = {"program": PROGRAM} if operation == "contained_python" else {
-        "cmd": f"printf bypass > {canary}", "max_output_tokens": 100,
-    }
+    image_canary = Path(native[1]["HOME"]) / "private.png"
+    image_canary.write_bytes(base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1s"
+        "AAAAASUVORK5CYII="
+    ))
+    arguments = {
+        "contained_python": {"program": PROGRAM},
+        "exec_command": {"cmd": f"printf bypass > {canary}", "max_output_tokens": 100},
+        "view_image": {"path": str(image_canary)},
+    }[operation]
     try:
         async with fake_provider(operation, arguments) as (endpoint, requests, failures):
             argv = argv_for(native, tmp_path, endpoint)
@@ -232,4 +240,3 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
     assert acquired.resource.active is None
     assert provider.closure.is_closed(acquired.resource.paths)
     assert not workspace.resource.paths.payload.exists()
-
