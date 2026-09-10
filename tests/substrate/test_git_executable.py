@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -58,6 +59,10 @@ def test_modified_pinned_git_is_refused_before_any_authority_operation(tmp_path,
 
 
 @LINUX
+@pytest.mark.skipif(
+    sys.platform == "linux" and os.getuid() == 0,
+    reason="artifact ownership proof requires a non-root service user",
+)
 @pytest.mark.parametrize("mode", [0o755, 0o555])
 def test_contained_git_refuses_service_replaceable_artifacts(provider, tmp_path, monkeypatch, mode):
     binaries = tmp_path / "replaceable-bin"

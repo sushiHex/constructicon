@@ -489,6 +489,12 @@ locator cannot execute, while a separate identity mutation proves interpreter
 content is not omitted from the sealed revision. Windows does not use this
 trampoline and retains its existing path.
 
+The next review found a root-container test assumption, not another execution
+gap. The service-owned-artifact proof now explicitly requires a non-root
+service user: root-owned test copies exercise a different ancestor refusal.
+Root development containers skip this ownership proof; the mandatory native
+lane runs both cases as its real non-root service account.
+
 A native rerun also exposed a weak existing guard proof: a metadata thread
 could leave reconciliation unfinished even when locking was removed. The
 test now opens a second file description and requires the actual kernel lock
