@@ -17,6 +17,8 @@ import math
 import os
 import select
 import signal
+import socket
+import struct
 import subprocess
 import sys
 import time
@@ -35,49 +37,55 @@ def _owner_closed(events: list[tuple[int, int]]) -> bool:
 
 
 class _Shutdown:
-    """One non-renewable cleanup window, independent of the owner's event loop."""
+    """One non-renewable grace window, beginning at actual namespace TERM."""
 
     def __init__(self, deadline: float) -> None:
         self.deadline = deadline
+        self._requested = False
         self.started: float | None = None
 
     def request(self, _signum: int = 0, _frame: object = None) -> None:
+        self._requested = True
+
+    def acknowledge_term(self, when: float) -> None:
         if self.started is None:
-            self.started = min(time.monotonic(), self.deadline)
+            self.started = when
 
     @property
     def requested(self) -> bool:
-        if time.monotonic() >= self.deadline:
-            self.request()
-        return self.started is not None
+        return self._requested or time.monotonic() >= self.deadline
 
     @property
     def forced(self) -> bool:
         return (
-            self.requested and self.started is not None
+            self.started is not None
             and time.monotonic() >= self.started + TERM_GRACE_S
         )
 
 
 def _reap(
     child: subprocess.Popen[bytes], owner_fd: int, shutdown: _Shutdown,
-    terminate: Callable[[bool], None],
+    begin_term: Callable[[], float | None], force: Callable[[], None],
 ) -> int:
     if sys.platform != "linux":
         raise OSError("owned child reaping requires Linux")
     poller = select.poll()
     poller.register(owner_fd, select.POLLIN | select.POLLHUP | select.POLLERR)
     result = 125
-    notified = False
+
+    def advance() -> None:
+        if shutdown.requested and shutdown.started is None:
+            when = begin_term()
+            if when is not None:
+                shutdown.acknowledge_term(when)
+        if shutdown.forced:
+            force()
+
     try:
         while True:
             if poller.poll(0):
                 shutdown.request()
-            if shutdown.requested and not notified:
-                terminate(False)
-                notified = True
-            if shutdown.forced:
-                terminate(True)
+            advance()
             try:
                 pid, status = os.waitpid(-1, os.WNOHANG)
             except ChildProcessError:
@@ -91,13 +99,10 @@ def _reap(
             time.sleep(0.01)
     finally:
         # A failure does not release guards over surviving work. The original
-        # stop time also survives repeated signals and fallback cleanup.
+        # TERM time also survives repeated signals and fallback cleanup.
         shutdown.request()
-        if not notified:
-            terminate(False)
         while True:
-            if shutdown.forced:
-                terminate(True)
+            advance()
             try:
                 pid, _ = os.waitpid(-1, os.WNOHANG)
             except ChildProcessError:
@@ -114,7 +119,7 @@ def _signal_namespace(force: bool) -> None:
         os.kill(-1, signal.SIGKILL if force else signal.SIGTERM)
 
 
-def supervise_namespace(owner_fd: int, deadline: float, argv: list[str]) -> int:
+def supervise_namespace(control: socket.socket, deadline: float, argv: list[str]) -> int:
     """Trusted PID 1 replaces bwrap's init; the payload inherits no private fd."""
 
     if sys.platform != "linux" or os.getpid() != 1:
@@ -126,11 +131,23 @@ def supervise_namespace(owner_fd: int, deadline: float, argv: list[str]) -> int:
     signal.signal(signal.SIGTERM, shutdown.request)
     signal.signal(signal.SIGINT, shutdown.request)
     poller = select.poll()
-    poller.register(owner_fd, select.POLLIN | select.POLLHUP | select.POLLERR)
+    poller.register(control.fileno(), select.POLLIN | select.POLLHUP | select.POLLERR)
     if poller.poll(0) or shutdown.requested:
         return 125
     child = subprocess.Popen(argv, close_fds=True, env=dict(os.environ))
-    return _reap(child, owner_fd, shutdown, _signal_namespace)
+
+    def begin_term() -> float:
+        _signal_namespace(False)
+        when = time.monotonic()
+        # One atomic record on a private sequenced-packet socket. Both reapers
+        # use this timestamp, never the earlier request/deadline observation.
+        with suppress(BrokenPipeError, ConnectionResetError):
+            control.send(struct.pack("!d", when))
+        return when
+
+    return _reap(
+        child, control.fileno(), shutdown, begin_term, lambda: _signal_namespace(True),
+    )
 
 
 def _subreaper() -> None:
@@ -192,34 +209,44 @@ def supervise(owner_fd: int, deadline: float, argv: list[str]) -> int:
     if os.read(owner_fd, 1) != b"\x01" or shutdown.requested:
         return 125
     # TERM must reach workloads, not kill bwrap's monitor and trigger PDEATHSIG.
-    # A private, one-way lifetime pipe reaches only the trusted namespace init.
+    # A private socket reaches only trusted init: EOF requests TERM; the reverse
+    # direction acknowledges its actual send time. A delayed init cannot lose
+    # its grace to an earlier external clock. No acknowledgement means no
+    # fallback KILL or claim of quiescence; guards remain until children exit.
     # Acquisition guards remain here, outside every payload namespace.
-    namespace_read, namespace_write = os.pipe()
+    control, namespace = socket.socketpair(type=socket.SOCK_SEQPACKET)
+    with control, namespace:
+        control.setblocking(False)
+        requested = False
 
-    def terminate(force: bool) -> None:
-        nonlocal namespace_write
-        if namespace_write >= 0:
-            os.close(namespace_write)
-            namespace_write = -1
-        if force:
-            _terminate_owned_children()
+        def begin_term() -> float | None:
+            nonlocal requested
+            if not requested:
+                # The peer may already have exited. This never substitutes an
+                # invented TERM timestamp for the peer's acknowledgement.
+                with suppress(OSError):
+                    control.shutdown(socket.SHUT_WR)
+                requested = True
+            with suppress(BlockingIOError, ConnectionResetError):
+                message = control.recv(8)
+                if len(message) == 8:
+                    return float(struct.unpack("!d", message)[0])
+            return None
 
-    try:
+        namespace_fd = namespace.fileno()
         split = argv.index("--")
         command = [
-            *argv[:split], "--as-pid-1", "--sync-fd", str(namespace_read), "--",
+            *argv[:split], "--as-pid-1", "--sync-fd", str(namespace_fd), "--",
             "/usr/bin/python3", "-I", NAMESPACE_SCRIPT, "--namespace",
-            str(namespace_read), str(deadline), *argv[split + 1:],
+            str(namespace_fd), str(deadline), *argv[split + 1:],
         ]
         if shutdown.requested or _owner_closed(poller.poll(0)):
             return 125
         child = subprocess.Popen(
-            command, close_fds=True, pass_fds=(namespace_read,), env=dict(os.environ),
+            command, close_fds=True, pass_fds=(namespace_fd,), env=dict(os.environ),
         )
-        return _reap(child, owner_fd, shutdown, terminate)
-    finally:
-        os.close(namespace_read)
-        terminate(False)
+        namespace.close()
+        return _reap(child, owner_fd, shutdown, begin_term, _terminate_owned_children)
 
 
 def main() -> int:
@@ -228,10 +255,8 @@ def main() -> int:
         deadline = float(sys.argv[3])
         if not math.isfinite(deadline):
             raise ValueError("a finite monotonic deadline is required")
-        try:
-            return supervise_namespace(owner_fd, deadline, sys.argv[4:])
-        finally:
-            os.close(owner_fd)
+        with socket.socket(fileno=owner_fd) as control:
+            return supervise_namespace(control, deadline, sys.argv[4:])
     owner_fd = int(sys.argv[1])
     guards = tuple(int(value) for value in sys.argv[2].split(","))
     deadline = float(sys.argv[3])

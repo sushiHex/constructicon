@@ -318,7 +318,7 @@ frozen shutdown default. TERM must reach the workload, not bubblewrap's
 monitor: the pinned monitor's parent-death behavior otherwise kills namespace
 init before a cooperative child can flush. A small trusted PID-1 shim now
 replaces bubblewrap's built-in init. The external reaper retains the guards;
-one private lifetime pipe links it to the shim, which inherits neither guard
+one private lifetime socket links it to the shim, which inherits neither guard
 nor controller pipe. The shim closes private descriptors in the actual child
 and disables dumpability so that child cannot inspect its descriptors/memory.
 Both roles reuse one reaping loop and one non-renewable two-second shutdown
@@ -338,6 +338,24 @@ surviving elapsed-time mutant: a slower payload alone could satisfy the old
 absolute threshold. The test now observes the real probe and payload spans
 separately and requires the returned total to include both. No launch result
 or OS observation is fabricated, and the threshold is not merely increased.
+
+Review of `ab6daf8` found that the external fallback started its grace before
+namespace init delivered TERM. Stop requests now carry no grace timestamp.
+The private socket's write-half closure requests shutdown; trusted PID 1
+acknowledges the actual TERM send time in one atomic record. Both reapers use
+that same timestamp, and repeated requests or acknowledgements never renew it.
+The payload inherits no endpoint and cannot inspect init's private descriptors.
+Without acknowledgement the external reaper neither invents a clock nor
+releases guards over living descendants. A stalled trusted init can delay
+cleanup; it cannot turn missing evidence into quiescence.
+
+A native regression stops the exact namespace init through a pidfd, cancels
+the call, and waits beyond the old fallback window. Init must remain alive and
+the acquisition guard held. After continuation, the real TERM handler takes
+one second to flush successfully before teardown. The portable shutdown-law
+test also delays acknowledgement and independently kills a mutation that
+starts grace at request time. The native fixture, not that policy mutation,
+proves the installed immutable reapers exchange the timestamp correctly.
 
 ### Backend extensibility and subscription intent
 

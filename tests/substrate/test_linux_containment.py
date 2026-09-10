@@ -16,6 +16,7 @@ import socket
 import sys
 import threading
 import time
+from contextlib import suppress
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -86,11 +87,19 @@ def test_shutdown_has_one_nonrenewable_two_second_grace(monkeypatch, trigger):
     else:
         shutdown.request()
     assert shutdown.requested and not shutdown.forced
+    # A delayed trusted init has not delivered TERM yet. The request's clock
+    # must neither consume grace nor authorize the external fallback kill.
+    now[0] += 5.0
+    shutdown.request()
+    assert shutdown.started is None and not shutdown.forced
     started = now[0]
+    shutdown.acknowledge_term(started)
+    assert not shutdown.forced
     now[0] = started + 1.999
     assert not shutdown.forced
     shutdown.request()
     shutdown.request()
+    shutdown.acknowledge_term(now[0])
     assert shutdown.started == started
     now[0] = started + 2.0
     assert shutdown.forced
@@ -440,6 +449,82 @@ print('ready', flush=True)
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_delayed_namespace_term_preserves_the_actual_grace_and_guard(
+    launcher, tmp_path, monkeypatch,
+):
+    reapers = []
+    spawn = asyncio.create_subprocess_exec
+
+    async def observe(*args, **kwargs):
+        process = await spawn(*args, **kwargs)
+        reapers.append(process.pid)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", observe)
+    task = asyncio.create_task(run(launcher, tmp_path, """
+import os, signal, time
+from pathlib import Path
+def stop(signum, frame):
+    time.sleep(1)
+    Path('/workspace/flushed').write_text('done')
+    os._exit(0)
+signal.signal(signal.SIGTERM, stop)
+Path('/workspace/ready').touch()
+time.sleep(100)
+""", posture=Posture.WRITE, timeout_s=15))
+    init_fd = None
+    waiter = None
+    try:
+        async with asyncio.timeout(5):
+            while not (tmp_path / "workspace/ready").exists():
+                assert not task.done(), "workload never reached its barrier"
+                await asyncio.sleep(.01)
+        assert len(reapers) == 2  # Actual probe and payload reapers.
+        reaper = reapers[-1]
+        monitors = Path(f"/proc/{reaper}/task/{reaper}/children").read_text().split()
+        assert len(monitors) == 1
+        monitor = int(monitors[0])
+        inits = Path(f"/proc/{monitor}/task/{monitor}/children").read_text().split()
+        assert len(inits) == 1
+        init = int(inits[0])
+        status = Path(f"/proc/{init}/status")
+        fields = dict(line.split(":", 1) for line in status.read_text().splitlines())
+        assert int(fields["PPid"]) == monitor and fields["NSpid"].split()[-1] == "1"
+        init_fd = os.pidfd_open(init)
+        signal.pidfd_send_signal(init_fd, signal.SIGSTOP)
+        async with asyncio.timeout(2):
+            while "State:\tT" not in status.read_text():
+                await asyncio.sleep(.01)
+        task.cancel()
+
+        async def acquire_after_call():
+            paths = AcquisitionPaths(tmp_path, acquisition_id_for("lease-os-proof", 1))
+            async with acquisition_guard(paths):
+                pass
+
+        waiter = asyncio.create_task(acquire_after_call())
+        await asyncio.sleep(2.2)  # Longer than the old, premature fallback window.
+        poller = select.poll()
+        poller.register(init_fd, select.POLLIN)
+        assert not poller.poll(0), "fallback killed init before it delivered TERM"
+        assert not task.done() and not waiter.done(), "live work lost its guard"
+        signal.pidfd_send_signal(init_fd, signal.SIGCONT)
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 5)
+        assert (tmp_path / "workspace/flushed").read_text() == "done"
+        await asyncio.wait_for(waiter, 2)
+    finally:
+        if init_fd is not None:
+            with suppress(ProcessLookupError):
+                signal.pidfd_send_signal(init_fd, signal.SIGCONT)
+            os.close(init_fd)
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        if waiter is not None:
+            await asyncio.gather(waiter, return_exceptions=True)
 
 
 async def test_term_ignoring_workload_gets_only_the_fixed_grace(launcher, tmp_path):

@@ -41,9 +41,16 @@ MUTANTS = (
         OS + "test_shutdown_has_one_nonrenewable_two_second_grace",
     ),
     (
-        "repeated stops renew TERM grace",
-        "constructicon.substrate.executors._supervisor:_Shutdown.request",
+        "repeated acknowledgements renew TERM grace",
+        "constructicon.substrate.executors._supervisor:_Shutdown.acknowledge_term",
         "if self.started is None:", "if True:",
+        OS + "test_shutdown_has_one_nonrenewable_two_second_grace",
+    ),
+    (
+        "stop requests consume grace before TERM delivery",
+        "constructicon.substrate.executors._supervisor:_Shutdown.request",
+        "self._requested = True",
+        "self._requested = True\n    self.acknowledge_term(time.monotonic())",
         OS + "test_shutdown_has_one_nonrenewable_two_second_grace",
     ),
     (
