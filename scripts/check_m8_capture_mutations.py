@@ -120,6 +120,11 @@ MUTANTS = (
         '"--keep=leaked", cwd=authority.repository_id, stdin=pack, guard=guard,',
         HANDOFF + "test_unpublished_verified_objects_remain_reclaimable_by_authority_gc",
     ),
+    (
+        "handoff may mutate between verification and import", PACK,
+        "if type(pack) is not bytes:", "if False:",
+        HANDOFF + "test_mutable_handoffs_are_refused_before_any_await_or_import[bytearray]",
+    ),
 )
 
 if __name__ == "__main__":

@@ -82,6 +82,15 @@ async def test_unpublished_verified_objects_remain_reclaimable_by_authority_gc(h
     assert authority._run("cat-file", "-e", candidate, check=False).returncode != 0
 
 
+@pytest.mark.parametrize("mutable", [bytearray, memoryview])
+async def test_mutable_handoffs_are_refused_before_any_await_or_import(handoff, mutable):
+    _, authority, _, root, candidate, content = handoff
+    with pytest.raises(ContractViolation, match="immutable bytes"):
+        await receive(handoff, content=mutable(content))
+    assert authority._run("cat-file", "-e", candidate, check=False).returncode != 0
+    assert list(root.iterdir()) == []
+
+
 @pytest.mark.parametrize(
     "damage", ["truncated", "checksum", "magic", "version", "count", "trailer"]
 )

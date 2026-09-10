@@ -426,9 +426,54 @@ check before publication, not a second ownership law or an atomic SQLite/Git
 transaction. New WRITE process assemblies refuse legacy capture/gate resources,
 including relabeled instances. No live provider is enabled by this slice.
 
-Portable tests exercise real Git packs, publication races, and the awaiting
-walker contract. Native containment, process-death, mutation, and independent
-review evidence remain pending; Windows skips are not physical proof.
+The explicit revision is a string, as the manifest requires. It binds the
+provider's source closure, installed trusted Git, launcher, object format,
+target ref and limits. Portable admission tests exercise that real descriptor
+without materializing anything. New awaiting component definitions enter the
+normal canonical registration path; no retained component is rewritten.
+
+The native lane exercises hostile hooks, includes, filters, fsmonitor,
+credential helpers, alternates, symlinked Git metadata and stale locks;
+detached capture writers; a physically READ-only export; reset after hostile
+metadata; and repeated cancellation. Actual child processes run through the
+production launcher, not substituted OS results. Quarantine Git also inherits
+fixed Linux address-space/file/CPU limits before parsing compressed objects.
+Its exact open guard survives the Python owner's death, so recovery cannot
+delete an import root while that child still owns it.
+
+Public-control tests cover capture and counterfactual discard, plus literal
+controller death during import, after publication and after checkpointing.
+The late-publisher barrier is after the local control and literal marker reads:
+the successor finishes discard before the old host attempts its Git
+transaction and is killed. The reverse order preserves the existing
+checkpoint-selected release/discard law. Portable tests separately pin both
+atomic absence comparisons, closure response loss, SHA-1/SHA-256 handoffs,
+malformed/oversized packs, missing history and exact OID/type checks. The
+controllable fake proves that the walker awaits capture before checkpointing.
+
+### PR C review corrections and scope
+
+The first independent review found permanent authority `.keep` files after
+import. Removed them rather than adding a second recovery inventory. Verified
+objects may await publication without becoming immortal: normal Git GC can
+reclaim unreferenced imports, and Git refuses a ref transaction if an external
+prune removed its target first. A real-Git test pins reclaimability. Mutable
+buffers are refused at the handoff, preventing verification/import drift.
+
+The same review proposed requiring both contained workspace and gate instances
+in every WRITE provider assembly. That broader rule was not adopted: accepted
+ADR 0018 refuses legacy capture/uncontained gate bindings, which assembly now
+enforces, but PR C defines no production live provider. Requiring a PR D gate
+to instantiate the credential-free capture-only double would add an invented
+gate or collapse the approved slice sequence. Such a graph does not run checks
+or install its candidate. D/E remain prerequisites for the live F/G/H
+factories; this scope reading is explicitly included in the confirming review.
+
+Pre-M8 compatibility was reproduced against full base
+`3ee1beb6a58fac0bab85841a1f34d96b514c3c34`: seven checks pass in both trees;
+the historical fake profile and six manifest goldens are byte-identical.
+Exact-head native/mutation/local/CI results and the confirming review remain
+acceptance gates in PR #34; Windows skips are not physical evidence.
 
 ## Remaining slices and operator prerequisites
 

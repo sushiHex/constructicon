@@ -50,6 +50,8 @@ async def import_pack(
     closure transaction can give these already-verified objects a candidate ref.
     """
 
+    if type(pack) is not bytes:
+        raise ContractViolation("Git handoff requires immutable bytes")
     algorithm = authority.environment.object_format
     candidate = commit_oid(str(candidate).encode(), algorithm)
     hash_bytes = hashlib.new(algorithm).digest_size
