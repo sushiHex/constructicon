@@ -14,8 +14,50 @@ OS = "tests/substrate/test_linux_containment.py::"
 LEASE = "tests/substrate/test_contained_workspace.py::"
 CLOSURE = "constructicon.substrate.git.acquisition:AcquisitionClosure."
 FACT = "tests/substrate/test_acquisition_closure.py::"
+OPEN_CHECK = (
+    "await finish_owned(asyncio.create_task(asyncio.to_thread(\n"
+    "            self.provider.closure.require_open, self.paths,\n        )))"
+)
+BASE_READ = (
+    "await finish_owned(asyncio.create_task(asyncio.to_thread(\n"
+    "        self.authority.resolve_ref, self.target_ref,\n    )))"
+)
+COMMIT = "await finish_owned(asyncio.create_task(asyncio.to_thread(closure.commit, paths)))"
+METADATA = (
+    ("acquire", WORKSPACE + "acquire", BASE_READ,
+     "self.authority.resolve_ref(self.target_ref)"),
+    ("materialize", "constructicon.substrate.git.contained:ContainedWorkspace.materialize",
+     OPEN_CHECK, "self.provider.closure.require_open(self.paths)"),
+    ("use", "constructicon.substrate.git.contained:ContainedWorkspace.use.__wrapped__",
+     OPEN_CHECK, "self.provider.closure.require_open(self.paths)"),
+    ("close", "constructicon.substrate.git.acquisition:dispose_acquisition",
+     COMMIT, "closure.commit(paths)"),
+)
 
 MUTANTS = (
+    *(
+        (
+            f"{phase} metadata {'blocks the loop' if blocking else 'outlives its owner'}",
+            target, before,
+            synchronous if blocking else before.replace(
+                "await finish_owned(asyncio.create_task(asyncio.to_thread(",
+                "await asyncio.to_thread(",
+            )[:-2],
+            LEASE + f"test_trusted_metadata_yields_and_remains_owned_through_cancellation[{phase}]",
+        )
+        for phase, target, before, synchronous in METADATA for blocking in (True, False)
+    ),
+    (
+        "READ extraction monopolizes the event loop", WORKSPACE + "populate",
+        "await finish_owned(asyncio.create_task(asyncio.to_thread(extract)))", "extract()",
+        LEASE + "test_read_extraction_yields_and_retains_its_guard_until_writes_finish",
+    ),
+    (
+        "READ extraction outlives its guard", WORKSPACE + "populate",
+        "await finish_owned(asyncio.create_task(asyncio.to_thread(extract)))",
+        "await asyncio.to_thread(extract)",
+        LEASE + "test_read_extraction_yields_and_retains_its_guard_until_writes_finish",
+    ),
     (
         "artifact hashing monopolizes the event loop", LAUNCH + "probe",
         "await finish_owned(asyncio.create_task(asyncio.to_thread(self.check_artifacts)))",
@@ -104,7 +146,7 @@ MUTANTS = (
     (
         "closed materializer can create again",
         "constructicon.substrate.git.contained:ContainedWorkspace.materialize",
-        "self.provider.closure.require_open(self.paths)", "pass",
+        OPEN_CHECK, "pass",
         LEASE + "test_waiting_materializer_cannot_recreate_disposed_payload",
     ),
     (
@@ -115,7 +157,7 @@ MUTANTS = (
     (
         "durably closed view can be used",
         "constructicon.substrate.git.contained:ContainedWorkspace.use.__wrapped__",
-        "self.provider.closure.require_open(self.paths)", "pass",
+        OPEN_CHECK, "pass",
         LEASE + "test_recovery_waits_for_started_materialization_then_removes_it",
     ),
     (
@@ -127,8 +169,8 @@ MUTANTS = (
     (
         "closure waits behind the producer",
         "constructicon.substrate.git.acquisition:dispose_acquisition",
-        "closure.commit(paths)\n    async with acquisition_guard(paths):",
-        "async with acquisition_guard(paths):\n        closure.commit(paths)",
+        f"{COMMIT}\n    async with acquisition_guard(paths):",
+        f"async with acquisition_guard(paths):\n        {COMMIT}",
         LEASE + "test_reconciliation_commits_revocation_before_waiting_for_physical_quiescence",
     ),
     (

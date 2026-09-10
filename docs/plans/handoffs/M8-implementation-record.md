@@ -293,6 +293,25 @@ proves both responsiveness and ownership; moving hashing back onto the loop
 or abandoning the worker on cancellation is independently assertion-killed.
 Native tests continue to validate the actual artifacts and launch recipe.
 
+Review of `e97f762` identified the same event-loop hazard in READ archive
+extraction. Extraction now joins its filesystem worker before releasing the
+acquisition guard, including repeated cancellation. A native barrier proves
+that the loop stays responsive, another guard holder cannot enter early, and
+the actual archive writes finish before the cancelled materializer returns.
+Synchronous extraction and an unjoined worker are separate mutations.
+
+The same audit covered the newly introduced trusted metadata boundaries:
+base-ref resolution, guarded closure checks at materialization/use, and the
+closure-marker transaction. They now join off-loop work as well. Revocation
+still commits before waiting for the guard; a cancellation during that write
+can leave a closed, unreconciled acquisition for retry, never false disposal.
+The four boundary cases each test responsiveness and repeated-cancellation
+ownership, with one mutation for each guarantee. These fixed, bounded Git
+plumbing calls operate only on the trusted authority. No hostile staging
+importer or gate verifier is wrapped in a thread, and no legacy API changes.
+Small fixed-count guard/path syscalls remain synchronous; repository-sized
+processing and subprocess waits do not run on the event loop.
+
 ### Backend extensibility and subscription intent
 
 The owner reaffirmed that Claude Code, Codex, and Pi are the starting adapters,

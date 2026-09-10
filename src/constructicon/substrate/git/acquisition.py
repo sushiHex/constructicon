@@ -129,7 +129,7 @@ async def acquisition_guard(paths: AcquisitionPaths) -> AsyncIterator[int]:
 async def dispose_acquisition(closure: AcquisitionClosure, paths: AcquisitionPaths) -> bool:
     """Revoke before waiting, then remove only quiescent acquisition payloads."""
 
-    closure.commit(paths)
+    await finish_owned(asyncio.create_task(asyncio.to_thread(closure.commit, paths)))
     async with acquisition_guard(paths):
         if not paths.payload.exists() and not paths.payload.is_symlink():
             return False
@@ -139,7 +139,7 @@ async def dispose_acquisition(closure: AcquisitionClosure, paths: AcquisitionPat
         if not shutil.rmtree.avoids_symlink_attacks:
             raise ContractViolation("symlink-safe acquisition disposal is unavailable")
         # Cancellation cannot release the guard while this worker still has
-        # filesystem authority. Only deletion runs in a thread, never an
-        # uncontained Git importer or verifier.
+        # filesystem authority. This worker only disposes the tree; it never
+        # executes an uncontained Git importer or verifier.
         await finish_owned(asyncio.create_task(asyncio.to_thread(shutil.rmtree, paths.payload)))
         return True

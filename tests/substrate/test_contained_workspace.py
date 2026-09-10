@@ -6,6 +6,7 @@ import asyncio
 import copy
 import random
 import sys
+import tarfile
 import threading
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -336,6 +337,135 @@ async def test_large_materialization_keeps_artifact_and_task_limits_separate(
                 )
     finally:
         await provider.close(acquired, "discard")
+
+
+@LINUX
+async def test_read_extraction_yields_and_retains_its_guard_until_writes_finish(
+    provider, monkeypatch,
+):
+    acquired = await provider.acquire(context())
+    entered, release, finished = (threading.Event() for _ in range(3))
+    extract = tarfile.TarFile.extractall
+
+    def blocked_extract(archive, *args, **kwargs):
+        entered.set()
+        try:
+            release.wait(5)
+            extract(archive, *args, **kwargs)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(tarfile.TarFile, "extractall", blocked_extract)
+    producer = asyncio.create_task(acquired.materialize())
+    waiting = None
+
+    async def next_guard():
+        async with acquisition_guard(acquired.resource.paths):
+            return "quiescent"
+
+    try:
+        try:
+            async with asyncio.timeout(2):
+                while not entered.is_set():
+                    await asyncio.sleep(.001)
+        except TimeoutError:
+            pytest.fail("the event loop could not observe extraction entry within its deadline")
+        assert not finished.is_set(), "extraction monopolized the event loop"
+        waiting = asyncio.create_task(next_guard())
+        for _ in range(2):
+            producer.cancel()
+            await asyncio.sleep(.02)
+            assert not producer.done() and not waiting.done(), "extraction abandoned its guard"
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await producer
+        assert finished.is_set() and not acquired.resource.ready
+        assert await waiting == "quiescent"
+        assert Path(acquired.resource.path, "calc.py").read_text().startswith("def add")
+    finally:
+        release.set()
+        await asyncio.gather(producer, *(t for t in (waiting,) if t), return_exceptions=True)
+        if entered.is_set() and not await asyncio.to_thread(finished.wait, 5):
+            raise RuntimeError("extraction test worker did not finish")
+        await provider.close(acquired, "discard")
+
+
+@pytest.mark.parametrize("phase", [
+    "acquire", pytest.param("materialize", marks=LINUX),
+    pytest.param("use", marks=LINUX), pytest.param("close", marks=LINUX),
+])
+async def test_trusted_metadata_yields_and_remains_owned_through_cancellation(
+    provider, monkeypatch, phase,
+):
+    acquired = None if phase == "acquire" else await provider.acquire(context())
+    if phase in {"use", "close"}:
+        await acquired.materialize()
+    owner = provider.authority if phase == "acquire" else provider.closure
+    method = {"acquire": "resolve_ref", "close": "commit"}.get(phase, "require_open")
+    operation = getattr(owner, method)
+    entered, release, finished = (threading.Event() for _ in range(3))
+
+    def blocked_operation(*args, **kwargs):
+        entered.set()
+        try:
+            release.wait(5)
+            return operation(*args, **kwargs)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(owner, method, blocked_operation)
+
+    async def use():
+        async with acquired.resource.use():
+            pytest.fail("cancelled metadata validation yielded workspace authority")
+
+    action = {
+        "acquire": lambda: provider.acquire(context()),
+        "materialize": lambda: acquired.materialize(),
+        "use": use,
+        "close": lambda: provider.close(acquired, "discard"),
+    }[phase]
+    call = asyncio.create_task(action())
+    waiting = None
+
+    async def next_guard():
+        async with acquisition_guard(acquired.resource.paths):
+            return "quiescent"
+
+    try:
+        try:
+            async with asyncio.timeout(2):
+                while not entered.is_set():
+                    await asyncio.sleep(.001)
+        except TimeoutError:
+            pytest.fail("the event loop could not observe metadata entry within its deadline")
+        assert not finished.is_set(), "metadata operation monopolized the event loop"
+        if phase in {"materialize", "use"}:
+            waiting = asyncio.create_task(next_guard())
+        for _ in range(2):
+            call.cancel()
+            await asyncio.sleep(.02)
+            assert not call.done(), "metadata operation outlived its owner"
+            assert waiting is None or not waiting.done(), "metadata check abandoned its guard"
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await call
+        assert finished.is_set()
+        if waiting is not None:
+            assert await waiting == "quiescent"
+        if phase == "acquire":
+            assert not provider.root.exists()
+        elif phase == "materialize":
+            assert not acquired.resource.paths.payload.exists()
+        elif phase == "close":
+            assert provider.closure.is_closed(acquired.resource.paths)
+    finally:
+        release.set()
+        await asyncio.gather(call, *(t for t in (waiting,) if t), return_exceptions=True)
+        if entered.is_set() and not await asyncio.to_thread(finished.wait, 5):
+            raise RuntimeError("metadata test worker did not finish")
+        if acquired is not None:
+            await provider.close(acquired, "discard")
 
 
 @LINUX

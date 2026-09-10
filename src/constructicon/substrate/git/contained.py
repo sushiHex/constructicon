@@ -100,7 +100,9 @@ class ContainedWorkspace:
             raise ContractViolation("workspace materialization already entered")
         self._phase.entered = True  # Before the first await or persistent operation.
         async with acquisition_guard(self.paths) as guard:
-            self.provider.closure.require_open(self.paths)
+            await finish_owned(asyncio.create_task(asyncio.to_thread(
+                self.provider.closure.require_open, self.paths,
+            )))
             Path(self.path).mkdir(parents=True, exist_ok=False)
             await self.provider.populate(self, guard)
             self._phase.ready = True
@@ -110,7 +112,9 @@ class ContainedWorkspace:
         self.provider.owned_view(self, self.context)
         async with acquisition_guard(self.paths) as guard:
             self.provider.owned_view(self, self.context)
-            self.provider.closure.require_open(self.paths)
+            await finish_owned(asyncio.create_task(asyncio.to_thread(
+                self.provider.closure.require_open, self.paths,
+            )))
             if Path(self.path).is_symlink() or not Path(self.path).is_dir():
                 raise ContractViolation("workspace mount is no longer its owned directory")
             yield guard
@@ -140,7 +144,9 @@ class ContainedWorkspaceProvider:
         lease_id = lease_id_for(context.run_lease.run_id, context.path, context.binding.binding)
         acquisition = acquisition_id_for(lease_id, context.run_lease.epoch)
         paths = AcquisitionPaths(self.root, acquisition)
-        base = self.authority.resolve_ref(self.target_ref)
+        base = await finish_owned(asyncio.create_task(asyncio.to_thread(
+            self.authority.resolve_ref, self.target_ref,
+        )))
         workspace = ContainedWorkspace(self, context, paths, base)
         self._views.add(workspace)
         reference = _WorkspaceReference(
@@ -256,8 +262,12 @@ class ContainedWorkspaceProvider:
     async def populate(self, workspace: ContainedWorkspace, guard: int) -> None:
         if self.posture is Posture.READ:
             content = await self._export("archive", "--format=tar", workspace.base)
-            with tarfile.open(fileobj=io.BytesIO(content)) as archive:
-                archive.extractall(workspace.path, filter="data")
+
+            def extract() -> None:
+                with tarfile.open(fileobj=io.BytesIO(content)) as archive:
+                    archive.extractall(workspace.path, filter="data")
+
+            await finish_owned(asyncio.create_task(asyncio.to_thread(extract)))
             return
         content = await self._export(
             "pack-objects", "--stdout", "--revs", stdin=f"{workspace.base}\n".encode(),

@@ -32,6 +32,7 @@ from constructicon.core.workspace import (
     lease_id_for,
 )
 from constructicon.runtime.registry import CapabilityDescriptor
+from constructicon.substrate._lifetime import finish_owned
 from constructicon.substrate.git.acquisition import (
     AcquisitionPaths,
     acquisition_guard,
@@ -98,7 +99,9 @@ class RecordedExecutor:
             raise ContractViolation("recorded executor is closed or already entered")
         self.entered = True
         async with acquisition_guard(self.paths):
-            self.provider.workspaces.closure.require_open(self.paths)
+            await finish_owned(asyncio.create_task(asyncio.to_thread(
+                self.provider.workspaces.closure.require_open, self.paths,
+            )))
             self.ready = True
 
     async def execute(self, task, *, workspace, grants):
@@ -118,7 +121,9 @@ class RecordedExecutor:
         async with acquisition_guard(self.paths) as executor_guard:
             if self.closed:
                 raise ContractViolation("recorded executor closed while awaiting its guard")
-            self.provider.workspaces.closure.require_open(self.paths)
+            await finish_owned(asyncio.create_task(asyncio.to_thread(
+                self.provider.workspaces.closure.require_open, self.paths,
+            )))
             async with view.use() as workspace_guard:
                 if self.closed:
                     raise ContractViolation("recorded executor closed before launch")
