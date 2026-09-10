@@ -185,7 +185,8 @@ async def test_recovery_before_verify_has_no_subject_or_current_base_dependency(
 
 @LINUX
 @pytest.mark.parametrize("route", ["root", "repository"])
-async def test_recovery_never_reports_the_wrong_storage_root_reaped(tmp_path, route):
+async def test_recovery_never_reports_the_wrong_storage_root_reaped(tmp_path, route, monkeypatch):
+    from constructicon.substrate.gates import contained
     from constructicon.substrate.git.acquisition import acquisition_guard
 
     runner = await qualify(unqualified(tmp_path))
@@ -206,13 +207,23 @@ async def test_recovery_never_reports_the_wrong_storage_root_reaped(tmp_path, ro
         launcher=runner.launcher, checks=runner.checks,
     )
     assert successor.revision == runner.revision  # Host locators never enter this digest.
+
+    async def forbidden_disposal(*args, **kwargs):
+        pytest.fail("a foreign recovery route reached physical disposal")
+
     async with acquisition_guard(old):
-        with pytest.raises(ContractViolation, match="recovery reference"):
-            await successor.reconcile(gate_context(successor, epoch=2), (stale_row(acquired, ctx),))
-        assert sentinel.read_bytes() == b"still owned by the old guard"
-        assert not runner.closure.is_closed(old) and not successor.closure.is_closed(old)
-        if route == "root":
-            assert not successor.root.exists()
+        with monkeypatch.context() as refusal:
+            # Observe the forbidden boundary directly: an omitted repository
+            # fence would otherwise wait forever on the guard held above.
+            refusal.setattr(contained, "dispose_acquisition", forbidden_disposal)
+            with pytest.raises(ContractViolation, match="recovery reference"):
+                await successor.reconcile(
+                    gate_context(successor, epoch=2), (stale_row(acquired, ctx),),
+                )
+            assert sentinel.read_bytes() == b"still owned by the old guard"
+            assert not runner.closure.is_closed(old) and not successor.closure.is_closed(old)
+            if route == "root":
+                assert not successor.root.exists()
     # The genuine successor uses the recorded root and the same guard.
     same = await qualify(runner)
     result = await same.reconcile(gate_context(same, epoch=2), (stale_row(acquired, ctx),))
