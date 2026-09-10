@@ -68,3 +68,30 @@ Implementation references: [bubblewrap 0.9.0](https://github.com/containers/bubb
 for its device-setup mappings; [Linux UID maps](https://man7.org/linux/man-pages/man7/user_namespaces.7.html)
 for reader-relative columns; [AppArmor exec transitions](https://github.com/torvalds/linux/blob/v6.17/security/apparmor/domain.c)
 for named-stack selection versus a leading-`&` executable attachment search.
+
+## PR B: the separate containment gate
+
+`M8 Linux containment` provisions its own scoped policy and immutable closure
+under `/var/lib/constructicon-m8-launch`. It does not borrow the qualification
+root or its result. The `m8-service` account has no sudo and runs the native
+launcher, workspace, closure and recorded-executor suites. Missing prerequisites
+are failures when `M8_CONTAINMENT_REQUIRED=1`; ordinary unsupported-host skips
+never satisfy this job. The assertion-only mutation inventory runs separately.
+
+The closure contains curated Python/Git and their runtime libraries, plus the
+standalone reaper. Content, topology and permissions contribute to its digest;
+the service cannot rewrite it. Root-owned installation and every ancestor are
+checked. Provisioning stays an explicit disposable-host operation, not code
+an unavailable adapter runs to repair its environment.
+
+The seven-day `m8-containment-*` artifact includes `m8-runtime.json` (the same
+inventory hashed by the launcher, executable/policy/ABI digests), `m8-host.txt`
+(commit, observed image/kernel/service/profile facts), and `boundary.json`
+(selected child namespace, mount, descriptor, ID-map, device and limit facts).
+It never captures the host environment or credentials. Read these alongside
+the exact job's test and mutation results: files alone are not a passing gate,
+and an earlier job does not qualify a later rolling image.
+
+This lane demonstrates the networkless boundary, not an always-on execution
+host, provider gateway, live subscription login, safe candidate import, or
+contained gate implementation. Those retain their separate M8 slice gates.

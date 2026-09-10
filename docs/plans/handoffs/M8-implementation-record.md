@@ -1,6 +1,6 @@
 # M8 implementation record
 
-Status: PR A merged; hosted-runner qualification; not milestone completion.
+Status: PR A and hosted-runner decision merged; PR B under review.
 
 Authority: [accepted ADR 0018](../../adr/0018-live-executors-are-leased-contained-processes.md)
 and [frozen rev 1](../milestones/M8-live-executors-rev1.md). PR #26 merged as
@@ -165,11 +165,224 @@ diagnostic root borrows `/usr`; it is not PR B's pinned runtime. No hostile
 process-tree cleanup, complete filesystem/FD exclusion, gateway, live model
 call, or production availability is claimed by qualification.
 
+## PR B — Linux containment and acquisition lifetime
+
+The concrete networkless launcher, deferred READ/WRITE workspaces, permanent
+Git closure marker, and retained acquisition guard are under review in PR #30.
+PR #29 merged as `efe63c2`; PR #30 is based directly on main. The
+trusted single-call subreaper keeps guard descriptors outside the payload's
+PID namespace until its children are reaped; neither a Python controller's
+death nor the bubblewrap monitor's return proves quiescence by itself.
+
+The runtime is a curated immutable closure, not a mount of the host's `/usr`.
+Provisioning moved from `/opt` to `/var/lib` after a hosted image's world-writable
+`/opt` correctly failed the ancestor check. No check or host directory mode was
+weakened to accommodate it. The service has no sudo or provider credentials.
+
+An early independent review identified four concrete corrections: install the
+supervisor source in that immutable closure; separate the 16 MiB artifact bound
+from the 1 MiB task-input bound; include availability and spawn in the call's
+deadline and elapsed observation; and keep deletion off the event loop while
+retaining the acquisition guard through repeated cancellation and completion.
+The Git export also drains after stopping its producer, so a full pipe cannot
+strand bounded materialization cleanup. Bulk filesystem work and fixed
+trusted-authority metadata calls use joined worker threads, never a legacy
+Git importer or verifier.
+
+The existing owner pipe now authorizes start only after the controller owns
+the real spawn handle, then witnesses controller lifetime. A setup child
+retains the acquisition guard while waiting; death before that authorization
+cannot start a payload. The reaper also receives the remaining deadline in
+the shared monotonic clock. It enforces expiry independently of asyncio,
+including when the controller's event loop is stalled. Elapsed observation
+includes setup and joined cleanup; expired cleanup cannot report success.
+Shutdown gives the workload the plan's two-second TERM grace before forced
+teardown. No additional backend authority is granted during cleanup. One
+process-lifetime chain retains the guards until quiescence; it adds no graph
+scheduler, persistent PID ledger, or journal phase.
+
+The runtime digest and retained inventory use one projection. Symlinks cannot
+reach executable content outside that immutable closure. The physical proof
+records six namespaces, single-ID UID/GID maps, exact minimal devices,
+no-new-privileges, zero effective capabilities, process limits, private mounts,
+an allowlisted environment, and only standard payload descriptors. The pinned
+bubblewrap emits `/dev/core` as a legacy `/proc/kcore` alias; the assertion
+requires that exact link and proves opening it is denied, rather than claiming
+the name is absent. No kernel memory is read by this test.
+
+Native regressions cover READ refusal, WRITE confinement, host file/socket/FD
+exclusion, private network, hostile detached descendants and held pipes,
+timeouts, repeated cancellation, controller death during setup and execution,
+and real control-plane deaths before recording, after recording, and during
+materialization. Recovery proves exact closure and epoch separation. A
+recorded-subprocess Executor double exercises the same task, grant, lease,
+workspace and outcome contracts without a provider request.
+
+The required CI lane uses the actual non-sudo service user. Its artifacts retain
+the exact runtime inventory/digest, bubblewrap and AppArmor policy/ABI digests,
+commit, observed runner/kernel/service facts, and the child boundary projection.
+They contain no host environment dump or credentials and expire after seven
+days. [The runbook](../../M8_CI.md) distinguishes this from qualification.
+Windows skips remain explicitly not physical evidence. Exact-head local/CI,
+mutation, compatibility and independent-review results are recorded on PR #30
+before readiness, not inferred from the implementation's existence.
+
+### Mutation coverage and independent defensive strength
+
+The native inventory removes READ mount protection, network isolation,
+workspace mount selection, runtime link containment, deadline transfer,
+start ordering, elapsed accounting, export bounds, permanent-closure checks,
+literal sentinel semantics, the closure transaction, physical serialization,
+revocation-before-wait ordering, and deletion cancellation/loop discipline.
+Network/visibility payloads additionally test the recipe directly after
+artifact validation, so an availability refusal cannot masquerade as proof
+that an attempted escape was physically stopped. Only assertion failures
+count; setup errors and harness timeouts do not.
+
+Some checks are intentionally redundant and are not independently credited:
+the controller's spawn timeout is now backed by the reaper's transferred
+deadline; post-wait local view checks are backed by the durable closure check;
+and bubblewrap's parent-death mechanism is backed by the external reaper's
+exact-child termination. In-memory controller mutations do not modify the
+installed immutable reaper. Its descendant-reap and inherited-guard code is
+proved by actual stopped-reaper/controller-death experiments, not falsely
+claimed as independently mutation-killed source. Killing the trusted reaper
+itself, kernel compromise, and aggregate multi-tenant resource isolation are
+not promised. Per-process limits do not establish a tenant-wide quota.
+
+### PR B confirming-review corrections
+
+Review of `78d83c8` found three additional defects. A start byte buffered before
+owner death arrived as `POLLIN | POLLHUP`; consuming the byte discarded the
+observed death. The supervisor now refuses HUP/ERR before process creation.
+A native fork test inherits the actual function and observes whether Popen
+is reached with a real buffered-and-closed pipe. Its code-object mutation
+discriminates that branch without racing a payload against its later kill.
+This is a native owner-pipe law proof, not a rewrite of the installed reaper.
+
+The recorded double now captures and checks the exact program against its
+admitted configuration digest after acquiring both guards; the same local
+string enters the command. Launch-revision checking also occurs after the
+workspace wait. A changed recording cannot run behind an old identity. The
+decoder counts actual malformed/contradictory records separately from a byte
+bound or missing terminal result: those conditions alone invent no malformed
+record. Dedicated regressions and three additional mutations cover these
+corrections. Final exact-head confirmation remains the PR's gate.
+
+Review of `999fe7e` found that availability still transferred its independent
+ten-second deadline to the reaper and that launcher fields could be reloaded
+across the probe await. The launch configuration is now one frozen value;
+reconfiguration creates a new value, never changes an admitted call midway.
+Identity-bearing changes also change its revision; relocating identical
+artifacts does not. Each configurable field has a refusal test. Immutability is
+the standard dataclass contract, not an independently mutated custom guard.
+`run` passes its deadline through `probe` to that same reaper. Standalone
+qualification alone supplies a default deadline. A native probe emits its
+actual namespace observation, then stalls; a pidfd proves its reaper exits
+on the caller deadline even while the controller event loop is blocked.
+Removing the deadline transfer is a separate native mutation. Expiry is
+reported as timeout rather than as an unrelated prerequisite failure.
+
+Review of `b8256a6` found synchronous runtime hashing before the probe's first
+await. Artifact verification now uses the existing owned-work join around a
+read-only worker thread. Heartbeats and cancellation remain deliverable while
+storage is busy. Expiry or repeated cancellation joins that worker before
+returning and cannot start a probe or payload afterward. This is not a hard
+wall-clock bound on a stalled host filesystem: joining an in-progress read is
+cleanup latency, not additional authorized execution. A portable barrier test
+proves both responsiveness and ownership; moving hashing back onto the loop
+or abandoning the worker on cancellation is independently assertion-killed.
+Native tests continue to validate the actual artifacts and launch recipe.
+
+Review of `e97f762` identified the same event-loop hazard in READ archive
+extraction. Extraction now joins its filesystem worker before releasing the
+acquisition guard, including repeated cancellation. A native barrier proves
+that the loop stays responsive, another guard holder cannot enter early, and
+the actual archive writes finish before the cancelled materializer returns.
+Synchronous extraction and an unjoined worker are separate mutations.
+
+The same audit covered the newly introduced trusted metadata boundaries:
+base-ref resolution, guarded closure checks at materialization/use, and the
+closure-marker transaction. They now join off-loop work as well. Revocation
+still commits before waiting for the guard; a cancellation during that write
+can leave a closed, unreconciled acquisition for retry, never false disposal.
+The four boundary cases each test responsiveness and repeated-cancellation
+ownership, with one mutation for each guarantee. These fixed, bounded Git
+plumbing calls operate only on the trusted authority. No hostile staging
+importer or gate verifier is wrapped in a thread, and no legacy API changes.
+Small fixed-count guard/path syscalls remain synchronous; repository-sized
+processing and subprocess waits do not run on the event loop.
+
+Review of `f9236c7` rejected the recorded immediate-KILL deviation from the
+frozen shutdown default. TERM must reach the workload, not bubblewrap's
+monitor: the pinned monitor's parent-death behavior otherwise kills namespace
+init before a cooperative child can flush. A small trusted PID-1 shim now
+replaces bubblewrap's built-in init. The external reaper retains the guards;
+one private lifetime socket links it to the shim, which inherits neither guard
+nor controller pipe. The shim closes private descriptors in the actual child
+and disables dumpability so that child cannot inspect its descriptors/memory.
+Both roles reuse one reaping loop and one non-renewable two-second shutdown
+state. Namespace-wide TERM/KILL is guarded by the private-PID-1 precondition;
+the external fallback still signals only exact children through pidfds.
+See the pinned [bubblewrap implementation](https://github.com/containers/bubblewrap/blob/v0.9.0/bubblewrap.c).
+
+Native tests require cooperative output flushing on timeout, cancellation and
+output-bound teardown, bounded escalation for TERM-ignoring work, descriptor
+privacy, and the existing descendant/owner-death proofs. Portable policy tests
+independently mutation-check grace duration, non-renewal, TERM/KILL selection,
+and the PID guard. These policy mutants do not rewrite installed immutable
+code; actual signal delivery and cleanup remain mandatory native proofs.
+
+The first grace-enabled native run passed all 112 tests but exposed one
+surviving elapsed-time mutant: a slower payload alone could satisfy the old
+absolute threshold. The test now observes the real probe and payload spans
+separately and requires the returned total to include both. No launch result
+or OS observation is fabricated, and the threshold is not merely increased.
+
+Review of `ab6daf8` found that the external fallback started its grace before
+namespace init delivered TERM. Stop requests now carry no grace timestamp.
+The private socket's write-half closure requests shutdown; trusted PID 1
+acknowledges the actual TERM send time in one atomic record. Both reapers use
+that same timestamp, and repeated requests or acknowledgements never renew it.
+The payload inherits no endpoint and cannot inspect init's private descriptors.
+Without acknowledgement the external reaper neither invents a clock nor
+releases guards over living descendants. A stalled trusted init can delay
+cleanup; it cannot turn missing evidence into quiescence.
+
+A native regression stops the exact namespace init through a pidfd, cancels
+the call, and waits beyond the old fallback window. Init must remain alive and
+the acquisition guard held. After continuation, the real TERM handler takes
+one second to flush successfully before teardown. The portable shutdown-law
+test also delays acknowledgement and independently kills a mutation that
+starts grace at request time. The native fixture, not that policy mutation,
+proves the installed immutable reapers exchange the timestamp correctly.
+
+### Backend extensibility and subscription intent
+
+The owner reaffirmed that Claude Code, Codex, and Pi are the starting adapters,
+with future cloud and local models using the same task-shaped executor seam.
+This follows ADR 0005: API models enter through a compatible harness, not a
+completion-level provider abstraction in the kernel. No CLI-specific base
+class, provider enum, model switch in the walker, or alternate workspace
+contract is required by this launcher. Adapter profiles and launch identity
+continue to state exactly what is supported and enforced.
+
+The owner's primary solo-developer motivation includes subscription reuse.
+That intent does not establish a working or authorized authentication route:
+accepted ADR 0018 still requires gateway-only initial authentication. Resolving
+subscription-backed access is an explicit prerequisite decision before the
+live Claude Code/Codex slices, not something PR B claims or silently enables.
+The [authentication feasibility record](../../designs/EXECUTOR_AUTHENTICATION.md)
+separates documented native CLI login from credential intermediation. It
+recommends an explicit successor-design investigation before choosing a
+gateway that would serve API billing rather than the owner's subscription goal;
+it changes no accepted authentication policy.
+
 ## Remaining slices and operator prerequisites
 
-PR B still needs its complete physical proofs under the actual Linux service
-account and production policy. Hosted-runner qualification supplies only
-prerequisite evidence. The Windows machine remains unchanged; no gateway,
+PR B's readiness gate requires its physical proofs under the actual Linux
+service account and production policy. Hosted-runner qualification supplies
+only prerequisite evidence. The Windows machine remains unchanged; no gateway,
 secret access, paid request, or account login has been authorized.
 
 B: Linux launcher and containment. C: safe async WRITE capture. D: contained
