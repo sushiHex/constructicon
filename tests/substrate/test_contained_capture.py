@@ -7,6 +7,7 @@ import inspect
 import json
 import shlex
 import threading
+from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -308,7 +309,7 @@ os.execv('/usr/bin/git', ['/usr/bin/git', 'pack-objects', '--stdout', '--revs'])
     assert not Path(view.path, "export-wrote").exists()
 
 
-async def test_detached_capture_writer_is_reaped_before_export_or_reset(capture):
+async def test_detached_capture_writer_is_reaped_before_read_export(capture):
     provider, _, acquired = capture
     view = acquired.resource
     hook = Path(view.path, ".git/hooks/pre-commit")
@@ -338,3 +339,56 @@ else:
     # preserves the captured commit, never invents a worktree-only replacement.
     absent = provider.authority._run("cat-file", "-e", f"{oid}:writer-quiesced", check=False)
     assert absent.returncode != 0
+
+
+async def test_repeated_capture_cancellation_joins_the_hook_and_publishes_nothing(capture):
+    provider, _, acquired = capture
+    view = acquired.resource
+    hook = Path(view.path, ".git/hooks/pre-commit")
+    hook.parent.mkdir()
+    hook.write_text("""#!/usr/bin/python3
+import os, signal
+def finish(*args):
+    open('hook-quiesced', 'w').write('quiescent')
+    os._exit(0)
+signal.signal(signal.SIGTERM, finish)
+open('hook-started', 'w').write('started')
+signal.pause()
+""")
+    hook.chmod(0o700)
+    Path(view.path, "candidate.txt").write_text("not a completed candidate")
+    task = asyncio.create_task(view.commit_all("cancel"))
+    try:
+        async with asyncio.timeout(15):
+            while not Path(view.path, "hook-started").exists():
+                assert not task.done(), "capture ended before its hook became observable"
+                await asyncio.sleep(0.01)
+        for _ in range(5):
+            task.cancel()
+            await asyncio.sleep(0)
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert Path(view.path, "hook-quiesced").read_text() == "quiescent"
+        assert provider.closure.candidate(provider._candidate_ref(view)) is None
+        assert not list(view.paths.payload.glob("quarantine-*"))
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_reset_after_hostile_call_never_runs_its_fsmonitor_on_the_host(capture, tmp_path):
+    provider, _, acquired = capture
+    view = acquired.resource
+    sentinel = tmp_path / "host-sentinel"
+    sentinel.write_text("untouched")
+    script = "from pathlib import Path; Path(" + repr(str(sentinel)) + ").write_text('escaped')"
+    command = "/usr/bin/python3 -c " + shlex.quote(script)
+    with Path(view.path, ".git/config").open("a") as config:
+        config.write("\n[core]\nfsmonitor = " + json.dumps(command) + "\n")
+    Path(view.path, "calc.py").write_text("hostile edit")
+    # The hostile metadata may refuse, but has no ambient host authority.
+    with suppress(ContractViolation):
+        await view.reset_to(GitRef(repository=provider.authority.repository_id, commit=view.base))
+    assert sentinel.read_text() == "untouched"
+    assert provider.closure.candidate(provider._candidate_ref(view)) is None

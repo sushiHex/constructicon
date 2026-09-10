@@ -12,7 +12,6 @@ from pathlib import Path
 
 from constructicon.api.control import ControlPlane
 from constructicon.core.control import RunSubmission
-from constructicon.core.errors import ContractViolation
 from constructicon.core.grants import Posture
 from constructicon.core.identity import Digest
 from constructicon.substrate.executors.linux import LinuxLauncher
@@ -66,20 +65,24 @@ async def main():
     publish = provider.closure.publish
 
     def publish_at_seam(*args):
-        if phase == "before_publication":
-            pause()  # After the last local control check; no physical guard held.
-            try:
-                publish(*args)
-            except ContractViolation:
-                print(json.dumps({"result": "refused"}), flush=True)
-            else:
-                print(json.dumps({"result": "published"}), flush=True)
-            os.kill(os.getpid(), signal.SIGSTOP)
-            raise AssertionError("the already-reconciled owner resumed twice")
         publish(*args)
         if phase == "after_publication":
             pause()
             raise AssertionError("a killed publisher resumed")
+
+    transaction = provider.authority._ref_transaction
+
+    def transaction_at_seam(commands):
+        if phase == "before_publication" and any("refs/candidates/" in c for c in commands):
+            # After both the local control check AND the literal open-marker
+            # read. Only Git's atomic absence assertion can fence this writer.
+            pause()
+            result = transaction(commands)
+            outcome = "refused" if result.returncode else "published"
+            print(json.dumps({"result": outcome}), flush=True)
+            os.kill(os.getpid(), signal.SIGSTOP)
+            raise AssertionError("the already-reconciled owner resumed twice")
+        return transaction(commands)
 
     completion = journal.record_completion
 
@@ -92,6 +95,7 @@ async def main():
     journal.record_capability_lease = record_at_seam
     journal.record_completion = completion_at_seam
     provider.closure.publish = publish_at_seam
+    provider.authority._ref_transaction = transaction_at_seam
     control = ControlPlane(system=system, store=journal)
     await control.startup()
     graph = await register_capture(control)

@@ -10,7 +10,7 @@ import asyncio
 
 from constructicon.api.system import Constructicon
 from constructicon.core.address import GitSha
-from constructicon.core.component import CapabilityRequirement
+from constructicon.core.component import CapabilityRequirement, ComponentDef
 from constructicon.core.control import PromotionCommandResult, RegistrationCommandResult
 from constructicon.core.envelope import GitRef
 from constructicon.core.errors import ContractViolation
@@ -85,7 +85,12 @@ async def register_capture(control, *, executor=False):
     if executor:
         requirements.append(CapabilityRequirement(alias="executor", kind="executor"))
         bindings["executor"] = "recorded"
-    definition = definition.model_copy(update={"capability_requirements": tuple(requirements)})
+    definition = ComponentDef.model_validate(
+        {
+            **definition.model_dump(),
+            "capability_requirements": tuple(requirements),
+        }
+    )
     registered = await control.registry_register(
         LOCAL_ADMIN,
         definition=definition,

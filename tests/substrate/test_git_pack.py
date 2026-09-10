@@ -149,6 +149,42 @@ async def test_export_with_omitted_history_is_not_repaired_from_another_object_s
     assert list(root.iterdir()) == []
 
 
+async def test_a_valid_tree_cannot_be_published_as_a_commit(handoff):
+    source, authority, git, root, candidate, _ = handoff
+    tree = (await git.run("rev-parse", f"{candidate}^{{tree}}", cwd=source)).decode().strip()
+    with pytest.raises(ContractViolation, match="not a commit"):
+        await receive(handoff, candidate=GitSha(tree))
+    assert authority._run("cat-file", "-e", candidate, check=False).returncode != 0
+    assert list(root.iterdir()) == []
+
+
+async def test_sha256_pack_preserves_the_authoritys_actual_object_format(tmp_path):
+    source, destination, acquired = (tmp_path / name for name in ("source", "destination", "owned"))
+    for directory in (source, destination, acquired):
+        directory.mkdir()
+    git = GitProcess(shutil.which("git"), ProcessLimits())
+    for directory in (source, destination):
+        await git.run("init", "--bare", "--object-format=sha256", cwd=directory)
+    tree = (await git.run("mktree", cwd=source)).decode().strip()
+    commit = (await git.run("commit-tree", tree, "-m", "sha256", cwd=source)).decode().strip()
+    assert len(commit) == 64
+    content = await git.run(
+        "pack-objects", "--stdout", "--revs", cwd=source, stdin=f"{commit}\n".encode()
+    )
+    authority = GitAuthority(destination, tmp_path / "legacy")
+    await import_pack(
+        authority,
+        git,
+        acquisition_root=acquired,
+        candidate=GitSha(commit),
+        pack=content,
+        limits=PackLimits(),
+        guard=None,
+    )
+    assert await git.run("cat-file", "-t", commit, cwd=destination) == b"commit\n"
+    assert list(acquired.iterdir()) == []
+
+
 @pytest.mark.parametrize("raw", [b"", b"HEAD", b"-h", b"0" * 40 + b"\nnoise", b"A" * 40])
 def test_candidate_identity_is_never_a_revision_expression_or_command_stream(raw):
     with pytest.raises(ContractViolation):

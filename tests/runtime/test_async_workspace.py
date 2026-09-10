@@ -20,12 +20,16 @@ from tests.api.test_control_response_loss import RUN_ACTOR
 from tests.captureworld import ControlledWorkspaceProvider, register_capture
 from tests.gitworld import WRITE_GRANTS
 from tests.substrate.test_contained_workspace import context
+from tests.substrate.test_contained_workspace import provider as provider
 
 
 async def until(predicate):
-    async with asyncio.timeout(5):
-        while not predicate():
-            await asyncio.sleep(0.001)
+    try:
+        async with asyncio.timeout(5):
+            while not predicate():
+                await asyncio.sleep(0.001)
+    except TimeoutError:
+        pytest.fail("walker did not reach the required asynchronous capture boundary")
 
 
 async def test_real_walker_passes_control_and_awaits_capture_before_checkpoint(tmp_path):
@@ -92,3 +96,39 @@ async def test_async_workspace_double_blocks_each_operation_until_explicitly_rel
     await provider.close(acquired, "discard")
     with pytest.raises(ContractViolation, match="not an open invocation"):
         await workspace.commit_all("after closure")
+
+
+async def test_real_capture_revision_and_component_registration_admit_without_materialization(
+    provider,
+    tmp_path,
+):
+    from types import SimpleNamespace
+
+    from constructicon.core.identity import digest
+    from constructicon.substrate.executors.linux import ProcessLimits
+    from tests.api.test_control_response_loss import _fresh_control, _PassiveHost
+    from tests.captureworld import capture_system
+    from tests.substrate.test_contained_capture import write_provider
+
+    launch = SimpleNamespace(revision=digest("fake-launch", 1, "inert"), limits=ProcessLimits())
+    provider = write_provider(provider, launch)
+    assert type(provider.revision) is str  # The manifest publishes strings, not RootModel objects.
+    journal = SqliteJournal(tmp_path / "inert.sqlite")
+    system = capture_system(journal, provider)
+    control = _fresh_control(system, journal, "inert", run_host=_PassiveHost())
+    await control.startup()
+    try:
+        # Both new component definitions must round-trip through the real
+        # command law; the executor version adds a second capability alias.
+        await register_capture(control, executor=True)
+        graph = await register_capture(control)
+        submission = await control.runs_start(
+            RUN_ACTOR,
+            proposal=graph,
+            inputs={"goal": {"message": "capture"}},
+            idempotency_key="start-inert",
+        )
+        assert isinstance(submission, RunSubmission), submission
+        assert not provider.root.exists()
+    finally:
+        await control.shutdown()
