@@ -20,7 +20,7 @@ from constructicon.core.grants import Posture
 from constructicon.core.identity import Digest, digest
 from constructicon.core.workspace import Disposition, LeaseContext
 from constructicon.substrate._lifetime import finish_owned
-from constructicon.substrate.git import acquisition, pack, process
+from constructicon.substrate.git import acquisition, contained, pack, process
 from constructicon.substrate.git.acquisition import AcquisitionPaths, dispose_acquisition
 from constructicon.substrate.git.authority import _PINNED_ENV, candidate_ref_for
 from constructicon.substrate.git.contained import ContainedWorkspace, ContainedWorkspaceProvider
@@ -74,11 +74,12 @@ class ContainedWriteWorkspaceProvider(ContainedWorkspaceProvider):
 
     @property
     def revision(self) -> Digest:
-        sources = [Path(__file__), Path(acquisition.__file__), Path(pack.__file__),
-                   Path(process.__file__)]
+        sources = [Path(__file__), Path(acquisition.__file__), Path(contained.__file__),
+                   Path(pack.__file__), Path(process.__file__)]
         return digest("contained-write-workspace", 1, {
             "source": [hashlib.sha256(source.read_bytes()).hexdigest() for source in sources],
             "launcher": self.launcher.revision, "target": self.target_ref,
+            "git": hashlib.sha256(Path(self.git).read_bytes()).hexdigest(),
             "object_format": self.authority.environment.object_format,
             "pack_limits": asdict(self.pack_limits),
         })

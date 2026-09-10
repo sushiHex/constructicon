@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 
+from constructicon.api.system import Constructicon
 from constructicon.core.address import GitSha
 from constructicon.core.component import CapabilityRequirement
 from constructicon.core.control import PromotionCommandResult, RegistrationCommandResult
@@ -23,9 +24,35 @@ from constructicon.core.workspace import (
     acquisition_id_for,
     lease_id_for,
 )
+from constructicon.runtime.registry import CapabilityDescriptor
 from tests.api.test_control_response_loss import LOCAL_ADMIN
 from tests.conftest import atomic
-from tests.gitworld import CANDIDATE, GOAL
+from tests.gitworld import CANDIDATE, GOAL, WRITE_GRANTS
+
+
+def capture_system(journal, provider, *, executor=None, owner="capture-owner", lease_ttl_s=30):
+    capabilities = {"capture": provider}
+    catalog = {
+        "capture": CapabilityDescriptor(
+            capability_id="capture",
+            kind="workspace.contained",
+            revision=provider.revision,
+            leased=True,
+            requires_posture=WRITE_GRANTS.posture,
+        )
+    }
+    if executor is not None:
+        capabilities["recorded"] = executor
+        catalog["recorded"] = executor.descriptor("recorded")
+    return Constructicon(
+        journal=journal,
+        root_grants=WRITE_GRANTS,
+        capabilities=capabilities,
+        catalog=catalog,
+        owner_id=owner,
+        lease_ttl_s=lease_ttl_s,
+        heartbeat_interval_s=min(1, lease_ttl_s / 5),
+    )
 
 
 async def capture_candidate(ctx, inputs):

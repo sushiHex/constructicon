@@ -19,6 +19,18 @@ from constructicon.substrate._lifetime import finish_owned
 from constructicon.substrate.executors.linux import ProcessLimits
 from constructicon.substrate.git.authority import _PINNED_ENV
 
+# Strict Git parses untrusted objects in the quarantine. Bound the parser
+# itself, not just its eventual inventory: compressed bytes can expand first.
+# This tiny exec trampoline owns no process protocol or mutable Git metadata.
+_LIMITED_EXEC = """
+import os, resource, sys
+for kind, bound in ((resource.RLIMIT_AS, 512 * 1024 * 1024),
+                    (resource.RLIMIT_FSIZE, 128 * 1024 * 1024),
+                    (resource.RLIMIT_CPU, 30), (resource.RLIMIT_CORE, 0)):
+    resource.setrlimit(kind, (bound, bound))
+os.execv(sys.argv[1], sys.argv[1:])
+"""
+
 
 @dataclass(frozen=True)
 class GitProcess:
@@ -36,10 +48,15 @@ class GitProcess:
             "PATH": os.environ.get("PATH", os.defpath), **_PINNED_ENV,
             "GIT_NO_LAZY_FETCH": "1", "GIT_TERMINAL_PROMPT": "0",
         }
-        spawn = asyncio.create_task(asyncio.create_subprocess_exec(
+        command = (
             self.executable, "-c", "core.hooksPath=" + os.devnull,
             "-c", "protocol.allow=never", "-c", "gc.auto=0",
-            "-c", "maintenance.auto=false", *args, cwd=cwd, env=environment,
+            "-c", "maintenance.auto=false", *args,
+        )
+        if sys.platform == "linux":
+            command = (sys.executable, "-I", "-c", _LIMITED_EXEC, *command)
+        spawn = asyncio.create_task(asyncio.create_subprocess_exec(
+            *command, cwd=cwd, env=environment,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE, close_fds=True,
             pass_fds=(guard,) if guard is not None else (),
@@ -85,8 +102,10 @@ class GitProcess:
                     asyncio.create_task(drain(process.stdout, output, self.limits.artifact_bytes)),
                     asyncio.create_task(drain(process.stderr, errors, self.limits.stderr_bytes)),
                 ))
-            await asyncio.gather(*tasks)
-            await process.wait()
+            try:
+                await asyncio.gather(*tasks)
+            finally:
+                await process.wait()
 
         try:
             async with asyncio.timeout(30):

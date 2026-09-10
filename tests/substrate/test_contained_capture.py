@@ -190,6 +190,7 @@ async def test_hostile_git_metadata_cannot_execute_or_modify_a_host_sentinel(
             stream.write("\n[credential]\nhelper = " + json.dumps("!" + shell) + "\n")
     if damage == "hook":
         hook = stage / ".git/hooks/pre-commit"
+        hook.parent.mkdir()
         hook.write_text("#!/usr/bin/python3\n" + hostile + "\n")
         hook.chmod(0o700)
     elif damage == "alternates":
@@ -267,3 +268,73 @@ async def test_disposal_finishes_before_a_paused_old_publisher_resumes(capture, 
     with pytest.raises(ContractViolation, match="permanently closed"):
         await task
     assert provider.closure.candidate(provider._candidate_ref(view)) is None
+
+
+async def test_export_is_physically_read_only_after_capture(capture, monkeypatch):
+    provider, _, acquired = capture
+    view = acquired.resource
+    run = provider.launcher.run
+    observed = False
+
+    async def probe(command, **kwargs):
+        nonlocal observed
+        if command[:2] == ("/usr/bin/git", "pack-objects"):
+            observed = True
+            command = (
+                "/usr/bin/python3",
+                "-I",
+                "-c",
+                """
+import os
+try:
+    open('export-wrote', 'w').write('wrong authority')
+except OSError:
+    pass
+else:
+    raise SystemExit('export could mutate staging')
+os.execv('/usr/bin/git', ['/usr/bin/git', 'pack-objects', '--stdout', '--revs'])
+""",
+            )
+        return await run(command, **kwargs)
+
+    # Instrument the production launch request; no OS operation or result is
+    # mocked. A WRITE export makes the real filesystem mutation succeed.
+    monkeypatch.setattr(type(provider.launcher), "run", lambda self, *a, **kw: probe(*a, **kw))
+    try:
+        candidate = await view.commit_all("read-only handoff")
+    except ContractViolation as exc:
+        pytest.fail(f"the handoff did not enforce its READ grant: {exc}")
+    assert observed and candidate == view.base
+    assert not Path(view.path, "export-wrote").exists()
+
+
+async def test_detached_capture_writer_is_reaped_before_export_or_reset(capture):
+    provider, _, acquired = capture
+    view = acquired.resource
+    hook = Path(view.path, ".git/hooks/pre-commit")
+    hook.parent.mkdir()
+    hook.write_text("""#!/usr/bin/python3
+import os, signal
+ready_r, ready_w = os.pipe()
+if os.fork() == 0:
+    os.close(ready_r)
+    os.setsid()
+    def finish(*args):
+        open('writer-quiesced', 'w').write('TERM reached detached writer')
+        os._exit(0)
+    signal.signal(signal.SIGTERM, finish)
+    os.write(ready_w, b'R')
+    signal.pause()
+else:
+    os.close(ready_w)
+    assert os.read(ready_r, 1) == b'R'
+""")
+    hook.chmod(0o700)
+    Path(view.path, "candidate.txt").write_text("before hook")
+    oid = await view.commit_all("detached writer")
+    assert oid != view.base
+    assert Path(view.path, "writer-quiesced").read_text() == "TERM reached detached writer"
+    # The teardown write was not staged in the candidate. Host publication
+    # preserves the captured commit, never invents a worktree-only replacement.
+    absent = provider.authority._run("cat-file", "-e", f"{oid}:writer-quiesced", check=False)
+    assert absent.returncode != 0
