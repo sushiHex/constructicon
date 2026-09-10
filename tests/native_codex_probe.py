@@ -164,6 +164,7 @@ async def run_probe(argv, *, cwd, env, worker, timeout=30):
     """
     process = None
     stderr = bytearray()
+    stopped = False
 
     async def drain():
         while chunk := await process.stderr.read(8192):
@@ -171,15 +172,24 @@ async def run_probe(argv, *, cwd, env, worker, timeout=30):
             if len(stderr) > RECORD_BYTES:
                 raise ProbeRefused("stderr bound")
 
-    async def close():
-        if process is None:
+    def stop():
+        nonlocal stopped
+        if process is None or stopped:
             return
+        stopped = True
         if os.name == "posix":
             with suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
         elif process.returncode is None:
             process.kill()
-        await process.wait()
+
+    async def close():
+        stop()
+        if process is not None:
+            # Readers have left their TaskGroup. Drain killed-child pipes so a
+            # paused asyncio transport cannot keep wait() blocked indefinitely.
+            async with asyncio.timeout(5):
+                await process.communicate()
 
     try:
         async with asyncio.timeout(timeout):
@@ -189,9 +199,17 @@ async def run_probe(argv, *, cwd, env, worker, timeout=30):
                 limit=RECORD_BYTES, start_new_session=os.name == "posix",
             )
             async with asyncio.TaskGroup() as group:
-                diagnostic = group.create_task(drain())
-                result = await conversation(Wire(process.stdout, process.stdin), cwd, worker)
-                diagnostic.cancel()
+                group.create_task(drain())
+                wire = Wire(process.stdout, process.stdin)
+                result = await conversation(wire, cwd, worker)
+                stop()
+                while chunk := await process.stdout.read(8192):
+                    wire.received += len(chunk)
+                    if wire.received > TOTAL_BYTES:
+                        raise ProbeRefused("trailing stdout bound")
+                await process.wait()
+                # Join stderr through EOF: a terminal notification cannot hide
+                # overflow already waiting in the other pipe.
             result["stderr_observed"] = stderr.decode("utf-8", errors="replace")
             return result
     except BaseException as exc:

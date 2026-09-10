@@ -162,4 +162,6 @@ async def test_real_pipe_lifetime_with_scripted_peer(tmp_path, mode):
     else:
         with pytest.raises((ExceptionGroup, TimeoutError, asyncio.CancelledError)):
             await asyncio.wait_for(pending, 6)
-        assert not invoked
+        # The two OS pipes have no shared ordering. Overflow must fail the
+        # probe, but may be observed after the preceding tool dispatch.
+        assert invoked in ([], ["pass"]) if mode == "stderr" else not invoked
