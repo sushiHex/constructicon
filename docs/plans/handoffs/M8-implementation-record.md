@@ -333,6 +333,12 @@ independently mutation-check grace duration, non-renewal, TERM/KILL selection,
 and the PID guard. These policy mutants do not rewrite installed immutable
 code; actual signal delivery and cleanup remain mandatory native proofs.
 
+The first grace-enabled native run passed all 112 tests but exposed one
+surviving elapsed-time mutant: a slower payload alone could satisfy the old
+absolute threshold. The test now observes the real probe and payload spans
+separately and requires the returned total to include both. No launch result
+or OS observation is fabricated, and the threshold is not merely increased.
+
 ### Backend extensibility and subscription intent
 
 The owner reaffirmed that Claude Code, Codex, and Pi are the starting adapters,

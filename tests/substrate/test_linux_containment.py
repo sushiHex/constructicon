@@ -542,15 +542,29 @@ async def test_the_call_deadline_includes_probe_and_spawn(launcher, tmp_path, mo
 
 async def test_successful_call_elapsed_time_includes_availability(launcher, tmp_path, monkeypatch):
     probe = launcher.probe
+    physical_run = launcher._run
+    probe_elapsed = 0.0
+    payloads = []
 
     async def delayed_probe(_self, *, deadline=None):
+        nonlocal probe_elapsed
+        started = time.monotonic()
         await asyncio.sleep(.2)
         await probe(deadline=deadline)
+        probe_elapsed = time.monotonic() - started
+
+    async def observed_run(_self, *args, **kwargs):
+        result = await physical_run(*args, **kwargs)
+        if kwargs.get("workspace") is not None:
+            payloads.append(result)
+        return result
 
     monkeypatch.setattr(LinuxLauncher, "probe", delayed_probe)
+    monkeypatch.setattr(LinuxLauncher, "_run", observed_run)
     result = await run(launcher, tmp_path, "print('complete')")
     assert result.returncode == 0 and result.stdout.strip() == b"complete", result.stderr
-    assert result.elapsed_s >= .2
+    assert len(payloads) == 1 and probe_elapsed >= .2
+    assert result.elapsed_s >= probe_elapsed + payloads[0].elapsed_s
 
 
 async def test_payload_waits_for_controller_ownership_of_the_real_spawn_handle(
