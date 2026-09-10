@@ -619,6 +619,10 @@ earlier Windows/interface feasibility record without rewriting it. It exercises
 the native app-server against a loopback fake, reuses the contained worker and
 existing acquisition cleanup, and inventories native tools separately from
 client RPCs. Its observations do not qualify subscription authentication or
-complete slice E. The [OpenRouter assessment](../../designs/OPENROUTER.md)
+complete slice E. The enabled-image control exports the PNG fixture without a
+worker callback; the disabled-image configuration removes the reader and
+refuses its direct invocation. The probe record preserves both results and
+their exact-head evidence, leaving broader mediation and lifecycle proof open.
+The [OpenRouter assessment](../../designs/OPENROUTER.md)
 proposes configuration of the planned Pi harness rather than another executor
 or kernel abstraction. It is not an approved expansion of M8.

@@ -99,8 +99,13 @@ Credentials, paid calls, and live deployment remain separate operator actions.
 The [pinned native mediation experiment](../plans/handoffs/M8-native-mediation-probe.md)
 establishes a supported credential-free custom-provider path and a real dynamic
 callback into the existing contained worker. It does not establish exclusive
-mediation: the measured tool inventory still exposes a native image reader.
-The accepted trust boundary therefore remains unchanged. No authentication
+mediation. The earlier/image-enabled configuration exposes a native reader
+that exports the PNG fixture without a worker callback; the tested
+`features.view_image = false` configuration removes that tool and refuses its
+direct invocation. The contained-worker callback succeeds in both cases.
+Model-dependent tool inventories, startup/extensions, client-RPC reachability
+and lifecycle ownership remain unqualified, not that tested disabled-image
+path. The accepted trust boundary remains unchanged. No authentication
 deployment or billing choice is inferred from authorization to run this test.
 
 Before live implementation, issue #38 still needs the owner's concrete route

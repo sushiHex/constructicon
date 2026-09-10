@@ -11,22 +11,30 @@ Base: `d94a47931d63b3e59de72450bb8e794178b6bad4`; work in
 An unmodified Linux Codex CLI can complete a credential-free turn against a
 local fake Responses provider and dispatch its experimental dynamic tool to
 Constructicon's existing contained worker. That closes the earlier uncertainty
-about whether an offline integration path exists. It does not prove complete
-mediation: the tested configuration still advertises a native `view_image`
-reader, besides `request_user_input` and the supplied `contained_python` tool.
+about whether an offline integration path exists. The image-enabled control
+and the disabled-image configuration have different observed results; neither
+qualifies complete mediation or native authentication.
 
-The image probe goes further than advertisement: `view_image` reads a valid
-PNG from the native harness's private home and sends those exact bytes to the
-fake provider, with no dynamic callback or contained-worker invocation. That
-file is outside the acquired workspace. It is a harmless fixture, not a real
-secret, but it refutes the proposed exclusive worker mediation for this recipe.
-The regression deliberately passes when it reproduces that negative result;
-green investigation CI is not green native-authentication eligibility.
+The earlier recipe left `view_image` enabled. The current enabled control
+reproduces its result: the native reader sends the exact PNG fixture from the
+harness's private home to the fake provider, without a dynamic callback or
+contained-worker invocation. Its tool inventory contains `request_user_input`,
+`view_image` and `contained_python`. This harmless file is outside the acquired
+workspace; the result refutes exclusive worker mediation for that enabled
+configuration only.
 
-The tested `exec_command` attempt is refused by the native router, creates no
-harness-home canary, and never reaches the supplied worker. Disabling this
-execution path does not disable the image reader. This result does not judge
-every other configuration recipe or establish a provider-wide impossibility.
+With `features.view_image = false`, the measured inventory contains only
+`request_user_input` and `contained_python`. Even when the fake provider requests
+`view_image` directly, the native router returns `unsupported call: view_image`
+instead of the image bytes. The contained-worker callback still succeeds in
+both configurations. The tested image-reader path is therefore closed by this
+control; it is not a remaining failure of the disabled-image recipe.
+
+The tested `exec_command` attempt is refused in both configurations, creates no
+harness-home canary, and never reaches the supplied worker. These observations
+do not cover every model-dependent tool inventory, startup/extension path,
+client-RPC reachability or lifecycle boundary. Green investigation CI is not
+green native-authentication eligibility or a provider-wide impossibility proof.
 
 Keep [ADR 0018](../../adr/0018-live-executors-are-leased-contained-processes.md)
 in force and live native authentication unavailable. No reusable credential
@@ -124,7 +132,9 @@ or undocumented account emulation. It emits deterministic tool and terminal
 records; no LLM participates in the measurement.
 
 The recorded model request inventories the effective tools, rather than
-inferring them from configuration flags. Generated `ClientRequest` metadata
+inferring them from configuration flags. The artificial `probe-model` uses
+fallback model metadata, so its inventory does not establish the tools of a
+real deployment model. Generated `ClientRequest` metadata
 separately inventories 155 client RPCs, including filesystem/process operations,
 hooks, skills, plugins, MCP, authentication and remote control. Those RPCs are
 not thereby model tools; the probe issues none of them. Their presence is also
@@ -137,6 +147,13 @@ remain the evidence. Unknown flags or a successful thread cannot establish
 that a feature was disabled. The native sandbox availability diagnostic can
 appear even though the explicitly unsandboxed lab thread completes; only the
 separate Constructicon worker boundary is credited with containment.
+
+The enabled/disabled matrix uses `features.view_image`, accepted by the pinned
+binary. The attempted `tools.view_image` spelling was rejected as an unknown
+configuration field. The binary's own `features list` output records
+`view_image` as stable and enabled by default; the provider request and forced
+call results separately prove the disabled control's behavior. The shared
+fixture creates its empty configuration directory before any CLI command.
 
 Full request records, observed methods/warnings, worker outputs and schema
 digests are emitted as `codex-*.json` in the workflow artifact. They contain
@@ -151,9 +168,10 @@ committed as evidence.
 owner's concrete authentication/deployment choice. A working callback is not
 positive combined mediation evidence, so it does not authorize a native
 successor ADR. Conversely, this bounded recipe is not a provider-wide
-impossibility result. Further native investigation would need to close the
-remaining model-reader and startup/extension surfaces and prove lifecycle
-ownership before a successor design could be accepted.
+impossibility result. Further native investigation must assess model-dependent
+tool inventories, startup/extensions and client-RPC reachability, and prove
+lifecycle ownership before a successor design could be accepted. The passing
+disabled-image case closes that tested path, not this broader proof obligation.
 
 The API/cloud gateway route remains available as an explicit alternative, but
 no actual deployment or separately billed route has been selected. Slice E
@@ -173,6 +191,27 @@ passed four native probe cases and the 268-test existing containment suite.
 It killed the nine portable probe mutants and all 91 existing B/C/D mutants.
 The downloaded artifact's `codex-view_image.json` independently confirms the
 exact PNG bytes in the fake provider's second request, with zero worker calls.
-The explicit image/exec assertions and strengthened worker assertions added
-after that observation must pass again on the final PR head. PR #48 carries
-the final-head gate/review evidence; this earlier run is not substituted for it.
+That earlier artifact describes the enabled-image experiment, not the later
+disabled control.
+
+At `2af6db3b7db2e338bdf692c7335affd9793188db`,
+[standard CI](https://github.com/sushiHex/constructicon/actions/runs/34534289049)
+passed 1,862 tests with 104 explicit skips. Local `uv run verify` passed 1,814
+tests with 152 Windows skips; ruff, strict mypy and all four import contracts
+passed. The
+[native lane](https://github.com/sushiHex/constructicon/actions/runs/34534289033)
+passed all seven probe cases, the 268-test existing containment suite, and all
+100 portable/native assertion mutants. Runner qualification also passed.
+
+The downloaded exact-head `codex-view_image-images-true.json` records the image
+bytes; `codex-view_image-images-false.json` records the two-tool inventory and
+`unsupported call: view_image`, with no worker call. These artifacts were
+inspected independently of the test assertions. The fixture regression failed
+before directory creation moved to shared setup and passed afterward.
+
+The confirming review on that head found a documentation overclaim: this
+record still presented the enabled reader as unresolved without reporting the
+passing disabled control. This correction and the linked authentication
+summary distinguish both configurations without changing code or qualifying
+authentication. PR #48 carries final-head gate/review evidence; the recorded
+runs above are not substituted for checks on subsequent commits.
