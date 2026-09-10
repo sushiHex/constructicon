@@ -6,6 +6,8 @@ import os
 import struct
 import sys
 import zlib
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -18,6 +20,38 @@ from tests.native_codex_probe import (
     Wire,
     run_probe,
 )
+from tests.substrate import test_native_codex_mediation as native_probe
+
+
+def test_native_fixture_creates_private_config_before_first_cli(tmp_path, monkeypatch):
+    """Fixture ownership only; the subprocess and Linux host facts are doubles."""
+    proc = {
+        "/proc/net/dev": SimpleNamespace(read_text=lambda: "header\nheader\n lo: 0\n"),
+        "/proc/net/route": SimpleNamespace(read_text=lambda: "header\n"),
+    }
+    monkeypatch.setattr(native_probe, "Path", lambda value: proc.get(value, Path(value)))
+    monkeypatch.setattr(native_probe, "sys", SimpleNamespace(platform="linux"))
+    monkeypatch.setattr(native_probe, "os", SimpleNamespace(
+        environ={"M8_CODEX_BINARY": "pinned-codex"}, getuid=lambda: 1000,
+    ))
+    calls = []
+
+    def check_output(argv, *, env, cwd, timeout):
+        assert cwd == tmp_path and timeout == 15
+        assert set(env) == {"HOME", "CODEX_HOME", "PATH", "LANG"}
+        assert Path(env["HOME"]) == tmp_path / "empty-home"
+        config = Path(env["CODEX_HOME"])
+        assert config == Path(env["HOME"]) / ".codex"
+        assert config.is_dir()
+        assert not tuple(config.iterdir())
+        calls.append(argv)
+        return b"codex-cli 0.153.4\n"
+
+    monkeypatch.setattr(native_probe, "subprocess", SimpleNamespace(check_output=check_output))
+    native = native_probe.native.__wrapped__(tmp_path)
+    assert calls == [["pinned-codex", "--version"]]
+    native_probe.argv_for(native, tmp_path, "http://127.0.0.1:1/v1", images=False)
+    assert (Path(native[1]["CODEX_HOME"]) / "config.toml").is_file()
 
 
 def test_native_canary_is_a_valid_image_not_a_decoder_failure():

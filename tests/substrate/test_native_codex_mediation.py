@@ -130,7 +130,7 @@ def native(tmp_path):
     assert os.getuid() != 0
     assert not {key for key in os.environ if "TOKEN" in key or "API_KEY" in key}
     home = tmp_path / "empty-home"
-    home.mkdir()
+    (home / ".codex").mkdir(parents=True)
     env = {"HOME": str(home), "CODEX_HOME": str(home / ".codex"),
            "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
     version = subprocess.check_output([binary, "--version"], env=env, cwd=tmp_path, timeout=15)
@@ -172,7 +172,6 @@ js_repl = false
 apps = false
 '''
     config = Path(env["CODEX_HOME"])
-    config.mkdir()
     (config / "config.toml").write_text(configuration)
     return [str(binary), "app-server", "--strict-config", "--stdio"]
 
