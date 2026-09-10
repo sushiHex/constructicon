@@ -8,6 +8,7 @@ import json
 import os
 import signal
 import sys
+import threading
 from pathlib import Path
 
 from constructicon.api.control import ControlPlane
@@ -51,6 +52,8 @@ async def main():
     system, journal, provider = assemble(root, "doomed-capture-owner")
     row_seen = None
     record = journal.record_capability_lease
+    loop = asyncio.get_running_loop()
+    loop_thread = threading.get_ident()
 
     def record_at_seam(lease, row):
         nonlocal row_seen
@@ -59,11 +62,24 @@ async def main():
 
     def pause(**evidence):
         assert row_seen is not None
-        print(
-            json.dumps({"phase": phase, "lease": row_seen.model_dump(mode="json"), **evidence}),
-            flush=True,
-        )
-        os.kill(os.getpid(), signal.SIGSTOP)
+        resumed = threading.Event()
+
+        def at_loop_boundary():
+            # All journal transactions here are synchronous on the event loop.
+            # Stop between callbacks, never freeze its heartbeat inside SQLite
+            # merely because this publication seam runs in a Git worker thread.
+            print(
+                json.dumps({"phase": phase, "lease": row_seen.model_dump(mode="json"), **evidence}),
+                flush=True,
+            )
+            os.kill(os.getpid(), signal.SIGSTOP)
+            resumed.set()
+
+        if threading.get_ident() == loop_thread:
+            at_loop_boundary()
+        else:
+            loop.call_soon_threadsafe(at_loop_boundary)
+            resumed.wait()
 
     spawn = asyncio.create_subprocess_exec
 
