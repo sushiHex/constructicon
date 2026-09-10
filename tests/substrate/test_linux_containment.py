@@ -654,7 +654,7 @@ async def test_successful_call_elapsed_time_includes_availability(launcher, tmp_
 
 @pytest.mark.parametrize("source", (
     "open('/workspace/started','w').write('owned')",
-    "import sys; open('/workspace/started','w').write(sys.stdin.read())",
+    "import sys; value = sys.stdin.read(); open('/workspace/started','w').write(value)",
 ), ids=("direct", "stdin-gated"))
 async def test_payload_waits_for_controller_ownership_of_the_real_spawn_handle(
     launcher, tmp_path, monkeypatch, source,
