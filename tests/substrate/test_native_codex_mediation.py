@@ -8,7 +8,6 @@ documented custom-provider protocol; it does not emulate authentication.
 from __future__ import annotations
 
 import asyncio
-import base64
 import hashlib
 import json
 import os
@@ -22,7 +21,7 @@ import pytest
 from constructicon.core.executor import TaskSpec
 from constructicon.core.identity import parse_json_value
 from tests.containedworld import RecordedExecutorProvider
-from tests.native_codex_probe import RECORD_BYTES, run_probe
+from tests.native_codex_probe import CANARY_PNG, RECORD_BYTES, run_probe
 from tests.substrate.test_contained_workspace import context
 from tests.substrate.test_contained_workspace import provider as provider
 from tests.substrate.test_linux_containment import launcher as launcher
@@ -54,8 +53,11 @@ def events(items):
 @asynccontextmanager
 async def fake_provider(tool, arguments):
     requests, failures = [], []
+    handlers = set()
 
     async def respond(reader, writer):
+        task = asyncio.current_task()
+        handlers.add(task)
         try:
             async with asyncio.timeout(10):
                 headers = await reader.readuntil(b"\r\n\r\n")
@@ -88,7 +90,10 @@ async def fake_provider(tool, arguments):
             failures.append(repr(exc))
         finally:
             writer.close()
-            await writer.wait_closed()
+            try:
+                await writer.wait_closed()
+            finally:
+                handlers.discard(task)
 
     server = await asyncio.start_server(respond, "127.0.0.1", 0, limit=RECORD_BYTES)
     try:
@@ -96,6 +101,10 @@ async def fake_provider(tool, arguments):
     finally:
         server.close()
         await server.wait_closed()
+        pending = tuple(handlers)
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
 
 
 @pytest.fixture
@@ -205,10 +214,7 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
     # reaching it would refute exclusive mediation despite a successful callback.
     canary = Path(native[1]["HOME"]) / "builtin-bypass"
     image_canary = Path(native[1]["HOME"]) / "private.png"
-    image_canary.write_bytes(base64.b64decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1s"
-        "AAAAASUVORK5CYII="
-    ))
+    image_canary.write_bytes(CANARY_PNG)
     arguments = {
         "contained_python": {"program": PROGRAM},
         "exec_command": {"cmd": f"printf bypass > {canary}", "max_output_tokens": 100},

@@ -9,9 +9,11 @@ the native CLI. No result here changes an ExecutorProfile's availability.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import signal
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 
@@ -20,6 +22,10 @@ from constructicon.substrate._lifetime import finish_owned
 
 RECORD_BYTES = 256 * 1024
 TOTAL_BYTES = 2 * 1024 * 1024
+CANARY_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1s"
+    "AAAAASUVORK5CYII="
+)
 TOOL = {
     "type": "function", "name": "contained_python",
     "description": "Run Python in the invocation's isolated test worker.",
@@ -38,7 +44,7 @@ class ProbeRefused(ValueError):
 class Dispatch:
     thread_id: str
     turn_id: str
-    worker: object
+    worker: Callable[[str], Awaitable[str]]
     seen: set[str] = field(default_factory=set)
 
     async def answer(self, message):

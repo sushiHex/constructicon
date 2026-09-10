@@ -3,11 +3,14 @@
 import asyncio
 import json
 import os
+import struct
 import sys
+import zlib
 
 import pytest
 
 from tests.native_codex_probe import (
+    CANARY_PNG,
     RECORD_BYTES,
     TOTAL_BYTES,
     Dispatch,
@@ -15,6 +18,22 @@ from tests.native_codex_probe import (
     Wire,
     run_probe,
 )
+
+
+def test_native_canary_is_a_valid_image_not_a_decoder_failure():
+    assert CANARY_PNG[:8] == b"\x89PNG\r\n\x1a\n"
+    offset = 8
+    types = []
+    while offset < len(CANARY_PNG):
+        size = struct.unpack("!I", CANARY_PNG[offset:offset + 4])[0]
+        chunk = CANARY_PNG[offset + 4:offset + 8 + size]
+        crc = struct.unpack("!I", CANARY_PNG[offset + 8 + size:offset + 12 + size])[0]
+        assert zlib.crc32(chunk) == crc
+        types.append(chunk[:4])
+        if chunk[:4] == b"IDAT":
+            assert len(zlib.decompress(chunk[4:])) == 3  # Filter + one gray/alpha pixel.
+        offset += size + 12
+    assert types == [b"IHDR", b"IDAT", b"IEND"]
 
 
 def call(**changes):
