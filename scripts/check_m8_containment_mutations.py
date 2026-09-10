@@ -35,6 +35,35 @@ METADATA = (
 )
 
 MUTANTS = (
+    (
+        "TERM grace is skipped", "constructicon.substrate.executors._supervisor:_Shutdown.forced",
+        "self.started + TERM_GRACE_S", "self.started",
+        OS + "test_shutdown_has_one_nonrenewable_two_second_grace",
+    ),
+    (
+        "repeated stops renew TERM grace",
+        "constructicon.substrate.executors._supervisor:_Shutdown.request",
+        "if self.started is None:", "if True:",
+        OS + "test_shutdown_has_one_nonrenewable_two_second_grace",
+    ),
+    (
+        "cooperative namespace shutdown sends KILL",
+        "constructicon.substrate.executors._supervisor:_signal_namespace",
+        "signal.SIGKILL if force else signal.SIGTERM", "signal.SIGKILL",
+        OS + "test_namespace_signals_are_term_then_kill_and_never_host_wide",
+    ),
+    (
+        "namespace teardown never escalates",
+        "constructicon.substrate.executors._supervisor:_signal_namespace",
+        "signal.SIGKILL if force else signal.SIGTERM", "signal.SIGTERM",
+        OS + "test_namespace_signals_are_term_then_kill_and_never_host_wide",
+    ),
+    (
+        "namespace signaling loses its PID guard",
+        "constructicon.substrate.executors._supervisor:_signal_namespace",
+        'if sys.platform != "linux" or os.getpid() != 1:', "if False:",
+        OS + "test_namespace_signals_are_term_then_kill_and_never_host_wide",
+    ),
     *(
         (
             f"{phase} metadata {'blocks the loop' if blocking else 'outlives its owner'}",
@@ -77,9 +106,9 @@ MUTANTS = (
     ),
     (
         "buffered start survives observed owner death",
-        "constructicon.substrate.executors._supervisor:supervise",
-        "if any(flags & (select.POLLHUP | select.POLLERR) for _, flags in events):",
-        "if False:",
+        "constructicon.substrate.executors._supervisor:_owner_closed",
+        "return any(flags & (select.POLLHUP | select.POLLERR) for _, flags in events)",
+        "return False",
         OS + "test_buffered_start_does_not_authorize_launch_after_observed_owner_death",
     ),
     (

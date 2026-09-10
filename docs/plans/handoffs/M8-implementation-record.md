@@ -185,8 +185,9 @@ from the 1 MiB task-input bound; include availability and spawn in the call's
 deadline and elapsed observation; and keep deletion off the event loop while
 retaining the acquisition guard through repeated cancellation and completion.
 The Git export also drains after stopping its producer, so a full pipe cannot
-strand bounded materialization cleanup. Only symlink-safe filesystem deletion
-uses a worker thread, not a legacy Git importer or verifier.
+strand bounded materialization cleanup. Bulk filesystem work and fixed
+trusted-authority metadata calls use joined worker threads, never a legacy
+Git importer or verifier.
 
 The existing owner pipe now authorizes start only after the controller owns
 the real spawn handle, then witnesses controller lifetime. A setup child
@@ -195,10 +196,10 @@ cannot start a payload. The reaper also receives the remaining deadline in
 the shared monotonic clock. It enforces expiry independently of asyncio,
 including when the controller's event loop is stalled. Elapsed observation
 includes setup and joined cleanup; expired cleanup cannot report success.
-The reaper kills its exact children immediately on termination rather than
-using the plan's proposed two-second cooperative grace. No additional backend
-work is authorized during cleanup. The process boundary remains one local
-owner, not another scheduler, persistent PID ledger, or journal phase.
+Shutdown gives the workload the plan's two-second TERM grace before forced
+teardown. No additional backend authority is granted during cleanup. One
+process-lifetime chain retains the guards until quiescence; it adds no graph
+scheduler, persistent PID ledger, or journal phase.
 
 The runtime digest and retained inventory use one projection. Symlinks cannot
 reach executable content outside that immutable closure. The physical proof
@@ -311,6 +312,26 @@ plumbing calls operate only on the trusted authority. No hostile staging
 importer or gate verifier is wrapped in a thread, and no legacy API changes.
 Small fixed-count guard/path syscalls remain synchronous; repository-sized
 processing and subprocess waits do not run on the event loop.
+
+Review of `f9236c7` rejected the recorded immediate-KILL deviation from the
+frozen shutdown default. TERM must reach the workload, not bubblewrap's
+monitor: the pinned monitor's parent-death behavior otherwise kills namespace
+init before a cooperative child can flush. A small trusted PID-1 shim now
+replaces bubblewrap's built-in init. The external reaper retains the guards;
+one private lifetime pipe links it to the shim, which inherits neither guard
+nor controller pipe. The shim closes private descriptors in the actual child
+and disables dumpability so that child cannot inspect its descriptors/memory.
+Both roles reuse one reaping loop and one non-renewable two-second shutdown
+state. Namespace-wide TERM/KILL is guarded by the private-PID-1 precondition;
+the external fallback still signals only exact children through pidfds.
+See the pinned [bubblewrap implementation](https://github.com/containers/bubblewrap/blob/v0.9.0/bubblewrap.c).
+
+Native tests require cooperative output flushing on timeout, cancellation and
+output-bound teardown, bounded escalation for TERM-ignoring work, descriptor
+privacy, and the existing descendant/owner-death proofs. Portable policy tests
+independently mutation-check grace duration, non-renewal, TERM/KILL selection,
+and the PID guard. These policy mutants do not rewrite installed immutable
+code; actual signal delivery and cleanup remain mandatory native proofs.
 
 ### Backend extensibility and subscription intent
 

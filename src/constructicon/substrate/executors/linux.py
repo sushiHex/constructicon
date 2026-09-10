@@ -24,8 +24,9 @@ from constructicon.core.errors import ContractViolation
 from constructicon.core.grants import Posture
 from constructicon.core.identity import Digest, digest
 from constructicon.substrate._lifetime import finish_owned
+from constructicon.substrate.executors._supervisor import NAMESPACE_SCRIPT
 
-SUPERVISOR_PATH = Path("usr/libexec/constructicon-supervisor.py")
+SUPERVISOR_PATH = Path(NAMESPACE_SCRIPT.removeprefix("/"))
 BWRAP_SHA256 = "52231e1caf55bcbc667b269f49c63599a6f7db4767ae6a039580d0ff853db712"
 _PROBE = """
 import ctypes, errno, json, os

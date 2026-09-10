@@ -18,6 +18,7 @@ import threading
 import time
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -72,6 +73,44 @@ def test_runtime_inventory_is_the_digest_input_and_binds_content(tmp_path):
     assert before == digest("linux-runtime-root", 1, inventory)
     payload.write_bytes(b"other")
     assert runtime_digest(root, require_immutable=False) != before
+
+
+@pytest.mark.parametrize("trigger", ["deadline", "request"])
+def test_shutdown_has_one_nonrenewable_two_second_grace(monkeypatch, trigger):
+    now = [5.0]
+    monkeypatch.setattr(_supervisor, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    shutdown = _supervisor._Shutdown(10.0)
+    assert not shutdown.requested and not shutdown.forced
+    if trigger == "deadline":
+        now[0] = 10.0
+    else:
+        shutdown.request()
+    assert shutdown.requested and not shutdown.forced
+    started = now[0]
+    now[0] = started + 1.999
+    assert not shutdown.forced
+    shutdown.request()
+    shutdown.request()
+    assert shutdown.started == started
+    now[0] = started + 2.0
+    assert shutdown.forced
+
+
+def test_namespace_signals_are_term_then_kill_and_never_host_wide(monkeypatch):
+    signals = []
+    process_id = [1]
+    monkeypatch.setattr(_supervisor, "sys", SimpleNamespace(platform="linux"))
+    monkeypatch.setattr(_supervisor, "signal", SimpleNamespace(SIGTERM="term", SIGKILL="kill"))
+    monkeypatch.setattr(_supervisor, "os", SimpleNamespace(
+        getpid=lambda: process_id[0], kill=lambda pid, sig: signals.append((pid, sig)),
+    ))
+    _supervisor._signal_namespace(False)
+    _supervisor._signal_namespace(True)
+    assert signals == [(-1, "term"), (-1, "kill")]
+    process_id[0] = 2
+    with pytest.raises(OSError, match="private PID 1"):
+        _supervisor._signal_namespace(False)
+    assert len(signals) == 2
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="native runtime link topology")
@@ -357,6 +396,81 @@ print('ready',flush=True)
     assert (tmp_path / "workspace/descendant").read_bytes() == before
 
 
+@pytest.mark.parametrize("ending", ["timeout", "cancel", "bound"])
+async def test_term_grace_flushes_cooperative_output_before_cleanup(launcher, tmp_path, ending):
+    source = """
+import os, signal, time
+from pathlib import Path
+def stop(signum, frame):
+    time.sleep(.15)
+    os.write(2, b'cooperative shutdown\\n')
+    Path('/workspace/flushed').write_text('done')
+    os._exit(0)
+signal.signal(signal.SIGTERM, stop)
+Path('/workspace/ready').touch()
+print('ready', flush=True)
+""" + ("while True: os.write(1, b'x'*8192)" if ending == "bound" else "time.sleep(100)")
+    if ending == "bound":
+        launcher = replace(launcher, limits=replace(launcher.limits, record_bytes=1024))
+    task = asyncio.create_task(run(
+        launcher, tmp_path, source, posture=Posture.WRITE,
+        timeout_s=1 if ending == "timeout" else 10,
+    ))
+    try:
+        if ending == "cancel":
+            async with asyncio.timeout(5):
+                while not (tmp_path / "workspace/ready").exists():
+                    assert not task.done(), "cooperative workload did not start"
+                    await asyncio.sleep(.01)
+            task.cancel()
+            await asyncio.sleep(.05)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            result = await asyncio.wait_for(task, 8)
+            assert b"cooperative shutdown" in result.stderr
+            assert result.timed_out == (ending == "timeout")
+            if ending == "bound":
+                assert result.bound_exceeded == "record"
+            else:
+                assert result.elapsed_s >= 1.1  # Includes actual cooperative cleanup.
+        assert (tmp_path / "workspace/flushed").read_text() == "done"
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_term_ignoring_workload_gets_only_the_fixed_grace(launcher, tmp_path):
+    result = await run(launcher, tmp_path, """
+import signal, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+print('ready', flush=True)
+time.sleep(100)
+""", timeout_s=1)
+    assert result.stdout.strip() == b"ready" and result.timed_out
+    assert 2.9 <= result.elapsed_s < 5
+
+
+async def test_namespace_init_private_descriptors_cannot_be_opened_by_the_payload(
+    launcher, tmp_path,
+):
+    result = await run(launcher, tmp_path, """
+import os
+from pathlib import Path
+assert os.getppid() == 1
+try:
+    list(Path('/proc/1/fd').iterdir())
+except PermissionError:
+    print('private init descriptors')
+else:
+    raise AssertionError('workload may inspect namespace init descriptors')
+""")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == b"private init descriptors"
+
+
 async def test_runtime_drift_refuses_before_any_child_starts(launcher, tmp_path):
     launcher = replace(launcher, expected_runtime=Digest("sha256:" + "0" * 64))
     with pytest.raises(Exception, match="runtime content differs"):
@@ -509,7 +623,9 @@ def test_buffered_start_does_not_authorize_launch_after_observed_owner_death(mon
         # against the subsequent kill or replacing Linux's poll/read behavior.
         try:
             monkeypatch.setattr(_supervisor.subprocess, "Popen", lambda *a, **kw: os._exit(91))
-            code = _supervisor.supervise(read_fd, time.monotonic() + 1, ["must-not-start"])
+            code = _supervisor.supervise(
+                read_fd, time.monotonic() + 1, ["must-not-start", "--", "payload"],
+            )
         except BaseException:
             os._exit(92)
         os._exit(code)
