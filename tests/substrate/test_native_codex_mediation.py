@@ -144,7 +144,7 @@ def write_evidence(name, value):
         (Path(directory) / name).write_text(json.dumps(value, sort_keys=True, indent=2) + "\n")
 
 
-def argv_for(native, cwd, endpoint):
+def argv_for(native, cwd, endpoint, *, images):
     binary, env = native
     configuration = f'''
 model = "probe-model"
@@ -153,6 +153,8 @@ model_context_window = 32768
 model_auto_compact_token_limit = 30000
 check_for_update_on_startup = false
 web_search = "disabled"
+[tools]
+view_image = {str(images).lower()}
 [model_providers.probe]
 name = "Credential-free loopback fixture"
 base_url = "{endpoint}"
@@ -196,8 +198,9 @@ def test_pinned_native_schema_inventory(native, tmp_path):
 
 
 @pytest.mark.parametrize("operation", ["contained_python", "exec_command", "view_image"])
+@pytest.mark.parametrize("images", [True, False], ids=["image-control", "image-disabled"])
 async def test_native_dynamic_dispatch_and_builtin_probe(
-    native, tmp_path, provider, launcher, operation,
+    native, tmp_path, provider, launcher, operation, images,
 ):
     provider.launcher = launcher
     executor = RecordedExecutorProvider(launcher, provider, WORKER)
@@ -230,17 +233,19 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
     }[operation]
     try:
         async with fake_provider(operation, arguments) as (endpoint, requests, failures):
-            argv = argv_for(native, tmp_path, endpoint)
+            argv = argv_for(native, tmp_path, endpoint, images=images)
             result = await run_probe(argv, cwd=tmp_path, env=native[1], worker=worker)
-            evidence = {"probe": operation, "protocol": result, "requests": requests,
+            evidence = {"probe": operation, "images_enabled": images,
+                        "protocol": result, "requests": requests,
                         "server_failures": failures, "worker_outputs": observed,
                         "builtin_canary_written": canary.exists()}
-            write_evidence(f"codex-{operation}.json", evidence)
+            write_evidence(f"codex-{operation}-images-{str(images).lower()}.json", evidence)
             assert not failures, failures
             assert len(requests) == 2
-            assert {tool["name"] for tool in requests[0]["tools"]} == {
-                "request_user_input", "view_image", "contained_python",
-            }
+            expected_tools = {"request_user_input", "contained_python"}
+            if images:
+                expected_tools.add("view_image")
+            assert {tool["name"] for tool in requests[0]["tools"]} == expected_tools
             outputs = [item for item in requests[1]["input"]
                        if item.get("type") == "function_call_output"]
             assert len(outputs) == 1
@@ -250,8 +255,8 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
             else:
                 assert not observed
                 assert not result["calls"]
-                if operation == "exec_command":
-                    assert outputs[0]["output"] == "unsupported call: exec_command"
+                if operation == "exec_command" or not images:
+                    assert outputs[0]["output"] == f"unsupported call: {operation}"
                     assert not canary.exists()
                 else:
                     # A PASS reproduces the negative result: this native reader
