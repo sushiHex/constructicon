@@ -6,38 +6,37 @@
 
 **Assemble the plan. Seal the run. Prove what ships.**
 
-Constructicon is an execution and authority layer for agentic software
-engineering. Agents can write code, compose workflows, and operate runs.
-Constructicon compiles that intent into a sealed, crash-safe execution, scopes
-every capability, records every external change, and allows only proven results
-to reach protected Git.
+Constructicon is an execution and governance layer for agentic software
+engineering: sealed workflows, durable human collaboration, and proof-carrying
+Git changes.
+
+Agents propose work and compose its structure. Constructicon validates that
+proposal, pins what will execute, scopes its capabilities, and records the
+evidence for external changes. Humans observe, advise, and approve through the
+same typed control plane.
 
 > Authored intent may be ergonomic. Executed reality must be explicit.
 
+**Developer preview.** M1 through M7.1 are complete. M8 has landed executor
+contracts and a networkless Linux containment foundation; live Claude Code,
+Codex, and Pi adapters are not available yet. See [current status](#what-is-implemented).
+
 ## Why Constructicon exists
 
-Most agent frameworks focus on generating work: prompts, roles, routing, memory,
-and tool loops. Constructicon focuses on the boundary after generation:
+An agent's proposal, a successful check, a human approval, and an installed
+change are different facts. Constructicon keeps the relationships between
+them explicit and recoverable:
 
 **What exact plan ran, against which component world, what evidence passed, what
 changed, and can the answer survive a crash or retry?**
 
-Constructicon is not another agent persona system or model router. It is the
-deterministic machinery beneath autonomous software work.
-
-| Common agent harness | Constructicon |
-| --- | --- |
-| Interprets a mutable workflow while it runs | Compiles one immutable `ExecutionManifest` before execution |
-| Accepts an agent's claim that checks passed | Mints attestations from checks observed by trusted deterministic code |
-| Gives the worker credentials to push code | Gives agent workspaces zero authority over protected refs |
-| Repeats an effect after an uncertain failure | Reconciles the external world first, then records one receipt |
-| Lets component updates drift into active work | Pins one component world per run and changes future resolution only through explicit promotion |
-| Approves a branch or patch in the abstract | Gates the prepared merge commit and installs that exact commit or nothing |
+The model may change. The execution, recovery, and authority laws do not move
+into the model or its provider.
 
 ### The central promise
 
-**The only path from proposed code to a protected Git ref is one exact,
-attested, idempotent Git transaction.**
+**Within Constructicon's Git authority, proposed code reaches a protected ref
+through one exact, attested, idempotent Git transaction.**
 
 Gates run against the prepared merge commit into the current base.
 `merge_verified` installs that exact commit. A moved base, missing evidence,
@@ -87,6 +86,36 @@ authority.
 - **Learning produces candidates, never mutations.** A component cannot rewrite
   itself, promote itself, or define its own exam.
 
+### Humans are participants, not side channels
+
+Journal-backed mailboxes carry typed requests, replies, and acknowledgements.
+A run can park while waiting for advice or approval, release its invocation
+resources, and wake from the durable reply after a process restart. Advice and
+approval have separate authority; a human decision does not replace evidence
+from deterministic checks.
+
+`panel()` composes ordinary graph nodes with explicit membership and mapped
+fan-in. The standard quorum aggregator evaluates typed member results under
+an explicit policy. Human members use the same channel contracts; there is no
+panel-specific scheduler. See [channels and panels](docs/ARCHITECTURE.md#channels).
+
+### One executor seam, multiple kinds of backend
+
+Claude Code, Codex, and Pi are the initial integration targets, not a closed
+provider list. Future cloud APIs and local models can enter through compatible
+task harnesses implementing the existing `Executor` / `ExecutorProvider`
+contracts. Provider configuration, authentication, and native stream decoding
+belong in the adapter; the graph language and walker do not grow provider
+switches. An adapter is interchangeable only where it can enforce the admitted
+capabilities.
+
+Subscription reuse for solo developers is an explicit goal, **not a working
+integration today**. The accepted initial authentication boundary remains
+gateway-only. The [native-authentication investigation](docs/plans/handoffs/M8-native-auth-feasibility.md)
+identifies possible interfaces and the missing isolation proof; it does not
+authorize copying desktop credentials or silently substituting API billing.
+See [adding an executor](docs/CONTRIBUTING.md#adding-an-executor-l1).
+
 ## Quick start
 
 Constructicon currently targets Python 3.11 or newer and uses
@@ -102,7 +131,14 @@ uv run verify
 `verify` runs the same credential-free gate as CI: Ruff, strict mypy,
 import-linter, and pytest.
 
+The separate [Linux containment lane](docs/M8_CI.md#pr-b-the-separate-containment-gate)
+provisions its physical test boundary on GitHub Actions. Platform skips in a
+local run are not containment evidence.
+
 ### Run a small workflow
+
+This example executes a deterministic Python task. It needs no model login,
+executor service, or protected Git repository.
 
 Definitions must be importable after restart. Create `demo_component.py` in the
 repository root:
@@ -145,8 +181,10 @@ from constructicon.core.control import (
     AuthenticatedActor,
     PromotionCommandResult,
     RegistrationCommandResult,
+    RunResultPreview,
     RunSubmission,
 )
+from constructicon.core.run import RunStatus
 from constructicon.sdk import flow
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from demo_component import triage
@@ -188,7 +226,15 @@ async def main() -> None:
             idempotency_key="demo-run-1",
         )
         assert isinstance(submitted, RunSubmission)
-        print(submitted.run_id, submitted.run_status)
+        async with asyncio.timeout(30):
+            while True:
+                result = control.runs_result(launcher, submitted.run_id)
+                assert isinstance(result, RunResultPreview)
+                if result.status not in (RunStatus.PENDING, RunStatus.RUNNING):
+                    break
+                await asyncio.sleep(0.05)
+        assert result.status is RunStatus.SUCCEEDED, result.model_dump_json()
+        print(result.status.value, result.outputs)
     finally:
         await control.shutdown()
 
@@ -202,7 +248,17 @@ Run it:
 uv run python demo.py
 ```
 
-`@task`, `flow`, `component`, `harness`, and `loop` are authoring sugar only.
+Expected output:
+
+```text
+succeeded {'brief': {'title': 'Fix the flaky retry'}}
+```
+
+Run the unchanged example again to replay the same command keys and read the
+same completed run. If you change a command's arguments, give that operation
+a new idempotency key; reusing a key with a different request is a refusal.
+
+`@task`, `flow`, `component`, `harness`, `loop`, and `panel` are authoring sugar only.
 They immediately lower to the same canonical `Ref | Graph | Loop` contracts
 used by strict agent-authored JSON. There is no privileged SDK workflow model
 and no trusted bypass around admission.
@@ -223,14 +279,21 @@ revision-pinned pagination, and full immutable records remain available by
 reference. Local registration and initial promotion are intentionally Python
 launcher operations, not MCP tools.
 
+The CLI does not provision executor or channel capabilities. Assemble those in
+a Python launcher; persisted definitions do not substitute for live capability
+bindings. The same MCP surface exposes human inboxes, replies, acknowledgements,
+and request-bound approvals under the actor's scopes.
+
 For HTTP, Constructicon is authenticated or unavailable. Actor identity comes
 from a verified OAuth bearer token, never from a caller-controlled tool
 argument.
 
 ## What is implemented
 
-Constructicon `0.1.0` is a developer preview. The core architecture is frozen,
-and milestones M1 through M6 are implemented and green:
+Constructicon `0.1.0` is a developer preview, not a hosted coding-agent service.
+The execution and authority laws are governed by the
+[invariants](docs/INVARIANTS.md) and accepted [ADRs](docs/adr/README.md).
+Milestones M1 through M7.1 are complete:
 
 | Milestone | Capability |
 | --- | --- |
@@ -240,23 +303,29 @@ and milestones M1 through M6 are implemented and green:
 | M4 | Generic bounded repair loops without a second scheduler |
 | M5 | Agent-first JSON authoring, SDK sugar, introspection, and repairable admission |
 | M6 | Durable authenticated command law, race-safe hosting, revision-pinned reads, MCP v2 adapter, and counterfactual replay |
+| M7 | Durable channels, human advice and approval, restart-safe waiting, and deterministic panels |
+| M7.1 | Explicit panel membership, ordered mapped fan-in, exact endpoint diagnostics, and strengthened counterfactual admission |
 
-Next:
+**M8 is in progress.** Merged work includes complete executor grant policy,
+content-bound launch identity, record-before-materialization leases, a
+networkless Linux launcher, owned READ/WRITE workspaces, and process cleanup
+that survives controller death. Failure of the trusted reaper itself is outside
+that recovery guarantee. The physical boundary is tested on GitHub Actions with
+hostile fixtures, not live model calls.
 
-- **M7:** journal-backed channels, panels, and human advisor or approval round
-  trips
-- **M8:** live Claude Code, Codex, and Pi executors once their isolation
-  profiles can be enforced honestly
-- **M9:** self-improvement through evaluated candidates and explicit promotion
+Still outstanding: safe asynchronous WRITE capture, contained gate execution,
+provider-route conformance, and the live adapters. A networkless launcher is
+not a working subscription integration or a live coding-agent backend. Track
+the remaining work in the [M8 implementation record](docs/plans/handoffs/M8-implementation-record.md)
+and [authentication assessment](docs/designs/EXECUTOR_AUTHENTICATION.md).
 
-The deterministic execution core, Git authority path, Python SDK, and MCP
-control plane exist today. Live coding-agent adapters are intentionally not
-treated as ready until their isolation claims can be mechanically enforced.
+**M9 remains planned:** self-improvement through evaluated immutable candidates
+and explicit promotion, without letting the learner define its own exam.
 
 ## When Constructicon fits
 
-Constructicon is aimed at teams and researchers building agents that can affect
-real repositories and need stronger answers than "the agent said it worked."
+Constructicon is aimed at solo developers, teams, and researchers building
+agent-driven workflows over real repositories.
 
 It is a good fit when you need:
 
@@ -265,6 +334,7 @@ It is a good fit when you need:
 - an authority boundary independent of the model or agent provider
 - reproducible and counterfactual runs against a recorded component world
 - machine-shaped APIs with typed, repairable rejection
+- durable human advice, approvals, and explicitly composed panels
 - protected Git changes that are exact, attested, and idempotent
 
 It is not a hosted coding-agent product, a prompt framework, or a general model
@@ -288,10 +358,10 @@ them.
 ## Architecture
 
 ```text
-L4  api        ControlPlane, MCP, system assembly
-L3  sdk        @task, component, flow, harness, loop
+L4  api        ControlPlane, RunHost, MCP, system assembly
+L3  sdk        @task, component, flow, harness, loop, panel
 L2  runtime    registry, admission, manifest, walker, resume
-L1  substrate  journal, Git authority, gates, executors, effects
+L1  substrate  journal, Git authority, workspaces, gates, executors, effects, channels
 L0  core       every contract in the system, defined once
 ```
 
@@ -305,6 +375,11 @@ plus Pydantic. CI enforces both rules.
 - [Architecture](docs/ARCHITECTURE.md): the complete current design and
   milestone acceptance tests
 - [Contributing](docs/CONTRIBUTING.md): extension guides for agents and humans
+- [M8 implementation record](docs/plans/handoffs/M8-implementation-record.md):
+  shipped foundations, remaining slices, and proof boundaries
+- [Executor authentication](docs/designs/EXECUTOR_AUTHENTICATION.md):
+  subscription goals, current constraints, and the next feasibility experiment
+- [Linux CI evidence](docs/M8_CI.md): runner qualification versus containment proof
 - [Historical planning archive](docs/plans/README.md): non-normative plans,
   recovered records, and implementation handoffs
 - [Self-improvement design](docs/designs/SELF_IMPROVEMENT.md): learning as
