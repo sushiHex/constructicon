@@ -48,6 +48,35 @@ jobs:
           sudo install -m 0444 "$RUNNER_TEMP/m8-runtime.json" /var/lib/constructicon-m8-launch/runtime.json
           sudo install -d -o m8-service -g m8-service -m 0755 /home/m8-service/evidence
           sudo chmod o+x /home/runner /home/runner/work /home/runner/work/constructicon
+      - name: Acquire the pinned native investigation artifact (no account)
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 2 --output "$RUNNER_TEMP/codex.tar.gz" \
+            https://github.com/openai/codex/releases/download/rust-v0.153.4/codex-package-x86_64-unknown-linux-musl.tar.gz
+          printf '%s  %s\n' a822187e1a2420c61c5926721bfbd878701ed95547c9bb0d4de4498a16ba1821 "$RUNNER_TEMP/codex.tar.gz" | sha256sum --check --strict
+          sudo install -d -m 0755 /var/lib/constructicon-m8-launch/native-codex
+          sudo tar --no-same-owner -xzf "$RUNNER_TEMP/codex.tar.gz" -C /var/lib/constructicon-m8-launch/native-codex
+          sudo chmod -R go-w /var/lib/constructicon-m8-launch/native-codex
+      - name: Probe native mediation with loopback only and no credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          # This disposable outer namespace contains the unqualified harness.
+          # It is lab isolation, not a new Constructicon launch recipe. Workers
+          # still use the existing acquisition-owned production launcher.
+          sudo unshare --net --pid --fork --mount-proc sh -c '
+            set -eu
+            ip link set lo up
+            exec runuser -u m8-service -- env -i \
+              HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
+              M8_CONTAINMENT_REQUIRED=1 M8_NATIVE_CODEX_REQUIRED=1 \
+              M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
+              M8_CODEX_BINARY=/var/lib/constructicon-m8-launch/native-codex/bin/codex \
+              M8_EVIDENCE_DIRECTORY=/home/m8-service/evidence \
+              "$1/.venv/bin/python" -m pytest tests/substrate/test_native_codex_mediation.py \
+                -v --tb=short -p no:cacheprovider
+          ' sh "$PWD"
       - name: Prove containment as the non-sudo service user
         shell: bash
         env:
@@ -98,6 +127,7 @@ jobs:
             ${{ runner.temp }}/m8-runtime.json
             ${{ runner.temp }}/m8-host.txt
             /home/m8-service/evidence/boundary.json
+            /home/m8-service/evidence/codex-*.json
           if-no-files-found: error
           retention-days: 7
       - name: Report bounded launch-policy denials
