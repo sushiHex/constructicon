@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import sys
 import tarfile
 import weakref
 from collections.abc import AsyncIterator
@@ -36,7 +37,7 @@ from constructicon.core.workspace import (
     lease_id_for,
 )
 from constructicon.substrate._lifetime import finish_owned
-from constructicon.substrate.executors.linux import LinuxLauncher
+from constructicon.substrate.executors.linux import LinuxLauncher, require_fixed_artifact
 from constructicon.substrate.git.acquisition import (
     AcquisitionClosure,
     AcquisitionPaths,
@@ -136,7 +137,10 @@ class ContainedWorkspaceProvider:
 
     @property
     def git(self) -> str:
-        return self.authority.git_executable
+        executable = self.authority.git_executable
+        if sys.platform == "linux":
+            require_fixed_artifact(Path(executable))
+        return executable
 
     async def acquire(self, context: LeaseContext) -> AcquiredCapability:
         if context.binding.effective_grants.posture is not self.posture:

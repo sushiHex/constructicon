@@ -469,6 +469,17 @@ operations or snapshot export, and a changed executable refuses. The new
 regressions and mutants pin all three boundaries. Historical Git values and
 call conventions do not change.
 
+The follow-up check/use review exposed an unsupported input that was not yet
+refused: a service-replaceable host Git installation. Contained providers now
+reuse the launcher's exact fixed-artifact check for Git and its ancestors;
+even a mode-0555 tool owned by the service is not immutable. The shared check
+keeps its existing behavior and messages. Historical authorities still accept
+operator-supplied Git; they are not silently relabeled as contained.
+Privileged operators must not replace a live world's installed tools. Racing
+such a replacement is outside the same fixed-runtime assumption used by B,
+not a guarantee supplied by executing a pathname or by an open descriptor.
+No new cross-platform execution mechanism or process owner is introduced.
+
 A native rerun also exposed a weak existing guard proof: a metadata thread
 could leave reconciliation unfinished even when locking was removed. The
 test now opens a second file description and requires the actual kernel lock

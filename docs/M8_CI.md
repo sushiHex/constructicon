@@ -108,6 +108,14 @@ The separate `check_m8_capture_mutations.py` inventory changes code objects in
 isolated test processes. Assertion failures count; skips, timeouts, or broken
 mutation instruments do not. Both PR B and PR C inventories must pass.
 
+Contained Git uses the launcher's existing fixed-artifact rule too: its
+executable and ancestors must be root-owned and not service-writable. A
+service-owned executable is unavailable, even with its write bits cleared.
+Operators replace tools between deployed worlds, not during a running one;
+new installed content requires a new admitted revision. These are the same
+trusted-runtime assumptions as the launcher, not protection from a privileged
+operator modifying a live installation.
+
 These additions do not offer a live model route or execute candidate gates
 on the host. The original PR B evidence proves its boundary only; capture
 claims require the new exact-head tests and their mutation results.

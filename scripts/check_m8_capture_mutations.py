@@ -146,6 +146,13 @@ MUTANTS = (
         "tests/substrate/test_git_executable.py::"
         "test_path_changes_cannot_redirect_candidate_or_closure_operations",
     ),
+    (
+        "contained Git may be replaced by the service",
+        "constructicon.substrate.git.contained:ContainedWorkspaceProvider.git",
+        "require_fixed_artifact(Path(executable))", "pass",
+        "tests/substrate/test_git_executable.py::"
+        "test_contained_git_refuses_service_replaceable_artifacts",
+    ),
 )
 
 if __name__ == "__main__":

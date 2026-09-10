@@ -56,6 +56,23 @@ def test_modified_pinned_git_is_refused_before_any_authority_operation(tmp_path,
         authority.resolve_ref("refs/heads/main")
 
 
+@LINUX
+@pytest.mark.parametrize("mode", [0o755, 0o555])
+def test_contained_git_refuses_service_replaceable_artifacts(provider, tmp_path, monkeypatch, mode):
+    binaries = tmp_path / "replaceable-bin"
+    binaries.mkdir()
+    copied = binaries / "git"
+    shutil.copy2(provider.authority.git_executable, copied)
+    copied.chmod(mode)
+    monkeypatch.setenv("PATH", str(binaries) + os.pathsep + os.environ["PATH"])
+    # A historical authority can still use an operator-supplied installation.
+    # A contained provider cannot publish it as an immutable launch artifact.
+    provider.authority = GitAuthority(provider.authority.repository_id, tmp_path / "legacy-copy")
+    assert provider.authority.resolve_ref("refs/heads/main")
+    with pytest.raises(ContractViolation, match="fixed root-owned"):
+        _ = provider.git
+
+
 def test_the_provider_uses_its_authoritys_executable_not_a_second_path_lookup(
     provider, monkeypatch
 ):
