@@ -569,6 +569,13 @@ class GitAuthority:
         return None
 
 
+def candidate_ref_for(run_id: str, acquisition_id: str) -> str:
+    """One candidate locator for legacy and contained acquisition consumers."""
+
+    safe_run = "".join(c if c.isalnum() or c in "-_" else "-" for c in run_id)
+    return f"refs/candidates/{safe_run}/{acquisition_id}"
+
+
 class GitWorkspaceCapability:
     """The leased WRITE-workspace capability (implements ``LeasedCapability``).
 
@@ -583,8 +590,7 @@ class GitWorkspaceCapability:
         self.target_ref = target_ref
 
     def _candidate_ref(self, run_id: str, acquisition_id: str) -> str:
-        safe_run = "".join(c if c.isalnum() or c in "-_" else "-" for c in run_id)
-        return f"refs/candidates/{safe_run}/{acquisition_id}"
+        return candidate_ref_for(run_id, acquisition_id)
 
     async def acquire(self, context: LeaseContext) -> AcquiredCapability:
         run_id = context.run_lease.run_id

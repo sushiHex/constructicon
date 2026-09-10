@@ -65,6 +65,8 @@ jobs:
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_linux_containment.py \
               tests/substrate/test_contained_workspace.py tests/substrate/test_acquisition_closure.py \
               tests/substrate/test_recorded_executor.py \
+              tests/substrate/test_contained_capture.py tests/substrate/test_git_pack.py \
+              tests/runtime/test_async_workspace.py tests/api/test_capture_assembly.py \
               -v --tb=short -p no:cacheprovider
       - name: Kill the native review-regression mutants
         shell: bash

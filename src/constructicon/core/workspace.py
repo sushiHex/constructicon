@@ -43,6 +43,15 @@ class WriteWorkspace(WorkspaceView, Protocol):
     def commit_all(self, message: str) -> GitSha: ...
 
 
+@runtime_checkable
+class AsyncWriteWorkspace(WorkspaceView, Protocol):
+    """Contained capture; ``workspace.contained`` never uses the legacy convention."""
+
+    async def reset_to(self, ref: GitRef) -> None: ...
+
+    async def commit_all(self, message: str) -> GitSha: ...
+
+
 @dataclass(frozen=True)
 class LeaseContext:
     """Everything a provider may know about one acquisition — walker supplied."""
@@ -51,6 +60,9 @@ class LeaseContext:
     binding: CapabilityBinding
     path: ExecutionPath
     manifest_hash: Digest
+    # In-memory observation of the walker's existing run-control law, not a
+    # second owner or durable field. Legacy providers need not consume it.
+    check_control: Callable[[], None] | None = None
 
 
 @dataclass(frozen=True)

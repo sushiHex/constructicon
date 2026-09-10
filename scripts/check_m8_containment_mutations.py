@@ -22,7 +22,11 @@ BASE_READ = (
     "await finish_owned(asyncio.create_task(asyncio.to_thread(\n"
     "        self.authority.resolve_ref, self.target_ref,\n    )))"
 )
-COMMIT = "await finish_owned(asyncio.create_task(asyncio.to_thread(closure.commit, paths)))"
+COMMIT = (
+    "await finish_owned(asyncio.create_task(asyncio.to_thread(\n"
+    "        closure.commit, paths, candidate_ref=candidate_ref, disposition=disposition,\n"
+    "    )))"
+)
 METADATA = (
     ("acquire", WORKSPACE + "acquire", BASE_READ,
      "self.authority.resolve_ref(self.target_ref)"),

@@ -19,7 +19,9 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from constructicon.core.address import GitSha
 from constructicon.core.errors import ContractViolation
+from constructicon.core.workspace import Disposition
 from constructicon.substrate._lifetime import finish_owned
 from constructicon.substrate.git.authority import GitAuthority, GitAuthorityDamaged
 
@@ -77,7 +79,45 @@ class AcquisitionClosure:
         if self.is_closed(paths):
             raise ContractViolation("acquisition is permanently closed")
 
-    def commit(self, paths: AcquisitionPaths) -> None:
+    def candidate(self, ref: str) -> GitSha | None:
+        """Read a literal candidate, never peel a malformed ref into absence."""
+
+        symbolic = self.authority._run("symbolic-ref", "--quiet", ref, check=False)
+        if symbolic.returncode != 1:
+            raise GitAuthorityDamaged("candidate must be a literal object ref")
+        result = self.authority._run("rev-parse", "--verify", "--quiet", ref, check=False)
+        if result.returncode == 1:
+            return None
+        oid = result.stdout.strip()
+        if result.returncode or re.fullmatch(rf"[0-9a-f]{{{len(self.sentinel)}}}", oid) is None:
+            raise GitAuthorityDamaged("candidate ref is malformed")
+        kind = self.authority._run("cat-file", "-t", oid, check=False)
+        if kind.returncode or kind.stdout.strip() != "commit":
+            raise GitAuthorityDamaged("candidate ref does not name a commit")
+        return GitSha(oid)
+
+    def publish(self, paths: AcquisitionPaths, ref: str, candidate: GitSha) -> None:
+        """One external fence: publication cannot occur behind committed closure."""
+
+        for _ in range(8):
+            self.require_open(paths)
+            current = self.candidate(ref)
+            if current is not None and current != candidate:
+                raise ContractViolation("candidate ref already pins a different commit")
+            operation = "create" if current is None else "verify"
+            result = self.authority._ref_transaction([
+                "option no-deref",
+                f"verify {paths.closure_ref} {'0' * len(self.sentinel)}",
+                f"{operation} {ref} {candidate}",
+            ])
+            if result.returncode == 0:
+                return
+        raise ContractViolation("candidate publication transaction did not converge")
+
+    def commit(
+        self, paths: AcquisitionPaths, *, candidate_ref: str | None = None,
+        disposition: Disposition = "discard",
+    ) -> None:
         # This is called only for started handles or authoritative durable rows.
         actual = self.authority._run("hash-object", "-w", "--stdin", input_text="").stdout.strip()
         if actual != self.sentinel:
@@ -85,10 +125,20 @@ class AcquisitionClosure:
         for _ in range(8):
             exists = self.is_closed(paths)
             operation = "verify" if exists else "create"
-            result = self.authority._ref_transaction([
+            commands = [
                 "option no-deref",
                 f"{operation} {paths.closure_ref} {self.sentinel}",
-            ])
+            ]
+            if candidate_ref is not None:
+                candidate = self.candidate(candidate_ref)
+                if disposition == "discard" and candidate is not None:
+                    commands.append(f"delete {candidate_ref} {candidate}")
+                else:
+                    # Even absence is verified inside the transaction: a publisher
+                    # may have won since this read, and closure must retry as a whole.
+                    observed = candidate or "0" * len(self.sentinel)
+                    commands.append(f"verify {candidate_ref} {observed}")
+            result = self.authority._ref_transaction(commands)
             if result.returncode == 0:
                 if not self.is_closed(paths):
                     raise GitAuthorityDamaged("committed acquisition closure disappeared")
@@ -126,10 +176,15 @@ async def acquisition_guard(paths: AcquisitionPaths) -> AsyncIterator[int]:
         os.close(fd)
 
 
-async def dispose_acquisition(closure: AcquisitionClosure, paths: AcquisitionPaths) -> bool:
+async def dispose_acquisition(
+    closure: AcquisitionClosure, paths: AcquisitionPaths, *,
+    candidate_ref: str | None = None, disposition: Disposition = "discard",
+) -> bool:
     """Revoke before waiting, then remove only quiescent acquisition payloads."""
 
-    await finish_owned(asyncio.create_task(asyncio.to_thread(closure.commit, paths)))
+    await finish_owned(asyncio.create_task(asyncio.to_thread(
+        closure.commit, paths, candidate_ref=candidate_ref, disposition=disposition,
+    )))
     async with acquisition_guard(paths):
         if not paths.payload.exists() and not paths.payload.is_symlink():
             return False

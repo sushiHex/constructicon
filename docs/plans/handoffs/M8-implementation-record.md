@@ -1,6 +1,6 @@
 # M8 implementation record
 
-Status: PR A and hosted-runner decision merged; PR B under review.
+Status: PR A and PR B merged; PR C safe WRITE capture in progress.
 
 Authority: [accepted ADR 0018](../../adr/0018-live-executors-are-leased-contained-processes.md)
 and [frozen rev 1](../milestones/M8-live-executors-rev1.md). PR #26 merged as
@@ -407,6 +407,28 @@ generation. These establish possible integration points, not complete native
 tool mediation or subscription availability. The proposed next experiment
 keeps scripted driver proof separate from actual native CLI proof. No successor
 ADR, credential access, or changed authentication policy follows from it.
+
+## PR C — safe async WRITE capture (in progress)
+
+The new `AsyncWriteWorkspace` has an explicitly awaiting consumer and a
+controllable fake. `workspace.contained` uses the existing acquisition,
+launcher, and Git authority. Legacy synchronous capture remains unchanged.
+Mutable staging Git executes inside the launcher, followed by a separate READ
+export. A fresh acquisition-owned quarantine validates immutable pack bytes
+before trusted import; only the exact candidate OID is published.
+
+Publication and disposition extend the existing closure transaction, including
+the candidate-absence comparison. No SQLite schema, scheduler, or installation
+path changes. The physical guard ends only after import and quarantine cleanup;
+publication needs no payload path and is fenced by the Git transaction itself.
+`LeaseContext.check_control` exposes the walker's existing in-memory control
+check before publication, not a second ownership law or an atomic SQLite/Git
+transaction. New WRITE process assemblies refuse legacy capture/gate resources,
+including relabeled instances. No live provider is enabled by this slice.
+
+Portable tests exercise real Git packs, publication races, and the awaiting
+walker contract. Native containment, process-death, mutation, and independent
+review evidence remain pending; Windows skips are not physical proof.
 
 ## Remaining slices and operator prerequisites
 
