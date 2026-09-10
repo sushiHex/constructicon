@@ -88,6 +88,7 @@ from constructicon.core.executor import (
     TransportDamage,
     Usage,
 )
+from constructicon.core.gates import MergeEvaluation, MergeGate
 from constructicon.core.grants import (
     EffectiveGrants,
     GrantRequest,
@@ -281,6 +282,8 @@ __all__ = [
     "LoopExport",
     "LoopResolution",
     "LoopVocabulary",
+    "MergeEvaluation",
+    "MergeGate",
     "MergeSubject",
     "ModelSelection",
     "NodeId",

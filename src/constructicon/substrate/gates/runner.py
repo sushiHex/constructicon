@@ -28,10 +28,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast
 
-from pydantic import BaseModel, ConfigDict
-
 from constructicon.core.address import GitSha
-from constructicon.core.effect import AttestationDraft, CheckResult, MergeSubject
+from constructicon.core.effect import AttestationDraft, CheckResult
+from constructicon.core.gates import MergeEvaluation as MergeEvaluation
 from constructicon.core.identity import Digest, digest
 from constructicon.core.journal import Journal
 from constructicon.core.workspace import (
@@ -65,26 +64,6 @@ def default_check_specs() -> tuple[CheckSpec, ...]:
             "pytest", (sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider")
         ),
     )
-
-
-class MergeEvaluation(BaseModel):
-    """The typed gate verdict a merge node needs — subject, authority id, and
-    evidence. A conflict has no subject and can authorize nothing."""
-
-    model_config = ConfigDict(frozen=True)
-
-    subject: MergeSubject | None
-    attestation_id: str | None
-    checks: tuple[CheckResult, ...]
-
-    @property
-    def ok(self) -> bool:
-        return (
-            self.subject is not None
-            and self.attestation_id is not None
-            and bool(self.checks)
-            and all(check.ok for check in self.checks)
-        )
 
 
 class GateRunner:
