@@ -21,14 +21,18 @@ connector liveness.
 Accepted [ADR 0018](0018-live-executors-are-leased-contained-processes.md)
 and the [frozen M8 plan](../plans/milestones/M8-live-executors-rev1.md)
 define a Linux-first leased process boundary, gateway-only initial
-authentication, and complete live executor profiles. PR A is authorized;
-physical containment and deployed gateway conformance remain unimplemented
-proof gates, and operator provisioning requires a separately selected target.
+authentication, and complete live executor profiles. PR A contracts and PR B
+networkless Linux containment are merged; deployed gateway conformance and
+native model adapters remain outstanding. Operator deployment is separate
+from GitHub Actions proof runs.
 
 Accepted [ADR 0019](0019-hosted-linux-runners-are-requalified-not-image-pinned.md)
 records the owner's GitHub Actions selection and the explicit adjustment from
 an immutable hosted image to per-host qualification. It supersedes only M8
 rev 1's CI-host-image requirement; the original plan and ADR 0018 keep their
 historical bytes and all other proof obligations remain governing. The
-[qualification workflow](../M8_CI.md) investigates prerequisites only; it does
-not establish PR B containment or enable a live executor.
+[qualification workflow](../M8_CI.md) investigates prerequisites only; the
+separate required native lane establishes PR B's containment evidence. Neither
+enables a credential-bearing live executor. The
+[native-authentication investigation](../plans/handoffs/M8-native-auth-feasibility.md)
+changes no accepted ADR and records the additional proof a successor would need.
