@@ -163,6 +163,41 @@ def test_invalid_check_configuration_is_refused(tmp_path, bad):
         unqualified(tmp_path, checks=bad)
 
 
+async def test_relative_authorities_cannot_alias_across_service_working_directories(
+    tmp_path, monkeypatch,
+):
+    identifiers = []
+    for name in ("service-a", "service-b"):
+        service = tmp_path / name
+        runner = unqualified(service)
+        with monkeypatch.context() as local:
+            local.chdir(service)
+            relative = GitAuthority(Path("authority.git"), service / "relative-legacy")
+            identifiers.append(relative.repository_id)
+            # Legacy authority still accepts this locator; only the new
+            # contained assembly refuses the ambiguous recovery route.
+            assert relative.resolve_ref(runner.target_ref)
+            with pytest.raises(ContractViolation, match="canonical absolute Git authority"):
+                await ContainedGateRunner.create(
+                    journal=runner._journal, authority=relative, root=runner.root,
+                    target_ref=runner.target_ref, provider_id=runner.provider_id,
+                    launcher=runner.launcher, checks=runner.checks,
+                )
+            assert not runner.root.exists() and not runner.launcher.calls
+    assert identifiers == ["authority.git", "authority.git"]
+
+
+@LINUX
+async def test_absolute_repository_alias_is_not_a_canonical_recovery_route(tmp_path):
+    runner = unqualified(tmp_path)
+    alias = tmp_path / "repo-alias"
+    alias.symlink_to(Path(runner.authority.repository_id), target_is_directory=True)
+    runner.authority = GitAuthority(alias, tmp_path / "alias-legacy")
+    with pytest.raises(ContractViolation, match="canonical absolute Git authority"):
+        await qualify(runner)
+    assert not runner.root.exists() and not runner.launcher.calls
+
+
 @LINUX
 @pytest.mark.parametrize("materialize", [False, True])
 async def test_recovery_before_verify_has_no_subject_or_current_base_dependency(

@@ -133,6 +133,16 @@ MUTANTS = (
         "elif False:",
         TEST + "test_missing_or_contradictory_private_exit_is_not_a_pass[None]",
     ),
+    (
+        "relative authorities alias across working directories", GATE + "__init__",
+        "if not repository.is_absolute() or repository != repository.resolve():", "if False:",
+        TEST + "test_relative_authorities_cannot_alias_across_service_working_directories",
+    ),
+    (
+        "absolute repository aliases may rebind recovery", GATE + "__init__",
+        "or repository != repository.resolve()", "",
+        TEST + "test_absolute_repository_alias_is_not_a_canonical_recovery_route",
+    ),
 )
 
 if __name__ == "__main__":

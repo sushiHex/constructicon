@@ -129,6 +129,9 @@ class ContainedGateRunner:
     ) -> None:
         if not root.is_absolute() or not target_ref.startswith("refs/") or not provider_id:
             raise ContractViolation("gates require an absolute root, full target and provider id")
+        repository = Path(authority.repository_id)
+        if not repository.is_absolute() or repository != repository.resolve():
+            raise ContractViolation("contained gates require a canonical absolute Git authority")
         if not checks or len({spec.name for spec in checks}) != len(checks):
             raise ContractViolation("contained checks must be nonempty and uniquely named")
         for spec in checks:

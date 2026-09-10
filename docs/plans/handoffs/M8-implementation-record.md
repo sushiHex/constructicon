@@ -565,6 +565,14 @@ not a reconstructed route. No new ledger or path-dependent launch identity is
 introduced. Relocating live acquisition storage, or rebinding an unchanged host
 pathname to different storage, is not supported by this trusted deployment.
 
+The confirming review found one remaining ambiguity: legacy `GitAuthority`
+accepts relative repository paths, so two service working directories can give
+different repositories the same `repository_id`. The new contained gate now
+requires a canonical absolute authority locator before qualification. It refuses
+relative paths and symlink aliases rather than silently rewriting historical
+merge subjects or changing the legacy constructor. The regression constructs
+both working-directory worlds; the native companion covers an absolute alias.
+
 Exit codes 125--127 are valid check exits, not evidence that setup failed. The
 trusted namespace reaper now reports the actual payload exit through its
 existing private control socket and an anonymous report pipe owned by the

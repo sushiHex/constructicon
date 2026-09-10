@@ -177,7 +177,9 @@ versions do not reinterpret retained consumers.
 mount-free contained probes before publishing its check-set identity. That
 identity binds actual runtime and trusted tool content, checks, launch law and
 limits; it is independent of the candidate. Assembly requires the exact
-descriptor and journal, and a legacy runner cannot gain containment by relabeling.
+descriptor and journal, a canonical absolute authority locator, and the same
+journal/authority objects as an assembled merge effect. A legacy runner cannot
+gain containment by relabeling.
 
 Verification reuses GitAuthority's exact current-base merge preparation. Its
 recorded acquisition owns the temporary snapshot; exported blobs and modes

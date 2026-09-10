@@ -267,7 +267,8 @@ its historical substrate import remains a re-export. Publish an awaiting
 component version instead of changing a retained synchronous consumer.
 
 Assemble `ContainedGateRunner.create(...)` asynchronously with explicit check
-specs and the pinned Linux launcher. Tool identification has no repository
+specs, the pinned Linux launcher, and a canonical absolute Git authority path
+(no relative locator or symlink alias). Tool identification has no repository
 mount and must finish before publishing its revision. Supply absolute paths
 inside that runtime, not this process's interpreter or host package environment.
 Invocation alone prepares the candidate against the current target and mounts
