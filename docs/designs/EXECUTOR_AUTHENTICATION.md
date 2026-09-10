@@ -79,7 +79,17 @@ containment, revocation, exact identity, restart cleanup, and the single
 task-shaped seam. Native harness authentication must use the vendor's own
 supported flow. No security downgrade is authorized by this record.
 
-Because subscriptions are a primary owner goal, recommend evaluating option
-2 before spending implementation effort on a gateway that solves a different
-use case. Approval of that investigation would not authorize credentials,
-paid calls, or a live deployment; those remain separate operator actions.
+The owner authorized investigating option 2. The
+[native-authentication investigation](../plans/handoffs/M8-native-auth-feasibility.md)
+records current CLI interfaces, a pinned Hardline comparison, and a local
+Codex protocol-schema probe. Complete mediation is not established: dynamic
+tool dispatch is not proof of exclusive dispatch, and Claude's `canUseTool`
+callback is not a universal interceptor. No credential-bearing integration
+was attempted, and no successor ADR is accepted by that investigation.
+
+The next proposed experiment is a credential-free, pinned Codex app-server
+driver/worker probe, followed separately by native CLI integration against a
+supported offline test interface if one exists. Scripted peers alone cannot
+qualify the native CLI. This keeps the subscription goal explicit without
+inventing a broker abstraction or spending on a different billing route.
+Credentials, paid calls, and live deployment remain separate operator actions.

@@ -168,9 +168,10 @@ call, or production availability is claimed by qualification.
 ## PR B — Linux containment and acquisition lifetime
 
 The concrete networkless launcher, deferred READ/WRITE workspaces, permanent
-Git closure marker, and retained acquisition guard are under review in PR #30.
-PR #29 merged as `efe63c2`; PR #30 is based directly on main. The
-trusted single-call subreaper keeps guard descriptors outside the payload's
+Git closure marker, and retained acquisition guard merged in PR #30 as
+`c39afe7033a259932dbf4110160501519b8710e0`, following PR #29 at `efe63c2`.
+The merged tree matches reviewed head `ec43d128cfab417186afa72ae144396a46c88e7c`.
+The trusted single-call subreaper keeps guard descriptors outside the payload's
 PID namespace until its children are reaped; neither a Python controller's
 death nor the bubblewrap monitor's return proves quiescence by itself.
 
@@ -374,19 +375,27 @@ subscription-backed access is an explicit prerequisite decision before the
 live Claude Code/Codex slices, not something PR B claims or silently enables.
 The [authentication feasibility record](../../designs/EXECUTOR_AUTHENTICATION.md)
 separates documented native CLI login from credential intermediation. It
-recommends an explicit successor-design investigation before choosing a
-gateway that would serve API billing rather than the owner's subscription goal;
-it changes no accepted authentication policy.
+now links the owner-authorized
+[native-authentication investigation](M8-native-auth-feasibility.md): pinned
+Hardline source, published CLI interfaces, and credential-free Codex schema
+generation. These establish possible integration points, not complete native
+tool mediation or subscription availability. The proposed next experiment
+keeps scripted driver proof separate from actual native CLI proof. No successor
+ADR, credential access, or changed authentication policy follows from it.
 
 ## Remaining slices and operator prerequisites
 
-PR B's readiness gate requires its physical proofs under the actual Linux
-service account and production policy. Hosted-runner qualification supplies
-only prerequisite evidence. The Windows machine remains unchanged; no gateway,
+PR B completed its physical proofs under the actual Linux service account and
+pinned containment policy on GitHub Actions. Its final head passed the local
+gate (1,699 passed, 72 skipped), CI gate (1,720 passed, 51 skipped), native lane
+(113 passed), and mutation inventory (42 killed); confirming review reported
+no actionable findings. These are PR B evidence, not proof of a native model
+adapter or gateway. Hosted-runner qualification alone still supplies only
+prerequisite evidence. The Windows machine remains unchanged; no gateway,
 secret access, paid request, or account login has been authorized.
 
-B: Linux launcher and containment. C: safe async WRITE capture. D: contained
-async gates. E: selected gateway integration and deployment-specific
-conformance. F/G/H: Claude Code, Codex, then Pi and integrated closeout.
+C: safe async WRITE capture. D: contained async gates. E: selected gateway
+integration and deployment-specific conformance. F/G/H: Claude Code, Codex,
+then Pi and integrated closeout.
 No live WRITE profile is enabled before capture, gates, and routed authority
 are proved. The public model contracts are not substitutes for those proofs.
