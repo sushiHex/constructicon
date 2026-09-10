@@ -36,6 +36,10 @@ def test_new_write_provider_refuses_legacy_resources_even_when_relabeled(
     if posture is Posture.WRITE:
         with pytest.raises(ValueError, match="require contained workspace and gate bindings"):
             Constructicon(**arguments)
+    elif legacy == "gates" and relabel:
+        # PR D now owns this capability kind, independently of executor posture.
+        with pytest.raises(ValueError, match="legacy gates cannot be relabeled"):
+            Constructicon(**arguments)
     else:
         Constructicon(**arguments)
 

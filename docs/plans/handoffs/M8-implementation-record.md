@@ -1,6 +1,6 @@
 # M8 implementation record
 
-Status: PR A and PR B merged; PR C safe WRITE capture in progress.
+Status: PR A, PR B, and PR C merged; PR D contained gates in progress.
 
 Authority: [accepted ADR 0018](../../adr/0018-live-executors-are-leased-contained-processes.md)
 and [frozen rev 1](../milestones/M8-live-executors-rev1.md). PR #26 merged as
@@ -408,7 +408,7 @@ tool mediation or subscription availability. The proposed next experiment
 keeps scripted driver proof separate from actual native CLI proof. No successor
 ADR, credential access, or changed authentication policy follows from it.
 
-## PR C — safe async WRITE capture (in progress)
+## PR C — safe async WRITE capture (merged as #34)
 
 The new `AsyncWriteWorkspace` has an explicitly awaiting consumer and a
 controllable fake. `workspace.contained` uses the existing acquisition,
@@ -516,6 +516,72 @@ the historical fake profile and six manifest goldens are byte-identical.
 Exact-head native/mutation/local/CI results and the confirming review remain
 acceptance gates in PR #34; Windows skips are not physical evidence.
 
+## PR D — contained async gates (in progress)
+
+Started from PR C's squash merge `04c7b19`. L0 owns the explicit async
+`MergeGate` and the unchanged `MergeEvaluation`, re-exported at its historical
+import path. The contained provider and a controllable fake use the same
+awaiting component through ordinary registration, admission, and execution.
+
+Runtime identification has no candidate mount and finishes before publishing
+the check-set identity. Verification uses the existing authority merge law at
+the current target, an acquisition-owned exported snapshot, and the existing
+READ-only networkless Linux launcher. The candidate never supplies runtime
+identity. Anonymous assembly descriptors allocate no persistent lease. Private
+gate recovery references carry the provider, acquisition, normalized storage
+locator and closure repository, never a base; host locators do not enter the
+portable runtime digest.
+
+Trusted metadata and filesystem workers are joined, not a wrapped legacy
+verifier. The bound operation observes the existing invocation control callback
+while checks run and before minting. Cleanup completes before authority. The
+same Git closure and physical guard fence late use and successor disposal.
+The new snapshot proof also compares exported blobs and modes with the prepared
+Git tree: archive attributes cannot hide or substitute the bytes being tested.
+Lossy exports and unsupported gitlinks refuse; legacy gate behavior is unchanged.
+
+Tests and native acceptance proofs are being added. No local skip, scripted
+launcher, or prior slice's test count is credited as PR D containment evidence.
+Exact-head gate results, mutation results, and independent review remain pending.
+
+### PR D review corrections
+
+The first independent review found three introduced gaps. Assembly now proves
+that a contained gate and the real merge effect share the exact journal and
+authority objects. The effect also refuses a subject for another repository
+before execution, reconciliation or simulation: mirrored Git objects confer no
+authority over a different repository. The positive public-control lane runs
+the contained gate and installs its exact attested subject through the effect.
+
+Recovery previously selected its guard from the current configured root. A
+changed root could falsely report an old acquisition reaped while its payload
+and guard remained elsewhere. The private durable reference now pins that
+locator and refuses a mismatched restart before closure or disposal. The
+original root still recovers normally. Independent design adjudication accepted
+the private locator and identified its companion fence: the closure repository
+is privately pinned too, and the complete stale batch is validated before any
+physical effect. Close already uses the provider-minted handle's original paths,
+not a reconstructed route. No new ledger or path-dependent launch identity is
+introduced. Relocating live acquisition storage, or rebinding an unchanged host
+pathname to different storage, is not supported by this trusted deployment.
+
+The confirming review found one remaining ambiguity: legacy `GitAuthority`
+accepts relative repository paths, so two service working directories can give
+different repositories the same `repository_id`. The new contained gate now
+requires a canonical absolute authority locator before qualification. It refuses
+relative paths and symlink aliases rather than silently rewriting historical
+merge subjects or changing the legacy constructor. The regression constructs
+both working-directory worlds; the native companion covers an absolute alias.
+
+Exit codes 125--127 are valid check exits, not evidence that setup failed. The
+trusted namespace reaper now reports the actual payload exit through its
+existing private control socket and an anonymous report pipe owned by the
+launcher. Repository code inherits neither descriptor. Missing or contradictory
+exit evidence is an infrastructure failure; a completed nonzero check is a
+check failure, including 125--127. This extends the shared launcher observation
+instead of inventing a gate-specific child supervisor. All existing B/C proofs
+and inventories must pass again alongside the new D regressions.
+
 ## Remaining slices and operator prerequisites
 
 PR B completed its physical proofs under the actual Linux service account and
@@ -527,7 +593,7 @@ adapter or gateway. Hosted-runner qualification alone still supplies only
 prerequisite evidence. The Windows machine remains unchanged; no gateway,
 secret access, paid request, or account login has been authorized.
 
-C: safe async WRITE capture. D: contained async gates. E: selected gateway
+D: contained async gates. E: selected gateway
 integration and deployment-specific conformance. F/G/H: Claude Code, Codex,
 then Pi and integrated closeout.
 No live WRITE profile is enabled before capture, gates, and routed authority

@@ -13,6 +13,7 @@ import json
 import math
 import os
 import stat
+import struct
 import sys
 import time
 from contextlib import suppress
@@ -122,6 +123,8 @@ class ProcessResult:
     elapsed_s: float
     timed_out: bool = False
     bound_exceeded: str | None = None
+    # Only the private trusted-reaper channel can supply this observation.
+    payload_returncode: int | None = None
 
 
 DEFAULT_PROCESS_LIMITS = ProcessLimits()
@@ -268,6 +271,8 @@ class LinuxLauncher:
         self, command: tuple[str, ...], *, workspace: Path | None, posture: Posture,
         guard_fds: tuple[int, ...], stdin: bytes = b"", deadline: float,
     ) -> ProcessResult:
+        if sys.platform != "linux":
+            raise ContractViolation("contained process ownership requires Linux")
         if not guard_fds or len(set(guard_fds)) != len(guard_fds):
             raise ContractViolation("contained work requires its distinct acquisition guards")
         if asyncio.get_running_loop().time() >= deadline:
@@ -277,6 +282,8 @@ class LinuxLauncher:
         # monotonic clock, with only the already-remaining budget transferred.
         child_deadline = time.monotonic() + (deadline - asyncio.get_running_loop().time())
         owner_read, owner_write = os.pipe()
+        report_read, report_write = os.pipe()
+        os.set_blocking(report_read, False)
         process: asyncio.subprocess.Process | None = None
         started = time.monotonic()
         stdout = bytearray()
@@ -343,10 +350,10 @@ class LinuxLauncher:
                 f"{self.root}/lib/x86_64-linux-gnu:{self.root}/usr/lib/x86_64-linux-gnu",
                 str(self.root / "usr/bin/python3.12"), "-I", str(self.root / SUPERVISOR_PATH),
                 str(owner_read), ",".join(str(fd) for fd in guard_fds),
-                str(child_deadline), *args,
+                str(child_deadline), f"--report-fd={report_write}", *args,
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE, close_fds=True,
-                pass_fds=(owner_read, *guard_fds), env={"LANG": "C.UTF-8"},
+                pass_fds=(owner_read, report_write, *guard_fds), env={"LANG": "C.UTF-8"},
             ))
             cancelled = False
             try:
@@ -388,10 +395,24 @@ class LinuxLauncher:
             os.close(owner_read)
             stop()
             cleanup = completion or asyncio.create_task(finish())
-            await finish_owned(cleanup)
+            try:
+                await finish_owned(cleanup)
+                raw_report = b""
+                with suppress(BlockingIOError):
+                    raw_report = os.read(report_read, 5)
+            finally:
+                os.close(report_read)
+                os.close(report_write)
         assert process is not None and process.returncode is not None
+        payload_returncode = None
+        if len(raw_report) == 4:
+            payload_returncode = struct.unpack("!i", raw_report)[0]
+            if not 0 <= payload_returncode <= 255:
+                raise ContractViolation("invalid private payload exit report")
+        elif raw_report:
+            raise ContractViolation("malformed private payload exit report")
         return ProcessResult(
             process.returncode, bytes(stdout), bytes(stderr_head + stderr_tail),
-            time.monotonic() - started,
-            timed_out or asyncio.get_running_loop().time() >= deadline, bound,
+            time.monotonic() - started, timed_out or asyncio.get_running_loop().time() >= deadline,
+            bound, payload_returncode,
         )

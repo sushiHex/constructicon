@@ -92,9 +92,9 @@ It never captures the host environment or credentials. Read these alongside
 the exact job's test and mutation results: files alone are not a passing gate,
 and an earlier job does not qualify a later rolling image.
 
-This lane demonstrates the networkless boundary, not an always-on execution
-host, provider gateway, live subscription login, safe candidate import, or
-contained gate implementation. Those retain their separate M8 slice gates.
+PR B's portion demonstrates the networkless boundary, not an always-on execution
+host, provider gateway, live subscription login, candidate import, or gate
+implementation. The additional slice proofs below are separately required.
 
 ## PR C: capture on the same native boundary
 
@@ -120,3 +120,21 @@ operator modifying a live installation.
 These additions do not offer a live model route or execute candidate gates
 on the host. The original PR B evidence proves its boundary only; capture
 claims require the new exact-head tests and their mutation results.
+
+## PR D: checks on the same native boundary
+
+PR D adds mount-free runtime identification, exact prepared-snapshot checks,
+hostile repository code, stdout/stderr bounds, repeated cancellation and real
+owner-death recovery. The public lifecycle proves heartbeat advancement while
+checks run, then no successful checkpoint or attestation after cancellation or
+ownership loss. Recovery before first verification needs no candidate or base.
+It refuses a changed storage locator before cleanup. A positive public-control
+lane also installs the gate's exact subject through the same-world merge effect.
+Private launcher exit evidence distinguishes setup failure from legitimate
+check exits 125--127 without trusting repository output.
+
+`check_m8_gate_mutations.py` independently challenges phase separation, runtime
+drift, physical READ mounts, output truthfulness, exact exported bytes, control
+observation, cleanup/closure and assembly. The B, C and D inventories all remain
+mandatory; a skip or broken instrument never counts as a killed mutation.
+These are credential-free gate proofs, not provider-route or live-adapter proof.

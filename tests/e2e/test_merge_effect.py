@@ -6,6 +6,7 @@ one install ever, at every seam."""
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,7 @@ from constructicon.core.effect import (
     MergeSubject,
     idempotency_key,
 )
-from constructicon.core.errors import AdmissionError
+from constructicon.core.errors import AdmissionError, ContractViolation
 from constructicon.core.identity import Digest, digest
 from constructicon.core.run import RunStatus
 from constructicon.substrate.effects.git import MergeVerifiedEffect
@@ -150,6 +151,27 @@ async def test_the_forgery_matrix_leaves_no_receipt_and_moves_nothing(
     receipt = await effect.execute(request_for(subject, attestation_id))
     assert receipt.status == "committed"
     assert authority.resolve_ref("refs/heads/main") == subject.merge_commit
+
+
+@pytest.mark.parametrize("operation", ["execute", "reconcile", "simulate"])
+async def test_mirrored_objects_never_authorize_another_repository(
+    tmp_path, journal, operation,
+):
+    authority, _, subject, attestation = prepared_world(tmp_path, journal)
+    mirror = tmp_path / "mirror.git"
+    shutil.copytree(Path(authority.repository_id), mirror)
+    other = GitAuthority(mirror, tmp_path / "mirror-workspaces")
+    # All Git facts match: only the governing authority differs.
+    assert other.tree_of(subject.merge_commit) == subject.tested_tree
+    assert other.parents_of(subject.merge_commit) == (subject.expected_base, subject.candidate)
+    effect = MergeVerifiedEffect(journal=journal, authority=other)
+    request = request_for(subject, attestation)
+    before = other.resolve_ref(subject.target_ref)
+    with pytest.raises(ContractViolation, match="another Git authority"):
+        await getattr(effect, operation)(request)
+    assert other.resolve_ref(subject.target_ref) == before
+    assert not other.reconcile_install(subject, request.idempotency_key)
+    assert journal.receipt_for(request.idempotency_key) is None
 
 
 @pytest.mark.parametrize(

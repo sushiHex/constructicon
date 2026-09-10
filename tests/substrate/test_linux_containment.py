@@ -230,6 +230,25 @@ async def run(
         )
 
 
+@pytest.mark.parametrize("code", [0, 125, 126, 127])
+async def test_payload_exit_is_an_owned_fact_not_stdout_or_a_reserved_code(
+    launcher, tmp_path, code,
+):
+    result = await run(launcher, tmp_path, f"import os; os.write(1,b'\\x00'*4); os._exit({code})")
+    assert result.returncode == code and result.payload_returncode == code
+    assert result.stdout == b"\x00" * 4  # These bytes cannot forge the private exit fact.
+
+
+async def test_missing_executable_has_no_payload_exit_fact(launcher, tmp_path):
+    paths = AcquisitionPaths(tmp_path, acquisition_id_for("lease-missing-executable", 1))
+    async with acquisition_guard(paths) as guard:
+        result = await launcher.run(
+            ("/does-not-exist",), workspace=None, posture=Posture.READ, guard_fds=(guard,),
+            timeout_s=5,
+        )
+    assert result.returncode != 0 and result.payload_returncode is None
+
+
 async def test_native_namespace_mount_privilege_and_descriptor_table(launcher, tmp_path):
     source = """
 import json, os, resource

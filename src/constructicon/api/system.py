@@ -69,7 +69,8 @@ from constructicon.runtime.walker import (
 from constructicon.sdk.types import DefinitionBundle
 from constructicon.substrate.effects.channel import ChannelSendEffect
 from constructicon.substrate.effects.git import MergeVerifiedEffect
-from constructicon.substrate.gates.runner import CheckSpec, GateRunner
+from constructicon.substrate.gates.contained import ContainedGateRunner
+from constructicon.substrate.gates.runner import BoundGateRunner, CheckSpec, GateRunner
 from constructicon.substrate.git.authority import GitAuthority, GitWorkspaceCapability
 from constructicon.substrate.journal.projection import ProjectionResult, project_run
 from constructicon.substrate.journal.sqlite import SqliteJournal
@@ -179,7 +180,7 @@ class Constructicon:
             and Posture.WRITE in resource.identity.profile.postures
             for resource in self._capabilities.values()
         ) and (
-            any(isinstance(resource, (GitWorkspaceCapability, GateRunner))
+            any(isinstance(resource, (GitWorkspaceCapability, GateRunner, BoundGateRunner))
                 for resource in self._capabilities.values())
             or any(descriptor.kind in {"workspace", "gates"}
                    for descriptor in self._catalog.values())
@@ -189,6 +190,27 @@ class Constructicon:
             )
         for capability_id in sorted(self._capabilities.keys() | self._catalog.keys()):
             descriptor = self._catalog.get(capability_id)
+            resource = self._capabilities.get(capability_id)
+            if isinstance(resource, ContainedGateRunner) and (
+                    descriptor is None or descriptor.kind != resource.kind
+                    or not descriptor.leased or descriptor.revision != resource.revision
+                    or not resource.is_assembled_from(journal)
+            ):
+                raise ValueError("contained gates require their exact descriptor and journal")
+            if isinstance(resource, ContainedGateRunner) and (
+                merge := (effects or {}).get("merge_verified")
+            ) is not None and (
+                not isinstance(merge, MergeVerifiedEffect)
+                or not merge.is_assembled_from(journal, resource.authority)
+            ):
+                raise ValueError(
+                    "contained gates and merge effect require the same authority/journal",
+                )
+            if (
+                descriptor is not None and descriptor.kind == "gates.contained"
+                and isinstance(resource, (GateRunner, BoundGateRunner))
+            ):
+                raise ValueError("legacy gates cannot be relabeled as contained")
             if descriptor is None:
                 continue
             if descriptor.capability_id != capability_id:
