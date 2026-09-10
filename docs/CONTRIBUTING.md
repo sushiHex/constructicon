@@ -16,6 +16,15 @@ existing component or contract to compose or extend. Use
 `describe_component(name)` for one stable contract and `rdeps(name)` before
 changing a shared definition. Compose before you drop a tier (I10).
 
+## Finding and tracking work
+
+Use [GitHub Issues](https://github.com/sushiHex/constructicon/issues) for current
+work and [the tracking guide](WORK_TRACKING.md) for triage, dependencies,
+ownership, handoffs, and evidence-backed closure. Search before creating an
+issue, link substantive PRs to their work item, and keep design decisions in
+reviewed plans/ADRs. A tracked proposal is not approved implementation. There
+is no separately maintained Markdown backlog.
+
 ## Authoring components and graphs (L3/L4)
 
 - Use `@task("namespace/name")` for a new atomic operation. Every data

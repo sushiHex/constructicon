@@ -15,6 +15,15 @@ three documents and one command:
 uv run verify        # ruff + mypy --strict + import-linter + pytest — what CI runs
 ```
 
+## Work tracking
+
+Follow `docs/WORK_TRACKING.md` when selecting, starting, handing off, or closing
+work. GitHub Issues owns the backlog, dependencies, and ownership; plans and
+accepted ADRs own design authority. Query current issues and linked PRs before
+starting, and leave a branch/head handoff when pausing. Do not keep a second
+TODO in Markdown or infer approval from an issue or `ready` label. Review and
+status requests alone do not authorize external mutations.
+
 ## The map
 
 ```text

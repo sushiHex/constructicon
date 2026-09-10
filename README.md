@@ -18,8 +18,10 @@ same typed control plane.
 > Authored intent may be ergonomic. Executed reality must be explicit.
 
 **Developer preview.** M1 through M7.1 are complete. M8 has landed executor
-contracts and a networkless Linux containment foundation; live Claude Code,
-Codex, and Pi adapters are not available yet. See [current status](#what-is-implemented).
+contracts, networkless Linux containment, safe WRITE capture, and contained
+gates; live Claude Code, Codex, and Pi adapters are not available yet. See
+[current status](#what-is-implemented) and
+[open work](https://github.com/sushiHex/constructicon/issues).
 
 ## Why Constructicon exists
 
@@ -376,6 +378,8 @@ plus Pydantic. CI enforces both rules.
 
 ## Documentation
 
+- [Work tracking](docs/WORK_TRACKING.md): GitHub Issues, dependencies, ownership,
+  and evidence-backed completion; plans and ADRs remain design authority
 - [Invariants](docs/INVARIANTS.md): the laws every change must preserve
 - [Architecture](docs/ARCHITECTURE.md): the complete current design and
   milestone acceptance tests
@@ -395,6 +399,11 @@ plus Pydantic. CI enforces both rules.
 
 Contributions are welcome, especially around real executor integrations,
 failure probes, channel transports, and examples.
+
+Find [ready work](https://github.com/sushiHex/constructicon/issues?q=is%3Aissue%20is%3Aopen%20label%3Aready)
+or [propose an issue](https://github.com/sushiHex/constructicon/issues/new/choose).
+Read [how we track work](docs/WORK_TRACKING.md) before starting a substantive
+change so contributors and agent sessions share one queue.
 
 Before adding a new concept, read [the invariants](docs/INVARIANTS.md), inspect
 `system.describe()`, and look for an existing contract to compose. The full
