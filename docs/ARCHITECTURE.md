@@ -163,8 +163,36 @@ captures discard their own candidates, never the source run's.
 New WRITE process providers cannot be assembled with legacy workspace or gate
 bindings, including relabeled concrete instances. This does not create a live
 provider or require a gate in a credential-free capture-only test graph.
-Contained gates and routed authority remain prerequisites for the live adapter
-slices; no live WRITE configuration is offered here.
+Contained gates and routed authority are separate prerequisites for the live
+adapter slices; capture alone offers no live WRITE configuration.
+
+### Contained merge gates
+
+L0 `MergeGate.verify(candidate)` is explicitly async. `MergeEvaluation` is the
+same data contract used by the historical synchronous runner, re-exported at
+its old import path. New `gates.contained` bindings and awaiting component
+versions do not reinterpret retained consumers.
+
+`substrate/gates/contained.py` identifies the installed runtime through
+mount-free contained probes before publishing its check-set identity. That
+identity binds actual runtime and trusted tool content, checks, launch law and
+limits; it is independent of the candidate. Assembly requires the exact
+descriptor and journal, and a legacy runner cannot gain containment by relabeling.
+
+Verification reuses GitAuthority's exact current-base merge preparation. Its
+recorded acquisition owns the temporary snapshot; exported blobs and modes
+must match the prepared Git tree before checks start. Lossy archive attributes
+and unsupported gitlinks refuse. Checks run in the existing READ-only Linux
+boundary without host environment, network or a provider route. Their combined
+stdout/stderr has the launcher's enforced bound. Timeout, overflow and teardown
+failure cannot become passed checks.
+
+The bound gate observes the walker's control callback while work is pending.
+Cancellation joins check teardown and any trusted metadata/filesystem workers;
+the transient snapshot is removed before minting. Final control observation
+precedes the journal's fenced attestation write. Existing acquisition guards
+and subject-independent closure refs fence use and recovery, including leases
+that never verified a candidate. No new journal phase or scheduler is involved.
 
 ## Agent authoring and introspection
 
@@ -731,7 +759,8 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
   materialization. PR B supplies the networkless Linux launcher, immutable
   per-call reaper, deferred READ/WRITE materialization and acquisition closure.
   PR C implements asynchronous contained capture, immutable pack verification,
-  and atomic candidate closure. Contained gates, gateway conformance, and
+  and atomic candidate closure. PR D adds contained async gates and mount-free
+  check-runtime identification. Gateway conformance and
   ClaudeCode/Codex/Pi adapters remain separate slices; no live model adapter
   is available yet. Native CI evidence is described in [M8_CI.md](M8_CI.md). See
   [ADR 0018](adr/0018-live-executors-are-leased-contained-processes.md) and the

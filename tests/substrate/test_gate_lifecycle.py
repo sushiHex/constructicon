@@ -8,6 +8,7 @@ import os
 import signal
 import sqlite3
 import sys
+import threading
 from contextlib import closing, suppress
 from pathlib import Path
 
@@ -24,6 +25,8 @@ from tests.gateworld import register_gate
 from tests.runtime.test_async_gates import until
 from tests.substrate._gate_owner import assemble
 from tests.substrate.test_contained_gates import candidate, unqualified
+from tests.substrate.test_contained_gates import qualify as qualify_gate
+from tests.substrate.test_contained_gates import started as started_gate
 from tests.substrate.test_linux_containment import launcher as launcher
 
 
@@ -33,7 +36,9 @@ def workload_pids(tag):
         if entry.name.isdigit():
             with suppress(FileNotFoundError, ProcessLookupError, PermissionError):
                 command = (entry / "cmdline").read_bytes().split(b"\0")
-                if b"/workspace/check.py" in command and tag.encode() in command:
+                if command[:2] == [b"/usr/bin/python3", b"/workspace/check.py"] and (
+                    tag.encode() in command
+                ):
                     result.append(int(entry.name))
     return result
 
@@ -152,3 +157,45 @@ async def test_running_gate_heartbeats_and_quiesces_without_authority(launcher, 
         for pid in pids:
             with suppress(ProcessLookupError):
                 os.kill(pid, signal.SIGKILL)
+
+
+async def test_repeated_cancellation_joins_snapshot_cleanup(launcher, tmp_path, monkeypatch):
+    import shutil
+
+    from constructicon.substrate.gates.runner import CheckSpec
+
+    runner = await qualify_gate(unqualified(tmp_path, launcher, (
+        CheckSpec("slow", ("/usr/bin/python3", "/workspace/check.py", tmp_path.name), 30),
+    )))
+    sha = candidate(runner, {"check.py": "import os,time\nos.fork()\ntime.sleep(90)\n"})
+    acquired = await started_gate(runner)
+    entered, released = threading.Event(), threading.Event()
+    original = shutil.rmtree
+
+    def remove(path, *args, **kwargs):
+        if path == acquired.resource.paths.payload:
+            entered.set()
+            assert released.wait(5)
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr("constructicon.substrate.gates.contained.shutil.rmtree", remove)
+    running = asyncio.create_task(acquired.resource.verify(sha))
+    try:
+        pids = await wait_workload(tmp_path.name)
+        running.cancel()
+        await until(entered.is_set)
+        running.cancel()
+        await asyncio.sleep(0)
+        running.cancel()
+        await asyncio.sleep(0)
+        assert not running.done()
+        assert acquired.resource.paths.payload.exists()
+    finally:
+        released.set()
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+    assert not runner._journal.drafts and not acquired.resource.paths.payload.exists()
+    assert not workload_pids(tmp_path.name)
+    assert all(not Path(f"/proc/{pid}").exists() for pid in pids)
+    await runner.close(acquired, "discard")

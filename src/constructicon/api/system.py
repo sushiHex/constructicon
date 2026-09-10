@@ -180,7 +180,7 @@ class Constructicon:
             and Posture.WRITE in resource.identity.profile.postures
             for resource in self._capabilities.values()
         ) and (
-            any(isinstance(resource, (GitWorkspaceCapability, GateRunner))
+            any(isinstance(resource, (GitWorkspaceCapability, GateRunner, BoundGateRunner))
                 for resource in self._capabilities.values())
             or any(descriptor.kind in {"workspace", "gates"}
                    for descriptor in self._catalog.values())

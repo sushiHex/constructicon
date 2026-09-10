@@ -423,6 +423,25 @@ async def test_closed_marker_prevents_late_verify_even_on_a_ready_local_handle(t
     await runner.close(acquired, "discard")
 
 
+@LINUX
+async def test_local_close_observed_at_mint_boundary_prevents_authority(tmp_path, monkeypatch):
+    runner = await qualify(unqualified(tmp_path))
+    acquired = await started(runner)
+    original = runner._require_open
+
+    async def close_after_last_open(handle):
+        await original(handle)
+        if any(kwargs["workspace"] is not None for _, kwargs in runner.launcher.calls):
+            # Model close() entering while the joined identity worker is pending.
+            handle._phase.closed = True
+
+    monkeypatch.setattr(runner, "_require_open", close_after_last_open)
+    with pytest.raises(ContractViolation, match="locally closed"):
+        await runner._verify(acquired.resource, candidate(runner))
+    assert not runner._journal.drafts and not acquired.resource.paths.payload.exists()
+    await runner.close(acquired, "discard")
+
+
 @pytest.mark.parametrize("change", ["kind", "revision", "leased", "journal", "absent"])
 async def test_contained_gate_assembly_requires_exact_facts(tmp_path, change):
     from constructicon.api.system import Constructicon
@@ -443,3 +462,47 @@ async def test_contained_gate_assembly_requires_exact_facts(tmp_path, change):
     with pytest.raises(ValueError, match="exact descriptor and journal"):
         Constructicon(journal=journal, capabilities={"gates": runner},
                       catalog={} if change == "absent" else {"gates": descriptor})
+
+
+@LINUX
+@pytest.mark.parametrize("field", ["provider", "acquisition", "epoch", "path"])
+async def test_recovery_refuses_a_foreign_reference_without_closing_it(tmp_path, field):
+    import json
+
+    runner = await qualify(unqualified(tmp_path))
+    ctx = gate_context(runner)
+    acquired = await runner.acquire(ctx)
+    stale = stale_row(acquired, ctx)
+    if field in {"provider", "acquisition"}:
+        raw = json.loads(acquired.resource_ref)
+        raw[field] = "foreign"
+        row = stale.lease.model_copy(update={"resource_ref": json.dumps(raw)})
+    elif field == "epoch":
+        row = stale.lease.model_copy(update={"acquisition_epoch": 2})
+    else:
+        row = stale.lease.model_copy(update={"path": context(binding="other").path.model_copy(
+            update={"scope": context().path.scope.child("other")},
+        )})
+    with pytest.raises(ContractViolation, match="recovery"):
+        await runner.reconcile(gate_context(runner, epoch=2), (replace(stale, lease=row),))
+    assert not runner.closure.is_closed(acquired.resource.paths)
+    assert not acquired.resource.paths.payload.exists()
+
+
+async def test_bound_legacy_gate_cannot_hide_behind_an_unrelated_label(tmp_path):
+    from constructicon.api.system import Constructicon
+    from constructicon.substrate.gates.runner import BoundGateRunner
+    from constructicon.substrate.journal.sqlite import SqliteJournal
+    from tests.executorworld import FakeExecutorProvider, launch_identity
+
+    executor = FakeExecutorProvider()
+    executor._identity = launch_identity(executor.identity.profile.model_copy(update={
+        "postures": frozenset({Posture.WRITE}),
+    }))
+    assert Posture.WRITE in executor.identity.profile.postures
+    with pytest.raises(ValueError, match="require contained workspace and gate bindings"):
+        Constructicon(
+            journal=SqliteJournal(tmp_path / "run.sqlite"),
+            capabilities={"executor": executor, "alias": object.__new__(BoundGateRunner)},
+            catalog={"executor": executor.descriptor("executor")},
+        )

@@ -261,6 +261,26 @@ on those capabilities, not on a shared model name.
 Implement `CheckResult` production over a workspace; the runner mints the
 `Attestation`. A red check is data, not an error.
 
+New contained consumers declare `gates.contained` and await L0
+`MergeGate.verify(candidate)`. `MergeEvaluation` is one unchanged data contract;
+its historical substrate import remains a re-export. Publish an awaiting
+component version instead of changing a retained synchronous consumer.
+
+Assemble `ContainedGateRunner.create(...)` asynchronously with explicit check
+specs and the pinned Linux launcher. Tool identification has no repository
+mount and must finish before publishing its revision. Supply absolute paths
+inside that runtime, not this process's interpreter or host package environment.
+Invocation alone prepares the candidate against the current target and mounts
+that exact snapshot READ-only. Both phases have private scratch and no network
+or provider route. Gitlinks and archive attributes producing a lossy export are
+refused before running code. The legacy M3 runner remains trusted/fake-only.
+
+Reuse the existing acquisition guard and closure marker. Keep the recovery
+reference independent of candidate and base, join trusted preparation and
+cleanup workers, and let the launcher own all check descendants. Observe the
+walker-supplied control callback during work and immediately before minting;
+no blocking-verifier wrapper, alternate scheduler, or cleanup ledger.
+
 ## Consuming a contained WRITE workspace (L0/L1)
 
 Declare capability kind `workspace.contained`, obtain `AsyncWriteWorkspace`,

@@ -253,6 +253,8 @@ class ContainedGateRunner:
 
     @staticmethod
     def _control(handle: BoundContainedGate) -> None:
+        if handle._phase.closed:
+            raise ContractViolation("gate acquisition was locally closed")
         control = handle.context.check_control
         if control is None:
             raise ContractViolation("gate lost its invocation control check")

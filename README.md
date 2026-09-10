@@ -315,8 +315,11 @@ hostile fixtures, not live model calls. Async WRITE capture runs staging Git
 inside that boundary, verifies an immutable pack, and atomically fences its
 exact candidate against acquisition closure.
 
-Still outstanding: contained gate execution,
-provider-route conformance, and the live adapters. A networkless launcher is
+Contained async gates use the same boundary to check the exact prepared merge
+snapshot. Runtime identification happens without a candidate mount; cancellation
+and descendant cleanup complete before authority is minted.
+
+Still outstanding: provider-route conformance and the live adapters. A networkless launcher is
 not a working subscription integration or a live coding-agent backend. Track
 the remaining work in the [M8 implementation record](docs/plans/handoffs/M8-implementation-record.md)
 and [authentication assessment](docs/designs/EXECUTOR_AUTHENTICATION.md).

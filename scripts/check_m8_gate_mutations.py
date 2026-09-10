@@ -34,8 +34,8 @@ MUTANTS = (
     ),
     (
         "output overflow is reported passed", GATE + "_check",
-        'status = "infrastructure_error"\n            detail =',
-        'status = "passed"\n            detail =',
+        'status = "infrastructure_error"\n        detail =',
+        'status = "passed"\n        detail =',
         TEST + "test_native_output_overflow_cannot_pass[stdout]",
     ),
     (
@@ -78,6 +78,17 @@ MUTANTS = (
         "constructicon.api.system:Constructicon.__init__",
         "or not resource.is_assembled_from(journal)", "",
         TEST + "test_contained_gate_assembly_requires_exact_facts[journal]",
+    ),
+    (
+        "cooperative cancellation waits for a check to finish", BOUND + "verify",
+        "self.provider._control(self)", "pass",
+        "tests/substrate/test_gate_lifecycle.py::"
+        "test_running_gate_heartbeats_and_quiesces_without_authority[cancel]",
+    ),
+    (
+        "a locally closed gate still mints", GATE + "_control",
+        "if handle._phase.closed:", "if False:",
+        TEST + "test_local_close_observed_at_mint_boundary_prevents_authority",
     ),
 )
 
