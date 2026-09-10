@@ -106,7 +106,19 @@ MUTANTS = (
     (
         "recovery reports the wrong storage root reaped", GATE + "reconcile",
         "or reference.storage_root != str(self.root)", "",
-        TEST + "test_recovery_never_reports_the_wrong_storage_root_reaped",
+        TEST + "test_recovery_never_reports_the_wrong_storage_root_reaped[root]",
+    ),
+    (
+        "recovery closes a different repository's fence", GATE + "reconcile",
+        "or reference.repository != self.closure.authority.repository_id", "",
+        TEST + "test_recovery_never_reports_the_wrong_storage_root_reaped[repository]",
+    ),
+    (
+        "recovery mutates before validating the complete batch", GATE + "reconcile",
+        "pending.append((acquired, row.resource_ref))",
+        "await dispose_acquisition(self.closure, AcquisitionPaths(self.root, acquired))\n"
+        "        pending.append((acquired, row.resource_ref))",
+        TEST + "test_recovery_validates_the_whole_batch_before_closing_any_row",
     ),
     (
         "reserved check exit is guessed to be infrastructure failure", GATE + "_check",

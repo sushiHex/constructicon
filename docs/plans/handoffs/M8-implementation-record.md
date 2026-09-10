@@ -528,8 +528,9 @@ the check-set identity. Verification uses the existing authority merge law at
 the current target, an acquisition-owned exported snapshot, and the existing
 READ-only networkless Linux launcher. The candidate never supplies runtime
 identity. Anonymous assembly descriptors allocate no persistent lease. Private
-gate recovery references carry the provider, acquisition and normalized storage
-locator, never a base; host locators do not enter the portable runtime digest.
+gate recovery references carry the provider, acquisition, normalized storage
+locator and closure repository, never a base; host locators do not enter the
+portable runtime digest.
 
 Trusted metadata and filesystem workers are joined, not a wrapped legacy
 verifier. The bound operation observes the existing invocation control callback
@@ -556,8 +557,13 @@ Recovery previously selected its guard from the current configured root. A
 changed root could falsely report an old acquisition reaped while its payload
 and guard remained elsewhere. The private durable reference now pins that
 locator and refuses a mismatched restart before closure or disposal. The
-original root still recovers normally; no new ledger or path-dependent launch
-identity is introduced. Relocating live acquisition storage is not supported.
+original root still recovers normally. Independent design adjudication accepted
+the private locator and identified its companion fence: the closure repository
+is privately pinned too, and the complete stale batch is validated before any
+physical effect. Close already uses the provider-minted handle's original paths,
+not a reconstructed route. No new ledger or path-dependent launch identity is
+introduced. Relocating live acquisition storage, or rebinding an unchanged host
+pathname to different storage, is not supported by this trusted deployment.
 
 Exit codes 125--127 are valid check exits, not evidence that setup failed. The
 trusted namespace reaper now reports the actual payload exit through its

@@ -69,6 +69,7 @@ class _GateReference(BaseModel):
     acquisition: str
     provider: str
     storage_root: str
+    repository: str
 
 
 @dataclass
@@ -237,6 +238,7 @@ class ContainedGateRunner:
         # A private recovery locator, not part of the portable launch identity.
         reference = _GateReference(
             acquisition=acquired, provider=self.provider_id, storage_root=str(self.root),
+            repository=self.closure.authority.repository_id,
         )
         return AcquiredCapability(
             resource=handle, lease_id=logical, acquisition_id=acquired,
@@ -282,7 +284,7 @@ class ContainedGateRunner:
     async def reconcile(
         self, context: LeaseContext, stale: tuple[StaleAcquisition, ...],
     ) -> LeaseReconciliation:
-        reaped = []
+        pending = []
         logical = lease_id_for(context.run_lease.run_id, context.path, context.binding.binding)
         for item in stale:
             row = item.lease
@@ -297,12 +299,15 @@ class ContainedGateRunner:
             if (
                 reference.acquisition != acquired or reference.provider != self.provider_id
                 or reference.storage_root != str(self.root)
+                or reference.repository != self.closure.authority.repository_id
                 or canonical_json(reference.model_dump(mode="json")) != row.resource_ref
             ):
                 raise ContractViolation("gate recovery reference contradicts its durable row")
+            pending.append((acquired, row.resource_ref))
+        # Validate the complete batch before giving any row physical authority.
+        for acquired, _ in pending:
             await dispose_acquisition(self.closure, AcquisitionPaths(self.root, acquired))
-            reaped.append(row.resource_ref)
-        return LeaseReconciliation(reaped=tuple(reaped))
+        return LeaseReconciliation(reaped=tuple(reference for _, reference in pending))
 
     async def _snapshot(self, handle: BoundContainedGate, commit: GitSha, guard: int) -> Path:
         git = GitProcess(self.authority.git_executable, self.launcher.limits)

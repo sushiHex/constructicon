@@ -184,7 +184,8 @@ async def test_recovery_before_verify_has_no_subject_or_current_base_dependency(
 
 
 @LINUX
-async def test_recovery_never_reports_the_wrong_storage_root_reaped(tmp_path):
+@pytest.mark.parametrize("route", ["root", "repository"])
+async def test_recovery_never_reports_the_wrong_storage_root_reaped(tmp_path, route):
     from constructicon.substrate.git.acquisition import acquisition_guard
 
     runner = await qualify(unqualified(tmp_path))
@@ -194,8 +195,13 @@ async def test_recovery_never_reports_the_wrong_storage_root_reaped(tmp_path):
     old.payload.mkdir(parents=True)
     sentinel = old.payload / "owned"
     sentinel.write_bytes(b"still owned by the old guard")
+    authority, root = runner.authority, runner.root
+    if route == "root":
+        root = tmp_path / "different-root"
+    else:
+        authority = GitAuthority(seed_authority(tmp_path / "other"), tmp_path / "other-legacy")
     successor = await ContainedGateRunner.create(
-        journal=runner._journal, authority=runner.authority, root=tmp_path / "different-root",
+        journal=runner._journal, authority=authority, root=root,
         target_ref=runner.target_ref, provider_id=runner.provider_id,
         launcher=runner.launcher, checks=runner.checks,
     )
@@ -204,12 +210,35 @@ async def test_recovery_never_reports_the_wrong_storage_root_reaped(tmp_path):
         with pytest.raises(ContractViolation, match="recovery reference"):
             await successor.reconcile(gate_context(successor, epoch=2), (stale_row(acquired, ctx),))
         assert sentinel.read_bytes() == b"still owned by the old guard"
-        assert not successor.root.exists() and not runner.closure.is_closed(old)
+        assert not runner.closure.is_closed(old) and not successor.closure.is_closed(old)
+        if route == "root":
+            assert not successor.root.exists()
     # The genuine successor uses the recorded root and the same guard.
     same = await qualify(runner)
     result = await same.reconcile(gate_context(same, epoch=2), (stale_row(acquired, ctx),))
     assert result.reaped == (acquired.resource_ref,)
     assert runner.closure.is_closed(old) and not old.payload.exists()
+
+
+@LINUX
+async def test_recovery_validates_the_whole_batch_before_closing_any_row(tmp_path):
+    import json
+
+    runner = await qualify(unqualified(tmp_path))
+    first = await runner.acquire(gate_context(runner))
+    second = await runner.acquire(gate_context(runner, epoch=2))
+    raw = json.loads(second.resource_ref)
+    raw["storage_root"] = str(tmp_path / "foreign")
+    foreign = stale_row(
+        replace(second, resource_ref=json.dumps(raw)), gate_context(runner, epoch=2),
+    )
+    with pytest.raises(ContractViolation, match="recovery reference"):
+        await runner.reconcile(gate_context(runner, epoch=3), (
+            stale_row(first, gate_context(runner)), foreign,
+        ))
+    assert not runner.closure.is_closed(first.resource.paths)
+    assert not runner.closure.is_closed(second.resource.paths)
+    assert not runner.root.exists()
 
 
 async def test_native_checks_use_exact_prepared_snapshot_and_fixed_runtime(launcher, tmp_path):
