@@ -652,29 +652,53 @@ async def test_successful_call_elapsed_time_includes_availability(launcher, tmp_
     assert result.elapsed_s >= probe_elapsed + payloads[0].elapsed_s
 
 
+@pytest.mark.parametrize("source", (
+    "open('/workspace/started','w').write('owned')",
+    "import sys; value = sys.stdin.read(); open('/workspace/started','w').write(value)",
+), ids=("direct", "stdin-gated"))
 async def test_payload_waits_for_controller_ownership_of_the_real_spawn_handle(
-    launcher, tmp_path, monkeypatch,
+    launcher, tmp_path, monkeypatch, source,
 ):
+    # Observe the authorizing fact, not marker absence during a timed window.
+    # Pipe identity joins the parent's write end to the inherited read end;
+    # descriptor numbers alone can be reused between probe and workload.
     spawn = asyncio.create_subprocess_exec
-    calls = 0
-    escaped = None
+    write = os.write
+    events = []
 
-    async def held_spawn(*args, **kwargs):
-        nonlocal calls, escaped
-        calls += 1
+    def pipe_identity(fd):
+        stat = os.fstat(fd)
+        return stat.st_dev, stat.st_ino
+
+    async def observed_spawn(*args, **kwargs):
         process = await spawn(*args, **kwargs)
-        if calls == 2:
-            await asyncio.sleep(.3)
-            escaped = (tmp_path / "workspace/started").exists()
+        events.append(("handle", pipe_identity(kwargs["pass_fds"][0])))
         return process
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", held_spawn)
-    result = await run(
-        launcher, tmp_path, "open('/workspace/started','w').write('owned')",
-        posture=Posture.WRITE,
-    )
-    assert escaped is False, "payload began while the spawn handle was still unowned"
+    def observed_write(fd, data):
+        owner = pipe_identity(fd) if data == b"\x01" else None
+        written = write(fd, data)
+        if owner is not None:
+            events.append(("authorize", owner))
+        return written
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", observed_spawn)
+    monkeypatch.setattr(os, "write", observed_write)
+    # The stdin-gated payload cannot publish its marker until feed starts,
+    # which is after handle return even under premature authorization. The
+    # ordering assertion must therefore work without an observable escape.
+    result = await run(launcher, tmp_path, source, posture=Posture.WRITE, stdin=b"owned")
     assert result.returncode == 0 and (tmp_path / "workspace/started").read_text() == "owned"
+    handles = [(index, owner) for index, (kind, owner) in enumerate(events) if kind == "handle"]
+    assert len(handles) == 2, "both the native probe and workload must return real handles"
+    for handoff, owner in handles:
+        authorizations = [
+            index for index, event in enumerate(events) if event == ("authorize", owner)
+        ]
+        assert authorizations, "the real owner pipe never received its start byte"
+        # Check the first write: a later lawful duplicate must not hide an
+        # earlier premature authorization, or kill a mutant by count alone.
+        assert handoff < authorizations[0], "start authorized before the spawn handle returned"
 
 
 async def test_reaper_enforces_expiry_while_the_controller_event_loop_is_stalled(
