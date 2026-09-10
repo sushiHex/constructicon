@@ -153,8 +153,6 @@ model_context_window = 32768
 model_auto_compact_token_limit = 30000
 check_for_update_on_startup = false
 web_search = "disabled"
-[tools]
-view_image = {str(images).lower()}
 [model_providers.probe]
 name = "Credential-free loopback fixture"
 base_url = "{endpoint}"
@@ -164,6 +162,7 @@ request_max_retries = 0
 stream_max_retries = 0
 stream_idle_timeout_ms = 10000
 [features]
+view_image = {str(images).lower()}
 shell_tool = false
 unified_exec = false
 apply_patch_freeform = false
@@ -191,7 +190,13 @@ def test_pinned_native_schema_inventory(native, tmp_path):
     client = json.loads((output / "ClientRequest.json").read_text())
     methods = sorted({variant["properties"]["method"]["enum"][0]
                       for variant in client["oneOf"]})
+    features = subprocess.check_output(
+        [str(binary), "features", "list"], env=env, cwd=tmp_path, timeout=15,
+    ).decode()
+    flags = {line.split()[0]: line.split()[-1] for line in features.splitlines()}
+    assert flags["view_image"] == "true"
     write_evidence("codex-schema.json", {"schemas": schemas, "client_methods": methods,
+                                        "default_features": features,
                                         "binary_sha256": hashlib.sha256(binary.read_bytes())
                                         .hexdigest()})
     assert "thread/start" in methods and "turn/start" in methods
