@@ -167,6 +167,13 @@ async def test_reconciliation_commits_revocation_before_waiting_for_physical_qui
     recovery = None
     try:
         async with acquisition_guard(paths):
+            # Exercise the actual kernel lock directly. Observing an unfinished
+            # recovery task can race its still-running metadata thread even if
+            # the guard was removed, and therefore cannot prove exclusion.
+            import fcntl
+
+            with paths.guard.open("rb") as contender, pytest.raises(BlockingIOError):
+                fcntl.flock(contender.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             recovery = asyncio.create_task(provider.reconcile(
                 context(epoch=2), (stale_row(acquired, old),),
             ))

@@ -139,6 +139,13 @@ MUTANTS = (
         "tests/substrate/test_git_executable.py::"
         "test_modified_pinned_git_is_refused_before_any_authority_operation",
     ),
+    (
+        "snapshot export bypasses the authority executable",
+        "constructicon.substrate.git.authority:GitAuthority.read_snapshot",
+        '[self.git_executable, "archive",', '["git", "archive",',
+        "tests/substrate/test_git_executable.py::"
+        "test_path_changes_cannot_redirect_candidate_or_closure_operations",
+    ),
 )
 
 if __name__ == "__main__":

@@ -28,6 +28,11 @@ def test_path_changes_cannot_redirect_candidate_or_closure_operations(tmp_path, 
         assert closure.candidate(candidate) == base
         closure.commit(paths, candidate_ref=candidate)
         assert closure.is_closed(paths) and closure.candidate(candidate) is None
+        snapshot = authority.read_snapshot(base)
+        try:
+            assert snapshot.git_ref().commit == base
+        finally:
+            authority.discard_snapshot(snapshot)
     except OSError as exc:
         pytest.fail(f"an ambient PATH change redirected privileged Git: {exc}")
 

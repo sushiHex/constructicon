@@ -465,8 +465,15 @@ but authority ref operations still looked up bare `git` through current PATH.
 `GitAuthority` now owns one resolved executable and checks its content before
 use; the contained provider reads that same fact instead of discovering or
 retaining a second locator. PATH changes cannot redirect candidate/closure
-operations, and a changed executable refuses. The new regressions and mutants
-pin both boundaries. Historical Git values and call conventions do not change.
+operations or snapshot export, and a changed executable refuses. The new
+regressions and mutants pin all three boundaries. Historical Git values and
+call conventions do not change.
+
+A native rerun also exposed a weak existing guard proof: a metadata thread
+could leave reconciliation unfinished even when locking was removed. The
+test now opens a second file description and requires the actual kernel lock
+to refuse it while the producer holds its guard, before testing revocation.
+No added delay or production change substitutes for that exclusion proof.
 
 The same review proposed requiring both contained workspace and gate instances
 in every WRITE provider assembly. That broader rule was not adopted: accepted

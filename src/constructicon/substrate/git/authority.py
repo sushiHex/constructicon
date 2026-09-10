@@ -387,7 +387,7 @@ class GitAuthority:
         env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
         env.update(_PINNED_ENV)
         archive = subprocess.run(
-            ["git", "archive", "--format=tar", commit],
+            [self.git_executable, "archive", "--format=tar", commit],
             cwd=self._repo,
             env=env,
             capture_output=True,
