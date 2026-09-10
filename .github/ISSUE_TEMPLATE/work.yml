@@ -1,0 +1,41 @@
+name: Work item
+description: Scope an implementation, investigation, or planning outcome.
+labels: [needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search for an existing issue. One work item owns one outcome; small
+        steps belong here, independently assignable work can become sub-issues.
+        Creating this issue does not approve a design or authorize deployment.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Work kind
+      options:
+        - Implementation
+        - Investigation
+        - Planning
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome and scope
+      description: What changes or becomes known? Include non-goals and the smallest useful scope.
+    validations:
+      required: true
+  - type: textarea
+    id: authority
+    attributes:
+      label: Authority and prerequisites
+      description: Link plans/ADRs and blockers; distinguish proposals from approvals. Say none or unknown when appropriate.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Observable completion evidence. Investigations need a stopping condition and may conclude negatively.
+    validations:
+      required: true

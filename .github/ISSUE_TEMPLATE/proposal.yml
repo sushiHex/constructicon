@@ -1,0 +1,38 @@
+name: Design proposal or decision
+description: Compare alternatives and request a scoped decision before implementation.
+labels: [decision, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Existing invariants and accepted ADRs remain in force. Discussion here
+        does not approve a successor design; accepted architectural decisions
+        must be recorded through a reviewed repository change.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and desired outcome
+      description: Who needs this, and why does existing composition not suffice?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and tradeoffs
+      description: Include reuse or no change, compatibility, authority, and operational cost.
+    validations:
+      required: true
+  - type: textarea
+    id: contracts
+    attributes:
+      label: Affected contracts and decisions
+      description: Link existing plans/ADRs; name proposed supersessions and non-goals. Unknowns are allowed.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence and decision requested
+      description: Separate observations from hypotheses; name missing proofs and the exact choice needed.
+    validations:
+      required: true

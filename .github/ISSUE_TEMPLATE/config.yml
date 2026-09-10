@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Work tracking and contribution guide
+    url: https://github.com/sushiHex/constructicon/blob/main/docs/WORK_TRACKING.md
+    about: How to find work, propose a change, and close it with evidence.

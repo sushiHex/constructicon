@@ -1,6 +1,6 @@
 # M8 implementation record
 
-Status: PR A, PR B, and PR C merged; PR D contained gates in progress.
+Status: PR A–D merged; authentication decision and slices E–H remain.
 
 Authority: [accepted ADR 0018](../../adr/0018-live-executors-are-leased-contained-processes.md)
 and [frozen rev 1](../milestones/M8-live-executors-rev1.md). PR #26 merged as
@@ -516,7 +516,7 @@ the historical fake profile and six manifest goldens are byte-identical.
 Exact-head native/mutation/local/CI results and the confirming review remain
 acceptance gates in PR #34; Windows skips are not physical evidence.
 
-## PR D — contained async gates (in progress)
+## PR D — contained async gates (merged as #35)
 
 Started from PR C's squash merge `04c7b19`. L0 owns the explicit async
 `MergeGate` and the unchanged `MergeEvaluation`, re-exported at its historical
@@ -540,9 +540,18 @@ The new snapshot proof also compares exported blobs and modes with the prepared
 Git tree: archive attributes cannot hide or substitute the bytes being tested.
 Lossy exports and unsupported gitlinks refuse; legacy gate behavior is unchanged.
 
-Tests and native acceptance proofs are being added. No local skip, scripted
-launcher, or prior slice's test count is credited as PR D containment evidence.
-Exact-head gate results, mutation results, and independent review remain pending.
+PR #35 merged on 2026-09-10 as `882871ba7698508878c467ddd700c8db1d1a1edf`.
+Its tree is identical to reviewed head
+`f1ec0ab0fcbccd0cc8666540c9a69874088c870e`. On that head, the local gate passed
+1,785 tests with 145 expected Windows skips; [standard CI](https://github.com/sushiHex/constructicon/actions/runs/34469665363)
+passed 1,833 with 97 skips; the [native Linux lane](https://github.com/sushiHex/constructicon/actions/runs/34469665386)
+passed 268 and killed all 91 B/C/D mutants. Seven compatibility checks passed
+against the full pre-M8 base; the legacy profile and six manifests remained
+byte-identical. The [independent exact-head review](https://github.com/sushiHex/constructicon/pull/35#issuecomment-5617881708)
+reported no new findings, and all four review threads were resolved before
+merge. The [final handoff](https://github.com/sushiHex/constructicon/pull/35#issuecomment-5618008046)
+records the complete gate. Windows skips are not credited as physical evidence;
+none of these results proves a provider route or live model adapter.
 
 ### PR D review corrections
 
@@ -593,8 +602,12 @@ adapter or gateway. Hosted-runner qualification alone still supplies only
 prerequisite evidence. The Windows machine remains unchanged; no gateway,
 secret access, paid request, or account login has been authorized.
 
-D: contained async gates. E: selected gateway
-integration and deployment-specific conformance. F/G/H: Claude Code, Codex,
-then Pi and integrated closeout.
-No live WRITE profile is enabled before capture, gates, and routed authority
-are proved. The public model contracts are not substitutes for those proofs.
+Capture and contained gates are now merged. Under the accepted plan, E remains
+selected gateway integration and deployment-specific conformance; F/G/H remain
+Claude Code, Codex, then Pi and integrated closeout. The native-authentication
+investigation has not superseded ADR 0018. Current sequencing, the owner decision,
+and completion criteria live in the [M8 milestone](https://github.com/sushiHex/constructicon/milestone/1),
+under the repository's [issue-first workflow](../../WORK_TRACKING.md).
+No live WRITE profile is enabled before routed authority and its adapter are
+also proved. Public model contracts and completed containment slices are not
+substitutes for those proofs.

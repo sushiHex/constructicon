@@ -1,0 +1,36 @@
+name: Bug report
+description: Report a reproducible mismatch between the contract and behavior.
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues first. Use a credential-free reproduction and
+        redact secrets, private repository content, and sensitive logs.
+        A report is evidence for triage, not permission to weaken a contract.
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+      description: What should happen, what happened, and what was the impact?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Exact commands or a small fixture; say explicitly if not reproduced yet.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Version and environment
+      description: Commit/version, OS, Python, and relevant executor/profile; no credentials.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Contract and evidence
+      description: Optional links to a test, invariant, ADR, related issue, or sanitized result.
