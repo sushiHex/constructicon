@@ -108,8 +108,9 @@ The separate `check_m8_capture_mutations.py` inventory changes code objects in
 isolated test processes. Assertion failures count; skips, timeouts, or broken
 mutation instruments do not. Both PR B and PR C inventories must pass.
 
-Contained Git uses the launcher's existing fixed-artifact rule too: its
-executable and ancestors must be root-owned and not service-writable. A
+Contained Git and its system-Python bootstrap use the launcher's existing
+fixed-artifact rule too: executables and ancestors must be root-owned and
+not service-writable. The application venv is not selected for bootstrap. A
 service-owned executable is unavailable, even with its write bits cleared.
 Operators replace tools between deployed worlds, not during a running one;
 new installed content requires a new admitted revision. These are the same

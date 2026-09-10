@@ -75,6 +75,7 @@ class ContainedWriteWorkspaceProvider(ContainedWorkspaceProvider):
 
     @property
     def revision(self) -> str:
+        interpreter = process.git_interpreter()
         sources = [Path(__file__), Path(acquisition.__file__), Path(authority.__file__),
                    Path(contained.__file__), Path(pack.__file__), Path(process.__file__),
                    Path(_lifetime.__file__)]
@@ -82,6 +83,7 @@ class ContainedWriteWorkspaceProvider(ContainedWorkspaceProvider):
             "source": [hashlib.sha256(source.read_bytes()).hexdigest() for source in sources],
             "launcher": self.launcher.revision, "target": self.target_ref,
             "git": hashlib.sha256(Path(self.git).read_bytes()).hexdigest(),
+            "python": hashlib.sha256(interpreter.read_bytes()).hexdigest() if interpreter else None,
             "object_format": self.authority.environment.object_format,
             "pack_limits": asdict(self.pack_limits),
         }))

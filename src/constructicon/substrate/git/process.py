@@ -16,7 +16,7 @@ from pathlib import Path
 
 from constructicon.core.errors import ContractViolation
 from constructicon.substrate._lifetime import finish_owned
-from constructicon.substrate.executors.linux import ProcessLimits
+from constructicon.substrate.executors.linux import ProcessLimits, require_fixed_artifact
 from constructicon.substrate.git.authority import _PINNED_ENV
 
 # Strict Git parses untrusted objects in the quarantine. Bound the parser
@@ -30,6 +30,16 @@ for kind, bound in ((resource.RLIMIT_AS, 512 * 1024 * 1024),
     resource.setrlimit(kind, (bound, bound))
 os.execv(sys.argv[1], sys.argv[1:])
 """
+
+
+def git_interpreter() -> Path | None:
+    """Trusted bootstrap is an installed artifact, not the application venv."""
+
+    if sys.platform != "linux":
+        return None
+    interpreter = Path("/usr/bin/python3").resolve()
+    require_fixed_artifact(interpreter)
+    return interpreter
 
 
 @dataclass(frozen=True)
@@ -53,8 +63,9 @@ class GitProcess:
             "-c", "protocol.allow=never", "-c", "gc.auto=0",
             "-c", "maintenance.auto=false", *args,
         )
-        if sys.platform == "linux":
-            command = (sys.executable, "-I", "-c", _LIMITED_EXEC, *command)
+        interpreter = git_interpreter()
+        if interpreter is not None:
+            command = (str(interpreter), "-I", "-c", _LIMITED_EXEC, *command)
         spawn = asyncio.create_task(asyncio.create_subprocess_exec(
             *command, cwd=cwd, env=environment,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,

@@ -9,6 +9,7 @@ import pytest
 from constructicon.core.errors import ContractViolation
 from constructicon.substrate.git.acquisition import AcquisitionClosure, AcquisitionPaths
 from constructicon.substrate.git.authority import GitAuthority
+from constructicon.substrate.git.contained import ContainedWorkspaceProvider
 from tests.gitworld import seed_authority
 from tests.substrate.test_contained_workspace import LINUX
 from tests.substrate.test_contained_workspace import provider as provider
@@ -67,8 +68,12 @@ def test_contained_git_refuses_service_replaceable_artifacts(provider, tmp_path,
     monkeypatch.setenv("PATH", str(binaries) + os.pathsep + os.environ["PATH"])
     # A historical authority can still use an operator-supplied installation.
     # A contained provider cannot publish it as an immutable launch artifact.
-    provider.authority = GitAuthority(provider.authority.repository_id, tmp_path / "legacy-copy")
-    assert provider.authority.resolve_ref("refs/heads/main")
+    authority = GitAuthority(provider.authority.repository_id, tmp_path / "legacy-copy")
+    assert authority.resolve_ref("refs/heads/main")
+    provider = ContainedWorkspaceProvider(
+        authority, root=provider.root, target_ref=provider.target_ref,
+        provider_id=provider.provider_id, posture=provider.posture, launcher=provider.launcher,
+    )
     with pytest.raises(ContractViolation, match="fixed root-owned"):
         _ = provider.git
 
@@ -90,3 +95,23 @@ def test_the_provider_uses_its_authoritys_executable_not_a_second_path_lookup(
         pytest.fail(f"contained provider repeated executable discovery: {exc}")
     assert Path(capture.git).is_absolute()
     assert capture.git == provider.authority.git_executable
+
+
+def test_capture_revision_binds_the_selected_bootstrap_content(provider, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from constructicon.core.identity import digest
+    from constructicon.substrate.executors.linux import ProcessLimits
+    from constructicon.substrate.git import process
+    from tests.substrate.test_contained_capture import write_provider
+
+    # This identity probe supplies artifact bytes, never an executable to run.
+    # The native test separately proves the physical interpreter selection.
+    artifact = tmp_path / "bootstrap-artifact"
+    artifact.write_bytes(b"installed interpreter A")
+    monkeypatch.setattr(process, "git_interpreter", lambda: artifact)
+    launch = SimpleNamespace(revision=digest("fake-launch", 1, "inert"), limits=ProcessLimits())
+    capture = write_provider(provider, launch)
+    before = capture.revision
+    artifact.write_bytes(b"installed interpreter B")
+    assert capture.revision != before, "bootstrap content is absent from capture identity"

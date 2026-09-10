@@ -85,7 +85,7 @@ MUTANTS = (
     ),
     (
         "Git parser loses its native resource limits", PROCESS,
-        'if sys.platform == "linux":', "if False:",
+        "if interpreter is not None:", "if False:",
         "tests/substrate/test_git_process.py::"
         "test_git_parser_limits_are_present_in_the_actual_child_before_parsing",
     ),
@@ -152,6 +152,21 @@ MUTANTS = (
         "require_fixed_artifact(Path(executable))", "pass",
         "tests/substrate/test_git_executable.py::"
         "test_contained_git_refuses_service_replaceable_artifacts",
+    ),
+    (
+        "trusted bootstrap follows the application interpreter", PROCESS,
+        '(str(interpreter), "-I", "-c", _LIMITED_EXEC, *command)',
+        '(sys.executable, "-I", "-c", _LIMITED_EXEC, *command)',
+        "tests/substrate/test_git_process.py::"
+        "test_trusted_git_never_bootstraps_through_a_replaceable_app_interpreter",
+    ),
+    (
+        "bootstrap content is absent from capture identity",
+        "constructicon.substrate.git.capture:ContainedWriteWorkspaceProvider.revision",
+        '"python": hashlib.sha256(interpreter.read_bytes()).hexdigest() if interpreter else None,',
+        '"python": None,',
+        "tests/substrate/test_git_executable.py::"
+        "test_capture_revision_binds_the_selected_bootstrap_content",
     ),
 )
 

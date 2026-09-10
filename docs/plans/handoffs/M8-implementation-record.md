@@ -480,6 +480,15 @@ such a replacement is outside the same fixed-runtime assumption used by B,
 not a guarantee supplied by executing a pathname or by an open descriptor.
 No new cross-platform execution mechanism or process owner is introduced.
 
+The confirming pass found the companion bootstrap gap: the resource-limit
+trampoline still selected the application's possibly service-writable Python.
+It now uses fixed system Python on Linux through the same artifact predicate,
+and the capture revision binds those interpreter bytes. The application venv
+is not a trusted subprocess locator. A native shim proves replacement of that
+locator cannot execute, while a separate identity mutation proves interpreter
+content is not omitted from the sealed revision. Windows does not use this
+trampoline and retains its existing path.
+
 A native rerun also exposed a weak existing guard proof: a metadata thread
 could leave reconciliation unfinished even when locking was removed. The
 test now opens a second file description and requires the actual kernel lock

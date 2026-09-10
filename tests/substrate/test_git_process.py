@@ -75,6 +75,24 @@ async def test_trusted_git_pump_rejects_input_and_output_bounds(tmp_path):
 
 
 @LINUX
+async def test_trusted_git_never_bootstraps_through_a_replaceable_app_interpreter(
+    tmp_path, monkeypatch
+):
+    marker = tmp_path / "unchecked-interpreter"
+    shim = tmp_path / "application-python"
+    shim.write_text(
+        "#!/usr/bin/python3\nimport os,sys\nfrom pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('unbound bootstrap ran')\n"
+        "os.execv('/usr/bin/python3', ['/usr/bin/python3', *sys.argv[1:]])\n"
+    )
+    shim.chmod(0o755)
+    monkeypatch.setattr(sys, "executable", str(shim))
+    output = await GitProcess(shutil.which("git"), ProcessLimits()).run("--version", cwd=tmp_path)
+    assert output.startswith(b"git version ")
+    assert not marker.exists(), "trusted Git executed the mutable application interpreter"
+
+
+@LINUX
 async def test_git_parser_limits_are_present_in_the_actual_child_before_parsing(tmp_path):
     # Trusted test-only alias: observe limits inherited through Git's own child
     # launcher, not a mocked return or just the trampoline's source text.
