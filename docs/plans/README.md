@@ -71,6 +71,7 @@ the eventual code differs.
 | [M8 planning evidence](handoffs/M8-planning-evidence.md) | Repository and CLI-interface observations, primary source pins, proposed deployment boundaries, and an explicit inventory of proofs not yet executed |
 | [M8 implementation record](handoffs/M8-implementation-record.md) | Merged PR A contracts, PR B Linux containment, PR C safe capture, and PR D contained gates; compatibility and cleanup evidence, and remaining E–H slices; not a live-executor completion claim |
 | [M8 native authentication feasibility](handoffs/M8-native-auth-feasibility.md) | Native CLI interfaces, pinned Hardline comparison, and the missing complete-mediation proof; credential-free investigation, not a successor ADR or working subscription executor |
+| [M8 native mediation probe](handoffs/M8-native-mediation-probe.md) | Credential-free pinned Linux experiment; private driver, contained worker and native evidence kept distinct; no new authentication authority |
 
 ## Completeness and recovery notes
 

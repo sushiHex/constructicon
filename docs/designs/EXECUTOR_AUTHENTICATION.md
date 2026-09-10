@@ -93,3 +93,23 @@ supported offline test interface if one exists. Scripted peers alone cannot
 qualify the native CLI. This keeps the subscription goal explicit without
 inventing a broker abstraction or spending on a different billing route.
 Credentials, paid calls, and live deployment remain separate operator actions.
+
+## Linux experiment follow-up (2026-09-10)
+
+The [pinned native mediation experiment](../plans/handoffs/M8-native-mediation-probe.md)
+establishes a supported credential-free custom-provider path and a real dynamic
+callback into the existing contained worker. It does not establish exclusive
+mediation. The earlier/image-enabled configuration exposes a native reader
+that exports the PNG fixture without a worker callback; the tested
+`features.view_image = false` configuration removes that tool and refuses its
+direct invocation. The contained-worker callback succeeds in both cases.
+Model-dependent tool inventories, startup/extensions, client-RPC reachability
+and lifecycle ownership remain unqualified, not that tested disabled-image
+path. The accepted trust boundary remains unchanged. No authentication
+deployment or billing choice is inferred from authorization to run this test.
+
+Before live implementation, issue #38 still needs the owner's concrete route
+decision. A separately billed gateway must be selected and proved as deployed;
+a native successor needs positive combined mediation and lifecycle evidence.
+The [OpenRouter assessment](OPENROUTER.md) proposes reuse of the planned Pi
+executor, not another authentication route or completion API in the kernel.
