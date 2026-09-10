@@ -358,6 +358,31 @@ test also delays acknowledgement and independently kills a mutation that
 starts grace at request time. The native fixture, not that policy mutation,
 proves the installed immutable reapers exchange the timestamp correctly.
 
+### Post-merge correction: deterministic spawn-order evidence
+
+The README wording correction in PR #32 (`d35ae85`) exposed a gap in the existing
+mutation proof. All 113 native tests passed, but `payload start before spawn
+ownership` survived: the test sampled a workspace marker after 300 ms, so
+slow process startup could hide an already-authorized payload. Neither the
+launcher nor the mutation had changed in that PR.
+
+The corrected test records the real owner-pipe writes and native spawn-handle
+returns. Device/inode identity joins each writer to the inherited read end;
+reused descriptor numbers cannot confuse the probe with the workload. Both
+operations still call the OS unchanged. Assertions run after the real workload
+completes and cleanup joins. For each native handle, the first successful start
+write must follow handoff: a later lawful duplicate cannot hide an early write,
+and duplicate counting cannot substitute for the ordering proof.
+
+Two payloads exercise the same assertion. One writes directly; the other waits
+for stdin, which the controller supplies only after handle return. The latter
+deliberately hides the file effect of premature authorization, so marker
+absence cannot be credited as evidence. No fixed observation delay, mocked OS
+return, or production protocol change is used. This proves controller-side
+authorization ordering; the unmodified native reaper and lifetime tests remain
+responsible for enforcement and cleanup. Windows skips are not native evidence;
+exact-head Linux and mutation results belong in the follow-up PR.
+
 ### Backend extensibility and subscription intent
 
 The owner reaffirmed that Claude Code, Codex, and Pi are the starting adapters,
