@@ -35,6 +35,10 @@ async def observe(launcher, guard_root, model, *, files=None, extra="", argument
         "arguments": list(arguments),
     }
     setup_bytes = (json.dumps(setup) + "\n").encode()
+    probe = os.environ.get("PYTEST_CURRENT_TEST", "startup")
+    observation_name = "codex-startup-observation-" + hashlib.sha256(
+        probe.encode() + setup_bytes,
+    ).hexdigest()[:16] + ".json"
 
     async def conversation(io):
         await io.write(setup_bytes)
@@ -53,13 +57,15 @@ async def observe(launcher, guard_root, model, *, files=None, extra="", argument
             command=("/usr/bin/python3", "-I", BOOTSTRAP), timeout=20,
         )
     except ProcessExchangeError as exc:
-        evidence("codex-startup-failure-" + hashlib.sha256(setup_bytes).hexdigest()[:16] + ".json",
-                 launcher, observations, exc.result)
+        evidence(observation_name, launcher, observations, exc.result)
         raise
+    evidence(observation_name, launcher, observations, result)
     return observations, result
 
 
 def evidence(name, launcher, observations, result):
+    if not os.environ.get("M8_EVIDENCE_DIRECTORY"):
+        return
     write_evidence(name, {
         "launch_revision": str(launcher.revision),
         "observations": observations,
@@ -84,10 +90,18 @@ async def test_native_starts_with_private_configuration(startup_launcher, tmp_pa
     assert observations["config"]["config"]["model"] == model
     assert all(observations["bootstrap"]["absent"].values())
     assert observations["bootstrap"]["bootstrap_environment"] == {
-        "HOME": "/tmp/home", "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8",
+        "HOME": "/tmp/home", "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "PWD": "/tmp",
     }
     assert observations["config"]["layers"]
-    assert not observations["warnings"]
+    assert [warning["params"] for warning in observations["warnings"]] == [{
+        "details": None,
+        "summary": (
+            "Codex could not find bubblewrap on PATH. Install bubblewrap with your OS package "
+            "manager. See the sandbox prerequisites: "
+            "https://developers.openai.com/codex/concepts/sandboxing#prerequisites. "
+            "Codex will use the bundled bubblewrap in the meantime."
+        ),
+    }]
 
 
 async def test_ambient_environment_cannot_select_configuration(
@@ -103,7 +117,9 @@ async def test_ambient_environment_cannot_select_configuration(
     evidence("codex-startup-ambient.json", startup_launcher, observations, result)
     assert result.payload_returncode == 0 and not result.timed_out
     assert observations["config"]["config"]["model"] == MODELS[0]
-    assert set(observations["bootstrap"]["bootstrap_environment"]) == {"HOME", "PATH", "LANG"}
+    assert set(observations["bootstrap"]["bootstrap_environment"]) == {
+        "HOME", "PATH", "LANG", "PWD",
+    }
     assert "outside-startup-canary" not in json.dumps(observations)
 
 
@@ -129,7 +145,9 @@ async def test_unknown_configuration_refuses_before_native_rpc(startup_launcher,
 
 
 @pytest.mark.parametrize("root", ["/tmp/home/.codex/skills", "/tmp/native-startup/.agents/skills"])
-async def test_skill_origin_has_a_native_positive_and_absent_control(startup_launcher, tmp_path, root):
+async def test_skill_origin_has_a_native_positive_and_absent_control(
+    startup_launcher, tmp_path, root,
+):
     async def skills(wire, observations):
         observations["skills"] = await wire.rpc("skills/list", {
             "cwds": ["/tmp/native-startup"], "forceReload": True,
@@ -155,12 +173,16 @@ async def test_provider_connectivity_is_a_named_refusal(startup_launcher, tmp_pa
             "model": MODELS[0], "modelProvider": "probe", "cwd": "/tmp/native-startup",
             "approvalPolicy": "never", "sandbox": "danger-full-access", "ephemeral": True,
         })
+        observations["thread"] = thread
         started = await wire.rpc("turn/start", {
             "threadId": thread["thread"]["id"],
             "input": [{"type": "text", "text": "Inert fixture: no provider exists on this route."}],
         })
+        observations["started"] = started
+        observations["turn_events"] = []
         while True:
             message = await wire.read()
+            observations["turn_events"].append(message)
             assert "id" not in message, "no native operation is authorized by this probe"
             if message.get("method") == "turn/completed":
                 assert message["params"]["threadId"] == thread["thread"]["id"]

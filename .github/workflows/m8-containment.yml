@@ -64,8 +64,13 @@ jobs:
           sudo install -m 0444 "$RUNNER_TEMP/codex-models.json" /var/lib/constructicon-m8-launch/codex-models.json
       - name: Prove bounded native startup without a provider route
         shell: bash
+        env:
+          EVIDENCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
+          printf 'commit=%s image=%s/%s kernel=%s\n' "$EVIDENCE_COMMIT" "$ImageOS" "$ImageVersion" "$(uname -r)" > "$RUNNER_TEMP/m8-host.txt"
+          id m8-service >> "$RUNNER_TEMP/m8-host.txt"
+          sudo cat /sys/kernel/security/apparmor/profiles | awk '/constructicon-m8-/ {print}' >> "$RUNNER_TEMP/m8-host.txt"
           sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" scripts/ci/build_m8_startup_fixture.py \
             /var/lib/constructicon-m8-launch/runtime /var/lib/constructicon-m8-launch/startup-runtime \
             /var/lib/constructicon-m8-launch/native-codex/bin/codex \
@@ -104,15 +109,9 @@ jobs:
           uv run python scripts/check_native_codex_probe_mutations.py
       - name: Prove containment as the non-sudo service user
         shell: bash
-        env:
-          EVIDENCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          printf 'commit=%s image=%s/%s kernel=%s\n' "$EVIDENCE_COMMIT" "$ImageOS" "$ImageVersion" "$(uname -r)"
-          printf 'commit=%s image=%s/%s kernel=%s\n' "$EVIDENCE_COMMIT" "$ImageOS" "$ImageVersion" "$(uname -r)" > "$RUNNER_TEMP/m8-host.txt"
-          id m8-service >> "$RUNNER_TEMP/m8-host.txt"
-          sudo cat /sys/kernel/security/apparmor/profiles | awk '/constructicon-m8-/ {print}' >> "$RUNNER_TEMP/m8-host.txt"
-          sudo cat /sys/kernel/security/apparmor/profiles | awk '/constructicon-m8-/ {print}'
+          cat "$RUNNER_TEMP/m8-host.txt"
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
             M8_EVIDENCE_DIRECTORY=/home/m8-service/evidence \

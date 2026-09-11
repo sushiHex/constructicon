@@ -34,7 +34,8 @@ async def exchange(launcher, tmp_path, conversation, *, source=CHALLENGE, timeou
     paths = AcquisitionPaths(tmp_path, acquisition_id_for("duplex-proof", 1))
     async with acquisition_guard(paths) as guard:
         return await launcher.exchange(
-            ("/usr/bin/python3", "-I", "-c", source) if command is None else command, workspace=None,
+            ("/usr/bin/python3", "-I", "-c", source) if command is None else command,
+            workspace=None,
             posture=Posture.READ, guard_fds=(guard,), conversation=conversation, timeout_s=timeout,
         )
 

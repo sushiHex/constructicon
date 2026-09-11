@@ -2,6 +2,7 @@
 
 import inspect
 import json
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -101,19 +102,32 @@ def test_startup_configuration_keeps_pins_and_has_no_authentication():
         configuration("unqualified-model")
 
 
-async def test_startup_uses_the_exact_owned_launch_interface(tmp_path):
+async def test_startup_uses_the_exact_owned_launch_interface(tmp_path, monkeypatch):
     from constructicon.core.grants import Posture
     from constructicon.substrate.executors.linux import LinuxLauncher
     from tests.native_startup import BOOTSTRAP
+    from tests.substrate import test_linux_duplex
     from tests.substrate.test_native_startup import observe
 
     invoked = []
+    acquired = []
+
+    @asynccontextmanager
+    async def guard(paths):
+        assert paths.root == tmp_path
+        acquired.append(True)
+        try:
+            yield 17
+        finally:
+            acquired.clear()
+
+    monkeypatch.setattr(test_linux_duplex, "acquisition_guard", guard)
 
     async def exchange(*args, **kwargs):
         inspect.signature(LinuxLauncher.exchange).bind(None, *args, **kwargs)
         assert args == (("/usr/bin/python3", "-I", BOOTSTRAP),)
         assert kwargs["workspace"] is None and kwargs["posture"] is Posture.READ
-        assert len(kwargs["guard_fds"]) == 1 and type(kwargs["guard_fds"][0]) is int
+        assert acquired == [True] and kwargs["guard_fds"] == (17,)
         assert kwargs["timeout_s"] == 20
         assert callable(kwargs["conversation"])
         invoked.append(True)
@@ -123,3 +137,4 @@ async def test_startup_uses_the_exact_owned_launch_interface(tmp_path):
         {}, "instrument-only",
     )
     assert invoked == [True]
+    assert acquired == []
