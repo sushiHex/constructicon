@@ -224,3 +224,18 @@ before implementation. This is not permission to move the CLI outside the
 boundary, deploy a gateway, use an account, or substitute paid calls. Startup
 completeness and the provider prerequisite still gate native journal recovery;
 ADR 0018 and authentication unavailability remain unchanged.
+
+## Proposed credential-free provider fixture
+
+PR #54 is squash-merged as `e5e0dd7b65210ee882bb38ab371b6a4f97c1e2d5`,
+tree-identical to its reviewed head. Its bounded negative result stands.
+The [provider-fixture proposal](../plans/handoffs/M8-provider-fixture-proposal.md)
+keeps the scripted provider in the trusted test driver and proposes one
+test-only Unix socket mount plus a byte bridge inside the existing owned
+namespace. It states the added peer reachability rather than claiming the
+unchanged networkless recipe, and publishes no production executor profile.
+
+Independent design review and explicit owner acceptance gate implementation.
+The proposal separates placement proof from combined startup/mediation proof;
+native durable recovery follows neither automatically. No credentials,
+gateway deployment, billing choice or successor ADR is accepted here.
