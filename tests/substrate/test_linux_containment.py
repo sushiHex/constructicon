@@ -841,12 +841,13 @@ async def test_probe_reaper_uses_the_call_deadline_when_the_controller_stalls(
             os.close(lifetime_fd)
 
 
-async def test_controller_dies_while_a_real_setup_child_holds_the_guard(launcher, tmp_path):
+@pytest.mark.parametrize("phase", ["setup", "duplex-setup"])
+async def test_controller_dies_while_a_real_setup_child_holds_the_guard(launcher, tmp_path, phase):
     authority = GitAuthority(seed_authority(tmp_path / "git"), tmp_path / "legacy")
     closure = AcquisitionClosure(authority)
     paths = AcquisitionPaths(tmp_path / "owned", acquisition_id_for("lease-owner-death", 1))
     owner = await asyncio.create_subprocess_exec(
-        sys.executable, "-m", "tests.substrate._linux_owner", str(paths.root), "setup",
+        sys.executable, "-m", "tests.substrate._linux_owner", str(paths.root), phase,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
     reaper = None
@@ -883,8 +884,9 @@ async def test_controller_dies_while_a_real_setup_child_holds_the_guard(launcher
             await cleanup
 
 
+@pytest.mark.parametrize("phase", ["running", "duplex"])
 async def test_controller_death_cannot_release_the_reapers_guard_before_quiescence(
-    launcher, tmp_path,
+    launcher, tmp_path, phase,
 ):
     authority = GitAuthority(seed_authority(tmp_path / "git"), tmp_path / "legacy")
     closure = AcquisitionClosure(authority)
@@ -893,20 +895,60 @@ async def test_controller_death_cannot_release_the_reapers_guard_before_quiescen
     fresh.payload.mkdir(parents=True)
     (fresh.payload / "untouched").write_text("new epoch")
     owner = await asyncio.create_subprocess_exec(
-        sys.executable, "-m", "tests.substrate._linux_owner", str(paths.root),
+        sys.executable, "-m", "tests.substrate._linux_owner", str(paths.root), phase,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
     reaper = None
     cleanup = None
     try:
         async with asyncio.timeout(15):
-            while not (paths.payload / "live").exists():
+            live = paths.payload / "live"
+            while not live.exists() or not live.stat().st_size:
                 if owner.returncode is not None:
                     pytest.fail(f"owner failed before launch: {await owner.stderr.read()!r}")
                 await asyncio.sleep(.01)
         children = Path(f"/proc/{owner.pid}/task/{owner.pid}/children").read_text().split()
         assert len(children) == 1
         reaper = int(children[0])
+        # The live marker has observed bytes. Retain each current descendant's
+        # start time so absence after disposal proves reaping, not merely a
+        # quiet heartbeat or a zombie. A recycled pid is a different process.
+        def birth(pid):
+            try:
+                return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
+            except FileNotFoundError:
+                return None
+
+        writer_pid = (paths.payload / "writer-id").read_text()
+        resident, writer_seen = {}, False
+        async with asyncio.timeout(3):
+            while not writer_seen:
+                pending = [reaper]
+                while pending:
+                    parent = pending.pop()
+                    try:
+                        children_file = Path(f"/proc/{parent}/task/{parent}/children")
+                        child_pids = children_file.read_text().split()
+                    except FileNotFoundError:
+                        continue
+                    for child in child_pids:
+                        pid = int(child)
+                        started = birth(pid)
+                        if started is None:
+                            continue
+                        try:
+                            status = Path(f"/proc/{pid}/status").read_text().splitlines()
+                        except FileNotFoundError:
+                            continue
+                        resident[pid] = started
+                        writer_seen |= any(
+                            row.startswith("NSpid:") and row.split()[-1] == writer_pid
+                            for row in status
+                        )
+                        pending.append(pid)
+                if not writer_seen:
+                    await asyncio.sleep(.01)
+        assert resident and writer_seen, "the escaped writer was absent from the observed inventory"
         os.kill(reaper, signal.SIGSTOP)
         owner.kill()
         await owner.wait()
@@ -921,6 +963,10 @@ async def test_controller_death_cannot_release_the_reapers_guard_before_quiescen
         os.kill(reaper, signal.SIGCONT)
         reaper = None
         assert await asyncio.wait_for(cleanup, 10)
+        for pid, started in resident.items():
+            assert birth(pid) != started, (
+                "an old descendant remains resident after its guard was released"
+            )
         assert not paths.payload.exists() and paths.guard.is_file()
         assert closure.is_closed(paths) and not closure.is_closed(fresh)
         assert (fresh.payload / "untouched").read_text() == "new epoch"

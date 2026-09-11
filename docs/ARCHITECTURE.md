@@ -130,6 +130,24 @@ Recovery always uses the durable row, including when materialization never began
 callbacks default to `None` and retain their eager behavior. PR A proves this
 sequence with genuine deferred-resource doubles, not Linux processes.
 
+### Owned process conversations
+
+L0 `core/process.py` declares `ProcessIO`: bounded byte reads, cumulative-budget
+writes, and stdin half-close. `LinuxLauncher.exchange` lends it to a trusted
+asynchronous adapter for one callback. The existing batch `run` and duplex
+callback use the same subprocess pump, supervisor, acquisition guards, bounded
+output capture and absolute deadline. A cursor reads that capture; there is no
+second transcript, process manager or renewable conversation lifetime.
+
+Callback return invalidates the handle and closes stdin; it does not establish
+process success. Deadline and output ceilings return bounded `ProcessResult`
+salvage. An independent callback/I/O failure raises `ProcessExchangeError`
+with that result and its original cause after teardown; caller cancellation
+propagates. Cleanup failures remain failures, preserving earlier causes.
+Protocol framing and provider semantics belong to adapters, not the byte
+transport. The launch revision binds the L0 protocol source as well as the
+pump. No network, authentication, executor-profile or persistence law changes.
+
 ### Contained WRITE capture
 
 `AsyncWriteWorkspace` preserves the existing `GitRef`/`GitSha` values but

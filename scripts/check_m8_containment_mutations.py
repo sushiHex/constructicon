@@ -111,7 +111,7 @@ MUTANTS = (
         OS + "test_artifact_verification_yields_and_joins_before_return",
     ),
     (
-        "availability gets an independent deadline", LAUNCH + "run",
+        "availability gets an independent deadline", LAUNCH + "_launch",
         "await self.probe(deadline=deadline)", "await self.probe()",
         OS + "test_probe_reaper_uses_the_call_deadline_when_the_controller_stalls",
     ),
@@ -148,7 +148,7 @@ MUTANTS = (
         LEASE + "test_export_has_an_artifact_bound_not_the_task_input_bound",
     ),
     (
-        "probe outside call deadline", LAUNCH + "run",
+        "probe outside call deadline", LAUNCH + "_launch",
         "async with asyncio.timeout_at(deadline):", "async with asyncio.timeout(10):",
         OS + "test_the_call_deadline_includes_probe_and_spawn[probe]",
     ),
@@ -159,8 +159,9 @@ MUTANTS = (
     ),
     (
         "payload start before spawn ownership", LAUNCH + "_run",
-        "cancelled = False",
-        "if workspace is not None: os.write(owner_write, b'\\x01')\n        cancelled = False",
+        "spawn = asyncio.create_task(asyncio.create_subprocess_exec(",
+        "if workspace is not None: os.write(owner_write, b'\\x01')"
+        "\n        spawn = asyncio.create_task(asyncio.create_subprocess_exec(",
         OS + "test_payload_waits_for_controller_ownership_of_the_real_spawn_handle",
     ),
     (
@@ -234,7 +235,7 @@ MUTANTS = (
         FACT + "test_closure_is_idempotent_and_different_epochs_never_reopen_one_another",
     ),
     (
-        "elapsed observation omits availability", LAUNCH + "run",
+        "elapsed observation omits availability", LAUNCH + "_launch",
         "return replace(result, elapsed_s=time.monotonic() - started)", "return result",
         OS + "test_successful_call_elapsed_time_includes_availability",
     ),
@@ -248,7 +249,7 @@ MUTANTS = (
     (
         "deletion abandons its guard on cancellation",
         "constructicon.substrate._lifetime:finish_owned",
-        "await asyncio.shield(task)", "await task",
+        "await asyncio.wait((task,))", "await task",
         LEASE + "test_deletion_yields_but_keeps_its_guard_through_repeated_cancellation",
     ),
 )

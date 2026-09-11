@@ -29,7 +29,7 @@ async def main():
         bubblewrap=root / "bwrap", policy=policy,
         expected_policy_sha256=hashlib.sha256(policy.read_bytes()).hexdigest(),
     )
-    if phase == "setup":
+    if phase in {"setup", "duplex-setup"}:
         spawn = asyncio.create_subprocess_exec
         calls = 0
 
@@ -51,17 +51,41 @@ if os.fork() == 0:
     os.setsid()
     if os.fork(): os._exit(0)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    with open('/workspace/writer-id', 'w') as identity:
+        identity.write(str(os.getpid()))
     with open('/workspace/live', 'w') as stream:
         while True:
             stream.write('x'); stream.flush(); time.sleep(.01)
 while not os.path.exists('/workspace/live'): time.sleep(.001)
 time.sleep(100)
 """
+    duplex = phase.startswith("duplex")
+    if duplex:
+        source = (
+            "import os, sys\nchallenge = os.urandom(16).hex()\n"
+            "print(challenge, flush=True)\n"
+            "assert sys.stdin.readline().strip() == challenge[::-1]\n"
+        ) + source
+
+    async def conversation(io):
+        challenge = bytearray()
+        while not challenge.endswith(b"\n"):
+            data = await io.read()
+            assert data
+            challenge.extend(data)
+        await io.write(bytes(challenge).strip()[::-1] + b"\n")
+        await io.read()  # Remain in the exchange while the escaped descendant runs.
+
     async with acquisition_guard(paths) as guard:
-        await launcher.run(
-            ("/usr/bin/python3", "-I", "-c", source), workspace=paths.payload,
-            posture=Posture.WRITE, guard_fds=(guard,), timeout_s=60,
-        )
+        arguments = {
+            "workspace": paths.payload, "posture": Posture.WRITE,
+            "guard_fds": (guard,), "timeout_s": 60,
+        }
+        command = ("/usr/bin/python3", "-I", "-c", source)
+        if duplex:
+            await launcher.exchange(command, conversation=conversation, **arguments)
+        else:
+            await launcher.run(command, **arguments)
 
 
 if __name__ == "__main__":

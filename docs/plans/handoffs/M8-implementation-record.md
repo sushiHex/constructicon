@@ -647,3 +647,40 @@ proposes configuration of the planned Pi harness rather than another executor
 or kernel abstraction. The follow-on scope is two explicit qualified models,
 no automatic fallback, and separate Pi/authentication prerequisites. It is
 not an approved expansion of M8 or a completed Pi integration.
+
+## Bounded duplex transport: accepted scope, implementation in progress
+
+The owner authorized steps 1-4 on 2026-09-11: merge PR #51, design the bounded
+transport, implement it after review, and resume only qualified native work.
+PR #51 merged as `ddad9f07f13b64bffd84476b3d7999d373b2ac7f`, tree-identical
+to reviewed `3b1b840c6844728ccd22811b568ce328b28e7cfb`.
+
+Under that delegation this session accepts the
+[bounded duplex contract](M8-bounded-duplex-contract.md) at reviewed head
+`28714ce3dbf644ee498dfb402d65f2e0d02be272`. Three independent contract-review
+rounds closed short-read progress, deterministic failure outcomes, and
+shutdown-induced I/O precedence; the final pass reported no major issues.
+The reviewed contract remains byte-identical, including its historical
+proposed status; this record carries acceptance, not an invented owner review
+of its exact bytes. No ADR 0018 clause, authentication route, or network policy
+is changed by this transport scope.
+
+The separate implementation slice is in progress. Portable byte-law checks
+are not native process proof. Exact-head Linux evidence, all existing batch
+consumers and mutation inventories, the new lifetime failures, and independent
+code review remain required before claiming the transport complete. Complete
+native startup and journal-driven qualification remain separate obligations.
+
+The implementation reuses the existing launch owner and one bounded capture.
+The first independent code review (head `548a67b`) found five failure-law gaps:
+cancellation coinciding with a failed join or spawn, settled write failures
+misclassified by a later stop, discarded read errors, and private-report
+corruption hiding a callback error. The follow-up keeps actual cancellation
+objects in the existing `finish_owned` helper, groups concurrent failures,
+arbitrates writes against their owned operation's completion, and retains
+read/report failures. The launch identity now binds the helper source too.
+Self-review additionally made stop idempotent so callback cleanup receives
+one cancellation, not repeated interruptions. New native regressions and
+assertion mutants are required to confirm these corrections; the previous
+303-test Linux pass did not satisfy the complete mutation gate because an
+older mutation anchor no longer matched uniquely.
