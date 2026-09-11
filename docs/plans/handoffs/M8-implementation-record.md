@@ -648,7 +648,7 @@ or kernel abstraction. The follow-on scope is two explicit qualified models,
 no automatic fallback, and separate Pi/authentication prerequisites. It is
 not an approved expansion of M8 or a completed Pi integration.
 
-## Bounded duplex transport: accepted scope, implementation in progress
+## Bounded duplex transport: merged
 
 The owner authorized steps 1-4 on 2026-09-11: merge PR #51, design the bounded
 transport, implement it after review, and resume only qualified native work.
@@ -665,11 +665,17 @@ proposed status; this record carries acceptance, not an invented owner review
 of its exact bytes. No ADR 0018 clause, authentication route, or network policy
 is changed by this transport scope.
 
-The separate implementation slice is in progress. Portable byte-law checks
-are not native process proof. Exact-head Linux evidence, all existing batch
-consumers and mutation inventories, the new lifetime failures, and independent
-code review remain required before claiming the transport complete. Complete
-native startup and journal-driven qualification remain separate obligations.
+Contract PR #52 merged as `eaa0894f6af6b2c70fae415f8faea2dde7643307` and
+implementation PR #53 as `6d6379c56bc1dd44a6f32f82b00efefbefdbe939`.
+Both merged trees equal their reviewed heads. The implementation was rebased
+without changing any of its six patches or its complete tree. Fresh proof on
+`159f4595bee8988840cc775063deef3befeb239e` passed: local verify 1,852 tests
+(262 Windows skips), CI verify 1,900 (214 skips), Linux containment 324,
+native mediation 87, and all 132 assertion mutants. The final independent
+review found no major issues; all prior threads were resolved. The downloaded
+native artifact independently matched the head, challenge transcripts,
+outcomes, and launch identity. These are transport proofs, not complete
+native startup or journal-driven qualification.
 
 The implementation reuses the existing launch owner and one bounded capture.
 The first independent code review (head `548a67b`) found five failure-law gaps:
@@ -684,3 +690,14 @@ one cancellation, not repeated interruptions. New native regressions and
 assertion mutants are required to confirm these corrections; the previous
 303-test Linux pass did not satisfy the complete mutation gate because an
 older mutation anchor no longer matched uniquely.
+
+The final correction separated waiting for owned completion from retrieving
+the owned result. That preserves pre-entry caller cancellation even when the
+owned task self-cancels immediately, without inferring the source of a
+cancellation from counters. Regressions cover immediate/delayed self-cancel,
+completed failures, and repeated caller cancellation.
+
+The [controlled-startup investigation](M8-controlled-startup-evidence.md)
+continues #37 under the existing networkless recipe. It records its own
+evidence and provider-connectivity gap; it cannot borrow transport success
+as a claim of native authentication or durable recovery.

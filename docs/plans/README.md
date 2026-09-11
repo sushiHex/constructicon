@@ -72,8 +72,9 @@ the eventual code differs.
 | [M8 implementation record](handoffs/M8-implementation-record.md) | Merged PR A contracts, PR B Linux containment, PR C safe capture, and PR D contained gates; compatibility and cleanup evidence, and remaining E–H slices; not a live-executor completion claim |
 | [M8 native authentication feasibility](handoffs/M8-native-auth-feasibility.md) | Native CLI interfaces, pinned Hardline comparison, and the missing complete-mediation proof; credential-free investigation, not a successor ADR or working subscription executor |
 | [M8 native mediation probe](handoffs/M8-native-mediation-probe.md) | Credential-free pinned Linux experiment; private driver, contained worker and native evidence kept distinct; no new authentication authority |
-| [M8 native qualification plan](handoffs/M8-native-qualification-plan.md) | Bounded startup investigation and prospective journal-driven native lifecycle gates; lifecycle blocked on an authorized duplex contract, not a successor ADR or production authentication approval |
-| [M8 bounded duplex contract](handoffs/M8-bounded-duplex-contract.md) | Proposed provider-neutral byte conversation within the existing launcher lifetime; reviewed transport prerequisite, not native authentication or lifecycle qualification |
+| [M8 native qualification plan](handoffs/M8-native-qualification-plan.md) | Bounded startup investigation and prospective journal-driven native lifecycle gates; its transport prerequisite is now merged in #52/#53, but startup and provider-arrangement qualification remain prerequisites |
+| [M8 bounded duplex contract](handoffs/M8-bounded-duplex-contract.md) | Accepted provider-neutral byte conversation, merged through #52/#53; historical proposed wording preserved, acceptance in the living implementation record; not native authentication or lifecycle qualification |
+| [M8 controlled startup evidence](handoffs/M8-controlled-startup-evidence.md) | Startup-origin inventory and scoped native observations through the merged duplex launcher; explicit unqualified surfaces and provider-connectivity prerequisite |
 
 ## Completeness and recovery notes
 

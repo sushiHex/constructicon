@@ -29,13 +29,18 @@ from constructicon.core.manifest import CapabilityLease
 from constructicon.core.workspace import StaleAcquisition, acquisition_id_for
 from constructicon.substrate.git.acquisition import AcquisitionPaths
 from tests.containedworld import RecordedExecutorProvider
-from tests.native_codex_probe import CANARY_PNG, RECORD_BYTES, run_probe
+from tests.native_codex_probe import (
+    CANARY_PNG,
+    CATALOG_SHA256,
+    RECORD_BYTES,
+    catalog_for,
+    run_probe,
+)
 from tests.substrate.test_contained_workspace import context
 from tests.substrate.test_contained_workspace import provider as provider
 from tests.substrate.test_linux_containment import launcher as launcher
 
 WORKER = "import sys; exec(sys.stdin.read())"
-CATALOG_SHA256 = "d7136a413cfac1b5b1686d9e0dcc5c80ca05bebed5e9fc3911376561d0ef6ee8"
 PROGRAM = (
     "import json, pathlib\n"
     "assert not pathlib.Path('/etc/shadow').exists()\n"
@@ -158,19 +163,6 @@ def write_evidence(name, value):
     directory = os.environ.get("M8_EVIDENCE_DIRECTORY")
     if directory:
         (Path(directory) / name).write_text(json.dumps(value, sort_keys=True, indent=2) + "\n")
-
-
-def catalog_for(source: bytes, *, restricted: bool) -> bytes:
-    """Change only three tool selectors, never model identity or instructions."""
-    catalog = json.loads(source)
-    selected = {"gpt-5.5", "gpt-5.6-sol"}
-    assert {entry["slug"] for entry in catalog["models"]} >= selected
-    if restricted:
-        for entry in catalog["models"]:
-            if entry["slug"] in selected:
-                entry.update(apply_patch_tool_type=None, tool_mode="direct",
-                             multi_agent_version=None)
-    return (json.dumps(catalog, sort_keys=True) + "\n").encode()
 
 
 def argv_for(native, cwd, endpoint, *, images, model="probe-model", catalog=None):
