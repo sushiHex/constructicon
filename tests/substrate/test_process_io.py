@@ -122,6 +122,27 @@ async def test_overlapping_write_and_half_close_refuse_without_queueing():
     assert writer.data == b"x" * 8192 and io.spent == 16000
 
 
+async def test_one_reader_and_one_writer_can_make_independent_progress():
+    io, writer, output = channel()
+    writer.release.clear()
+    writing = asyncio.create_task(io.write(b"x"))
+    reading = asyncio.create_task(io.read())
+    try:
+        await asyncio.sleep(0)
+        assert not writing.done() and not reading.done()
+        output.extend(b"reply")
+        io.changed.set()
+        assert await asyncio.wait_for(reading, .5) == b"reply"
+        assert not writing.done()
+        writer.release.set()
+        await writing
+        assert writer.data == b"x" and io.spent == 1
+    finally:
+        writer.release.set()
+        io.invalidate(stopping=True)
+        await asyncio.gather(reading, writing, return_exceptions=True)
+
+
 @pytest.mark.parametrize("owned_shutdown", [False, True])
 async def test_io_failure_is_subordinate_only_to_its_owned_shutdown(owned_shutdown):
     io, writer, _ = channel()

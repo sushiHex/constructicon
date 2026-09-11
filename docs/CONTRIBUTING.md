@@ -265,6 +265,22 @@ on those capabilities, not on a shared model name.
    physical isolation. `substrate/executors/linux.py` supplies the networkless
    boundary; its required native CI proof is described in [M8_CI.md](M8_CI.md).
 
+### Driving an interactive contained process
+
+Use `LinuxLauncher.exchange` with a trusted async callback accepting L0
+`ProcessIO`; do not spawn a second controller. Read arbitrary chunks, frame
+messages in the adapter, and combine decoded output with the final
+`ProcessResult`. One pending read and one pending write may overlap; same-
+direction overlap is refused. Writes spend the cumulative input budget before
+delivery, so never retry or refund an interrupted prefix. The callback must
+join its own work and cooperate with cancellation; host Python is trusted.
+
+Do not retain the handle beyond the callback, renew the deadline, expose raw
+descriptors, or infer success from callback return. Test against a genuine
+scripted channel and the Linux boundary, including short-read progress and
+failure cleanup. Duplex transport supplies no provider connectivity or native
+authentication qualification.
+
 ## Adding a gate / check producer (L1)
 
 Implement `CheckResult` production over a workspace; the runner mints the

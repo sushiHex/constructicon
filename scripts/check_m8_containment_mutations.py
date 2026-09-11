@@ -159,8 +159,9 @@ MUTANTS = (
     ),
     (
         "payload start before spawn ownership", LAUNCH + "_run",
-        "cancelled = False",
-        "if workspace is not None: os.write(owner_write, b'\\x01')\n        cancelled = False",
+        "\n        cancelled = False\n",
+        "\n        if workspace is not None: os.write(owner_write, b'\\x01')"
+        "\n        cancelled = False\n",
         OS + "test_payload_waits_for_controller_ownership_of_the_real_spawn_handle",
     ),
     (

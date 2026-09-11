@@ -162,8 +162,10 @@ async def test_output_bound_returns_salvage_with_a_stalled_reader(launcher, tmp_
     assert result.stdout == (b"x\n" * 1024 if bound == "stdout" else b"x" * 1100)
 
 
-async def test_cancellation_joins_callback_and_closes_its_handle(launcher, tmp_path):
+@pytest.mark.parametrize("phase", ["read", "write", "adapter"])
+async def test_cancellation_joins_callback_and_closes_its_handle(launcher, tmp_path, phase):
     entered = asyncio.Event()
+    cleaning, release = asyncio.Event(), asyncio.Event()
     handles, joined = [], []
 
     async def conversation(io):
@@ -171,8 +173,15 @@ async def test_cancellation_joins_callback_and_closes_its_handle(launcher, tmp_p
         assert await io.read() == b"ready\n"
         entered.set()
         try:
-            await io.read()
+            if phase == "read":
+                await io.read()
+            elif phase == "write":
+                await io.write(b"x" * launcher.limits.input_bytes)
+            else:
+                await asyncio.Event().wait()
         finally:
+            cleaning.set()
+            await release.wait()
             joined.append(True)
 
     task = asyncio.create_task(exchange(launcher, tmp_path, conversation, source=(
@@ -181,24 +190,120 @@ async def test_cancellation_joins_callback_and_closes_its_handle(launcher, tmp_p
     try:
         await asyncio.wait_for(entered.wait(), 5)
         task.cancel()
+        await asyncio.wait_for(cleaning.wait(), 5)
+        task.cancel()
         await asyncio.sleep(0)
         task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done() and joined == []
+        release.set()
         with pytest.raises(asyncio.CancelledError):
             await task
         assert joined == [True]
         with pytest.raises(ContractViolation):
             await handles[0].write(b"stale")
     finally:
+        release.set()
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
 
 
-async def test_cleanup_failure_keeps_the_original_callback_error(launcher, tmp_path, monkeypatch):
+async def test_cancelled_spawn_is_joined_without_starting_the_conversation(
+    launcher, tmp_path, monkeypatch,
+):
+    created, release = asyncio.Event(), asyncio.Event()
+    processes, callbacks = [], []
+    spawn = asyncio.create_subprocess_exec
+
+    async def held_spawn(*args, **kwargs):
+        process = await spawn(*args, **kwargs)
+        processes.append(process)
+        if len(processes) == 2:  # Real workload setup, after the physical probe.
+            created.set()
+            await release.wait()
+        return process
+
+    async def conversation(_io):
+        callbacks.append(True)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", held_spawn)
+    task = asyncio.create_task(exchange(launcher, tmp_path, conversation, source="pass"))
+    try:
+        await asyncio.wait_for(created.wait(), 5)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done() and callbacks == []
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert len(processes) == 2 and all(p.returncode is not None for p in processes)
+        assert callbacks == []
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_repeated_bound_notifications_do_not_cancel_callback_cleanup(
+    launcher, tmp_path, monkeypatch,
+):
+    launcher = replace(launcher, limits=replace(launcher.limits, stdout_bytes=2048))
+    cleaning, owner_joining, release = (asyncio.Event() for _ in range(3))
+    aborted, joined = [], []
+    finish = linux.finish_owned
+
+    async def observe(task):
+        if cleaning.is_set():
+            owner_joining.set()
+        return await finish(task)
+
+    monkeypatch.setattr(linux, "finish_owned", observe)
+
+    async def conversation(io):
+        assert await io.read() == b"ready\n"
+        await io.write(b"go\n")
+        try:
+            await io.read()
+        finally:
+            cleaning.set()
+            try:
+                await release.wait()
+                joined.append(True)
+            except asyncio.CancelledError:
+                aborted.append(True)
+                raise
+
+    task = asyncio.create_task(exchange(launcher, tmp_path, conversation, source=(
+        "import os, sys\nprint('ready', flush=True)\n"
+        "assert sys.stdin.readline() == 'go\\n'\nos.write(1, b'x' * 8192)"
+    )))
+    try:
+        await asyncio.wait_for(owner_joining.wait(), 5)
+        await asyncio.sleep(0)
+        assert not aborted and not task.done()
+        release.set()
+        result = await task
+        assert joined == [True] and result.bound_exceeded == "stdout"
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("phase", ["join", "report"])
+async def test_cleanup_failure_keeps_the_original_callback_error(
+    launcher, tmp_path, monkeypatch, phase,
+):
     original = ValueError("callback defect")
     cleanup = RuntimeError("cleanup defect")
     failed = []
     finish = linux.finish_owned
+    read = os.read
 
     async def observe(task):
         value = await finish(task)
@@ -206,16 +311,28 @@ async def test_cleanup_failure_keeps_the_original_callback_error(launcher, tmp_p
             raise cleanup
         return value
 
-    monkeypatch.setattr(linux, "finish_owned", observe)
+    def broken_report(fd, count):
+        if failed and count == 5:
+            raise cleanup
+        return read(fd, count)
+
+    if phase == "join":
+        monkeypatch.setattr(linux, "finish_owned", observe)
+    else:
+        monkeypatch.setattr(linux.os, "read", broken_report)
 
     async def conversation(io):
         assert await io.read() == b"ready\n"
         failed.append(True)
         raise original
 
-    with pytest.raises(BaseExceptionGroup) as caught:
+    caught = None
+    try:
         await exchange(launcher, tmp_path, conversation, source="print('ready', flush=True)")
-    assert original in caught.value.exceptions and cleanup in caught.value.exceptions
+    except BaseException as exc:
+        caught = exc
+    assert isinstance(caught, BaseExceptionGroup)
+    assert original in caught.exceptions and cleanup in caught.exceptions
 
 
 @pytest.mark.parametrize(("source", "output", "diagnostics", "exit_code"), [

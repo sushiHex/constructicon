@@ -138,3 +138,20 @@ drift, physical READ mounts, output truthfulness, exact exported bytes, control
 observation, cleanup/closure and assembly. The B, C and D inventories all remain
 mandatory; a skip or broken instrument never counts as a killed mutation.
 These are credential-free gate proofs, not provider-route or live-adapter proof.
+
+## Bounded duplex transport
+
+The same containment job exercises `test_linux_duplex.py` and the portable
+`test_process_io.py` laws. The real peer generates a fresh challenge, waits for
+a computed response, and confirms it; the same conversation runs against a
+scripted double. EOF, cumulative limits, stalled peers, cancellation, callback
+and cleanup failures exercise the existing launch owner. The real controller-
+death fixture also runs in duplex mode and observes descendant reaping and
+guard retention, not merely a stopped heartbeat.
+
+`check_m8_duplex_mutations.py` adds assertion-only checks without replacing any
+existing inventory. The artifact includes `duplex-progress-*.json`: actual
+launch revision, captured byte evidence, exit observations and termination
+flags. Read it with `m8-host.txt` and the exact job results. These are byte-
+transport proofs, not evidence of a native CLI's startup control, journal
+recovery, network reachability or subscription authentication.

@@ -54,6 +54,18 @@ MUTANTS = (
         UNIT + "test_io_failure_is_subordinate_only_to_its_owned_shutdown[False]",
     ),
     (
+        "repeated stops interrupt callback cleanup", PUMP,
+        "if initiating and protocol is not None", "if protocol is not None",
+        NATIVE + "test_repeated_bound_notifications_do_not_cancel_callback_cleanup",
+    ),
+    (
+        "private report failure hides the callback failure", PUMP,
+        "raw_report = os.read(report_read, 5)",
+        "\n                try: raw_report = os.read(report_read, 5)"
+        "\n                except BaseException: errors.clear(); raise",
+        NATIVE + "test_cleanup_failure_keeps_the_original_callback_error[report]",
+    ),
+    (
         "stdout ceiling never stops conversation", PUMP,
         'bound = bound or "stdout"', 'bound = bound',
         NATIVE + "test_output_bound_returns_salvage_with_a_stalled_reader[stdout]",

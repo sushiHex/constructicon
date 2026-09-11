@@ -415,6 +415,7 @@ class LinuxLauncher:
         stdout = bytearray()
         stderr_head = bytearray()
         stderr_tail = bytearray()
+        raw_report = b""
         bound: str | None = None
         timed_out = False
         tasks: list[asyncio.Task[None]] = []
@@ -427,6 +428,12 @@ class LinuxLauncher:
         cleanup_errors: list[BaseException] = []
         caller_cancelled = False
         protocol_observed = False
+
+        def close_fd(fd: int) -> None:
+            try:
+                os.close(fd)
+            except OSError as exc:
+                cleanup_errors.append(exc)
 
         def remember(error: BaseException) -> None:
             if not any(error is old for old in errors):
@@ -448,7 +455,8 @@ class LinuxLauncher:
 
         def stop(reason: str = "complete") -> None:
             nonlocal owner_write, stop_reason
-            if stop_reason is None:
+            initiating = stop_reason is None
+            if initiating:
                 observe_protocol()
                 stop_reason = reason
             try:
@@ -457,8 +465,8 @@ class LinuxLauncher:
             finally:
                 if owner_write >= 0:
                     fd, owner_write = owner_write, -1
-                    os.close(fd)
-                if protocol is not None and not protocol.done():
+                    close_fd(fd)
+                if initiating and protocol is not None and not protocol.done():
                     protocol.cancel()
                 if not stopped.done():
                     stopped.set_result(None)
@@ -595,7 +603,7 @@ class LinuxLauncher:
         except BaseException as exc:
             remember(exc)
         finally:
-            os.close(owner_read)
+            close_fd(owner_read)
             try:
                 stop("cancel" if caller_cancelled else "failure" if errors else "complete")
             except BaseException as exc:
@@ -619,16 +627,29 @@ class LinuxLauncher:
                     except BaseException as exc:
                         cleanup_errors.append(exc)
                     observe_protocol()
-                raw_report = b""
                 with suppress(BlockingIOError):
                     raw_report = os.read(report_read, 5)
+            except BaseException as exc:
+                cleanup_errors.append(exc)
             finally:
-                os.close(report_read)
-                os.close(report_write)
+                close_fd(report_read)
+                close_fd(report_write)
+        payload_returncode = None
+        try:
+            if len(raw_report) == 4:
+                payload_returncode = struct.unpack("!i", raw_report)[0]
+                if not 0 <= payload_returncode <= 255:
+                    raise ContractViolation("invalid private payload exit report")
+            elif raw_report:
+                raise ContractViolation("malformed private payload exit report")
+        except BaseException as exc:
+            cleanup_errors.append(exc)
         if cleanup_errors:
             failures = [*errors, *cleanup_errors]
             if caller_cancelled:
                 failures.insert(0, asyncio.CancelledError())
+            if len(failures) == 1:
+                raise failures[0]
             raise BaseExceptionGroup("contained process cleanup failed", failures)
         if caller_cancelled:
             if errors:
@@ -638,13 +659,6 @@ class LinuxLauncher:
             assert errors
             raise errors[0]
         assert process is not None and process.returncode is not None
-        payload_returncode = None
-        if len(raw_report) == 4:
-            payload_returncode = struct.unpack("!i", raw_report)[0]
-            if not 0 <= payload_returncode <= 255:
-                raise ContractViolation("invalid private payload exit report")
-        elif raw_report:
-            raise ContractViolation("malformed private payload exit report")
         result = ProcessResult(
             process.returncode, bytes(stdout), bytes(stderr_head + stderr_tail),
             time.monotonic() - started, timed_out or asyncio.get_running_loop().time() >= deadline,
