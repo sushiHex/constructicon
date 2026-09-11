@@ -39,6 +39,9 @@ The peer does not forward requests, possess credentials, resolve upstream
 hosts, or implement a provider service. It returns the same two scripted
 Responses exchanges used by the existing test. Host-side request observations
 stay outside the payload's writable files, output stream, and process domain.
+They prove received bytes, not which process sent them. The CLI and its
+descendants can use both loopback and the mounted Unix socket directly. The
+fixture grants invocation-wide access, not a CLI-authenticated channel.
 
 ## Authority and evidence limits
 
@@ -129,7 +132,16 @@ or trusted supervisor descriptors. The bootstrap closes its copy of the
 listener and `exec`s the CLI with the controlled loopback URL. This preserves
 the direct payload identity whose exit the trusted supervisor reports. No
 second controller, reaper, daemon, renewable timeout, or process-group cleanup
-is introduced. A bridge failure cannot be treated as a completed native turn.
+is introduced. A transport-visible bridge failure must fail the required
+exchange; do not turn interrupted forwarding into native completion.
+
+The unchanged supervisor reports the direct native payload's exit, not a
+separate bridge status. Descendant reaping does not prove successful bridge
+exit. A bridge can fail after forwarding the final response without changing
+either the native result or peer transcript. This proposal does not detect or
+claim success for that unobserved exit. No `bridge_returncode` is inferred;
+a stronger per-bridge outcome contract would need a separately reviewed
+observation mechanism, not a second owner hidden in the bootstrap.
 
 The bridge transports bytes to one fixed destination. It has bounded buffers,
 connection count and byte totals, closes both halves on error, and carries no
@@ -137,6 +149,13 @@ model dispatch, URL routing, retry policy, or credential logic. The endpoint
 refuses ancillary descriptor transfer; received descriptors are closed before
 refusal. No descriptor crosses into the CLI or a model-selected callback.
 The existing owner's absolute deadline bounds every child, including setup.
+For normal EOF, drain accepted bytes, half-close the destination's write side,
+and preserve the reverse direction until its EOF or the same deadline. Before
+native exec, require a bounded bridge-ready handshake proving fixed-endpoint
+setup; its descriptors are close-on-exec and closed before the CLI starts.
+Readiness is not evidence of later bridge health.
+If readiness opens the peer connection, retain it for the first forwarded
+request; do not spend an extra connection on a disposable health check.
 
 Extract and reuse the existing test provider's bounded request parsing and
 scripted Responses generation for both TCP and Unix fixtures. Do not maintain
@@ -145,6 +164,26 @@ only its fixed request target, exact model/scenario, bounded native requests,
 and no authentication header. Unexpected methods, framing, extra requests,
 or malformed bodies fail the case. Requests are observations, never code for
 the host to execute.
+
+The host peer enforces its own limits even when a payload bypasses the bridge:
+two accepted connections per case, one active handler, at most 256 KiB of
+headers and 1 MiB of body per request, and 4 MiB of aggregate HTTP bytes across
+both directions. Spend connection allowance before reading headers or bodies;
+incomplete connections spend it too. Over-budget or concurrent admission fails
+the case and closes the listener; malformed requests do not refund allowance.
+Use bounded reads and writes so overflow cannot first allocate an unbounded
+body. Give the bridge the same aggregate/connection ceilings with 8 KiB copy
+buffers; enforcement at the host remains independent. Keep these test limits
+in one shared definition used by both transports and bind it to fixture
+identity. This bounds the instrument, not general host resource denial.
+
+Set one 20-second case deadline before peer setup; supply only its remaining
+budget to the existing launcher. Each peer handler is also capped at ten
+seconds or the remaining case time, whichever is shorter. No accept or retry
+renews either deadline. Stop accepting and close active I/O on a failure or
+deadline, retain the socket leaf until physical teardown, then join all
+handlers before asserting the final peer error/transcript result. The existing
+supervisor's teardown grace and truthful cleanup-failure law remain unchanged.
 
 The peer is an async task in the existing test-driver process, not a new
 physical process owner. Its context must join accepted handlers on every exit,
@@ -164,12 +203,16 @@ inside a bridge patch.
    host loopback services, socket siblings, authority/journal paths and another
    invocation's endpoint remain absent or unreachable. Fail preflight without
    native launch if the setup differs. Exercise endpoint loss, malformed and
-   oversized requests, bridge failure, timeout, cancellation, owner death,
+   oversized requests, bridge loss before readiness, mid-request and after
+   response buffering, timeout, cancellation, owner death,
    and a session-changing descendant. Assert quiescence/reaping through the
    existing owner's proof, not a child's exit message or a PID's disappearance.
    Require complete native `ProcessResult` outcomes and host-side peer errors;
-   a native success marker cannot erase either failure. No combined native
-   mediation claim follows from reachability alone.
+   a native success marker cannot erase either observed failure. A bridge loss
+   after all required bytes arrive is a control for the stated observation
+   limit, not a promised per-bridge failure signal. Exercise incomplete and
+   concurrent direct-socket callers to prove host-side budgets cannot be
+   bypassed. No combined native mediation claim follows from reachability.
 2. **Combined startup/mediation proof.** Run both pinned model profiles through
    this exact fixture. Preserve their distinct request-tool wire shapes.
    Exercise allowed callbacks and the existing patch/image/model-dependent
@@ -178,6 +221,13 @@ inside a bridge patch.
    together. The controller dispatches any permitted worker through the
    existing contained-worker/acquisition path, never inside the provider or
    the native home. Do not credit a scripted callback as physical worker proof.
+   Add descendant loopback/direct-socket controls: external recording proves
+   receipt from the invocation, not CLI-versus-descendant provenance. Matching
+   RPC ids, content, and model names do not authenticate the missing sender.
+   These functional observations alone cannot establish complete mediation or
+   unlock recovery/authentication. That conclusion remains conditional on
+   independent startup-origin and native-execution controls; any stronger
+   process-authentication boundary requires a new decision.
    Complete the origin/control/test inventory from PR #54: managed policy,
    named profiles, project TOML/trust, hooks, plugins/MCP/apps, packaged assets,
    environment and cloud/account absence. Use inert public markers and
