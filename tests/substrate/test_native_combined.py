@@ -1,20 +1,22 @@
 """Combined native observations inside the approved test-only placement."""
 
 import base64
-import hashlib
 import json
-import os
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import pytest
 
 from constructicon.core.executor import TaskSpec
 from constructicon.substrate.executors.linux import LinuxLauncher
 from tests.containedworld import RecordedExecutorProvider
-from tests.native_codex_probe import CANARY_PNG, CATALOG_SHA256, PROBE_PROMPT, conversation
-from tests.native_combined import BASE_INSTRUCTIONS, CombinedScenario, controlled_configuration
+from tests.native_codex_probe import CANARY_PNG, PROBE_PROMPT, conversation
+from tests.native_combined import (
+    BASE_INSTRUCTIONS,
+    CombinedScenario,
+    assert_native_identity,
+    controlled_configuration,
+)
 from tests.native_startup import MODELS
 from tests.substrate.test_contained_workspace import context
 from tests.substrate.test_contained_workspace import provider as provider
@@ -35,10 +37,20 @@ async def worker_result(resource, workspace, program, observations):
     return json.dumps(result.output)
 
 
+def assert_patch_effect(record, positive):
+    names = [entry["fileName"] for entry in record["patch_directory"]["entries"]]
+    assert ("inert" in names) is positive
+    if positive:
+        assert base64.b64decode(record["patch_file"]["dataBase64"], validate=True) == (
+            b"fixture only\n"
+        )
+
+
 @pytest.mark.parametrize("model", MODELS)
 @pytest.mark.parametrize("operation,positive", [
     ("contained_python", False), ("apply_patch", False), ("view_image", False),
     ("apply_patch", True), ("view_image", True),
+    ("exec", False), ("spawn_agent", False),
 ])
 async def test_combined_native_dispatch_and_refusal(
     placement_image, launcher, tmp_path, provider, model, operation, positive, monkeypatch,
@@ -65,21 +77,24 @@ async def test_combined_native_dispatch_and_refusal(
         "apply_patch": {"patch": "*** Begin Patch\n*** Add File: /tmp/native-startup/inert\n"
                                  "+fixture only\n*** End Patch\n"},
         "view_image": {"path": "/tmp/native-startup/inert.png"},
+        "exec": {"code": "text('inert fixture')"},
+        "spawn_agent": {"task_name": "fixture", "message": "inert fixture"},
     }[operation]
-    kind = "custom tool call" if operation == "apply_patch" else "call"
+    kind = "custom tool call" if operation in {"apply_patch", "exec"} else "call"
+    namespace = {"exec": "functions", "spawn_agent": "collaboration"}.get(operation)
     output = (json.dumps({"contained": True}) if operation == "contained_python" else
               f"unsupported {kind}: {operation}")
+    if operation == "spawn_agent":
+        output = "unsupported call: collaborationspawn_agent"
     config = controlled_configuration(model, images=positive and operation == "view_image")
-    files = {}
     if positive and operation == "view_image":
-        output = [{"type": "input_image", "detail": "high", "image_url":
+        output = [{"type": "input_image", "image_url":
                    "data:image/png;base64," + base64.b64encode(CANARY_PNG).decode()}]
+        if model == MODELS[0]:
+            output[0]["detail"] = "high"
     if positive and operation == "apply_patch":
-        source = Path(os.environ["M8_CODEX_CATALOG"]).read_bytes()
-        assert hashlib.sha256(source).hexdigest() == CATALOG_SHA256
-        files["/tmp/home/.codex/control-catalog.json"] = source.decode()
         config = config.replace('model_catalog_json = "/opt/native-startup/catalog.json"',
-                                'model_catalog_json = "/tmp/home/.codex/control-catalog.json"')
+                                'model_catalog_json = "/opt/native-startup/source-catalog.json"')
         output = ("Exit code: 0\nWall time: <elapsed> seconds\nOutput:\n"
                   "Success. Updated the following files:\nA /tmp/native-startup/inert\n")
     now = datetime.now(UTC)
@@ -90,7 +105,8 @@ async def test_combined_native_dispatch_and_refusal(
     ]))
     scenario = CombinedScenario(model, dates, operation, arguments, output,
                                 images=positive and operation == "view_image",
-                                restricted=not (positive and operation == "apply_patch"))
+                                restricted=not (positive and operation == "apply_patch"),
+                                namespace=namespace)
 
     async def worker(program):
         assert operation == "contained_python" and program == PROGRAM
@@ -121,10 +137,14 @@ async def test_combined_native_dispatch_and_refusal(
             wire, "/tmp/native-startup", worker, model=model, base_instructions=BASE_INSTRUCTIONS,
             before_thread=canary,
         )
-        if positive and operation == "apply_patch":
-            record["patch_file"] = await wire.rpc("fs/readFile", {
-                "path": "/tmp/native-startup/inert",
+        if operation == "apply_patch":
+            record["patch_directory"] = await wire.rpc("fs/readDirectory", {
+                "path": "/tmp/native-startup",
             })
+            if positive:
+                record["patch_file"] = await wire.rpc("fs/readFile", {
+                    "path": "/tmp/native-startup/inert",
+                })
         record["config"] = await wire.rpc("config/read", {"includeLayers": True})
         await wire.io.close_stdin()
 
@@ -134,21 +154,21 @@ async def test_combined_native_dispatch_and_refusal(
         async with placement(
             placement_image, model=model, scenario=PROBE_PROMPT, tool=operation,
             arguments=arguments, request_check=scenario,
+            namespace=namespace,
         ) as (composed, peer, record):
             record["combined"] = {"model": model, "operation": operation, "dates": dates,
                                   "positive": positive}
             observations, result = await observe(
                 composed, peer, tmp_path, query=query, record=record,
-                config=config, files=files,
+                config=config,
             )
         assert_outcome(result)
         assert len(peer.requests) == 2 and not peer.failures
+        assert_native_identity(observations["protocol"], peer.requests)
         for ordinal, request in enumerate(peer.requests, 1):
             scenario(request, ordinal)
-        if positive and operation == "apply_patch":
-            assert base64.b64decode(observations["patch_file"]["dataBase64"], validate=True) == (
-                b"fixture only\n"
-            )
+        if operation == "apply_patch":
+            assert_patch_effect(observations, positive)
         assert all(observations["bootstrap"]["absent"].values())
         assert observations["protocol"]["calls"] == (
             ["call_probe"] if operation == "contained_python" else []

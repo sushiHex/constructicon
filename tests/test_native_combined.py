@@ -12,6 +12,7 @@ from tests.native_codex_probe import PROBE_PROMPT
 from tests.native_combined import (
     BASE_INSTRUCTIONS,
     CombinedScenario,
+    assert_native_identity,
     canonical,
     fixed_request_fields,
     message,
@@ -28,6 +29,8 @@ from tests.test_native_provider import request_bytes, transact
      "5c4eb4222231029c8481fb5d0275ce9e6439ee73ff0bdb4446ae7de381645aa5"),
     ("native_combined_sol_tools.json",
      "2af69894c7d1da46180c29ab5b0a6d996e6daad08d7f1a93d9f6de217a2a10b1"),
+    ("native_combined_mcp_tools.json",
+     "19d0ce92c181de4ef0a5256c3a256695c4207f2346f28a3bdba69002f2c800c5"),
 ])
 def test_previously_observed_tool_goldens_are_pinned(name, expected):
     value = json.loads(Path(__file__).with_name("fixtures").joinpath(name).read_text())
@@ -149,6 +152,50 @@ async def test_failed_worker_keeps_complete_evidence_before_refusal():
     with pytest.raises(AssertionError):
         await worker_result(resource, object(), "inert", observations)
     assert observations == [result.model_dump(mode="json")]
+
+
+def test_refusal_message_cannot_hide_a_patch_side_effect():
+    from tests.substrate.test_native_combined import assert_patch_effect
+
+    assert_patch_effect({"patch_directory": {"entries": []}}, False)
+    with pytest.raises(AssertionError):
+        assert_patch_effect({"patch_directory": {"entries": [{"fileName": "inert"}]}}, False)
+
+
+def test_mcp_positive_control_never_broadens_the_empty_recipe():
+    from dataclasses import replace
+
+    scenario = CombinedScenario(MODELS[0], ("2026-09-11",), "exec_command",
+                                {"cmd": "true"}, "unsupported call: exec_command")
+    request = request_for(scenario, 1)
+    request["tools"] = tools_for(mcp=True)
+    replace(scenario, mcp=True)(request, 1)
+    with pytest.raises(ValueError, match="instructions or tools"):
+        scenario(request, 1)
+
+
+@pytest.mark.parametrize("operation,namespace", [("exec", "functions"),
+                                               ("spawn_agent", "collaboration")])
+def test_refused_call_namespace_is_part_of_the_observation(scenario, operation, namespace):
+    from dataclasses import replace
+
+    scenario = replace(scenario, tool=operation, namespace=namespace,
+                       arguments={"code": "inert"} if operation == "exec" else {})
+    request = request_for(scenario, 2)
+    scenario(request, 2)
+    request["input"][-2]["namespace"] = "foreign"
+    with pytest.raises(ValueError, match="context or conversation"):
+        scenario(request, 2)
+
+
+@pytest.mark.parametrize("field", ["thread", "turn"])
+def test_peer_metadata_must_correlate_with_the_same_native_rpc(field):
+    protocol = {"thread": "thread-fixture", "turn": "turn-fixture"}
+    request = {"client_metadata": {"thread_id": "thread-fixture", "turn_id": "turn-fixture"}}
+    assert_native_identity(protocol, [request, deepcopy(request)])
+    request["client_metadata"][field + "_id"] = "foreign"
+    with pytest.raises(AssertionError):
+        assert_native_identity(protocol, [request])
 
 
 @pytest.mark.parametrize("elapsed", ["0", "0.2", "19.9"])

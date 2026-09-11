@@ -47,11 +47,14 @@ def message(role, *texts):
             "content": [{"type": "input_text", "text": text} for text in texts]}
 
 
-def tools_for(*, images=False, restricted=True):
+def tools_for(*, images=False, restricted=True, mcp=False):
     golden = json.loads(Path(__file__).with_name("fixtures").joinpath(
         "native_combined_tools.json",
     ).read_text())
-    return [tool for tool in golden if not (
+    resources = json.loads(Path(__file__).with_name("fixtures").joinpath(
+        "native_combined_mcp_tools.json",
+    ).read_text()) if mcp else []
+    return resources + [tool for tool in golden if not (
         (tool["name"] == "view_image" and not images)
         or (tool["name"] == "apply_patch" and restricted)
     )]
@@ -80,6 +83,14 @@ def fixed_request_fields(model):
     }
 
 
+def assert_native_identity(protocol, requests):
+    # Correlation with the controller's observed RPC identities is not sender
+    # authentication. The descendant control deliberately demonstrates that gap.
+    for request in requests:
+        assert request["client_metadata"]["thread_id"] == protocol["thread"]
+        assert request["client_metadata"]["turn_id"] == protocol["turn"]
+
+
 @dataclass(frozen=True)
 class CombinedScenario:
     model: str
@@ -89,13 +100,15 @@ class CombinedScenario:
     output: object
     images: bool = False
     restricted: bool = True
+    namespace: str | None = None
+    mcp: bool = False
 
     def prefix(self, date):
         prefix = []
         if self.model == MODELS[1]:
             tools = [{
                 "type": "namespace", "name": "functions", "description": "",
-                "tools": tools_for(images=self.images, restricted=self.restricted),
+                "tools": tools_for(images=self.images, restricted=self.restricted, mcp=self.mcp),
             }]
             if not self.restricted:
                 tools = json.loads(Path(__file__).with_name("fixtures").joinpath(
@@ -108,8 +121,11 @@ class CombinedScenario:
 
     def suffix(self):
         call = {"call_id": "call_probe", "name": self.tool}
-        if self.tool == "apply_patch":
-            call.update(type="custom_tool_call", input=self.arguments["patch"])
+        if self.namespace is not None:
+            call["namespace"] = self.namespace
+        if self.tool in {"apply_patch", "exec"}:
+            call.update(type="custom_tool_call",
+                        input=self.arguments["patch" if self.tool == "apply_patch" else "code"])
             kind = "custom_tool_call_output"
         else:
             call.update(type="function_call", arguments=json.dumps(self.arguments))
@@ -137,7 +153,7 @@ class CombinedScenario:
         if self.model == MODELS[0]:
             if request.get("instructions") != BASE_INSTRUCTIONS or canonical(
                 request.get("tools"),
-            ) != canonical(tools_for(images=self.images, restricted=self.restricted)):
+            ) != canonical(tools_for(images=self.images, restricted=self.restricted, mcp=self.mcp)):
                 raise ValueError("changed native instructions or tools")
         elif "instructions" in request or "tools" in request:
             raise ValueError("flattened namespaced model request")

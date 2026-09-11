@@ -42,7 +42,8 @@ def placement_image(launcher):
 
 @asynccontextmanager
 async def placement(image, *, timeout=CASE_SECONDS, model=MODELS[0],
-                    scenario=PLACEMENT_PROMPT, tool=None, arguments=None, request_check=None):
+                    scenario=PLACEMENT_PROMPT, tool=None, arguments=None, request_check=None,
+                    namespace=None):
     deadline = asyncio.get_running_loop().time() + timeout  # Before peer setup.
     with tempfile.TemporaryDirectory(prefix="m8-placement-") as directory:
         endpoint = Path(directory) / "provider.sock"
@@ -53,7 +54,8 @@ async def placement(image, *, timeout=CASE_SECONDS, model=MODELS[0],
         try:
             async with provider_peer(tool=tool, arguments=arguments, path=endpoint,
                                      deadline=deadline, model=model,
-                                     scenario=scenario, request_check=request_check) as peer:
+                                     scenario=scenario, request_check=request_check,
+                                     namespace=namespace) as peer:
                 identity = endpoint.stat()
                 composed = PlacementLauncher(
                     **{field.name: getattr(image, field.name) for field in fields(image)},

@@ -17,7 +17,8 @@ MUTANTS = (
      'request.get("instructions") != BASE_INSTRUCTIONS', "False",
      NEGATIVE + "[gpt-5.5-changed-instructions]"),
     ("tool declarations unchecked", MODULE + "CombinedScenario.__call__",
-     "canonical(tools_for(images=self.images, restricted=self.restricted))", 'canonical(request.get("tools"))',
+     "canonical(tools_for(images=self.images, restricted=self.restricted, mcp=self.mcp))",
+     'canonical(request.get("tools"))',
      NEGATIVE + "[gpt-5.5-changed-tool-schema]"),
     ("request ordinal unbounded", MODULE + "CombinedScenario.__call__",
      "ordinal not in (1, 2)", "False",
@@ -34,6 +35,14 @@ MUTANTS = (
     ("patch elapsed window unbounded", MODULE + "CombinedScenario.__call__",
      "not 0 <= float(elapsed[1]) <= 20", "False",
      TEST + "test_positive_patch_control_excludes_only_bounded_elapsed_text[gpt-5.5-0]"),
+    ("refusal conceals patch side effect",
+     "tests.substrate.test_native_combined:assert_patch_effect",
+     'assert ("inert" in names) is positive', "pass",
+     TEST + "test_refusal_message_cannot_hide_a_patch_side_effect"),
+    *((f"peer {field} detached from native RPC", MODULE + "assert_native_identity",
+       f'assert request["client_metadata"]["{field}_id"] == protocol["{field}"]', "pass",
+       TEST + f"test_peer_metadata_must_correlate_with_the_same_native_rpc[{field}]")
+      for field in ("thread", "turn")),
 )
 
 if __name__ == "__main__":

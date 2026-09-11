@@ -35,6 +35,9 @@ def main():
     (payload / "catalog.json").write_bytes(catalog_for(raw_catalog, restricted=True))
     shutil.copyfile("tests/substrate/_native_startup_bootstrap.py", payload / "bootstrap.py")
     if placement:
+        # The positive control uses the unchanged pinned catalog. Keep it in the
+        # immutable fixture, not a setup RPC that exceeds the existing bound.
+        (payload / "source-catalog.json").write_bytes(raw_catalog)
         for name in ("_provider_transport.py", "_provider_bridge.py", "_provider_bootstrap.py"):
             shutil.copyfile(Path("tests/substrate") / name, payload / name)
         (payload / "provider.sock").touch()  # Only this immutable leaf is overmounted.

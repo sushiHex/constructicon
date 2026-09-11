@@ -105,14 +105,15 @@ the already-reviewed native artifact `10281307021`, run `34643786457`, file
 of the new request under test. The assertion preserves the namespaced Sol
 framing instead of flattening it, and compares entire declared tool definitions.
 Only top-level item IDs are excluded from conversation-content comparison;
-they must still be nonempty strings. The only allowed context-text variation is the UTC date within
-the controller's 20-second invocation window. Tool call IDs, arguments, results,
+they must still be nonempty strings. The only allowed context-text variation is
+the UTC date within the controller's 20-second invocation window. Tool call IDs, arguments, results,
 message order, permissions text, environment, and controller prompt remain exact.
 
 The root field inventory and generation settings are also exact. Unknown
 `previous_response_id`, `conversation`, and arbitrary context fields refuse.
 `client_metadata` and `prompt_cache_key` remain recorded transport annotations,
-not validated origin evidence; the fixed fake peer neither routes nor selects
+not authenticated origin evidence; metadata thread/turn IDs must correlate with
+the controller's observed RPC IDs. The fixed fake peer neither routes nor selects
 behavior from them. The positive patch control additionally permits only a
 numeric elapsed-time field between zero and twenty seconds in its otherwise
 exact result text. Its actual file content is checked through a trusted read.
@@ -120,8 +121,15 @@ exact result text. Its actual file content is checked through a trusted read.
 The original Sol tool declaration is preserved separately from the restricted
 one: `native_combined_sol_tools.json` comes from the same prior artifact's
 `codex-gpt-5.6-sol-contained_python-images-false-unchanged.json`. Positive patch
-controls submit the original pinned catalog; restricted cases keep the existing
+controls select the original pinned catalog; restricted cases keep the existing
 restricted catalog. No new catalog transformation or native binary pin is added.
+The original catalog is an immutable placement-only asset, checked against its
+existing source hash at image construction, not a large bootstrap argument.
+
+The three MCP resource-tool declarations are pinned in
+`native_combined_mcp_tools.json` from the same prior artifact's
+`codex-project-trusted.json`. Only deliberately enabled MCP positive controls
+expect these tools; the empty recipe still rejects them.
 
 Independent source review found and corrected an old owner-death caller missing
 the newly explicit model, top-level history fields bypassing the context check,
@@ -132,17 +140,49 @@ identity before any callback-result assertion can fail.
 The first Linux six-case combined baseline passed on `4b8f372` (allowed worker
 plus disabled patch/image paths for both profiles). It does not establish the
 later strengthened assertion or startup controls. Current portable focused
-checks: 129 passed, 28 platform skips; nine targeted assertion mutants killed.
+checks: 141 passed, 28 platform skips. Targeted assertion mutants additionally
+cover negative patch side effects and native RPC/peer identity correlation.
 These are instrument checks, not native qualification. Expanded Linux controls,
 full final-head gates, artifact audit, and complete-head independent review
 remain unexecuted.
 
-The pending origin matrix now includes private/account-empty baselines, selected
-versus unselected named profiles, project TOML and inert MCP startup under both
+The origin matrix includes private/account-empty baselines, refused selected
+and ignored unselected named profiles, project TOML and inert MCP startup under both
 trust states, discovered user/project skills with prompt inclusion disabled, and
 JSON/TOML hooks with untrusted, explicitly trusted, and disabled controls. Trusted
-hook and MCP execution is deliberate positive-control behavior, not part of the
+hook attempts and MCP execution are deliberate positive controls, not part of the
 empty safe recipe. System/managed sources remain physically absent under the
 unchanged read-only runtime. No account-authenticated or cloud-managed positive
-control is attempted. Local plugin discovery is observed; a plugin installation
-and execution positive control is not yet established.
+control is attempted. The local-plugin positive control seeds the pinned
+loader's existing cache layout with one inert skill/MCP fixture; it does not
+qualify plugin installation, marketplaces, or arbitrary extensions.
+
+### Failed hypotheses retained
+
+The expanded run `34651713774` on `16dc9d5` failed seven cases (76 passed).
+Its downloaded artifact is retained as `m8-containment-34651713774-1`:
+
+- Sending the original catalog in setup exceeded the existing 256-KiB line
+  bound. The fix moves the same pinned bytes into the immutable test image;
+  no transport bound is increased.
+- Sol's positive image result omits `detail`, unlike gpt-5.5. The earlier
+  reviewed artifact independently confirms that difference; expected results
+  now preserve the distinct wire shapes.
+- `app-server` rejects `--profile` before RPC. This is a refused configuration,
+  not evidence that profile selection works. Unselected profile files remain a
+  separate ambient-configuration control.
+- A trusted MCP server advertises three native resource tools even when its
+  `tools/list` is empty. The pre-existing artifact supplies their exact golden;
+  this does not broaden the empty recipe's expected declarations.
+- Both trusted command hooks were attempted but failed with `ENOENT`, leaving
+  the public marker untouched. The immutable inventory has no `/bin/sh`, the
+  pinned hook runner's default shell. Disabled and untrusted controls must show
+  no attempt; successful command-hook execution is **blocked**, not proved.
+  No shell, runtime-base change, or additional grant is introduced to force it.
+
+The source distinction between hook discovery, trust, and attempted execution
+is in the pinned `hooks/src/engine/discovery.rs`, `hooks/src/registry.rs`, and
+`hooks/src/engine/command_runner.rs`. A failed hook is not a safe-disable proof:
+the fixture must still prove its untrusted and explicitly disabled controls.
+These corrections and the newly added namespaced/plugin controls await their
+next native run; they are not credited from the failed run.
