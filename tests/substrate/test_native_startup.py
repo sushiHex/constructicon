@@ -47,7 +47,7 @@ async def observe(launcher, model, *, files=None, extra="", arguments=(), query=
 
     result = await launcher.exchange(
         ("/usr/bin/python3", "-I", BOOTSTRAP), workspace=None, posture=Posture.READ,
-        conversation=conversation, timeout_s=20,
+        guard_fds=(), conversation=conversation, timeout_s=20,
     )
     return observations, result
 
@@ -168,6 +168,7 @@ async def test_provider_connectivity_is_a_named_refusal(startup_launcher):
             arguments=("-c", f'model_providers.probe.base_url="{endpoint}"'),
         )
         assert not requests and not failures
+        assert endpoint in json.dumps(observations["turn"]["error"])
         observations["external_fixture"] = {"endpoint": endpoint, "requests": requests}
     evidence("codex-startup-provider-refusal.json", startup_launcher, observations, result)
     assert result.payload_returncode == 0 and not result.timed_out

@@ -1,6 +1,8 @@
 """Portable framing proofs; these tests make no native-isolation claim."""
 
+import inspect
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -29,7 +31,11 @@ class BytePeer:
 async def test_duplex_framing_preserves_short_reads_and_coalesced_suffix(fragment):
     peer = BytePeer(b'{"id":1,"result":{"ok":true}}\n{"method":"warning"}\n', fragment=fragment)
     wire = DuplexWire(peer)
-    assert await wire.rpc("fixture/read", {}) == {"ok": True}
+    try:
+        result = await wire.rpc("fixture/read", {})
+    except ProbeRefused as exc:
+        pytest.fail(f"valid fragmented response refused: {exc}")
+    assert result == {"ok": True}
     assert json.loads(peer.written) == {"id": 1, "method": "fixture/read", "params": {}}
     assert await wire.read() == {"method": "warning"}
     assert wire.warnings == [{"method": "warning"}]
@@ -89,3 +95,24 @@ def test_startup_configuration_keeps_pins_and_has_no_authentication():
         assert not any(value["features"].values())
     with pytest.raises(ValueError, match="not pinned"):
         configuration("unqualified-model")
+
+
+async def test_startup_uses_the_exact_owned_launch_interface():
+    from constructicon.core.grants import Posture
+    from constructicon.substrate.executors.linux import LinuxLauncher
+    from tests.native_startup import BOOTSTRAP
+    from tests.substrate.test_native_startup import observe
+
+    invoked = []
+
+    async def exchange(*args, **kwargs):
+        inspect.signature(LinuxLauncher.exchange).bind(None, *args, **kwargs)
+        assert args == (("/usr/bin/python3", "-I", BOOTSTRAP),)
+        assert kwargs["workspace"] is None and kwargs["posture"] is Posture.READ
+        assert kwargs["guard_fds"] == () and kwargs["timeout_s"] == 20
+        assert callable(kwargs["conversation"])
+        invoked.append(True)
+        return "instrument-only"
+
+    assert await observe(SimpleNamespace(exchange=exchange), MODELS[0]) == ({}, "instrument-only")
+    assert invoked == [True]
