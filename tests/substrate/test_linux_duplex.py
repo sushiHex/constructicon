@@ -216,3 +216,54 @@ async def test_cleanup_failure_keeps_the_original_callback_error(launcher, tmp_p
     with pytest.raises(BaseExceptionGroup) as caught:
         await exchange(launcher, tmp_path, conversation, source="print('ready', flush=True)")
     assert original in caught.value.exceptions and cleanup in caught.value.exceptions
+
+
+@pytest.mark.parametrize(("source", "output", "diagnostics", "exit_code"), [
+    ("pass", b"", b"", 0),
+    ("import sys; sys.exit(7)", b"", b"", 7),
+    ("import os; os.write(2, b'diagnostic')", b"", b"diagnostic", 0),
+    ("import os; os.write(1, b'tail')", b"tail", b"", 0),
+])
+async def test_eof_and_exit_remain_process_observations(
+    launcher, tmp_path, source, output, diagnostics, exit_code,
+):
+    received = bytearray()
+
+    async def conversation(io):
+        while chunk := await io.read(2):
+            received.extend(chunk)
+        assert await io.read() == b""
+
+    result = await exchange(launcher, tmp_path, conversation, source=source)
+    assert bytes(received) == result.stdout == output
+    assert result.stderr == diagnostics
+    assert result.returncode == result.payload_returncode == exit_code
+    assert not result.timed_out and result.bound_exceeded is None
+
+
+async def test_callback_return_does_not_claim_a_lingering_peer_completed(launcher, tmp_path):
+    returned = []
+
+    async def conversation(io):
+        assert await io.read() == b"ready\n"
+        returned.append(True)
+
+    result = await exchange(launcher, tmp_path, conversation, timeout=2, source=(
+        "import time; print('ready', flush=True); time.sleep(100)"
+    ))
+    assert returned == [True]
+    assert result.timed_out and result.stdout == b"ready\n"
+
+
+async def test_progress_does_not_renew_the_absolute_deadline(launcher, tmp_path):
+    received = bytearray()
+
+    async def conversation(io):
+        while chunk := await io.read():
+            received.extend(chunk)
+
+    result = await exchange(launcher, tmp_path, conversation, timeout=2, source=(
+        "import os, time\nwhile True: os.write(1, b'.\\n'); time.sleep(.01)"
+    ))
+    assert len(received) >= 6 and result.stdout.startswith(received)
+    assert result.timed_out and result.bound_exceeded is None
