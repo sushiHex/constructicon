@@ -76,7 +76,11 @@ must exercise the same protocol tests (I6/I7).
   allowed while stdin is open and spend no bytes.
 - `read` accepts an integer in `1..8192` (not bool) and returns at most that
   many bytes, in order. Nonempty chunks are arbitrary stream boundaries, not
-  messages. Only drained stdout followed by actual pipe EOF returns `b""`;
+  messages. It returns as soon as at least one captured byte is available;
+  it never waits to fill `maximum`. With no available bytes it waits for
+  bytes, actual EOF, or terminal failure. A short challenge followed by a
+  peer waiting for a response must progress with the default `read(8192)`.
+  Only drained stdout followed by actual pipe EOF returns `b""`;
   no idle period or decoder observation invents EOF. Repeated EOF reads are
   stable while the callback remains active.
 - Reuse the existing bounded stdout capture as the readable history, with a
@@ -118,14 +122,42 @@ buffered final stdout after child exit while its conversation is still active.
 
 On caller cancellation, callback failure, transport failure, output overflow,
 or deadline: invalidate I/O first, request the existing owner-pipe shutdown,
-cancel and join protocol work, finish all drains and reaping, then return the
-bounded result or propagate the error. Pending reads/writes must wake or be
+cancel and join protocol work, finish all drains and reaping, then apply the
+outcome table below. Pending reads/writes must wake or be
 cancelled; cleanup cannot wait for a peer response. Repeated cancellation
 cannot release the guard or orphan the callback. Preserve an original error
 and any cleanup failure through exception chaining/grouping; never turn
 cleanup failure into a successful result. Normal peer EOF/broken-pipe handling
 in the batch specialization stays compatible; duplex protocol truncation is
 observable to its adapter rather than silently retried.
+
+| Observed cause | Caller-visible outcome after successful teardown |
+| --- | --- |
+| Normal conversation and process completion | Existing `ProcessResult`; return/exit codes remain observations, not decoded task success |
+| Deadline expiry | `ProcessResult(timed_out=True)` with bounded captured stdout/stderr |
+| Output or record ceiling | `ProcessResult(bound_exceeded=...)` with bounded captured stdout/stderr; preserve `timed_out` too if expiry was also observed |
+| Caller cancellation | Propagate `CancelledError`, never convert it to a result |
+| Uncaught callback or unexpected duplex I/O error, including refused writes | Raise L1 `ProcessExchangeError` carrying the completed `ProcessResult`, with the original exception as its cause |
+| Pre-spawn validation/probe/spawn exception | Preserve the existing exception path; no invented child result |
+
+`ProcessExchangeError` is a local exception, not a new wire outcome or durable
+record. Its result exposes salvage while its cause preserves the failing
+adapter/transport operation. This wrapper is duplex-only; the batch API keeps
+its existing exception types. Ordinary pipe EOF remains a read result; the
+adapter decides whether its protocol was truncated.
+
+Priority is deterministic: caller cancellation over a completed ordinary
+failure; an already observed non-cancellation callback/I/O failure over a
+simultaneous timeout/bound result; timeout/bound over normal completion.
+Retain additional observed exceptions as causes or grouped failures; priority
+selects the outward outcome, not permission to discard another failure.
+Cancellation deliberately sent to stop the conversation on timeout/overflow
+is not caller cancellation and does not replace that result. If cleanup
+itself fails, raise that failure (or a `BaseExceptionGroup` retaining it and
+the original exception/cancellation); never return a `ProcessResult` implying
+completed teardown. A complete salvage result is not promised when cleanup
+cannot establish completion. Tests must pin the simultaneous-cause precedence,
+not just isolated happy paths.
 
 The launcher does not poll SQLite or Git. Closing a Git acquisition marker
 does not itself kill a running process: closure refuses later use, disposal
@@ -166,13 +198,16 @@ Windows skips are not physical proof. Required observations:
    response, writes it, and receives confirmation. A predetermined stdin
    buffer must fail this test. Exercise the same conversation with a genuine
    scripted double; neither has model/account access.
-2. Fragmented/coalesced output, final bytes before EOF, repeated EOF, no output,
+2. Short reads while the peer waits for a response, fragmented/coalesced
+   output, final bytes before EOF, repeated EOF, no output,
    stderr-only progress, early stdin close, and callback completion with a
    lingering child. Assert both typed outcomes and exact observed bytes.
 3. Exact and overflowing cumulative input/output/record limits, a single
    oversized write with zero delivery, stalled reader/writer, same-direction
    overlap, closed/stale-handle use, callback failure, and a non-renewing
-   deadline. Demonstrate the observation first so no vacuous refusal passes.
+   deadline. Assert the outcome table, preserved error cause and captured
+   bytes, including simultaneous termination causes. Demonstrate the
+   observation first so no vacuous refusal passes.
 4. Repeated cancellation during spawn, write drain, read wait, adapter work,
    and teardown; no pending callback or I/O task after return. Cleanup failure
    must retain the original failure and cannot report disposal or success.
