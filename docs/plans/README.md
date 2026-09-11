@@ -73,6 +73,7 @@ the eventual code differs.
 | [M8 native authentication feasibility](handoffs/M8-native-auth-feasibility.md) | Native CLI interfaces, pinned Hardline comparison, and the missing complete-mediation proof; credential-free investigation, not a successor ADR or working subscription executor |
 | [M8 native mediation probe](handoffs/M8-native-mediation-probe.md) | Credential-free pinned Linux experiment; private driver, contained worker and native evidence kept distinct; no new authentication authority |
 | [M8 native qualification plan](handoffs/M8-native-qualification-plan.md) | Bounded startup investigation and prospective journal-driven native lifecycle gates; lifecycle blocked on an authorized duplex contract, not a successor ADR or production authentication approval |
+| [M8 bounded duplex contract](handoffs/M8-bounded-duplex-contract.md) | Proposed provider-neutral byte conversation within the existing launcher lifetime; reviewed transport prerequisite, not native authentication or lifecycle qualification |
 
 ## Completeness and recovery notes
 
