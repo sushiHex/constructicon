@@ -598,11 +598,23 @@ def process_state(pid):
         return None
 
 
-def stop_native(pid, start):
-    state = process_state(pid)
-    if state is not None and state[1] == start and state[0] != "Z":
+def pin_native(pid, start):
+    fd = os.pidfd_open(pid)
+    try:
+        state = process_state(pid)
+        assert state is not None and state[1] == start and state[0] != "Z"
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def stop_native(fd):
+    try:
         with suppress(ProcessLookupError):
-            os.kill(pid, signal.SIGKILL)
+            signal.pidfd_send_signal(fd, signal.SIGKILL)
+    finally:
+        os.close(fd)
 
 
 @pytest.mark.parametrize("model,stage", [
@@ -640,7 +652,8 @@ async def test_driver_death_and_explicit_successor_reconciliation(
             await asyncio.wait_for(recovery.wait(), 5)
 
     async def start_owner(epoch, pause):
-        item = SimpleNamespace(process=await spawn(epoch, pause), pid=None, start=None, stale=[])
+        item = SimpleNamespace(process=await spawn(epoch, pause), pid=None, start=None,
+                               pidfd=None, stale=[])
         owners.append(item)  # Every later failure sees this owner, including startup.
         line = await asyncio.wait_for(item.process.stdout.readline(), 25)
         assert line, (await item.process.stderr.read()).decode()
@@ -657,10 +670,9 @@ async def test_driver_death_and_explicit_successor_reconciliation(
         assert line, (await item.process.stderr.read()).decode()
         event = json.loads(line)
         item.pid = event["native_pid"]
-        initial = process_state(item.pid)
-        item.start = initial[1] if initial is not None else None
+        item.start = event["native_start"]
         assert event["phase"] == "native-started"
-        assert initial is not None and initial[0] != "Z"
+        item.pidfd = pin_native(item.pid, item.start)
         return item
 
     failure = None
@@ -756,8 +768,8 @@ async def test_driver_death_and_explicit_successor_reconciliation(
             except Exception as exc:
                 errors.append(exc)
             try:
-                if item.pid is not None and item.start is not None:
-                    stop_native(item.pid, item.start)
+                if item.pidfd is not None:
+                    stop_native(item.pidfd)
             except Exception as exc:
                 errors.append(exc)
             try:

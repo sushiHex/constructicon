@@ -399,7 +399,9 @@ the contained WRITE worker has written a heartbeat; the before-worker case
 never starts that worker. Killing the Python driver with SIGKILL bypasses its
 cleanup. Before any test cleanup or recovery call, the native PID stops
 executing and the heartbeat stops. PID start time distinguishes the observed
-process from a reused PID; a zombie counts as non-executing, not reaped.
+process from a reused PID at enrollment; cleanup retains and signals a Linux
+pidfd, never the numeric PID after an identity check. A zombie counts as
+non-executing, not reaped.
 
 The acquisitions remain open and the workspace remains present after death.
 Explicit successor `reconcile` calls close both old acquisitions and remove
@@ -444,6 +446,14 @@ preceded the worker's first heartbeat write. The active report now waits for
 nonempty bytes, not existence. A deterministic portable regression steps
 through missing, empty, and written states; restoring existence-only polling
 fails it. The parent's later read is not substituted for that event's evidence.
+
+Review then caught the remaining check-to-kill PID reuse window. The owner
+reports its observed native start time; the parent opens a pidfd, validates
+that observation, and retains the descriptor until cleanup. Signaling uses
+that stable descriptor, including when the original process has exited; every
+path closes it. Portable tests cover reuse before enrollment and after it,
+and restoring numeric-PID signaling fails the instrument mutation. This pins
+the one observed native process, not an all-descendant ownership claim.
 
 The corrected `3acd4bc` native step passed all 77 cases and 18 portable
 instrument mutants. Additional missing/malformed-catalog and removed-tool

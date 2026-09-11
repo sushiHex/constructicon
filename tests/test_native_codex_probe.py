@@ -269,23 +269,42 @@ async def test_native_heartbeat_observes_data_not_file_creation(tmp_path, monkey
     assert heartbeat.read_bytes() == b"."
 
 
-def test_native_cleanup_tolerates_process_exit_race(monkeypatch):
+@pytest.mark.parametrize("gone", [False, True])
+def test_native_cleanup_uses_pinned_identity_despite_pid_reuse(monkeypatch, gone):
     monkeypatch.setattr(native_probe.signal, "SIGKILL", 9, raising=False)
     monkeypatch.setattr(native_probe, "process_state", lambda pid: ("S", "same-start"))
-    called = []
+    monkeypatch.setattr(native_probe.os, "pidfd_open", lambda pid: 456, raising=False)
+    called, closed = [], []
 
-    def disappeared(pid, sig):
-        called.append(pid)
-        raise ProcessLookupError("exited after stat")
+    def send(fd, sig):
+        called.append(fd)
+        if gone:
+            raise ProcessLookupError("original process exited; numeric PID may be reused")
 
-    monkeypatch.setattr(native_probe.os, "kill", disappeared)
+    def numeric_kill(pid, sig):
+        pytest.fail("a recycled numeric PID is not the enrolled cleanup target")
+
+    monkeypatch.setattr(native_probe.signal, "pidfd_send_signal", send, raising=False)
+    monkeypatch.setattr(native_probe.os, "kill", numeric_kill)
+    monkeypatch.setattr(native_probe.os, "close", closed.append)
+    fd = native_probe.pin_native(123, "same-start")
+    # The numeric PID changes owner after enrollment, before cleanup signals.
+    monkeypatch.setattr(native_probe, "process_state", lambda pid: ("S", "reused"))
     try:
-        native_probe.stop_native(123, "same-start")
+        native_probe.stop_native(fd)
     except ProcessLookupError:
         pytest.fail("native exit during cleanup must not replace the original failure")
-    assert called == [123]
-    native_probe.stop_native(123, "different-start")
-    assert called == [123]  # A reused PID cannot become a cleanup target.
+    assert called == [456] and closed == [456]
+
+
+def test_native_enrollment_refuses_a_reused_pid(monkeypatch):
+    monkeypatch.setattr(native_probe.os, "pidfd_open", lambda pid: 456, raising=False)
+    monkeypatch.setattr(native_probe, "process_state", lambda pid: ("S", "reused"))
+    closed = []
+    monkeypatch.setattr(native_probe.os, "close", closed.append)
+    with pytest.raises(AssertionError):
+        native_probe.pin_native(123, "reported-start")
+    assert closed == [456]
 
 
 @pytest.mark.parametrize("mode", ["success", "eof", "stderr", "timeout", "cancel"])

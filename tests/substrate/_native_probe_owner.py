@@ -27,6 +27,7 @@ from tests.substrate.test_native_codex_mediation import (
     argv_for,
     fake_provider,
     install_catalog,
+    process_state,
 )
 
 
@@ -84,8 +85,11 @@ async def main():
         process = await create(*argv, **kwargs)
         if argv[0] == str(binary):
             native_pid = process.pid
+            state = process_state(native_pid)
+            assert state is not None and state[0] != "Z"
             # Report before any tool/heartbeat await, including a failed turn.
-            print(json.dumps({"phase": "native-started", "native_pid": native_pid}), flush=True)
+            print(json.dumps({"phase": "native-started", "native_pid": native_pid,
+                              "native_start": state[1]}), flush=True)
         return process
 
     asyncio.create_subprocess_exec = observe
