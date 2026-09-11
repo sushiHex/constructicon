@@ -22,6 +22,7 @@ from constructicon.substrate._lifetime import finish_owned
 
 RECORD_BYTES = 256 * 1024
 TOTAL_BYTES = 2 * 1024 * 1024
+CATALOG_SHA256 = "d7136a413cfac1b5b1686d9e0dcc5c80ca05bebed5e9fc3911376561d0ef6ee8"
 CANARY_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1s"
     "AAAAASUVORK5CYII="
@@ -38,6 +39,19 @@ TOOL = {
 
 class ProbeRefused(ValueError):
     """Damaged or out-of-scope protocol; no recovery/re-execution is attempted."""
+
+
+def catalog_for(source: bytes, *, restricted: bool) -> bytes:
+    """Change only three tool selectors, never model identity or instructions."""
+    catalog = json.loads(source)
+    selected = {"gpt-5.5", "gpt-5.6-sol"}
+    assert {entry["slug"] for entry in catalog["models"]} >= selected
+    if restricted:
+        for entry in catalog["models"]:
+            if entry["slug"] in selected:
+                entry.update(apply_patch_tool_type=None, tool_mode="direct",
+                             multi_agent_version=None)
+    return (json.dumps(catalog, sort_keys=True) + "\n").encode()
 
 
 @dataclass
@@ -88,9 +102,16 @@ class Wire:
         self.observed_methods = set()
         self.warnings = []
 
+    async def _readline(self):
+        return await self.reader.readline()
+
+    async def _write(self, raw):
+        self.writer.write(raw)
+        await self.writer.drain()
+
     async def read(self):
         try:
-            raw = await self.reader.readline()
+            raw = await self._readline()
         except (ValueError, asyncio.LimitOverrunError) as exc:
             raise ProbeRefused("record bound") from exc
         self.received += len(raw)
@@ -115,8 +136,7 @@ class Wire:
         self.sent += len(raw)
         if len(raw) > RECORD_BYTES or self.sent > TOTAL_BYTES:
             raise ProbeRefused("outbound protocol bound")
-        self.writer.write(raw)
-        await self.writer.drain()
+        await self._write(raw)
 
     async def rpc(self, method, params):
         self.sequence += 1
