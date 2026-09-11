@@ -16,7 +16,7 @@ import re
 import signal
 import subprocess
 import sys
-from contextlib import asynccontextmanager, suppress
+from contextlib import suppress
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,7 +24,6 @@ import pytest
 
 from constructicon.core.executor import TaskSpec
 from constructicon.core.grants import Posture
-from constructicon.core.identity import parse_json_value
 from constructicon.core.manifest import CapabilityLease
 from constructicon.core.workspace import StaleAcquisition, acquisition_id_for
 from constructicon.substrate.git.acquisition import AcquisitionPaths
@@ -32,10 +31,11 @@ from tests.containedworld import RecordedExecutorProvider
 from tests.native_codex_probe import (
     CANARY_PNG,
     CATALOG_SHA256,
-    RECORD_BYTES,
     catalog_for,
     run_probe,
 )
+from tests.native_provider import events as events
+from tests.native_provider import fake_provider as fake_provider
 from tests.substrate.test_contained_workspace import context
 from tests.substrate.test_contained_workspace import provider as provider
 from tests.substrate.test_linux_containment import launcher as launcher
@@ -54,85 +54,6 @@ PROGRAM = (
 )
 
 
-def events(items, *, model="probe-model"):
-    response = {"id": "resp_probe", "object": "response", "model": model,
-                "status": "in_progress", "output": []}
-    yield {"type": "response.created", "response": response}
-    for index, item in enumerate(items):
-        yield {"type": "response.output_item.added", "output_index": index, "item": item}
-        if item["type"] == "message":
-            yield {"type": "response.output_text.delta", "output_index": index,
-                   "content_index": 0, "item_id": item["id"], "delta": "fixture complete"}
-        yield {"type": "response.output_item.done", "output_index": index, "item": item}
-    yield {"type": "response.completed", "response": {
-        **response, "status": "completed", "output": items,
-        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
-    }}
-
-
-@asynccontextmanager
-async def fake_provider(tool, arguments, *, model="probe-model", namespace=None):
-    requests, failures = [], []
-    handlers = set()
-
-    async def respond(reader, writer):
-        task = asyncio.current_task()
-        handlers.add(task)
-        try:
-            async with asyncio.timeout(10):
-                headers = await reader.readuntil(b"\r\n\r\n")
-                lines = headers.decode("ascii").split("\r\n")
-                assert lines[0] == "POST /v1/responses HTTP/1.1", lines[0]
-                fields = dict(line.lower().split(":", 1) for line in lines[1:] if line)
-                assert "authorization" not in fields  # No placeholder or token needed.
-                size = int(fields["content-length"])
-                assert 0 < size <= 1024 * 1024
-                request = parse_json_value((await reader.readexactly(size)).decode())
-                requests.append(request)
-                assert len(requests) <= 2, "unexpected retry or extra turn"
-                assert request["model"] == model
-                if len(requests) == 1:
-                    item = {"id": "fc_probe", "call_id": "call_probe", "name": tool}
-                    if namespace is not None:
-                        item["namespace"] = namespace
-                    if tool in {"apply_patch", "exec"}:
-                        source = arguments["patch" if tool == "apply_patch" else "code"]
-                        items = [{**item, "type": "custom_tool_call", "input": source}]
-                    else:
-                        items = [{**item, "type": "function_call",
-                                  "arguments": json.dumps(arguments)}]
-                else:
-                    items = [{"id": "msg_probe", "type": "message", "role": "assistant",
-                              "status": "completed", "content": [
-                                  {"type": "output_text", "text": "fixture complete"}]}]
-                payload = b"".join(
-                    ("event: " + event["type"] + "\ndata: " + json.dumps(event) + "\n\n").encode()
-                    for event in events(items, model=model)
-                )
-                writer.write(
-                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n"
-                    + f"Content-Length: {len(payload)}\r\n\r\n".encode() + payload,
-                )
-                await writer.drain()
-        except Exception as exc:
-            failures.append(repr(exc))
-        finally:
-            writer.close()
-            try:
-                await writer.wait_closed()
-            finally:
-                handlers.discard(task)
-
-    server = await asyncio.start_server(respond, "127.0.0.1", 0, limit=RECORD_BYTES)
-    try:
-        yield f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}/v1", requests, failures
-    finally:
-        server.close()
-        await server.wait_closed()
-        pending = tuple(handlers)
-        for task in pending:
-            task.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
 
 
 @pytest.fixture

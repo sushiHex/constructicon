@@ -16,7 +16,9 @@ from tests.native_codex_probe import CATALOG_SHA256, catalog_for
 def main():
     if os.getuid() != 0 or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
         raise SystemExit("startup fixture requires the authorized disposable runner")
-    base, destination, binary, catalog = map(Path, sys.argv[1:])
+    arguments = sys.argv[1:]
+    placement = arguments[-1:] == ["--provider-placement"]
+    base, destination, binary, catalog = map(Path, arguments[:-1] if placement else arguments)
     if not destination.is_absolute() or destination.exists() or destination.is_symlink():
         raise SystemExit("startup fixture destination must be fresh and absolute")
     # This is a copy of the already curated immutable closure, not host /usr.
@@ -32,6 +34,10 @@ def main():
         raise SystemExit("catalog differs from pinned source")
     (payload / "catalog.json").write_bytes(catalog_for(raw_catalog, restricted=True))
     shutil.copyfile("tests/substrate/_native_startup_bootstrap.py", payload / "bootstrap.py")
+    if placement:
+        for name in ("_provider_transport.py", "_provider_bridge.py", "_provider_bootstrap.py"):
+            shutil.copyfile(Path("tests/substrate") / name, payload / name)
+        (payload / "provider.sock").touch()  # Only this immutable leaf is overmounted.
     for path in [*destination.rglob("*"), destination]:
         if not path.is_symlink():
             path.chmod(0o555 if path.is_dir() or path.stat().st_mode & 0o111 else 0o444)

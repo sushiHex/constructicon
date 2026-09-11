@@ -225,7 +225,7 @@ boundary, deploy a gateway, use an account, or substitute paid calls. Startup
 completeness and the provider prerequisite still gate native journal recovery;
 ADR 0018 and authentication unavailability remain unchanged.
 
-## Proposed credential-free provider fixture
+## Accepted test-only provider fixture
 
 PR #54 is squash-merged as `e5e0dd7b65210ee882bb38ab371b6a4f97c1e2d5`,
 tree-identical to its reviewed head. Its bounded negative result stands.
@@ -235,7 +235,10 @@ test-only Unix socket mount plus a byte bridge inside the existing owned
 namespace. It states the added peer reachability rather than claiming the
 unchanged networkless recipe, and publishes no production executor profile.
 
-Independent design review and explicit owner acceptance gate implementation.
+The owner accepted the exact reviewed proposal at `35946af` on 2026-09-11;
+PR #55 merged it as `7d1e56c`. Its historical proposed wording remains frozen.
+Acceptance authorizes the placement-proof implementation only, recorded in the
+[placement evidence](../plans/handoffs/M8-provider-placement-evidence.md).
 The proposal separates placement proof from combined startup/mediation proof;
 native durable recovery follows neither automatically. No credentials,
 gateway deployment, billing choice or successor ADR is accepted here.

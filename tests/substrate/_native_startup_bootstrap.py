@@ -10,8 +10,9 @@ import sys
 from pathlib import Path
 
 
-def main():
-    setup = json.loads(sys.stdin.buffer.readline(256 * 1024))
+def prepare(setup=None):
+    if setup is None:
+        setup = json.loads(sys.stdin.buffer.readline(256 * 1024))
     if set(setup) != {"files", "config", "arguments"}:
         raise ValueError("unexpected startup fixture fields")
     root = Path("/tmp/native-startup")
@@ -27,17 +28,21 @@ def main():
             raise ValueError("fixture file must belong to private startup storage")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
+    return setup
+
+
+def launch(setup):
     print(json.dumps({
         "bootstrap_environment": dict(os.environ),
         "absent": {name: not Path(name).exists() for name in (
             "/etc/codex", "/workspace/.codex", "/root", "/home",
         )},
     }), flush=True)
-    os.chdir(root)
+    os.chdir("/tmp/native-startup")
     os.execv("/opt/native-startup/native/bin/codex", [
         "codex", *setup["arguments"], "app-server", "--strict-config", "--stdio",
     ])
 
 
 if __name__ == "__main__":
-    main()
+    launch(prepare())
