@@ -16,8 +16,9 @@ import re
 import signal
 import subprocess
 import sys
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -589,9 +590,24 @@ async def test_native_turn_ending_joins_an_active_contained_worker(
     })
 
 
+def process_state(pid):
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        return fields[0], fields[19]  # state and starttime, not PID alone
+    except FileNotFoundError:
+        return None
+
+
+def stop_native(pid, start):
+    state = process_state(pid)
+    if state is not None and state[1] == start and state[0] != "Z":
+        with suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
+
+
 @pytest.mark.parametrize("model,stage", [
     ("gpt-5.5", "active"), ("gpt-5.6-sol", "active"), ("gpt-5.5", "before-worker"),
-    ("gpt-5.5", "held-guard"),
+    ("gpt-5.5", "held-guard"), ("gpt-5.5", "successor-stall"),
 ])
 async def test_driver_death_and_explicit_successor_reconciliation(
     native, tmp_path, provider, launcher, model, stage,
@@ -599,16 +615,18 @@ async def test_driver_death_and_explicit_successor_reconciliation(
     """Lease-level composition only; no journal recovery or auth availability claim."""
     provider.posture = Posture.WRITE
     provider.launcher = launcher
-    async def spawn(epoch):
+    owners = []
+
+    async def spawn(epoch, pause="finish"):
         return await asyncio.create_subprocess_exec(
             sys.executable, "-m", "tests.substrate._native_probe_owner",
-            str(tmp_path), str(epoch), model, "active" if stage == "active" else "before-worker",
+            str(tmp_path), str(epoch), model, pause,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
 
-    async def reconcile():
+    async def reconcile(stale):
         recovery = await spawn("reconcile")
         try:
             rows = json.dumps([item.lease.model_dump(mode="json") for item in stale]).encode()
@@ -620,33 +638,31 @@ async def test_driver_death_and_explicit_successor_reconciliation(
                 recovery.kill()
             await asyncio.wait_for(recovery.wait(), 5)
 
-    def process_state(pid):
-        try:
-            fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
-            return fields[0], fields[19]  # state and starttime, not PID alone
-        except FileNotFoundError:
-            return None
-
-    owner = await spawn(1)
-    native_pid = native_start = None
-    stale = []
-    failure = None
-    try:
-        line = await asyncio.wait_for(owner.stdout.readline(), 25)
-        assert line, (await owner.stderr.read()).decode()
+    async def start_owner(epoch, pause):
+        item = SimpleNamespace(process=await spawn(epoch, pause), pid=None, start=None, stale=[])
+        owners.append(item)  # Every later failure sees this owner, including startup.
+        line = await asyncio.wait_for(item.process.stdout.readline(), 25)
+        assert line, (await item.process.stderr.read()).decode()
         event = json.loads(line)
+        item.pid = event["native_pid"]
+        item.stale = [StaleAcquisition(lease=CapabilityLease.model_validate(row),
+                                       disposition="discard") for row in event["leases"]]
+        initial = process_state(item.pid)
+        item.start = initial[1] if initial is not None else None
         assert event["phase"] == "native-started"
-        native_pid = event["native_pid"]
-        initial = process_state(native_pid)
         assert initial is not None and initial[0] != "Z"
-        native_start = initial[1]
-        stale = [StaleAcquisition(lease=CapabilityLease.model_validate(row), disposition="discard")
-                 for row in event["leases"]]
+        return item
+
+    failure = None
+    active_worker = stage in {"active", "successor-stall"}
+    try:
+        first = await start_owner(1, "active" if active_worker else "before-worker")
+        owner, stale = first.process, first.stale
         paths = [AcquisitionPaths(provider.root, acquisition_id_for(
             item.lease.lease_id, item.lease.acquisition_epoch,
         )) for item in stale]
         heartbeat = paths[0].payload / "workspace" / "worker-live"
-        if stage == "active":
+        if active_worker:
             line = await asyncio.wait_for(owner.stdout.readline(), 20)
             assert json.loads(line) == {"phase": "active"}
             assert heartbeat.read_bytes()
@@ -659,18 +675,18 @@ async def test_driver_death_and_explicit_successor_reconciliation(
         assert owner.returncode == -signal.SIGKILL
         async with asyncio.timeout(5):
             while True:
-                state = process_state(native_pid)
-                if state is None or state[1] != native_start or state[0] == "Z":
+                state = process_state(first.pid)
+                if state is None or state[1] != first.start or state[0] == "Z":
                     break
                 await asyncio.sleep(.02)
-        if stage == "active":
+        if active_worker:
             stopped = heartbeat.read_bytes()
             await asyncio.sleep(.2)
             assert heartbeat.read_bytes() == stopped
         else:
             assert not heartbeat.exists()
-        before = {"native_executing": False, "worker_started": stage == "active",
-                  "worker_heartbeat_stopped": True if stage == "active" else None,
+        before = {"native_executing": False, "worker_started": active_worker,
+                  "worker_heartbeat_stopped": True if active_worker else None,
                   "acquisitions_closed": [provider.closure.is_closed(path) for path in paths],
                   "workspace_present": paths[0].payload.exists()}
         assert before["acquisitions_closed"] == [False, False]
@@ -686,51 +702,69 @@ async def test_driver_death_and_explicit_successor_reconciliation(
                 started_at = clock.time()
                 with pytest.raises(TimeoutError):
                     async with asyncio.timeout(8):
-                        await reconcile()
+                        await reconcile(stale)
                 assert clock.time() - started_at < 7
                 assert paths[0].payload.exists()  # Blocked is not disposed.
         # These are the actual recovery operations, not unconditional teardown.
         # Rows are serialized fixture inputs, explicitly not read from SQLite.
-        await reconcile()
+        await reconcile(stale)
         assert all(provider.closure.is_closed(path) for path in paths)
         assert all(not path.payload.exists() for path in paths)
-        successor = await spawn(2)
-        try:
-            stdout, stderr = await asyncio.wait_for(successor.communicate(), 25)
-        finally:
-            if successor.returncode is None:
-                successor.kill()
-                await successor.wait()
-        assert successor.returncode == 0, stderr.decode()
-        started, completed = [json.loads(line) for line in stdout.splitlines()]
-        assert started["phase"] == "native-started"
-        assert completed["phase"] == "completed"
-        assert all(completed[key] for key in (
-            "executor_closed", "workspace_closed", "workspace_removed",
-        ))
-        write_evidence(f"codex-driver-death-{model}-{stage}.json", {
-            "model": model, "stage": stage, "before_reconciliation": before,
-            "after_reconciliation": {"old_acquisitions_closed": True,
-                                      "old_payloads_removed": True},
-            "fresh_invocation": completed,
-            "lease_source": "serialized fixture rows, not journal recovery",
-        })
+        second = await start_owner(2, "before-worker" if stage == "successor-stall" else "finish")
+        if stage == "successor-stall":
+            with pytest.raises(TimeoutError) as lost:
+                await asyncio.wait_for(second.process.stdout.readline(), .25)
+            failure = lost.value  # Must survive the same fallback cleanup as an unexpected failure.
+            completed = {"phase": "stalled-after-start"}
+        else:
+            stdout, stderr = await asyncio.wait_for(second.process.communicate(), 25)
+            assert second.process.returncode == 0, stderr.decode()
+            completed = json.loads(stdout)
+            assert completed["phase"] == "completed"
+            assert all(completed[key] for key in (
+                "executor_closed", "workspace_closed", "workspace_removed",
+            ))
     except BaseException as exc:
         failure = exc
         raise
     finally:
-        if owner.returncode is None:
-            owner.kill()
-        await owner.wait()
-        # Failure cleanup is lab hygiene and never credited to owner death.
-        if native_pid is not None and native_start is not None:
-            state = process_state(native_pid)
-            if state is not None and state[1] == native_start and state[0] != "Z":
-                os.kill(native_pid, signal.SIGKILL)
-        if stale:
+        errors = []
+        # Both invocations use this one cleanup law. It is lab hygiene, never
+        # credited to automatic owner death or journal recovery.
+        for item in reversed(owners):
             try:
-                await reconcile()
-            except Exception as cleanup_error:
-                if failure is None:
-                    raise
-                failure.add_note(f"bounded failure cleanup also failed: {cleanup_error!r}")
+                with suppress(ProcessLookupError):
+                    if item.process.returncode is None:
+                        item.process.kill()
+                await asyncio.wait_for(item.process.wait(), 5)
+            except Exception as exc:
+                errors.append(exc)
+            try:
+                if item.pid is not None and item.start is not None:
+                    stop_native(item.pid, item.start)
+            except Exception as exc:
+                errors.append(exc)
+            try:
+                if item.stale:
+                    await reconcile(item.stale)
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            if failure is None:
+                raise ExceptionGroup("bounded probe cleanup failed", errors)
+            for exc in errors:
+                failure.add_note(f"bounded failure cleanup also failed: {exc!r}")
+    if stage == "successor-stall":
+        assert isinstance(failure, TimeoutError) and not getattr(failure, "__notes__", ())
+        second_paths = [AcquisitionPaths(provider.root, acquisition_id_for(
+            item.lease.lease_id, item.lease.acquisition_epoch,
+        )) for item in second.stale]
+        assert all(provider.closure.is_closed(path) for path in second_paths)
+        assert all(not path.payload.exists() for path in second_paths)
+        completed["after_explicit_failure_cleanup"] = {"closed": True, "payloads_removed": True}
+    write_evidence(f"codex-driver-death-{model}-{stage}.json", {
+        "model": model, "stage": stage, "before_reconciliation": before,
+        "after_reconciliation": {"old_acquisitions_closed": True, "old_payloads_removed": True},
+        "fresh_invocation": completed,
+        "lease_source": "serialized fixture rows, not journal recovery",
+    })

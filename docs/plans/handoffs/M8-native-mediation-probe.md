@@ -392,8 +392,10 @@ for all settings, tools, models, or startup paths.
 
 The new child-interpreter fixture uses the same pinned native binary and
 restricted catalog, plus the existing `RecordedExecutorProvider`, workspace
-provider, and Linux launcher. It reports only after the contained WRITE worker
-has written a heartbeat. Killing that Python driver with SIGKILL bypasses its
+provider, and Linux launcher. It reports the native PID and fixture lease rows
+immediately after spawn. The active-worker case emits a separate report after
+the contained WRITE worker has written a heartbeat; the before-worker case
+never starts that worker. Killing the Python driver with SIGKILL bypasses its
 cleanup. Before any test cleanup or recovery call, the native PID stops
 executing and the heartbeat stops. PID start time distinguishes the observed
 process from a reused PID; a zombie counts as non-executing, not reaped.
@@ -423,6 +425,15 @@ the parent kills that interpreter on timeout. A deliberately held guard pins
 the bound. Cleanup errors are attached to the original failure rather than
 replacing it. This is lab containment of the test's failure path, not a new
 production recovery service or permission to dispose an active resource.
+
+The confirming review found that the fresh invocation still used the old late
+reporting path. Both invocations now use one test-local start/cleanup law,
+including failure cleanup of their own epoch's rows; a stalled successor pins
+that case. Native PID cleanup tolerates exit between inspection and kill and
+preserves other cleanup errors alongside the original failure. Portable tests
+and mutations pin that exit race and refusal to kill a reused PID. The record
+also distinguishes the early process-start report from the later heartbeat
+report, rather than attributing worker activity to both.
 
 The corrected `3acd4bc` native step passed all 77 cases and 18 portable
 instrument mutants. Additional missing/malformed-catalog and removed-tool

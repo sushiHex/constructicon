@@ -48,6 +48,12 @@ MUTANTS = (
     ("catalog reaches config", "tests.substrate.test_native_codex_mediation:argv_for",
      "if catalog else ''", "if False else ''",
      TEST + "test_catalog_changes_only_the_named_tool_selectors"),
+    *((name, "tests.substrate.test_native_codex_mediation:stop_native", before, after,
+       TEST + "test_native_cleanup_tolerates_process_exit_race")
+      for name, before, after in (
+          ("native cleanup exit race", "suppress(ProcessLookupError)", "suppress()"),
+          ("native cleanup PID reuse", "state[1] == start", "True"),
+      )),
 )
 
 if __name__ == "__main__":

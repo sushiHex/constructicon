@@ -32,7 +32,9 @@ from tests.substrate.test_native_codex_mediation import (
 
 async def main():
     root, mode, model = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-    epoch = 2 if mode == "reconcile" else int(mode)
+    rows = ([StaleAcquisition(lease=CapabilityLease.model_validate(row), disposition="discard")
+             for row in json.loads(sys.stdin.read())] if mode == "reconcile" else [])
+    epoch = max(row.lease.acquisition_epoch for row in rows) + 1 if rows else int(mode)
     # Use the same fixture factories and real boundary as the in-process lane.
     workspaces = ContainedWorkspaceProvider(
         GitAuthority(root / "authority.git", root / "legacy"), root=root / "owned",
@@ -43,8 +45,6 @@ async def main():
     contexts = [context(epoch=epoch, posture=Posture.WRITE, binding=binding)
                 for binding in ("workspace", "executor")]
     if mode == "reconcile":
-        rows = [StaleAcquisition(lease=CapabilityLease.model_validate(row), disposition="discard")
-                for row in json.loads(sys.stdin.read())]
         await executor.reconcile(contexts[1], (rows[1],))
         await workspaces.reconcile(contexts[0], (rows[0],))
         print(json.dumps({"phase": "reconciled"}), flush=True)
@@ -84,7 +84,7 @@ async def main():
     ) if epoch == 1 else "print('{\"type\":\"result\",\"output\":{\"fresh\":true}}')"
 
     async def worker(source):
-        if epoch == 1 and sys.argv[4] == "before-worker":
+        if sys.argv[4] == "before-worker":
             await asyncio.Event().wait()  # Regression: no heartbeat ever arrives.
         result = await acquired.resource.execute(
             TaskSpec(instruction=source), workspace=workspace.resource,

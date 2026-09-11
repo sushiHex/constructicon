@@ -252,6 +252,25 @@ def test_catalog_changes_only_the_named_tool_selectors(tmp_path, restricted):
     assert configured.get("model_catalog_json") == str(path)
 
 
+def test_native_cleanup_tolerates_process_exit_race(monkeypatch):
+    monkeypatch.setattr(native_probe.signal, "SIGKILL", 9, raising=False)
+    monkeypatch.setattr(native_probe, "process_state", lambda pid: ("S", "same-start"))
+    called = []
+
+    def disappeared(pid, sig):
+        called.append(pid)
+        raise ProcessLookupError("exited after stat")
+
+    monkeypatch.setattr(native_probe.os, "kill", disappeared)
+    try:
+        native_probe.stop_native(123, "same-start")
+    except ProcessLookupError:
+        pytest.fail("native exit during cleanup must not replace the original failure")
+    assert called == [123]
+    native_probe.stop_native(123, "different-start")
+    assert called == [123]  # A reused PID cannot become a cleanup target.
+
+
 @pytest.mark.parametrize("mode", ["success", "eof", "stderr", "timeout", "cancel"])
 async def test_real_pipe_lifetime_with_scripted_peer(tmp_path, mode):
     invoked = []
