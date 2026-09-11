@@ -608,6 +608,7 @@ def stop_native(pid, start):
 @pytest.mark.parametrize("model,stage", [
     ("gpt-5.5", "active"), ("gpt-5.6-sol", "active"), ("gpt-5.5", "before-worker"),
     ("gpt-5.5", "held-guard"), ("gpt-5.5", "successor-stall"),
+    ("gpt-5.5", "during-materialization"),
 ])
 async def test_driver_death_and_explicit_successor_reconciliation(
     native, tmp_path, provider, launcher, model, stage,
@@ -644,9 +645,18 @@ async def test_driver_death_and_explicit_successor_reconciliation(
         line = await asyncio.wait_for(item.process.stdout.readline(), 25)
         assert line, (await item.process.stderr.read()).decode()
         event = json.loads(line)
-        item.pid = event["native_pid"]
         item.stale = [StaleAcquisition(lease=CapabilityLease.model_validate(row),
                                        disposition="discard") for row in event["leases"]]
+        assert event["phase"] == "acquired"
+        if pause == "during-materialization":
+            async with asyncio.timeout(10):
+                while not (tmp_path / "materialization-entered").exists():
+                    await asyncio.sleep(.01)
+            return item  # Kill inside materialization; no native PID exists yet.
+        line = await asyncio.wait_for(item.process.stdout.readline(), 25)
+        assert line, (await item.process.stderr.read()).decode()
+        event = json.loads(line)
+        item.pid = event["native_pid"]
         initial = process_state(item.pid)
         item.start = initial[1] if initial is not None else None
         assert event["phase"] == "native-started"
@@ -656,7 +666,10 @@ async def test_driver_death_and_explicit_successor_reconciliation(
     failure = None
     active_worker = stage in {"active", "successor-stall"}
     try:
-        first = await start_owner(1, "active" if active_worker else "before-worker")
+        pause = "active" if active_worker else "before-worker"
+        if stage == "during-materialization":
+            pause = stage
+        first = await start_owner(1, pause)
         owner, stale = first.process, first.stale
         paths = [AcquisitionPaths(provider.root, acquisition_id_for(
             item.lease.lease_id, item.lease.acquisition_epoch,
@@ -673,19 +686,22 @@ async def test_driver_death_and_explicit_successor_reconciliation(
         # for the driver's exit must not credit a graceful Python finally.
         await asyncio.wait_for(owner.wait(), 5)
         assert owner.returncode == -signal.SIGKILL
-        async with asyncio.timeout(5):
-            while True:
-                state = process_state(first.pid)
-                if state is None or state[1] != first.start or state[0] == "Z":
-                    break
-                await asyncio.sleep(.02)
+        if first.pid is not None:
+            async with asyncio.timeout(5):
+                while True:
+                    state = process_state(first.pid)
+                    if state is None or state[1] != first.start or state[0] == "Z":
+                        break
+                    await asyncio.sleep(.02)
         if active_worker:
             stopped = heartbeat.read_bytes()
             await asyncio.sleep(.2)
             assert heartbeat.read_bytes() == stopped
         else:
             assert not heartbeat.exists()
-        before = {"native_executing": False, "worker_started": active_worker,
+        before = {"native_started": first.pid is not None,
+                  "native_executing": False if first.pid is not None else None,
+                  "worker_started": active_worker,
                   "worker_heartbeat_stopped": True if active_worker else None,
                   "acquisitions_closed": [provider.closure.is_closed(path) for path in paths],
                   "workspace_present": paths[0].payload.exists()}

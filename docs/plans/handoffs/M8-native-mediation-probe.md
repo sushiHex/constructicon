@@ -392,8 +392,9 @@ for all settings, tools, models, or startup paths.
 
 The new child-interpreter fixture uses the same pinned native binary and
 restricted catalog, plus the existing `RecordedExecutorProvider`, workspace
-provider, and Linux launcher. It reports the native PID and fixture lease rows
-immediately after spawn. The active-worker case emits a separate report after
+provider, and Linux launcher. It reports the fixture lease rows before
+materialization, then the native PID immediately after spawn. The active-worker
+case emits a separate report after
 the contained WRITE worker has written a heartbeat; the before-worker case
 never starts that worker. Killing the Python driver with SIGKILL bypasses its
 cleanup. Before any test cleanup or recovery call, the native PID stops
@@ -433,7 +434,10 @@ that case. Native PID cleanup tolerates exit between inspection and kill and
 preserves other cleanup errors alongside the original failure. Portable tests
 and mutations pin that exit race and refusal to kill a reused PID. The record
 also distinguishes the early process-start report from the later heartbeat
-report, rather than attributing worker activity to both.
+report, rather than attributing worker activity to both. A final review extended
+that same enrollment law to pre-spawn materialization: lease rows must reach
+the parent before population can block. The kill-during-materialization case
+proves closure and disposal without inventing a native PID or worker activity.
 
 The corrected `3acd4bc` native step passed all 77 cases and 18 portable
 instrument mutants. Additional missing/malformed-catalog and removed-tool

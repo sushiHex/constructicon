@@ -52,6 +52,17 @@ async def main():
     await executor.qualify()
     workspace = await workspaces.acquire(contexts[0])
     acquired = await executor.acquire(contexts[1])
+    # Enroll both inert handles before materialization can create or block on
+    # persistent resources. The parent retains these rows even without a PID.
+    print(json.dumps({"phase": "acquired",
+                      "leases": [stale_row(handle, ctx).lease.model_dump(mode="json")
+                                 for handle, ctx in zip((workspace, acquired), contexts,
+                                                        strict=True)]}), flush=True)
+    if sys.argv[4] == "during-materialization":
+        async def stalled_population(_workspace, _guard):
+            (root / "materialization-entered").write_text("entered")
+            await asyncio.Event().wait()
+        workspaces.populate = stalled_population
     home = root / f"home-{epoch}"
     config = home / ".codex"
     config.mkdir(parents=True)
@@ -68,10 +79,7 @@ async def main():
         if argv[0] == str(binary):
             native_pid = process.pid
             # Report before any tool/heartbeat await, including a failed turn.
-            print(json.dumps({"phase": "native-started", "native_pid": native_pid,
-                              "leases": [stale_row(handle, ctx).lease.model_dump(mode="json")
-                                         for handle, ctx in zip((workspace, acquired), contexts,
-                                                                strict=True)]}), flush=True)
+            print(json.dumps({"phase": "native-started", "native_pid": native_pid}), flush=True)
         return process
 
     asyncio.create_subprocess_exec = observe
