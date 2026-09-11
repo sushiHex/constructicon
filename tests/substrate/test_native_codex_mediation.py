@@ -12,6 +12,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from contextlib import asynccontextmanager
@@ -20,6 +21,7 @@ from pathlib import Path
 import pytest
 
 from constructicon.core.executor import TaskSpec
+from constructicon.core.grants import Posture
 from constructicon.core.identity import parse_json_value
 from tests.containedworld import RecordedExecutorProvider
 from tests.native_codex_probe import CANARY_PNG, RECORD_BYTES, run_probe
@@ -41,8 +43,8 @@ PROGRAM = (
 )
 
 
-def events(items):
-    response = {"id": "resp_probe", "object": "response", "model": "probe-model",
+def events(items, *, model="probe-model"):
+    response = {"id": "resp_probe", "object": "response", "model": model,
                 "status": "in_progress", "output": []}
     yield {"type": "response.created", "response": response}
     for index, item in enumerate(items):
@@ -58,7 +60,7 @@ def events(items):
 
 
 @asynccontextmanager
-async def fake_provider(tool, arguments):
+async def fake_provider(tool, arguments, *, model="probe-model"):
     requests, failures = [], []
     handlers = set()
 
@@ -77,16 +79,21 @@ async def fake_provider(tool, arguments):
                 request = parse_json_value((await reader.readexactly(size)).decode())
                 requests.append(request)
                 assert len(requests) <= 2, "unexpected retry or extra turn"
+                assert request["model"] == model
                 if len(requests) == 1:
-                    items = [{"id": "fc_probe", "type": "function_call", "call_id": "call_probe",
-                              "name": tool, "arguments": json.dumps(arguments)}]
+                    item = {"id": "fc_probe", "call_id": "call_probe", "name": tool}
+                    if tool == "apply_patch":
+                        items = [{**item, "type": "custom_tool_call", "input": arguments["patch"]}]
+                    else:
+                        items = [{**item, "type": "function_call",
+                                  "arguments": json.dumps(arguments)}]
                 else:
                     items = [{"id": "msg_probe", "type": "message", "role": "assistant",
                               "status": "completed", "content": [
                                   {"type": "output_text", "text": "fixture complete"}]}]
                 payload = b"".join(
                     ("event: " + event["type"] + "\ndata: " + json.dumps(event) + "\n\n").encode()
-                    for event in events(items)
+                    for event in events(items, model=model)
                 )
                 writer.write(
                     b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n"
@@ -144,10 +151,10 @@ def write_evidence(name, value):
         (Path(directory) / name).write_text(json.dumps(value, sort_keys=True, indent=2) + "\n")
 
 
-def argv_for(native, cwd, endpoint, *, images):
+def argv_for(native, cwd, endpoint, *, images, model="probe-model"):
     binary, env = native
     configuration = f'''
-model = "probe-model"
+model = "{model}"
 model_provider = "probe"
 model_context_window = 32768
 model_auto_compact_token_limit = 30000
@@ -201,10 +208,18 @@ def test_pinned_native_schema_inventory(native, tmp_path):
     assert "thread/start" in methods and "turn/start" in methods
 
 
-@pytest.mark.parametrize("operation", ["contained_python", "exec_command", "view_image"])
+@pytest.mark.parametrize("model,operation", [
+    *(("probe-model", operation) for operation in (
+        "contained_python", "exec_command", "view_image",
+    )),
+    *((model, operation) for model in ("gpt-5.5", "gpt-5.6-sol") for operation in (
+        "contained_python", "exec_command", "view_image", "apply_patch",
+        "fs/readFile", "process/spawn", "config/value/write",
+    )),
+])
 @pytest.mark.parametrize("images", [True, False], ids=["image-control", "image-disabled"])
 async def test_native_dynamic_dispatch_and_builtin_probe(
-    native, tmp_path, provider, launcher, operation, images,
+    native, tmp_path, provider, launcher, model, operation, images,
 ):
     provider.launcher = launcher
     executor = RecordedExecutorProvider(launcher, provider, WORKER)
@@ -227,6 +242,7 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
     # A canary in the harness home is NOT a credential. A disabled built-in
     # reaching it would refute exclusive mediation despite a successful callback.
     canary = Path(native[1]["HOME"]) / "builtin-bypass"
+    patch_canary = Path(native[1]["HOME"]) / "native-patch-fixture.txt"
     image_canary = Path(native[1]["HOME"]) / "private.png"
     image_canary.write_bytes(CANARY_PNG)
     arguments = {
@@ -234,24 +250,59 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
                              f"assert not pathlib.Path({str(image_canary)!r}).exists()\n"},
         "exec_command": {"cmd": f"printf bypass > {canary}", "max_output_tokens": 100},
         "view_image": {"path": str(image_canary)},
+        "apply_patch": {"patch": f"*** Begin Patch\n*** Add File: {patch_canary}\n"
+                                 "+fixture only\n*** End Patch\n"},
+        # Client RPC names are sent as model tool calls, never as client RPCs.
+        # Exact unsupported-call output proves name dispatch, not argument validation.
+        "fs/readFile": {"path": str(image_canary)},
+        "process/spawn": {"command": ["/usr/bin/true"]},
+        "config/value/write": {"keyPath": "model", "value": "not-selected",
+                               "mergeStrategy": "replace"},
     }[operation]
     try:
-        async with fake_provider(operation, arguments) as (endpoint, requests, failures):
-            argv = argv_for(native, tmp_path, endpoint, images=images)
-            result = await run_probe(argv, cwd=tmp_path, env=native[1], worker=worker)
-            evidence = {"probe": operation, "images_enabled": images,
+        async with fake_provider(operation, arguments, model=model) as exchange:
+            endpoint, requests, failures = exchange
+            argv = argv_for(native, tmp_path, endpoint, images=images, model=model)
+            result = await run_probe(argv, cwd=tmp_path, env=native[1], worker=worker, model=model)
+            evidence = {"probe": operation, "model": model, "images_enabled": images,
                         "protocol": result, "requests": requests,
                         "server_failures": failures, "worker_outputs": observed,
-                        "builtin_canary_written": canary.exists()}
-            write_evidence(f"codex-{operation}-images-{str(images).lower()}.json", evidence)
+                        "builtin_canary_written": canary.exists(),
+                        "native_patch_written": patch_canary.exists()}
+            write_evidence(f"codex-{model}-{operation.replace('/', '-')}-images-"
+                           f"{str(images).lower()}.json", evidence)
             assert not failures, failures
             assert len(requests) == 2
             expected_tools = {"request_user_input", "contained_python"}
             if images:
                 expected_tools.add("view_image")
-            assert {tool["name"] for tool in requests[0]["tools"]} == expected_tools
+            if model != "probe-model":
+                expected_tools.add("apply_patch")
+                assert "missing model metadata" not in result["stderr_observed"].lower()
+            if model == "gpt-5.6-sol":
+                # This pinned model publishes CodeMode namespaces despite the
+                # requested false flags. Preserve that distinct wire surface;
+                # do not flatten it into a claim of the fallback inventory.
+                assert "tools" not in requests[0]
+                declarations = [item for item in requests[0]["input"]
+                                if item.get("type") == "additional_tools"]
+                assert len(declarations) == 1
+                namespaces = {tool["name"]: tool for tool in declarations[0]["tools"]}
+                assert set(namespaces) == {"functions", "collaboration"}
+                functions = {tool["name"]: tool for tool in namespaces["functions"]["tools"]}
+                assert set(functions) == {"exec", "wait", "request_user_input"}
+                assert {tool["name"] for tool in namespaces["collaboration"]["tools"]} == {
+                    "followup_task", "interrupt_agent", "list_agents", "send_message",
+                    "spawn_agent", "wait_agent",
+                }
+                description = functions["exec"]["description"]
+                assert set(re.findall(r"^### `([^`]+)`$", description, re.MULTILINE)) == (
+                    expected_tools - {"request_user_input"}
+                )
+            else:
+                assert {tool["name"] for tool in requests[0]["tools"]} == expected_tools
             outputs = [item for item in requests[1]["input"]
-                       if item.get("type") == "function_call_output"]
+                       if item.get("type") in {"function_call_output", "custom_tool_call_output"}]
             assert len(outputs) == 1
             if operation == "contained_python":
                 assert result["calls"] == ["call_probe"]
@@ -259,7 +310,9 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
             else:
                 assert not observed
                 assert not result["calls"]
-                if operation == "exec_command" or not images:
+                if operation == "apply_patch":
+                    assert patch_canary.read_text() == "fixture only\n"
+                elif operation != "view_image" or not images:
                     assert outputs[0]["output"] == f"unsupported call: {operation}"
                     assert not canary.exists()
                 else:
@@ -276,3 +329,154 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
     assert acquired.resource.active is None
     assert provider.closure.is_closed(acquired.resource.paths)
     assert not workspace.resource.paths.payload.exists()
+
+
+@pytest.mark.parametrize("trust", ["untrusted", "trusted"])
+async def test_project_extension_startup_has_a_positive_control(native, tmp_path, trust):
+    """Observe one project MCP startup path, not all hooks/plugins/config sources."""
+    marker = tmp_path / "extension-started"
+    project_config = tmp_path / ".codex"
+    project_config.mkdir()
+    (tmp_path / ".git").mkdir()
+    # A tiny, inert MCP peer records startup and advertises no tools. It neither
+    # executes model input nor loads any external module or account state.
+    peer = (
+        "import json, sys; from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('started')\n"
+        "for line in sys.stdin:\n"
+        "    request = json.loads(line)\n"
+        "    if 'id' not in request: continue\n"
+        "    result = {'protocolVersion': '2025-03-26', 'capabilities': {'tools': {}},\n"
+        "              'serverInfo': {'name': 'inert-fixture', 'version': '0'}}\n"
+        "    if request['method'] == 'tools/list': result = {'tools': []}\n"
+        "    print(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': result}),\n"
+        "          flush=True)\n"
+    )
+    (project_config / "config.toml").write_text(
+        '[mcp_servers.fixture]\ncommand = "/usr/bin/python3"\n'
+        f"args = {json.dumps(['-I', '-u', '-c', peer])}\nstartup_timeout_sec = 5\n",
+    )
+
+    async def worker(_program):
+        raise AssertionError("a refused model call must not dispatch")
+
+    async with fake_provider("exec_command", {"cmd": "true"}, model="gpt-5.5") as exchange:
+        endpoint, requests, failures = exchange
+        argv = argv_for(native, tmp_path, endpoint, images=False, model="gpt-5.5")
+        config = Path(native[1]["CODEX_HOME"]) / "config.toml"
+        config.write_text(config.read_text() +
+                          f'\n[projects.{json.dumps(str(tmp_path))}]\ntrust_level = "{trust}"\n')
+        result = await run_probe(argv, cwd=tmp_path, env=native[1], worker=worker, model="gpt-5.5")
+        write_evidence(f"codex-project-{trust}.json", {
+            "trust": trust, "extension_started": marker.exists(), "protocol": result,
+            "requests": requests, "server_failures": failures,
+        })
+        assert not failures and len(requests) == 2
+        assert not result["calls"]
+        assert marker.exists() == (trust == "trusted")
+        if marker.exists():
+            assert marker.read_text() == "started"
+
+
+@pytest.mark.parametrize("ending", ["cancel", "native-death"])
+async def test_native_turn_ending_joins_an_active_contained_worker(
+    native, tmp_path, provider, launcher, monkeypatch, ending,
+):
+    provider.posture = Posture.WRITE
+    provider.launcher = launcher
+    executor = RecordedExecutorProvider(launcher, provider, WORKER)
+    await executor.qualify()
+    workspace = await provider.acquire(context(posture=Posture.WRITE))
+    acquired = await executor.acquire(context(posture=Posture.WRITE, binding="executor"))
+    await workspace.materialize()
+    await acquired.materialize()
+    heartbeat = Path(workspace.resource.path) / "worker-live"
+    program = (
+        "import time\n"
+        "with open('/workspace/worker-live', 'ab', buffering=0) as beat:\n"
+        "    while True:\n"
+        "        beat.write(b'.'); time.sleep(.02)\n"
+    )
+    native_processes = []
+    create = asyncio.create_subprocess_exec
+
+    async def observe_process(*argv, **kwargs):
+        process = await create(*argv, **kwargs)
+        if argv[0] == str(native[0]):
+            native_processes.append(process)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", observe_process)
+    calls = []
+
+    def acquisition_state():
+        return {
+            "executor_closed": provider.closure.is_closed(acquired.resource.paths),
+            "workspace_closed": provider.closure.is_closed(workspace.resource.paths),
+            "workspace_removed": not workspace.resource.paths.payload.exists(),
+        }
+
+    async def worker(source):
+        calls.append(source)
+        await acquired.resource.execute(
+            TaskSpec(instruction=source), workspace=workspace.resource,
+            grants=acquired.resource.context.binding.effective_grants,
+        )
+        raise AssertionError("the active worker must be cancelled, not return an answer")
+
+    pending = None
+    try:
+        async with fake_provider("contained_python", {"program": program},
+                                 model="gpt-5.5") as exchange:
+            endpoint, requests, failures = exchange
+            argv = argv_for(native, tmp_path, endpoint, images=False, model="gpt-5.5")
+            pending = asyncio.create_task(run_probe(
+                argv, cwd=tmp_path, env=native[1], worker=worker, timeout=12, model="gpt-5.5",
+            ))
+            async with asyncio.timeout(10):
+                while not heartbeat.exists():
+                    await asyncio.sleep(.01)
+            assert len(native_processes) == 1 and calls == [program]
+            assert acquired.resource.active is not None
+            if ending == "cancel":
+                pending.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await pending
+            else:
+                native_processes[0].kill()
+                # The driver is awaiting its worker: native death does not
+                # interrupt that await. The existing overall deadline owns it.
+                with pytest.raises(TimeoutError):
+                    await pending
+            assert native_processes[0].returncode is not None
+            assert acquired.resource.active is None
+            stopped = heartbeat.read_bytes()
+            assert stopped
+            await asyncio.sleep(.1)
+            assert heartbeat.read_bytes() == stopped
+            assert not failures and len(requests) == 1
+            # The driver owns its process and joins the supplied callback. It
+            # does NOT own these fixture acquisitions. Prove that distinction
+            # before the test's unconditional cleanup can conceal it.
+            before_cleanup = acquisition_state()
+            assert not any(before_cleanup.values())
+            on_driver_return = {
+                "native_returncode": native_processes[0].returncode,
+                "worker_joined": acquired.resource.active is None,
+                "worker_heartbeat_stopped": heartbeat.read_bytes() == stopped,
+                "acquisitions": before_cleanup,
+            }
+    finally:
+        if pending is not None:
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        await executor.close(acquired, "discard")
+        await provider.close(workspace, "discard")
+    assert acquired.resource.active is None
+    after_cleanup = acquisition_state()
+    assert all(after_cleanup.values())
+    write_evidence(f"codex-lifetime-{ending}.json", {
+        "ending": ending, "worker_calls": len(calls), "driver_deadline_s": 12,
+        "on_driver_return": on_driver_return,
+        "after_explicit_test_cleanup": after_cleanup,
+    })

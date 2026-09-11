@@ -623,6 +623,17 @@ complete slice E. The enabled-image control exports the PNG fixture without a
 worker callback; the disabled-image configuration removes the reader and
 refuses its direct invocation. The probe record preserves both results and
 their exact-head evidence, leaving broader mediation and lifecycle proof open.
+The PR #49 follow-up measures two real pinned model profiles as well. Both
+execute native patch writes in the disposable harness home despite the
+requested disabled flag, without dispatching the contained worker. The bounded
+matrix distinguishes this failed mediation obligation from passing controls
+and unmeasured startup/restart surfaces. No native credential-bearing profile
+is qualified, and no successor ADR follows from these results. The
+[authentication packet](../../designs/EXECUTOR_AUTHENTICATION.md#bounded-decision-packet-pr-49)
+returns the concrete route choice to the owner; it does not select paid API
+usage as a substitute for subscriptions.
 The [OpenRouter assessment](../../designs/OPENROUTER.md)
 proposes configuration of the planned Pi harness rather than another executor
-or kernel abstraction. It is not an approved expansion of M8.
+or kernel abstraction. The follow-on scope is two explicit qualified models,
+no automatic fallback, and separate Pi/authentication prerequisites. It is
+not an approved expansion of M8 or a completed Pi integration.

@@ -133,14 +133,14 @@ class Wire:
             return value["result"]
 
 
-async def conversation(wire, cwd, worker):
+async def conversation(wire, cwd, worker, *, model="probe-model"):
     await wire.rpc("initialize", {
         "clientInfo": {"name": "constructicon_probe", "version": "0"},
         "capabilities": {"experimentalApi": True},
     })
     await wire.send({"method": "initialized"})
     started = await wire.rpc("thread/start", {
-        "model": "probe-model", "modelProvider": "probe", "cwd": str(cwd),
+        "model": model, "modelProvider": "probe", "cwd": str(cwd),
         "approvalPolicy": "never", "sandbox": "danger-full-access",
         "ephemeral": True, "dynamicTools": [TOOL],
     })
@@ -166,7 +166,7 @@ async def conversation(wire, cwd, worker):
                     "warnings": wire.warnings}
 
 
-async def run_probe(argv, *, cwd, env, worker, timeout=30):
+async def run_probe(argv, *, cwd, env, worker, timeout=30, model="probe-model"):
     """The native lane has an outer network/PID namespace and no credentials.
 
     Process-group cleanup here is lab hygiene, NOT escaped-descendant proof.
@@ -211,7 +211,7 @@ async def run_probe(argv, *, cwd, env, worker, timeout=30):
             async with asyncio.TaskGroup() as group:
                 group.create_task(drain())
                 wire = Wire(process.stdout, process.stdin)
-                result = await conversation(wire, cwd, worker)
+                result = await conversation(wire, cwd, worker, model=model)
                 stop()
                 while chunk := await process.stdout.read(8192):
                     wire.received += len(chunk)

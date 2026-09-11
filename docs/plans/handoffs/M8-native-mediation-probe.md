@@ -1,10 +1,12 @@
 # M8 native mediation: credential-free Linux experiment
 
 Status: bounded investigation under
-[#37](https://github.com/sushiHex/constructicon/issues/37), 2026-09-10.
+[#37](https://github.com/sushiHex/constructicon/issues/37), updated 2026-09-11.
 Not a successor ADR, production adapter, subscription proof, or live profile.
 Base: `d94a47931d63b3e59de72450bb8e794178b6bad4`; work in
 [PR #48](https://github.com/sushiHex/constructicon/pull/48).
+The bounded follow-up in [PR #49](https://github.com/sushiHex/constructicon/pull/49)
+starts from its squash merge, `dbfe05ce21d7f2441ec88daaa424fdc895e95b7e`.
 
 ## Result and decision boundary
 
@@ -15,7 +17,7 @@ about whether an offline integration path exists. The image-enabled control
 and the disabled-image configuration have different observed results; neither
 qualifies complete mediation or native authentication.
 
-The earlier recipe left `view_image` enabled. The current enabled control
+The earlier recipe left `view_image` enabled. PR #48's fallback-model control
 reproduces its result: the native reader sends the exact PNG fixture from the
 harness's private home to the fake provider, without a dynamic callback or
 contained-worker invocation. Its tool inventory contains `request_user_input`,
@@ -23,7 +25,7 @@ contained-worker invocation. Its tool inventory contains `request_user_input`,
 workspace; the result refutes exclusive worker mediation for that enabled
 configuration only.
 
-With `features.view_image = false`, the measured inventory contains only
+With `features.view_image = false`, that fallback-model inventory contains only
 `request_user_input` and `contained_python`. Even when the fake provider requests
 `view_image` directly, the native router returns `unsupported call: view_image`
 instead of the image bytes. The contained-worker callback still succeeds in
@@ -178,7 +180,103 @@ no actual deployment or separately billed route has been selected. Slice E
 cannot claim deployed conformance from this loopback fake. Steps beyond this
 boundary need the missing decision, not another speculative kernel interface.
 The [OpenRouter reuse assessment](../../designs/OPENROUTER.md) likewise changes
-no authentication authority or M8 scope.
+no authentication authority or M8 scope. The follow-up below bounds the next
+experiment and supplies the current decision packet; it does not reopen ADR
+0018 or turn unmeasured obligations into passing controls.
+
+## Bounded follow-up (PR #49)
+
+### Model profiles and tool surfaces
+
+The binary/archive identities above are unchanged. The exact tagged source is
+[`3d2ee51`](https://github.com/openai/codex/tree/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a).
+Its bundled
+[model catalog](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/models-manager/models.json)
+has SHA-256 `d7136a413cfac1b5b1686d9e0dcc5c80ca05bebed5e9fc3911376561d0ef6ee8`.
+The two selected entries, `gpt-5.5` and `gpt-5.6-sol`, declare a free-form patch
+tool. The pinned
+[tool registry](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/tools/spec_plan.rs)
+uses the model metadata when registering that tool. Source inspection motivated
+the experiment; the binary's requests and fixture writes establish its result.
+
+Both names pass unchanged through the private config, thread request, fake
+provider request and fake response. Neither has a missing-model-metadata
+diagnostic. No catalog was rewritten to make the result pass, and no live model
+or subscription participated. The fixture is not a billing or entitlement test.
+
+| Profile | Observed published surface | Forced native patch |
+| --- | --- | --- |
+| `probe-model` fallback | Ordinary `tools`: dynamic worker, question tool, optionally image reader | Not tested; no metadata-based patch claim |
+| `gpt-5.5` | Ordinary `tools`: the same set plus native patch | Writes the disposable-home fixture; zero worker calls |
+| `gpt-5.6-sol` | `additional_tools` in input: CodeMode `functions` and `collaboration` namespaces; CodeMode describes the dynamic worker, patch and optional image reader | Writes the disposable-home fixture; zero worker calls |
+
+Both real profiles write the fixture with images enabled and disabled, despite
+`apply_patch_freeform = false`. Sol's published CodeMode/collaboration surface
+also contradicts the requested false flags. Those are negative qualification
+results, not reasons to flatten or silently omit the unexpected inventory.
+The fixture sends direct tool records to test routing; it does not claim a
+real model chose them or that every CodeMode/nested-tool route was exercised.
+
+The first matrix run on `cf29776` passed the fallback and `gpt-5.5` cases but
+failed Sol's ordinary-`tools` assertion. The downloaded evidence contained its
+distinct `additional_tools` representation and successful patch writes. The
+instrument now asserts that representation explicitly instead of weakening
+the inventory check or crediting a configuration flag. A green test reproducing
+an unmediated write means the experiment worked, not that mediation passed.
+
+### Bounded surface and lifetime assessment
+
+The new test cases are in
+[`test_native_codex_mediation.py`](../../../tests/substrate/test_native_codex_mediation.py).
+Three RPC names (`fs/readFile`, `process/spawn`, `config/value/write`) are
+presented as model calls, never sent as client RPCs. The expected exact
+unsupported-call refusal distinguishes name routing from malformed arguments.
+Portable tests separately prove the private driver refuses those names as
+server requests even with otherwise valid worker arguments. This is not an
+exhaustive reachability analysis of all 155 client RPCs.
+
+A project-local MCP fixture is an inert Python process that records startup
+and advertises no tools. Explicit trusted and untrusted project configurations
+provide the positive and negative controls; an empty home alone would make a
+non-launch test vacuous. This covers one startup path, not arbitrary hooks,
+plugins, skills, inherited system config or every configuration precedence.
+
+The lifetime cases use an actually running WRITE worker in an acquired staging
+workspace, observed through its heartbeat. On cancellation and native-process
+death, the driver joins the worker and its existing launcher, stops that
+heartbeat, and reaps the native process. The acquisitions remain open and the
+workspace remains present at driver return; explicit test cleanup closes and
+disposes them afterward. Both states are asserted and recorded separately.
+This does not prove event-driven acquisition disposal. No extra lifecycle store
+or scheduler is introduced. Native death while the driver awaits its worker
+is bounded by the existing 12-second test deadline, not an immediate death
+notification; the test must not credit it as instantaneous revocation.
+
+These cases do not kill the driver process or restart a credential-owning
+harness. Existing B/C/D owner-death tests remain worker-boundary evidence;
+composing them with a native harness is a remaining proof obligation. No
+process-group helper is promoted into escaped-descendant ownership evidence.
+
+| Obligation | Status for this bounded recipe | Scope of the evidence |
+| --- | --- | --- |
+| Native callback into contained READ worker | Pass | Both real profiles; not every model or grant |
+| Disabled native image reader | Pass | Exact image control on each profile |
+| Native patch exclusively mediated | Fail | Both real profiles write outside the worker without dispatch |
+| Requested disabled model-dependent features | Fail | Sol still publishes CodeMode/collaboration; execution of every nested route untested |
+| Three client-RPC names as model calls | Pass | Exact unsupported-call refusals in both profiles; not an exhaustive RPC proof |
+| Untrusted-project MCP startup blocked | Pass | No marker when untrusted; trusted control starts the inert extension |
+| Cancellation/death with active worker | Pass, bounded | Worker joined, heartbeat stops, native process reaped; native death uses the overall deadline |
+| Event-driven native acquisition disposal | Unknown | Acquisitions remain open at driver return; disposal is explicit test cleanup, not event-path evidence |
+| All hooks/extensions/config sources | Unknown | One project MCP path cannot establish completeness |
+| Driver death and native harness restart ownership | Unknown | Not proved by worker-only recovery or process groups |
+| Credential-bearing native eligibility | Not qualified | No credentials; complete mediation already fails for this recipe |
+
+The [authentication packet](../../designs/EXECUTOR_AUTHENTICATION.md#bounded-decision-packet-pr-49)
+owns the resulting alternatives. This experiment stops at a supported negative
+result for the named recipe; it does not expand itself into a different trust
+boundary, a new provider investigation, or API billing. Unknown rows are
+explicit prerequisites for any future native qualification, not an invitation
+to mark that work complete when this investigation merges.
 
 ## Verification observations
 
@@ -215,3 +313,32 @@ passing disabled control. This correction and the linked authentication
 summary distinguish both configurations without changing code or qualifying
 authentication. PR #48 carries final-head gate/review evidence; the recorded
 runs above are not substituted for checks on subsequent commits.
+
+At `2ec171f7e574d66ceafcd765aac9ef92224b6aec`, the
+[follow-up native lane](https://github.com/sushiHex/constructicon/actions/runs/34545164135)
+passed all 39 native probe cases, the existing 268-test containment suite, and
+the then-current 100 assertion mutants. Standard CI and runner qualification
+also passed. The downloaded artifact was inspected separately: the trusted
+project starts the inert MCP fixture while the untrusted project does not;
+each lifetime case records one worker call, native exit `-9`, and a stopped
+heartbeat. That artifact's closure/removal fields were recorded after manual
+test cleanup, not caused by cancellation or native death. The RPC-name cases retain
+the exact unsupported-call outputs, and both real profiles retain the native
+patch write with zero worker calls.
+
+The follow-up also strengthens the portable instrument: model selection is
+observed across config and real-pipe thread creation rather than assumed,
+and client-RPC names cannot become worker authority. All 35 portable tests
+and 13 instrument mutants pass locally. The four additional mutants exercise
+model propagation at its three boundaries and RPC-method separation. These
+are instrument proofs, not native authentication evidence. PR #49 carries the
+final exact-head gate and independent review; these earlier runs do not
+substitute for that gate.
+
+The independent review of `7df6f8d` caught that lifetime attribution error:
+the assertions and evidence followed explicit `close()` calls, but this
+record credited disposal to the ending itself. The correction measures open
+acquisitions and a present workspace before cleanup, then closed acquisitions
+and removed workspace after cleanup. Evidence names both phases explicitly;
+no new event-driven disposal mechanism or native eligibility is invented to
+satisfy an overclaim. Final confirmation must review this corrected head.

@@ -118,7 +118,16 @@ These are future gates, not results of this document:
 ## Sequencing
 
 Keep #47 open without `ready` or an M8 milestone assignment. The reuse proposal
-needs review, the Pi harness needs qualification, and the authentication route
-needs a decision before implementation can be promised. M8 need not wait on
-this enhancement; an approved follow-on can reuse its completed Pi adapter.
-Current work state belongs to the issues, not a duplicate checklist here.
+is the bounded follow-on scope selected for review in
+[PR #49](https://github.com/sushiHex/constructicon/pull/49): configure the
+planned Pi adapter, qualify two explicit models independently, and permit no
+automatic fallback. This selects a reuse direction, not a model pair, billing
+route, deployed gateway, or implementation availability.
+
+The Pi harness needs qualification under #42 and authentication still needs
+the #38 decision before implementation can be promised. Do not reinterpret
+the Codex native experiment as Pi or OpenRouter evidence. A future native
+subscription design would not by itself qualify OpenRouter's API-key route.
+The issue records these conditional prerequisites; no new unconditional
+dependency or expansion of M8 is created by this review. Current work state
+belongs to the issues, not a duplicate checklist here.

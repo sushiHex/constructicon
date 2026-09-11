@@ -1,8 +1,8 @@
 # Executor authentication: feasibility and next decision
 
-Status: evidence and recommendation, 2026-09-09; not an accepted ADR or a
+Status: evidence and recommendation, updated 2026-09-11; not an accepted ADR or a
 claim of working subscription integration. No login, credential inspection,
-provider request, or gateway provisioning was performed.
+remote provider request, or gateway provisioning was performed.
 
 ## The contract does not need another abstraction
 
@@ -87,9 +87,10 @@ tool dispatch is not proof of exclusive dispatch, and Claude's `canUseTool`
 callback is not a universal interceptor. No credential-bearing integration
 was attempted, and no successor ADR is accepted by that investigation.
 
-The next proposed experiment is a credential-free, pinned Codex app-server
+The next proposed experiment was a credential-free, pinned Codex app-server
 driver/worker probe, followed separately by native CLI integration against a
-supported offline test interface if one exists. Scripted peers alone cannot
+supported offline test interface if one existed. Its results follow below;
+scripted peers alone cannot
 qualify the native CLI. This keeps the subscription goal explicit without
 inventing a broker abstraction or spending on a different billing route.
 Credentials, paid calls, and live deployment remain separate operator actions.
@@ -113,3 +114,47 @@ decision. A separately billed gateway must be selected and proved as deployed;
 a native successor needs positive combined mediation and lifecycle evidence.
 The [OpenRouter assessment](OPENROUTER.md) proposes reuse of the planned Pi
 executor, not another authentication route or completion API in the kernel.
+
+## Bounded decision packet (PR #49)
+
+The follow-up uses the same pinned `0.153.4` Linux binary, but selects its
+bundled `gpt-5.5` and `gpt-5.6-sol` model metadata rather than relying on an
+unknown model's fallback. No model was contacted: a credential-free loopback
+fixture supplies every response. These model names identify the measured
+configuration, not an account's entitlement or a recommended billing choice.
+
+The assessed recipe fails complete mediation for both real model profiles.
+With images disabled and `apply_patch_freeform = false`, a native patch call
+still writes a harmless fixture in the disposable harness home without a
+contained-worker callback. Sol also publishes CodeMode and collaboration
+surfaces despite the requested false feature flags. A recognized configuration
+field is not proof of effective disablement. The
+[evidence matrix](../plans/handoffs/M8-native-mediation-probe.md#bounded-follow-up-pr-49)
+separates those observations from controls that work and surfaces not proved.
+
+This is sufficient to reject **this recipe as a credential-owning harness**;
+it is not evidence that every possible supported native configuration fails.
+Do not author a successor ADR as if its prerequisite had passed. Startup and
+lifecycle spot checks cannot cancel a demonstrated unmediated write, and
+additional feature switches alone are not a design proof.
+
+Issue #38 is now a concrete owner decision, not permission to keep widening
+this experiment indefinitely:
+
+- **Keep subscription reuse as the goal:** authorize a separately bounded
+  investigation of a specifically identified, supported complete-mediation
+  interface or different native recipe. State how it closes the native patch
+  path, model-dependent surfaces and startup/lifecycle obligations before
+  implementation. No trusted-harness ADR or live adapter is qualified yet.
+- **Choose a gateway instead:** name the deployment and accept its separate
+  API/cloud billing, then prove the existing invocation-route contract there.
+  This stays within ADR 0018 but does not fulfill subscription reuse.
+- **Defer live adapters:** retain the completed fake-first containment work
+  and leave E-H unavailable until a viable route is chosen.
+
+Recommendation: preserve the subscription goal and the existing trust boundary;
+do not substitute a paid route or promote this failing recipe. Further native
+work needs a concrete new interface/configuration hypothesis and authorization,
+not another broker, a weakened boundary, or credentials in the lab. None of
+these owner choices has been made by this packet. #38 and its dependent work
+remain open; closure of an investigation cannot unlock live implementation.
