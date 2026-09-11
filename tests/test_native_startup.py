@@ -138,3 +138,34 @@ async def test_startup_uses_the_exact_owned_launch_interface(tmp_path, monkeypat
     )
     assert invoked == [True]
     assert acquired == []
+
+
+@pytest.mark.parametrize("changes, accepted", [
+    ({}, True),
+    ({"payload_returncode": None}, False),
+    ({"payload_returncode": 0}, False),
+    ({"returncode": 125}, False),
+    ({"timed_out": True}, False),
+    ({"bound_exceeded": "stderr"}, False),
+], ids=["observed", "missing-payload", "successful-payload", "supervisor", "timeout", "bound"])
+async def test_strict_config_evidence_requires_observed_exit(
+    changes, accepted, tmp_path, monkeypatch,
+):
+    from dataclasses import replace
+
+    from constructicon.substrate.executors.linux import ProcessExchangeError, ProcessResult
+    from tests.substrate import test_native_startup as native
+
+    observed = ProcessResult(1, b"", b"unknown_startup diagnostic", 0.1, payload_returncode=1)
+
+    async def refuse(*args, **kwargs):
+        raise ProcessExchangeError(replace(observed, **changes))
+
+    monkeypatch.setattr(native, "observe", refuse)
+    monkeypatch.delenv("M8_EVIDENCE_DIRECTORY", raising=False)
+    check = native.test_unknown_configuration_refuses_before_native_rpc(None, tmp_path, "fixture")
+    if accepted:
+        await check
+    else:
+        with pytest.raises(AssertionError):
+            await check

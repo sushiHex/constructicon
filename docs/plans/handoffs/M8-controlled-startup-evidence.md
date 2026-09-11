@@ -1,8 +1,7 @@
 # M8 controlled startup: investigation evidence
 
 Status: partial native observations; combined qualification is blocked.
-The exact-head merge gate and independent review remain pending. No production
-profile is qualified.
+Exact-head readiness is tracked in PR #54. No production profile is qualified.
 
 Base: `6d6379c56bc1dd44a6f32f82b00efefbefdbe939` (merged PR #53).
 The owner authorized the four recommended steps: transport-record closure,
@@ -137,6 +136,24 @@ actual timeout outcome. It never converts an unfinished turn into completion.
 The older PR #50 fixture still tests a working fake provider in its separate
 outer lab namespace. That positive result is not connectivity for this image.
 
+At `016eca5a3f0db21b11d81a1f76d23f5ce8f41ff8`, the corrected
+[native lane](https://github.com/sushiHex/constructicon/actions/runs/34581593946)
+passed all nine startup cases, 87 existing mediation cases, 324 containment
+cases, and 142 assertion mutants. The
+[CI repository gate](https://github.com/sushiHex/constructicon/actions/runs/34581593968)
+passed 1,916 tests with 223 explicit skips. Downloaded host metadata names
+that head; the runtime digest was independently recomputed from its inventory,
+and the catalog, bootstrap, and binary entries match the pinned source
+projection, committed bootstrap bytes, and pinned package executable.
+
+The [independent review](https://github.com/sushiHex/constructicon/pull/54#discussion_r3987643307)
+found one evidence-gate defect: `None != 0` allowed a missing private payload
+exit to count as strict-config refusal. The actual native artifact has exit 1;
+the assertion, not that observation, was wrong. A portable regression first
+failed on missing evidence, then passed after requiring both observed statuses
+to be 1 with no timeout or capture-bound failure. Its fake result is only an
+assertion test, not native provenance. A new mutant removes the payload check.
+
 ## Verification and decision boundary
 
 Portable checks exercise framing, exact JSON/RPC refusals, send/receive bounds,
@@ -164,5 +181,5 @@ implicit next step. No blanket claim that every possible supported arrangement
 is impossible follows from this one negative result. Until that prerequisite
 and the remaining startup-origin controls are resolved, Slice B stays blocked.
 
-Final merge-head verification and review links belong in PR #54; they are
-pending, not inferred from the earlier partial run above.
+Final merge-head verification and review links belong in PR #54. Readiness
+must come from that head's gates, never from the earlier runs recorded here.

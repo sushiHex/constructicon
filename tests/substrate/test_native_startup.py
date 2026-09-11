@@ -140,7 +140,8 @@ async def test_unknown_configuration_refuses_before_native_rpc(startup_launcher,
         await observe(startup_launcher, tmp_path, MODELS[0], extra=extra)
     result = refused.value.result
     evidence("codex-startup-strict-" + str(len(extra)) + ".json", startup_launcher, {}, result)
-    assert result.payload_returncode != 0 and not result.timed_out
+    assert result.returncode == result.payload_returncode == 1
+    assert not result.timed_out and result.bound_exceeded is None
     assert "unknown_startup" in result.stderr.decode()
 
 

@@ -38,6 +38,10 @@ MUTANTS = (
      'observations["turn_events"].append(message)', "pass",
      "tests/substrate/test_native_startup.py::"
      "test_provider_failure_retries_until_the_owned_deadline"),
+    ("missing payload exit qualifies a strict refusal", "tests.substrate.test_native_startup:"
+     "test_unknown_configuration_refuses_before_native_rpc",
+     "result.returncode == result.payload_returncode == 1", "result.returncode == 1",
+     UNIT + "test_strict_config_evidence_requires_observed_exit[missing-payload]"),
 )
 
 if __name__ == "__main__":
