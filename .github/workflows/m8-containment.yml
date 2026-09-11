@@ -86,6 +86,23 @@ jobs:
             M8_STARTUP_REQUIRED=1 M8_STARTUP_ROOT=/var/lib/constructicon-m8-launch/startup-runtime \
             PYTEST_ADDOPTS=-pno:cacheprovider \
             "$PWD/.venv/bin/python" scripts/check_m8_startup_mutations.py
+      - name: Prove the accepted test-only provider placement
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" scripts/ci/build_m8_startup_fixture.py \
+            /var/lib/constructicon-m8-launch/runtime /var/lib/constructicon-m8-launch/placement-runtime \
+            /var/lib/constructicon-m8-launch/native-codex/bin/codex \
+            /var/lib/constructicon-m8-launch/codex-models.json --provider-placement \
+            | tee "$RUNNER_TEMP/m8-placement-runtime.json"
+          sudo install -m 0444 "$RUNNER_TEMP/m8-placement-runtime.json" /var/lib/constructicon-m8-launch/placement-runtime.json
+          sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
+            M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
+            M8_PLACEMENT_REQUIRED=1 M8_PLACEMENT_ROOT=/var/lib/constructicon-m8-launch/placement-runtime \
+            M8_EVIDENCE_DIRECTORY=/home/m8-service/evidence \
+            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_provider_placement.py \
+              tests/test_native_provider.py tests/test_provider_placement.py -v --tb=short -p no:cacheprovider
+          uv run python scripts/check_m8_placement_mutations.py
       - name: Probe native mediation with loopback only and no credentials
         shell: bash
         run: |
@@ -156,6 +173,7 @@ jobs:
           path: |
             ${{ runner.temp }}/m8-runtime.json
             ${{ runner.temp }}/m8-startup-runtime.json
+            ${{ runner.temp }}/m8-placement-runtime.json
             ${{ runner.temp }}/m8-host.txt
             /home/m8-service/evidence/boundary.json
             /home/m8-service/evidence/codex-*.json

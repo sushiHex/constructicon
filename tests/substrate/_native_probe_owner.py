@@ -127,8 +127,8 @@ async def main():
                 if epoch == 1 and sys.argv[4] == "active":
                     group.create_task(report_active())
                 result = await run_probe(argv, cwd=root, env=env, worker=worker, model=model)
-            assert not failures and len(requests) == 2
-            assert result["calls"] == ["call_probe"]
+        assert not failures and len(requests) == 2
+        assert result["calls"] == ["call_probe"]
     finally:
         await executor.close(acquired, "discard")
         await workspaces.close(workspace, "discard")
