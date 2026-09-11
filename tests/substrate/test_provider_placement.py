@@ -20,7 +20,7 @@ from constructicon.substrate.executors.linux import ProcessExchangeError
 from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisition_guard
 from tests.native_provider import provider_peer
 from tests.native_startup import MODELS, DuplexWire, configuration, initialize
-from tests.provider_placement import BOOTSTRAP, PlacementLauncher
+from tests.provider_placement import BOOTSTRAP, PLACEMENT_PROMPT, PlacementLauncher
 from tests.substrate._provider_transport import CASE_SECONDS
 from tests.substrate.test_linux_containment import launcher as launcher
 from tests.substrate.test_linux_duplex import exchange
@@ -47,13 +47,20 @@ async def placement(image, *, timeout=CASE_SECONDS):
         endpoint = Path(directory) / "provider.sock"
         # These ordinary siblings must never appear in the contained namespace.
         (endpoint.parent / "journal.sqlite").write_text("inert host-only marker")
-        async with provider_peer(path=endpoint, deadline=deadline, model=MODELS[0]) as peer:
-            identity = endpoint.stat()
-            composed = PlacementLauncher(
-                **{field.name: getattr(image, field.name) for field in fields(image)},
-                endpoint=endpoint, endpoint_identity=(identity.st_dev, identity.st_ino),
-            )
-            yield composed, peer
+        record = {}
+        composed = peer = None
+        try:
+            async with provider_peer(path=endpoint, deadline=deadline, model=MODELS[0],
+                                     scenario=PLACEMENT_PROMPT) as peer:
+                identity = endpoint.stat()
+                composed = PlacementLauncher(
+                    **{field.name: getattr(image, field.name) for field in fields(image)},
+                    endpoint=endpoint, endpoint_identity=(identity.st_dev, identity.st_ino),
+                )
+                yield composed, peer, record
+        finally:
+            if composed is not None:
+                evidence(composed, peer, record)
 
 
 def birth(pid):
@@ -81,7 +88,7 @@ def descendants(pid):
 
 
 async def observe(
-    composed, peer, guard_root, *, probe=None, query=None, identity=None, fault="none",
+    composed, peer, guard_root, *, probe=None, query=None, identity=None, fault="none", record=None,
 ):
     setup = {
         "files": {}, "config": configuration(MODELS[0]), "arguments": [],
@@ -91,7 +98,8 @@ async def observe(
         },
     }
     raw = (json.dumps(setup) + "\n").encode()
-    observations = {"setup": setup, "records": [], "resident": {}}
+    observations = {} if record is None else record
+    observations.update({"setup": setup, "records": [], "resident": {}})
 
     async def conversation(io):
         await io.write(raw)
@@ -104,12 +112,19 @@ async def observe(
 
     result = None
     try:
+        remaining = peer.deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            raise TimeoutError("placement case expired before launch")
         result = await exchange(
             composed, guard_root, conversation, command=("/usr/bin/python3", "-I", BOOTSTRAP),
-            timeout=max(.001, peer.deadline - asyncio.get_running_loop().time()),
+            timeout=remaining,
         )
     except ProcessExchangeError as exc:
         result = exc.result
+        observations["failure"] = repr(exc.__cause__)
+        raise
+    except BaseException as exc:
+        observations["failure"] = type(exc).__name__
         raise
     finally:
         if result is not None:
@@ -143,7 +158,7 @@ async def test_native_reaches_only_the_fixed_peer(placement_image, tmp_path):
         })
         started = await wire.rpc("turn/start", {
             "threadId": thread["thread"]["id"],
-            "input": [{"type": "text", "text": "Return the inert placement fixture response."}],
+            "input": [{"type": "text", "text": PLACEMENT_PROMPT}],
         })
         while True:
             message = await wire.read()
@@ -157,22 +172,26 @@ async def test_native_reaches_only_the_fixed_peer(placement_image, tmp_path):
                 await wire.io.close_stdin()
                 return
 
-    async with placement(placement_image) as (composed, peer):
-        observations, result = await observe(composed, peer, tmp_path, query=turn)
-    evidence(composed, peer, observations)
+    async with placement(placement_image) as (composed, peer, record):
+        observations, result = await observe(composed, peer, tmp_path, record=record, query=turn)
     assert_outcome(result)
     assert len(peer.requests) == peer.budget.connections == 1 and not peer.failures
     assert "fixture complete" in json.dumps(observations["records"])
     assert observations["placement"]["interfaces"] == ["lo"]
     assert observations["placement"]["routes"] == []
+    assert observations["placement"]["identity"] == list(composed.endpoint_identity)
+    assert set(observations["placement"]["fds_after_setup"]) == {"0", "1", "2"}
+    bridge_fds = observations["placement"]["bridge_fds_at_entry"]
+    assert len(bridge_fds) == 5 and bridge_fds["0"] == bridge_fds["1"] == "/dev/null"
     assert observations["resident"]
     assert all(birth(pid) != started for pid, started in observations["resident"].items())
 
 
 async def test_actual_mount_mismatch_refuses_before_native_exec(placement_image, tmp_path):
-    async with placement(placement_image) as (composed, peer):
-        observations, result = await observe(composed, peer, tmp_path, identity=[0, 0])
-    evidence(composed, peer, observations)
+    async with placement(placement_image) as (composed, peer, record):
+        _observations, result = await observe(
+            composed, peer, tmp_path, record=record, identity=[0, 0],
+        )
     assert_outcome(result, status=1)
     assert b"mounted endpoint differs" in result.stderr
     assert not result.stdout and not peer.requests and peer.budget.connections == 0
@@ -180,9 +199,9 @@ async def test_actual_mount_mismatch_refuses_before_native_exec(placement_image,
 
 async def test_private_loopback_does_not_expose_host_or_socket_siblings(placement_image, tmp_path):
     with socket.socket() as host, socket.socket(socket.AF_UNIX) as sibling:
-        host.bind(("127.0.0.1", 0))
+        host.bind(("127.0.0.2", 0))
         host.listen(1)
-        async with placement(placement_image) as (composed, peer):
+        async with placement(placement_image) as (composed, peer, record):
             other = composed.endpoint.parent / "other.sock"
             sibling.bind(str(other))
             sibling.listen(1)
@@ -194,11 +213,12 @@ paths = {json.dumps([str(other), str(composed.endpoint.parent / "journal.sqlite"
 assert all(not pathlib.Path(path).exists() for path in paths)
 with socket.socket() as host:
     host.settimeout(1)
-    assert host.connect_ex(("127.0.0.1", {host.getsockname()[1]})) != 0
+    assert host.connect_ex(("127.0.0.2", {host.getsockname()[1]})) != 0
 print(json.dumps({{"unreachable": paths}}), flush=True)
 '''
-            observations, result = await observe(composed, peer, tmp_path, probe=probe)
-    evidence(composed, peer, observations)
+            _observations, result = await observe(
+                composed, peer, tmp_path, record=record, probe=probe,
+            )
     assert_outcome(result)
     assert b"unreachable" in result.stdout
     assert not peer.requests
@@ -217,6 +237,7 @@ async def test_existing_owner_reaps_bridge_and_session_changed_descendant(
         observations["placement"] = (await wire.read())["placement"]
         assert (await wire.read())["descendant_ready"]
         observed.update(descendants(os.getpid()))
+        observations["resident"] = dict(observed)
         entered.set()
         await wire.read()
 
@@ -235,8 +256,10 @@ else:
     print(json.dumps({"descendant_ready": True}), flush=True)
     time.sleep(100)
 '''
-    async with placement(placement_image, timeout=5) as (composed, peer):
-        task = asyncio.create_task(observe(composed, peer, tmp_path, probe=probe, query=blocked))
+    async with placement(placement_image, timeout=5) as (composed, peer, record):
+        task = asyncio.create_task(observe(
+            composed, peer, tmp_path, record=record, probe=probe, query=blocked,
+        ))
         await asyncio.wait_for(entered.wait(), 4)
         assert len(observed) >= 4
         if mode == "cancel":
@@ -244,11 +267,14 @@ else:
             with pytest.raises(asyncio.CancelledError):
                 await task
         else:
-            observations, result = await task
-            assert_outcome(result, status=143, timed_out=True)
+            _observations, result = await task
+            # Native TERM is reported separately from the outer reaper's
+            # possible KILL of bwrap after grace for the stubborn descendant.
+            assert result.payload_returncode == 143
+            assert result.returncode in {137, 143}
+            assert result.timed_out and result.bound_exceeded is None
     if mode == "timeout":
-        evidence(composed, peer, observations)
-    assert all(birth(pid) != started for pid, started in observed.items())
+        assert all(birth(pid) != started for pid, started in observed.items())
     assert not peer.active and all(task.done() for task in peer.handlers)
 
 
@@ -270,16 +296,17 @@ with socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=2) as cli
 
 @pytest.mark.parametrize("fault", ["none", "before_ready", "request", "response", "response_eof"])
 async def test_transport_loss_and_the_unobserved_final_exit(placement_image, tmp_path, fault):
-    body = json.dumps({"model": MODELS[0]}).encode()
+    body = json.dumps({"model": MODELS[0], "inert_padding": "x" * 16000,
+                       "input": [{"role": "user", "content": [
+                           {"type": "input_text", "text": PLACEMENT_PROMPT}]}]}).encode()
     raw = b"POST /v1/responses HTTP/1.1\r\n" + (
         f"Content-Length: {len(body)}\r\n\r\n".encode() + body
     )
-    async with placement(placement_image) as (composed, peer):
+    async with placement(placement_image) as (composed, peer, record):
         observations, result = await observe(
-            composed, peer, tmp_path, fault=fault,
+            composed, peer, tmp_path, record=record, fault=fault,
             probe=http_probe(raw, complete=fault in {"none", "response_eof"}),
         )
-    evidence(composed, peer, observations)
     assert_outcome(result, status=1 if fault == "before_ready" else 0)
     if fault == "before_ready":
         assert b"bridge not ready" in result.stderr and not result.stdout
@@ -289,6 +316,9 @@ async def test_transport_loss_and_the_unobserved_final_exit(placement_image, tmp
         assert len(peer.requests) == 1 and not peer.failures
     else:
         assert not peer.requests and peer.failures
+        if fault == "request":
+            assert 0 < peer.budget.total < len(raw)
+            assert any("incomplete" in failure for failure in peer.failures)
     if fault == "response_eof":
         # All bytes arrived, but exit 7 of the bridge is intentionally unobserved.
         assert "bridge_returncode" not in observations["outcome"]
@@ -301,19 +331,17 @@ async def test_transport_loss_and_the_unobserved_final_exit(placement_image, tmp
 async def test_bad_bytes_through_bridge_fail_the_external_peer(
     placement_image, tmp_path, raw, reason,
 ):
-    async with placement(placement_image) as (composed, peer):
-        observations, result = await observe(composed, peer, tmp_path,
+    async with placement(placement_image) as (composed, peer, record):
+        _observations, result = await observe(composed, peer, tmp_path, record=record,
                                              probe=http_probe(raw, complete=False))
-    evidence(composed, peer, observations)
     assert_outcome(result)
     assert not peer.requests and any(reason in item for item in peer.failures)
 
 
 async def test_lost_endpoint_refuses_readiness(placement_image, tmp_path):
-    async with placement(placement_image) as (composed, peer):
+    async with placement(placement_image) as (composed, peer, record):
         peer.stop()  # Retain the leaf inode but remove the listening service.
-        observations, result = await observe(composed, peer, tmp_path)
-    evidence(composed, peer, observations)
+        _observations, result = await observe(composed, peer, tmp_path, record=record)
     assert_outcome(result, status=1)
     assert not result.stdout and b"bridge not ready" in result.stderr
     assert not peer.requests and not peer.failures
@@ -322,7 +350,7 @@ async def test_lost_endpoint_refuses_readiness(placement_image, tmp_path):
 async def test_owner_death_keeps_guard_until_every_placement_descendant_is_reaped(
     placement_image, tmp_path,
 ):
-    async with placement(placement_image) as (composed, peer):
+    async with placement(placement_image) as (composed, peer, record):
         owner = await asyncio.create_subprocess_exec(
             sys.executable, "-m", "tests.substrate._placement_owner", str(composed.endpoint),
             str(tmp_path), str(peer.deadline), stdout=asyncio.subprocess.PIPE,
@@ -342,6 +370,7 @@ async def test_owner_death_keeps_guard_until_every_placement_descendant_is_reape
             children = Path(f"/proc/{owner.pid}/task/{owner.pid}/children").read_text().split()
             assert len(children) == 1 and len(resident) >= 4
             reaper = int(children[0])
+            resident.pop(reaper)  # Its adopting host parent, not our namespace, reaps this owner.
             os.kill(reaper, signal.SIGSTOP)
             owner.kill()
             await owner.wait()
@@ -353,6 +382,8 @@ async def test_owner_death_keeps_guard_until_every_placement_descendant_is_reape
             await asyncio.wait_for(waiter, 8)
             assert acquired == [True]
             assert all(birth(pid) != started for pid, started in resident.items())
+            record.update({"termination": "controller killed", "resident": resident,
+                           "guard_acquired_after_reaping": acquired})
         finally:
             if reaper is not None:
                 os.kill(reaper, signal.SIGCONT)
@@ -363,3 +394,27 @@ async def test_owner_death_keeps_guard_until_every_placement_descendant_is_reape
                 await waiter
     assert peer.failures and not peer.requests  # Readiness alone does not complete a request.
     assert not peer.active and all(task.done() for task in peer.handlers)
+
+
+async def test_two_invocations_cannot_select_each_others_endpoint(placement_image, tmp_path):
+    body = json.dumps({"model": MODELS[0], "input": [{"role": "user", "content": [
+        {"type": "input_text", "text": PLACEMENT_PROMPT}]}]}).encode()
+    raw = (b"POST /v1/responses HTTP/1.1\r\n"
+           + f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
+    async with (
+        placement(placement_image) as (first, first_peer, first_record),
+        placement(placement_image) as (second, second_peer, second_record),
+    ):
+        assert first.endpoint_identity != second.endpoint_identity
+        assert first.revision == second.revision
+        for index, (own, peer, record, other) in enumerate((
+            (first, first_peer, first_record, second),
+            (second, second_peer, second_record, first),
+        )):
+            probe = (f"import pathlib\nassert not pathlib.Path({str(other.endpoint)!r}).exists()\n"
+                     + http_probe(raw, complete=True))
+            _, result = await observe(own, peer, tmp_path / str(index), record=record, probe=probe)
+            assert_outcome(result)
+            assert len(first_peer.requests) == 1
+            assert len(second_peer.requests) == index
+    assert not first_peer.failures and not second_peer.failures

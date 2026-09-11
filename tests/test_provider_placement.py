@@ -3,6 +3,7 @@
 import asyncio
 import socket
 import stat
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -119,12 +120,16 @@ def test_actual_namespace_preflight_checks_named_mounts_flags_and_fds(monkeypatc
         "4 1 1:4 / /tmp rw - tmpfs tmpfs rw",
         f"5 1 1:5 / {ENDPOINT} ro - ext4 /dev/test ro",
     ]
+    devices = ("null", "zero", "full", "random", "urandom", "tty")
+    mounts += [f"{number} 3 1:6 / /dev/{name} rw - devtmpfs devtmpfs rw"
+               for number, name in enumerate(devices, 6)]
+    mounts.append("12 3 1:7 / /dev/pts rw - devpts devpts rw")
     if drift == "extra":
         mounts.append("6 4 1:6 / /tmp/authority ro - ext4 /dev/test ro")
     if drift == "root-rw":
         mounts[0] = mounts[0].replace("ro", "rw")
     if drift == "endpoint-rw":
-        mounts[-1] = mounts[-1].replace("ro", "rw")
+        mounts[4] = mounts[4].replace("ro", "rw")
     contents = {
         "/proc/self/mountinfo": "\n".join(mounts),
         "/proc/net/dev": "header\nheader\nlo: 0\n" + ("eth0: 0" if drift == "network" else ""),
@@ -133,11 +138,65 @@ def test_actual_namespace_preflight_checks_named_mounts_flags_and_fds(monkeypatc
     monkeypatch.setattr(Path, "read_text", lambda path: contents[str(path).replace("\\", "/")])
     monkeypatch.setattr(Path, "lstat", lambda path:
                         SimpleNamespace(st_mode=stat.S_IFSOCK, st_dev=7, st_ino=8))
+    monkeypatch.setattr(Path, "stat", lambda path: SimpleNamespace(st_mode=stat.S_IFCHR))
     names = ("0", "1", "2", "9") if drift == "fd" else ("0", "1", "2")
     monkeypatch.setattr(Path, "iterdir", lambda path: iter(Path(name) for name in names))
     monkeypatch.setattr(bootstrap.os, "readlink", lambda path: "observed")
     if drift == "none":
-        assert bootstrap.topology([7, 8])["interfaces"] == ["lo"]
+        observed = bootstrap.topology([7, 8])
+        assert observed["interfaces"] == ["lo"]
+        assert observed["identity"] == [7, 8]
     else:
         with pytest.raises(ValueError):
             bootstrap.topology([7, 8])
+
+
+async def test_failed_conversation_keeps_its_owned_result(composition, tmp_path, monkeypatch):
+    from constructicon.substrate.executors.linux import ProcessExchangeError, ProcessResult
+    from tests.substrate import test_provider_placement as placement
+    result = ProcessResult(7, b"partial", b"diagnostic", .1, False, None, 7)
+
+    async def failed(*_args, **_kwargs):
+        raise ProcessExchangeError(result) from ValueError("bad RPC")
+
+    monkeypatch.setattr(placement, "exchange", failed)
+    record = {}
+    peer = SimpleNamespace(deadline=asyncio.get_running_loop().time() + 20)
+    with pytest.raises(ProcessExchangeError):
+        await placement.observe(composition, peer, tmp_path, record=record)
+    assert "outcome" in record
+    assert record["outcome"]["payload_returncode"] == 7
+    assert record["outcome"]["stdout"] == b"partial".hex()
+    assert record["outcome"]["stderr"] == b"diagnostic".hex()
+    assert record["failure"] == "ValueError('bad RPC')"
+
+
+async def test_case_emits_failed_evidence_after_peer_join(composition, monkeypatch):
+    from dataclasses import fields
+
+    from tests.substrate import test_provider_placement as placement
+    order, saved = [], []
+
+    @asynccontextmanager
+    async def peer_fixture(*, path, **kwargs):
+        path.touch()
+        try:
+            yield SimpleNamespace(requests=[], failures=[], active=set(), handlers=set(),
+                                  budget=Budget())
+        finally:
+            order.append("joined")
+
+    def emitted(name, value):
+        order.append("evidence")
+        saved.append(value)
+
+    monkeypatch.setattr(placement, "provider_peer", peer_fixture)
+    monkeypatch.setattr(placement, "write_evidence", emitted)
+    image = linux.LinuxLauncher(**{field.name: getattr(composition, field.name)
+                                  for field in fields(linux.LinuxLauncher)})
+    with pytest.raises(ValueError, match="case failed"):
+        async with placement.placement(image) as (_composed, _peer, record):
+            record["failure"] = "retained observation"
+            raise ValueError("case failed")
+    assert order == ["joined", "evidence"]
+    assert saved[0]["failure"] == "retained observation"

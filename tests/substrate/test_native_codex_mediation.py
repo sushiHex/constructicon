@@ -142,11 +142,11 @@ async def test_invalid_catalog_refuses_before_provider_request(native, tmp_path,
         argv = argv_for(native, tmp_path, endpoint, images=False, model="gpt-5.5", catalog=path)
         with pytest.raises(ExceptionGroup) as refusal:
             await run_probe(argv, cwd=tmp_path, env=native[1], worker=worker, model="gpt-5.5")
-        assert not requests and not failures
-        write_evidence(f"codex-catalog-{damage}.json", {
-            "damage": damage, "provider_requests": requests,
-            "refusal": repr(refusal.value),
-        })
+    assert not requests and not failures
+    write_evidence(f"codex-catalog-{damage}.json", {
+        "damage": damage, "provider_requests": requests,
+        "refusal": repr(refusal.value),
+    })
 
 
 @pytest.mark.parametrize("model", ["gpt-5.5", "gpt-5.6-sol"])
@@ -168,17 +168,17 @@ async def test_removed_catalog_tools_refuse_direct_namespaced_calls(
         endpoint, requests, failures = exchange
         argv = argv_for(native, tmp_path, endpoint, images=False, model=model, catalog=path)
         result = await run_probe(argv, cwd=tmp_path, env=native[1], worker=worker, model=model)
-        write_evidence(f"codex-catalog-{model}-{operation}.json", {
-            "model": model, "namespace": namespace, "operation": operation,
-            "requests": requests, "protocol": result, "server_failures": failures,
-        })
-        assert not failures and len(requests) == 2 and not result["calls"]
-        outputs = [item for item in requests[1]["input"]
-                   if item.get("type") in {"function_call_output", "custom_tool_call_output"}]
-        assert len(outputs) == 1
-        # Pin the binary's actual diagnostic spelling, not an invented display
-        # law for namespaces. The input still carries the explicit namespace.
-        assert outputs[0]["output"] == refusal
+    write_evidence(f"codex-catalog-{model}-{operation}.json", {
+        "model": model, "namespace": namespace, "operation": operation,
+        "requests": requests, "protocol": result, "server_failures": failures,
+    })
+    assert not failures and len(requests) == 2 and not result["calls"]
+    outputs = [item for item in requests[1]["input"]
+               if item.get("type") in {"function_call_output", "custom_tool_call_output"}]
+    assert len(outputs) == 1
+    # Pin the binary's actual diagnostic spelling, not an invented display
+    # law for namespaces. The input still carries the explicit namespace.
+    assert outputs[0]["output"] == refusal
 
 
 def test_pinned_native_schema_inventory(native, tmp_path):
@@ -274,76 +274,76 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
             argv = argv_for(native, tmp_path, endpoint, images=images, model=model,
                             catalog=catalog_path)
             result = await run_probe(argv, cwd=tmp_path, env=native[1], worker=worker, model=model)
-            evidence = {"probe": operation, "model": model, "images_enabled": images,
-                        "protocol": result, "requests": requests,
-                        "server_failures": failures, "worker_outputs": observed,
-                        "builtin_canary_written": canary.exists(),
-                        "native_patch_written": patch_canary.exists(),
-                        "catalog": catalog_evidence}
-            write_evidence(f"codex-{model}-{operation.replace('/', '-')}-images-"
-                           f"{str(images).lower()}-{catalog_mode}.json", evidence)
-            assert not failures, failures
-            assert len(requests) == 2
-            expected_tools = {"request_user_input", "contained_python"}
-            if images:
-                expected_tools.add("view_image")
-            if model != "probe-model":
-                if not restricted:
-                    expected_tools.add("apply_patch")
-                assert "missing model metadata" not in result["stderr_observed"].lower()
-            if model == "gpt-5.6-sol":
-                # The bundled catalog enables CodeMode; the restricted one
-                # retains namespace framing without CodeMode. Preserve both
-                # wire shapes rather than flattening them into ordinary tools.
-                assert "tools" not in requests[0]
-                declarations = [item for item in requests[0]["input"]
-                                if item.get("type") == "additional_tools"]
-                assert len(declarations) == 1
-                namespaces = {tool["name"]: tool for tool in declarations[0]["tools"]}
-                assert set(namespaces) == (
-                    {"functions"} if restricted else {"functions", "collaboration"}
+        evidence = {"probe": operation, "model": model, "images_enabled": images,
+                    "protocol": result, "requests": requests,
+                    "server_failures": failures, "worker_outputs": observed,
+                    "builtin_canary_written": canary.exists(),
+                    "native_patch_written": patch_canary.exists(),
+                    "catalog": catalog_evidence}
+        write_evidence(f"codex-{model}-{operation.replace('/', '-')}-images-"
+                       f"{str(images).lower()}-{catalog_mode}.json", evidence)
+        assert not failures, failures
+        assert len(requests) == 2
+        expected_tools = {"request_user_input", "contained_python"}
+        if images:
+            expected_tools.add("view_image")
+        if model != "probe-model":
+            if not restricted:
+                expected_tools.add("apply_patch")
+            assert "missing model metadata" not in result["stderr_observed"].lower()
+        if model == "gpt-5.6-sol":
+            # The bundled catalog enables CodeMode; the restricted one
+            # retains namespace framing without CodeMode. Preserve both
+            # wire shapes rather than flattening them into ordinary tools.
+            assert "tools" not in requests[0]
+            declarations = [item for item in requests[0]["input"]
+                            if item.get("type") == "additional_tools"]
+            assert len(declarations) == 1
+            namespaces = {tool["name"]: tool for tool in declarations[0]["tools"]}
+            assert set(namespaces) == (
+                {"functions"} if restricted else {"functions", "collaboration"}
+            )
+            functions = {tool["name"]: tool for tool in namespaces["functions"]["tools"]}
+            if restricted:
+                assert set(functions) == expected_tools
+            else:
+                assert set(functions) == {"exec", "wait", "request_user_input"}
+                assert {tool["name"] for tool in namespaces["collaboration"]["tools"]} == {
+                    "followup_task", "interrupt_agent", "list_agents", "send_message",
+                    "spawn_agent", "wait_agent",
+                }
+                description = functions["exec"]["description"]
+                assert set(re.findall(r"^### `([^`]+)`$", description, re.MULTILINE)) == (
+                    expected_tools - {"request_user_input"}
                 )
-                functions = {tool["name"]: tool for tool in namespaces["functions"]["tools"]}
-                if restricted:
-                    assert set(functions) == expected_tools
-                else:
-                    assert set(functions) == {"exec", "wait", "request_user_input"}
-                    assert {tool["name"] for tool in namespaces["collaboration"]["tools"]} == {
-                        "followup_task", "interrupt_agent", "list_agents", "send_message",
-                        "spawn_agent", "wait_agent",
-                    }
-                    description = functions["exec"]["description"]
-                    assert set(re.findall(r"^### `([^`]+)`$", description, re.MULTILINE)) == (
-                        expected_tools - {"request_user_input"}
-                    )
+        else:
+            assert {tool["name"] for tool in requests[0]["tools"]} == expected_tools
+            assert not any(item.get("type") == "additional_tools"
+                           for item in requests[0]["input"])
+        outputs = [item for item in requests[1]["input"]
+                   if item.get("type") in {"function_call_output", "custom_tool_call_output"}]
+        assert len(outputs) == 1
+        if operation == "contained_python":
+            assert result["calls"] == ["call_probe"]
+            assert observed == [{"contained": True}]
+        else:
+            assert not observed
+            assert not result["calls"]
+            if operation == "apply_patch" and not restricted:
+                assert patch_canary.read_text() == "fixture only\n"
+            elif operation != "view_image" or not images:
+                kind = "custom tool call" if operation == "apply_patch" else "call"
+                assert outputs[0]["output"] == f"unsupported {kind}: {operation}"
+                assert not canary.exists()
+                assert not patch_canary.exists()
             else:
-                assert {tool["name"] for tool in requests[0]["tools"]} == expected_tools
-                assert not any(item.get("type") == "additional_tools"
-                               for item in requests[0]["input"])
-            outputs = [item for item in requests[1]["input"]
-                       if item.get("type") in {"function_call_output", "custom_tool_call_output"}]
-            assert len(outputs) == 1
-            if operation == "contained_python":
-                assert result["calls"] == ["call_probe"]
-                assert observed == [{"contained": True}]
-            else:
-                assert not observed
-                assert not result["calls"]
-                if operation == "apply_patch" and not restricted:
-                    assert patch_canary.read_text() == "fixture only\n"
-                elif operation != "view_image" or not images:
-                    kind = "custom tool call" if operation == "apply_patch" else "call"
-                    assert outputs[0]["output"] == f"unsupported {kind}: {operation}"
-                    assert not canary.exists()
-                    assert not patch_canary.exists()
-                else:
-                    # A PASS reproduces the negative result: this native reader
-                    # bypasses the worker and exports an unmounted harness file.
-                    image = outputs[0]["output"][0]
-                    assert image["type"] == "input_image"
-                    assert image["image_url"].startswith("data:image/png;base64,")
-                    assert base64.b64decode(image["image_url"].split(",", 1)[1],
-                                            validate=True) == CANARY_PNG
+                # A PASS reproduces the negative result: this native reader
+                # bypasses the worker and exports an unmounted harness file.
+                image = outputs[0]["output"][0]
+                assert image["type"] == "input_image"
+                assert image["image_url"].startswith("data:image/png;base64,")
+                assert base64.b64decode(image["image_url"].split(",", 1)[1],
+                                        validate=True) == CANARY_PNG
     finally:
         await executor.close(acquired, "discard")
         await provider.close(workspace, "discard")
@@ -388,15 +388,15 @@ async def test_project_extension_startup_has_a_positive_control(native, tmp_path
         config.write_text(config.read_text() +
                           f'\n[projects.{json.dumps(str(tmp_path))}]\ntrust_level = "{trust}"\n')
         result = await run_probe(argv, cwd=tmp_path, env=native[1], worker=worker, model="gpt-5.5")
-        write_evidence(f"codex-project-{trust}.json", {
-            "trust": trust, "extension_started": marker.exists(), "protocol": result,
-            "requests": requests, "server_failures": failures,
-        })
-        assert not failures and len(requests) == 2
-        assert not result["calls"]
-        assert marker.exists() == (trust == "trusted")
-        if marker.exists():
-            assert marker.read_text() == "started"
+    write_evidence(f"codex-project-{trust}.json", {
+        "trust": trust, "extension_started": marker.exists(), "protocol": result,
+        "requests": requests, "server_failures": failures,
+    })
+    assert not failures and len(requests) == 2
+    assert not result["calls"]
+    assert marker.exists() == (trust == "trusted")
+    if marker.exists():
+        assert marker.read_text() == "started"
 
 
 @pytest.mark.parametrize("ending", ["cancel", "native-death"])
@@ -475,7 +475,6 @@ async def test_native_turn_ending_joins_an_active_contained_worker(
             assert stopped
             await asyncio.sleep(.1)
             assert heartbeat.read_bytes() == stopped
-            assert not failures and len(requests) == 1
             # The driver owns its process and joins the supplied callback. It
             # does NOT own these fixture acquisitions. Prove that distinction
             # before the test's unconditional cleanup can conceal it.
@@ -487,6 +486,7 @@ async def test_native_turn_ending_joins_an_active_contained_worker(
                 "worker_heartbeat_stopped": heartbeat.read_bytes() == stopped,
                 "acquisitions": before_cleanup,
             }
+        assert not failures and len(requests) == 1
     finally:
         if pending is not None:
             pending.cancel()

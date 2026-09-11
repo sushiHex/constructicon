@@ -9,6 +9,7 @@ import asyncio
 import os
 import socket
 from dataclasses import dataclass
+from pathlib import Path
 
 CONNECTIONS = 2
 HEADERS = 256 * 1024
@@ -18,6 +19,16 @@ CHUNK = 8192
 CASE_SECONDS = 20
 HANDLER_SECONDS = 10
 ENDPOINT = "/opt/native-startup/provider.sock"
+
+
+def descriptors():
+    observed = {}
+    for entry in Path("/proc/self/fd").iterdir():
+        try:
+            observed[entry.name] = os.readlink(entry)
+        except FileNotFoundError:
+            continue  # The enumeration's descriptor has already closed.
+    return observed
 
 
 @dataclass

@@ -138,6 +138,20 @@ async def test_pipelined_bytes_after_a_large_body_are_not_dropped(address):
     assert any("trailing request bytes" in item for item in peer.failures)
 
 
+@pytest.mark.parametrize("prompt", [None, "wrong", "controlled"])
+async def test_model_match_does_not_substitute_for_the_controlled_scenario(address, prompt):
+    body = {"model": "probe-model"}
+    if prompt is not None:
+        body["input"] = [{"role": "user", "content": [{"type": "input_text", "text": prompt}]}]
+    async with provider_peer(path=address, scenario="controlled") as peer:
+        response = await transact(peer, request_bytes(body))
+    if prompt == "controlled":
+        assert b"response.completed" in response and not peer.failures
+    else:
+        assert not response
+        assert any("unexpected scenario" in failure for failure in peer.failures)
+
+
 async def test_failed_bind_and_replaced_path_never_remove_another_resource(address):
     if address is None:
         pytest.skip("pathname ownership is Unix-specific")

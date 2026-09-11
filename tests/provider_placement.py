@@ -14,6 +14,7 @@ from tests.substrate import _provider_transport
 from tests.substrate._provider_transport import ENDPOINT
 
 BOOTSTRAP = "/opt/native-startup/_provider_bootstrap.py"
+PLACEMENT_PROMPT = "Return the inert placement fixture response."
 
 
 @dataclass(frozen=True, kw_only=True)

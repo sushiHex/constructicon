@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager, suppress
 
 from constructicon.core.identity import parse_json_value
 from constructicon.substrate._lifetime import finish_owned
+from tests.native_codex_probe import PROBE_PROMPT
 from tests.substrate._provider_transport import (
     BODY,
     CASE_SECONDS,
@@ -104,7 +105,7 @@ def response_for(tool, arguments, model, namespace, ordinal):
 
 
 class Peer:
-    def __init__(self, listener, deadline, tool, arguments, model, namespace):
+    def __init__(self, listener, deadline, tool, arguments, model, namespace, scenario):
         self.listener, self.deadline = listener, deadline
         self.tool, self.arguments, self.model, self.namespace = tool, arguments, model, namespace
         self.budget = Budget()
@@ -112,6 +113,22 @@ class Peer:
         self.handlers, self.active = set(), set()
         self.stopped = asyncio.Event()
         self.acceptor = None
+        self.scenario = scenario
+
+    def check_scenario(self, request):
+        # The controlled user turn is a scenario assertion, not process identity
+        # or proof of upstream instructions. Startup-origin qualification is separate.
+        inputs = request.get("input", [])
+        if not isinstance(inputs, list):
+            raise ValueError("unexpected scenario input")
+        users = [item for item in inputs if isinstance(item, dict) and item.get("role") == "user"]
+        if self.scenario is None:
+            if inputs:
+                raise ValueError("unexpected scenario input")
+        elif not users or users[-1].get("content") != [
+            {"type": "input_text", "text": self.scenario},
+        ]:
+            raise ValueError("unexpected scenario prompt")
 
     def stop(self):
         self.stopped.set()
@@ -132,6 +149,7 @@ class Peer:
                 self.requests.append(request)
                 if request.get("model") != self.model:
                     raise ValueError("unexpected model")
+                self.check_scenario(request)
                 await write(sock, self.budget, response_for(
                     self.tool, self.arguments, self.model, self.namespace, len(self.requests),
                 ))
@@ -176,7 +194,7 @@ class Peer:
 
 @asynccontextmanager
 async def provider_peer(tool=None, arguments=None, *, model="probe-model", namespace=None,
-                        path=None, deadline=None):
+                        path=None, deadline=None, scenario=None):
     if deadline is None:
         deadline = asyncio.get_running_loop().time() + CASE_SECONDS
     listener = socket.socket(socket.AF_UNIX if path is not None else socket.AF_INET)
@@ -189,7 +207,7 @@ async def provider_peer(tool=None, arguments=None, *, model="probe-model", names
             observed = path.lstat()
             bound = (observed.st_dev, observed.st_ino)
         listener.listen(2)
-        peer = Peer(listener, deadline, tool, arguments, model, namespace)
+        peer = Peer(listener, deadline, tool, arguments, model, namespace, scenario)
         task = asyncio.create_task(peer.serve())
         peer.acceptor = task
         try:
@@ -224,6 +242,7 @@ async def provider_peer(tool=None, arguments=None, *, model="probe-model", names
 
 @asynccontextmanager
 async def fake_provider(tool, arguments, *, model="probe-model", namespace=None):
-    async with provider_peer(tool, arguments, model=model, namespace=namespace) as peer:
+    async with provider_peer(tool, arguments, model=model, namespace=namespace,
+                             scenario=PROBE_PROMPT) as peer:
         port = peer.listener.getsockname()[1]
         yield f"http://127.0.0.1:{port}/v1", peer.requests, peer.failures

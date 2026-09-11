@@ -22,6 +22,7 @@ from constructicon.substrate._lifetime import finish_owned
 
 RECORD_BYTES = 256 * 1024
 TOTAL_BYTES = 2 * 1024 * 1024
+PROBE_PROMPT = "Run the deterministic offline fixture."
 CATALOG_SHA256 = "d7136a413cfac1b5b1686d9e0dcc5c80ca05bebed5e9fc3911376561d0ef6ee8"
 CANARY_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1s"
@@ -167,7 +168,7 @@ async def conversation(wire, cwd, worker, *, model="probe-model"):
     thread = started["thread"]["id"]
     turn = await wire.rpc("turn/start", {
         "threadId": thread,
-        "input": [{"type": "text", "text": "Run the deterministic offline fixture."}],
+        "input": [{"type": "text", "text": PROBE_PROMPT}],
     })
     dispatch = Dispatch(thread, turn["turn"]["id"], worker)
     while True:

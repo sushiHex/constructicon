@@ -32,6 +32,21 @@ MUTANTS = (
     ("bridge double-charges bytes", TRANSPORT + "read",
      "budget.charge(len(raw))", "budget.charge(2 * len(raw))",
      RECIPE + "test_bridge_half_close_drains_and_preserves_reverse_direction"),
+    ("model match replaces scenario validation", PEER + "Peer.respond",
+     "self.check_scenario(request)", "pass",
+     UNIT + "test_model_match_does_not_substitute_for_the_controlled_scenario[tcp-wrong]"),
+    ("unexpected mount admitted", "tests.substrate._provider_bootstrap:topology",
+     'raise ValueError("unexpected mount inventory: " + json.dumps(mounts))', "pass",
+     RECIPE + "test_actual_namespace_preflight_checks_named_mounts_flags_and_fds[extra]"),
+    ("writable root admitted", "tests.substrate._provider_bootstrap:topology",
+     'raise ValueError("runtime root is not read-only")', "pass",
+     RECIPE + "test_actual_namespace_preflight_checks_named_mounts_flags_and_fds[root-rw]"),
+    ("endpoint identity omitted from evidence", "tests.substrate._provider_bootstrap:topology",
+     '"identity": expected', '"identity": None',
+     RECIPE + "test_actual_namespace_preflight_checks_named_mounts_flags_and_fds[none]"),
+    ("failed native outcome discarded", "tests.substrate.test_provider_placement:observe",
+     "result = exc.result", "result = None",
+     RECIPE + "test_failed_conversation_keeps_its_owned_result"),
 )
 
 

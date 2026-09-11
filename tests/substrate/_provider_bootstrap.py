@@ -12,12 +12,11 @@ import stat
 import subprocess
 import sys
 import time
-from contextlib import suppress
 from pathlib import Path
 
 # Fixed immutable imports; isolated Python does not search the working directory.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _provider_transport import ENDPOINT
+from _provider_transport import ENDPOINT, descriptors
 
 
 def topology(expected):
@@ -29,20 +28,19 @@ def topology(expected):
     leaf = [row for row in mounts if row[4] == ENDPOINT]
     if len(leaf) != 1 or "ro" not in leaf[0][5].split(","):
         raise ValueError("endpoint must be one read-only leaf mount")
-    required = {"/", "/proc", "/dev", "/tmp", ENDPOINT}
     device_mounts = {
         "/dev/" + name for name in ("null", "zero", "full", "random", "urandom", "tty")
     }
-    allowed = required | device_mounts | {"/dev/pts", "/dev/shm"}
+    required = {"/", "/proc", "/dev", "/tmp", "/dev/pts", ENDPOINT} | device_mounts
     points = [row[4] for row in mounts]
-    if not required <= set(points) or not set(points) <= allowed or len(points) != len(set(points)):
+    if set(points) != required or len(points) != len(set(points)):
         raise ValueError("unexpected mount inventory: " + json.dumps(mounts))
     for row in mounts:
         point, flags, filesystem = row[4], row[5].split(","), row[row.index("-") + 1]
         if point == "/" and "ro" not in flags:
             raise ValueError("runtime root is not read-only")
-        expected = {"/proc": "proc", "/tmp": "tmpfs", "/dev": "tmpfs", "/dev/pts": "devpts"}
-        if point in expected and filesystem != expected[point]:
+        filesystems = {"/proc": "proc", "/tmp": "tmpfs", "/dev": "tmpfs", "/dev/pts": "devpts"}
+        if point in filesystems and filesystem != filesystems[point]:
             raise ValueError("unexpected mount filesystem")
         if point in device_mounts and not stat.S_ISCHR(Path(point).stat().st_mode):
             raise ValueError("unexpected device mount")
@@ -52,11 +50,7 @@ def topology(expected):
     ipv6_routes = Path("/proc/net/ipv6_route").read_text().splitlines()
     if interfaces != {"lo"} or routes or any(row.split()[-1] != "lo" for row in ipv6_routes):
         raise ValueError("external interface or route")
-    fds = {}
-    for entry in Path("/proc/self/fd").iterdir():
-        # The descriptor used by iterdir itself is already closed.
-        with suppress(FileNotFoundError):
-            fds[entry.name] = os.readlink(entry)
+    fds = descriptors()
     if set(fds) != {"0", "1", "2"}:
         raise ValueError("unexpected inherited descriptor")
     return {
@@ -99,13 +93,19 @@ def main():
         remaining = placement["deadline"] - time.monotonic()
         if remaining <= 0 or not select.select([read_fd], [], [], remaining)[0]:
             raise ValueError("bridge readiness deadline")
-        if os.read(read_fd, 2) != b"R":
+        ready = os.read(read_fd, 4096)
+        if not ready:
             raise ValueError("bridge not ready")
+        bridge_fds = json.loads(ready)
     finally:
         os.close(read_fd)
         if write_fd >= 0:
             os.close(write_fd)
-    observed.update({"port": port, "bridge_pid": child.pid})
+    after = descriptors()
+    if set(after) != {"0", "1", "2"}:
+        raise ValueError("setup descriptor would reach native exec")
+    observed.update({"port": port, "bridge_pid": child.pid,
+                     "fds_after_setup": after, "bridge_fds_at_entry": bridge_fds})
     print(json.dumps({"placement": observed}), flush=True)
     # The descriptor is a setup observation, not an observed bridge outcome.
     # No wait(), signal handler, or process owner is added here.
