@@ -1,5 +1,6 @@
 """Pinned-release startup observations inside the unchanged networkless launcher."""
 
+import hashlib
 import json
 import os
 from dataclasses import asdict, replace
@@ -7,11 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from constructicon.core.grants import Posture
 from constructicon.core.identity import Digest
 from constructicon.substrate.executors.linux import ProcessExchangeError
 from tests.native_startup import BOOTSTRAP, MODELS, DuplexWire, configuration, initialize
 from tests.substrate.test_linux_containment import launcher as launcher
+from tests.substrate.test_linux_duplex import exchange
 from tests.substrate.test_native_codex_mediation import fake_provider, write_evidence
 
 
@@ -27,15 +28,18 @@ def startup_launcher(launcher):
     return replace(launcher, runtime_root=root, expected_runtime=Digest(pinned))
 
 
-async def observe(launcher, model, *, files=None, extra="", arguments=(), query=None):
+async def observe(launcher, guard_root, model, *, files=None, extra="", arguments=(), query=None):
     observations = {}
+    setup = {
+        "config": configuration(model) + extra, "files": files or {},
+        "arguments": list(arguments),
+    }
+    setup_bytes = (json.dumps(setup) + "\n").encode()
 
     async def conversation(io):
-        await io.write((json.dumps({
-            "config": configuration(model) + extra, "files": files or {},
-            "arguments": list(arguments),
-        }) + "\n").encode())
+        await io.write(setup_bytes)
         wire = DuplexWire(io)
+        observations["warnings"] = wire.warnings
         observations["bootstrap"] = await wire.read()
         observations["initialize"] = await initialize(wire)
         observations["config"] = await wire.rpc("config/read", {
@@ -43,12 +47,15 @@ async def observe(launcher, model, *, files=None, extra="", arguments=(), query=
         })
         if query is not None:
             await query(wire, observations)
-        observations["warnings"] = wire.warnings
-
-    result = await launcher.exchange(
-        ("/usr/bin/python3", "-I", BOOTSTRAP), workspace=None, posture=Posture.READ,
-        guard_fds=(), conversation=conversation, timeout_s=20,
-    )
+    try:
+        result = await exchange(
+            launcher, guard_root, conversation,
+            command=("/usr/bin/python3", "-I", BOOTSTRAP), timeout=20,
+        )
+    except ProcessExchangeError as exc:
+        evidence("codex-startup-failure-" + hashlib.sha256(setup_bytes).hexdigest()[:16] + ".json",
+                 launcher, observations, exc.result)
+        raise
     return observations, result
 
 
@@ -62,7 +69,7 @@ def evidence(name, launcher, observations, result):
 
 
 @pytest.mark.parametrize("model", MODELS)
-async def test_native_starts_with_private_configuration(startup_launcher, model):
+async def test_native_starts_with_private_configuration(startup_launcher, tmp_path, model):
     async def inventory(wire, observations):
         observations["skills"] = await wire.rpc("skills/list", {
             "cwds": ["/tmp/native-startup"], "forceReload": True,
@@ -70,7 +77,7 @@ async def test_native_starts_with_private_configuration(startup_launcher, model)
         observations["hooks"] = await wire.rpc("hooks/list", {"cwds": ["/tmp/native-startup"]})
         observations["requirements"] = await wire.rpc("configRequirements/read", {})
 
-    observations, result = await observe(startup_launcher, model, query=inventory)
+    observations, result = await observe(startup_launcher, tmp_path, model, query=inventory)
     evidence(f"codex-startup-{model}.json", startup_launcher, observations, result)
     assert result.returncode == result.payload_returncode == 0
     assert not result.timed_out and result.bound_exceeded is None
@@ -92,7 +99,7 @@ async def test_ambient_environment_cannot_select_configuration(
     monkeypatch.setenv("CODEX_HOME", str(poisoned))
     monkeypatch.setenv("OPENAI_BASE_URL", "http://192.0.2.1:1/never")
     monkeypatch.setenv("CODEX_APP_SERVER_TEST_USER_CONFIG_FILE", str(poisoned / "config.toml"))
-    observations, result = await observe(startup_launcher, MODELS[0])
+    observations, result = await observe(startup_launcher, tmp_path, MODELS[0])
     evidence("codex-startup-ambient.json", startup_launcher, observations, result)
     assert result.payload_returncode == 0 and not result.timed_out
     assert observations["config"]["config"]["model"] == MODELS[0]
@@ -100,9 +107,9 @@ async def test_ambient_environment_cannot_select_configuration(
     assert "outside-startup-canary" not in json.dumps(observations)
 
 
-async def test_explicit_session_configuration_is_a_positive_control(startup_launcher):
+async def test_explicit_session_configuration_is_a_positive_control(startup_launcher, tmp_path):
     observations, result = await observe(
-        startup_launcher, MODELS[0], arguments=("-c", f'model="{MODELS[1]}"'),
+        startup_launcher, tmp_path, MODELS[0], arguments=("-c", f'model="{MODELS[1]}"'),
     )
     evidence("codex-startup-session.json", startup_launcher, observations, result)
     assert result.payload_returncode == 0 and not result.timed_out
@@ -112,9 +119,9 @@ async def test_explicit_session_configuration_is_a_positive_control(startup_laun
 @pytest.mark.parametrize("extra", [
     "\nunknown_startup_feature = true\n", "\n[unknown_startup]\nx=1\n",
 ], ids=["feature", "table"])
-async def test_unknown_configuration_refuses_before_native_rpc(startup_launcher, extra):
+async def test_unknown_configuration_refuses_before_native_rpc(startup_launcher, tmp_path, extra):
     with pytest.raises(ProcessExchangeError) as refused:
-        await observe(startup_launcher, MODELS[0], extra=extra)
+        await observe(startup_launcher, tmp_path, MODELS[0], extra=extra)
     result = refused.value.result
     evidence("codex-startup-strict-" + str(len(extra)) + ".json", startup_launcher, {}, result)
     assert result.payload_returncode != 0 and not result.timed_out
@@ -122,14 +129,14 @@ async def test_unknown_configuration_refuses_before_native_rpc(startup_launcher,
 
 
 @pytest.mark.parametrize("root", ["/tmp/home/.codex/skills", "/tmp/native-startup/.agents/skills"])
-async def test_skill_origin_has_a_native_positive_and_absent_control(startup_launcher, root):
+async def test_skill_origin_has_a_native_positive_and_absent_control(startup_launcher, tmp_path, root):
     async def skills(wire, observations):
         observations["skills"] = await wire.rpc("skills/list", {
             "cwds": ["/tmp/native-startup"], "forceReload": True,
         })
 
-    baseline, before = await observe(startup_launcher, MODELS[0], query=skills)
-    marked, after = await observe(startup_launcher, MODELS[0], query=skills, files={
+    baseline, before = await observe(startup_launcher, tmp_path, MODELS[0], query=skills)
+    marked, after = await observe(startup_launcher, tmp_path, MODELS[0], query=skills, files={
         root + "/startup-canary/SKILL.md": (
             "---\nname: startup-canary\ndescription: Inert startup discovery fixture.\n---\n"
             "Public inert marker. This fixture performs no operation.\n"
@@ -142,7 +149,7 @@ async def test_skill_origin_has_a_native_positive_and_absent_control(startup_lau
     assert "startup-canary" in json.dumps(marked["skills"])
 
 
-async def test_provider_connectivity_is_a_named_refusal(startup_launcher):
+async def test_provider_connectivity_is_a_named_refusal(startup_launcher, tmp_path):
     async def turn(wire, observations):
         thread = await wire.rpc("thread/start", {
             "model": MODELS[0], "modelProvider": "probe", "cwd": "/tmp/native-startup",
@@ -164,7 +171,7 @@ async def test_provider_connectivity_is_a_named_refusal(startup_launcher):
     async with fake_provider("contained_python", {"program": "pass"}, model=MODELS[0]) as peer:
         endpoint, requests, failures = peer
         observations, result = await observe(
-            startup_launcher, MODELS[0], query=turn,
+            startup_launcher, tmp_path, MODELS[0], query=turn,
             arguments=("-c", f'model_providers.probe.base_url="{endpoint}"'),
         )
         assert not requests and not failures

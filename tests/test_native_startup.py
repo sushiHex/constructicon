@@ -37,7 +37,11 @@ async def test_duplex_framing_preserves_short_reads_and_coalesced_suffix(fragmen
         pytest.fail(f"valid fragmented response refused: {exc}")
     assert result == {"ok": True}
     assert json.loads(peer.written) == {"id": 1, "method": "fixture/read", "params": {}}
-    assert await wire.read() == {"method": "warning"}
+    try:
+        notification = await wire.read()
+    except ProbeRefused as exc:
+        pytest.fail(f"valid coalesced notification refused: {exc}")
+    assert notification == {"method": "warning"}
     assert wire.warnings == [{"method": "warning"}]
 
 
@@ -97,7 +101,7 @@ def test_startup_configuration_keeps_pins_and_has_no_authentication():
         configuration("unqualified-model")
 
 
-async def test_startup_uses_the_exact_owned_launch_interface():
+async def test_startup_uses_the_exact_owned_launch_interface(tmp_path):
     from constructicon.core.grants import Posture
     from constructicon.substrate.executors.linux import LinuxLauncher
     from tests.native_startup import BOOTSTRAP
@@ -109,10 +113,13 @@ async def test_startup_uses_the_exact_owned_launch_interface():
         inspect.signature(LinuxLauncher.exchange).bind(None, *args, **kwargs)
         assert args == (("/usr/bin/python3", "-I", BOOTSTRAP),)
         assert kwargs["workspace"] is None and kwargs["posture"] is Posture.READ
-        assert kwargs["guard_fds"] == () and kwargs["timeout_s"] == 20
+        assert len(kwargs["guard_fds"]) == 1 and type(kwargs["guard_fds"][0]) is int
+        assert kwargs["timeout_s"] == 20
         assert callable(kwargs["conversation"])
         invoked.append(True)
         return "instrument-only"
 
-    assert await observe(SimpleNamespace(exchange=exchange), MODELS[0]) == ({}, "instrument-only")
+    assert await observe(SimpleNamespace(exchange=exchange), tmp_path, MODELS[0]) == (
+        {}, "instrument-only",
+    )
     assert invoked == [True]
