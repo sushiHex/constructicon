@@ -151,7 +151,20 @@ def write_evidence(name, value):
         (Path(directory) / name).write_text(json.dumps(value, sort_keys=True, indent=2) + "\n")
 
 
-def argv_for(native, cwd, endpoint, *, images, model="probe-model"):
+def catalog_for(source: bytes, *, restricted: bool) -> bytes:
+    """Change only three tool selectors, never model identity or instructions."""
+    catalog = json.loads(source)
+    selected = {"gpt-5.5", "gpt-5.6-sol"}
+    assert {entry["slug"] for entry in catalog["models"]} >= selected
+    if restricted:
+        for entry in catalog["models"]:
+            if entry["slug"] in selected:
+                entry.update(apply_patch_tool_type=None, tool_mode="direct",
+                             multi_agent_version=None)
+    return (json.dumps(catalog, sort_keys=True) + "\n").encode()
+
+
+def argv_for(native, cwd, endpoint, *, images, model="probe-model", catalog=None):
     binary, env = native
     configuration = f'''
 model = "{model}"
@@ -160,6 +173,7 @@ model_context_window = 32768
 model_auto_compact_token_limit = 30000
 check_for_update_on_startup = false
 web_search = "disabled"
+{f'model_catalog_json = {json.dumps(str(catalog))}' if catalog else ''}
 [model_providers.probe]
 name = "Credential-free loopback fixture"
 base_url = "{endpoint}"
@@ -208,19 +222,36 @@ def test_pinned_native_schema_inventory(native, tmp_path):
     assert "thread/start" in methods and "turn/start" in methods
 
 
-@pytest.mark.parametrize("model,operation", [
-    *(("probe-model", operation) for operation in (
+@pytest.mark.parametrize("model,operation,catalog_mode", [
+    *(("probe-model", operation, "bundled") for operation in (
         "contained_python", "exec_command", "view_image",
     )),
-    *((model, operation) for model in ("gpt-5.5", "gpt-5.6-sol") for operation in (
+    *((model, operation, mode) for model in ("gpt-5.5", "gpt-5.6-sol")
+      for mode in ("bundled", "restricted") for operation in (
         "contained_python", "exec_command", "view_image", "apply_patch",
         "fs/readFile", "process/spawn", "config/value/write",
     )),
+    *((model, operation, "unchanged") for model in ("gpt-5.5", "gpt-5.6-sol")
+      for operation in ("contained_python", "apply_patch")),
 ])
 @pytest.mark.parametrize("images", [True, False], ids=["image-control", "image-disabled"])
 async def test_native_dynamic_dispatch_and_builtin_probe(
-    native, tmp_path, provider, launcher, model, operation, images,
+    native, tmp_path, provider, launcher, model, operation, images, catalog_mode,
 ):
+    catalog_path = None
+    catalog_evidence = None
+    restricted = catalog_mode == "restricted"
+    if catalog_mode != "bundled":
+        source = Path(os.environ["M8_CODEX_CATALOG"]).read_bytes()
+        assert hashlib.sha256(source).hexdigest() == (
+            "d7136a413cfac1b5b1686d9e0dcc5c80ca05bebed5e9fc3911376561d0ef6ee8"
+        )
+        content = catalog_for(source, restricted=restricted)
+        catalog_path = Path(native[1]["CODEX_HOME"]) / "catalog.json"
+        catalog_path.write_bytes(content)
+        catalog_evidence = {"source_sha256": hashlib.sha256(source).hexdigest(),
+                            "effective_sha256": hashlib.sha256(content).hexdigest(),
+                            "mode": catalog_mode}
     provider.launcher = launcher
     executor = RecordedExecutorProvider(launcher, provider, WORKER)
     await executor.qualify()
@@ -262,24 +293,27 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
     try:
         async with fake_provider(operation, arguments, model=model) as exchange:
             endpoint, requests, failures = exchange
-            argv = argv_for(native, tmp_path, endpoint, images=images, model=model)
+            argv = argv_for(native, tmp_path, endpoint, images=images, model=model,
+                            catalog=catalog_path)
             result = await run_probe(argv, cwd=tmp_path, env=native[1], worker=worker, model=model)
             evidence = {"probe": operation, "model": model, "images_enabled": images,
                         "protocol": result, "requests": requests,
                         "server_failures": failures, "worker_outputs": observed,
                         "builtin_canary_written": canary.exists(),
-                        "native_patch_written": patch_canary.exists()}
+                        "native_patch_written": patch_canary.exists(),
+                        "catalog": catalog_evidence}
             write_evidence(f"codex-{model}-{operation.replace('/', '-')}-images-"
-                           f"{str(images).lower()}.json", evidence)
+                           f"{str(images).lower()}-{catalog_mode}.json", evidence)
             assert not failures, failures
             assert len(requests) == 2
             expected_tools = {"request_user_input", "contained_python"}
             if images:
                 expected_tools.add("view_image")
             if model != "probe-model":
-                expected_tools.add("apply_patch")
+                if not restricted:
+                    expected_tools.add("apply_patch")
                 assert "missing model metadata" not in result["stderr_observed"].lower()
-            if model == "gpt-5.6-sol":
+            if model == "gpt-5.6-sol" and not restricted:
                 # This pinned model publishes CodeMode namespaces despite the
                 # requested false flags. Preserve that distinct wire surface;
                 # do not flatten it into a claim of the fallback inventory.
@@ -301,6 +335,8 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
                 )
             else:
                 assert {tool["name"] for tool in requests[0]["tools"]} == expected_tools
+                assert not any(item.get("type") == "additional_tools"
+                               for item in requests[0]["input"])
             outputs = [item for item in requests[1]["input"]
                        if item.get("type") in {"function_call_output", "custom_tool_call_output"}]
             assert len(outputs) == 1
@@ -310,11 +346,12 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
             else:
                 assert not observed
                 assert not result["calls"]
-                if operation == "apply_patch":
+                if operation == "apply_patch" and not restricted:
                     assert patch_canary.read_text() == "fixture only\n"
                 elif operation != "view_image" or not images:
                     assert outputs[0]["output"] == f"unsupported call: {operation}"
                     assert not canary.exists()
+                    assert not patch_canary.exists()
                 else:
                     # A PASS reproduces the negative result: this native reader
                     # bypasses the worker and exports an unmounted harness file.

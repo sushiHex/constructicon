@@ -229,6 +229,28 @@ async def test_model_selection_reaches_configuration_and_thread(tmp_path, model)
     assert observed == [model]
 
 
+@pytest.mark.parametrize("restricted", [False, True])
+def test_catalog_changes_only_the_named_tool_selectors(tmp_path, restricted):
+    entries = [{"slug": slug, "instructions": "preserve verbatim", "unknown": [1, True],
+                "apply_patch_tool_type": "freeform", "tool_mode": "code_mode_only",
+                "multi_agent_version": "v2"}
+               for slug in ("gpt-5.5", "gpt-5.6-sol", "unselected")]
+    original = {"models": entries, "unrelated": {"keep": True}}
+    effective = json.loads(native_probe.catalog_for(json.dumps(original).encode(),
+                                                    restricted=restricted))
+    expected = json.loads(json.dumps(original))
+    if restricted:
+        for entry in expected["models"][:2]:
+            entry.update(apply_patch_tool_type=None, tool_mode="direct", multi_agent_version=None)
+    assert effective == expected
+    config = tmp_path / "config"
+    config.mkdir()
+    path = config / "catalog.json"
+    native_probe.argv_for((Path("pinned-codex"), {"CODEX_HOME": str(config)}),
+                          tmp_path, "http://127.0.0.1:1/v1", images=False, catalog=path)
+    assert tomllib.loads((config / "config.toml").read_text())["model_catalog_json"] == str(path)
+
+
 @pytest.mark.parametrize("mode", ["success", "eof", "stderr", "timeout", "cancel"])
 async def test_real_pipe_lifetime_with_scripted_peer(tmp_path, mode):
     invoked = []
