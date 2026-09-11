@@ -242,9 +242,12 @@ non-launch test vacuous. This covers one startup path, not arbitrary hooks,
 plugins, skills, inherited system config or every configuration precedence.
 
 The lifetime cases use an actually running WRITE worker in an acquired staging
-workspace, observed through its heartbeat. Cancellation and native-process
-death must join the existing launcher, stop that heartbeat, reap the native
-process and close/dispose the existing acquisitions. No extra lifecycle store
+workspace, observed through its heartbeat. On cancellation and native-process
+death, the driver joins the worker and its existing launcher, stops that
+heartbeat, and reaps the native process. The acquisitions remain open and the
+workspace remains present at driver return; explicit test cleanup closes and
+disposes them afterward. Both states are asserted and recorded separately.
+This does not prove event-driven acquisition disposal. No extra lifecycle store
 or scheduler is introduced. Native death while the driver awaits its worker
 is bounded by the existing 12-second test deadline, not an immediate death
 notification; the test must not credit it as instantaneous revocation.
@@ -262,7 +265,8 @@ process-group helper is promoted into escaped-descendant ownership evidence.
 | Requested disabled model-dependent features | Fail | Sol still publishes CodeMode/collaboration; execution of every nested route untested |
 | Three client-RPC names as model calls | Pass | Exact unsupported-call refusals in both profiles; not an exhaustive RPC proof |
 | Untrusted-project MCP startup blocked | Pass | No marker when untrusted; trusted control starts the inert extension |
-| Cancellation/death with active worker | Pass, bounded | Heartbeat stops, native process is reaped and acquisitions disposed; native death uses the overall deadline |
+| Cancellation/death with active worker | Pass, bounded | Worker joined, heartbeat stops, native process reaped; native death uses the overall deadline |
+| Event-driven native acquisition disposal | Unknown | Acquisitions remain open at driver return; disposal is explicit test cleanup, not event-path evidence |
 | All hooks/extensions/config sources | Unknown | One project MCP path cannot establish completeness |
 | Driver death and native harness restart ownership | Unknown | Not proved by worker-only recovery or process groups |
 | Credential-bearing native eligibility | Not qualified | No credentials; complete mediation already fails for this recipe |
@@ -316,8 +320,9 @@ passed all 39 native probe cases, the existing 268-test containment suite, and
 the then-current 100 assertion mutants. Standard CI and runner qualification
 also passed. The downloaded artifact was inspected separately: the trusted
 project starts the inert MCP fixture while the untrusted project does not;
-each lifetime case records one worker call, native exit `-9`, a stopped
-heartbeat, committed closure and removed workspace. The RPC-name cases retain
+each lifetime case records one worker call, native exit `-9`, and a stopped
+heartbeat. That artifact's closure/removal fields were recorded after manual
+test cleanup, not caused by cancellation or native death. The RPC-name cases retain
 the exact unsupported-call outputs, and both real profiles retain the native
 patch write with zero worker calls.
 
@@ -329,3 +334,11 @@ model propagation at its three boundaries and RPC-method separation. These
 are instrument proofs, not native authentication evidence. PR #49 carries the
 final exact-head gate and independent review; these earlier runs do not
 substitute for that gate.
+
+The independent review of `7df6f8d` caught that lifetime attribution error:
+the assertions and evidence followed explicit `close()` calls, but this
+record credited disposal to the ending itself. The correction measures open
+acquisitions and a present workspace before cleanup, then closed acquisitions
+and removed workspace after cleanup. Evidence names both phases explicitly;
+no new event-driven disposal mechanism or native eligibility is invented to
+satisfy an overclaim. Final confirmation must review this corrected head.

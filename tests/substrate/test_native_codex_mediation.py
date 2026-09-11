@@ -379,7 +379,7 @@ async def test_project_extension_startup_has_a_positive_control(native, tmp_path
 
 
 @pytest.mark.parametrize("ending", ["cancel", "native-death"])
-async def test_native_turn_cleanup_joins_an_active_contained_worker(
+async def test_native_turn_ending_joins_an_active_contained_worker(
     native, tmp_path, provider, launcher, monkeypatch, ending,
 ):
     provider.posture = Posture.WRITE
@@ -408,6 +408,13 @@ async def test_native_turn_cleanup_joins_an_active_contained_worker(
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", observe_process)
     calls = []
+
+    def acquisition_state():
+        return {
+            "executor_closed": provider.closure.is_closed(acquired.resource.paths),
+            "workspace_closed": provider.closure.is_closed(workspace.resource.paths),
+            "workspace_removed": not workspace.resource.paths.payload.exists(),
+        }
 
     async def worker(source):
         calls.append(source)
@@ -448,6 +455,17 @@ async def test_native_turn_cleanup_joins_an_active_contained_worker(
             await asyncio.sleep(.1)
             assert heartbeat.read_bytes() == stopped
             assert not failures and len(requests) == 1
+            # The driver owns its process and joins the supplied callback. It
+            # does NOT own these fixture acquisitions. Prove that distinction
+            # before the test's unconditional cleanup can conceal it.
+            before_cleanup = acquisition_state()
+            assert not any(before_cleanup.values())
+            on_driver_return = {
+                "native_returncode": native_processes[0].returncode,
+                "worker_joined": acquired.resource.active is None,
+                "worker_heartbeat_stopped": heartbeat.read_bytes() == stopped,
+                "acquisitions": before_cleanup,
+            }
     finally:
         if pending is not None:
             pending.cancel()
@@ -455,11 +473,10 @@ async def test_native_turn_cleanup_joins_an_active_contained_worker(
         await executor.close(acquired, "discard")
         await provider.close(workspace, "discard")
     assert acquired.resource.active is None
-    assert provider.closure.is_closed(acquired.resource.paths)
-    assert not workspace.resource.paths.payload.exists()
+    after_cleanup = acquisition_state()
+    assert all(after_cleanup.values())
     write_evidence(f"codex-lifetime-{ending}.json", {
-        "ending": ending, "worker_calls": len(calls),
-        "native_returncode": native_processes[0].returncode,
-        "worker_heartbeat_stopped": True, "acquisition_closed": True,
-        "workspace_removed": True, "driver_deadline_s": 12,
+        "ending": ending, "worker_calls": len(calls), "driver_deadline_s": 12,
+        "on_driver_return": on_driver_return,
+        "after_explicit_test_cleanup": after_cleanup,
     })
