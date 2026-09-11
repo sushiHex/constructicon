@@ -8,7 +8,6 @@ import json
 
 from tests.native_codex_probe import RECORD_BYTES, ProbeRefused, Wire
 
-NATIVE = "/opt/native-startup/native/bin/codex"
 CATALOG = "/opt/native-startup/catalog.json"
 BOOTSTRAP = "/opt/native-startup/bootstrap.py"
 MODELS = ("gpt-5.5", "gpt-5.6-sol")

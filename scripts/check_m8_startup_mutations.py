@@ -33,6 +33,11 @@ MUTANTS = (
      '"arguments": list(arguments)', '"arguments": []',
      "tests/substrate/test_native_startup.py::"
      "test_explicit_session_configuration_is_a_positive_control"),
+    ("native network failures are discarded", "tests.substrate.test_native_startup:"
+     "test_provider_failure_retries_until_the_owned_deadline",
+     'observations["turn_events"].append(message)', "pass",
+     "tests/substrate/test_native_startup.py::"
+     "test_provider_failure_retries_until_the_owned_deadline"),
 )
 
 if __name__ == "__main__":

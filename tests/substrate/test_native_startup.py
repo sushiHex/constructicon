@@ -167,7 +167,7 @@ async def test_skill_origin_has_a_native_positive_and_absent_control(
     assert "startup-canary" in json.dumps(marked["skills"])
 
 
-async def test_provider_connectivity_is_a_named_refusal(startup_launcher, tmp_path):
+async def test_provider_failure_retries_until_the_owned_deadline(startup_launcher, tmp_path):
     async def turn(wire, observations):
         thread = await wire.rpc("thread/start", {
             "model": MODELS[0], "modelProvider": "probe", "cwd": "/tmp/native-startup",
@@ -196,10 +196,23 @@ async def test_provider_connectivity_is_a_named_refusal(startup_launcher, tmp_pa
             startup_launcher, tmp_path, MODELS[0], query=turn,
             arguments=("-c", f'model_providers.probe.base_url="{endpoint}"'),
         )
+        observations["external_fixture"] = {
+            "endpoint": endpoint, "requests": requests, "failures": failures,
+        }
+        evidence("codex-startup-provider-refusal.json", startup_launcher, observations, result)
         assert not requests and not failures
-        assert endpoint in json.dumps(observations["turn"]["error"])
-        observations["external_fixture"] = {"endpoint": endpoint, "requests": requests}
+        # This is the native projection, not the setup record echoing itself.
+        assert observations["config"]["config"]["model_providers"]["probe"]["base_url"] == endpoint
     evidence("codex-startup-provider-refusal.json", startup_launcher, observations, result)
-    assert result.payload_returncode == 0 and not result.timed_out
-    assert observations["turn"]["status"] == "failed"
-    assert observations["turn"]["error"]
+    assert result.timed_out and result.bound_exceeded is None
+    assert result.returncode == result.payload_returncode == 143
+    assert "turn" not in observations  # Native never reported a terminal turn.
+    errors = [message["params"] for message in observations["turn_events"]
+              if message.get("method") == "error"]
+    assert errors
+    for error in errors:
+        assert error["threadId"] == observations["thread"]["thread"]["id"]
+        assert error["turnId"] == observations["started"]["turn"]["id"]
+        assert error["willRetry"] is True
+        assert error["error"]["message"] == "Reconnecting... waiting for network"
+        assert error["error"]["additionalDetails"] == "Connection failed: error sending request"
