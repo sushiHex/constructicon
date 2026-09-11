@@ -135,20 +135,23 @@ def test_actual_namespace_preflight_checks_named_mounts_flags_and_fds(monkeypatc
         "/proc/net/dev": "header\nheader\nlo: 0\n" + ("eth0: 0" if drift == "network" else ""),
         "/proc/net/route": "header\n", "/proc/net/ipv6_route": "",
     }
-    monkeypatch.setattr(Path, "read_text", lambda path: contents[str(path).replace("\\", "/")])
-    monkeypatch.setattr(Path, "lstat", lambda path:
-                        SimpleNamespace(st_mode=stat.S_IFSOCK, st_dev=7, st_ino=8))
-    monkeypatch.setattr(Path, "stat", lambda path: SimpleNamespace(st_mode=stat.S_IFCHR))
     names = ("0", "1", "2", "9") if drift == "fd" else ("0", "1", "2")
-    monkeypatch.setattr(Path, "iterdir", lambda path: iter(Path(name) for name in names))
-    monkeypatch.setattr(bootstrap.os, "readlink", lambda path: "observed")
+    # Restore filesystem primitives before pytest formats any failed proof.
+    with monkeypatch.context() as namespace:
+        namespace.setattr(Path, "read_text", lambda path: contents[str(path).replace("\\", "/")])
+        namespace.setattr(Path, "lstat", lambda path:
+                          SimpleNamespace(st_mode=stat.S_IFSOCK, st_dev=7, st_ino=8))
+        namespace.setattr(Path, "stat", lambda path: SimpleNamespace(st_mode=stat.S_IFCHR))
+        namespace.setattr(Path, "iterdir", lambda path: iter(Path(name) for name in names))
+        namespace.setattr(bootstrap.os, "readlink", lambda path: "observed")
+        if drift == "none":
+            observed = bootstrap.topology([7, 8])
+        else:
+            with pytest.raises(ValueError):
+                bootstrap.topology([7, 8])
     if drift == "none":
-        observed = bootstrap.topology([7, 8])
         assert observed["interfaces"] == ["lo"]
         assert observed["identity"] == [7, 8]
-    else:
-        with pytest.raises(ValueError):
-            bootstrap.topology([7, 8])
 
 
 async def test_failed_conversation_keeps_its_owned_result(composition, tmp_path, monkeypatch):
