@@ -149,11 +149,20 @@ adapter decides whether its protocol was truncated.
 Priority is deterministic: caller cancellation over a completed ordinary
 failure; an already observed non-cancellation callback/I/O failure over a
 simultaneous timeout/bound result; timeout/bound over normal completion.
-Retain additional observed exceptions as causes or grouped failures; priority
-selects the outward outcome, not permission to discard another failure.
-Cancellation deliberately sent to stop the conversation on timeout/overflow
-is not caller cancellation and does not replace that result. If cleanup
-itself fails, raise that failure (or a `BaseExceptionGroup` retaining it and
+Retain additional independently observed exceptions as causes or grouped
+failures; priority selects the outward outcome, not permission to discard
+another failure. The controller records the initiating stop cause before
+invalidating I/O, cancelling protocol work, or terminating the peer. Pending
+operations interrupted by that owned shutdown carry its internal stop cause;
+their broken pipe, invalid-handle wakeup, or cancellation is a consequence,
+not a newly independent failure that overrides timeout/overflow salvage.
+This classification comes from the operation's owned lifetime, never an
+exception-message match or a blanket suppression of `BrokenPipeError`.
+An independent I/O/callback failure already observed before stop keeps its
+priority. Later caller cancellation still propagates. Tests must cover both
+orderings, including shutdown-induced read and write failures.
+
+If cleanup itself fails, raise that failure (or a `BaseExceptionGroup` retaining it and
 the original exception/cancellation); never return a `ProcessResult` implying
 completed teardown. A complete salvage result is not promised when cleanup
 cannot establish completion. Tests must pin the simultaneous-cause precedence,
