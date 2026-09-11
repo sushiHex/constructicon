@@ -34,6 +34,7 @@ from tests.substrate.test_contained_workspace import provider as provider
 from tests.substrate.test_linux_containment import launcher as launcher
 
 WORKER = "import sys; exec(sys.stdin.read())"
+CATALOG_SHA256 = "d7136a413cfac1b5b1686d9e0dcc5c80ca05bebed5e9fc3911376561d0ef6ee8"
 PROGRAM = (
     "import json, pathlib\n"
     "assert not pathlib.Path('/etc/shadow').exists()\n"
@@ -64,7 +65,7 @@ def events(items, *, model="probe-model"):
 
 
 @asynccontextmanager
-async def fake_provider(tool, arguments, *, model="probe-model"):
+async def fake_provider(tool, arguments, *, model="probe-model", namespace=None):
     requests, failures = [], []
     handlers = set()
 
@@ -86,8 +87,11 @@ async def fake_provider(tool, arguments, *, model="probe-model"):
                 assert request["model"] == model
                 if len(requests) == 1:
                     item = {"id": "fc_probe", "call_id": "call_probe", "name": tool}
-                    if tool == "apply_patch":
-                        items = [{**item, "type": "custom_tool_call", "input": arguments["patch"]}]
+                    if namespace is not None:
+                        item["namespace"] = namespace
+                    if tool in {"apply_patch", "exec"}:
+                        source = arguments["patch" if tool == "apply_patch" else "code"]
+                        items = [{**item, "type": "custom_tool_call", "input": source}]
                     else:
                         items = [{**item, "type": "function_call",
                                   "arguments": json.dumps(arguments)}]
@@ -201,6 +205,65 @@ apps = false
     return [str(binary), "app-server", "--strict-config", "--stdio"]
 
 
+def install_catalog(native, *, restricted):
+    source = Path(os.environ["M8_CODEX_CATALOG"]).read_bytes()
+    assert hashlib.sha256(source).hexdigest() == CATALOG_SHA256
+    path = Path(native[1]["CODEX_HOME"]) / "catalog.json"
+    path.write_bytes(catalog_for(source, restricted=restricted))
+    return path
+
+
+@pytest.mark.parametrize("damage", ["missing", "malformed"])
+async def test_invalid_catalog_refuses_before_provider_request(native, tmp_path, damage):
+    path = Path(native[1]["CODEX_HOME"]) / "invalid-catalog.json"
+    if damage == "malformed":
+        path.write_text("{not-json")
+
+    async def worker(_source):
+        raise AssertionError("invalid catalog must not reach the worker")
+
+    async with fake_provider("contained_python", {"program": PROGRAM},
+                             model="gpt-5.5") as exchange:
+        endpoint, requests, failures = exchange
+        argv = argv_for(native, tmp_path, endpoint, images=False, model="gpt-5.5", catalog=path)
+        with pytest.raises(ExceptionGroup) as refusal:
+            await run_probe(argv, cwd=tmp_path, env=native[1], worker=worker, model="gpt-5.5")
+        assert not requests and not failures
+        write_evidence(f"codex-catalog-{damage}.json", {
+            "damage": damage, "provider_requests": requests,
+            "refusal": repr(refusal.value),
+        })
+
+
+@pytest.mark.parametrize("model", ["gpt-5.5", "gpt-5.6-sol"])
+@pytest.mark.parametrize("operation,namespace,arguments", [
+    ("exec", "functions", {"code": "text('inert fixture')"}),
+    ("spawn_agent", "collaboration", {"task_name": "fixture", "message": "inert fixture"}),
+])
+async def test_removed_catalog_tools_refuse_direct_namespaced_calls(
+    native, tmp_path, model, operation, namespace, arguments,
+):
+    path = install_catalog(native, restricted=True)
+
+    async def worker(_source):
+        raise AssertionError("a removed native tool must not reach the worker")
+
+    async with fake_provider(operation, arguments, model=model, namespace=namespace) as exchange:
+        endpoint, requests, failures = exchange
+        argv = argv_for(native, tmp_path, endpoint, images=False, model=model, catalog=path)
+        result = await run_probe(argv, cwd=tmp_path, env=native[1], worker=worker, model=model)
+        write_evidence(f"codex-catalog-{model}-{operation}.json", {
+            "model": model, "namespace": namespace, "operation": operation,
+            "requests": requests, "protocol": result, "server_failures": failures,
+        })
+        assert not failures and len(requests) == 2 and not result["calls"]
+        outputs = [item for item in requests[1]["input"]
+                   if item.get("type") in {"function_call_output", "custom_tool_call_output"}]
+        assert len(outputs) == 1
+        kind = "custom tool call" if operation == "exec" else "call"
+        assert outputs[0]["output"] == f"unsupported {kind}: {namespace}.{operation}"
+
+
 def test_pinned_native_schema_inventory(native, tmp_path):
     binary, env = native
     output = tmp_path / "schema"
@@ -246,15 +309,9 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
     catalog_evidence = None
     restricted = catalog_mode == "restricted"
     if catalog_mode != "bundled":
-        source = Path(os.environ["M8_CODEX_CATALOG"]).read_bytes()
-        assert hashlib.sha256(source).hexdigest() == (
-            "d7136a413cfac1b5b1686d9e0dcc5c80ca05bebed5e9fc3911376561d0ef6ee8"
-        )
-        content = catalog_for(source, restricted=restricted)
-        catalog_path = Path(native[1]["CODEX_HOME"]) / "catalog.json"
-        catalog_path.write_bytes(content)
-        catalog_evidence = {"source_sha256": hashlib.sha256(source).hexdigest(),
-                            "effective_sha256": hashlib.sha256(content).hexdigest(),
+        catalog_path = install_catalog(native, restricted=restricted)
+        submitted = hashlib.sha256(catalog_path.read_bytes()).hexdigest()
+        catalog_evidence = {"source_sha256": CATALOG_SHA256, "submitted_sha256": submitted,
                             "mode": catalog_mode}
     provider.launcher = launcher
     executor = RecordedExecutorProvider(launcher, provider, WORKER)

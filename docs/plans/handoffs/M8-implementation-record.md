@@ -632,6 +632,16 @@ is qualified, and no successor ADR follows from these results. The
 [authentication packet](../../designs/EXECUTOR_AUTHENTICATION.md#bounded-decision-packet-pr-49)
 returns the concrete route choice to the owner; it does not select paid API
 usage as a substitute for subscriptions.
+PR #50 tests the explicitly authorized controlled-catalog hypothesis. With
+three tool selectors changed on the same two model entries, native patch is
+refused and Sol's CodeMode/collaboration surface disappears; the unchanged
+catalog remains the positive control. Driver SIGKILL, explicit lease-provider
+reconciliation, and a fresh native invocation are tested separately from
+manual cleanup. This is not RunHost/journal recovery or ownership of the native
+home and all descendants. The
+[follow-up evidence](M8-native-mediation-probe.md#controlled-catalog-experiment-pr-50)
+keeps those remaining obligations explicit; ADR 0018 and live-profile
+availability are unchanged.
 The [OpenRouter assessment](../../designs/OPENROUTER.md)
 proposes configuration of the planned Pi harness rather than another executor
 or kernel abstraction. The follow-on scope is two explicit qualified models,

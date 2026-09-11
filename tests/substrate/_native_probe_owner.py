@@ -20,7 +20,12 @@ from tests.containedworld import RecordedExecutorProvider
 from tests.native_codex_probe import run_probe
 from tests.substrate.test_contained_workspace import context, stale_row
 from tests.substrate.test_linux_containment import launcher
-from tests.substrate.test_native_codex_mediation import WORKER, argv_for, catalog_for, fake_provider
+from tests.substrate.test_native_codex_mediation import (
+    WORKER,
+    argv_for,
+    fake_provider,
+    install_catalog,
+)
 
 
 async def main():
@@ -43,9 +48,7 @@ async def main():
     env = {"HOME": str(home), "CODEX_HOME": str(config),
            "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
     binary = Path(os.environ["M8_CODEX_BINARY"])
-    catalog = config / "catalog.json"
-    catalog.write_bytes(catalog_for(Path(os.environ["M8_CODEX_CATALOG"]).read_bytes(),
-                                    restricted=True))
+    catalog = install_catalog((binary, env), restricted=True)
     native_pid = None
     create = asyncio.create_subprocess_exec
 

@@ -158,3 +158,28 @@ work needs a concrete new interface/configuration hypothesis and authorization,
 not another broker, a weakened boundary, or credentials in the lab. None of
 these owner choices has been made by this packet. #38 and its dependent work
 remain open; closure of an investigation cannot unlock live implementation.
+
+## Controlled catalog follow-up (PR #50)
+
+The owner authorized the specific startup-catalog experiment, not a new
+authentication route. The same pinned binary now refuses native patch calls
+for both selected real model profiles when their patch selector is absent.
+An unchanged-catalog control still writes the fixture. Sol also honors the
+direct-tool selection and loses its CodeMode/collaboration surface while
+retaining the contained callback. The
+[evidence record](../plans/handoffs/M8-native-mediation-probe.md#controlled-catalog-experiment-pr-50)
+names exact catalog bytes and preserves the model-specific wire inventories.
+
+This advances the subscription-first hypothesis without authorizing credentials.
+Literal driver-death probes additionally observe stopped native execution and
+a stopped contained worker, followed by explicit provider reconciliation and
+a fresh native invocation. Acquisitions do not dispose themselves on death;
+the recovery calls cause their closure. The rows are serialized fixtures, not
+RunHost's journal recovery, and native-home/all-descendant ownership is not
+proved. Existing B/C/D recovery remains evidence for those resources only.
+
+Next qualification must close those lifecycle and startup/configuration gaps
+before proposing a successor ADR. The narrow catalog result is not complete
+mediation, a production launch identity, or permission to place a reusable
+secret in the harness. ADR 0018 remains the accepted boundary. No API billing
+substitution, Pi qualification, or OpenRouter readiness follows from this work.
