@@ -378,9 +378,9 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
                     expected_tools.add("apply_patch")
                 assert "missing model metadata" not in result["stderr_observed"].lower()
             if model == "gpt-5.6-sol":
-                # This pinned model publishes CodeMode namespaces despite the
-                # requested false flags. Preserve that distinct wire surface;
-                # do not flatten it into a claim of the fallback inventory.
+                # The bundled catalog enables CodeMode; the restricted one
+                # retains namespace framing without CodeMode. Preserve both
+                # wire shapes rather than flattening them into ordinary tools.
                 assert "tools" not in requests[0]
                 declarations = [item for item in requests[0]["input"]
                                 if item.get("type") == "additional_tools"]
@@ -589,21 +589,36 @@ async def test_native_turn_ending_joins_an_active_contained_worker(
     })
 
 
-@pytest.mark.parametrize("model", ["gpt-5.5", "gpt-5.6-sol"])
+@pytest.mark.parametrize("model,stage", [
+    ("gpt-5.5", "active"), ("gpt-5.6-sol", "active"), ("gpt-5.5", "before-worker"),
+    ("gpt-5.5", "held-guard"),
+])
 async def test_driver_death_and_explicit_successor_reconciliation(
-    native, tmp_path, provider, launcher, model,
+    native, tmp_path, provider, launcher, model, stage,
 ):
     """Lease-level composition only; no journal recovery or auth availability claim."""
     provider.posture = Posture.WRITE
     provider.launcher = launcher
-    executor = RecordedExecutorProvider(launcher, provider, WORKER)
-
     async def spawn(epoch):
         return await asyncio.create_subprocess_exec(
             sys.executable, "-m", "tests.substrate._native_probe_owner",
-            str(tmp_path), str(epoch), model, stdout=asyncio.subprocess.PIPE,
+            str(tmp_path), str(epoch), model, "active" if stage == "active" else "before-worker",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+
+    async def reconcile():
+        recovery = await spawn("reconcile")
+        try:
+            rows = json.dumps([item.lease.model_dump(mode="json") for item in stale]).encode()
+            stdout, stderr = await asyncio.wait_for(recovery.communicate(rows), 5)
+            assert recovery.returncode == 0, stderr.decode()
+            assert json.loads(stdout) == {"phase": "reconciled"}
+        finally:
+            if recovery.returncode is None:
+                recovery.kill()
+            await asyncio.wait_for(recovery.wait(), 5)
 
     def process_state(pid):
         try:
@@ -615,11 +630,12 @@ async def test_driver_death_and_explicit_successor_reconciliation(
     owner = await spawn(1)
     native_pid = native_start = None
     stale = []
+    failure = None
     try:
         line = await asyncio.wait_for(owner.stdout.readline(), 25)
         assert line, (await owner.stderr.read()).decode()
         event = json.loads(line)
-        assert event["phase"] == "active"
+        assert event["phase"] == "native-started"
         native_pid = event["native_pid"]
         initial = process_state(native_pid)
         assert initial is not None and initial[0] != "Z"
@@ -630,7 +646,12 @@ async def test_driver_death_and_explicit_successor_reconciliation(
             item.lease.lease_id, item.lease.acquisition_epoch,
         )) for item in stale]
         heartbeat = paths[0].payload / "workspace" / "worker-live"
-        assert heartbeat.read_bytes()
+        if stage == "active":
+            line = await asyncio.wait_for(owner.stdout.readline(), 20)
+            assert json.loads(line) == {"phase": "active"}
+            assert heartbeat.read_bytes()
+        else:
+            assert not heartbeat.exists()
         owner.kill()
         # The native child has its own pipes, not these report pipes. Waiting
         # for the driver's exit must not credit a graceful Python finally.
@@ -642,19 +663,35 @@ async def test_driver_death_and_explicit_successor_reconciliation(
                 if state is None or state[1] != native_start or state[0] == "Z":
                     break
                 await asyncio.sleep(.02)
-        stopped = heartbeat.read_bytes()
-        await asyncio.sleep(.2)
-        assert heartbeat.read_bytes() == stopped
-        before = {"native_executing": False, "worker_heartbeat_stopped": True,
+        if stage == "active":
+            stopped = heartbeat.read_bytes()
+            await asyncio.sleep(.2)
+            assert heartbeat.read_bytes() == stopped
+        else:
+            assert not heartbeat.exists()
+        before = {"native_executing": False, "worker_started": stage == "active",
+                  "worker_heartbeat_stopped": True if stage == "active" else None,
                   "acquisitions_closed": [provider.closure.is_closed(path) for path in paths],
                   "workspace_present": paths[0].payload.exists()}
         assert before["acquisitions_closed"] == [False, False]
         assert before["workspace_present"]
+        if stage == "held-guard":
+            import fcntl
+
+            # Reproduce the review's stuck-guard failure, with an independent
+            # outer deadline so removing the helper's bound fails an assertion.
+            with paths[1].guard.open("rb") as guard:
+                fcntl.flock(guard.fileno(), fcntl.LOCK_EX)
+                clock = asyncio.get_running_loop()
+                started_at = clock.time()
+                with pytest.raises(TimeoutError):
+                    async with asyncio.timeout(8):
+                        await reconcile()
+                assert clock.time() - started_at < 7
+                assert paths[0].payload.exists()  # Blocked is not disposed.
         # These are the actual recovery operations, not unconditional teardown.
         # Rows are serialized fixture inputs, explicitly not read from SQLite.
-        await executor.reconcile(context(epoch=2, posture=Posture.WRITE, binding="executor"),
-                                 (stale[1],))
-        await provider.reconcile(context(epoch=2, posture=Posture.WRITE), (stale[0],))
+        await reconcile()
         assert all(provider.closure.is_closed(path) for path in paths)
         assert all(not path.payload.exists() for path in paths)
         successor = await spawn(2)
@@ -665,18 +702,22 @@ async def test_driver_death_and_explicit_successor_reconciliation(
                 successor.kill()
                 await successor.wait()
         assert successor.returncode == 0, stderr.decode()
-        completed = json.loads(stdout)
+        started, completed = [json.loads(line) for line in stdout.splitlines()]
+        assert started["phase"] == "native-started"
         assert completed["phase"] == "completed"
         assert all(completed[key] for key in (
             "executor_closed", "workspace_closed", "workspace_removed",
         ))
-        write_evidence(f"codex-driver-death-{model}.json", {
-            "model": model, "before_reconciliation": before,
+        write_evidence(f"codex-driver-death-{model}-{stage}.json", {
+            "model": model, "stage": stage, "before_reconciliation": before,
             "after_reconciliation": {"old_acquisitions_closed": True,
                                       "old_payloads_removed": True},
             "fresh_invocation": completed,
             "lease_source": "serialized fixture rows, not journal recovery",
         })
+    except BaseException as exc:
+        failure = exc
+        raise
     finally:
         if owner.returncode is None:
             owner.kill()
@@ -687,7 +728,9 @@ async def test_driver_death_and_explicit_successor_reconciliation(
             if state is not None and state[1] == native_start and state[0] != "Z":
                 os.kill(native_pid, signal.SIGKILL)
         if stale:
-            await executor.reconcile(
-                context(epoch=2, posture=Posture.WRITE, binding="executor"), (stale[1],),
-            )
-            await provider.reconcile(context(epoch=2, posture=Posture.WRITE), (stale[0],))
+            try:
+                await reconcile()
+            except Exception as cleanup_error:
+                if failure is None:
+                    raise
+                failure.add_note(f"bounded failure cleanup also failed: {cleanup_error!r}")

@@ -14,6 +14,8 @@ from pathlib import Path
 
 from constructicon.core.executor import TaskSpec
 from constructicon.core.grants import Posture
+from constructicon.core.manifest import CapabilityLease
+from constructicon.core.workspace import StaleAcquisition
 from constructicon.substrate.git.authority import GitAuthority
 from constructicon.substrate.git.contained import ContainedWorkspaceProvider
 from tests.containedworld import RecordedExecutorProvider
@@ -29,7 +31,8 @@ from tests.substrate.test_native_codex_mediation import (
 
 
 async def main():
-    root, epoch, model = Path(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
+    root, mode, model = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+    epoch = 2 if mode == "reconcile" else int(mode)
     # Use the same fixture factories and real boundary as the in-process lane.
     workspaces = ContainedWorkspaceProvider(
         GitAuthority(root / "authority.git", root / "legacy"), root=root / "owned",
@@ -37,9 +40,16 @@ async def main():
         launcher=launcher.__wrapped__(),
     )
     executor = RecordedExecutorProvider(workspaces.launcher, workspaces, WORKER)
-    await executor.qualify()
     contexts = [context(epoch=epoch, posture=Posture.WRITE, binding=binding)
                 for binding in ("workspace", "executor")]
+    if mode == "reconcile":
+        rows = [StaleAcquisition(lease=CapabilityLease.model_validate(row), disposition="discard")
+                for row in json.loads(sys.stdin.read())]
+        await executor.reconcile(contexts[1], (rows[1],))
+        await workspaces.reconcile(contexts[0], (rows[0],))
+        print(json.dumps({"phase": "reconciled"}), flush=True)
+        return
+    await executor.qualify()
     workspace = await workspaces.acquire(contexts[0])
     acquired = await executor.acquire(contexts[1])
     home = root / f"home-{epoch}"
@@ -57,6 +67,11 @@ async def main():
         process = await create(*argv, **kwargs)
         if argv[0] == str(binary):
             native_pid = process.pid
+            # Report before any tool/heartbeat await, including a failed turn.
+            print(json.dumps({"phase": "native-started", "native_pid": native_pid,
+                              "leases": [stale_row(handle, ctx).lease.model_dump(mode="json")
+                                         for handle, ctx in zip((workspace, acquired), contexts,
+                                                                strict=True)]}), flush=True)
         return process
 
     asyncio.create_subprocess_exec = observe
@@ -69,6 +84,8 @@ async def main():
     ) if epoch == 1 else "print('{\"type\":\"result\",\"output\":{\"fresh\":true}}')"
 
     async def worker(source):
+        if epoch == 1 and sys.argv[4] == "before-worker":
+            await asyncio.Event().wait()  # Regression: no heartbeat ever arrives.
         result = await acquired.resource.execute(
             TaskSpec(instruction=source), workspace=workspace.resource,
             grants=contexts[1].binding.effective_grants,
@@ -81,10 +98,7 @@ async def main():
             while not heartbeat.exists():
                 await asyncio.sleep(.01)
         assert acquired.resource.active is not None and native_pid is not None
-        print(json.dumps({"phase": "active", "native_pid": native_pid,
-                          "leases": [stale_row(handle, ctx).lease.model_dump(mode="json")
-                                     for handle, ctx in zip((workspace, acquired), contexts,
-                                                            strict=True)]}), flush=True)
+        print(json.dumps({"phase": "active"}), flush=True)
 
     try:
         await workspace.materialize()
@@ -94,7 +108,7 @@ async def main():
             argv = argv_for((binary, env), root, endpoint, images=False, model=model,
                             catalog=catalog)
             async with asyncio.TaskGroup() as group:
-                if epoch == 1:
+                if epoch == 1 and sys.argv[4] == "active":
                     group.create_task(report_active())
                 result = await run_probe(argv, cwd=root, env=env, worker=worker, model=model)
             assert not failures and len(requests) == 2

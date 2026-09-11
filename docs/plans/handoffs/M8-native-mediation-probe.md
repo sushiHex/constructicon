@@ -412,6 +412,18 @@ descendants, credential revocation, or response-loss/restart under the complete
 durable run lifecycle. Worker PID-namespace ownership remains the production
 launcher's proof, not a new claim about the native harness's process group.
 
+Independent review caught two failure-path defects in this instrument. The
+parent originally learned the native PID only after the worker heartbeat,
+leaving earlier failures without that cleanup target. It now receives a
+separate process-start event immediately, with a before-worker stall regression.
+Unconditional in-process reconciliation could also wait forever on a stuck
+guard. Both measured recovery and failure cleanup now run the existing
+reconciliation calls in a disposable interpreter with a five-second deadline;
+the parent kills that interpreter on timeout. A deliberately held guard pins
+the bound. Cleanup errors are attached to the original failure rather than
+replacing it. This is lab containment of the test's failure path, not a new
+production recovery service or permission to dispose an active resource.
+
 The corrected `3acd4bc` native step passed all 77 cases and 18 portable
 instrument mutants. Additional missing/malformed-catalog and removed-tool
 direct-call controls follow on the same PR. Its exact final head must pass
