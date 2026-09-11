@@ -163,6 +163,8 @@ class _ProcessIO:
         self.stdin_closed = False
         self.reading = False
         self.writing = False
+        self._draining: asyncio.Future[None] | None = None
+        self._interrupted_drain: asyncio.Future[None] | None = None
 
     def require_active(self) -> None:
         if self.stopping:
@@ -171,6 +173,11 @@ class _ProcessIO:
             raise ContractViolation("process conversation is closed")
 
     def invalidate(self, *, stopping: bool = False) -> None:
+        if (
+            stopping and not self.stopping and self._draining is not None
+            and not self._draining.done()
+        ):
+            self._interrupted_drain = self._draining
         self.stopping |= stopping
         self.active = False
         self.stdin_closed = True
@@ -189,13 +196,28 @@ class _ProcessIO:
             for offset in range(0, len(data), 8192):
                 self.require_active()
                 self._writer.write(data[offset:offset + 8192])
-                await self._writer.drain()
+                self._draining = asyncio.ensure_future(self._writer.drain())
+                try:
+                    await asyncio.shield(self._draining)
+                except asyncio.CancelledError:
+                    # A settled failure predates this cancellation. Shielding
+                    # keeps it intact even if its waiter has not resumed yet.
+                    if self._draining.done() and not self._draining.cancelled():
+                        self._draining.result()
+                    self._draining.cancel()
+                    await asyncio.gather(self._draining, return_exceptions=True)
+                    raise
                 self.require_active()
-        except (OSError, asyncio.CancelledError) as exc:
+        except OSError as exc:
+            if self._draining is not None and self._draining is self._interrupted_drain:
+                raise _OwnedStop from exc
+            raise
+        except asyncio.CancelledError as exc:
             if self.stopping:
                 raise _OwnedStop from exc
             raise
         finally:
+            self._draining = None
             self.writing = False
 
     async def read(self, maximum: int = 8192) -> bytes:
@@ -264,6 +286,7 @@ class LinuxLauncher:
             "bubblewrap": BWRAP_SHA256,
             "recipe": _sha(Path(__file__)),
             "io_contract": digest("process-io-contract", 1, inspect.getsource(ProcessIO)),
+            "lifetime": digest("owned-lifetime", 1, inspect.getsource(finish_owned)),
             "policy": self.expected_policy_sha256,
             "limits": asdict(self.limits),
         })
@@ -426,7 +449,7 @@ class LinuxLauncher:
         stop_reason: str | None = None
         errors: list[BaseException] = []
         cleanup_errors: list[BaseException] = []
-        caller_cancelled = False
+        cancellation: asyncio.CancelledError | None = None
         protocol_observed = False
 
         def close_fd(fd: int) -> None:
@@ -475,12 +498,9 @@ class LinuxLauncher:
             nonlocal bound
             line_bytes = 0
             while True:
-                try:
-                    chunk = await stream.read(8192)
-                except OSError:
-                    if stop_reason is not None:
-                        return  # This pending pipe operation was stopped by its owner.
-                    raise
+                # Owner shutdown yields EOF here, not permission to discard
+                # independent failures: the read transport is never cancelled.
+                chunk = await stream.read(8192)
                 if not chunk:
                     break
                 if output:
@@ -551,22 +571,21 @@ class LinuxLauncher:
                 stderr=asyncio.subprocess.PIPE, close_fds=True,
                 pass_fds=(owner_read, report_write, *guard_fds), env={"LANG": "C.UTF-8"},
             ))
-            cancelled = False
             try:
                 async with asyncio.timeout_at(deadline):
                     process = await asyncio.shield(spawn)
             except TimeoutError:
                 timed_out = True
                 stop("deadline")
-            except asyncio.CancelledError:
-                cancelled = True
+            except asyncio.CancelledError as exc:
+                cancellation = cancellation or exc
                 stop("cancel")
             while True:
                 try:
                     process = await asyncio.shield(spawn)
                     break
-                except asyncio.CancelledError:
-                    cancelled = True
+                except asyncio.CancelledError as exc:
+                    cancellation = cancellation or exc
                     stop()
             assert process.stdin is not None and process.stdout is not None
             assert process.stderr is not None
@@ -578,8 +597,8 @@ class LinuxLauncher:
                 asyncio.create_task(drain(process.stdout, output=True)),
                 asyncio.create_task(drain(process.stderr, output=False)),
             ]
-            if cancelled:
-                raise asyncio.CancelledError
+            if cancellation is not None:
+                raise cancellation
             if stop_reason is None:
                 protocol = asyncio.create_task(converse())
             if owner_write >= 0:
@@ -598,22 +617,22 @@ class LinuxLauncher:
             except TimeoutError:
                 timed_out = True
                 stop("deadline")
-        except asyncio.CancelledError:
-            caller_cancelled = True
+        except asyncio.CancelledError as exc:
+            cancellation = cancellation or exc
         except BaseException as exc:
             remember(exc)
         finally:
             close_fd(owner_read)
             try:
-                stop("cancel" if caller_cancelled else "failure" if errors else "complete")
+                stop("cancel" if cancellation is not None else "failure" if errors else "complete")
             except BaseException as exc:
                 cleanup_errors.append(exc)
             cleanup = completion or asyncio.create_task(finish())
             try:
                 try:
                     await finish_owned(cleanup)
-                except asyncio.CancelledError:
-                    caller_cancelled = True
+                except asyncio.CancelledError as exc:
+                    cancellation = cancellation or exc
                 except BaseException as exc:
                     cleanup_errors.append(exc)
                 if protocol is not None:
@@ -622,8 +641,8 @@ class LinuxLauncher:
 
                     try:
                         await finish_owned(asyncio.create_task(join_protocol()))
-                    except asyncio.CancelledError:
-                        caller_cancelled = True
+                    except asyncio.CancelledError as exc:
+                        cancellation = cancellation or exc
                     except BaseException as exc:
                         cleanup_errors.append(exc)
                     observe_protocol()
@@ -646,15 +665,15 @@ class LinuxLauncher:
             cleanup_errors.append(exc)
         if cleanup_errors:
             failures = [*errors, *cleanup_errors]
-            if caller_cancelled:
-                failures.insert(0, asyncio.CancelledError())
+            if cancellation is not None:
+                failures.insert(0, cancellation)
             if len(failures) == 1:
                 raise failures[0]
             raise BaseExceptionGroup("contained process cleanup failed", failures)
-        if caller_cancelled:
+        if cancellation is not None:
             if errors:
-                raise asyncio.CancelledError from BaseExceptionGroup("conversation failed", errors)
-            raise asyncio.CancelledError
+                raise cancellation from BaseExceptionGroup("conversation failed", errors)
+            raise cancellation
         if process is None:
             assert errors
             raise errors[0]

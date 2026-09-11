@@ -670,3 +670,17 @@ are not native process proof. Exact-head Linux evidence, all existing batch
 consumers and mutation inventories, the new lifetime failures, and independent
 code review remain required before claiming the transport complete. Complete
 native startup and journal-driven qualification remain separate obligations.
+
+The implementation reuses the existing launch owner and one bounded capture.
+The first independent code review (head `548a67b`) found five failure-law gaps:
+cancellation coinciding with a failed join or spawn, settled write failures
+misclassified by a later stop, discarded read errors, and private-report
+corruption hiding a callback error. The follow-up keeps actual cancellation
+objects in the existing `finish_owned` helper, groups concurrent failures,
+arbitrates writes against their owned operation's completion, and retains
+read/report failures. The launch identity now binds the helper source too.
+Self-review additionally made stop idempotent so callback cleanup receives
+one cancellation, not repeated interruptions. New native regressions and
+assertion mutants are required to confirm these corrections; the previous
+303-test Linux pass did not satisfy the complete mutation gate because an
+older mutation anchor no longer matched uniquely.

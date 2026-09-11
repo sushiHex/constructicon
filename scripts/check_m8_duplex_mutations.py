@@ -45,13 +45,43 @@ MUTANTS = (
     ),
     (
         "owned pipe failure becomes independent", IO + "write",
-        "if self.stopping:", "if False:",
+        "if self._draining is not None and self._draining is self._interrupted_drain:",
+        "if False:",
         UNIT + "test_io_failure_is_subordinate_only_to_its_owned_shutdown[True]",
     ),
     (
         "ordinary pipe failure is treated as shutdown", IO + "write",
-        "if self.stopping:", "if True:",
+        "if self._draining is not None and self._draining is self._interrupted_drain:",
+        "if True:",
         UNIT + "test_io_failure_is_subordinate_only_to_its_owned_shutdown[False]",
+    ),
+    (
+        "settled write failure is relabeled by current stop state", IO + "write",
+        "if self._draining is not None and self._draining is self._interrupted_drain:",
+        "if self.stopping:",
+        UNIT + "test_settled_write_failure_keeps_its_order_against_shutdown[True]",
+    ),
+    (
+        "joined failure forgets cancellation",
+        "constructicon.substrate._lifetime:finish_owned",
+        "        if interrupted is not None:\n", "        if False:\n",
+        "tests/substrate/test_lifetime.py::"
+        "test_join_retains_original_cancellation_and_cleanup_failure[True]",
+    ),
+    (
+        "late spawn failure forgets caller cancellation", PUMP,
+        'cancellation = cancellation or exc\n            stop("cancel")',
+        'cancellation = None\n            stop("cancel")',
+        NATIVE + "test_cancellation_during_spawn_preserves_its_message_and_late_failure[True]",
+    ),
+    (
+        "read failures after stop are discarded", PUMP,
+        "chunk = await stream.read(8192)",
+        "\n            try: chunk = await stream.read(8192)"
+        "\n            except OSError:"
+        "\n                if stop_reason is not None: return"
+        "\n                raise",
+        NATIVE + "test_read_failure_after_callback_stop_keeps_both_errors",
     ),
     (
         "repeated stops interrupt callback cleanup", PUMP,

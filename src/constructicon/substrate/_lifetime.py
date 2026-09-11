@@ -9,13 +9,27 @@ _T = TypeVar("_T")
 
 
 async def finish_owned(task: asyncio.Task[_T]) -> _T:
-    interrupted = False
+    owner = asyncio.current_task()
+    assert owner is not None
+    cancellations = owner.cancelling()
+    interrupted: asyncio.CancelledError | None = None
     while not task.done():
         try:
             await asyncio.shield(task)
-        except asyncio.CancelledError:
-            interrupted = True
-    result = task.result()
-    if interrupted:
-        raise asyncio.CancelledError
+        except asyncio.CancelledError as exc:
+            if owner.cancelling() > cancellations:
+                interrupted = interrupted or exc
+                cancellations = owner.cancelling()
+        except BaseException:
+            break  # Retrieve the owned failure once, retaining cancellation too.
+    try:
+        result = task.result()
+    except BaseException as exc:
+        if interrupted is not None:
+            raise BaseExceptionGroup(
+                "owned cleanup failed after cancellation", [interrupted, exc],
+            ) from None
+        raise
+    if interrupted is not None:
+        raise interrupted
     return result

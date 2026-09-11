@@ -295,7 +295,98 @@ async def test_repeated_bound_notifications_do_not_cancel_callback_cleanup(
         await asyncio.gather(task, return_exceptions=True)
 
 
-@pytest.mark.parametrize("phase", ["join", "report"])
+@pytest.mark.parametrize("fails", [False, True])
+async def test_cancellation_during_spawn_preserves_its_message_and_late_failure(
+    launcher, tmp_path, monkeypatch, fails,
+):
+    entered, release = asyncio.Event(), asyncio.Event()
+    error = OSError("spawn refused")
+    spawn = asyncio.create_subprocess_exec
+    calls = 0
+
+    async def delayed(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            entered.set()
+            await release.wait()
+            if fails:
+                raise error
+        return await spawn(*args, **kwargs)
+
+    async def conversation(_io):
+        pytest.fail("a cancelled spawn must not start its protocol")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", delayed)
+    task = asyncio.create_task(exchange(launcher, tmp_path, conversation, source="pass"))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        task.cancel("spawn cancellation")
+        await asyncio.sleep(0)
+        release.set()
+        caught = None
+        try:
+            await task
+        except BaseException as exc:
+            caught = exc
+        assert isinstance(caught, asyncio.CancelledError)
+        assert caught.args == ("spawn cancellation",)
+        if fails:
+            assert isinstance(caught.__cause__, BaseExceptionGroup)
+            assert error in caught.__cause__.exceptions
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_read_failure_after_callback_stop_keeps_both_errors(
+    launcher, tmp_path, monkeypatch,
+):
+    original, pipe_error = ValueError("callback failed"), OSError("pipe failed")
+    pending = asyncio.get_running_loop().create_future()
+    spawn = asyncio.create_subprocess_exec
+    invalidate = linux._ProcessIO.invalidate
+    calls = 0
+
+    def stopped(io, *, stopping=False):
+        invalidate(io, stopping=stopping)
+        if stopping and not pending.done() and calls == 2:
+            pending.set_exception(pipe_error)
+
+    async def observed_spawn(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        process = await spawn(*args, **kwargs)
+        if calls == 2:
+            read = process.stdout.read
+            reads = 0
+
+            def observed_read(n):
+                nonlocal reads
+                reads += 1
+                return read(n) if reads == 1 else pending
+
+            monkeypatch.setattr(process.stdout, "read", observed_read)
+        return process
+
+    async def conversation(io):
+        assert await io.read() == b"ready\n"
+        raise original
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", observed_spawn)
+    monkeypatch.setattr(linux._ProcessIO, "invalidate", stopped)
+    with pytest.raises(ProcessExchangeError) as caught:
+        await exchange(launcher, tmp_path, conversation, source=(
+            "import time; print('ready', flush=True); time.sleep(100)"
+        ))
+    cause = caught.value.__cause__
+    assert isinstance(cause, BaseExceptionGroup)
+    assert original in cause.exceptions and pipe_error in cause.exceptions
+
+
+@pytest.mark.parametrize("phase", ["join", "report", "malformed", "invalid"])
 async def test_cleanup_failure_keeps_the_original_callback_error(
     launcher, tmp_path, monkeypatch, phase,
 ):
@@ -313,7 +404,9 @@ async def test_cleanup_failure_keeps_the_original_callback_error(
 
     def broken_report(fd, count):
         if failed and count == 5:
-            raise cleanup
+            if phase == "report":
+                raise cleanup
+            return b"bad" if phase == "malformed" else b"\xff" * 4
         return read(fd, count)
 
     if phase == "join":
@@ -332,7 +425,11 @@ async def test_cleanup_failure_keeps_the_original_callback_error(
     except BaseException as exc:
         caught = exc
     assert isinstance(caught, BaseExceptionGroup)
-    assert original in caught.exceptions and cleanup in caught.exceptions
+    assert original in caught.exceptions
+    if phase in {"join", "report"}:
+        assert cleanup in caught.exceptions
+    else:
+        assert any(isinstance(exc, ContractViolation) for exc in caught.exceptions)
 
 
 @pytest.mark.parametrize(("source", "output", "diagnostics", "exit_code"), [

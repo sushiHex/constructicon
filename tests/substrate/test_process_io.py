@@ -175,3 +175,26 @@ async def test_owned_stop_wakes_a_pending_read():
     io.invalidate(stopping=True)
     with pytest.raises(_OwnedStop):
         await asyncio.wait_for(pending, .5)
+
+
+@pytest.mark.parametrize("failed_before_stop", [False, True])
+async def test_settled_write_failure_keeps_its_order_against_shutdown(failed_before_stop):
+    io, writer, _ = channel()
+    result = asyncio.get_running_loop().create_future()
+    writer.drain = lambda: result
+    pending = asyncio.create_task(io.write(b"x"))
+    await asyncio.sleep(0)
+    assert writer.data == b"x" and not pending.done()
+    error = BrokenPipeError("pipe failure")
+    if failed_before_stop:
+        result.set_exception(error)
+    io.invalidate(stopping=True)
+    if not failed_before_stop:
+        result.set_exception(error)
+    caught = None
+    try:
+        await pending
+    except Exception as exc:
+        caught = exc
+    assert isinstance(caught, BrokenPipeError if failed_before_stop else _OwnedStop)
+    assert (caught if failed_before_stop else caught.__cause__) is error
