@@ -236,12 +236,14 @@ async def test_invalid_catalog_refuses_before_provider_request(native, tmp_path,
 
 
 @pytest.mark.parametrize("model", ["gpt-5.5", "gpt-5.6-sol"])
-@pytest.mark.parametrize("operation,namespace,arguments", [
-    ("exec", "functions", {"code": "text('inert fixture')"}),
-    ("spawn_agent", "collaboration", {"task_name": "fixture", "message": "inert fixture"}),
+@pytest.mark.parametrize("operation,namespace,arguments,refusal", [
+    ("exec", "functions", {"code": "text('inert fixture')"},
+     "unsupported custom tool call: exec"),
+    ("spawn_agent", "collaboration", {"task_name": "fixture", "message": "inert fixture"},
+     "unsupported call: collaborationspawn_agent"),
 ])
 async def test_removed_catalog_tools_refuse_direct_namespaced_calls(
-    native, tmp_path, model, operation, namespace, arguments,
+    native, tmp_path, model, operation, namespace, arguments, refusal,
 ):
     path = install_catalog(native, restricted=True)
 
@@ -260,8 +262,9 @@ async def test_removed_catalog_tools_refuse_direct_namespaced_calls(
         outputs = [item for item in requests[1]["input"]
                    if item.get("type") in {"function_call_output", "custom_tool_call_output"}]
         assert len(outputs) == 1
-        kind = "custom tool call" if operation == "exec" else "call"
-        assert outputs[0]["output"] == f"unsupported {kind}: {namespace}.{operation}"
+        # Pin the binary's actual diagnostic spelling, not an invented display
+        # law for namespaces. The input still carries the explicit namespace.
+        assert outputs[0]["output"] == refusal
 
 
 def test_pinned_native_schema_inventory(native, tmp_path):
