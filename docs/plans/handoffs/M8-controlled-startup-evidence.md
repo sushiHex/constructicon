@@ -1,7 +1,8 @@
 # M8 controlled startup: investigation evidence
 
-Status: work in progress; native checks below are prospective until an
-exact-head Actions artifact is recorded. No production profile is qualified.
+Status: partial native observations; combined qualification is blocked.
+The exact-head merge gate and independent review remain pending. No production
+profile is qualified.
 
 Base: `6d6379c56bc1dd44a6f32f82b00efefbefdbe939` (merged PR #53).
 The owner authorized the four recommended steps: transport-record closure,
@@ -15,7 +16,7 @@ remain unchanged. Durable native recovery is not in this slice.
 
 ## One owner, two different questions
 
-`LinuxLauncher.exchange` now supports native startup RPCs, with the same
+`LinuxLauncher.exchange` carries native startup RPCs, with the same
 supervisor, guards, capture bounds, deadline, and namespace recipe as batch
 work. `DuplexWire` frames its byte chunks through the existing investigation
 `Wire`; it introduces no process owner or second JSON/RPC validator.
@@ -24,7 +25,9 @@ A separate immutable **test image** copies the already-curated userspace and
 adds the pinned CLI package, restricted catalog, and a small setup entry point.
 Its content participates in the normal runtime and launch digests. It is not
 the original runtime image and does not inherit its exact artifact identity.
-The entry point receives one trusted setup record, writes only private `/tmp`
+The existing duplex test helper supplies a real acquisition guard. This is
+not a journal lease or evidence of native RunHost recovery. The entry point
+receives one trusted setup record, writes only private `/tmp`
 files, and replaces itself with the native app-server. It never spawns or
 supervises another controller. No acquired repository is mounted.
 
@@ -72,23 +75,67 @@ read at the exact commit; it is not a claim of release execution:
 
 ## Origin to control to test inventory
 
-The table deliberately separates candidate controls from executed proof.
-Native tests live in `tests/substrate/test_native_startup.py`; until their
-artifact is recorded below, every native result is **unexecuted**.
+The table separates scoped observations from remaining qualification gaps.
+Native tests live in `tests/substrate/test_native_startup.py`. The first
+executed observations are recorded below; no row borrows credit from an
+unexecuted control or from a different native fixture.
 
 | Origin | Candidate control / observation | Test or remaining gap |
 | --- | --- | --- |
 | Packaged defaults and assets | Whole pinned package in immutable runtime | Record native layers and full runtime inventory; not an audit of every embedded behavior |
 | System and legacy-managed files | No `/etc/codex` in curated image | Bootstrap checks physical absence; native layers recorded; no managed-policy positive control yet |
-| Cloud config, auth, prior-session caches | Fresh private home; no account or route | Absence by construction; authenticated/cloud configuration remains unqualified |
+| Cloud config, auth, prior-session caches | Fresh private home; no account or route | No inherited account files; authenticated/cloud configuration remains unqualified |
 | Base user config | Controller-created private config before exec | Both pinned models; exact native `config/read` results |
 | Selected user/profile config | Controller owns argv and private files | Explicit session override positive control; named-profile precedence unqualified |
 | Working directory / ancestor / repository | Fresh private cwd; no acquired repo mount | Absent workspace metadata; project-skill positive/absent control; project TOML/trust matrix unqualified |
-| Environment / internal overrides | Existing `--clearenv` plus three fixed variables | Poisoned host `CODEX_HOME`, base URL, and debug override absent from child and native result |
-| Skills | Fresh roots; embedded assets bound to binary | User/project inert skill positive/absent controls and native inventory |
+| Environment / internal overrides | Existing `--clearenv` plus three fixed variables; bubblewrap supplies `PWD` | Poisoned host `CODEX_HOME`, base URL, and debug override absent from child and native result |
+| Skills | Fresh roots; embedded assets bound to binary | User/project inert skill positive/absent controls; packaged system skills materialize in the fresh home |
 | Hooks, plugins, MCP, apps | No inherited configuration; same published tool controls | Baseline hook inventory only; execution order, plugin/MCP discovery and startup-process matrix remain unqualified |
 | Model/runtime metadata | Pinned package/catalog, two exact model selections | Native config/layers recorded; full request-tool inventory still has only the separate PR #50 lab proof |
 | Client RPCs | Trusted bounded `Wire` requests, same refusal law | Portable framing, malformed/foreign messages, byte ceilings; not model-selected authority |
+
+## Executed observations and corrected assumptions
+
+The first two runs failed before native launch: the instrument first omitted
+the required guard argument, then supplied an empty tuple. Both are invalid.
+It now reuses the guarded duplex test helper; a portable test pins that
+interface using a fake guard, and the native lane takes the real Linux guard.
+Neither failed run supplies native execution evidence.
+
+At `236068c843cb8280abeb2f30adeb15bd9022efab`,
+[run 34581074023](https://github.com/sushiHex/constructicon/actions/runs/34581074023)
+passed eight startup assertions and failed the ninth test's incorrect
+expectation of a completed failed turn. Its downloaded artifact was inspected
+independently of those assertions:
+
+- Both models return their private config and origins through native RPCs.
+  User config names `/tmp/home/.codex/config.toml`; the system layer is empty.
+  The bootstrap environment includes bubblewrap's `PWD=/tmp`, in addition
+  to the launcher's fixed `HOME`, `PATH`, and `LANG`.
+- The poisoned outer environment is absent. A controlled session override
+  changes the native model; unknown feature/table settings refuse startup.
+  Inert user/project skills appear only in their positive controls.
+- A fresh home is not an empty native startup: packaged system skills are
+  installed there. `hooks/list` returns an empty baseline, not a hook-execution
+  proof. `configRequirements/read` returns null, not managed-policy proof.
+- Native startup warns about missing bubblewrap on its internal PATH and
+  refusing helper aliases under `/tmp`. These warnings are retained. No extra
+  binary is installed simply to silence them. The outer Constructicon launcher
+  is the enforced boundary; this is not proof of native sandbox execution.
+- The native config projection names the external fake endpoint. Thread and
+  turn creation succeed, followed by typed errors: `Connection failed: error
+  sending request` and `Reconnecting... waiting for network`, with
+  `willRetry=true`. Both provider retry settings were zero. No terminal turn
+  arrives; at 20 seconds the existing owner terminates the payload with status
+  143 and `timed_out=true`, with no capture-bound violation. This is a bounded
+  network-failure observation, not a graceful native refusal or successful
+  provider exchange.
+
+The corrected regression requires the matching thread/turn error identities,
+the native endpoint projection, empty external request/failure lists, and the
+actual timeout outcome. It never converts an unfinished turn into completion.
+The older PR #50 fixture still tests a working fake provider in its separate
+outer lab namespace. That positive result is not connectivity for this image.
 
 ## Verification and decision boundary
 
@@ -97,8 +144,10 @@ and fixed configuration. Windows skips are not physical proof. Native checks
 must record process exits, timeout/bound flags, warnings, runtime identity,
 the exact config layers and discovery responses. The provider test starts the
 existing credential-free fake endpoint outside the launch namespace and
-records its empty request list plus the native failed turn. That is a negative
-connectivity observation, not a successful native model invocation.
+records its empty request list plus the native nonterminal retry and bounded
+termination. That is a negative connectivity observation, not a successful
+native model invocation. Patch/image/model-dependent tool inventories cannot
+be re-proved through this arrangement without a working provider fixture.
 
 Required gate: exact-head `uv run verify`, CI, relevant assertion mutants,
 independent review, and separate inspection of the downloaded artifact.
@@ -107,4 +156,13 @@ Startup completeness and the supported provider arrangement must be established
 before native SQLite/RunHost recovery can begin. No successor ADR, credentials,
 paid API substitution, or live availability follows from this record.
 
-Exact-head native results and review: **not yet executed**.
+The remaining decision is a supported credential-free provider-fixture
+arrangement that preserves one physical owner and names its precise network
+boundary. The present HTTP listener is outside `--unshare-net`; moving the CLI
+outside containment, enabling a route, or starting another owner is not an
+implicit next step. No blanket claim that every possible supported arrangement
+is impossible follows from this one negative result. Until that prerequisite
+and the remaining startup-origin controls are resolved, Slice B stays blocked.
+
+Final merge-head verification and review links belong in PR #54; they are
+pending, not inferred from the earlier partial run above.

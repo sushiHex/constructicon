@@ -201,3 +201,26 @@ second process manager nor a recorded-executor test can substitute for the
 missing native composition. No native qualification code or successor ADR is
 claimed by PR #51; [#38](https://github.com/sushiHex/constructicon/issues/38)
 remains the decision point.
+
+## Controlled startup and provider placement (PR #54)
+
+The transport prerequisite is merged in PR #52/#53 at
+`6d6379c56bc1dd44a6f32f82b00efefbefdbe939`. It preserves the existing owner;
+it does not supply a network route. The
+[controlled-startup evidence](../plans/handoffs/M8-controlled-startup-evidence.md)
+records native startup in a separate immutable test image through that duplex
+interface. Config/session and inert skill controls have scoped observations;
+managed/cloud/profile/plugin and full startup authority remain unqualified.
+
+The provider experiment is negative: the existing external fake HTTP endpoint
+is unreachable under the unchanged network namespace. Native startup and turn
+creation succeed, but network retry continues until the owned deadline, not
+until a terminal native turn. The record preserves this distinction and the
+native warnings. A failed exchange is not positive model mediation.
+
+The next decision is a separately reviewed supported credential-free fixture
+arrangement, with its exact network boundary and one lifetime owner stated
+before implementation. This is not permission to move the CLI outside the
+boundary, deploy a gateway, use an account, or substitute paid calls. Startup
+completeness and the provider prerequisite still gate native journal recovery;
+ADR 0018 and authentication unavailability remain unchanged.

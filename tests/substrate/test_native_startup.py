@@ -199,11 +199,10 @@ async def test_provider_failure_retries_until_the_owned_deadline(startup_launche
         observations["external_fixture"] = {
             "endpoint": endpoint, "requests": requests, "failures": failures,
         }
-        evidence("codex-startup-provider-refusal.json", startup_launcher, observations, result)
-        assert not requests and not failures
-        # This is the native projection, not the setup record echoing itself.
-        assert observations["config"]["config"]["model_providers"]["probe"]["base_url"] == endpoint
     evidence("codex-startup-provider-refusal.json", startup_launcher, observations, result)
+    assert not requests and not failures
+    # This is the native projection, not the setup record echoing itself.
+    assert observations["config"]["config"]["model_providers"]["probe"]["base_url"] == endpoint
     assert result.timed_out and result.bound_exceeded is None
     assert result.returncode == result.payload_returncode == 143
     assert "turn" not in observations  # Native never reported a terminal turn.
