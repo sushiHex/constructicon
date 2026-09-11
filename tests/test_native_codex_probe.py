@@ -248,7 +248,8 @@ def test_catalog_changes_only_the_named_tool_selectors(tmp_path, restricted):
     path = config / "catalog.json"
     native_probe.argv_for((Path("pinned-codex"), {"CODEX_HOME": str(config)}),
                           tmp_path, "http://127.0.0.1:1/v1", images=False, catalog=path)
-    assert tomllib.loads((config / "config.toml").read_text())["model_catalog_json"] == str(path)
+    configured = tomllib.loads((config / "config.toml").read_text())
+    assert configured.get("model_catalog_json") == str(path)
 
 
 @pytest.mark.parametrize("mode", ["success", "eof", "stderr", "timeout", "cancel"])

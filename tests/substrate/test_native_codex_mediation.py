@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 from contextlib import asynccontextmanager
@@ -23,6 +24,9 @@ import pytest
 from constructicon.core.executor import TaskSpec
 from constructicon.core.grants import Posture
 from constructicon.core.identity import parse_json_value
+from constructicon.core.manifest import CapabilityLease
+from constructicon.core.workspace import StaleAcquisition, acquisition_id_for
+from constructicon.substrate.git.acquisition import AcquisitionPaths
 from tests.containedworld import RecordedExecutorProvider
 from tests.native_codex_probe import CANARY_PNG, RECORD_BYTES, run_probe
 from tests.substrate.test_contained_workspace import context
@@ -313,7 +317,7 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
                 if not restricted:
                     expected_tools.add("apply_patch")
                 assert "missing model metadata" not in result["stderr_observed"].lower()
-            if model == "gpt-5.6-sol" and not restricted:
+            if model == "gpt-5.6-sol":
                 # This pinned model publishes CodeMode namespaces despite the
                 # requested false flags. Preserve that distinct wire surface;
                 # do not flatten it into a claim of the fallback inventory.
@@ -322,17 +326,22 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
                                 if item.get("type") == "additional_tools"]
                 assert len(declarations) == 1
                 namespaces = {tool["name"]: tool for tool in declarations[0]["tools"]}
-                assert set(namespaces) == {"functions", "collaboration"}
-                functions = {tool["name"]: tool for tool in namespaces["functions"]["tools"]}
-                assert set(functions) == {"exec", "wait", "request_user_input"}
-                assert {tool["name"] for tool in namespaces["collaboration"]["tools"]} == {
-                    "followup_task", "interrupt_agent", "list_agents", "send_message",
-                    "spawn_agent", "wait_agent",
-                }
-                description = functions["exec"]["description"]
-                assert set(re.findall(r"^### `([^`]+)`$", description, re.MULTILINE)) == (
-                    expected_tools - {"request_user_input"}
+                assert set(namespaces) == (
+                    {"functions"} if restricted else {"functions", "collaboration"}
                 )
+                functions = {tool["name"]: tool for tool in namespaces["functions"]["tools"]}
+                if restricted:
+                    assert set(functions) == expected_tools
+                else:
+                    assert set(functions) == {"exec", "wait", "request_user_input"}
+                    assert {tool["name"] for tool in namespaces["collaboration"]["tools"]} == {
+                        "followup_task", "interrupt_agent", "list_agents", "send_message",
+                        "spawn_agent", "wait_agent",
+                    }
+                    description = functions["exec"]["description"]
+                    assert set(re.findall(r"^### `([^`]+)`$", description, re.MULTILINE)) == (
+                        expected_tools - {"request_user_input"}
+                    )
             else:
                 assert {tool["name"] for tool in requests[0]["tools"]} == expected_tools
                 assert not any(item.get("type") == "additional_tools"
@@ -349,7 +358,8 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
                 if operation == "apply_patch" and not restricted:
                     assert patch_canary.read_text() == "fixture only\n"
                 elif operation != "view_image" or not images:
-                    assert outputs[0]["output"] == f"unsupported call: {operation}"
+                    kind = "custom tool call" if operation == "apply_patch" else "call"
+                    assert outputs[0]["output"] == f"unsupported {kind}: {operation}"
                     assert not canary.exists()
                     assert not patch_canary.exists()
                 else:
@@ -517,3 +527,107 @@ async def test_native_turn_ending_joins_an_active_contained_worker(
         "on_driver_return": on_driver_return,
         "after_explicit_test_cleanup": after_cleanup,
     })
+
+
+@pytest.mark.parametrize("model", ["gpt-5.5", "gpt-5.6-sol"])
+async def test_driver_death_and_explicit_successor_reconciliation(
+    native, tmp_path, provider, launcher, model,
+):
+    """Lease-level composition only; no journal recovery or auth availability claim."""
+    provider.posture = Posture.WRITE
+    provider.launcher = launcher
+    executor = RecordedExecutorProvider(launcher, provider, WORKER)
+
+    async def spawn(epoch):
+        return await asyncio.create_subprocess_exec(
+            sys.executable, "-m", "tests.substrate._native_probe_owner",
+            str(tmp_path), str(epoch), model, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+    def process_state(pid):
+        try:
+            fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+            return fields[0], fields[19]  # state and starttime, not PID alone
+        except FileNotFoundError:
+            return None
+
+    owner = await spawn(1)
+    native_pid = native_start = None
+    stale = []
+    try:
+        line = await asyncio.wait_for(owner.stdout.readline(), 25)
+        assert line, (await owner.stderr.read()).decode()
+        event = json.loads(line)
+        assert event["phase"] == "active"
+        native_pid = event["native_pid"]
+        initial = process_state(native_pid)
+        assert initial is not None and initial[0] != "Z"
+        native_start = initial[1]
+        stale = [StaleAcquisition(lease=CapabilityLease.model_validate(row), disposition="discard")
+                 for row in event["leases"]]
+        paths = [AcquisitionPaths(provider.root, acquisition_id_for(
+            item.lease.lease_id, item.lease.acquisition_epoch,
+        )) for item in stale]
+        heartbeat = paths[0].payload / "workspace" / "worker-live"
+        assert heartbeat.read_bytes()
+        owner.kill()
+        # The native child has its own pipes, not these report pipes. Waiting
+        # for the driver's exit must not credit a graceful Python finally.
+        await asyncio.wait_for(owner.wait(), 5)
+        assert owner.returncode == -signal.SIGKILL
+        async with asyncio.timeout(5):
+            while True:
+                state = process_state(native_pid)
+                if state is None or state[1] != native_start or state[0] == "Z":
+                    break
+                await asyncio.sleep(.02)
+        stopped = heartbeat.read_bytes()
+        await asyncio.sleep(.2)
+        assert heartbeat.read_bytes() == stopped
+        before = {"native_executing": False, "worker_heartbeat_stopped": True,
+                  "acquisitions_closed": [provider.closure.is_closed(path) for path in paths],
+                  "workspace_present": paths[0].payload.exists()}
+        assert before["acquisitions_closed"] == [False, False]
+        assert before["workspace_present"]
+        # These are the actual recovery operations, not unconditional teardown.
+        # Rows are serialized fixture inputs, explicitly not read from SQLite.
+        await executor.reconcile(context(epoch=2, posture=Posture.WRITE, binding="executor"),
+                                 (stale[1],))
+        await provider.reconcile(context(epoch=2, posture=Posture.WRITE), (stale[0],))
+        assert all(provider.closure.is_closed(path) for path in paths)
+        assert all(not path.payload.exists() for path in paths)
+        successor = await spawn(2)
+        try:
+            stdout, stderr = await asyncio.wait_for(successor.communicate(), 25)
+        finally:
+            if successor.returncode is None:
+                successor.kill()
+                await successor.wait()
+        assert successor.returncode == 0, stderr.decode()
+        completed = json.loads(stdout)
+        assert completed["phase"] == "completed"
+        assert all(completed[key] for key in (
+            "executor_closed", "workspace_closed", "workspace_removed",
+        ))
+        write_evidence(f"codex-driver-death-{model}.json", {
+            "model": model, "before_reconciliation": before,
+            "after_reconciliation": {"old_acquisitions_closed": True,
+                                      "old_payloads_removed": True},
+            "fresh_invocation": completed,
+            "lease_source": "serialized fixture rows, not journal recovery",
+        })
+    finally:
+        if owner.returncode is None:
+            owner.kill()
+        await owner.wait()
+        # Failure cleanup is lab hygiene and never credited to owner death.
+        if native_pid is not None and native_start is not None:
+            state = process_state(native_pid)
+            if state is not None and state[1] == native_start and state[0] != "Z":
+                os.kill(native_pid, signal.SIGKILL)
+        if stale:
+            await executor.reconcile(
+                context(epoch=2, posture=Posture.WRITE, binding="executor"), (stale[1],),
+            )
+            await provider.reconcile(context(epoch=2, posture=Posture.WRITE), (stale[0],))
