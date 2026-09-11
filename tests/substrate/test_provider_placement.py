@@ -143,7 +143,8 @@ def evidence(composed, peer, observations):
         "requests": peer.requests, "failures": peer.failures,
         "budget": asdict(peer.budget), "endpoint": str(composed.endpoint),
     }}
-    name = hashlib.sha256(os.environ.get("PYTEST_CURRENT_TEST", "placement").encode()).hexdigest()
+    key = [os.environ.get("PYTEST_CURRENT_TEST", "placement"), str(composed.endpoint)]
+    name = hashlib.sha256(json.dumps(key).encode()).hexdigest()
     write_evidence("codex-placement-" + name[:16] + ".json", value)
 
 
@@ -241,19 +242,20 @@ async def test_existing_owner_reaps_bridge_and_session_changed_descendant(
         entered.set()
         await wire.read()
 
-    probe = '''
+    probe = f'''
 import json, os, signal, time
 read_fd, write_fd = os.pipe()
 if os.fork() == 0:
     os.close(read_fd)
     os.setsid()
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    if {mode == "cancel"!r}:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
     os.write(write_fd, b"R")
     time.sleep(100)
 else:
     os.close(write_fd)
     assert os.read(read_fd, 1) == b"R"
-    print(json.dumps({"descendant_ready": True}), flush=True)
+    print(json.dumps({{"descendant_ready": True}}), flush=True)
     time.sleep(100)
 '''
     async with placement(placement_image, timeout=5) as (composed, peer, record):
@@ -268,13 +270,11 @@ else:
                 await task
         else:
             _observations, result = await task
-            # Native TERM is reported separately from the outer reaper's
-            # possible KILL of bwrap after grace for the stubborn descendant.
-            assert result.payload_returncode == 143
-            assert result.returncode in {137, 143}
-            assert result.timed_out and result.bound_exceeded is None
-    if mode == "timeout":
-        assert all(birth(pid) != started for pid, started in observed.items())
+            # This TERM-cooperative case requires an observed native exit.
+            # Forced teardown is proved separately through cancellation and
+            # controller death: outer KILL can preempt the optional exit report.
+            assert_outcome(result, status=143, timed_out=True)
+    assert all(birth(pid) != started for pid, started in observed.items())
     assert not peer.active and all(task.done() for task in peer.handlers)
 
 

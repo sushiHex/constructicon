@@ -175,7 +175,7 @@ async def test_case_emits_failed_evidence_after_peer_join(composition, monkeypat
     from dataclasses import fields
 
     from tests.substrate import test_provider_placement as placement
-    order, saved = [], []
+    order, saved, names = [], [], []
 
     @asynccontextmanager
     async def peer_fixture(*, path, **kwargs):
@@ -189,6 +189,7 @@ async def test_case_emits_failed_evidence_after_peer_join(composition, monkeypat
     def emitted(name, value):
         order.append("evidence")
         saved.append(value)
+        names.append(name)
 
     monkeypatch.setattr(placement, "provider_peer", peer_fixture)
     monkeypatch.setattr(placement, "write_evidence", emitted)
@@ -200,3 +201,42 @@ async def test_case_emits_failed_evidence_after_peer_join(composition, monkeypat
             raise ValueError("case failed")
     assert order == ["joined", "evidence"]
     assert saved[0]["failure"] == "retained observation"
+    async with (
+        placement.placement(image) as (_one, _peer_one, record_one),
+        placement.placement(image) as (_two, _peer_two, record_two),
+    ):
+        record_one["member"] = "first"
+        record_two["member"] = "second"
+    assert len(set(names)) == 3, "one invocation overwrote another's evidence"
+    assert [record["member"] for record in saved[1:]] == ["second", "first"]
+
+
+async def test_cancel_control_cannot_accept_resident_descendants(tmp_path, monkeypatch):
+    from tests.substrate import test_provider_placement as placement
+
+    @asynccontextmanager
+    async def fixture(*_args, **_kwargs):
+        yield None, SimpleNamespace(active=set(), handlers=set()), {}
+
+    class Wire:
+        calls = 0
+
+        async def read(self):
+            self.calls += 1
+            if self.calls == 1:
+                return {"placement": {}}
+            if self.calls == 2:
+                return {"descendant_ready": True}
+            await asyncio.Event().wait()
+
+    async def observe(*_args, query, **_kwargs):
+        await query(Wire(), {})
+
+    monkeypatch.setattr(placement, "placement", fixture)
+    monkeypatch.setattr(placement, "observe", observe)
+    monkeypatch.setattr(placement, "descendants", lambda pid: dict.fromkeys(range(4), "resident"))
+    monkeypatch.setattr(placement, "birth", lambda pid: "resident")
+    with pytest.raises(AssertionError):
+        await placement.test_existing_owner_reaps_bridge_and_session_changed_descendant(
+            None, tmp_path, "cancel",
+        )

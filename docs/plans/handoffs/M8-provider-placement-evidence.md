@@ -39,13 +39,21 @@ not combined mediation or native durable recovery.
 That run had 59 passing placement/peer/recipe checks, two inapplicable transport
 skips, and one failed assertion. The escaped descendant deliberately ignored
 TERM: the native payload reported 143 while the outer supervisor reported 137
-after grace. Equating those two facts was wrong. The timeout control now checks
-native TERM separately from the supervisor's TERM/KILL teardown race, alongside
-the deadline, capture bound, and birth-pinned descendant/reaping proof. It does
-not turn either result into a successful invocation.
+after grace. Equating those two facts was wrong. The second run (`4676eb7`)
+exposed the stronger limit: outer KILL can precede the optional payload report,
+leaving `payload_returncode=None`. Neither observation is a successful native
+invocation, and a missing report cannot be filled from the expected signal.
+
+The deadline control now uses a TERM-cooperative, session-changing descendant
+and requires the complete observed exit, deadline, and capture outcome.
+Cancellation and controller-death controls retain TERM-ignoring descendants and
+prove physical cleanup through the existing guard and birth-pinned reaping
+observations, without inventing an exit report. No production supervisor change
+or stronger native-exit contract is claimed by this placement instrument.
 
 - [Initial Linux run](https://github.com/sushiHex/constructicon/actions/runs/34640107306)
 - [Downloaded artifact](https://github.com/sushiHex/constructicon/actions/runs/34640107306/artifacts/10279358887)
+- [Second Linux run and missing-report observation](https://github.com/sushiHex/constructicon/actions/runs/34641374636)
 
 ## Review corrections and proof boundary
 

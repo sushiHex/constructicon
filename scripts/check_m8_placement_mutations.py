@@ -47,6 +47,14 @@ MUTANTS = (
     ("failed native outcome discarded", "tests.substrate.test_provider_placement:observe",
      "result = exc.result", "result = None",
      RECIPE + "test_failed_conversation_keeps_its_owned_result"),
+    ("invocation evidence overwrites its sibling",
+     "tests.substrate.test_provider_placement:evidence",
+     "name = hashlib.sha256(json.dumps(key).encode()).hexdigest()", "name = 'shared'",
+     RECIPE + "test_case_emits_failed_evidence_after_peer_join"),
+    ("cancel control drops descendant proof", "tests.substrate.test_provider_placement:"
+     "test_existing_owner_reaps_bridge_and_session_changed_descendant",
+     "assert all(birth(pid) != started for pid, started in observed.items())", "pass",
+     RECIPE + "test_cancel_control_cannot_accept_resident_descendants"),
 )
 
 
