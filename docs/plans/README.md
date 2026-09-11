@@ -75,6 +75,7 @@ the eventual code differs.
 | [M8 native qualification plan](handoffs/M8-native-qualification-plan.md) | Bounded startup investigation and prospective journal-driven native lifecycle gates; its transport prerequisite is now merged in #52/#53, but startup and provider-arrangement qualification remain prerequisites |
 | [M8 bounded duplex contract](handoffs/M8-bounded-duplex-contract.md) | Accepted provider-neutral byte conversation, merged through #52/#53; historical proposed wording preserved, acceptance in the living implementation record; not native authentication or lifecycle qualification |
 | [M8 controlled startup evidence](handoffs/M8-controlled-startup-evidence.md) | Startup-origin inventory and scoped native observations through the merged duplex launcher; explicit unqualified surfaces and provider-connectivity prerequisite |
+| [M8 provider fixture proposal](handoffs/M8-provider-fixture-proposal.md) | Proposed test-only Unix endpoint mount and contained byte bridge; independent review and explicit owner acceptance gate implementation; not a production route or authentication decision |
 
 ## Completeness and recovery notes
 
