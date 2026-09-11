@@ -102,8 +102,12 @@ class CombinedScenario:
     restricted: bool = True
     namespace: str | None = None
     mcp: bool = False
+    plugins: bool = False
 
     def prefix(self, date):
+        context = json.loads(Path(__file__).with_name("fixtures").joinpath(
+            "native_combined_context.json",
+        ).read_text())
         prefix = []
         if self.model == MODELS[1]:
             tools = [{
@@ -116,7 +120,12 @@ class CombinedScenario:
                 ).read_text())
             prefix = [{"type": "additional_tools", "role": "developer", "tools": tools},
                       message("developer", BASE_INSTRUCTIONS)]
-        return [*prefix, message("developer", PERMISSIONS), message("user", environment(date)),
+        permissions = [PERMISSIONS, context["plugins"]] if self.plugins else [PERMISSIONS]
+        multi_agent = context["sol_multi_agent"] if (
+            self.model == MODELS[1] and not self.restricted
+        ) else []
+        return [*prefix, message("developer", *permissions), *multi_agent,
+                message("user", environment(date)),
                 message("user", PROBE_PROMPT)]
 
     def suffix(self):

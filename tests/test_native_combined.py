@@ -31,6 +31,8 @@ from tests.test_native_provider import request_bytes, transact
      "2af69894c7d1da46180c29ab5b0a6d996e6daad08d7f1a93d9f6de217a2a10b1"),
     ("native_combined_mcp_tools.json",
      "19d0ce92c181de4ef0a5256c3a256695c4207f2346f28a3bdba69002f2c800c5"),
+    ("native_combined_context.json",
+     "be9e009b12e23ecf51472047ae79868fd98ff518cc8505a2fe94e7d52eb67299"),
 ])
 def test_previously_observed_tool_goldens_are_pinned(name, expected):
     value = json.loads(Path(__file__).with_name("fixtures").joinpath(name).read_text())
@@ -172,6 +174,71 @@ def test_mcp_positive_control_never_broadens_the_empty_recipe():
     replace(scenario, mcp=True)(request, 1)
     with pytest.raises(ValueError, match="instructions or tools"):
         scenario(request, 1)
+
+
+def test_plugin_positive_context_never_becomes_ambient(scenario):
+    from dataclasses import replace
+
+    selected = replace(scenario, plugins=True)
+    request = request_for(selected, 1)
+    selected(request, 1)
+    with pytest.raises(ValueError, match="context or conversation"):
+        scenario(request, 1)
+
+
+def test_original_sol_agent_context_is_absent_from_the_restricted_recipe():
+    scenario = CombinedScenario(MODELS[1], ("2026-09-11",), "exec", {}, None)
+    request = request_for(scenario, 1)
+    assert len(request["input"]) == 5
+    extra = json.loads(Path(__file__).with_name("fixtures").joinpath(
+        "native_combined_context.json",
+    ).read_text())["sol_multi_agent"]
+    request["input"][3:3] = [{"id": f"agent-{index}", **item} for index, item in enumerate(extra)]
+    with pytest.raises(ValueError, match="context or conversation"):
+        scenario(request, 1)
+
+
+def test_failed_untrusted_hook_attempt_is_not_a_disable_proof():
+    from tests.substrate.test_combined_startup_origins import assert_hook_attempt
+
+    record = {"wire": [], "marker": {"dataBase64": "YWJzZW50"}}
+    assert_hook_attempt(record, False)
+    record["wire"] = [{"received": {"method": method, "params": {"run": {
+        "status": "failed", "entries": [{"kind": "error", "text":
+                                          "No such file or directory (os error 2)"}],
+    }}}} for method in ("hook/started", "hook/completed")]
+    assert_hook_attempt(record, True)
+    with pytest.raises(AssertionError):
+        assert_hook_attempt(record, False)
+
+
+@pytest.mark.parametrize("origin", ["json", "toml"])
+async def test_native_origin_test_inspects_the_untrusted_attempt(monkeypatch, origin):
+    from tests.substrate import test_combined_startup_origins as native
+
+    calls = 0
+
+    async def measure(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        attempted = calls != 3
+        return {
+            "hooks": {"data": [{"hooks": [{
+                "trustStatus": "untrusted" if calls == 1 else "trusted",
+                "enabled": attempted, "key": "fixture", "currentHash": "fixture-hash",
+            }]}]},
+            "marker": {"dataBase64": "YWJzZW50"},
+            "wire": [{"received": {"method": method, "params": {"run": {
+                "status": "failed", "entries": [{"kind": "error", "text":
+                                                  "No such file or directory (os error 2)"}],
+            }}}} for method in ("hook/started", "hook/completed")] if attempted else [],
+        }
+
+    monkeypatch.setattr(native, "measure", measure)
+    with pytest.raises(AssertionError):
+        await native.test_user_hook_discovery_trust_and_disable_have_execution_controls(
+            None, None, origin,
+        )
 
 
 @pytest.mark.parametrize("operation,namespace", [("exec", "functions"),

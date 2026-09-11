@@ -43,6 +43,21 @@ MUTANTS = (
        f'assert request["client_metadata"]["{field}_id"] == protocol["{field}"]', "pass",
        TEST + f"test_peer_metadata_must_correlate_with_the_same_native_rpc[{field}]")
       for field in ("thread", "turn")),
+    ("failed untrusted hook attempt accepted",
+     "tests.substrate.test_combined_startup_origins:assert_hook_attempt",
+     'assert [item["method"] for item in events] == (', 'assert True or (',
+     TEST + "test_failed_untrusted_hook_attempt_is_not_a_disable_proof"),
+    ("untrusted observation never inspected",
+     "tests.substrate.test_combined_startup_origins:"
+     "test_user_hook_discovery_trust_and_disable_have_execution_controls",
+     "assert_hook_attempt(record, False)", "pass",
+     TEST + "test_native_origin_test_inspects_the_untrusted_attempt[json]"),
+    ("plugin context becomes ambient", MODULE + "CombinedScenario.prefix",
+     "if self.plugins else [PERMISSIONS]", "if True else [PERMISSIONS]",
+     TEST + "test_plugin_positive_context_never_becomes_ambient[gpt-5.5]"),
+    ("agent context survives catalog restriction", MODULE + "CombinedScenario.prefix",
+     "self.model == MODELS[1] and not self.restricted", "self.model == MODELS[1]",
+     TEST + "test_original_sol_agent_context_is_absent_from_the_restricted_recipe"),
 )
 
 if __name__ == "__main__":

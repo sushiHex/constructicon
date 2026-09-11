@@ -1,6 +1,8 @@
 # M8 combined startup and mediation evidence
 
-Status: implementation in progress; not qualified.
+Status: partial combined investigation; no production qualification.
+Exact-head readiness and final artifact links belong to
+[draft PR #58](https://github.com/sushiHex/constructicon/pull/58).
 Owner-authorized investigation: [issue #57](https://github.com/sushiHex/constructicon/issues/57).
 Branch: `investigate/m8-combined-startup`.
 Base: `6a5c2e43cfa1bda7f281a66886946668f471c5c7` (merged placement PR #56).
@@ -106,8 +108,9 @@ of the new request under test. The assertion preserves the namespaced Sol
 framing instead of flattening it, and compares entire declared tool definitions.
 Only top-level item IDs are excluded from conversation-content comparison;
 they must still be nonempty strings. The only allowed context-text variation is
-the UTC date within the controller's 20-second invocation window. Tool call IDs, arguments, results,
-message order, permissions text, environment, and controller prompt remain exact.
+the UTC date within the controller's 20-second invocation window. Tool call IDs,
+arguments, results, message order, permissions text, environment, and controller
+prompt remain exact.
 
 The root field inventory and generation settings are also exact. Unknown
 `previous_response_id`, `conversation`, and arbitrary context fields refuse.
@@ -131,6 +134,16 @@ The three MCP resource-tool declarations are pinned in
 `codex-project-trusted.json`. Only deliberately enabled MCP positive controls
 expect these tools; the empty recipe still rejects them.
 
+`native_combined_context.json` preserves the original Sol agent-role and
+delegation context from the prior artifact's
+`codex-gpt-5.6-sol-contained_python-images-false-unchanged.json`, and the plugin
+usage text from the pinned
+[`available_plugins_instructions.rs`](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/context/available_plugins_instructions.rs).
+Neither comes from the request being judged. Only the original Sol catalog
+control admits those two agent messages; only the enabled-plugin control admits
+the plugin guidance. Restricted cases reject either addition. Plugin skill names
+retain the native `plugin_name:skill_name` form.
+
 Independent source review found and corrected an old owner-death caller missing
 the newly explicit model, top-level history fields bypassing the context check,
 and worker failure observations attached too late. Worker evidence now includes
@@ -140,11 +153,10 @@ identity before any callback-result assertion can fail.
 The first Linux six-case combined baseline passed on `4b8f372` (allowed worker
 plus disabled patch/image paths for both profiles). It does not establish the
 later strengthened assertion or startup controls. Current portable focused
-checks: 141 passed, 28 platform skips. Targeted assertion mutants additionally
-cover negative patch side effects and native RPC/peer identity correlation.
-These are instrument checks, not native qualification. Expanded Linux controls,
-full final-head gates, artifact audit, and complete-head independent review
-remain unexecuted.
+checks: 148 passed, 28 platform skips; sixteen assertion mutants killed. These
+include negative patch side effects, native RPC/peer identity correlation,
+untrusted hook attempts, and non-ambient positive-control context. They are
+instrument checks, not native qualification.
 
 The origin matrix includes private/account-empty baselines, refused selected
 and ignored unselected named profiles, project TOML and inert MCP startup under both
@@ -185,4 +197,60 @@ is in the pinned `hooks/src/engine/discovery.rs`, `hooks/src/registry.rs`, and
 `hooks/src/engine/command_runner.rs`. A failed hook is not a safe-disable proof:
 the fixture must still prove its untrusted and explicitly disabled controls.
 These corrections and the newly added namespaced/plugin controls await their
-next native run; they are not credited from the failed run.
+later native runs; they are not credited from the failed run.
+
+Run `34653259288` on `713da12` passed 96 combined-stage tests and failed two
+positive controls before a second provider request. The downloaded artifact
+`m8-containment-34653259288-1` independently establishes thirteen complete native
+tool cases: both physical-worker paths, all direct refusal paths, both image
+positives, and the gpt-5.5 patch positive. Worker callbacks each have one raw
+owned worker outcome, successful decoded result, matching RPC/peer identities,
+and no post-join peer failures. The artifact's original catalog, restricted
+catalog, and binary hashes retain the published pins.
+
+The remaining first-request mismatches were original Sol agent context and
+enabled-plugin guidance, not tool failures. Both have independent sources named
+above. The source-backed expectations now retain them only in those deliberate
+positive controls; completion awaits a later exact-head run rather than being
+inferred from a corrected first-request comparison.
+
+The same artifact has two untrusted and two disabled hook observations with
+zero hook events, plus two trusted attempts with paired start/completion and
+the exact `ENOENT` failure. Independent review found that the untrusted test
+had checked only the marker. The correction checks the exact event sequence
+in all three states. A portable whole-test reproduction and a call-site mutant
+prove that an attempted-but-failed untrusted hook cannot pass as disabled.
+
+The repository gate on `713da12` passed locally (1,993 tests, 342 platform skips)
+and on CI (2,067 tests, 268 skips), with ruff, strict mypy and four import
+contracts. That green gate does not erase the two native failures. Final-head
+local/CI/native gates, artifact inspection and independent confirmation remain
+required by PR #58; the source corrections alone do not establish them.
+
+## Origin/control inventory and qualification boundary
+
+The origin matrix runs on gpt-5.5; fresh baselines and tool/worker cases run on
+both pinned profiles. The table is deliberately narrower than a claim about
+every extension or every CLI startup mode.
+
+| Origin | Control and evidence | Qualification limit |
+| --- | --- | --- |
+| Packaged assets/model metadata | Immutable inventory, pinned binary and both catalog hashes; fixed model selection | Not an audit of all embedded behavior or other models |
+| System/managed sources | Curated image excludes `/etc/codex`; bootstrap absence and null requirements observed | Managed-policy execution positive is unexecuted |
+| User/profile layers | Private controller config; unused profile ignored; selected profile refused before RPC | Named-profile app-server use is refuted, not supported |
+| Project/ancestor state | Private cwd, no acquired repo mount; trusted/untrusted project TOML plus inert MCP | Does not authorize arbitrary project startup content |
+| Environment | Owned launch clears inherited state; exact child environment recorded | Older host-poison test remains separate startup evidence |
+| Skills | User/project positive discovery, explicit instruction/bundled controls, exact request comparison | Installation and arbitrary skill behavior are unexecuted |
+| Hooks | JSON/TOML discovery, exact trust hash, no-event untrusted/disabled observations, failed trusted attempts | Successful command-hook execution blocked by missing default shell |
+| Local plugins | Explicit enablement of one seeded cache entry; skill identity and MCP/public-marker control | Installer/marketplace workflows unexecuted; enabled completion requires final run |
+| MCP/apps | Project-trust MCP positive and absent counterpart; exact resource-tool golden; apps disabled | Account-backed apps and arbitrary server behavior unexecuted |
+| Cloud/account/cache | Fresh private home, null account, no provider credentials | Authenticated or cloud-managed state unexecuted |
+| RPC and worker | Fixed controller scenario, bounded wire, actual acquired READ worker, full outcomes | No native journal/RunHost/revocation recovery proof |
+| Request sender | Actual contained non-native descendant uses bridge then direct leaf with exact bytes | CLI-authorship inference is refuted; invocation membership only |
+
+The deliverable is this bounded evidence and its regression suite, not an
+authentication design. Proved local facts, refuted hypotheses, unexecuted cloud
+surfaces, and the hook-shell prerequisite remain separate. A passing final
+regression run does not remove the qualification boundary. Native authentication
+and durable recovery stay unavailable pending their accepted prerequisites and
+the owner's decision in [#38](https://github.com/sushiHex/constructicon/issues/38).

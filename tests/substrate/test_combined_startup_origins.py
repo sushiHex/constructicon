@@ -38,13 +38,13 @@ def inert_mcp():
     )
 
 
-async def measure(image, guard_root, model, *, files=None, config=None, mcp=False):
+async def measure(image, guard_root, model, *, files=None, config=None, mcp=False, plugins=False):
     now = datetime.now(UTC)
     dates = tuple(dict.fromkeys([
         now.date().isoformat(), (now + timedelta(seconds=20)).date().isoformat(),
     ]))
     scenario = CombinedScenario(model, dates, "exec_command", {"cmd": "true"},
-                                "unsupported call: exec_command", mcp=mcp)
+                                "unsupported call: exec_command", mcp=mcp, plugins=plugins)
 
     async def no_worker(_program):
         raise AssertionError("startup control must not dispatch a worker")
@@ -95,6 +95,22 @@ async def measure(image, guard_root, model, *, files=None, config=None, mcp=Fals
 
 def marker(record):
     return base64.b64decode(record["marker"]["dataBase64"], validate=True).decode()
+
+
+def assert_hook_attempt(record, enabled):
+    events = [item["received"] for item in record["wire"] if item.get("received", {}).get(
+        "method",
+    ) in {"hook/started", "hook/completed"}]
+    assert [item["method"] for item in events] == (
+        ["hook/started", "hook/completed"] if enabled else []
+    )
+    if enabled:
+        # The unchanged minimal image has no /bin/sh. Discovery and trust
+        # are proven; successful command-hook execution remains blocked.
+        run = events[-1]["params"]["run"]
+        assert run["status"] == "failed"
+        assert run["entries"] == [{"kind": "error", "text":
+                                   "No such file or directory (os error 2)"}]
 
 
 @pytest.mark.parametrize("model", MODELS)
@@ -177,10 +193,10 @@ async def test_seeded_local_plugin_obeys_explicit_enablement(placement_image, tm
                 "---\nname: inert-plugin\ndescription: Public inert plugin marker.\n"
                 "---\nNo action.\n",
         },
-        mcp=enabled,
+        mcp=enabled, plugins=enabled,
     )
     skills = [skill["name"] for row in record["skills"]["data"] for skill in row["skills"]]
-    assert ("inert-plugin" in skills) is enabled
+    assert ("inert-fixture:inert-plugin" in skills) is enabled
     assert marker(record) == ("started" if enabled else "absent")
     assert len(record["mcp"]["data"]) == (1 if enabled else 0)
 
@@ -220,6 +236,7 @@ async def test_user_hook_discovery_trust_and_disable_have_execution_controls(
     assert len(hooks) == 1 and hooks[0]["trustStatus"] == "untrusted"
     assert hooks[0]["enabled"] is True
     assert marker(record) == "absent"
+    assert_hook_attempt(record, False)
     for enabled in (True, False):
         # The controller explicitly trusts exactly the inert hook it just
         # inspected. This is an attempted-execution control, not the safe recipe.
@@ -233,13 +250,5 @@ async def test_user_hook_discovery_trust_and_disable_have_execution_controls(
         entries = [hook for row in checked["hooks"]["data"] for hook in row["hooks"]]
         assert len(entries) == 1 and entries[0]["trustStatus"] == "trusted"
         assert entries[0]["enabled"] is enabled
-        runs = [item["received"]["params"]["run"] for item in checked["wire"]
-                if item.get("received", {}).get("method") == "hook/completed"]
-        assert len(runs) == (1 if enabled else 0)
-        if enabled:
-            # The unchanged minimal image has no /bin/sh. Discovery and trust
-            # are proven; successful command-hook execution remains blocked.
-            assert runs[0]["status"] == "failed"
-            assert runs[0]["entries"] == [{"kind": "error", "text":
-                                          "No such file or directory (os error 2)"}]
+        assert_hook_attempt(checked, enabled)
         assert marker(checked) == "absent"
