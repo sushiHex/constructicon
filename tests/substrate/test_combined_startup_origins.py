@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from constructicon.core.identity import parse_json_value
 from tests.native_codex_probe import PROBE_PROMPT, conversation
 from tests.native_combined import (
     BASE_INSTRUCTIONS,
@@ -105,7 +106,14 @@ async def measure(image, guard_root, model, *, files=None, config=None, mcp=Fals
         assert flags["shell_zsh_fork"]["enabled"] is True
         assert flags["shell_zsh_fork"]["stage"] == "underDevelopment"
         assert flags["shell_zsh_fork"]["defaultEnabled"] is False
-        assert all(flags[name]["enabled"] is False for name in ("shell_tool", "unified_exec"))
+        # This release ignores user opt-outs of the unified-exec backend.
+        # ShellTool is the separate registration gate; the peer also proves
+        # actual declarations and rejects attempted exec_command dispatch.
+        assert flags["shell_tool"]["enabled"] is False
+        assert flags["unified_exec"]["enabled"] is True
+        assert any("Under-development features enabled: shell_zsh_fork." in item.get(
+            "params", {},
+        ).get("message", "") for item in observations["protocol"]["warnings"])
     return observations
 
 
@@ -114,9 +122,16 @@ def marker(record):
 
 
 def assert_hook_attempt(record, enabled, *, completed=False):
+    methods = {"hook/started", "hook/completed"}
     events = [item["received"] for item in record["wire"] if item.get("received", {}).get(
         "method",
-    ) in {"hook/started", "hook/completed"}]
+    ) in methods]
+    # Draining continues after the last RPC. A late attempt in owned stdout
+    # cannot disappear merely because the RPC consumer already finished.
+    raw = [parse_json_value(line.decode())
+           for line in bytes.fromhex(record["outcome"]["stdout"]).splitlines()]
+    assert all(isinstance(item, dict) for item in raw)
+    assert events == [item for item in raw if item.get("method") in methods]
     assert [item["method"] for item in events] == (
         ["hook/started", "hook/completed"] if enabled else []
     )

@@ -77,6 +77,10 @@ MUTANTS = (
     ("packaged shell selection is ignored", MODULE + "controlled_configuration",
      "str(packaged_shell).lower()", "'false'",
      TEST + "test_shell_selection_is_an_exact_context_variant[gpt-5.5]"),
+    ("late hook attempt omitted from consumed wire",
+     "tests.substrate.test_combined_startup_origins:assert_hook_attempt",
+     'assert events == [item for item in raw if item.get("method") in methods]', "pass",
+     TEST + "test_hook_attempt_after_last_rpc_cannot_escape_the_owned_capture[start]"),
     *((f"native hook matrix skips {phase}",
        "tests.substrate.test_combined_startup_origins:"
        "test_user_hook_discovery_trust_and_disable_have_execution_controls",

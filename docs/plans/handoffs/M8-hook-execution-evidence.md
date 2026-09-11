@@ -74,9 +74,45 @@ authority or a recommendation to enable hooks in a native executor.
 
 ## Decision boundary and results
 
-Execution is not yet performed. Exact-head local verification, CI, Linux
-evidence, mutation checks and independent source/artifact review are future
-gates. Windows skips will not count as physical proof.
+At acceptance commit `ed9ec6e`, execution had not been performed. Exact-head
+local verification, CI, Linux evidence, mutation checks and independent
+source/artifact review are required gates. Final readiness and artifact links
+belong to [PR #60](https://github.com/sushiHex/constructicon/pull/60), not a
+self-referential source hash. Windows skips never count as physical proof.
+
+Implementation reuses the existing hook matrix with an explicit packaged-shell
+variant for each model/origin pair. Native feature listing records effective
+enablement, exact `underDevelopment` stage and default false. Full request
+comparison permits only the source-predicted shell label change; every other
+context and tool assertion remains. The original missing-shell case stays.
+
+Independent source review of `bb5d554` confirmed one evidence gap: consumed
+wire records alone could miss a hook event arriving after the final RPC.
+The correction compares their hook-event projection with the entire owned
+stdout capture, using the existing strict JSON decoder. Late attempts and
+malformed tails refuse; capture is not optional. Portable reproductions and
+an assertion mutant exercise the same helper used by the native matrix.
+This is instrument correctness, not a claim that a native late event occurred.
+
+The first Linux run,
+[34658733279](https://github.com/sushiHex/constructicon/actions/runs/34658733279)
+on `bb5d554`, failed four new cases at an incorrect feature-state assertion;
+123 combined-stage tests passed. Downloaded artifact `10287025560` records
+all four untrusted variants completing two native requests with owner/payload
+exit zero, no timeout, no capture-bound fault, and no peer errors. It preserves
+the under-development warning. Trusted and disabled variants were not reached.
+
+The assertion had assumed `unified_exec=false` survives effective configuration.
+Pinned
+[`managed_features.rs`](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/config/managed_features.rs)
+instead enables that backend unless managed requirements pin it; this is not
+a new consequence of selecting zsh. `shell_tool=false` is a separate gate:
+[`add_shell_tools`](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/tools/spec_plan.rs)
+returns before registering tools when it is false. The correction asserts the
+observed effective flags exactly, retaining the unchanged actual tool inventory,
+full request comparison and refused `exec_command` control. Configuration text
+is not runtime authority. No native hook-execution success is credited from
+this failed run; the corrected matrix requires its own exact-head proof.
 
 Return four distinct classes to #38: proved at this fixture's scope, refuted,
 unexecuted, and blocked by a named prerequisite. Success closes this finite

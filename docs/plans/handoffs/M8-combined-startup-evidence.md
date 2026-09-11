@@ -2,7 +2,7 @@
 
 Status: partial combined investigation; no production qualification.
 Exact-head readiness and final artifact links belong to
-[draft PR #58](https://github.com/sushiHex/constructicon/pull/58).
+[merged PR #58](https://github.com/sushiHex/constructicon/pull/58).
 Owner-authorized investigation: [issue #57](https://github.com/sushiHex/constructicon/issues/57).
 Branch: `investigate/m8-combined-startup`.
 Base: `6a5c2e43cfa1bda7f281a66886946668f471c5c7` (merged placement PR #56).
@@ -141,7 +141,8 @@ usage text from the pinned
 [`available_plugins_instructions.rs`](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/context/available_plugins_instructions.rs).
 Neither comes from the request being judged. Only the original Sol catalog
 control admits those two agent messages; only the enabled-plugin control admits
-the plugin guidance. Restricted cases reject either addition. Plugin skill names
+the plugin guidance. The plugin-disabled restricted baseline rejects either
+addition. Plugin skill names
 retain the native `plugin_name:skill_name` form.
 
 Independent source review found and corrected an old owner-death caller missing
@@ -254,3 +255,23 @@ surfaces, and the hook-shell prerequisite remain separate. A passing final
 regression run does not remove the qualification boundary. Native authentication
 and durable recovery stay unavailable pending their accepted prerequisites and
 the owner's decision in [#38](https://github.com/sushiHex/constructicon/issues/38).
+
+## Investigation closure
+
+PR #58 squash-merged as `489db82fdf200502956e4c54aaa2c09cede598a9` and
+closed #57. Its tree equals reviewed `574c424abacb1fac12b85190b47a32d1dcfcfdb9`.
+That head passed local verification (2,000 tests, 342 platform skips), CI,
+105 combined-stage tests and 16 assertion mutants. Independent source and
+downloaded-artifact review found no remaining blocker at this stated scope.
+Artifact `10284874908` from
+[run 34654341443](https://github.com/sushiHex/constructicon/actions/runs/34654341443)
+contains all fourteen completed tool cases, fifteen completed origin records,
+the named-profile refusal, both actual worker controls and both descendant
+sender controls. The seeded enabled-plugin control completed; installation
+remains unexecuted. No qualification limit above is erased by closure.
+
+The successful-hook gap has one separately scoped
+[follow-up](M8-hook-execution-evidence.md). It tests the already-packaged shell
+without rewriting the failed default-shell observation or modifying this
+investigation's approved acceptance. Native authentication and recovery remain
+gated; #38 still records no selected route.

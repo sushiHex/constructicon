@@ -201,20 +201,28 @@ def test_original_sol_agent_context_is_absent_from_the_restricted_recipe():
 def test_failed_untrusted_hook_attempt_is_not_a_disable_proof():
     from tests.substrate.test_combined_startup_origins import assert_hook_attempt
 
-    record = {"wire": [], "marker": {"dataBase64": "YWJzZW50"}}
+    record = retain_hook_stdout({"wire": [], "marker": {"dataBase64": "YWJzZW50"}})
     assert_hook_attempt(record, False)
     record["wire"] = [{"received": {"method": method, "params": {"run": {
         "status": "failed", "entries": [{"kind": "error", "text":
                                           "No such file or directory (os error 2)"}],
     }}}} for method in ("hook/started", "hook/completed")]
+    retain_hook_stdout(record)
     assert_hook_attempt(record, True)
     with pytest.raises(AssertionError):
         assert_hook_attempt(record, False)
 
 
+def retain_hook_stdout(record):
+    record["outcome"] = {"stdout": b"".join(
+        (json.dumps(item["received"]) + "\n").encode() for item in record["wire"]
+    ).hex()}
+    return record
+
+
 def completed_hook_record():
     hook = {"eventName": "sessionStart", "sourcePath": "/tmp/home/.codex/hooks.json"}
-    return {
+    return retain_hook_stdout({
         "protocol": {"thread": "fixture-thread", "turn": "fixture-turn"},
         "hooks": {"data": [{"hooks": [hook]}]},
         "marker": {"dataBase64": "aG9vaw=="},
@@ -222,7 +230,7 @@ def completed_hook_record():
             "threadId": "fixture-thread", "turnId": "fixture-turn",
             "run": {**hook, "id": "fixture-hook", "entries": [], "status": status},
         }}} for method, status in (("hook/started", "running"), ("hook/completed", "completed"))],
-    }
+    })
 
 
 @pytest.mark.parametrize("damage", [
@@ -254,8 +262,25 @@ def test_successful_hook_proof_requires_execution_and_correlated_events(damage):
         record["marker"]["dataBase64"] = "YWJzZW50"
     elif damage == "negative-marker":
         record["wire"] = []
+    retain_hook_stdout(record)
     with pytest.raises(AssertionError):
         assert_hook_attempt(record, enabled, completed=True)
+
+
+@pytest.mark.parametrize("tail", ["start", "complete", "malformed", "duplicate-key"])
+def test_hook_attempt_after_last_rpc_cannot_escape_the_owned_capture(tail):
+    from tests.substrate.test_combined_startup_origins import assert_hook_attempt
+
+    record = retain_hook_stdout({"wire": [], "marker": {"dataBase64": "YWJzZW50"}})
+    assert_hook_attempt(record, False)
+    extra = (b'{"method":' if tail == "malformed" else
+             b'{"method":"hook/started","method":"ignored"}\n' if tail == "duplicate-key" else
+             json.dumps({
+        "method": "hook/started" if tail == "start" else "hook/completed",
+    }).encode() + b"\n")
+    record["outcome"]["stdout"] += extra.hex()
+    with pytest.raises((AssertionError, ValueError)):
+        assert_hook_attempt(record, False)
 
 
 def test_shell_selection_is_an_exact_context_variant(scenario):
@@ -307,7 +332,7 @@ async def test_native_hook_matrix_cannot_skip_a_phase(monkeypatch, phase):
                 record["marker"]["dataBase64"] = "YWJzZW50"
             else:
                 record["wire"] = completed_hook_record()["wire"]
-        return record
+        return retain_hook_stdout(record)
 
     monkeypatch.setattr(native, "measure", measure)
     with pytest.raises(AssertionError):
@@ -327,7 +352,7 @@ async def test_native_origin_test_inspects_the_untrusted_attempt(monkeypatch, or
         nonlocal calls
         calls += 1
         attempted = calls != 3
-        return {
+        return retain_hook_stdout({
             "hooks": {"data": [{"hooks": [{
                 "trustStatus": "untrusted" if calls == 1 else "trusted",
                 "enabled": attempted, "key": "fixture", "currentHash": "fixture-hash",
@@ -337,7 +362,7 @@ async def test_native_origin_test_inspects_the_untrusted_attempt(monkeypatch, or
                 "status": "failed", "entries": [{"kind": "error", "text":
                                                   "No such file or directory (os error 2)"}],
             }}}} for method in ("hook/started", "hook/completed")] if attempted else [],
-        }
+        })
 
     monkeypatch.setattr(native, "measure", measure)
     with pytest.raises(AssertionError):
