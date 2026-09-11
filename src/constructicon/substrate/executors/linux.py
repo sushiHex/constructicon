@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import math
 import os
@@ -16,6 +17,7 @@ import stat
 import struct
 import sys
 import time
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -24,6 +26,7 @@ from typing import Literal
 from constructicon.core.errors import ContractViolation
 from constructicon.core.grants import Posture
 from constructicon.core.identity import Digest, digest
+from constructicon.core.process import ProcessIO
 from constructicon.substrate._lifetime import finish_owned
 from constructicon.substrate.executors._supervisor import NAMESPACE_SCRIPT
 
@@ -129,6 +132,100 @@ class ProcessResult:
 
 DEFAULT_PROCESS_LIMITS = ProcessLimits()
 
+Conversation = Callable[[ProcessIO], Awaitable[None]]
+
+
+class ProcessExchangeError(Exception):
+    """A failed conversation with captured evidence after completed teardown."""
+
+    def __init__(self, result: ProcessResult) -> None:
+        super().__init__("contained process conversation failed")
+        self.result = result
+
+
+class _OwnedStop(ContractViolation):
+    """An interrupted operation belongs to the owner's initiating stop cause."""
+
+
+class _ProcessIO:
+    def __init__(
+        self, writer: asyncio.StreamWriter, output: bytearray, input_limit: int,
+    ) -> None:
+        self._writer = writer
+        self._output = output
+        self.input_limit = input_limit
+        self.spent = 0
+        self.offset = 0
+        self.changed = asyncio.Event()
+        self.eof = False
+        self.active = True
+        self.stopping = False
+        self.stdin_closed = False
+        self.reading = False
+        self.writing = False
+
+    def require_active(self) -> None:
+        if self.stopping:
+            raise _OwnedStop("process conversation is closed")
+        if not self.active:
+            raise ContractViolation("process conversation is closed")
+
+    def invalidate(self, *, stopping: bool = False) -> None:
+        self.stopping |= stopping
+        self.active = False
+        self.stdin_closed = True
+        self.changed.set()
+        self._writer.close()
+
+    async def write(self, data: bytes) -> None:
+        self.require_active()
+        if self.writing or self.stdin_closed:
+            raise ContractViolation("process stdin is closed or has a pending writer")
+        if not isinstance(data, bytes) or len(data) > self.input_limit - self.spent:
+            raise ContractViolation("process write exceeds the cumulative input budget")
+        self.spent += len(data)
+        self.writing = True
+        try:
+            for offset in range(0, len(data), 8192):
+                self.require_active()
+                self._writer.write(data[offset:offset + 8192])
+                await self._writer.drain()
+                self.require_active()
+        except (OSError, asyncio.CancelledError) as exc:
+            if self.stopping:
+                raise _OwnedStop from exc
+            raise
+        finally:
+            self.writing = False
+
+    async def read(self, maximum: int = 8192) -> bytes:
+        self.require_active()
+        if type(maximum) is not int or not 1 <= maximum <= 8192 or self.reading:
+            raise ContractViolation("process read requires one reader and a bound in 1..8192")
+        self.reading = True
+        try:
+            while self.offset == len(self._output) and not self.eof:
+                self.changed.clear()
+                await self.changed.wait()
+                self.require_active()
+            end = min(len(self._output), self.offset + maximum)
+            data = bytes(self._output[self.offset:end])
+            self.offset = end
+            return data
+        except asyncio.CancelledError as exc:
+            if self.stopping:
+                raise _OwnedStop from exc
+            raise
+        finally:
+            self.reading = False
+
+    async def close_stdin(self) -> None:
+        self.require_active()
+        if self.writing:
+            raise ContractViolation("process stdin has a pending writer")
+        self.stdin_closed = True
+        self._writer.close()
+
 
 @dataclass(frozen=True, kw_only=True)
 class LinuxLauncher:
@@ -166,6 +263,7 @@ class LinuxLauncher:
             "runtime": self.expected_runtime,
             "bubblewrap": BWRAP_SHA256,
             "recipe": _sha(Path(__file__)),
+            "io_contract": digest("process-io-contract", 1, inspect.getsource(ProcessIO)),
             "policy": self.expected_policy_sha256,
             "limits": asdict(self.limits),
         })
@@ -207,20 +305,47 @@ class LinuxLauncher:
     ) -> ProcessResult:
         """The caller holds and validates the acquisition before entering here."""
 
+        limit = self.limits.artifact_bytes if input_kind == "artifact" else self.limits.input_bytes
+        return await self._launch(
+            command, workspace=workspace, posture=posture, guard_fds=guard_fds,
+            stdin=stdin, input_limit=limit, conversation=None, timeout_s=timeout_s,
+        )
+
+    async def exchange(
+        self, command: tuple[str, ...], *, workspace: Path | None, posture: Posture,
+        guard_fds: tuple[int, ...], conversation: Conversation, timeout_s: float,
+    ) -> ProcessResult:
+        """Exchange bytes within the same owned, networkless process lifetime."""
+
+        return await self._launch(
+            command, workspace=workspace, posture=posture, guard_fds=guard_fds,
+            stdin=b"", input_limit=self.limits.input_bytes,
+            conversation=conversation, timeout_s=timeout_s,
+        )
+
+    async def _launch(
+        self, command: tuple[str, ...], *, workspace: Path | None, posture: Posture,
+        guard_fds: tuple[int, ...], stdin: bytes, input_limit: int,
+        conversation: Conversation | None, timeout_s: float,
+    ) -> ProcessResult:
+
         started = time.monotonic()
         deadline = asyncio.get_running_loop().time() + timeout_s
-        limit = self.limits.artifact_bytes if input_kind == "artifact" else self.limits.input_bytes
-        if len(stdin) > limit or not math.isfinite(timeout_s) or timeout_s <= 0:
+        if len(stdin) > input_limit or not math.isfinite(timeout_s) or timeout_s <= 0:
             raise ContractViolation("contained input/deadline exceeds the launch contract")
         try:
             async with asyncio.timeout_at(deadline):
                 await self.probe(deadline=deadline)
         except TimeoutError:
             return ProcessResult(125, b"", b"", time.monotonic() - started, timed_out=True)
-        result = await self._run(
-            command, workspace=workspace, posture=posture, guard_fds=guard_fds,
-            stdin=stdin, deadline=deadline,
-        )
+        try:
+            result = await self._run(
+                command, workspace=workspace, posture=posture, guard_fds=guard_fds,
+                stdin=stdin, deadline=deadline, input_limit=input_limit, conversation=conversation,
+            )
+        except ProcessExchangeError as exc:
+            exc.result = replace(exc.result, elapsed_s=time.monotonic() - started)
+            raise
         return replace(result, elapsed_s=time.monotonic() - started)
 
     async def probe(self, *, deadline: float | None = None) -> None:
@@ -270,6 +395,7 @@ class LinuxLauncher:
     async def _run(
         self, command: tuple[str, ...], *, workspace: Path | None, posture: Posture,
         guard_fds: tuple[int, ...], stdin: bytes = b"", deadline: float,
+        input_limit: int | None = None, conversation: Conversation | None = None,
     ) -> ProcessResult:
         if sys.platform != "linux":
             raise ContractViolation("contained process ownership requires Linux")
@@ -293,17 +419,62 @@ class LinuxLauncher:
         timed_out = False
         tasks: list[asyncio.Task[None]] = []
         completion: asyncio.Task[None] | None = None
+        protocol: asyncio.Task[None] | None = None
+        channel: _ProcessIO | None = None
+        stopped = asyncio.get_running_loop().create_future()
+        stop_reason: str | None = None
+        errors: list[BaseException] = []
+        cleanup_errors: list[BaseException] = []
+        caller_cancelled = False
+        protocol_observed = False
 
-        def stop() -> None:
-            nonlocal owner_write
-            if owner_write >= 0:
-                os.close(owner_write)
-                owner_write = -1
+        def remember(error: BaseException) -> None:
+            if not any(error is old for old in errors):
+                errors.append(error)
 
-        async def drain(stream: asyncio.StreamReader, *, output: bool) -> None:
+        def observe_protocol() -> None:
+            nonlocal protocol_observed
+            if protocol is None or not protocol.done() or protocol_observed:
+                return
+            protocol_observed = True
+            try:
+                protocol.result()
+            except BaseException as exc:
+                if stop_reason is not None and isinstance(
+                    exc, (_OwnedStop, asyncio.CancelledError),
+                ):
+                    return
+                remember(exc)
+
+        def stop(reason: str = "complete") -> None:
+            nonlocal owner_write, stop_reason
+            if stop_reason is None:
+                observe_protocol()
+                stop_reason = reason
+            try:
+                if channel is not None:
+                    channel.invalidate(stopping=True)
+            finally:
+                if owner_write >= 0:
+                    fd, owner_write = owner_write, -1
+                    os.close(fd)
+                if protocol is not None and not protocol.done():
+                    protocol.cancel()
+                if not stopped.done():
+                    stopped.set_result(None)
+
+        async def capture(stream: asyncio.StreamReader, *, output: bool) -> None:
             nonlocal bound
             line_bytes = 0
-            while chunk := await stream.read(8192):
+            while True:
+                try:
+                    chunk = await stream.read(8192)
+                except OSError:
+                    if stop_reason is not None:
+                        return  # This pending pipe operation was stopped by its owner.
+                    raise
+                if not chunk:
+                    break
                 if output:
                     room = max(0, self.limits.stdout_bytes - len(stdout))
                     stdout.extend(chunk[:room])
@@ -317,29 +488,46 @@ class LinuxLauncher:
                         if index < len(pieces) - 1:
                             line_bytes = 0
                     if bound:
-                        stop()
+                        stop("bound")
+                    if channel is not None:
+                        channel.changed.set()
                 else:
                     half = self.limits.stderr_bytes // 2
                     room = max(0, half - len(stderr_head))
                     stderr_head.extend(chunk[:room])
                     stderr_tail.extend(chunk[room:])
                     del stderr_tail[:max(0, len(stderr_tail) - (self.limits.stderr_bytes - half))]
+            if output and channel is not None:
+                channel.eof = True
+                channel.changed.set()
 
-        async def feed(stream: asyncio.StreamWriter) -> None:
+        async def drain(stream: asyncio.StreamReader, *, output: bool) -> None:
             try:
-                for offset in range(0, len(stdin), 8192):
-                    stream.write(stdin[offset:offset + 8192])
-                    await stream.drain()
-            except (BrokenPipeError, ConnectionResetError):
-                pass
+                await capture(stream, output=output)
+            except BaseException as exc:
+                remember(exc)
+                stop("failure")
+
+        async def converse() -> None:
+            assert channel is not None
+            try:
+                if conversation is not None:
+                    await conversation(channel)
+                else:
+                    # Historical batch delivery may end at peer EOF.
+                    with suppress(BrokenPipeError, ConnectionResetError):
+                        await channel.write(stdin)
             finally:
-                stream.close()
+                channel.invalidate()
 
         async def finish() -> None:
             if process is not None:
                 await process.wait()
             if tasks:
-                await asyncio.gather(*tasks)
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                failed = [result for result in results if isinstance(result, BaseException)]
+                if failed:
+                    raise BaseExceptionGroup("contained pipe drain failed", failed)
 
         try:
             # Shield spawn so cancellation cannot discard a successfully created
@@ -361,10 +549,10 @@ class LinuxLauncher:
                     process = await asyncio.shield(spawn)
             except TimeoutError:
                 timed_out = True
-                stop()
+                stop("deadline")
             except asyncio.CancelledError:
                 cancelled = True
-                stop()
+                stop("cancel")
             while True:
                 try:
                     process = await asyncio.shield(spawn)
@@ -374,13 +562,18 @@ class LinuxLauncher:
                     stop()
             assert process.stdin is not None and process.stdout is not None
             assert process.stderr is not None
+            channel = _ProcessIO(
+                process.stdin, stdout,
+                self.limits.input_bytes if input_limit is None else input_limit,
+            )
             tasks = [
-                asyncio.create_task(feed(process.stdin)),
                 asyncio.create_task(drain(process.stdout, output=True)),
                 asyncio.create_task(drain(process.stderr, output=False)),
             ]
             if cancelled:
                 raise asyncio.CancelledError
+            if stop_reason is None:
+                protocol = asyncio.create_task(converse())
             if owner_write >= 0:
                 # Refused/expired setup retains its observable exit status.
                 with suppress(BrokenPipeError):
@@ -388,21 +581,62 @@ class LinuxLauncher:
             completion = asyncio.create_task(finish())
             try:
                 async with asyncio.timeout_at(deadline):
+                    if protocol is not None:
+                        await asyncio.wait((protocol, stopped), return_when=asyncio.FIRST_COMPLETED)
+                        observe_protocol()
+                        if errors:
+                            stop("failure")
                     await asyncio.shield(completion)
             except TimeoutError:
                 timed_out = True
+                stop("deadline")
+        except asyncio.CancelledError:
+            caller_cancelled = True
+        except BaseException as exc:
+            remember(exc)
         finally:
             os.close(owner_read)
-            stop()
+            try:
+                stop("cancel" if caller_cancelled else "failure" if errors else "complete")
+            except BaseException as exc:
+                cleanup_errors.append(exc)
             cleanup = completion or asyncio.create_task(finish())
             try:
-                await finish_owned(cleanup)
+                try:
+                    await finish_owned(cleanup)
+                except asyncio.CancelledError:
+                    caller_cancelled = True
+                except BaseException as exc:
+                    cleanup_errors.append(exc)
+                if protocol is not None:
+                    async def join_protocol() -> None:
+                        await asyncio.gather(protocol, return_exceptions=True)
+
+                    try:
+                        await finish_owned(asyncio.create_task(join_protocol()))
+                    except asyncio.CancelledError:
+                        caller_cancelled = True
+                    except BaseException as exc:
+                        cleanup_errors.append(exc)
+                    observe_protocol()
                 raw_report = b""
                 with suppress(BlockingIOError):
                     raw_report = os.read(report_read, 5)
             finally:
                 os.close(report_read)
                 os.close(report_write)
+        if cleanup_errors:
+            failures = [*errors, *cleanup_errors]
+            if caller_cancelled:
+                failures.insert(0, asyncio.CancelledError())
+            raise BaseExceptionGroup("contained process cleanup failed", failures)
+        if caller_cancelled:
+            if errors:
+                raise asyncio.CancelledError from BaseExceptionGroup("conversation failed", errors)
+            raise asyncio.CancelledError
+        if process is None:
+            assert errors
+            raise errors[0]
         assert process is not None and process.returncode is not None
         payload_returncode = None
         if len(raw_report) == 4:
@@ -411,8 +645,16 @@ class LinuxLauncher:
                 raise ContractViolation("invalid private payload exit report")
         elif raw_report:
             raise ContractViolation("malformed private payload exit report")
-        return ProcessResult(
+        result = ProcessResult(
             process.returncode, bytes(stdout), bytes(stderr_head + stderr_tail),
             time.monotonic() - started, timed_out or asyncio.get_running_loop().time() >= deadline,
             bound, payload_returncode,
         )
+        if errors:
+            failure = (
+                errors[0] if len(errors) == 1 else BaseExceptionGroup("conversation failed", errors)
+            )
+            if conversation is not None:
+                raise ProcessExchangeError(result) from failure
+            raise failure
+        return result
