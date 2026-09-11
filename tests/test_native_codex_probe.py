@@ -97,6 +97,20 @@ async def test_dispatch_never_accepts_authority_or_identity_from_peer(change):
     assert not invoked
 
 
+@pytest.mark.parametrize("method", ["fs/readFile", "process/spawn", "config/value/write"])
+async def test_client_rpc_names_never_become_server_dispatch_authority(method):
+    invoked = []
+
+    async def worker(program):
+        invoked.append(program)
+        return "ok"
+
+    message = {**call(), "method": method}
+    with pytest.raises(ProbeRefused, match="unknown operation"):
+        await Dispatch("thread", "turn", worker).answer(message)
+    assert not invoked
+
+
 async def test_response_loss_cannot_repeat_work_and_sessions_do_not_share_calls():
     invoked = []
 
@@ -200,16 +214,19 @@ async def test_model_selection_reaches_configuration_and_thread(tmp_path, model)
     assert tomllib.loads((config / "config.toml").read_text())["model"] == model
     program = PEER.replace("MODE", "pass").replace(
         "assert read()['method'] == 'thread/start'",
-        f"request = read(); assert request['params']['model'] == {model!r}",
-    )
+        "selection = read()['params']['model']",
+    ).replace("'program': 'pass'", "'program': selection")
+    observed = []
 
     async def worker(program):
+        observed.append(program)
         return "ok"
 
     env = {key: os.environ[key] for key in ("SYSTEMROOT",) if key in os.environ}
     result = await run_probe([sys.executable, "-I", "-u", "-c", program],
                              cwd=tmp_path, env=env, worker=worker, model=model, timeout=5)
     assert result["calls"] == ["call"]
+    assert observed == [model]
 
 
 @pytest.mark.parametrize("mode", ["success", "eof", "stderr", "timeout", "cancel"])

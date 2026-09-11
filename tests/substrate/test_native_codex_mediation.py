@@ -12,6 +12,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from contextlib import asynccontextmanager
@@ -295,9 +296,9 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
                     "spawn_agent", "wait_agent",
                 }
                 description = functions["exec"]["description"]
-                for name in ("apply_patch", "contained_python"):
-                    assert f"### `{name}`" in description
-                assert ("### `view_image`" in description) == images
+                assert set(re.findall(r"^### `([^`]+)`$", description, re.MULTILINE)) == (
+                    expected_tools - {"request_user_input"}
+                )
             else:
                 assert {tool["name"] for tool in requests[0]["tools"]} == expected_tools
             outputs = [item for item in requests[1]["input"]

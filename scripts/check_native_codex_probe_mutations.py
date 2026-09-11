@@ -25,6 +25,16 @@ MUTANTS = (
      "False", TEST + "test_worker_output_is_bounded"),
     ("total receive bound", MODULE + "Wire.read", "self.received > TOTAL_BYTES", "False",
      TEST + "test_valid_frames_still_obey_total_budget"),
+    ("client RPC separation", MODULE + "Dispatch.answer",
+     'message.get("method") != "item/tool/call"', "False",
+     TEST + "test_client_rpc_names_never_become_server_dispatch_authority"),
+    ("model passed to thread", MODULE + "conversation", '"model": model',
+     '"model": "probe-model"', TEST + "test_model_selection_reaches_configuration_and_thread"),
+    ("model passed through driver", MODULE + "run_probe", "worker, model=model)", "worker)",
+     TEST + "test_model_selection_reaches_configuration_and_thread"),
+    ("model passed to config", "tests.substrate.test_native_codex_mediation:argv_for",
+     'model = "{model}"', 'model = "probe-model"',
+     TEST + "test_model_selection_reaches_configuration_and_thread"),
 )
 
 if __name__ == "__main__":
