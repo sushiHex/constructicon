@@ -5,6 +5,8 @@ from _mutations import run
 FRAME = "tests.native_startup:DuplexWire._readline"
 WIRE = "tests.native_codex_probe:Wire."
 UNIT = "tests/test_native_startup.py::"
+NATIVE = "tests.substrate.test_native_startup:"
+POSITIVE = UNIT + "test_every_positive_control_requires_its_own_clean_outcome"
 
 MUTANTS = (
     ("frame consumption omitted", FRAME, "del self.pending[:end]", "pass",
@@ -38,10 +40,29 @@ MUTANTS = (
      'observations["turn_events"].append(message)', "pass",
      "tests/substrate/test_native_startup.py::"
      "test_provider_failure_retries_until_the_owned_deadline"),
-    ("missing payload exit qualifies a strict refusal", "tests.substrate.test_native_startup:"
-     "test_unknown_configuration_refuses_before_native_rpc",
-     "result.returncode == result.payload_returncode == 1", "result.returncode == 1",
+    ("missing payload exit qualifies a strict refusal", NATIVE + "assert_outcome",
+     "result.returncode == result.payload_returncode == status", "result.returncode == status",
      UNIT + "test_strict_config_evidence_requires_observed_exit[missing-payload]"),
+    ("ambient control omits its outcome", NATIVE +
+     "test_ambient_environment_cannot_select_configuration",
+     "assert_outcome(result)", "pass", POSITIVE + "[supervisor-ambient]"),
+    ("session control omits its outcome", NATIVE +
+     "test_explicit_session_configuration_is_a_positive_control",
+     "assert_outcome(result)", "pass", POSITIVE + "[supervisor-session]"),
+    ("absent skill control omits its outcome", NATIVE +
+     "test_skill_origin_has_a_native_positive_and_absent_control",
+     "assert_outcome(before)", "pass", POSITIVE + "[supervisor-skill-before]"),
+    ("present skill control omits its outcome", NATIVE +
+     "test_skill_origin_has_a_native_positive_and_absent_control",
+     "assert_outcome(after)", "pass", POSITIVE + "[supervisor-skill-after]"),
+    ("deadline is omitted from the outcome", NATIVE + "assert_outcome",
+     "assert result.timed_out is timed_out", "pass", POSITIVE + "[timeout-skill-before]"),
+    ("capture bound is omitted from the outcome", NATIVE + "assert_outcome",
+     "assert result.bound_exceeded is None", "pass", POSITIVE + "[bound-skill-after]"),
+    ("supervisor exit is omitted from the outcome", NATIVE + "assert_outcome",
+     "result.returncode == result.payload_returncode == status",
+     "result.payload_returncode == status",
+     UNIT + "test_strict_config_evidence_requires_observed_exit[supervisor]"),
 )
 
 if __name__ == "__main__":

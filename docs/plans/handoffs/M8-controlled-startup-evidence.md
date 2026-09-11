@@ -154,6 +154,19 @@ failed on missing evidence, then passed after requiring both observed statuses
 to be 1 with no timeout or capture-bound failure. Its fake result is only an
 assertion test, not native provenance. A new mutant removes the payload check.
 
+The [second review](https://github.com/sushiHex/constructicon/pull/54#discussion_r3987796081)
+at `f8cc5b723bd5c0b043bf2fc900bcaafb5678b3b0` found the same incompleteness in
+positive controls: payload success did not prove the supervisor, deadline,
+and capture outcome for each separate skill, ambient, or session launch.
+That head's native gate passed, but the assertion could still credit a bad
+outcome. A fake supervisor-failure result reproduced the false positive.
+One shared outcome assertion now checks matching owner/payload statuses,
+the expected deadline state, and absence of a capture-bound violation for
+every launch, including both skill controls. Portable cases inject each bad
+outcome at each affected call site; mutants remove those call-site checks
+and each part of the shared predicate. No exit or timeout is inferred from
+the configuration response or from another launch's successful result.
+
 ## Verification and decision boundary
 
 Portable checks exercise framing, exact JSON/RPC refusals, send/receive bounds,

@@ -74,6 +74,13 @@ def evidence(name, launcher, observations, result):
     })
 
 
+def assert_outcome(result, *, status=0, timed_out=False):
+    """Every observation needs its own complete, owned process outcome."""
+    assert result.returncode == result.payload_returncode == status
+    assert result.timed_out is timed_out
+    assert result.bound_exceeded is None
+
+
 @pytest.mark.parametrize("model", MODELS)
 async def test_native_starts_with_private_configuration(startup_launcher, tmp_path, model):
     async def inventory(wire, observations):
@@ -85,8 +92,7 @@ async def test_native_starts_with_private_configuration(startup_launcher, tmp_pa
 
     observations, result = await observe(startup_launcher, tmp_path, model, query=inventory)
     evidence(f"codex-startup-{model}.json", startup_launcher, observations, result)
-    assert result.returncode == result.payload_returncode == 0
-    assert not result.timed_out and result.bound_exceeded is None
+    assert_outcome(result)
     assert observations["config"]["config"]["model"] == model
     assert all(observations["bootstrap"]["absent"].values())
     assert observations["bootstrap"]["bootstrap_environment"] == {
@@ -115,7 +121,7 @@ async def test_ambient_environment_cannot_select_configuration(
     monkeypatch.setenv("CODEX_APP_SERVER_TEST_USER_CONFIG_FILE", str(poisoned / "config.toml"))
     observations, result = await observe(startup_launcher, tmp_path, MODELS[0])
     evidence("codex-startup-ambient.json", startup_launcher, observations, result)
-    assert result.payload_returncode == 0 and not result.timed_out
+    assert_outcome(result)
     assert observations["config"]["config"]["model"] == MODELS[0]
     assert set(observations["bootstrap"]["bootstrap_environment"]) == {
         "HOME", "PATH", "LANG", "PWD",
@@ -128,7 +134,7 @@ async def test_explicit_session_configuration_is_a_positive_control(startup_laun
         startup_launcher, tmp_path, MODELS[0], arguments=("-c", f'model="{MODELS[1]}"'),
     )
     evidence("codex-startup-session.json", startup_launcher, observations, result)
-    assert result.payload_returncode == 0 and not result.timed_out
+    assert_outcome(result)
     assert observations["config"]["config"]["model"] == MODELS[1]
 
 
@@ -140,8 +146,7 @@ async def test_unknown_configuration_refuses_before_native_rpc(startup_launcher,
         await observe(startup_launcher, tmp_path, MODELS[0], extra=extra)
     result = refused.value.result
     evidence("codex-startup-strict-" + str(len(extra)) + ".json", startup_launcher, {}, result)
-    assert result.returncode == result.payload_returncode == 1
-    assert not result.timed_out and result.bound_exceeded is None
+    assert_outcome(result, status=1)
     assert "unknown_startup" in result.stderr.decode()
 
 
@@ -163,7 +168,8 @@ async def test_skill_origin_has_a_native_positive_and_absent_control(
     })
     evidence("codex-startup-skill-" + ("user" if "home" in root else "project") + ".json",
              startup_launcher, {"baseline": baseline, "marked": marked}, after)
-    assert before.payload_returncode == after.payload_returncode == 0
+    assert_outcome(before)
+    assert_outcome(after)
     assert "startup-canary" not in json.dumps(baseline["skills"])
     assert "startup-canary" in json.dumps(marked["skills"])
 
@@ -204,8 +210,7 @@ async def test_provider_failure_retries_until_the_owned_deadline(startup_launche
     assert not requests and not failures
     # This is the native projection, not the setup record echoing itself.
     assert observations["config"]["config"]["model_providers"]["probe"]["base_url"] == endpoint
-    assert result.timed_out and result.bound_exceeded is None
-    assert result.returncode == result.payload_returncode == 143
+    assert_outcome(result, status=143, timed_out=True)
     assert "turn" not in observations  # Native never reported a terminal turn.
     errors = [message["params"] for message in observations["turn_events"]
               if message.get("method") == "error"]

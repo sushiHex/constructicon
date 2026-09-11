@@ -169,3 +169,49 @@ async def test_strict_config_evidence_requires_observed_exit(
     else:
         with pytest.raises(AssertionError):
             await check
+
+
+@pytest.mark.parametrize("control", ["ambient", "session", "skill-before", "skill-after"])
+@pytest.mark.parametrize("damage", [
+    {}, {"payload_returncode": None}, {"returncode": 125},
+    {"timed_out": True}, {"bound_exceeded": "stdout"},
+], ids=["clean", "missing-payload", "supervisor", "timeout", "bound"])
+async def test_every_positive_control_requires_its_own_clean_outcome(
+    control, damage, tmp_path, monkeypatch,
+):
+    from dataclasses import replace
+
+    from constructicon.substrate.executors.linux import ProcessResult
+    from tests.substrate import test_native_startup as native
+
+    clean = ProcessResult(0, b"", b"", 0.1, payload_returncode=0)
+
+    async def observe(*args, **kwargs):
+        marked = bool(kwargs.get("files"))
+        observations = {
+            "config": {"config": {"model": MODELS[1] if control == "session" else MODELS[0]}},
+            "bootstrap": {"bootstrap_environment": dict.fromkeys(("HOME", "PATH", "LANG", "PWD"))},
+            "skills": {"names": ["startup-canary"] if marked else []},
+        }
+        damaged = control in {"ambient", "session"} or control == (
+            "skill-after" if marked else "skill-before"
+        )
+        return observations, replace(clean, **damage) if damaged else clean
+
+    monkeypatch.setattr(native, "observe", observe)
+    monkeypatch.delenv("M8_EVIDENCE_DIRECTORY", raising=False)
+    if control == "ambient":
+        check = native.test_ambient_environment_cannot_select_configuration(
+            None, monkeypatch, tmp_path,
+        )
+    elif control == "session":
+        check = native.test_explicit_session_configuration_is_a_positive_control(None, tmp_path)
+    else:
+        check = native.test_skill_origin_has_a_native_positive_and_absent_control(
+            None, tmp_path, "/tmp/home/.codex/skills",
+        )
+    if damage:
+        with pytest.raises(AssertionError):
+            await check
+    else:
+        await check
