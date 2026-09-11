@@ -38,7 +38,10 @@ and `gpt-5.6-sol`) must be observed inside the placement fixture.
    conversation turns. Unexpected context is a refused/unqualified observation,
    not permission to widen an allowlist until a positive case passes.
 3. Link each allowed native callback to the actual contained worker invocation,
-   its output, the returned native tool result, and the completed turn. Exercise
+   its output, the returned native tool result, and the completed turn. Bind the
+   peer transcript, native RPC/call identities, complete owned `ProcessResult`,
+   and post-join peer failures in each record. Preserve both models' distinct
+   request/tool wire shapes; `turn/completed` alone is insufficient. Exercise
    patch, image, and model-dependent refusal controls, including positive controls
    that prove a removed tool was reachable before its supported restriction.
    Preserve the worker's existing READ boundary and single physical owner.
@@ -77,8 +80,10 @@ new production restrictions, or borrowed desktop/account credentials.
 
 Native journal/RunHost/home/revocation recovery remains gated on a supported
 startup and mediation recipe. Completion here does not accept subscription auth.
-Report proved, partial, and blocked rows separately to issue #57 and the decision
-packet in issue #38. Keep the resulting implementation PR draft for owner review.
+Report proved, refuted-by-reproduction, unexecuted, and blocked-by-prerequisite
+rows separately to issue #57 and the decision packet in issue #38. An overall
+partial result must retain those distinctions. Keep the resulting implementation
+PR draft for owner review.
 
 ## Executed evidence
 
