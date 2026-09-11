@@ -154,12 +154,15 @@ class Wire:
             return value["result"]
 
 
-async def conversation(wire, cwd, worker, *, model="probe-model", base_instructions=None):
+async def conversation(wire, cwd, worker, *, model="probe-model", base_instructions=None,
+                       before_thread=None):
     await wire.rpc("initialize", {
         "clientInfo": {"name": "constructicon_probe", "version": "0"},
         "capabilities": {"experimentalApi": True},
     })
     await wire.send({"method": "initialized"})
+    if before_thread is not None:
+        await before_thread(wire)
     started = await wire.rpc("thread/start", {
         "model": model, "modelProvider": "probe", "cwd": str(cwd),
         "approvalPolicy": "never", "sandbox": "danger-full-access",
@@ -184,7 +187,8 @@ async def conversation(wire, cwd, worker, *, model="probe-model", base_instructi
                 or params["turn"]["status"] != "completed"
             ):
                 raise ProbeRefused(f"turn failed or changed identity: {params}")
-            return {"calls": sorted(dispatch.seen), "methods": sorted(wire.observed_methods),
+            return {"thread": thread, "turn": dispatch.turn_id,
+                    "calls": sorted(dispatch.seen), "methods": sorted(wire.observed_methods),
                     "warnings": wire.warnings}
 
 

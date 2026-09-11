@@ -104,12 +104,45 @@ the already-reviewed native artifact `10281307021`, run `34643786457`, file
 `codex-gpt-5.5-contained_python-images-true-unchanged.json`. They are independent
 of the new request under test. The assertion preserves the namespaced Sol
 framing instead of flattening it, and compares entire declared tool definitions.
-Only top-level item IDs are excluded from content comparison; they must still be
-nonempty strings. The only allowed context-text variation is the UTC date within
+Only top-level item IDs are excluded from conversation-content comparison;
+they must still be nonempty strings. The only allowed context-text variation is the UTC date within
 the controller's 20-second invocation window. Tool call IDs, arguments, results,
 message order, permissions text, environment, and controller prompt remain exact.
 
-Portable focused checks: 112 passed, 28 platform skips. These are instrument
-checks, not native qualification. Linux observations, startup-origin controls,
-assertion mutants, full gates, artifact audit, and complete-head independent
-review are still unexecuted for this slice.
+The root field inventory and generation settings are also exact. Unknown
+`previous_response_id`, `conversation`, and arbitrary context fields refuse.
+`client_metadata` and `prompt_cache_key` remain recorded transport annotations,
+not validated origin evidence; the fixed fake peer neither routes nor selects
+behavior from them. The positive patch control additionally permits only a
+numeric elapsed-time field between zero and twenty seconds in its otherwise
+exact result text. Its actual file content is checked through a trusted read.
+
+The original Sol tool declaration is preserved separately from the restricted
+one: `native_combined_sol_tools.json` comes from the same prior artifact's
+`codex-gpt-5.6-sol-contained_python-images-false-unchanged.json`. Positive patch
+controls submit the original pinned catalog; restricted cases keep the existing
+restricted catalog. No new catalog transformation or native binary pin is added.
+
+Independent source review found and corrected an old owner-death caller missing
+the newly explicit model, top-level history fields bypassing the context check,
+and worker failure observations attached too late. Worker evidence now includes
+the complete decoded result, raw owned process outcome, and existing acquisition
+identity before any callback-result assertion can fail.
+
+The first Linux six-case combined baseline passed on `4b8f372` (allowed worker
+plus disabled patch/image paths for both profiles). It does not establish the
+later strengthened assertion or startup controls. Current portable focused
+checks: 129 passed, 28 platform skips; nine targeted assertion mutants killed.
+These are instrument checks, not native qualification. Expanded Linux controls,
+full final-head gates, artifact audit, and complete-head independent review
+remain unexecuted.
+
+The pending origin matrix now includes private/account-empty baselines, selected
+versus unselected named profiles, project TOML and inert MCP startup under both
+trust states, discovered user/project skills with prompt inclusion disabled, and
+JSON/TOML hooks with untrusted, explicitly trusted, and disabled controls. Trusted
+hook and MCP execution is deliberate positive-control behavior, not part of the
+empty safe recipe. System/managed sources remain physically absent under the
+unchanged read-only runtime. No account-authenticated or cloud-managed positive
+control is attempted. Local plugin discovery is observed; a plugin installation
+and execution positive control is not yet established.

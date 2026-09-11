@@ -2,11 +2,13 @@
 
 The tool golden is from the previously reviewed pinned-binary artifact, not the
 request under test. Context is constructed independently from the controller's
-recipe. Only message IDs and the bounded invocation date may vary. This checks
+recipe. Only message IDs and the bounded invocation date may vary within content.
+Root telemetry/cache annotations are recorded, not origin evidence. This checks
 bytes/shape, never process authorship; a descendant can reproduce them.
 """
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -68,6 +70,16 @@ def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
+def fixed_request_fields(model):
+    return {
+        "include": ["reasoning.encrypted_content"], "model": model,
+        "parallel_tool_calls": model == MODELS[0], "store": False, "stream": True,
+        "text": {"verbosity": "low"}, "tool_choice": "auto",
+        "reasoning": ({"effort": "medium"} if model == MODELS[0] else
+                      {"context": "all_turns", "effort": "low"}),
+    }
+
+
 @dataclass(frozen=True)
 class CombinedScenario:
     model: str
@@ -81,10 +93,16 @@ class CombinedScenario:
     def prefix(self, date):
         prefix = []
         if self.model == MODELS[1]:
-            prefix = [{"type": "additional_tools", "role": "developer", "tools": [{
+            tools = [{
                 "type": "namespace", "name": "functions", "description": "",
                 "tools": tools_for(images=self.images, restricted=self.restricted),
-            }]}, message("developer", BASE_INSTRUCTIONS)]
+            }]
+            if not self.restricted:
+                tools = json.loads(Path(__file__).with_name("fixtures").joinpath(
+                    "native_combined_sol_tools.json",
+                ).read_text())
+            prefix = [{"type": "additional_tools", "role": "developer", "tools": tools},
+                      message("developer", BASE_INSTRUCTIONS)]
         return [*prefix, message("developer", PERMISSIONS), message("user", environment(date)),
                 message("user", PROBE_PROMPT)]
 
@@ -101,6 +119,21 @@ class CombinedScenario:
     def __call__(self, request, ordinal):
         if self.model not in MODELS or request.get("model") != self.model or ordinal not in (1, 2):
             raise ValueError("unexpected combined model or request ordinal")
+        fixed = fixed_request_fields(self.model)
+        expected_keys = set(fixed) | {"input", "client_metadata", "prompt_cache_key"}
+        if self.model == MODELS[0]:
+            expected_keys |= {"instructions", "tools"}
+        if set(request) != expected_keys or any(
+            canonical(request[key]) != canonical(value) for key, value in fixed.items()
+        ):
+            raise ValueError("unexpected root field or generation setting")
+        # The fake peer never uses these annotations as instructions, routing,
+        # or script selection. Keep their bytes in evidence; do not call them
+        # identity proof or silently accept new history-bearing root fields.
+        if not isinstance(request["client_metadata"], dict) or not isinstance(
+            request["prompt_cache_key"], str,
+        ):
+            raise ValueError("malformed transport annotations")
         if self.model == MODELS[0]:
             if request.get("instructions") != BASE_INSTRUCTIONS or canonical(
                 request.get("tools"),
@@ -109,6 +142,16 @@ class CombinedScenario:
         elif "instructions" in request or "tools" in request:
             raise ValueError("flattened namespaced model request")
         actual = without_ids(request.get("input"))
+        if ordinal == 2 and self.tool == "apply_patch" and not self.restricted and actual:
+            output = actual[-1].get("output")
+            elapsed = re.search(r"(?m)^Wall time: ([0-9]+(?:\.[0-9]+)?) seconds$", output) if (
+                isinstance(output, str)
+            ) else None
+            if elapsed is None or not 0 <= float(elapsed[1]) <= 20:
+                raise ValueError("unexpected patch control elapsed time")
+            actual[-1] = {**actual[-1], "output": (
+                output[:elapsed.start(1)] + "<elapsed>" + output[elapsed.end(1):]
+            )}
         suffix = self.suffix() if ordinal == 2 else []
         if not any(canonical(actual) == canonical(self.prefix(date) + suffix)
                    for date in self.dates):
