@@ -38,13 +38,15 @@ def inert_mcp():
     )
 
 
-async def measure(image, guard_root, model, *, files=None, config=None, mcp=False, plugins=False):
+async def measure(image, guard_root, model, *, files=None, config=None, mcp=False, plugins=False,
+                  packaged_shell=False):
     now = datetime.now(UTC)
     dates = tuple(dict.fromkeys([
         now.date().isoformat(), (now + timedelta(seconds=20)).date().isoformat(),
     ]))
     scenario = CombinedScenario(model, dates, "exec_command", {"cmd": "true"},
-                                "unsupported call: exec_command", mcp=mcp, plugins=plugins)
+                                "unsupported call: exec_command", mcp=mcp, plugins=plugins,
+                                packaged_shell=packaged_shell)
 
     async def no_worker(_program):
         raise AssertionError("startup control must not dispatch a worker")
@@ -68,16 +70,23 @@ async def measure(image, guard_root, model, *, files=None, config=None, mcp=Fals
             before_thread=inventory,
         )
         record["mcp"] = await wire.rpc("mcpServerStatus/list", {})
+        if packaged_shell:
+            record["features"] = await wire.rpc("experimentalFeature/list", {
+                "threadId": record["protocol"]["thread"], "limit": 1000,
+            })
         record["marker"] = await wire.rpc("fs/readFile", {"path": MARKER})
         await wire.io.close_stdin()
 
     async with placement(image, model=model, scenario=PROBE_PROMPT, tool=scenario.tool,
                          arguments=scenario.arguments, request_check=scenario) as fixture:
         composed, peer, record = fixture
-        record["combined_startup"] = {"model": model, "dates": dates}
+        record["combined_startup"] = {
+            "model": model, "dates": dates, "packaged_shell": packaged_shell,
+        }
         observations, result = await observe(
             composed, peer, guard_root, query=query, record=record,
-            config=controlled_configuration(model) if config is None else config,
+            config=controlled_configuration(model, packaged_shell=packaged_shell)
+            if config is None else config,
             files={MARKER: "absent", **(files or {})},
         )
     assert_outcome(result)
@@ -90,6 +99,13 @@ async def measure(image, guard_root, model, *, files=None, config=None, mcp=Fals
         assert observations[family]["data"][0]["cwd"] == CWD
         assert not observations[family]["data"][0]["errors"]
     assert not observations["plugins"]["marketplaceLoadErrors"]
+    if packaged_shell:
+        assert observations["features"]["nextCursor"] is None
+        flags = {flag["name"]: flag for flag in observations["features"]["data"]}
+        assert flags["shell_zsh_fork"]["enabled"] is True
+        assert flags["shell_zsh_fork"]["stage"] == "underDevelopment"
+        assert flags["shell_zsh_fork"]["defaultEnabled"] is False
+        assert all(flags[name]["enabled"] is False for name in ("shell_tool", "unified_exec"))
     return observations
 
 
@@ -97,20 +113,33 @@ def marker(record):
     return base64.b64decode(record["marker"]["dataBase64"], validate=True).decode()
 
 
-def assert_hook_attempt(record, enabled):
+def assert_hook_attempt(record, enabled, *, completed=False):
     events = [item["received"] for item in record["wire"] if item.get("received", {}).get(
         "method",
     ) in {"hook/started", "hook/completed"}]
     assert [item["method"] for item in events] == (
         ["hook/started", "hook/completed"] if enabled else []
     )
-    if enabled:
+    if enabled and completed:
+        starts, ends = (item["params"] for item in events)
+        hook = record["hooks"]["data"][0]["hooks"][0]
+        for item in (starts, ends):
+            assert item["threadId"] == record["protocol"]["thread"]
+            assert item["turnId"] == record["protocol"]["turn"]
+            assert item["run"]["eventName"] == hook["eventName"] == "sessionStart"
+            assert item["run"]["sourcePath"] == hook["sourcePath"]
+        assert starts["run"]["id"] == ends["run"]["id"] and ends["run"]["id"]
+        assert starts["run"]["status"] == "running"
+        assert ends["run"]["status"] == "completed"
+        assert ends["run"]["entries"] == []
+    elif enabled:
         # The unchanged minimal image has no /bin/sh. Discovery and trust
         # are proven; successful command-hook execution remains blocked.
         run = events[-1]["params"]["run"]
         assert run["status"] == "failed"
         assert run["entries"] == [{"kind": "error", "text":
                                    "No such file or directory (os error 2)"}]
+    assert marker(record) == ("hook" if enabled and completed else "absent")
 
 
 @pytest.mark.parametrize("model", MODELS)
@@ -219,19 +248,20 @@ async def test_skill_discovery_and_prompt_inclusion_are_distinct(
 
 @pytest.mark.parametrize("origin", ["json", "toml"])
 async def test_user_hook_discovery_trust_and_disable_have_execution_controls(
-    placement_image, tmp_path, origin,
+    placement_image, tmp_path, origin, *, model=MODELS[0], packaged_shell=False,
 ):
     command = ("/usr/bin/python3 -I -c \"from pathlib import Path; "
                f"Path('{MARKER}').write_text('hook')\"")
     hook = {"SessionStart": [{"hooks": [{"type": "command", "command": command, "timeout": 2}]}]}
-    config = controlled_configuration(MODELS[0])
+    config = controlled_configuration(model, packaged_shell=packaged_shell)
     files = {}
     if origin == "json":
         files[HOME_CONFIG + "/hooks.json"] = json.dumps({"hooks": hook})
     else:
         config += ('\n[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = "command"\n'
                    f'command = {json.dumps(command)}\ntimeout = 2\n')
-    record = await measure(placement_image, tmp_path, MODELS[0], config=config, files=files)
+    record = await measure(placement_image, tmp_path, model, config=config, files=files,
+                           packaged_shell=packaged_shell)
     hooks = [hook for row in record["hooks"]["data"] for hook in row["hooks"]]
     assert len(hooks) == 1 and hooks[0]["trustStatus"] == "untrusted"
     assert hooks[0]["enabled"] is True
@@ -245,10 +275,21 @@ async def test_user_hook_discovery_trust_and_disable_have_execution_controls(
             f'trusted_hash = {json.dumps(hooks[0]["currentHash"])}\n'
             f'enabled = {str(enabled).lower()}\n'
         )
-        checked = await measure(placement_image, tmp_path, MODELS[0],
-                                config=selected, files=files)
+        checked = await measure(placement_image, tmp_path, model,
+                                config=selected, files=files, packaged_shell=packaged_shell)
         entries = [hook for row in checked["hooks"]["data"] for hook in row["hooks"]]
         assert len(entries) == 1 and entries[0]["trustStatus"] == "trusted"
         assert entries[0]["enabled"] is enabled
-        assert_hook_attempt(checked, enabled)
-        assert marker(checked) == "absent"
+        assert_hook_attempt(checked, enabled, completed=packaged_shell)
+
+
+@pytest.mark.parametrize("origin", ["json", "toml"])
+@pytest.mark.parametrize("model", MODELS)
+async def test_packaged_shell_executes_only_the_exact_trusted_hook(
+    placement_image, tmp_path, model, origin,
+):
+    # Same control law, with the release's already-packaged shell selected.
+    # Keep the original missing-shell case as a historical negative control.
+    await test_user_hook_discovery_trust_and_disable_have_execution_controls(
+        placement_image, tmp_path, origin, model=model, packaged_shell=True,
+    )

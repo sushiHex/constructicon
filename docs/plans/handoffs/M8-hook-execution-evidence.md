@@ -27,7 +27,12 @@ selects that asset when `features.shell_zsh_fork` is enabled; the
 [hook configuration](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/session/mod.rs)
 passes the session environment's shell into the hook runner.
 These source observations are a hypothesis, not executable proof or a claim
-that an experimental feature is stable. Current
+that an experimental feature is stable. The release registry identifies it
+as `UnderDevelopment`, default `false`, expressly not ready for external use.
+It accepts the flag without a debug-build gate. Preserve any unstable-feature
+warning in the native wire; schema recognition does not establish a supported
+production recipe. Independent acceptance review confirmed this distinction
+before the first native run. Current
 [official hook guidance](https://learn.chatgpt.com/docs/hooks) provides
 orientation; the pinned release and observed behavior decide this result.
 
