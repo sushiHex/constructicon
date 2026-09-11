@@ -183,3 +183,21 @@ before proposing a successor ADR. The narrow catalog result is not complete
 mediation, a production launch identity, or permission to place a reusable
 secret in the harness. ADR 0018 remains the accepted boundary. No API billing
 substitution, Pi qualification, or OpenRouter readiness follows from this work.
+
+## Qualification prerequisite (PR #51)
+
+The [bounded qualification plan](../plans/handoffs/M8-native-qualification-plan.md)
+records an established interface blocker: the current Linux launcher feeds
+one complete stdin buffer and closes it. The native app-server instead needs
+requests that depend on earlier replies and worker results. Concurrent output
+draining does not provide that duplex interface. This follows directly from
+`LinuxLauncher._run` at the PR #50 merge, `8a2da8de653b919e492558eafb921d973e7535eb`;
+it is source evidence, not a newly executed native lifecycle proof.
+
+Before lifecycle qualification, a separately reviewed and authorized bounded
+duplex contract must preserve the existing supervisor and acquisition owner.
+Startup observations alone cannot resolve that prerequisite. Neither a
+second process manager nor a recorded-executor test can substitute for the
+missing native composition. No native qualification code or successor ADR is
+claimed by PR #51; [#38](https://github.com/sushiHex/constructicon/issues/38)
+remains the decision point.

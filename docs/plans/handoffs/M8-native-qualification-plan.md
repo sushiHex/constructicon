@@ -40,6 +40,28 @@ exercise `LeasedCapability` and the journal without claiming executor-profile
 qualification. Any eventual policy/version change belongs to the proposed
 successor decision, after evidence, not this implementation.
 
+## Known prerequisite: bounded duplex transport
+
+The existing launcher cannot perform Slice B's native exchange. Its
+`LinuxLauncher._run.feed` writes a predetermined byte buffer and permanently
+closes stdin; its output drains accumulate bytes, without exposing a live
+response channel to the caller. App-server requests must instead follow
+received responses and the contained worker's result. Concurrent draining is
+not duplex protocol support.
+
+This is an already-established interface blocker, not a conditional risk for
+the implementation to discover later. Slice B below records prospective
+acceptance criteria; it is not executable qualification authorized by this
+plan. It requires a separately reviewed, authorized transport contract that
+preserves the existing supervisor, acquisition guards, resource bounds,
+deadline, cancellation, and single lifecycle owner. A batch-fed script with
+its own controller or a raw subprocess driver is not that missing contract.
+
+Slice A can provide bounded startup observations, but neither those nor a
+non-native journal exercise can establish the positive combined result while
+this prerequisite remains open. Bring this blocker to #38 before attempting
+lifecycle plumbing. No new transport or authentication policy is approved here.
+
 ## Slice A: controlled startup
 
 Read the exact tagged upstream loader, app-server entry point, and tool
@@ -72,8 +94,9 @@ open-ended denylist or weaken the claimed boundary.
 
 ## Slice B: durable lifecycle composition
 
-Start only after Slice A has a supported recipe with no unresolved startup
-authority gap. Keep it a separate reviewable change. Reuse:
+Start only after the duplex prerequisite has a separately authorized solution
+and Slice A has a supported recipe with no unresolved startup authority gap.
+Keep it a separate reviewable change. Reuse:
 
 - `LeasedCapability`, `AcquiredCapability`, `LeaseContext` and
   `StaleAcquisition` from `core/workspace.py`;
@@ -107,12 +130,10 @@ as complete ownership. Assertions about reaping need actual reaping evidence;
 a zombie is only non-executing. Failure cleanup is bounded, retains the
 original failure, and is never credited as measured automatic recovery.
 
-The current `LinuxLauncher.run` accepts a bounded, complete stdin buffer; the
-native app-server driver uses a duplex conversation. Inspect that mismatch
-before adding plumbing. Do not copy a reaper, invent a process manager, widen
-the worker's network authority, or call a modified recipe the existing proof.
-If a new launch/transport contract, durable field, or trust boundary is needed,
-record the specific missing contract and stop at the decision boundary.
+The duplex mismatch is the upfront blocker above. Do not copy a reaper,
+invent a process manager, widen the worker's network authority, or call a
+modified recipe the existing proof. Additional durable fields or trust
+boundaries would also require a decision before implementation.
 
 ## Evidence and stopping rules
 
