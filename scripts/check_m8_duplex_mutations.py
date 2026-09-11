@@ -66,7 +66,15 @@ MUTANTS = (
         "constructicon.substrate._lifetime:finish_owned",
         "        if interrupted is not None:\n", "        if False:\n",
         "tests/substrate/test_lifetime.py::"
-        "test_join_retains_original_cancellation_and_cleanup_failure[True]",
+        "test_join_retains_original_cancellation_and_cleanup_failure",
+    ),
+    (
+        "pre-entry cancellation is forgotten",
+        "constructicon.substrate._lifetime:finish_owned",
+        "not task.cancelled() or owner.cancelling() > cancellations",
+        "owner.cancelling() > cancellations",
+        "tests/substrate/test_lifetime.py::"
+        "test_join_retains_original_cancellation_and_cleanup_failure",
     ),
     (
         "late spawn failure forgets caller cancellation", PUMP,

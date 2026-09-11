@@ -8,7 +8,8 @@ from constructicon.substrate._lifetime import finish_owned
 
 
 @pytest.mark.parametrize("fails", [False, True])
-async def test_join_retains_original_cancellation_and_cleanup_failure(fails):
+@pytest.mark.parametrize("when", ["during", "before"])
+async def test_join_retains_original_cancellation_and_cleanup_failure(fails, when):
     release = asyncio.Event()
     error = RuntimeError("owned failure")
 
@@ -19,9 +20,16 @@ async def test_join_retains_original_cancellation_and_cleanup_failure(fails):
         return 42
 
     owned = asyncio.create_task(work())
-    owner = asyncio.create_task(finish_owned(owned))
+
+    async def join():
+        if when == "before":
+            asyncio.current_task().cancel("first cancellation")
+        return await finish_owned(owned)
+
+    owner = asyncio.create_task(join())
     await asyncio.sleep(0)
-    owner.cancel("first cancellation")
+    if when == "during":
+        owner.cancel("first cancellation")
     await asyncio.sleep(0)
     owner.cancel("later cancellation")
     await asyncio.sleep(0)

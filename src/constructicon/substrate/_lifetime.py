@@ -17,7 +17,7 @@ async def finish_owned(task: asyncio.Task[_T]) -> _T:
         try:
             await asyncio.shield(task)
         except asyncio.CancelledError as exc:
-            if owner.cancelling() > cancellations:
+            if not task.cancelled() or owner.cancelling() > cancellations:
                 interrupted = interrupted or exc
                 cancellations = owner.cancelling()
         except BaseException:
