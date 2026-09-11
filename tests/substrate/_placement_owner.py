@@ -48,7 +48,8 @@ async def main():
         print("ready", flush=True)
         await wire.read()
 
-    await observe(launcher, SimpleNamespace(deadline=float(sys.argv[3])), Path(sys.argv[2]),
+    await observe(launcher, SimpleNamespace(deadline=float(sys.argv[3]), model="gpt-5.5"),
+                  Path(sys.argv[2]),
                   probe=PROBE, query=ready)
 
 
