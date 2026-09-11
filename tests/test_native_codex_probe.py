@@ -252,6 +252,23 @@ def test_catalog_changes_only_the_named_tool_selectors(tmp_path, restricted):
     assert configured.get("model_catalog_json") == str(path)
 
 
+async def test_native_heartbeat_observes_data_not_file_creation(tmp_path, monkeypatch):
+    from tests.substrate import _native_probe_owner as owner
+
+    heartbeat = tmp_path / "heartbeat"
+    observed = []
+
+    async def advance(_delay):
+        observed.append(heartbeat.read_bytes() if heartbeat.exists() else None)
+        assert len(observed) <= 2
+        heartbeat.write_bytes(b"" if len(observed) == 1 else b".")
+
+    monkeypatch.setattr(owner.asyncio, "sleep", advance)
+    await owner.wait_for_heartbeat(heartbeat)
+    assert observed == [None, b""]
+    assert heartbeat.read_bytes() == b"."
+
+
 def test_native_cleanup_tolerates_process_exit_race(monkeypatch):
     monkeypatch.setattr(native_probe.signal, "SIGKILL", 9, raising=False)
     monkeypatch.setattr(native_probe, "process_state", lambda pid: ("S", "same-start"))

@@ -439,6 +439,12 @@ that same enrollment law to pre-spawn materialization: lease rows must reach
 the parent before population can block. The kill-during-materialization case
 proves closure and disposal without inventing a native PID or worker activity.
 
+The next confirming pass found a narrower observation race: file creation
+preceded the worker's first heartbeat write. The active report now waits for
+nonempty bytes, not existence. A deterministic portable regression steps
+through missing, empty, and written states; restoring existence-only polling
+fails it. The parent's later read is not substituted for that event's evidence.
+
 The corrected `3acd4bc` native step passed all 77 cases and 18 portable
 instrument mutants. Additional missing/malformed-catalog and removed-tool
 direct-call controls follow on the same PR. Its exact final head must pass

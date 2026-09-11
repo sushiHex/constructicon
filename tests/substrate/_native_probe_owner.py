@@ -30,6 +30,12 @@ from tests.substrate.test_native_codex_mediation import (
 )
 
 
+async def wait_for_heartbeat(heartbeat):
+    async with asyncio.timeout(15):
+        while not heartbeat.exists() or not heartbeat.read_bytes():
+            await asyncio.sleep(.01)
+
+
 async def main():
     root, mode, model = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
     rows = ([StaleAcquisition(lease=CapabilityLease.model_validate(row), disposition="discard")
@@ -102,9 +108,7 @@ async def main():
         return json.dumps(result.output)
 
     async def report_active():
-        async with asyncio.timeout(15):
-            while not heartbeat.exists():
-                await asyncio.sleep(.01)
+        await wait_for_heartbeat(heartbeat)
         assert acquired.resource.active is not None and native_pid is not None
         print(json.dumps({"phase": "active"}), flush=True)
 

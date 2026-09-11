@@ -54,6 +54,10 @@ MUTANTS = (
           ("native cleanup exit race", "suppress(ProcessLookupError)", "suppress()"),
           ("native cleanup PID reuse", "state[1] == start", "True"),
       )),
+    ("native activity requires heartbeat data",
+     "tests.substrate._native_probe_owner:wait_for_heartbeat",
+     " or not heartbeat.read_bytes()", "",
+     TEST + "test_native_heartbeat_observes_data_not_file_creation"),
 )
 
 if __name__ == "__main__":
