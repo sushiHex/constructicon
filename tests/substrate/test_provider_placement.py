@@ -41,7 +41,9 @@ def placement_image(launcher):
 
 
 @asynccontextmanager
-async def placement(image, *, timeout=CASE_SECONDS):
+async def placement(image, *, timeout=CASE_SECONDS, model=MODELS[0],
+                    scenario=PLACEMENT_PROMPT, tool=None, arguments=None, request_check=None,
+                    namespace=None):
     deadline = asyncio.get_running_loop().time() + timeout  # Before peer setup.
     with tempfile.TemporaryDirectory(prefix="m8-placement-") as directory:
         endpoint = Path(directory) / "provider.sock"
@@ -50,8 +52,10 @@ async def placement(image, *, timeout=CASE_SECONDS):
         record = {}
         composed = peer = None
         try:
-            async with provider_peer(path=endpoint, deadline=deadline, model=MODELS[0],
-                                     scenario=PLACEMENT_PROMPT) as peer:
+            async with provider_peer(tool=tool, arguments=arguments, path=endpoint,
+                                     deadline=deadline, model=model,
+                                     scenario=scenario, request_check=request_check,
+                                     namespace=namespace) as peer:
                 identity = endpoint.stat()
                 composed = PlacementLauncher(
                     **{field.name: getattr(image, field.name) for field in fields(image)},
@@ -89,9 +93,12 @@ def descendants(pid):
 
 async def observe(
     composed, peer, guard_root, *, probe=None, query=None, identity=None, fault="none", record=None,
+    config=None, files=None, arguments=(),
 ):
     setup = {
-        "files": {}, "config": configuration(MODELS[0]), "arguments": [],
+        "files": {} if files is None else files,
+        "config": configuration(peer.model) if config is None else config,
+        "arguments": list(arguments),
         "placement": {
             "identity": list(composed.endpoint_identity) if identity is None else identity,
             "deadline": peer.deadline, "probe": probe, "fault": fault,
@@ -103,7 +110,7 @@ async def observe(
 
     async def conversation(io):
         await io.write(raw)
-        wire = DuplexWire(io)
+        wire = DuplexWire(io, observations.setdefault("wire", []))
         if query is not None:
             await query(wire, observations)
         else:

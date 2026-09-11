@@ -105,7 +105,8 @@ def response_for(tool, arguments, model, namespace, ordinal):
 
 
 class Peer:
-    def __init__(self, listener, deadline, tool, arguments, model, namespace, scenario):
+    def __init__(self, listener, deadline, tool, arguments, model, namespace, scenario,
+                 request_check=None):
         self.listener, self.deadline = listener, deadline
         self.tool, self.arguments, self.model, self.namespace = tool, arguments, model, namespace
         self.budget = Budget()
@@ -114,6 +115,7 @@ class Peer:
         self.stopped = asyncio.Event()
         self.acceptor = None
         self.scenario = scenario
+        self.request_check = request_check
 
     def check_scenario(self, request):
         # The controlled user turn is a scenario assertion, not process identity
@@ -150,6 +152,8 @@ class Peer:
                 if request.get("model") != self.model:
                     raise ValueError("unexpected model")
                 self.check_scenario(request)
+                if self.request_check is not None:
+                    self.request_check(request, len(self.requests))
                 await write(sock, self.budget, response_for(
                     self.tool, self.arguments, self.model, self.namespace, len(self.requests),
                 ))
@@ -194,7 +198,7 @@ class Peer:
 
 @asynccontextmanager
 async def provider_peer(tool=None, arguments=None, *, model="probe-model", namespace=None,
-                        path=None, deadline=None, scenario=None):
+                        path=None, deadline=None, scenario=None, request_check=None):
     if deadline is None:
         deadline = asyncio.get_running_loop().time() + CASE_SECONDS
     listener = socket.socket(socket.AF_UNIX if path is not None else socket.AF_INET)
@@ -207,7 +211,7 @@ async def provider_peer(tool=None, arguments=None, *, model="probe-model", names
             observed = path.lstat()
             bound = (observed.st_dev, observed.st_ino)
         listener.listen(2)
-        peer = Peer(listener, deadline, tool, arguments, model, namespace, scenario)
+        peer = Peer(listener, deadline, tool, arguments, model, namespace, scenario, request_check)
         task = asyncio.create_task(peer.serve())
         peer.acceptor = task
         try:

@@ -77,6 +77,7 @@ the eventual code differs.
 | [M8 controlled startup evidence](handoffs/M8-controlled-startup-evidence.md) | Startup-origin inventory and scoped native observations through the merged duplex launcher; explicit unqualified surfaces and provider-connectivity prerequisite |
 | [M8 provider fixture proposal](handoffs/M8-provider-fixture-proposal.md) | Accepted by the owner at reviewed `35946af`, merged in #55; frozen proposed wording is historical. Test-only Unix endpoint mount and contained byte bridge, not a production route or authentication decision |
 | [M8 provider placement evidence](handoffs/M8-provider-placement-evidence.md) | Living acceptance and implementation evidence for the placement-only slice; no combined mediation, recovery, or authentication qualification |
+| [M8 combined startup evidence](handoffs/M8-combined-startup-evidence.md) | Bounded combined startup/mediation acceptance and observations; distinguishes controlled turns from native context; not authentication or recovery qualification |
 
 ## Completeness and recovery notes
 
