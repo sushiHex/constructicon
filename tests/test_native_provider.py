@@ -168,9 +168,24 @@ async def test_failed_bind_and_replaced_path_never_remove_another_resource(addre
     assert peer.failures == ["endpoint replaced before teardown"]
 
 
-async def test_repeated_cancellation_joins_every_accepted_handler(address):
+async def test_repeated_cancellation_joins_every_accepted_handler(address, monkeypatch):
     entered = asyncio.Event()
+    cleaning, release = asyncio.Event(), asyncio.Event()
     peers, sockets = [], []
+    gather = asyncio.gather
+
+    def paused_join(*tasks, **kwargs):
+        pending = gather(*tasks, **kwargs)
+        if peers and tasks == (peers[0].acceptor,):
+            async def pause():
+                await pending
+                cleaning.set()
+                await release.wait()
+            return pause()
+        return pending
+
+    # Interrupt the exact join boundary, not a platform-dependent TCP callback.
+    monkeypatch.setattr(asyncio, "gather", paused_join)
 
     async def invocation():
         async with provider_peer(path=address) as peer:
@@ -185,13 +200,18 @@ async def test_repeated_cancellation_joins_every_accepted_handler(address):
     try:
         await asyncio.wait_for(entered.wait(), 2)
         task.cancel()
-        asyncio.get_running_loop().call_soon(task.cancel)
+        await asyncio.wait_for(cleaning.wait(), 2)
+        task.cancel()
+        done, _ = await asyncio.wait([task], timeout=.02)
+        assert not done, "cancellation abandoned owned cleanup"
+        release.set()
         with pytest.raises(asyncio.CancelledError):
             await task
         [peer] = peers
         assert not peer.active
         assert all(handler.done() for handler in peer.handlers)
     finally:
+        release.set()
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         for sock in sockets:
