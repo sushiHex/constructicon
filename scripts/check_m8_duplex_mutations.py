@@ -69,12 +69,18 @@ MUTANTS = (
         "test_join_retains_original_cancellation_and_cleanup_failure",
     ),
     (
-        "pre-entry cancellation is forgotten",
+        "completed work skips pending caller cancellation",
         "constructicon.substrate._lifetime:finish_owned",
-        "not task.cancelled() or owner.cancelling() > cancellations",
-        "owner.cancelling() > cancellations",
+        "while True:", "while not task.done():",
         "tests/substrate/test_lifetime.py::"
-        "test_join_retains_original_cancellation_and_cleanup_failure",
+        "test_completed_failure_does_not_skip_pending_caller_cancellation",
+    ),
+    (
+        "owned cancellation is mistaken for caller cancellation",
+        "constructicon.substrate._lifetime:finish_owned",
+        "await asyncio.wait((task,))", "await asyncio.shield(task)",
+        "tests/substrate/test_lifetime.py::"
+        "test_owned_task_cancellation_is_not_a_second_owner_cancellation",
     ),
     (
         "late spawn failure forgets caller cancellation", PUMP,

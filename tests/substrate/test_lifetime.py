@@ -55,6 +55,52 @@ async def test_owned_task_cancellation_is_not_a_second_owner_cancellation():
     async def work():
         raise asyncio.CancelledError("owned operation")
 
-    with pytest.raises(asyncio.CancelledError) as caught:
+    caught = None
+    try:
         await finish_owned(asyncio.create_task(work()))
-    assert caught.value.args == ("owned operation",)
+    except BaseException as exc:
+        caught = exc
+    assert isinstance(caught, asyncio.CancelledError)
+    assert caught.args == ("owned operation",)
+
+
+@pytest.mark.parametrize("delay", [False, True])
+async def test_pending_owner_and_owned_cancellation_are_distinct(delay):
+    async def work():
+        if delay:
+            await asyncio.sleep(.001)
+        raise asyncio.CancelledError("owned operation")
+
+    async def join():
+        asyncio.current_task().cancel("owner")
+        await finish_owned(asyncio.create_task(work()))
+
+    caught = None
+    try:
+        await asyncio.create_task(join())
+    except BaseException as exc:
+        caught = exc
+    assert isinstance(caught, BaseExceptionGroup)
+    assert [error.args for error in caught.exceptions] == [("owner",), ("owned operation",)]
+
+
+async def test_completed_failure_does_not_skip_pending_caller_cancellation():
+    error = ValueError("completed failure")
+
+    async def work():
+        raise error
+
+    owned = asyncio.create_task(work())
+    await asyncio.wait((owned,))
+
+    async def join():
+        asyncio.current_task().cancel("owner")
+        await finish_owned(owned)
+
+    caught = None
+    try:
+        await asyncio.create_task(join())
+    except BaseException as exc:
+        caught = exc
+    assert isinstance(caught, BaseExceptionGroup)
+    assert caught.exceptions[0].args == ("owner",) and caught.exceptions[1] is error

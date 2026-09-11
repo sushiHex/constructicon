@@ -249,7 +249,7 @@ MUTANTS = (
     (
         "deletion abandons its guard on cancellation",
         "constructicon.substrate._lifetime:finish_owned",
-        "await asyncio.shield(task)", "await task",
+        "await asyncio.wait((task,))", "await task",
         LEASE + "test_deletion_yields_but_keeps_its_guard_through_repeated_cancellation",
     ),
 )
