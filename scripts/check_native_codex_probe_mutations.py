@@ -35,6 +35,33 @@ MUTANTS = (
     ("model passed to config", "tests.substrate.test_native_codex_mediation:argv_for",
      'model = "{model}"', 'model = "probe-model"',
      TEST + "test_model_selection_reaches_configuration_and_thread"),
+    *((name, "tests.substrate.test_native_codex_mediation:catalog_for", before, after,
+       TEST + "test_catalog_changes_only_the_named_tool_selectors")
+      for name, before, after in (
+          ("catalog patch selector", "apply_patch_tool_type=None",
+           'apply_patch_tool_type="freeform"'),
+          ("catalog direct selector", 'tool_mode="direct"', 'tool_mode="code_mode_only"'),
+          ("catalog collaboration selector", "multi_agent_version=None",
+           'multi_agent_version="v2"'),
+          ("catalog preserves other models", 'entry["slug"] in selected', "True"),
+      )),
+    ("catalog reaches config", "tests.substrate.test_native_codex_mediation:argv_for",
+     "if catalog else ''", "if False else ''",
+     TEST + "test_catalog_changes_only_the_named_tool_selectors"),
+    ("native cleanup exit race", "tests.substrate.test_native_codex_mediation:stop_native",
+     "suppress(ProcessLookupError)", "suppress()",
+     TEST + "test_native_cleanup_uses_pinned_identity_despite_pid_reuse"),
+    ("native cleanup uses stable process identity",
+     "tests.substrate.test_native_codex_mediation:stop_native",
+     "signal.pidfd_send_signal", "os.kill",
+     TEST + "test_native_cleanup_uses_pinned_identity_despite_pid_reuse"),
+    ("native enrollment refuses PID reuse",
+     "tests.substrate.test_native_codex_mediation:pin_native",
+     "state[1] == start", "True", TEST + "test_native_enrollment_refuses_a_reused_pid"),
+    ("native activity requires heartbeat data",
+     "tests.substrate._native_probe_owner:wait_for_heartbeat",
+     " or not heartbeat.read_bytes()", "",
+     TEST + "test_native_heartbeat_observes_data_not_file_creation"),
 )
 
 if __name__ == "__main__":

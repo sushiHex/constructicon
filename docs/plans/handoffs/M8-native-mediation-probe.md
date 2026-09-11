@@ -341,4 +341,134 @@ record credited disposal to the ending itself. The correction measures open
 acquisitions and a present workspace before cleanup, then closed acquisitions
 and removed workspace after cleanup. Evidence names both phases explicitly;
 no new event-driven disposal mechanism or native eligibility is invented to
-satisfy an overclaim. Final confirmation must review this corrected head.
+satisfy an overclaim. PR #49's confirming review covered `7bbd807`; it merged
+as `746af92` with a byte-identical tree.
+
+## Controlled catalog experiment (PR #50)
+
+The owner authorized this bounded follow-up after PR #49. The hypothesis was
+specific: use the documented startup `model_catalog_json` override to remove
+model-selected native tool metadata without changing the binary, selected
+model names, instructions, or the worker boundary. The
+[configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
+establishes the setting, not its adequacy as an authority boundary.
+
+CI downloads the exact tagged catalog identified above and verifies its hash
+before entering the offline lab. One test-only transformation preserves every
+entry and field except these selectors on `gpt-5.5` and `gpt-5.6-sol`:
+`apply_patch_tool_type = null`, `tool_mode = "direct"`, and
+`multi_agent_version = null`. The existing false feature flags remain in place.
+The other model entries are unchanged, not qualified or silently removed.
+No fallback model is substituted for either selected name.
+
+The unchanged override is a positive control: it must reproduce the bundled
+catalog's tools and native patch writes. Its reserialized bytes have SHA-256
+`a5615a518d5c17d195ef62502671f797bb38860a27e180457e7557fb64f41647`.
+The restricted override's bytes have SHA-256
+`4f22dc85ec6e08bddd3b4e793601bf4298cd3d2c869e3a0f77c4ef2b55ca246d`.
+These identify submitted configuration, not an attested effective policy.
+
+The first native run, on `f0746dc`, exposed two incorrect instrument assumptions:
+unsupported free-form calls say `unsupported custom tool call`, and Sol's
+direct tools still travel in `additional_tools` under a `functions` namespace.
+The downloaded artifact proved that this was no longer CodeMode: there was
+no `exec`, `wait`, or collaboration namespace, and no native patch write.
+The corrected assertions preserve this wire distinction rather than flattening
+it into the other model's ordinary `tools` field.
+
+| Restricted profile | Observed tools | Forced patch |
+| --- | --- | --- |
+| `gpt-5.5` | Question and contained worker, plus image reader only in the enabled control | Refused; no fixture written |
+| `gpt-5.6-sol` | Same operations inside `functions`, without CodeMode or collaboration | Refused; no fixture written |
+
+The contained READ callback still succeeds for both profiles. Disabled images
+remain refused; enabled images still export the canary and are therefore only
+a negative control, never an eligible configuration. The three RPC-name probes
+retain their exact refusal. These results close the named patch and published
+model-dependent surface gaps for this catalog recipe, not complete mediation
+for all settings, tools, models, or startup paths.
+
+### Literal driver death and acquisition disposal
+
+The new child-interpreter fixture uses the same pinned native binary and
+restricted catalog, plus the existing `RecordedExecutorProvider`, workspace
+provider, and Linux launcher. It reports the fixture lease rows before
+materialization, then the native PID immediately after spawn. The active-worker
+case emits a separate report after
+the contained WRITE worker has written a heartbeat; the before-worker case
+never starts that worker. Killing the Python driver with SIGKILL bypasses its
+cleanup. Before any test cleanup or recovery call, the native PID stops
+executing and the heartbeat stops. PID start time distinguishes the observed
+process from a reused PID at enrollment; cleanup retains and signals a Linux
+pidfd, never the numeric PID after an identity check. A zombie counts as
+non-executing, not reaped.
+
+The acquisitions remain open and the workspace remains present after death.
+Explicit successor `reconcile` calls close both old acquisitions and remove
+their payloads through the existing closure law. A second interpreter uses a
+fresh home and epoch and completes one new native invocation; its normal
+owner cleanup closes and disposes its own acquisitions. Failure cleanup is
+separate and never credited as death or recovery evidence.
+
+This is a lease-level composition proof. The stale rows are serialized test
+fixtures, **not** rows recovered from SQLite by RunHost. The probe neither
+resumes a native conversation nor proves cleanup of the native home, all native
+descendants, credential revocation, or response-loss/restart under the complete
+durable run lifecycle. Worker PID-namespace ownership remains the production
+launcher's proof, not a new claim about the native harness's process group.
+
+Independent review caught two failure-path defects in this instrument. The
+parent originally learned the native PID only after the worker heartbeat,
+leaving earlier failures without that cleanup target. It now receives a
+separate process-start event immediately, with a before-worker stall regression.
+Unconditional in-process reconciliation could also wait forever on a stuck
+guard. Both measured recovery and failure cleanup now run the existing
+reconciliation calls in a disposable interpreter with a five-second deadline;
+the parent kills that interpreter on timeout. A deliberately held guard pins
+the bound. Cleanup errors are attached to the original failure rather than
+replacing it. This is lab containment of the test's failure path, not a new
+production recovery service or permission to dispose an active resource.
+
+The confirming review found that the fresh invocation still used the old late
+reporting path. Both invocations now use one test-local start/cleanup law,
+including failure cleanup of their own epoch's rows; a stalled successor pins
+that case. Native PID cleanup tolerates exit between inspection and kill and
+preserves other cleanup errors alongside the original failure. Portable tests
+and mutations pin that exit race and refusal to kill a reused PID. The record
+also distinguishes the early process-start report from the later heartbeat
+report, rather than attributing worker activity to both. A final review extended
+that same enrollment law to pre-spawn materialization: lease rows must reach
+the parent before population can block. The kill-during-materialization case
+proves closure and disposal without inventing a native PID or worker activity.
+
+The next confirming pass found a narrower observation race: file creation
+preceded the worker's first heartbeat write. The active report now waits for
+nonempty bytes, not existence. A deterministic portable regression steps
+through missing, empty, and written states; restoring existence-only polling
+fails it. The parent's later read is not substituted for that event's evidence.
+
+Review then caught the remaining check-to-kill PID reuse window. The owner
+reports its observed native start time; the parent opens a pidfd, validates
+that observation, and retains the descriptor until cleanup. Signaling uses
+that stable descriptor, including when the original process has exited; every
+path closes it. Portable tests cover reuse before enrollment and after it,
+and restoring numeric-PID signaling fails the instrument mutation. This pins
+the one observed native process, not an all-descendant ownership claim.
+
+The corrected `3acd4bc` native step passed all 77 cases and 18 portable
+instrument mutants. Additional missing/malformed-catalog and removed-tool
+direct-call controls follow on the same PR. Its exact final head must pass
+the complete CI/native gates and independent review; an earlier successful
+step is not substituted for that gate.
+
+### Decision boundary
+
+The catalog hypothesis has a supported positive result at its stated scope.
+It does not qualify a credential-owning harness or supersede ADR 0018. The
+remaining combined proof must include controlled startup/configuration sources,
+native process/home ownership through journal-driven death and restart, and
+actual authority revocation. No production adapter, profile availability,
+login, gateway, or billing change was made. The
+[authentication assessment](../../designs/EXECUTOR_AUTHENTICATION.md#controlled-catalog-follow-up-pr-50)
+and issue #38 retain those gates; Pi and OpenRouter remain behind their own
+qualification and authentication prerequisites.

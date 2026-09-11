@@ -229,6 +229,84 @@ async def test_model_selection_reaches_configuration_and_thread(tmp_path, model)
     assert observed == [model]
 
 
+@pytest.mark.parametrize("restricted", [False, True])
+def test_catalog_changes_only_the_named_tool_selectors(tmp_path, restricted):
+    entries = [{"slug": slug, "instructions": "preserve verbatim", "unknown": [1, True],
+                "apply_patch_tool_type": "freeform", "tool_mode": "code_mode_only",
+                "multi_agent_version": "v2"}
+               for slug in ("gpt-5.5", "gpt-5.6-sol", "unselected")]
+    original = {"models": entries, "unrelated": {"keep": True}}
+    effective = json.loads(native_probe.catalog_for(json.dumps(original).encode(),
+                                                    restricted=restricted))
+    expected = json.loads(json.dumps(original))
+    if restricted:
+        for entry in expected["models"][:2]:
+            entry.update(apply_patch_tool_type=None, tool_mode="direct", multi_agent_version=None)
+    assert effective == expected
+    config = tmp_path / "config"
+    config.mkdir()
+    path = config / "catalog.json"
+    native_probe.argv_for((Path("pinned-codex"), {"CODEX_HOME": str(config)}),
+                          tmp_path, "http://127.0.0.1:1/v1", images=False, catalog=path)
+    configured = tomllib.loads((config / "config.toml").read_text())
+    assert configured.get("model_catalog_json") == str(path)
+
+
+async def test_native_heartbeat_observes_data_not_file_creation(tmp_path, monkeypatch):
+    from tests.substrate import _native_probe_owner as owner
+
+    heartbeat = tmp_path / "heartbeat"
+    observed = []
+
+    async def advance(_delay):
+        observed.append(heartbeat.read_bytes() if heartbeat.exists() else None)
+        assert len(observed) <= 2
+        heartbeat.write_bytes(b"" if len(observed) == 1 else b".")
+
+    monkeypatch.setattr(owner.asyncio, "sleep", advance)
+    await owner.wait_for_heartbeat(heartbeat)
+    assert observed == [None, b""]
+    assert heartbeat.read_bytes() == b"."
+
+
+@pytest.mark.parametrize("gone", [False, True])
+def test_native_cleanup_uses_pinned_identity_despite_pid_reuse(monkeypatch, gone):
+    monkeypatch.setattr(native_probe.signal, "SIGKILL", 9, raising=False)
+    monkeypatch.setattr(native_probe, "process_state", lambda pid: ("S", "same-start"))
+    monkeypatch.setattr(native_probe.os, "pidfd_open", lambda pid: 456, raising=False)
+    called, closed = [], []
+
+    def send(fd, sig):
+        called.append(fd)
+        if gone:
+            raise ProcessLookupError("original process exited; numeric PID may be reused")
+
+    def numeric_kill(pid, sig):
+        pytest.fail("a recycled numeric PID is not the enrolled cleanup target")
+
+    monkeypatch.setattr(native_probe.signal, "pidfd_send_signal", send, raising=False)
+    monkeypatch.setattr(native_probe.os, "kill", numeric_kill)
+    monkeypatch.setattr(native_probe.os, "close", closed.append)
+    fd = native_probe.pin_native(123, "same-start")
+    # The numeric PID changes owner after enrollment, before cleanup signals.
+    monkeypatch.setattr(native_probe, "process_state", lambda pid: ("S", "reused"))
+    try:
+        native_probe.stop_native(fd)
+    except ProcessLookupError:
+        pytest.fail("native exit during cleanup must not replace the original failure")
+    assert called == [456] and closed == [456]
+
+
+def test_native_enrollment_refuses_a_reused_pid(monkeypatch):
+    monkeypatch.setattr(native_probe.os, "pidfd_open", lambda pid: 456, raising=False)
+    monkeypatch.setattr(native_probe, "process_state", lambda pid: ("S", "reused"))
+    closed = []
+    monkeypatch.setattr(native_probe.os, "close", closed.append)
+    with pytest.raises(AssertionError):
+        native_probe.pin_native(123, "reported-start")
+    assert closed == [456]
+
+
 @pytest.mark.parametrize("mode", ["success", "eof", "stderr", "timeout", "cancel"])
 async def test_real_pipe_lifetime_with_scripted_peer(tmp_path, mode):
     invoked = []

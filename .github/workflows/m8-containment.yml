@@ -58,6 +58,10 @@ jobs:
           sudo install -d -m 0755 /var/lib/constructicon-m8-launch/native-codex
           sudo tar --no-same-owner -xzf "$RUNNER_TEMP/codex.tar.gz" -C /var/lib/constructicon-m8-launch/native-codex
           sudo chmod -R go-w /var/lib/constructicon-m8-launch/native-codex
+          curl --fail --location --retry 2 --output "$RUNNER_TEMP/codex-models.json" \
+            https://raw.githubusercontent.com/openai/codex/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/models-manager/models.json
+          printf '%s  %s\n' d7136a413cfac1b5b1686d9e0dcc5c80ca05bebed5e9fc3911376561d0ef6ee8 "$RUNNER_TEMP/codex-models.json" | sha256sum --check --strict
+          sudo install -m 0444 "$RUNNER_TEMP/codex-models.json" /var/lib/constructicon-m8-launch/codex-models.json
       - name: Probe native mediation with loopback only and no credentials
         shell: bash
         run: |
@@ -73,6 +77,7 @@ jobs:
               M8_CONTAINMENT_REQUIRED=1 M8_NATIVE_CODEX_REQUIRED=1 \
               M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
               M8_CODEX_BINARY=/var/lib/constructicon-m8-launch/native-codex/bin/codex \
+              M8_CODEX_CATALOG=/var/lib/constructicon-m8-launch/codex-models.json \
               M8_EVIDENCE_DIRECTORY=/home/m8-service/evidence \
               "$1/.venv/bin/python" -m pytest tests/substrate/test_native_codex_mediation.py \
                 -v --tb=short -p no:cacheprovider

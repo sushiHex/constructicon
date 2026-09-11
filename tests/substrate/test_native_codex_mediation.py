@@ -13,16 +13,21 @@ import hashlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from constructicon.core.executor import TaskSpec
 from constructicon.core.grants import Posture
 from constructicon.core.identity import parse_json_value
+from constructicon.core.manifest import CapabilityLease
+from constructicon.core.workspace import StaleAcquisition, acquisition_id_for
+from constructicon.substrate.git.acquisition import AcquisitionPaths
 from tests.containedworld import RecordedExecutorProvider
 from tests.native_codex_probe import CANARY_PNG, RECORD_BYTES, run_probe
 from tests.substrate.test_contained_workspace import context
@@ -30,6 +35,7 @@ from tests.substrate.test_contained_workspace import provider as provider
 from tests.substrate.test_linux_containment import launcher as launcher
 
 WORKER = "import sys; exec(sys.stdin.read())"
+CATALOG_SHA256 = "d7136a413cfac1b5b1686d9e0dcc5c80ca05bebed5e9fc3911376561d0ef6ee8"
 PROGRAM = (
     "import json, pathlib\n"
     "assert not pathlib.Path('/etc/shadow').exists()\n"
@@ -60,7 +66,7 @@ def events(items, *, model="probe-model"):
 
 
 @asynccontextmanager
-async def fake_provider(tool, arguments, *, model="probe-model"):
+async def fake_provider(tool, arguments, *, model="probe-model", namespace=None):
     requests, failures = [], []
     handlers = set()
 
@@ -82,8 +88,11 @@ async def fake_provider(tool, arguments, *, model="probe-model"):
                 assert request["model"] == model
                 if len(requests) == 1:
                     item = {"id": "fc_probe", "call_id": "call_probe", "name": tool}
-                    if tool == "apply_patch":
-                        items = [{**item, "type": "custom_tool_call", "input": arguments["patch"]}]
+                    if namespace is not None:
+                        item["namespace"] = namespace
+                    if tool in {"apply_patch", "exec"}:
+                        source = arguments["patch" if tool == "apply_patch" else "code"]
+                        items = [{**item, "type": "custom_tool_call", "input": source}]
                     else:
                         items = [{**item, "type": "function_call",
                                   "arguments": json.dumps(arguments)}]
@@ -151,7 +160,20 @@ def write_evidence(name, value):
         (Path(directory) / name).write_text(json.dumps(value, sort_keys=True, indent=2) + "\n")
 
 
-def argv_for(native, cwd, endpoint, *, images, model="probe-model"):
+def catalog_for(source: bytes, *, restricted: bool) -> bytes:
+    """Change only three tool selectors, never model identity or instructions."""
+    catalog = json.loads(source)
+    selected = {"gpt-5.5", "gpt-5.6-sol"}
+    assert {entry["slug"] for entry in catalog["models"]} >= selected
+    if restricted:
+        for entry in catalog["models"]:
+            if entry["slug"] in selected:
+                entry.update(apply_patch_tool_type=None, tool_mode="direct",
+                             multi_agent_version=None)
+    return (json.dumps(catalog, sort_keys=True) + "\n").encode()
+
+
+def argv_for(native, cwd, endpoint, *, images, model="probe-model", catalog=None):
     binary, env = native
     configuration = f'''
 model = "{model}"
@@ -160,6 +182,7 @@ model_context_window = 32768
 model_auto_compact_token_limit = 30000
 check_for_update_on_startup = false
 web_search = "disabled"
+{f'model_catalog_json = {json.dumps(str(catalog))}' if catalog else ''}
 [model_providers.probe]
 name = "Credential-free loopback fixture"
 base_url = "{endpoint}"
@@ -181,6 +204,68 @@ apps = false
     config = Path(env["CODEX_HOME"])
     (config / "config.toml").write_text(configuration)
     return [str(binary), "app-server", "--strict-config", "--stdio"]
+
+
+def install_catalog(native, *, restricted):
+    source = Path(os.environ["M8_CODEX_CATALOG"]).read_bytes()
+    assert hashlib.sha256(source).hexdigest() == CATALOG_SHA256
+    path = Path(native[1]["CODEX_HOME"]) / "catalog.json"
+    path.write_bytes(catalog_for(source, restricted=restricted))
+    return path
+
+
+@pytest.mark.parametrize("damage", ["missing", "malformed"])
+async def test_invalid_catalog_refuses_before_provider_request(native, tmp_path, damage):
+    path = Path(native[1]["CODEX_HOME"]) / "invalid-catalog.json"
+    if damage == "malformed":
+        path.write_text("{not-json")
+
+    async def worker(_source):
+        raise AssertionError("invalid catalog must not reach the worker")
+
+    async with fake_provider("contained_python", {"program": PROGRAM},
+                             model="gpt-5.5") as exchange:
+        endpoint, requests, failures = exchange
+        argv = argv_for(native, tmp_path, endpoint, images=False, model="gpt-5.5", catalog=path)
+        with pytest.raises(ExceptionGroup) as refusal:
+            await run_probe(argv, cwd=tmp_path, env=native[1], worker=worker, model="gpt-5.5")
+        assert not requests and not failures
+        write_evidence(f"codex-catalog-{damage}.json", {
+            "damage": damage, "provider_requests": requests,
+            "refusal": repr(refusal.value),
+        })
+
+
+@pytest.mark.parametrize("model", ["gpt-5.5", "gpt-5.6-sol"])
+@pytest.mark.parametrize("operation,namespace,arguments,refusal", [
+    ("exec", "functions", {"code": "text('inert fixture')"},
+     "unsupported custom tool call: exec"),
+    ("spawn_agent", "collaboration", {"task_name": "fixture", "message": "inert fixture"},
+     "unsupported call: collaborationspawn_agent"),
+])
+async def test_removed_catalog_tools_refuse_direct_namespaced_calls(
+    native, tmp_path, model, operation, namespace, arguments, refusal,
+):
+    path = install_catalog(native, restricted=True)
+
+    async def worker(_source):
+        raise AssertionError("a removed native tool must not reach the worker")
+
+    async with fake_provider(operation, arguments, model=model, namespace=namespace) as exchange:
+        endpoint, requests, failures = exchange
+        argv = argv_for(native, tmp_path, endpoint, images=False, model=model, catalog=path)
+        result = await run_probe(argv, cwd=tmp_path, env=native[1], worker=worker, model=model)
+        write_evidence(f"codex-catalog-{model}-{operation}.json", {
+            "model": model, "namespace": namespace, "operation": operation,
+            "requests": requests, "protocol": result, "server_failures": failures,
+        })
+        assert not failures and len(requests) == 2 and not result["calls"]
+        outputs = [item for item in requests[1]["input"]
+                   if item.get("type") in {"function_call_output", "custom_tool_call_output"}]
+        assert len(outputs) == 1
+        # Pin the binary's actual diagnostic spelling, not an invented display
+        # law for namespaces. The input still carries the explicit namespace.
+        assert outputs[0]["output"] == refusal
 
 
 def test_pinned_native_schema_inventory(native, tmp_path):
@@ -208,19 +293,30 @@ def test_pinned_native_schema_inventory(native, tmp_path):
     assert "thread/start" in methods and "turn/start" in methods
 
 
-@pytest.mark.parametrize("model,operation", [
-    *(("probe-model", operation) for operation in (
+@pytest.mark.parametrize("model,operation,catalog_mode", [
+    *(("probe-model", operation, "bundled") for operation in (
         "contained_python", "exec_command", "view_image",
     )),
-    *((model, operation) for model in ("gpt-5.5", "gpt-5.6-sol") for operation in (
+    *((model, operation, mode) for model in ("gpt-5.5", "gpt-5.6-sol")
+      for mode in ("bundled", "restricted") for operation in (
         "contained_python", "exec_command", "view_image", "apply_patch",
         "fs/readFile", "process/spawn", "config/value/write",
     )),
+    *((model, operation, "unchanged") for model in ("gpt-5.5", "gpt-5.6-sol")
+      for operation in ("contained_python", "apply_patch")),
 ])
 @pytest.mark.parametrize("images", [True, False], ids=["image-control", "image-disabled"])
 async def test_native_dynamic_dispatch_and_builtin_probe(
-    native, tmp_path, provider, launcher, model, operation, images,
+    native, tmp_path, provider, launcher, model, operation, images, catalog_mode,
 ):
+    catalog_path = None
+    catalog_evidence = None
+    restricted = catalog_mode == "restricted"
+    if catalog_mode != "bundled":
+        catalog_path = install_catalog(native, restricted=restricted)
+        submitted = hashlib.sha256(catalog_path.read_bytes()).hexdigest()
+        catalog_evidence = {"source_sha256": CATALOG_SHA256, "submitted_sha256": submitted,
+                            "mode": catalog_mode}
     provider.launcher = launcher
     executor = RecordedExecutorProvider(launcher, provider, WORKER)
     await executor.qualify()
@@ -262,45 +358,55 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
     try:
         async with fake_provider(operation, arguments, model=model) as exchange:
             endpoint, requests, failures = exchange
-            argv = argv_for(native, tmp_path, endpoint, images=images, model=model)
+            argv = argv_for(native, tmp_path, endpoint, images=images, model=model,
+                            catalog=catalog_path)
             result = await run_probe(argv, cwd=tmp_path, env=native[1], worker=worker, model=model)
             evidence = {"probe": operation, "model": model, "images_enabled": images,
                         "protocol": result, "requests": requests,
                         "server_failures": failures, "worker_outputs": observed,
                         "builtin_canary_written": canary.exists(),
-                        "native_patch_written": patch_canary.exists()}
+                        "native_patch_written": patch_canary.exists(),
+                        "catalog": catalog_evidence}
             write_evidence(f"codex-{model}-{operation.replace('/', '-')}-images-"
-                           f"{str(images).lower()}.json", evidence)
+                           f"{str(images).lower()}-{catalog_mode}.json", evidence)
             assert not failures, failures
             assert len(requests) == 2
             expected_tools = {"request_user_input", "contained_python"}
             if images:
                 expected_tools.add("view_image")
             if model != "probe-model":
-                expected_tools.add("apply_patch")
+                if not restricted:
+                    expected_tools.add("apply_patch")
                 assert "missing model metadata" not in result["stderr_observed"].lower()
             if model == "gpt-5.6-sol":
-                # This pinned model publishes CodeMode namespaces despite the
-                # requested false flags. Preserve that distinct wire surface;
-                # do not flatten it into a claim of the fallback inventory.
+                # The bundled catalog enables CodeMode; the restricted one
+                # retains namespace framing without CodeMode. Preserve both
+                # wire shapes rather than flattening them into ordinary tools.
                 assert "tools" not in requests[0]
                 declarations = [item for item in requests[0]["input"]
                                 if item.get("type") == "additional_tools"]
                 assert len(declarations) == 1
                 namespaces = {tool["name"]: tool for tool in declarations[0]["tools"]}
-                assert set(namespaces) == {"functions", "collaboration"}
-                functions = {tool["name"]: tool for tool in namespaces["functions"]["tools"]}
-                assert set(functions) == {"exec", "wait", "request_user_input"}
-                assert {tool["name"] for tool in namespaces["collaboration"]["tools"]} == {
-                    "followup_task", "interrupt_agent", "list_agents", "send_message",
-                    "spawn_agent", "wait_agent",
-                }
-                description = functions["exec"]["description"]
-                assert set(re.findall(r"^### `([^`]+)`$", description, re.MULTILINE)) == (
-                    expected_tools - {"request_user_input"}
+                assert set(namespaces) == (
+                    {"functions"} if restricted else {"functions", "collaboration"}
                 )
+                functions = {tool["name"]: tool for tool in namespaces["functions"]["tools"]}
+                if restricted:
+                    assert set(functions) == expected_tools
+                else:
+                    assert set(functions) == {"exec", "wait", "request_user_input"}
+                    assert {tool["name"] for tool in namespaces["collaboration"]["tools"]} == {
+                        "followup_task", "interrupt_agent", "list_agents", "send_message",
+                        "spawn_agent", "wait_agent",
+                    }
+                    description = functions["exec"]["description"]
+                    assert set(re.findall(r"^### `([^`]+)`$", description, re.MULTILINE)) == (
+                        expected_tools - {"request_user_input"}
+                    )
             else:
                 assert {tool["name"] for tool in requests[0]["tools"]} == expected_tools
+                assert not any(item.get("type") == "additional_tools"
+                               for item in requests[0]["input"])
             outputs = [item for item in requests[1]["input"]
                        if item.get("type") in {"function_call_output", "custom_tool_call_output"}]
             assert len(outputs) == 1
@@ -310,11 +416,13 @@ async def test_native_dynamic_dispatch_and_builtin_probe(
             else:
                 assert not observed
                 assert not result["calls"]
-                if operation == "apply_patch":
+                if operation == "apply_patch" and not restricted:
                     assert patch_canary.read_text() == "fixture only\n"
                 elif operation != "view_image" or not images:
-                    assert outputs[0]["output"] == f"unsupported call: {operation}"
+                    kind = "custom tool call" if operation == "apply_patch" else "call"
+                    assert outputs[0]["output"] == f"unsupported {kind}: {operation}"
                     assert not canary.exists()
+                    assert not patch_canary.exists()
                 else:
                     # A PASS reproduces the negative result: this native reader
                     # bypasses the worker and exports an unmounted harness file.
@@ -479,4 +587,212 @@ async def test_native_turn_ending_joins_an_active_contained_worker(
         "ending": ending, "worker_calls": len(calls), "driver_deadline_s": 12,
         "on_driver_return": on_driver_return,
         "after_explicit_test_cleanup": after_cleanup,
+    })
+
+
+def process_state(pid):
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        return fields[0], fields[19]  # state and starttime, not PID alone
+    except FileNotFoundError:
+        return None
+
+
+def pin_native(pid, start):
+    fd = os.pidfd_open(pid)
+    try:
+        state = process_state(pid)
+        assert state is not None and state[1] == start and state[0] != "Z"
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def stop_native(fd):
+    try:
+        with suppress(ProcessLookupError):
+            signal.pidfd_send_signal(fd, signal.SIGKILL)
+    finally:
+        os.close(fd)
+
+
+@pytest.mark.parametrize("model,stage", [
+    ("gpt-5.5", "active"), ("gpt-5.6-sol", "active"), ("gpt-5.5", "before-worker"),
+    ("gpt-5.5", "held-guard"), ("gpt-5.5", "successor-stall"),
+    ("gpt-5.5", "during-materialization"),
+])
+async def test_driver_death_and_explicit_successor_reconciliation(
+    native, tmp_path, provider, launcher, model, stage,
+):
+    """Lease-level composition only; no journal recovery or auth availability claim."""
+    provider.posture = Posture.WRITE
+    provider.launcher = launcher
+    owners = []
+
+    async def spawn(epoch, pause="finish"):
+        return await asyncio.create_subprocess_exec(
+            sys.executable, "-m", "tests.substrate._native_probe_owner",
+            str(tmp_path), str(epoch), model, pause,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+    async def reconcile(stale):
+        recovery = await spawn("reconcile")
+        try:
+            rows = json.dumps([item.lease.model_dump(mode="json") for item in stale]).encode()
+            stdout, stderr = await asyncio.wait_for(recovery.communicate(rows), 5)
+            assert recovery.returncode == 0, stderr.decode()
+            assert json.loads(stdout) == {"phase": "reconciled"}
+        finally:
+            if recovery.returncode is None:
+                recovery.kill()
+            await asyncio.wait_for(recovery.wait(), 5)
+
+    async def start_owner(epoch, pause):
+        item = SimpleNamespace(process=await spawn(epoch, pause), pid=None, start=None,
+                               pidfd=None, stale=[])
+        owners.append(item)  # Every later failure sees this owner, including startup.
+        line = await asyncio.wait_for(item.process.stdout.readline(), 25)
+        assert line, (await item.process.stderr.read()).decode()
+        event = json.loads(line)
+        item.stale = [StaleAcquisition(lease=CapabilityLease.model_validate(row),
+                                       disposition="discard") for row in event["leases"]]
+        assert event["phase"] == "acquired"
+        if pause == "during-materialization":
+            async with asyncio.timeout(10):
+                while not (tmp_path / "materialization-entered").exists():
+                    await asyncio.sleep(.01)
+            return item  # Kill inside materialization; no native PID exists yet.
+        line = await asyncio.wait_for(item.process.stdout.readline(), 25)
+        assert line, (await item.process.stderr.read()).decode()
+        event = json.loads(line)
+        item.pid = event["native_pid"]
+        item.start = event["native_start"]
+        assert event["phase"] == "native-started"
+        item.pidfd = pin_native(item.pid, item.start)
+        return item
+
+    failure = None
+    active_worker = stage in {"active", "successor-stall"}
+    try:
+        pause = "active" if active_worker else "before-worker"
+        if stage == "during-materialization":
+            pause = stage
+        first = await start_owner(1, pause)
+        owner, stale = first.process, first.stale
+        paths = [AcquisitionPaths(provider.root, acquisition_id_for(
+            item.lease.lease_id, item.lease.acquisition_epoch,
+        )) for item in stale]
+        heartbeat = paths[0].payload / "workspace" / "worker-live"
+        if active_worker:
+            line = await asyncio.wait_for(owner.stdout.readline(), 20)
+            assert json.loads(line) == {"phase": "active"}
+            assert heartbeat.read_bytes()
+        else:
+            assert not heartbeat.exists()
+        owner.kill()
+        # The native child has its own pipes, not these report pipes. Waiting
+        # for the driver's exit must not credit a graceful Python finally.
+        await asyncio.wait_for(owner.wait(), 5)
+        assert owner.returncode == -signal.SIGKILL
+        if first.pid is not None:
+            async with asyncio.timeout(5):
+                while True:
+                    state = process_state(first.pid)
+                    if state is None or state[1] != first.start or state[0] == "Z":
+                        break
+                    await asyncio.sleep(.02)
+        if active_worker:
+            stopped = heartbeat.read_bytes()
+            await asyncio.sleep(.2)
+            assert heartbeat.read_bytes() == stopped
+        else:
+            assert not heartbeat.exists()
+        before = {"native_started": first.pid is not None,
+                  "native_executing": False if first.pid is not None else None,
+                  "worker_started": active_worker,
+                  "worker_heartbeat_stopped": True if active_worker else None,
+                  "acquisitions_closed": [provider.closure.is_closed(path) for path in paths],
+                  "workspace_present": paths[0].payload.exists()}
+        assert before["acquisitions_closed"] == [False, False]
+        assert before["workspace_present"]
+        if stage == "held-guard":
+            import fcntl
+
+            # Reproduce the review's stuck-guard failure, with an independent
+            # outer deadline so removing the helper's bound fails an assertion.
+            with paths[1].guard.open("rb") as guard:
+                fcntl.flock(guard.fileno(), fcntl.LOCK_EX)
+                clock = asyncio.get_running_loop()
+                started_at = clock.time()
+                with pytest.raises(TimeoutError):
+                    async with asyncio.timeout(8):
+                        await reconcile(stale)
+                assert clock.time() - started_at < 7
+                assert paths[0].payload.exists()  # Blocked is not disposed.
+        # These are the actual recovery operations, not unconditional teardown.
+        # Rows are serialized fixture inputs, explicitly not read from SQLite.
+        await reconcile(stale)
+        assert all(provider.closure.is_closed(path) for path in paths)
+        assert all(not path.payload.exists() for path in paths)
+        second = await start_owner(2, "before-worker" if stage == "successor-stall" else "finish")
+        if stage == "successor-stall":
+            with pytest.raises(TimeoutError) as lost:
+                await asyncio.wait_for(second.process.stdout.readline(), .25)
+            failure = lost.value  # Must survive the same fallback cleanup as an unexpected failure.
+            completed = {"phase": "stalled-after-start"}
+        else:
+            stdout, stderr = await asyncio.wait_for(second.process.communicate(), 25)
+            assert second.process.returncode == 0, stderr.decode()
+            completed = json.loads(stdout)
+            assert completed["phase"] == "completed"
+            assert all(completed[key] for key in (
+                "executor_closed", "workspace_closed", "workspace_removed",
+            ))
+    except BaseException as exc:
+        failure = exc
+        raise
+    finally:
+        errors = []
+        # Both invocations use this one cleanup law. It is lab hygiene, never
+        # credited to automatic owner death or journal recovery.
+        for item in reversed(owners):
+            try:
+                with suppress(ProcessLookupError):
+                    if item.process.returncode is None:
+                        item.process.kill()
+                await asyncio.wait_for(item.process.wait(), 5)
+            except Exception as exc:
+                errors.append(exc)
+            try:
+                if item.pidfd is not None:
+                    stop_native(item.pidfd)
+            except Exception as exc:
+                errors.append(exc)
+            try:
+                if item.stale:
+                    await reconcile(item.stale)
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            if failure is None:
+                raise ExceptionGroup("bounded probe cleanup failed", errors)
+            for exc in errors:
+                failure.add_note(f"bounded failure cleanup also failed: {exc!r}")
+    if stage == "successor-stall":
+        assert isinstance(failure, TimeoutError) and not getattr(failure, "__notes__", ())
+        second_paths = [AcquisitionPaths(provider.root, acquisition_id_for(
+            item.lease.lease_id, item.lease.acquisition_epoch,
+        )) for item in second.stale]
+        assert all(provider.closure.is_closed(path) for path in second_paths)
+        assert all(not path.payload.exists() for path in second_paths)
+        completed["after_explicit_failure_cleanup"] = {"closed": True, "payloads_removed": True}
+    write_evidence(f"codex-driver-death-{model}-{stage}.json", {
+        "model": model, "stage": stage, "before_reconciliation": before,
+        "after_reconciliation": {"old_acquisitions_closed": True, "old_payloads_removed": True},
+        "fresh_invocation": completed,
+        "lease_source": "serialized fixture rows, not journal recovery",
     })
