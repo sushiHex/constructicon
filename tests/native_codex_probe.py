@@ -154,7 +154,7 @@ class Wire:
             return value["result"]
 
 
-async def conversation(wire, cwd, worker, *, model="probe-model"):
+async def conversation(wire, cwd, worker, *, model="probe-model", base_instructions=None):
     await wire.rpc("initialize", {
         "clientInfo": {"name": "constructicon_probe", "version": "0"},
         "capabilities": {"experimentalApi": True},
@@ -164,6 +164,7 @@ async def conversation(wire, cwd, worker, *, model="probe-model"):
         "model": model, "modelProvider": "probe", "cwd": str(cwd),
         "approvalPolicy": "never", "sandbox": "danger-full-access",
         "ephemeral": True, "dynamicTools": [TOOL],
+        **({"baseInstructions": base_instructions} if base_instructions is not None else {}),
     })
     thread = started["thread"]["id"]
     turn = await wire.rpc("turn/start", {

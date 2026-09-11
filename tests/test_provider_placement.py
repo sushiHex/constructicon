@@ -164,7 +164,7 @@ async def test_failed_conversation_keeps_its_owned_result(composition, tmp_path,
 
     monkeypatch.setattr(placement, "exchange", failed)
     record = {}
-    peer = SimpleNamespace(deadline=asyncio.get_running_loop().time() + 20)
+    peer = SimpleNamespace(deadline=asyncio.get_running_loop().time() + 20, model="gpt-5.5")
     with pytest.raises(ProcessExchangeError):
         await placement.observe(composition, peer, tmp_path, record=record)
     assert "outcome" in record

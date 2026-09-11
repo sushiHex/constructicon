@@ -14,10 +14,22 @@ MODELS = ("gpt-5.5", "gpt-5.6-sol")
 
 
 class DuplexWire(Wire):
-    def __init__(self, io):
+    def __init__(self, io, records=None):
         super().__init__(None, None)
         self.io = io
         self.pending = bytearray()
+        self.records = records
+
+    async def read(self):
+        value = await super().read()
+        if self.records is not None:
+            self.records.append({"received": value})
+        return value
+
+    async def send(self, value):
+        await super().send(value)
+        if self.records is not None:
+            self.records.append({"sent": value})
 
     async def _readline(self):
         while b"\n" not in self.pending:

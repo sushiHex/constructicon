@@ -1,6 +1,6 @@
 # M8 combined startup and mediation evidence
 
-Status: acceptance checklist committed before implementation; not qualified.
+Status: implementation in progress; not qualified.
 Owner-authorized investigation: [issue #57](https://github.com/sushiHex/constructicon/issues/57).
 Branch: `investigate/m8-combined-startup`.
 Base: `6a5c2e43cfa1bda7f281a66886946668f471c5c7` (merged placement PR #56).
@@ -87,4 +87,29 @@ PR draft for owner review.
 
 ## Executed evidence
 
-None in this record yet. The checklist is intentionally committed first.
+The checklist was committed as `e05d362` and strengthened after independent
+acceptance review in `35d12db`, before the first test implementation commit.
+
+The first slice adds a full expected conversation assertion to the existing
+peer, without changing its fixed response script or placement. Both pinned
+models use an explicit controller-supplied `baseInstructions` fixture string;
+this is a controlled probe recipe, not qualification of their default prompts.
+The source-supported `[skills] include_instructions = false` and
+`[skills.bundled] enabled = false` are explicit. Their source is
+[`skills_config.rs` at the pinned revision](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/config/src/skills_config.rs).
+These controls do not establish that arbitrary startup extensions cannot execute.
+
+The tool declarations in `tests/fixtures/native_combined_tools.json` come from
+the already-reviewed native artifact `10281307021`, run `34643786457`, file
+`codex-gpt-5.5-contained_python-images-true-unchanged.json`. They are independent
+of the new request under test. The assertion preserves the namespaced Sol
+framing instead of flattening it, and compares entire declared tool definitions.
+Only top-level item IDs are excluded from content comparison; they must still be
+nonempty strings. The only allowed context-text variation is the UTC date within
+the controller's 20-second invocation window. Tool call IDs, arguments, results,
+message order, permissions text, environment, and controller prompt remain exact.
+
+Portable focused checks: 112 passed, 28 platform skips. These are instrument
+checks, not native qualification. Linux observations, startup-origin controls,
+assertion mutants, full gates, artifact audit, and complete-head independent
+review are still unexecuted for this slice.
