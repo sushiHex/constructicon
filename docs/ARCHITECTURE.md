@@ -122,7 +122,10 @@ resource. The walker does not interpret its provider work. Recording failure
 closes an inert new handle locally without external I/O; once materialization
 enters, cleanup applies the provider's complete closure law. After the await,
 the existing run-control check refuses observed ownership loss or cooperative
-cancellation before exposure. Recorded cleanup joins the entire batch of
+cancellation before exposure. Before cancellation starts recorded cleanup, an
+already-observed ownership loss takes precedence: joined invocation teardown
+cannot turn shutdown cancellation into permission to close a successor's
+acquisitions. Recorded cleanup joins the entire batch of
 resource closes and fenced row transitions despite repeated task cancellation,
 then propagates cancellation; cleanup failure is never suppressed. The same
 waiting mechanism serves unrecorded cleanup, with its original disposition.

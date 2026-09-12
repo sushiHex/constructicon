@@ -1695,6 +1695,8 @@ class Walker:
             await self._close_acquired(lease, acquired, "discard")
             raise
         except (_CancelRequested, asyncio.CancelledError):
+            if lost:
+                raise lost[0] from None
             await self._close_acquired(lease, acquired, "discard")
             raise
         except Exception:

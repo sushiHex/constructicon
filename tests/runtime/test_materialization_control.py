@@ -6,6 +6,7 @@ Barriers establish ordering; the fake ledger is not an OS containment proof.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 import pytest
 
@@ -13,6 +14,7 @@ from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId
 from constructicon.core.run import OwnershipLost, RunStatus
 from constructicon.runtime.walker import RunResult
+from constructicon.substrate._lifetime import finish_owned
 from tests.api.test_executor_admission import INPUTS, executor_system
 from tests.conftest import LEASE_TTL_S
 from tests.executorworld import FakeExecutorProvider, register_component
@@ -85,6 +87,126 @@ async def test_control_changed_during_materialization_prevents_invocation(
         if not running.done():
             running.cancel()
         await asyncio.gather(running, return_exceptions=True)
+
+
+async def test_cancellation_during_ownership_loss_teardown_leaves_recorded_siblings_to_successor(
+    journal,
+    clock,
+    monkeypatch,
+):
+    first = FakeExecutorProvider()
+    second = FakeExecutorProvider(ledger=first.ledger)
+    providers = {"first": first, "second": second}
+    system = Constructicon(
+        journal=journal,
+        owner_id="revoked-worker",
+        capabilities=providers,
+        catalog={key: value.descriptor(key) for key, value in providers.items()},
+        lease_ttl_s=LEASE_TTL_S,
+    )
+    system._walker._heartbeat_interval_s = 0.001
+    graph = await register_component(
+        system,
+        journal,
+        bindings={"executor": "first", "z": "second"},
+    )
+    entered = asyncio.Event()
+    check_control = asyncio.Event()
+    teardown_started = asyncio.Event()
+    finish_teardown = asyncio.Event()
+    observed_loss = asyncio.Event()
+    latched: list[OwnershipLost] = []
+    close_calls: list[tuple[str, str]] = []
+    heartbeat = journal.heartbeat
+    first_close = first.close
+    second_close = second.close
+
+    def observe_heartbeat(*args, **kwargs):
+        try:
+            return heartbeat(*args, **kwargs)
+        except OwnershipLost as exc:
+            latched.append(exc)
+            observed_loss.set()
+            raise
+
+    async def observe_first_close(acquisition, disposition):
+        close_calls.append((acquisition.resource_ref, disposition))
+        return await first_close(acquisition, disposition)
+
+    async def observe_second_close(acquisition, disposition):
+        close_calls.append((acquisition.resource_ref, disposition))
+        return await second_close(acquisition, disposition)
+
+    async def lose_during_joined_teardown(handle):
+        first.ledger.allocate(handle.key)
+        entered.set()
+        await check_control.wait()
+        teardown = asyncio.create_task(finish_teardown.wait())
+        try:
+            assert handle.context.check_control is not None
+            handle.context.check_control()
+        finally:
+            teardown_started.set()
+            await finish_owned(teardown)
+
+    monkeypatch.setattr(journal, "heartbeat", observe_heartbeat)
+    monkeypatch.setattr(first, "close", observe_first_close)
+    monkeypatch.setattr(second, "close", observe_second_close)
+    second.before_materialize = lose_during_joined_teardown
+    run_id = RunId("cancel-during-ownership-loss-teardown")
+    running = asyncio.create_task(system._start_direct(graph, INPUTS, run_id=run_id))
+    winner = None
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        old_handles = (first.handles[0], second.handles[0])
+        clock.advance(LEASE_TTL_S + 1)
+        winner = journal.claim_run(run_id, owner_id="successor", ttl_s=LEASE_TTL_S)
+        assert winner.epoch == old_handles[0].context.run_lease.epoch + 1
+        await asyncio.wait_for(observed_loss.wait(), 5)
+        check_control.set()
+        await asyncio.wait_for(teardown_started.wait(), 5)
+
+        running.cancel("shutdown while provider teardown is joined")
+        await asyncio.sleep(0)
+        assert not running.done()
+        finish_teardown.set()
+        with pytest.raises(OwnershipLost) as caught:
+            await running
+
+        assert close_calls == []
+        assert all(not handle.closed for handle in old_handles)
+        assert first.ledger.resources == {handle.key for handle in old_handles}
+        assert [(row.state, row.disposition) for row in journal.capability_leases(run_id)] == [
+            ("active", None),
+            ("active", None),
+        ]
+        assert journal.run_state(run_id).owner_id == winner.owner_id
+        assert caught.value is latched[0]
+
+        journal.release_run(winner)
+        recovered_first = FakeExecutorProvider(ledger=first.ledger)
+        recovered_second = FakeExecutorProvider(ledger=first.ledger)
+        recovered_providers = {"first": recovered_first, "second": recovered_second}
+        recovered = Constructicon(
+            journal=journal,
+            owner_id="successor",
+            capabilities=recovered_providers,
+            catalog={key: value.descriptor(key) for key, value in recovered_providers.items()},
+            lease_ttl_s=LEASE_TTL_S,
+        )
+        assert (await recovered._resume_direct(run_id)).status is RunStatus.SUCCEEDED
+        assert recovered_first.reconciled == [old_handles[0].key]
+        assert recovered_second.reconciled == [old_handles[1].key]
+        assert first.ledger.resources == set()
+    finally:
+        check_control.set()
+        finish_teardown.set()
+        if not running.done():
+            running.cancel()
+        await asyncio.gather(running, return_exceptions=True)
+        if winner is not None:
+            with contextlib.suppress(OwnershipLost):
+                journal.release_run(winner)
 
 
 @pytest.mark.parametrize("cancellation", ["cancel", "abandon"])
