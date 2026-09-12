@@ -78,6 +78,13 @@ launcher, workspace, closure and recorded-executor suites. Missing prerequisites
 are failures when `M8_CONTAINMENT_REQUIRED=1`; ordinary unsupported-host skips
 never satisfy this job. The assertion-only mutation inventory runs separately.
 
+The combined containment job has a thirty-minute ceiling: the exact-head run
+[34659442292](https://github.com/sushiHex/constructicon/actions/runs/34659442292)
+took 19m39s against its former twenty-minute limit. This gives provisioning,
+the accumulated suites, and evidence upload headroom; it does not renew any
+invocation deadline or change fixture byte/connection limits. It is not a
+target duration or permission to retry a failing test until it passes.
+
 The closure contains curated Python/Git and their runtime libraries, plus the
 standalone reaper. Content, topology and permissions contribute to its digest;
 the service cannot rewrite it. Root-owned installation and every ancestor are

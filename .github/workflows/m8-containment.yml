@@ -14,7 +14,9 @@ concurrency:
 jobs:
   containment:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Run 34659442292 took 19m39s. Keep job headroom separate from the
+    # unchanged per-invocation deadlines and byte/connection budgets.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
