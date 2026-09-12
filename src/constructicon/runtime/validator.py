@@ -267,6 +267,9 @@ def _compile_graph(
     for entry in _explicit_maps(graph, location):
         explicit.setdefault(entry.destination_node, []).append(entry)
     node_indices = {node.id: index for index, node in enumerate(graph.nodes)}
+    incoming_connection_indices: dict[str, int] = {}
+    for index, connection in enumerate(graph.connections):
+        incoming_connection_indices.setdefault(connection.dst, index)
 
     for node in _ordered_nodes(graph, upstream):
         pool: list[_Source] = []
@@ -287,6 +290,8 @@ def _compile_graph(
             grants=grants,
             loop_depth=loop_depth,
             location=location.child("nodes", node_indices[node.id], "body"),
+            level_location=location,
+            incoming_connection_index=incoming_connection_indices.get(node.id),
         )
 
     outputs: dict[str, list[_Source]] = {}
@@ -297,7 +302,7 @@ def _compile_graph(
         for source in sources
     ]
     input_pool = [source for sources in input_sources.values() for source in sources]
-    for port in graph.outputs:
+    for index, port in enumerate(graph.outputs):
         # A graph input is a pass-through fallback, not a competitor with a
         # value produced by the graph. This matters most for feedback loops:
         # the initial state and the final exported state share one nominal
@@ -306,7 +311,14 @@ def _compile_graph(
             source for source in node_pool if _ports_same_contract(source.port, port)
         ]
         pool = node_pool if compatible_node_sources else input_pool
-        bound = _bind_port(comp, port, pool, where=f"{scope.render()} output")
+        bound = _bind_port(
+            comp,
+            port,
+            pool,
+            where=f"{scope.render()} output",
+            location=location.child("outputs", index),
+            scope=scope,
+        )
         if bound is not None:
             outputs[port.name] = [
                 _Source(address=source.address, port=port) for source in bound
@@ -326,6 +338,8 @@ def _compile_node(
     grants: EffectiveGrants,
     loop_depth: int,
     location: _GraphLocation,
+    level_location: _GraphLocation,
+    incoming_connection_index: int | None,
 ) -> dict[str, list[_Source]]:
     body = node.body
     instance_scope = level_scope.child(node.id)
@@ -349,6 +363,8 @@ def _compile_node(
             input_sources=input_sources,
             grants=grants,
             location=location,
+            level_location=level_location,
+            incoming_connection_index=incoming_connection_index,
         )
 
     if isinstance(body, Ref):
@@ -367,6 +383,9 @@ def _compile_node(
             explicit,
             node_lookup,
             input_sources,
+            location=location,
+            level_location=level_location,
+            incoming_connection_index=incoming_connection_index,
         )
         if isinstance(definition.body, Graph):
             if _boundary_lies(comp, stored, where=instance_scope):
@@ -411,6 +430,9 @@ def _compile_node(
         explicit,
         node_lookup,
         input_sources,
+        location=location,
+        level_location=level_location,
+        incoming_connection_index=incoming_connection_index,
     )
     return _compile_graph(
         comp,
@@ -435,6 +457,8 @@ def _compile_loop(
     input_sources: dict[str, list[_Source]],
     grants: EffectiveGrants,
     location: _GraphLocation,
+    level_location: _GraphLocation,
+    incoming_connection_index: int | None,
 ) -> dict[str, list[_Source]]:
     """Compile one loop into a complete, sealed mini-program."""
 
@@ -511,6 +535,8 @@ def _compile_loop(
     bound_inputs = _bind_node_inputs(
         comp, node, body_inputs, level_scope, pool, explicit, node_lookup,
         input_sources, feedback=frozenset(loop.feedback), boundary=True,
+        location=location, level_location=level_location,
+        incoming_connection_index=incoming_connection_index,
     )
     for port in body_inputs:
         selected = bound_inputs.get(port.name)
@@ -539,6 +565,8 @@ def _compile_loop(
             grants=grants,
             loop_depth=1,
             location=location.child("body"),
+            level_location=location,
+            incoming_connection_index=None,
         )
     else:
         body_outputs = _compile_graph(
@@ -954,6 +982,9 @@ def _bind_node_inputs(
     node_lookup: dict[str, dict[str, list[_Source]]],
     input_sources: dict[str, list[_Source]],
     *,
+    location: _GraphLocation,
+    level_location: _GraphLocation,
+    incoming_connection_index: int | None,
     feedback: frozenset[str] = frozenset(),
     boundary: bool = False,
 ) -> dict[str, list[_Source]]:
@@ -993,13 +1024,30 @@ def _bind_node_inputs(
                 bound[port.name] = [source for source in selected if source is not None]
             continue
         if port.name in feedback and not any(_source_matches(source, port) for source in pool):
-            comp.faults.append(
-                f"{scope.render()}: feedback port {port.name!r} needs an "
-                "initial value at the outer level; connect a matching seed or "
-                "add a per-port map override"
+            _located_fault(
+                comp,
+                location,
+                scope,
+                "missing_feedback_seed",
+                f"feedback port {port.name!r} needs an initial value at the outer "
+                "level; connect a matching seed or add a per-port map override",
+                destination_node=node.id,
+                destination_port=port.name,
             )
             continue
-        sources = _bind_port(comp, port, pool, where=where)
+        sources = _bind_port(
+            comp,
+            port,
+            pool,
+            where=where,
+            location=location,
+            scope=scope,
+            destination_node=node.id,
+            level_location=level_location,
+            incoming_connection_index=incoming_connection_index,
+            node_lookup=node_lookup,
+            input_sources=input_sources,
+        )
         if sources is not None:
             bound[port.name] = sources
     return bound
@@ -1022,16 +1070,33 @@ def _bind_port(
     pool: list[_Source],
     *,
     where: str,
+    location: _GraphLocation,
+    scope: ScopePath,
+    destination_node: str | None = None,
+    level_location: _GraphLocation | None = None,
+    incoming_connection_index: int | None = None,
+    node_lookup: dict[str, dict[str, list[_Source]]] | None = None,
+    input_sources: dict[str, list[_Source]] | None = None,
 ) -> list[_Source] | None:
     """Apply the fixed nominal magnetic rules; ambiguity is never guessed."""
 
     typed = [source for source in pool if _source_matches(source, port)]
     if port.cardinality == "many":
         if not typed:
-            comp.faults.append(
+            message = (
                 f"{where} port {port.name!r} gathers nominal type "
                 f"{port.type_id!r}@{port.schema_hash!r} but no upstream output "
                 f"offers it; available contracts: {_available_contracts(pool)}"
+            )
+            _located_fault(
+                comp,
+                location,
+                scope,
+                "missing_port_source",
+                message,
+                complete_message=True,
+                destination_port=port.name,
+                **_node_evidence(destination_node),
             )
             return None
         return typed
@@ -1040,30 +1105,167 @@ def _bind_port(
     if len(named) == 1:
         return named
     if len(named) > 1:
-        comp.faults.append(
+        message = (
             f"{where} port {port.name!r}: exact-name match must be unique but "
             f"{len(named)} upstream outputs share nominal contract "
             f"{port.type_id!r}@{port.schema_hash!r} — add a per-port map override"
+        )
+        _ambiguous_port_fault(
+            comp,
+            port,
+            named,
+            message=message,
+            location=location,
+            scope=scope,
+            destination_node=destination_node,
+            level_location=level_location,
+            incoming_connection_index=incoming_connection_index,
+            node_lookup=node_lookup,
+            input_sources=input_sources,
         )
         return None
     if len(typed) == 1:
         return typed
     if len(typed) > 1:
         candidates = sorted(_describe(source) for source in typed)
-        comp.faults.append(
+        message = (
             f"{where} port {port.name!r}: {len(typed)} candidates of nominal "
             f"contract {port.type_id!r}@{port.schema_hash!r} ({candidates}) — "
             "ambiguity is an error; add a per-port map override naming one"
         )
+        _ambiguous_port_fault(
+            comp,
+            port,
+            typed,
+            message=message,
+            location=location,
+            scope=scope,
+            destination_node=destination_node,
+            level_location=level_location,
+            incoming_connection_index=incoming_connection_index,
+            node_lookup=node_lookup,
+            input_sources=input_sources,
+        )
         return None
     if port.cardinality == "optional":
         return None
-    comp.faults.append(
+    message = (
         f"{where} port {port.name!r}: no upstream output of type "
         f"{port.type_id!r} (nominal contract @{port.schema_hash!r}); available contracts: "
         f"{_available_contracts(pool)}"
     )
+    _located_fault(
+        comp,
+        location,
+        scope,
+        "missing_port_source",
+        message,
+        complete_message=True,
+        destination_port=port.name,
+        **_node_evidence(destination_node),
+    )
     return None
+
+
+def _node_evidence(destination_node: str | None) -> dict[str, str]:
+    return {"destination_node": destination_node} if destination_node is not None else {}
+
+
+def _applicable_selectors(
+    port: Port,
+    sources: list[_Source],
+    node_lookup: dict[str, dict[str, list[_Source]]] | None,
+    input_sources: dict[str, list[_Source]] | None,
+) -> list[str]:
+    """Enumerate only level-local selectors explicit-map resolution can accept.
+
+    The magnetic pool contains these exact ``_Source`` objects. Identity keeps
+    equal-looking aliases from being advertised for a source that did not cause
+    this ambiguity.
+    """
+
+    if node_lookup is None or input_sources is None:
+        return []
+    candidates: list[str] = []
+    for node_name, outputs in sorted(node_lookup.items()):
+        if node_name == "$input" or "." in node_name:
+            continue
+        for output_name, resolved in sorted(outputs.items()):
+            if not output_name or len(resolved) != 1:
+                continue
+            source = resolved[0]
+            if (
+                any(source is candidate for candidate in sources)
+                and source.port.cardinality == "one"
+                and _source_matches(source, port)
+            ):
+                candidates.append(f"{node_name}.{output_name}")
+    for input_name, resolved in sorted(input_sources.items()):
+        if not input_name or len(resolved) != 1:
+            continue
+        source = resolved[0]
+        if (
+            any(source is candidate for candidate in sources)
+            and source.port.cardinality == "one"
+            and _source_matches(source, port)
+        ):
+            candidates.append(f"$input.{input_name}")
+    return sorted(candidates)
+
+
+def _ambiguous_port_fault(
+    comp: _Compilation,
+    port: Port,
+    sources: list[_Source],
+    *,
+    message: str,
+    location: _GraphLocation,
+    scope: ScopePath,
+    destination_node: str | None,
+    level_location: _GraphLocation | None,
+    incoming_connection_index: int | None,
+    node_lookup: dict[str, dict[str, list[_Source]]] | None,
+    input_sources: dict[str, list[_Source]] | None,
+) -> None:
+    candidates = _applicable_selectors(port, sources, node_lookup, input_sources)
+    if (
+        destination_node is not None
+        and level_location is not None
+        and incoming_connection_index is not None
+        and candidates
+    ):
+        _map_fault(
+            comp,
+            _MapEntry(
+                connection_index=incoming_connection_index,
+                destination_node=destination_node,
+                destination_port=port.name,
+                selector=candidates[0],
+                location=level_location,
+            ),
+            scope,
+            "ambiguous_node_input",
+            message,
+            complete_message=True,
+            candidate_selectors=candidates,
+        )
+        return
+    defect = (
+        "ambiguous_graph_output"
+        if destination_node is None
+        else "ambiguous_node_input_unmappable"
+    )
+    _located_fault(
+        comp,
+        location,
+        scope,
+        defect,
+        message,
+        complete_message=True,
+        destination_port=port.name,
+        candidate_selectors=candidates,
+        **_node_evidence(destination_node),
+    )
 
 
 def _map_fault(
@@ -1072,12 +1274,15 @@ def _map_fault(
     scope: ScopePath,
     defect: str,
     message: str,
+    *,
+    complete_message: bool = False,
     **evidence: Any,
 ) -> None:
     _located_fault(
         comp,
         entry.location.child("connections", entry.connection_index, "map", entry.destination_port),
         scope, defect, message,
+        complete_message=complete_message,
         connection_index=entry.connection_index,
         destination_node=entry.destination_node,
         destination_port=entry.destination_port,
@@ -1092,6 +1297,8 @@ def _located_fault(
     scope: ScopePath,
     defect: str,
     message: str,
+    *,
+    complete_message: bool = False,
     **evidence: Any,
 ) -> None:
     details = {
@@ -1106,9 +1313,8 @@ def _located_fault(
             component=location.retained[0], version=location.retained[1],
             definition_path=list(location.path),
         )
-    comp.faults.append(
-        f"{scope.render()}: {message}{FAULT_DETAILS_SEPARATOR}{canonical_json(details)}"
-    )
+    rendered = message if complete_message else f"{scope.render()}: {message}"
+    comp.faults.append(f"{rendered}{FAULT_DETAILS_SEPARATOR}{canonical_json(details)}")
 
 
 def _resolve_selector(

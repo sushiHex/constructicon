@@ -30,6 +30,26 @@ from constructicon.runtime.registry import CapabilityDescriptor
 from constructicon.runtime.validator import admit
 
 _LOCATED_FAULTS: dict[str, tuple[AdmissionCode, str]] = {
+    "missing_port_source": (
+        AdmissionCode.GRAPH_PORT_MISSING_SOURCE,
+        "connect a matching upstream output or graph input",
+    ),
+    "missing_feedback_seed": (
+        AdmissionCode.GRAPH_PORT_MISSING_SOURCE,
+        "connect a matching outer seed or add a per-port map override",
+    ),
+    "ambiguous_node_input": (
+        AdmissionCode.GRAPH_PORT_AMBIGUOUS,
+        "add a Connection.map override selecting one candidate",
+    ),
+    "ambiguous_node_input_unmappable": (
+        AdmissionCode.GRAPH_PORT_AMBIGUOUS,
+        "add an incoming connection with a per-port map or compose a scalar adapter",
+    ),
+    "ambiguous_graph_output": (
+        AdmissionCode.GRAPH_PORT_AMBIGUOUS,
+        "add an explicit adapter/selection node before this graph output",
+    ),
     "unknown_connection_node": (
         AdmissionCode.GRAPH_CONTRACT_INVALID,
         "name a declared node for each connection endpoint; repair the retained definition "
@@ -409,15 +429,49 @@ def _classify_fault(
         located_fault = _LOCATED_FAULTS.get(carried["defect"])
         if located_fault is not None:
             code, repair = located_fault
+            path = tuple(carried.get("path", ()))
+            details = {
+                key: value
+                for key, value in carried.items()
+                if key not in {"path", "scope", "candidate_selectors"}
+            }
+            candidate_value = carried.get("candidate_selectors")
+            candidates = (
+                [item for item in candidate_value if isinstance(item, str)]
+                if isinstance(candidate_value, list)
+                else []
+            )
+            if candidates:
+                published = candidates[: limits.max_fault_detail_items]
+                details.update(
+                    candidates=published,
+                    candidate_total=len(candidates),
+                    truncated=len(candidates) > len(published),
+                )
+                destination_port = carried.get("destination_port")
+                if (
+                    carried["defect"] == "ambiguous_node_input"
+                    and isinstance(destination_port, str)
+                ):
+                    details["map_example"] = {destination_port: candidates[0]}
+            if carried["defect"] == "ambiguous_node_input":
+                map_path = carried.get("path", carried.get("definition_path"))
+                if isinstance(map_path, list):
+                    details["map_path"] = map_path
+            if "definition_path" in carried and code in {
+                AdmissionCode.GRAPH_PORT_MISSING_SOURCE,
+                AdmissionCode.GRAPH_PORT_AMBIGUOUS,
+            }:
+                repair = (
+                    f"{repair}; repair the retained definition or pin a compatible version"
+                )
             return AdmissionFault(
                 code=code,
                 message=message,
-                path=tuple(carried.get("path", ())),
+                path=path,
                 scope=ScopePath(segments=tuple(carried["scope"])),
                 repair=repair,
-                details={
-                    key: value for key, value in carried.items() if key not in {"path", "scope"}
-                },
+                details=details,
             )
         head, _, _ = message.rpartition(FAULT_DETAILS_SEPARATOR)
         details = {key: carried[key] for key in ("component", "version") if key in carried}
@@ -521,11 +575,11 @@ def _scope_from_message(message: str) -> ScopePath | None:
     A fault reads either ``<scope> input|output port ...`` or ``<scope>: ...``.
     In the port form the scope ends at the message's own separator, so it may
     contain spaces and colons. The colon form cannot tell a scope from prose
-    that also contains a colon, so it keeps the legacy rule — up to the first
-    colon, and nothing with a space is a scope — and a scope with a space or a
-    colon there reads as none rather than as a wrong one. Rendered scopes are
-    not injective in ``/`` either; an exact scope needs a framed fact, not a
-    parse.
+    that also contains a colon, so it keeps the lossy legacy fallback — up to
+    the first colon, and nothing with a space is a scope. That fallback may
+    truncate a legal colon-bearing identifier, and rendered scopes are not
+    injective in ``/`` either. Exact coordinates need a framed fact, not this
+    compatibility parse.
     """
 
     match = re.match(r"^(?P<scope>.+?) (?:input|output) port ", message)

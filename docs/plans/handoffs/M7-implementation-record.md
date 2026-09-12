@@ -1109,15 +1109,15 @@ compatibility boundaries, historical fixtures, and verified failure proofs.
   fault's prose can reclassify it — so a composite can no longer reuse a
   standard named revision with another shape; and the legacy fault-scope
   parser keeps spaces and colons in the port form, where the message's own
-  separator ends the scope. In the colon form a scope cannot be told from
-  prose, so the legacy rule stands there and a scope is exact or absent,
-  never wrong; an exact scope in that form needs a framed fact carried by
-  the validator, like the retained-definition details, and rendered scopes
-  are not injective in `/` either. Both stay open, as does the registry
-  store's own idempotency check, which still compares definitions as models
-  (`runtime/registry.py` store path and `_sqlite_registry.py`); the bytes
-  law covers registration planning and application, not the store's
-  duplicate-row check.
+  separator ends the scope. The former claim that the colon-form fallback
+  was therefore exact or absent was too broad: [issue #69](https://github.com/sushiHex/constructicon/issues/69)
+  later demonstrated both colon truncation and slash segmentation for legal
+  identifiers. Exact validator-owned scopes now require a framed fact, like
+  the retained-definition details; genuinely unframed legacy prose keeps only
+  its bounded fallback. The registry store's own idempotency check remained
+  model-based at that review; its separate correction is tracked in
+  [#68](https://github.com/sushiHex/constructicon/issues/68). The bytes law here
+  covers registration planning and application, not that duplicate-row check.
 - Connector liveness is not an admission rule, and M7.1 decides against making
   it one. Two forms are refuted. The general form — a connection's source
   must bind something at its destination — refuses the M1 vertical slice, whose
