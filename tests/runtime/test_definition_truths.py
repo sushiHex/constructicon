@@ -125,8 +125,10 @@ async def _impl(ctx: object, inputs: dict[str, object]) -> dict[str, object]:
     return {"out": 1}
 
 
-def test_a_separator_inside_a_scope_is_not_a_frame(system: Constructicon) -> None:
-    """An unframed fault whose scope carries the frame's character is classified whole."""
+def test_a_separator_inside_a_scope_cannot_hide_a_validator_frame(
+    system: Constructicon,
+) -> None:
+    """The last separator still owns exact facts when a scope contains one."""
 
     definition, implementation = atomic(
         "test/triage", (ISSUE,), (_port("out", {"const": 1}),), _impl
@@ -143,8 +145,13 @@ def test_a_separator_inside_a_scope_is_not_a_frame(system: Constructicon) -> Non
     assert isinstance(rejected, AdmissionRejected)
     fault = next(item for item in rejected.faults if "no upstream output" in item.message)
     assert fault.code is AdmissionCode.GRAPH_PORT_MISSING_SOURCE
-    assert fault.details == {}
-    assert fault.scope is not None and fault.scope.segments[-1] == "member"
+    assert fault.path == ("nodes", 0, "body")
+    assert fault.scope == ScopePath(segments=("g\x1fseat", "member"))
+    assert fault.details == {
+        "defect": "missing_port_source",
+        "destination_node": "member",
+        "destination_port": "issue",
+    }
 
 
 @pytest.mark.parametrize(
@@ -164,6 +171,8 @@ def test_a_separator_inside_a_scope_is_not_a_frame(system: Constructicon) -> Non
         ("root/seat: a retained composite 'c': output port 'o' declares x", ("root", "seat")),
     ],
 )
-def test_a_faults_scope_is_exact_or_absent(message: str, expected: tuple[str, ...] | None) -> None:
+def test_the_legacy_scope_parser_keeps_its_bounded_rules(
+    message: str, expected: tuple[str, ...] | None,
+) -> None:
     scope = _scope_from_message(message)
     assert scope == (ScopePath(segments=expected) if expected else None)
