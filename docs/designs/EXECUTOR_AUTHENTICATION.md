@@ -79,16 +79,49 @@ change this investigation's scope rather than strengthen its evidence.
 
 ### Gate and next action
 
-At this packet's first commit, the independent gate review is pending.
-Before starting the separate Slice B change, that review must establish that
-the exact candidate has no unresolved startup authority gap under the
-[frozen qualification plan](../plans/handoffs/M8-native-qualification-plan.md).
-It must trace the actual loaders and startup tasks as well as the native
-artifact: physical exclusion, supported disablement and positive-control-only
-variants are different claims. Unexpected reachable behavior is a named
-blocker, not a reason to expand a denylist or relabel a missing test as safe.
+The acceptance packet was committed as `98e47a4` before any recovery code.
+Independent read-only Codex review of the pinned source, existing artifact and
+that packet found **no unresolved startup authority gap for this exact
+credential-free candidate**. This satisfies Slice B's startup prerequisite
+under the [frozen qualification plan](../plans/handoffs/M8-native-qualification-plan.md),
+not production startup qualification. The following source/artifact chain is
+part of that scoped conclusion, not an assumption that every feature is off:
 
-If the gate passes, Slice B reuses ordinary SQLite capability leases,
+- In the pinned `codex-rs/cloud-config/src/service.rs`,
+  `load_startup_bundle` returns no bundle before cache or network access when
+  authentication is absent. The private home is new, environment is cleared,
+  and the observed account is null. Authenticated behavior remains expressly
+  outside the accepted fixture's scope unless recipe safety depends on it;
+  no such dependency was found here.
+- `codex-rs/app-server/src/message_processor.rs` starts plugin tasks, and
+  `codex-rs/core-plugins/src/manager.rs` permits anonymous curated sync.
+  Plugins are enabled by default; startup can attempt Git before inventory.
+  Its inputs are pinned code plus controller-owned empty/private paths, not
+  a model-selected repository/configuration. Fixed external destinations have
+  no route in this namespace. The only reachable peer is the bounded local
+  fixture, whose script is controller-selected. This is physical exclusion
+  of external startup input, not a plugin-disable or no-process claim.
+- The full source tree's `shell_zsh_fork_skill_scripts_ignore_declared_permissions`
+  is an upstream shell-tool test, not a separate baseline script executor.
+  It dispatches `exec_command`; baseline `shell_tool=false` prevents that
+  registration, and the native refused-call control checks the boundary.
+- Artifact `10287620781` baseline files
+  `codex-placement-230d45c1adcfaf9d.json` and
+  `codex-placement-92e0cd706976b7b8.json` cover the two models. Both record
+  `packaged_shell=false`, controller setup containing only the public marker,
+  null account/requirements, two peer requests without peer failures, clean
+  owner/payload exits, loopback alone and no IPv4 route. The placement proof
+  supplies the namespace/socket boundary; these files do not independently
+  establish all possible network or descendant-lifecycle claims.
+
+The empty inventory is corroboration, not the reason for exclusion. Changing
+the home, working directory, configured extensions, environment, network,
+catalog or driver invalidates this conclusion and requires requalification.
+Unexpected reachable behavior is a named blocker, not a reason to expand a
+denylist or relabel a missing test as safe. Exact-head gates for this packet
+and job-budget change are recorded in its linked PR before merge.
+
+The now-unblocked, separately reviewed Slice B reuses ordinary SQLite capability leases,
 `ControlPlane`/`RunHost`, acquisition closure, and the same Linux process owner
 to prove native-home, protocol-resource, worker and checkpoint recovery across
 real process death. It stays a separate reviewed change. A source review or a
