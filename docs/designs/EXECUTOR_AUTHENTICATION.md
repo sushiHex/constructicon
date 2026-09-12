@@ -19,9 +19,16 @@ mode remains governing until an explicit successor decision.
 
 The proposal also records a pre-implementation limit: pinned `account/read`
 reports email and plan type, not the complete stable account/workspace binding
-the design requires. A supported metadata path and narrow store layout must
-be identified before the native implementation slices start. No token-cache
-inspection or inferred principal is an acceptable substitute.
+the design requires. The
+[credential-free interface preflight](../plans/handoffs/M8-native-account-interface-preflight.md)
+now confirms that the pinned release exposes no supported combination of
+methods supplying that complete identity. Its richer account-session types
+are not a callable interface. A narrow vendor-managed file store is a
+source-supported candidate, not an executed physical-placement proof, and
+does not close the identity gap. N1 remains blocked and ADR 0020 remains
+proposed. A different release/interface requires a separately authorized
+candidate and requalification; no token-cache inspection, inferred principal
+or weaker identity law is an acceptable substitute.
 
 The startup investigation began from `77da3f6db20bc98a43939822f7cc441755a2a95e`, the squash
 merge of [#60](https://github.com/sushiHex/constructicon/pull/60), tree-equal to
