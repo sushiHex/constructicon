@@ -261,3 +261,24 @@ async def test_native_local_close_during_closure_check_refuses(provider, monkeyp
         release.set()
     with pytest.raises(ContractViolation, match="not open"):
         await task
+
+
+def test_native_process_observer_distinguishes_worker_child_from_supervisors(monkeypatch):
+    from pathlib import Path
+
+    from tests.substrate import _native_recovery_owner as owner
+
+    program = native_lifecycle.WORKER.encode()
+    commands = {
+        50: b"\0".join((b"/usr/bin/python3", b"supervisor.py", b"-c", program, b"")),
+        51: b"\0".join((b"/usr/bin/python3", b"-I", b"-c", program, b"")),
+        52: b"\0".join((b"/usr/bin/python3", b"-I", b"-c", program, b"")),
+    }
+    monkeypatch.setattr(owner, "descendants", lambda pid: dict.fromkeys(commands, "birth"))
+    monkeypatch.setattr(Path, "read_bytes", lambda path: commands[int(path.parent.name)])
+    monkeypatch.setattr(owner.os, "getsid", lambda pid: {50: 50, 51: 50, 52: 52}[pid],
+                        raising=False)
+    observed = owner.physical_snapshot()
+    assert observed["session_children"] == [52]
+    assert observed["native_homes"] == []
+    assert set(observed["processes"]) == {50, 51, 52}

@@ -51,6 +51,15 @@ MUTANTS = (
     ("local closure missed across await", MODULE + "NativeFixture.require_open",
      ")))\n    self.check_control()", ")))\n    pass",
      TEST + "test_native_local_close_during_closure_check_refuses"),
+    ("supervisor credited as session-changing worker",
+     "tests.substrate._native_recovery_owner:physical_snapshot",
+     'args == [b"/usr/bin/python3", b"-I", b"-c", WORKER.encode(), b""]',
+     "WORKER.encode() in args",
+     TEST + "test_native_process_observer_distinguishes_worker_child_from_supervisors"),
+    ("worker parent credited without session change",
+     "tests.substrate._native_recovery_owner:physical_snapshot",
+     "os.getsid(pid) == pid", "True",
+     TEST + "test_native_process_observer_distinguishes_worker_child_from_supervisors"),
 )
 
 if __name__ == "__main__":

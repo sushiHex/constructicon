@@ -28,7 +28,10 @@ def physical_snapshot():
                 native_homes.append({"pid": pid, "config_sha256": hashlib.sha256(
                     config.read_bytes(),
                 ).hexdigest()})
-            if WORKER.encode() in args and os.getsid(pid) == pid:
+            # Supervisors also carry the program in argv. Only the exact
+            # workload may witness the fork's completed session change.
+            if (args == [b"/usr/bin/python3", b"-I", b"-c", WORKER.encode(), b""]
+                    and os.getsid(pid) == pid):
                 session_children.append(pid)
     return {"processes": processes, "native_homes": native_homes,
             "session_children": session_children}
