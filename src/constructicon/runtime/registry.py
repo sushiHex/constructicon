@@ -269,7 +269,7 @@ class InMemoryRegistryStore:
             key = str(version.content_hash)
             existing = self._versions.get(name, {}).get(key)
             if existing is not None:
-                if existing.definition == version.definition:
+                if same_definition(existing.definition, version.definition):
                     return
                 raise JournalDamaged(
                     f"component {name!r}@{key} already stored with a different definition"

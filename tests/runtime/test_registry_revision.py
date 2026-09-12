@@ -11,13 +11,16 @@ import pytest
 
 from constructicon.core.component import (
     CapabilityRequirement,
+    ComponentDef,
     ComponentMetadata,
     LearningProfile,
     PromotionRecord,
+    same_definition,
 )
 from constructicon.core.errors import JournalDamaged
-from constructicon.core.graph import Ref
+from constructicon.core.graph import Graph, Ref
 from constructicon.core.identity import canonical_json, digest
+from constructicon.core.ports import Port
 from constructicon.core.registry import (
     InvalidRegistryRevision,
     RegistryRevision,
@@ -59,6 +62,43 @@ def _version(name: str, offset: int) -> StoredVersion:
         content_hash=definition.content_hash(),
         registered_at=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=offset),
     )
+
+
+def _schema_definition(value: object) -> ComponentDef:
+    port = Port(
+        name="value",
+        type_id="registry/Value",
+        schema_hash=str(digest("json-schema", 1, {"const": 1})),
+        json_schema={"const": value},
+    )
+    return ComponentDef(
+        name="registry/canonical-duplicate",
+        role="component",
+        body=Graph(name="registry/canonical-duplicate", nodes=(), inputs=(port,)),
+        inputs=(port,),
+        outputs=(),
+    )
+
+
+def _sqlite_registration_evidence(
+    store: RegistryStore,
+    version: StoredVersion,
+) -> tuple[tuple[object, ...], tuple[object, ...]] | None:
+    if not isinstance(store, SqliteJournal):
+        return None
+    with sqlite3.connect(store._db_path) as connection:
+        component = connection.execute(
+            "SELECT registration_seq, name, content_hash, definition_json, registered_at "
+            "FROM components WHERE name = ? AND content_hash = ?",
+            (version.definition.name, str(version.content_hash)),
+        ).fetchone()
+        seal = connection.execute(
+            "SELECT family, fact_key, selector, fact_hash FROM durable_fact_seals "
+            "WHERE family = 'component_registration' ORDER BY fact_key",
+        ).fetchone()
+    assert component is not None
+    assert seal is not None
+    return tuple(component), tuple(seal)
 
 
 def _promotion(
@@ -151,6 +191,45 @@ def test_registry_revision_advances_only_for_new_durable_facts(
     assert after_promotion == RegistryRevision(registration_seq=1, promotion_seq=1)
     revision_store.store_promotion(promotion)
     assert revision_store.snapshot().revision == after_promotion
+
+
+@pytest.mark.parametrize("changed", (True, 1.0))
+def test_registry_store_refuses_canonical_duplicate_definitions_without_mutation(
+    revision_store: RegistryStore,
+    changed: object,
+) -> None:
+    """A duplicate key accepts only the exact canonical definition."""
+
+    original = _schema_definition(1)
+    contradictory_definition = _schema_definition(changed)
+    assert original == contradictory_definition
+    assert not same_definition(original, contradictory_definition)
+    assert original.content_hash() != contradictory_definition.content_hash()
+    retained = StoredVersion(
+        definition=original,
+        content_hash=original.content_hash(),
+        registered_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    contradictory = retained.model_copy(update={"definition": contradictory_definition})
+    assert contradictory.content_hash == retained.content_hash
+
+    revision_store.store_version(retained)
+    before_snapshot = registry_snapshot_digest(revision_store.snapshot())
+    before_evidence = _sqlite_registration_evidence(revision_store, retained)
+
+    with pytest.raises(JournalDamaged, match="different definition"):
+        revision_store.store_version(contradictory)
+
+    assert registry_snapshot_digest(revision_store.snapshot()) == before_snapshot
+    assert _sqlite_registration_evidence(revision_store, retained) == before_evidence
+    exact_retry = StoredVersion(
+        definition=ComponentDef.model_validate(original.model_dump(mode="json")),
+        content_hash=retained.content_hash,
+        registered_at=retained.registered_at + timedelta(seconds=1),
+    )
+    revision_store.store_version(exact_retry)
+    assert registry_snapshot_digest(revision_store.snapshot()) == before_snapshot
+    assert _sqlite_registration_evidence(revision_store, retained) == before_evidence
 
 
 def test_nonstable_promotion_fact_is_refused_before_it_can_move_a_pointer(

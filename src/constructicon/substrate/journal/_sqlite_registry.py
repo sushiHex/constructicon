@@ -10,7 +10,7 @@ from typing import Literal, cast
 from pydantic import ValidationError
 
 from constructicon.core.address import RunId
-from constructicon.core.component import ComponentDef, PromotionRecord
+from constructicon.core.component import ComponentDef, PromotionRecord, same_definition
 from constructicon.core.effect import ComponentProofSubject, promotion_attestation_faults
 from constructicon.core.errors import AdmissionError, JournalDamaged
 from constructicon.core.identity import (
@@ -92,7 +92,7 @@ class _SqliteRegistryMixin:
             payload = version.definition.model_dump_json()
             if existing is not None:
                 retained = _stored_version_from_row(conn, existing)
-                if retained.definition == version.definition:
+                if same_definition(retained.definition, version.definition):
                     return  # idempotent re-registration (startup re-registers)
                 raise JournalDamaged(
                     f"component {version.definition.name!r}@{version.content_hash} "
