@@ -8,7 +8,7 @@ import signal
 import socket
 import sys
 import tempfile
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from dataclasses import asdict, fields, replace
 from pathlib import Path
 
@@ -43,9 +43,11 @@ def placement_image(launcher):
 @asynccontextmanager
 async def placement(image, *, timeout=CASE_SECONDS, model=MODELS[0],
                     scenario=PLACEMENT_PROMPT, tool=None, arguments=None, request_check=None,
-                    namespace=None):
+                    namespace=None, directory=None):
     deadline = asyncio.get_running_loop().time() + timeout  # Before peer setup.
-    with tempfile.TemporaryDirectory(prefix="m8-placement-") as directory:
+    storage = (tempfile.TemporaryDirectory(prefix="m8-placement-") if directory is None
+               else nullcontext(directory))
+    with storage as directory:
         endpoint = Path(directory) / "provider.sock"
         # These ordinary siblings must never appear in the contained namespace.
         (endpoint.parent / "journal.sqlite").write_text("inert host-only marker")
@@ -93,7 +95,7 @@ def descendants(pid):
 
 async def observe(
     composed, peer, guard_root, *, probe=None, query=None, identity=None, fault="none", record=None,
-    config=None, files=None, arguments=(),
+    config=None, files=None, arguments=(), guard_fd=None,
 ):
     setup = {
         "files": {} if files is None else files,
@@ -124,7 +126,7 @@ async def observe(
             raise TimeoutError("placement case expired before launch")
         result = await exchange(
             composed, guard_root, conversation, command=("/usr/bin/python3", "-I", BOOTSTRAP),
-            timeout=remaining,
+            timeout=remaining, guard_fd=guard_fd,
         )
     except ProcessExchangeError as exc:
         result = exc.result

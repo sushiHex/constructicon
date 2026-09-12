@@ -79,6 +79,7 @@ the eventual code differs.
 | [M8 provider placement evidence](handoffs/M8-provider-placement-evidence.md) | Living acceptance and implementation evidence for the placement-only slice; no combined mediation, recovery, or authentication qualification |
 | [M8 combined startup evidence](handoffs/M8-combined-startup-evidence.md) | Bounded combined startup/mediation acceptance and observations; distinguishes controlled turns from native context; not authentication or recovery qualification |
 | [M8 hook execution evidence](handoffs/M8-hook-execution-evidence.md) | Narrow packaged-shell hook-control acceptance and evidence; preserves missing-shell history and keeps authentication/recovery gated |
+| [M8 native recovery evidence](handoffs/M8-native-recovery-evidence.md) | Credential-free journal/RunHost lifecycle acceptance after the scoped startup gate; not a native authentication or production profile claim |
 
 ## Completeness and recovery notes
 

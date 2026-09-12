@@ -134,6 +134,36 @@ adapter, new network/grant schema or additional owner is authorized here.
 The existing gateway choice remains independent, not a substitute for the
 owner's subscription-reuse goal.
 
+### Durable fixture follow-up (PR #64)
+
+The separately committed [acceptance and recovery record](../plans/handoffs/M8-native-recovery-evidence.md)
+now carries executed SQLite/RunHost evidence from source head `8c8a3c7` and
+[Linux run 34663385354](https://github.com/sushiHex/constructicon/actions/runs/34663385354),
+artifact `10288154121`. Both pinned model profiles cover all five death seams;
+cancellation and ownership transfer are separate cases. Checkpointed work
+restores without another native call; uncheckpointed work uses a new acquisition.
+The first failed ownership test and the artifact observer correction remain
+explicit in the record. The linked PR owns final exact-head gates and independent
+review, including the corrected exact-worker session observation.
+
+| Qualification claim | Disposition |
+| --- | --- |
+| Bounded, account-empty startup and native/worker mediation | Scoped positive evidence in #62 and the combined native lane |
+| Native acquisition, home/process lifetime, SQLite recovery and retained checkpoints | Executed positive evidence in #64; final corrected-head gates required before merge |
+| An old revoked host performs durable disposal, or no artifact means no request | Refuted; successor owns cleanup and interrupted evidence is partial |
+| Authenticated/cloud-managed startup, externally reachable extensions, real account/provider use | Unexecuted; the fixture's physical exclusions cannot qualify these modes |
+
+After the final corrected-head proof, the next design artifact may be a
+**proposed** successor to ADR 0018. It must name the changed trust clauses,
+trusted code, strict profile/version compatibility, revocation/recovery and
+new account/network/startup conformance gates. No existing profile can be
+relabeled to supply those proofs. The task-shaped, provider-neutral seam
+remains the extension point for later Codex, Claude Code, Pi, OpenRouter,
+cloud and local adapters; this one native fixture does not qualify them.
+No authentication route is selected or accepted here. #38 remains the owner
+decision, and no credentials, provider calls, gateway deployment or paid API
+substitute follow from this result.
+
 ## The contract does not need another abstraction
 
 [ADR 0005](../adr/0005-executor-seam.md) already admits subscription CLIs and
