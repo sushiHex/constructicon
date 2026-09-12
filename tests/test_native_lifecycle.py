@@ -235,3 +235,29 @@ async def test_native_closure_check_is_off_loop_and_joined_on_cancel(provider):
         with pytest.raises(asyncio.CancelledError):
             await task
     assert finished.is_set()
+
+
+async def test_native_local_close_during_closure_check_refuses(provider, monkeypatch):
+    import threading
+
+    entered, release = threading.Event(), threading.Event()
+
+    def check(paths):
+        entered.set()
+        assert release.wait(5)
+
+    provider.closure.require_open.side_effect = check
+    monkeypatch.setattr(native_lifecycle, "dispose_acquisition", AsyncMock())
+    acquired = await provider.acquire(replace(context(), check_control=lambda: None))
+    handle = acquired.resource
+    handle.entered = handle.ready = True
+    task = asyncio.create_task(handle.require_open())
+    try:
+        async with asyncio.timeout(5):
+            while not entered.is_set():
+                await asyncio.sleep(0.001)
+        await provider.close(acquired, "discard")
+    finally:
+        release.set()
+    with pytest.raises(ContractViolation, match="not open"):
+        await task

@@ -24,8 +24,8 @@ MUTANTS = (
     ("foreign path accepted", MODULE + "NativeFixtureProvider.reconcile",
      "row.path != context.path", "False",
      TEST + "test_native_recovery_rejects_foreign_rows[path]"),
-    ("control not observed", MODULE + "NativeFixture.require_open",
-     "self.context.check_control()\n    await", "pass\n    await",
+    ("control not observed", MODULE + "NativeFixture.check_control",
+     "self.context.check_control()", "pass",
      TEST + "test_native_work_observes_control_and_closure"),
     ("closure not observed", MODULE + "NativeFixture.require_open",
      "self.provider.closure.require_open, self.paths", "lambda _: None, self.paths",
@@ -48,6 +48,9 @@ MUTANTS = (
     ("failed worker decoding discarded", MODULE + "NativeFixture.worker",
      'evidence["decoded"] = decoded.model_dump(mode="json")', 'pass',
      TEST + "test_native_worker_retains_complete_failure_before_asserting"),
+    ("local closure missed across await", MODULE + "NativeFixture.require_open",
+     ")))\n    self.check_control()", ")))\n    pass",
+     TEST + "test_native_local_close_during_closure_check_refuses"),
 )
 
 if __name__ == "__main__":

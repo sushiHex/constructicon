@@ -93,14 +93,17 @@ class NativeFixture:
             await self.provider.at("during_materialization", self)
             self.ready = True
 
-    async def require_open(self):
+    def check_control(self):
         if self.closed or not self.ready:
             raise ContractViolation("native fixture is not open")
         self.context.check_control()
+
+    async def require_open(self):
+        self.check_control()
         await finish_owned(asyncio.create_task(asyncio.to_thread(
             self.provider.closure.require_open, self.paths,
         )))
-        self.context.check_control()
+        self.check_control()
 
     async def run(self, workspace):
         await self.require_open()
@@ -117,7 +120,7 @@ class NativeFixture:
         try:
             while not work.done():
                 await asyncio.wait({work}, timeout=0.05)
-                self.context.check_control()
+                self.check_control()
             return work.result()
         finally:
             await finish_owned(asyncio.create_task(stop()))
