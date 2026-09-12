@@ -36,3 +36,11 @@ separate required native lane establishes PR B's containment evidence. Neither
 enables a credential-bearing live executor. The
 [native-authentication investigation](../plans/handoffs/M8-native-auth-feasibility.md)
 changes no accepted ADR and records the additional proof a successor would need.
+
+Proposed [ADR 0020](0020-native-harnesses-mediate-contained-tools.md) and
+[M8 rev 2](../plans/milestones/M8-live-executors-rev2.md) now present that
+successor for decision after the credential-free startup and recovery gates.
+They propose vendor-managed account custody in a workspace-free native zone,
+separate contained tool workers, versioned authority, and Codex-first sequencing.
+They do not accept native authentication or replace the governing ADRs above;
+account access, production conformance and live calls remain separate gates.

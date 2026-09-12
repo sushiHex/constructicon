@@ -1,6 +1,6 @@
 # Executor authentication: feasibility and next decision
 
-Status: evidence and recommendation, updated 2026-09-12; not an accepted ADR or a
+Status: evidence and proposed successor decision; not an accepted ADR or a
 claim of working subscription integration. No login, credential inspection,
 remote provider request, or gateway provisioning was performed.
 
@@ -8,12 +8,22 @@ remote provider request, or gateway provisioning was performed.
 
 This section is the current packet; the dated sections below preserve how the
 evidence changed. [#38](https://github.com/sushiHex/constructicon/issues/38)
-owns the authentication decision. The owner authorized the bounded startup
-gate review in [#61](https://github.com/sushiHex/constructicon/issues/61),
-followed by a separate durable-recovery slice **only if that gate passes**.
-This is not acceptance of a successor to ADR 0018.
+owns the authentication decision. The authorized bounded startup gate and
+separate durable-recovery slice are now merged as #62 and #64. They support
+proposing [ADR 0020](../adr/0020-native-harnesses-mediate-contained-tools.md)
+and [M8 rev 2](../plans/milestones/M8-live-executors-rev2.md), not accepting
+native account authority. The proposal splits native account custody from
+contained workspace tools and makes construction, physical placement,
+authenticated startup and live smoke separate gates. The approved gateway
+mode remains governing until an explicit successor decision.
 
-The baseline is `77da3f6db20bc98a43939822f7cc441755a2a95e`, the squash
+The proposal also records a pre-implementation limit: pinned `account/read`
+reports email and plan type, not the complete stable account/workspace binding
+the design requires. A supported metadata path and narrow store layout must
+be identified before the native implementation slices start. No token-cache
+inspection or inferred principal is an acceptable substitute.
+
+The startup investigation began from `77da3f6db20bc98a43939822f7cc441755a2a95e`, the squash
 merge of [#60](https://github.com/sushiHex/constructicon/pull/60), tree-equal to
 reviewed `92ec3c2bd6df15197277abca2cb0fddf4e2e4b9f`. Its exact-head Linux
 [run 34659442292](https://github.com/sushiHex/constructicon/actions/runs/34659442292)
@@ -121,11 +131,11 @@ Unexpected reachable behavior is a named blocker, not a reason to expand a
 denylist or relabel a missing test as safe. Exact-head gates for this packet
 and job-budget change are recorded in its linked PR before merge.
 
-The now-unblocked, separately reviewed Slice B reuses ordinary SQLite capability leases,
+The subsequently merged Slice B reuses ordinary SQLite capability leases,
 `ControlPlane`/`RunHost`, acquisition closure, and the same Linux process owner
 to prove native-home, protocol-resource, worker and checkpoint recovery across
-real process death. It stays a separate reviewed change. A source review or a
-portable fake cannot substitute for that new Linux proof.
+real process death. It landed as a separate reviewed change, #64. A source
+review or portable fake did not substitute for its Linux proof below.
 
 Only a positive combined startup **and durable lifecycle** result supports a
 proposed successor ADR. Its account/provider conformance and eventual operator
@@ -137,24 +147,32 @@ owner's subscription-reuse goal.
 ### Durable fixture follow-up (PR #64)
 
 The separately committed [acceptance and recovery record](../plans/handoffs/M8-native-recovery-evidence.md)
-now carries executed SQLite/RunHost evidence from source head `8c8a3c7` and
-[Linux run 34663385354](https://github.com/sushiHex/constructicon/actions/runs/34663385354),
-artifact `10288154121`. Both pinned model profiles cover all five death seams;
+carries the executed SQLite/RunHost evidence and its earlier corrections.
+Final reviewed head `26b182c4ab69a567076e41d178d3b49b33645751` merged as
+`3718a86cc16a68f02ba22c569de5058b2a63371d` with an identical tree.
+[Linux run 34666495658](https://github.com/sushiHex/constructicon/actions/runs/34666495658)
+produced artifact `10288803813`, independently inspected against that head.
+Its published digest is
+`3b2f124b9f2163638bdc6b4a1f7cfb1aab78692ba85584fcbe6d34fc466598ac`.
+Both pinned model profiles cover all five death seams;
 cancellation and ownership transfer are separate cases. Checkpointed work
 restores without another native call; uncheckpointed work uses a new acquisition.
 The first failed ownership test and the artifact observer correction remain
-explicit in the record. The linked PR owns final exact-head gates and independent
-review, including the corrected exact-worker session observation.
+explicit in the record. Final gates and independent review passed, including
+the corrected exact-worker session observation: 12 native plus 19 portable
+recovery checks and all 17 recovery mutants, alongside the retained native
+startup/mediation/containment lanes. This is fixture lifecycle qualification,
+not authenticated or production qualification.
 
 | Qualification claim | Disposition |
 | --- | --- |
 | Bounded, account-empty startup and native/worker mediation | Scoped positive evidence in #62 and the combined native lane |
-| Native acquisition, home/process lifetime, SQLite recovery and retained checkpoints | Executed positive evidence in #64; final corrected-head gates required before merge |
+| Native acquisition, home/process lifetime, SQLite recovery and retained checkpoints | Executed positive evidence and final corrected-head review passed; #64 merged |
 | An old revoked host performs durable disposal, or no artifact means no request | Refuted; successor owns cleanup and interrupted evidence is partial |
 | Authenticated/cloud-managed startup, externally reachable extensions, real account/provider use | Unexecuted; the fixture's physical exclusions cannot qualify these modes |
 
-After the final corrected-head proof, the next design artifact may be a
-**proposed** successor to ADR 0018. It must name the changed trust clauses,
+After that final corrected-head proof, ADR 0020 is the **proposed** successor
+to ADR 0018. It names the changed trust clauses,
 trusted code, strict profile/version compatibility, revocation/recovery and
 new account/network/startup conformance gates. No existing profile can be
 relabeled to supply those proofs. The task-shaped, provider-neutral seam
