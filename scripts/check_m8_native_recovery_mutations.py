@@ -60,6 +60,11 @@ MUTANTS = (
      "tests.substrate._native_recovery_owner:physical_snapshot",
      "os.getsid(pid) == pid", "True",
      TEST + "test_native_process_observer_distinguishes_worker_child_from_supervisors"),
+    ("cancellation closes an observed lost owner's recorded acquisitions",
+     "constructicon.runtime.walker:Walker._invoke",
+     "if lost:\n            raise lost[0]", "if False:\n            raise lost[0]",
+     "tests/runtime/test_materialization_control.py::"
+     "test_cancellation_during_ownership_loss_teardown_leaves_recorded_siblings_to_successor"),
 )
 
 if __name__ == "__main__":

@@ -151,3 +151,35 @@ successor ADR, not accepting one or making an adapter available. Authenticated
 startup, externally reachable cloud/plugin inputs, provider/account conformance,
 credential ownership and live deployment remain unexecuted and separately gated.
 The fixture route proves invocation membership, never CLI sender authentication.
+
+## Ownership-loss cancellation repair
+
+The later docs-only [PR #65](https://github.com/sushiHex/constructicon/pull/65)
+exposed a runtime race on unchanged main source. Its
+[Linux run 34669582426](https://github.com/sushiHex/constructicon/actions/runs/34669582426)
+passed 30 recovery checks but failed the ownership case: the old handle
+reported local closure instead of `OwnershipLost`. Artifact `10290767072`
+preserves that failed run; previous timing-dependent successes do not refute it.
+The owner authorized [#66](https://github.com/sushiHex/constructicon/issues/66)
+as a separate runtime repair, without changing the planning branch.
+
+The heartbeat had already observed lost ownership. The invocation raised it,
+then joined its physical teardown. Shutdown cancellation during that join
+replaced the active exception with `CancelledError`. Ordinary cancellation
+cleanup then closed the provider before the journal's epoch fence could refuse
+the stale row transition. Process quiescence alone did not establish that the
+invocation had finished unwinding.
+
+The repair preserves the existing ownership decision before cancellation starts
+recorded cleanup. Observed ownership loss leaves those acquisitions for
+successor reconciliation even when invocation teardown reports cancellation.
+It does not invent a new lease, scheduler, cleanup inventory or ownership
+probe. Already-started cleanup still joins, real cleanup failures remain
+failures, and ordinary cancellation retains its existing disposition law.
+
+Barrier-based portable regressions establish the exception ordering and inspect
+the old provider, durable rows and successor reconciliation. They are not
+physical-process proof. The original native ownership assertion remains
+unchanged; the linked repair PR owns the exact-head local, Linux, mutation and
+independent-review results. The failed run above remains part of the evidence,
+not a result to replace by retrying the same code.
