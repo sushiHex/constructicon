@@ -115,6 +115,7 @@ jobs:
             M8_EVIDENCE_DIRECTORY=/home/m8-service/evidence \
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_native_recovery.py \
               tests/test_native_lifecycle.py -v --tb=short -p no:cacheprovider
+          uv run python scripts/check_m8_native_recovery_mutations.py
       - name: Measure combined native startup and mediation
         shell: bash
         run: |

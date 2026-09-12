@@ -5,8 +5,9 @@ Status: credential-free Slice B investigation authorized by the owner on
 [PR #62](https://github.com/sushiHex/constructicon/pull/62).
 [#63](https://github.com/sushiHex/constructicon/issues/63) owns this work;
 [#38](https://github.com/sushiHex/constructicon/issues/38) owns authentication.
-Acceptance is committed before implementation. No native recovery result is
-claimed here yet.
+Acceptance was committed as `7d8db2e` before implementation. The implementation
+is [draft PR #64](https://github.com/sushiHex/constructicon/pull/64); exact-head
+qualification remains pending its local, Linux, mutation and independent gates.
 
 ## Exact scope
 
@@ -67,3 +68,40 @@ remains; this slice proves resource lifetime, not process authorship.
 Only positive combined startup and lifecycle evidence supports a proposed
 successor ADR. Production/account conformance and owner acceptance remain
 separate. No paid gateway replaces the subscription-reuse goal.
+
+## Implementation and review corrections
+
+`tests/native_lifecycle.py` is a test-only leased capability, composed with the
+ordinary contained workspace. No production source, schema, launcher policy or
+runtime asset changes. Its graph grants generic network `allow`, truthfully:
+the native fixture has the accepted bounded peer route. The worker still uses
+the existing networkless launcher. This is not a production network profile.
+
+One acquisition guard covers endpoint creation, native conversation, callback
+and joined peer teardown. Both process trees inherit that borrowed guard; the
+worker also inherits its workspace guard. The helper never re-locks the same
+acquisition through a second descriptor. Trusted Git closure checks run on
+joined background threads rather than blocking heartbeat/control observation.
+
+The first Linux run,
+[34662575154](https://github.com/sushiHex/constructicon/actions/runs/34662575154)
+on `1fda132`, passed ten process-death cases and cancellation, but **failed**
+ownership revocation. Independent review reproduced the cause: the test
+expected the revoked owner to dispose durable acquisitions, whereas the walker
+correctly leaves that work to the successor. That run is not qualification.
+The corrected test observes old-process quiescence and stale-handle refusal
+first, then starts a real successor RunHost over SQLite to reconcile and finish.
+
+The review also required explicit old native/workspace dispositions and absent
+payloads, truthful network grants, nonblocking closure checks, and full worker
+evidence recorded before success assertions. Returned or salvaged process
+results retain bytes, both exit codes, elapsed time, timeout and bound facts,
+plus the decoded outcome. Interrupted work with no returned result records
+`null`, not an invented exit. Readiness is observed separately from completion.
+Successor reports preserve their complete native/peer/worker observations too.
+
+The portable instrument suite is deliberately separate from Linux proof.
+Its assertion mutations cover durable-row validation, unentered/absent-resource
+cleanup, control and closure checks, borrowed guards, the fixture's network
+grant and failed worker evidence. Exact-head results and artifact identities
+belong in the linked PR; a green portable test never implies physical isolation.

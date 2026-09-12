@@ -8,7 +8,7 @@ import asyncio
 import inspect
 import json
 from contextlib import suppress
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -28,6 +28,7 @@ from constructicon.core.workspace import (
 )
 from constructicon.runtime.registry import CapabilityDescriptor
 from constructicon.substrate._lifetime import finish_owned
+from constructicon.substrate.executors.linux import ProcessExchangeError
 from constructicon.substrate.git.acquisition import (
     AcquisitionPaths,
     acquisition_guard,
@@ -85,19 +86,24 @@ class NativeFixture:
             raise ContractViolation("native fixture is closed or already entered")
         self.entered = True
         async with acquisition_guard(self.paths):
-            self.provider.closure.require_open(self.paths)
+            await finish_owned(asyncio.create_task(asyncio.to_thread(
+                self.provider.closure.require_open, self.paths,
+            )))
             self.paths.payload.mkdir(parents=True)
             await self.provider.at("during_materialization", self)
             self.ready = True
 
-    def require_open(self):
+    async def require_open(self):
         if self.closed or not self.ready:
             raise ContractViolation("native fixture is not open")
         self.context.check_control()
-        self.provider.closure.require_open(self.paths)
+        await finish_owned(asyncio.create_task(asyncio.to_thread(
+            self.provider.closure.require_open, self.paths,
+        )))
+        self.context.check_control()
 
     async def run(self, workspace):
-        self.require_open()
+        await self.require_open()
         # This is the same cancellation-aware wait pattern used by contained
         # gates. The original error survives joined teardown, including failure.
         work = asyncio.create_task(self.exchange(workspace))
@@ -118,8 +124,46 @@ class NativeFixture:
 
     async def exchange(self, workspace):
         async with acquisition_guard(self.paths) as guard:
-            self.require_open()
+            await self.require_open()
             return await self.exchange_owned(workspace, guard)
+
+    async def worker(self, view, native_guard, deadline, record):
+        await self.require_open()
+        record["worker"] = evidence = {"process": None, "decoded": None, "ready": False}
+        result = None
+        try:
+            async with view.use() as guard:
+                async def proceed(io):
+                    assert await line(io, 8192) == b"worker-ready\n"
+                    evidence["ready"] = True
+                    await self.provider.at("during_active", self)
+                    await self.require_open()
+                    await io.write(b"continue\n")
+                    await io.close_stdin()
+                    while await io.read():
+                        pass
+
+                result = await self.provider.launcher.exchange(
+                    ("/usr/bin/python3", "-I", "-c", WORKER), workspace=Path(view.path),
+                    posture=Posture.READ, guard_fds=(native_guard, guard), conversation=proceed,
+                    timeout_s=max(0.001, deadline - asyncio.get_running_loop().time()),
+                )
+        except ProcessExchangeError as exc:
+            result = exc.result
+            raise
+        finally:
+            if result is not None:
+                evidence["process"] = {**asdict(result), "stdout": result.stdout.hex(),
+                                       "stderr": result.stderr.hex()}
+                # Readiness is framing, not an executor result. Preserve damage
+                # and failed outcomes before asserting the successful scenario.
+                decoded = decode(replace(result, stdout=result.stdout.removeprefix(
+                    b"worker-ready\n",
+                )), self.provider.model)
+                evidence["decoded"] = decoded.model_dump(mode="json")
+        assert_outcome(result)
+        assert result.stdout.startswith(b"worker-ready\n")
+        assert decoded.status == "success" and decoded.output == {"contained": True}
 
     async def exchange_owned(self, workspace, native_guard):
         provider = self.provider
@@ -145,31 +189,7 @@ class NativeFixture:
 
             async def worker(program):
                 assert program == PROGRAM
-                self.require_open()
-                async with view.use() as guard:
-                    async def proceed(io):
-                        assert await line(io, 8192) == b"worker-ready\n"
-                        await provider.at("during_active", self)
-                        self.require_open()
-                        await io.write(b"continue\n")
-                        await io.close_stdin()
-                        while await io.read():
-                            pass
-
-                    result = await provider.launcher.exchange(
-                        ("/usr/bin/python3", "-I", "-c", WORKER), workspace=Path(view.path),
-                        posture=Posture.READ, guard_fds=(native_guard, guard), conversation=proceed,
-                        timeout_s=max(0.001, peer.deadline - asyncio.get_running_loop().time()),
-                    )
-                assert_outcome(result)
-                # Readiness is protocol framing, not an executor result record.
-                assert result.stdout.startswith(b"worker-ready\n")
-                decoded = decode(replace(result, stdout=result.stdout[len(b"worker-ready\n") :]),
-                                 provider.model)
-                assert decoded.status == "success" and decoded.output == {"contained": True}
-                record["worker"] = {"stdout": result.stdout.hex(), "stderr": result.stderr.hex(),
-                                    "returncode": result.returncode,
-                                    "payload_returncode": result.payload_returncode}
+                await self.worker(view, native_guard, peer.deadline, record)
                 return output
 
             async def query(wire, observed):
@@ -181,7 +201,7 @@ class NativeFixture:
                 )
                 await wire.io.close_stdin()
 
-            self.require_open()
+            await self.require_open()
             observed, result = await observe(
                 composed, peer, provider.root, query=query, record=record,
                 config=controlled_configuration(provider.model), guard_fd=native_guard,
@@ -294,7 +314,9 @@ def assemble(root, model=MODELS[0], owner="native-owner", *, launcher=None, imag
     provider = NativeFixtureProvider(root / "n", workspaces, image, model)
     system = Constructicon(
         journal=journal, owner_id=owner, lease_ttl_s=2, heartbeat_interval_s=0.2,
-        root_grants=WRITE_GRANTS.model_copy(update={"posture": Posture.READ}),
+        # Generic grants permit this fixture's route. The worker's existing
+        # launcher still enforces its stronger, networkless namespace.
+        root_grants=WRITE_GRANTS.model_copy(update={"posture": Posture.READ, "network": "allow"}),
         capabilities={"native": provider, "workspace": workspaces}, catalog={
             "native": CapabilityDescriptor(capability_id="native", kind="test.native-fixture",
                                            revision=provider.revision, leased=True),

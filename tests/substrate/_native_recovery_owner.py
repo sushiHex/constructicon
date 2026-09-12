@@ -87,6 +87,8 @@ async def main(root, model, phase):
             state = journal.run_state(run_id)
             assert state.status is RunStatus.SUCCEEDED, journal.events(run_id)
             print(json.dumps({"run_id": str(run_id), "completed": provider.completed,
+                              "observations": [handle.observation for handle in provider.handles
+                                               if hasattr(handle, "observation")],
                               "acquired": len(provider.handles)}),
                   flush=True)
         else:

@@ -11,8 +11,9 @@ import pytest
 
 from constructicon.api.control import ControlPlane
 from constructicon.core.control import RunSubmission
+from constructicon.core.errors import ContractViolation
 from constructicon.core.manifest import CapabilityLease
-from constructicon.core.run import RunStatus
+from constructicon.core.run import OwnershipLost, RunStatus
 from constructicon.core.workspace import acquisition_id_for
 from constructicon.substrate.git.acquisition import AcquisitionPaths
 from constructicon.substrate.git.authority import GitAuthority
@@ -106,8 +107,18 @@ async def test_native_owner_death_recovers_from_sqlite(native_root, model, phase
         assert len(recovered["completed"]) == (0 if retained else 1)
         after = journal.capability_leases(row.run_id)
         assert after and all(item.state == "closed" for item in after)
+        for previous in rows:
+            closed = next(item for item in after if item.lease_id == previous.lease_id
+                          and item.acquisition_epoch == previous.acquisition_epoch)
+            assert closed.disposition == ("released" if retained else "discarded")
+            root = native_root / ("n" if previous.binding_id == "native" else "w")
+            old_paths = AcquisitionPaths(root, acquisition_id_for(previous.lease_id,
+                                                                 previous.acquisition_epoch))
+            assert closure.is_closed(old_paths) and not old_paths.payload.exists()
         native_rows = [item for item in after if item.binding_id == "native"]
         assert len(native_rows) == (1 if retained else 2)
+        old = next(item for item in native_rows if item.acquisition_epoch == row.acquisition_epoch)
+        assert old.disposition == ("released" if retained else "discarded")
         assert max(item.acquisition_epoch for item in native_rows) == (
             row.acquisition_epoch if retained else row.acquisition_epoch + 1
         )
@@ -143,6 +154,7 @@ async def test_native_cancellation_and_revocation(native_root, launcher, placeme
 
     provider.hook = pause
     control = ControlPlane(system=system, store=journal)
+    successor = None
     await control.startup()
     try:
         graph = await register_native(control)
@@ -163,22 +175,48 @@ async def test_native_cancellation_and_revocation(native_root, launcher, placeme
             await until(lambda: journal.run_state(submitted.run_id).status is RunStatus.CANCELLED)
         else:
             state = journal.run_state(submitted.run_id)
-            journal._now = lambda: state.lease_expires_at + timedelta(seconds=1)
-            lease = journal.claim_run(submitted.run_id, owner_id="new-owner", ttl_s=30)
+            clock = journal._now
+            try:
+                journal._now = lambda: state.lease_expires_at + timedelta(seconds=1)
+                lease = journal.claim_run(submitted.run_id, owner_id="new-owner", ttl_s=0.01)
+            finally:
+                journal._now = clock
             assert lease.epoch > handle.context.run_lease.epoch
         await assert_reaped(observed)
         await control.shutdown()
-        assert provider.closure.is_closed(handle.paths) and not handle.paths.payload.exists()
         assert not provider.completed
         assert journal.checkpoint(submitted.run_id, handle.context.path) is None
-        from constructicon.core.errors import ContractViolation
-
-        with pytest.raises(ContractViolation, match="not open"):
-            handle.require_open()
+        with pytest.raises(ContractViolation if stop == "cancel" else OwnershipLost):
+            await handle.require_open()
+        if stop == "ownership":
+            assert not provider.closure.is_closed(handle.paths)
+            assert handle.paths.payload.exists()
+            await until(lambda: journal.run_state(submitted.run_id).liveness == "lost")
+            successor = await owner(native_root, MODELS[0], "recover")
+            stdout, stderr = await asyncio.wait_for(successor.communicate(), 35)
+            assert successor.returncode == 0, stderr.decode()
+            recovered = json.loads(stdout)
+            assert recovered["run_id"] == submitted.run_id
+            assert recovered["acquired"] == 1 and len(recovered["completed"]) == 1
+            assert recovered["completed"][0]["acquisition"] != handle.paths.acquisition_id
+        assert provider.closure.is_closed(handle.paths) and not handle.paths.payload.exists()
+        old_rows = [row for row in journal.capability_leases(submitted.run_id)
+                    if row.acquisition_epoch == handle.context.run_lease.epoch]
+        assert {row.binding_id for row in old_rows} == {"native", "workspace"}
+        for row in old_rows:
+            assert row.state == "closed" and row.disposition == "discarded"
+            root = native_root / ("n" if row.binding_id == "native" else "w")
+            paths = AcquisitionPaths(root, acquisition_id_for(row.lease_id, row.acquisition_epoch))
+            assert provider.closure.is_closed(paths) and not paths.payload.exists()
         write_evidence(f"codex-recovery-{stop}.json", {
             "processes": observed["processes"], "native_homes": observed["native_homes"],
             "session_children": observed["session_children"], "old_processes_reaped": True,
             "closed": True, "completed": provider.completed,
+            "old_observation": handle.observation,
+            "successor": recovered if stop == "ownership" else None,
+            "old_leases": [row.model_dump(mode="json") for row in old_rows],
         })
     finally:
         await control.shutdown()
+        if successor is not None:
+            await kill(successor)
