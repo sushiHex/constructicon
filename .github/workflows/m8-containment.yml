@@ -105,6 +105,16 @@ jobs:
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_provider_placement.py \
               tests/test_native_provider.py tests/test_provider_placement.py -v --tb=short -p no:cacheprovider
           uv run python scripts/check_m8_placement_mutations.py
+      - name: Prove journal-owned native fixture recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
+            M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
+            M8_PLACEMENT_REQUIRED=1 M8_PLACEMENT_ROOT=/var/lib/constructicon-m8-launch/placement-runtime \
+            M8_EVIDENCE_DIRECTORY=/home/m8-service/evidence \
+            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_native_recovery.py \
+              tests/test_native_lifecycle.py -v --tb=short -p no:cacheprovider
       - name: Measure combined native startup and mediation
         shell: bash
         run: |
