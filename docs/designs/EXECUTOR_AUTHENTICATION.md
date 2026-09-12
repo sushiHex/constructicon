@@ -1,8 +1,138 @@
 # Executor authentication: feasibility and next decision
 
-Status: evidence and recommendation, updated 2026-09-11; not an accepted ADR or a
+Status: evidence and recommendation, updated 2026-09-12; not an accepted ADR or a
 claim of working subscription integration. No login, credential inspection,
 remote provider request, or gateway provisioning was performed.
+
+## Current qualification decision
+
+This section is the current packet; the dated sections below preserve how the
+evidence changed. [#38](https://github.com/sushiHex/constructicon/issues/38)
+owns the authentication decision. The owner authorized the bounded startup
+gate review in [#61](https://github.com/sushiHex/constructicon/issues/61),
+followed by a separate durable-recovery slice **only if that gate passes**.
+This is not acceptance of a successor to ADR 0018.
+
+The baseline is `77da3f6db20bc98a43939822f7cc441755a2a95e`, the squash
+merge of [#60](https://github.com/sushiHex/constructicon/pull/60), tree-equal to
+reviewed `92ec3c2bd6df15197277abca2cb0fddf4e2e4b9f`. Its exact-head Linux
+[run 34659442292](https://github.com/sushiHex/constructicon/actions/runs/34659442292)
+produced artifact `10287620781`: 131 combined-stage, 87 mediation and 324
+containment tests passed, including all 29 combined assertion mutants.
+The earlier [#58](https://github.com/sushiHex/constructicon/pull/58) result
+remains partial; neither merge claims native authentication or recovery.
+
+### One finite candidate
+
+The candidate remains the credential-free **test fixture**, not a production
+profile or a credential-owning process outside containment. It is defined by
+[`controlled_configuration`](../../tests/native_combined.py), the immutable
+[`startup bootstrap`](../../tests/substrate/_native_startup_bootstrap.py),
+the [accepted placement](../plans/handoffs/M8-provider-fixture-proposal.md),
+and the pinned Codex 0.153.4 source
+`3d2ee51ca2d5db578f328aa75e20aa22c0197c9a`.
+
+- Keep the exact package, restricted catalog, runtime and two model-profile
+  pins from #60. Model names select local metadata; no model is contacted.
+- Start `app-server --strict-config --stdio` in a newly created private home
+  and cwd, not the acquired repository. Only the contained worker receives
+  the repository. No login files, prior session, host home or journal is
+  mounted into the native process.
+- The trusted driver writes the configuration and sends the bounded RPC
+  sequence. Model-supplied arguments do not select configuration, RPC methods,
+  the provider endpoint or process launch. The fixed fake peer uses no incoming
+  request as an instruction or response-script selector.
+- Keep `shell_zsh_fork=false` in the baseline. #60's true variant is an
+  experimental **positive control**, proving that exact trusted hooks really
+  execute while their untrusted/disabled counterparts do not attempt to run.
+  That variant's warning and `underDevelopment` stage remain evidence; it is
+  neither needed by the empty baseline nor promoted to production support.
+- Keep the actual effective feature distinction: configured
+  `unified_exec=false` is normalized true on this release, but
+  `shell_tool=false` gates registration. The independent exact tool/context
+  checks and attempted-call refusals, not the requested flag, carry the proof.
+
+### Origins and evidence limits
+
+These rows classify the candidate, not all deployments of the native CLI.
+The detailed observations remain in the
+[combined record](../plans/handoffs/M8-combined-startup-evidence.md) and
+[hook record](../plans/handoffs/M8-hook-execution-evidence.md).
+
+| Origin | Candidate control and observed evidence | Not qualified by it |
+| --- | --- | --- |
+| Runtime and model metadata | Root-owned content inventory; pinned package and controller-selected restricted catalog; patch/image/model-dependent controls | A different release, catalog, or runtime |
+| System/managed config | Curated runtime has no `/etc/codex`; cleared environment; requirements query is null | A managed deployment or its authenticated policy |
+| User/profile, project and ancestors | Fresh private paths; controller-owned files/argv; unused-profile, selected-profile refusal, project trust and MCP controls | Inherited desktop configuration or repository cwd |
+| Environment | Exact cleared environment observed by the bootstrap; no inherited host credentials or loader variables | Arbitrary environment inheritance |
+| Hooks | No baseline hooks; JSON/TOML discovery and trust controls; four real executions and eight no-attempt packaged-shell counterparts | Enabling arbitrary hooks or treating ENOENT as disablement |
+| Skills and plugins | Fresh private roots, bundled/prompt skill controls; explicit seeded-plugin enablement and discovery controls | Plugin installation, marketplace workflows, arbitrary extensions, or a claim that the plugin subsystem is disabled |
+| MCP/apps | No baseline server, apps disabled; inert trusted-project and seeded-plugin startup controls | Arbitrary servers or authenticated apps |
+| Account/cloud/session state | Fresh account-empty home and bounded local fake provider; no external route | Authenticated/cloud-managed behavior, real provider conformance, or subscription availability |
+| Protocol and callback | Trusted bounded driver, exact peer conversation, real contained-worker result | CLI sender authentication: a contained descendant can also use the fixture route |
+
+The distinction is between an excluded input and a reachable uncontrolled
+authority path. An empty listing alone proves neither. Authenticated modes
+stay unqualified; they cannot silently enter a later live design. Conversely,
+requiring account access to finish a deliberately credential-free proof would
+change this investigation's scope rather than strengthen its evidence.
+
+### Gate and next action
+
+The acceptance packet was committed as `98e47a4` before any recovery code.
+Independent read-only Codex review of the pinned source, existing artifact and
+that packet found **no unresolved startup authority gap for this exact
+credential-free candidate**. This satisfies Slice B's startup prerequisite
+under the [frozen qualification plan](../plans/handoffs/M8-native-qualification-plan.md),
+not production startup qualification. The following source/artifact chain is
+part of that scoped conclusion, not an assumption that every feature is off:
+
+- In the pinned `codex-rs/cloud-config/src/service.rs`,
+  `load_startup_bundle` returns no bundle before cache or network access when
+  authentication is absent. The private home is new, environment is cleared,
+  and the observed account is null. Authenticated behavior remains expressly
+  outside the accepted fixture's scope unless recipe safety depends on it;
+  no such dependency was found here.
+- `codex-rs/app-server/src/message_processor.rs` starts plugin tasks, and
+  `codex-rs/core-plugins/src/manager.rs` permits anonymous curated sync.
+  Plugins are enabled by default; startup can attempt Git before inventory.
+  Its inputs are pinned code plus controller-owned empty/private paths, not
+  a model-selected repository/configuration. Fixed external destinations have
+  no route in this namespace. The only reachable peer is the bounded local
+  fixture, whose script is controller-selected. This is physical exclusion
+  of external startup input, not a plugin-disable or no-process claim.
+- The full source tree's `shell_zsh_fork_skill_scripts_ignore_declared_permissions`
+  is an upstream shell-tool test, not a separate baseline script executor.
+  It dispatches `exec_command`; baseline `shell_tool=false` prevents that
+  registration, and the native refused-call control checks the boundary.
+- Artifact `10287620781` baseline files
+  `codex-placement-230d45c1adcfaf9d.json` and
+  `codex-placement-92e0cd706976b7b8.json` cover the two models. Both record
+  `packaged_shell=false`, controller setup containing only the public marker,
+  null account/requirements, two peer requests without peer failures, clean
+  owner/payload exits, loopback alone and no IPv4 route. The placement proof
+  supplies the namespace/socket boundary; these files do not independently
+  establish all possible network or descendant-lifecycle claims.
+
+The empty inventory is corroboration, not the reason for exclusion. Changing
+the home, working directory, configured extensions, environment, network,
+catalog or driver invalidates this conclusion and requires requalification.
+Unexpected reachable behavior is a named blocker, not a reason to expand a
+denylist or relabel a missing test as safe. Exact-head gates for this packet
+and job-budget change are recorded in its linked PR before merge.
+
+The now-unblocked, separately reviewed Slice B reuses ordinary SQLite capability leases,
+`ControlPlane`/`RunHost`, acquisition closure, and the same Linux process owner
+to prove native-home, protocol-resource, worker and checkpoint recovery across
+real process death. It stays a separate reviewed change. A source review or a
+portable fake cannot substitute for that new Linux proof.
+
+Only a positive combined startup **and durable lifecycle** result supports a
+proposed successor ADR. Its account/provider conformance and eventual operator
+actions remain explicit; no credentials, billing, gateway deployment, live
+adapter, new network/grant schema or additional owner is authorized here.
+The existing gateway choice remains independent, not a substitute for the
+owner's subscription-reuse goal.
 
 ## The contract does not need another abstraction
 
