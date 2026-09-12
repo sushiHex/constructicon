@@ -59,6 +59,7 @@ the eventual code differs.
 | M7.1 | [Connector liveness rev 3](milestones/M7.1-connector-liveness-rev3.md) | Successor that leaves the pool alone: several connections may map one `many` port, and `panel()` states its membership through them, re-proved by the existing contract-mismatch fault | Superseded by rev 4. Its core survived; its destination-totality, cardinality, counterfactual, and schema claims did not |
 | M7.1 | [Panel membership rev 4](milestones/M7.1-panel-membership-rev4.md) | Successor that narrows the scope to authored panel membership, makes mapped fan-in an ordered union of scalar selectors, validates every map, and decides the Graph/description version boundary | Complete: PR A #23 and PR B #24 merged; ADR 0017 accepted. Preserved draft wording records the decision requested, not its current status |
 | M8 | [Live executors rev 1](milestones/M8-live-executors-rev1.md) | Reconciled against M7.1 closure at `71c4fe3`; technical proposal confirmed at `8f0c2e5` with source-grounded review corrections | Approved: ADR 0018 accepted; PR A authorized. Plan bytes are frozen; preserved pre-decision wording is historical, not its current approval status. Linux target and gateway remain separate operator prerequisites |
+| M8 | [Native harnesses, contained tools rev 2](milestones/M8-live-executors-rev2.md) | Proposed successor after credential-free startup #62 and native recovery #64, against `3718a86` | Review draft; ADR 0020 is proposed, not accepted. No implementation, account access or issue-dependency transition is authorized by its presence |
 
 ## Handoffs
 
@@ -80,6 +81,7 @@ the eventual code differs.
 | [M8 combined startup evidence](handoffs/M8-combined-startup-evidence.md) | Bounded combined startup/mediation acceptance and observations; distinguishes controlled turns from native context; not authentication or recovery qualification |
 | [M8 hook execution evidence](handoffs/M8-hook-execution-evidence.md) | Narrow packaged-shell hook-control acceptance and evidence; preserves missing-shell history and keeps authentication/recovery gated |
 | [M8 native recovery evidence](handoffs/M8-native-recovery-evidence.md) | Credential-free journal/RunHost lifecycle acceptance after the scoped startup gate; not a native authentication or production profile claim |
+| [M8 native account interface preflight](handoffs/M8-native-account-interface-preflight.md) | Pinned-source and retained binary-schema evidence: Codex 0.153.4 lacks the supported complete identity interface required before N1; proposed authority stays unaccepted |
 
 ## Completeness and recovery notes
 
