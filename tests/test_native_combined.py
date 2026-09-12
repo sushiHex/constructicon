@@ -201,15 +201,145 @@ def test_original_sol_agent_context_is_absent_from_the_restricted_recipe():
 def test_failed_untrusted_hook_attempt_is_not_a_disable_proof():
     from tests.substrate.test_combined_startup_origins import assert_hook_attempt
 
-    record = {"wire": [], "marker": {"dataBase64": "YWJzZW50"}}
+    record = retain_hook_stdout({"wire": [], "marker": {"dataBase64": "YWJzZW50"}})
     assert_hook_attempt(record, False)
     record["wire"] = [{"received": {"method": method, "params": {"run": {
         "status": "failed", "entries": [{"kind": "error", "text":
                                           "No such file or directory (os error 2)"}],
     }}}} for method in ("hook/started", "hook/completed")]
+    retain_hook_stdout(record)
     assert_hook_attempt(record, True)
     with pytest.raises(AssertionError):
         assert_hook_attempt(record, False)
+
+
+def retain_hook_stdout(record):
+    record["outcome"] = {"stdout": b"".join(
+        (json.dumps(item["received"]) + "\n").encode() for item in record["wire"]
+    ).hex()}
+    return record
+
+
+def completed_hook_record():
+    hook = {"eventName": "sessionStart", "sourcePath": "/tmp/home/.codex/hooks.json"}
+    return retain_hook_stdout({
+        "protocol": {"thread": "fixture-thread", "turn": "fixture-turn"},
+        "hooks": {"data": [{"hooks": [hook]}]},
+        "marker": {"dataBase64": "aG9vaw=="},
+        "wire": [{"received": {"method": method, "params": {
+            "threadId": "fixture-thread", "turnId": "fixture-turn",
+            "run": {**hook, "id": "fixture-hook", "entries": [], "status": status},
+        }}} for method, status in (("hook/started", "running"), ("hook/completed", "completed"))],
+    })
+
+
+@pytest.mark.parametrize("damage", [
+    "status", "entries", "thread", "turn", "pair", "source", "event", "start-status",
+    "missing-start", "duplicate", "missing-marker", "negative-attempt", "negative-marker",
+])
+def test_successful_hook_proof_requires_execution_and_correlated_events(damage):
+    from tests.substrate.test_combined_startup_origins import assert_hook_attempt
+
+    record = completed_hook_record()
+    assert_hook_attempt(record, True, completed=True)
+    end = record["wire"][-1]["received"]["params"]
+    enabled = not damage.startswith("negative-")
+    if damage == "status":
+        end["run"]["status"] = "failed"
+    elif damage == "entries":
+        end["run"]["entries"] = [{"kind": "error", "text": "inert failure"}]
+    elif damage in {"thread", "turn"}:
+        end[damage + "Id"] = "foreign"
+    elif damage in {"pair", "source", "event"}:
+        end["run"][{"pair": "id", "source": "sourcePath", "event": "eventName"}[damage]] = "foreign"
+    elif damage == "start-status":
+        record["wire"][0]["received"]["params"]["run"]["status"] = "completed"
+    elif damage == "missing-start":
+        del record["wire"][0]
+    elif damage == "duplicate":
+        record["wire"] += deepcopy(record["wire"])
+    elif damage in {"missing-marker", "negative-attempt"}:
+        record["marker"]["dataBase64"] = "YWJzZW50"
+    elif damage == "negative-marker":
+        record["wire"] = []
+    retain_hook_stdout(record)
+    with pytest.raises(AssertionError):
+        assert_hook_attempt(record, enabled, completed=True)
+
+
+@pytest.mark.parametrize("tail", ["start", "complete", "malformed", "duplicate-key"])
+def test_hook_attempt_after_last_rpc_cannot_escape_the_owned_capture(tail):
+    from tests.substrate.test_combined_startup_origins import assert_hook_attempt
+
+    record = retain_hook_stdout({"wire": [], "marker": {"dataBase64": "YWJzZW50"}})
+    assert_hook_attempt(record, False)
+    extra = (b'{"method":' if tail == "malformed" else
+             b'{"method":"hook/started","method":"ignored"}\n' if tail == "duplicate-key" else
+             json.dumps({
+        "method": "hook/started" if tail == "start" else "hook/completed",
+    }).encode() + b"\n")
+    record["outcome"]["stdout"] += extra.hex()
+    with pytest.raises((AssertionError, ValueError)):
+        assert_hook_attempt(record, False)
+
+
+def test_shell_selection_is_an_exact_context_variant(scenario):
+    from dataclasses import replace
+
+    from tests.native_combined import controlled_configuration
+
+    selected = replace(scenario, packaged_shell=True)
+    request = request_for(selected, 1)
+    # Pin independently; generating both sides from prefix() alone is no proof.
+    context = request["input"][-2]["content"][0]["text"]
+    assert "<shell>zsh</shell>" in context
+    assert "<shell>sh</shell>" in request_for(scenario, 1)["input"][-2]["content"][0]["text"]
+    selected(request, 1)
+    with pytest.raises(ValueError, match="context or conversation"):
+        scenario(request, 1)
+    for model in MODELS:
+        base = controlled_configuration(model)
+        assert "shell_zsh_fork = false" in base
+        assert controlled_configuration(model, packaged_shell=True) == base.replace(
+            "shell_zsh_fork = false", "shell_zsh_fork = true",
+        )
+
+
+@pytest.mark.parametrize("phase", ["untrusted", "trusted", "disabled"])
+async def test_native_hook_matrix_cannot_skip_a_phase(monkeypatch, phase):
+    from tests.substrate import test_combined_startup_origins as native
+
+    calls = []
+
+    async def measure(*_args, **kwargs):
+        ordinal = len(calls)
+        calls.append(kwargs)
+        assert kwargs["packaged_shell"] is True
+        enabled = ordinal != 2
+        trusted = ordinal != 0
+        record = completed_hook_record()
+        record["hooks"]["data"][0]["hooks"][0].update(
+            trustStatus="trusted" if trusted else "untrusted", enabled=enabled,
+            key="fixture-key", currentHash="fixture-hash",
+        )
+        if not (enabled and trusted):
+            record["wire"] = []
+            record["marker"]["dataBase64"] = "YWJzZW50"
+        if ("untrusted", "trusted", "disabled")[ordinal] == phase:
+            # A failed attempt is not non-execution; a missing marker is not
+            # positive execution even when native events claim completion.
+            if ordinal == 1:
+                record["marker"]["dataBase64"] = "YWJzZW50"
+            else:
+                record["wire"] = completed_hook_record()["wire"]
+        return retain_hook_stdout(record)
+
+    monkeypatch.setattr(native, "measure", measure)
+    with pytest.raises(AssertionError):
+        await native.test_packaged_shell_executes_only_the_exact_trusted_hook(
+            None, None, MODELS[0], "json",
+        )
+    assert len(calls) == ("untrusted", "trusted", "disabled").index(phase) + 1
 
 
 @pytest.mark.parametrize("origin", ["json", "toml"])
@@ -222,7 +352,7 @@ async def test_native_origin_test_inspects_the_untrusted_attempt(monkeypatch, or
         nonlocal calls
         calls += 1
         attempted = calls != 3
-        return {
+        return retain_hook_stdout({
             "hooks": {"data": [{"hooks": [{
                 "trustStatus": "untrusted" if calls == 1 else "trusted",
                 "enabled": attempted, "key": "fixture", "currentHash": "fixture-hash",
@@ -232,7 +362,7 @@ async def test_native_origin_test_inspects_the_untrusted_attempt(monkeypatch, or
                 "status": "failed", "entries": [{"kind": "error", "text":
                                                   "No such file or directory (os error 2)"}],
             }}}} for method in ("hook/started", "hook/completed")] if attempted else [],
-        }
+        })
 
     monkeypatch.setattr(native, "measure", measure)
     with pytest.raises(AssertionError):

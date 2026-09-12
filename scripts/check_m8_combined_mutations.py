@@ -58,6 +58,38 @@ MUTANTS = (
     ("agent context survives catalog restriction", MODULE + "CombinedScenario.prefix",
      "self.model == MODELS[1] and not self.restricted", "self.model == MODELS[1]",
      TEST + "test_original_sol_agent_context_is_absent_from_the_restricted_recipe"),
+    *((f"hook execution proof loses {name}",
+       "tests.substrate.test_combined_startup_origins:assert_hook_attempt", old, "pass",
+       TEST + f"test_successful_hook_proof_requires_execution_and_correlated_events[{name}]")
+      for name, old in (
+          ("status", 'assert ends["run"]["status"] == "completed"'),
+          ("entries", 'assert ends["run"]["entries"] == []'),
+          ("thread", 'assert item["threadId"] == record["protocol"]["thread"]'),
+          ("turn", 'assert item["turnId"] == record["protocol"]["turn"]'),
+          ("pair", 'assert starts["run"]["id"] == ends["run"]["id"] and ends["run"]["id"]'),
+          ("source", 'assert item["run"]["sourcePath"] == hook["sourcePath"]'),
+          ("missing-marker",
+           'assert marker(record) == ("hook" if enabled and completed else "absent")'),
+      )),
+    ("packaged shell becomes ambient context", MODULE + "environment",
+     "'zsh' if packaged_shell else 'sh'", "'zsh'",
+     TEST + "test_shell_selection_is_an_exact_context_variant[gpt-5.5]"),
+    ("packaged shell selection is ignored", MODULE + "controlled_configuration",
+     "str(packaged_shell).lower()", "'false'",
+     TEST + "test_shell_selection_is_an_exact_context_variant[gpt-5.5]"),
+    ("late hook attempt omitted from consumed wire",
+     "tests.substrate.test_combined_startup_origins:assert_hook_attempt",
+     'assert events == [item for item in raw if item.get("method") in methods]', "pass",
+     TEST + "test_hook_attempt_after_last_rpc_cannot_escape_the_owned_capture[start]"),
+    *((f"native hook matrix skips {phase}",
+       "tests.substrate.test_combined_startup_origins:"
+       "test_user_hook_discovery_trust_and_disable_have_execution_controls",
+       old, "pass", TEST + f"test_native_hook_matrix_cannot_skip_a_phase[{phase}]")
+      for phase, old in (
+          ("untrusted", "assert_hook_attempt(record, False)"),
+          ("trusted", "assert_hook_attempt(checked, enabled, completed=packaged_shell)"),
+          ("disabled", "assert_hook_attempt(checked, enabled, completed=packaged_shell)"),
+      )),
 )
 
 if __name__ == "__main__":

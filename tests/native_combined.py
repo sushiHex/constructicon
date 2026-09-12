@@ -26,15 +26,17 @@ PERMISSIONS = (
 )
 
 
-def controlled_configuration(model, *, images=False):
+def controlled_configuration(model, *, images=False, packaged_shell=False):
     return configuration(model).replace(
         "view_image = false", f"view_image = {str(images).lower()}",
-    ) + "\n[skills]\ninclude_instructions = false\n[skills.bundled]\nenabled = false\n"
+    ) + (f"shell_zsh_fork = {str(packaged_shell).lower()}\n"
+         "\n[skills]\ninclude_instructions = false\n[skills.bundled]\nenabled = false\n")
 
 
-def environment(date):
+def environment(date, *, packaged_shell=False):
     return (
-        "<environment_context>\n  <cwd>/tmp/native-startup</cwd>\n  <shell>sh</shell>\n"
+        "<environment_context>\n  <cwd>/tmp/native-startup</cwd>\n"
+        f"  <shell>{'zsh' if packaged_shell else 'sh'}</shell>\n"
         f"  <current_date>{date}</current_date>\n  <timezone>Etc/UTC</timezone>\n"
         "  <filesystem><workspace_roots><root>/tmp/native-startup</root></workspace_roots>"
         '<permission_profile type="disabled"><file_system type="unrestricted" />'
@@ -103,6 +105,7 @@ class CombinedScenario:
     namespace: str | None = None
     mcp: bool = False
     plugins: bool = False
+    packaged_shell: bool = False
 
     def prefix(self, date):
         context = json.loads(Path(__file__).with_name("fixtures").joinpath(
@@ -125,7 +128,7 @@ class CombinedScenario:
             self.model == MODELS[1] and not self.restricted
         ) else []
         return [*prefix, message("developer", *permissions), *multi_agent,
-                message("user", environment(date)),
+                message("user", environment(date, packaged_shell=self.packaged_shell)),
                 message("user", PROBE_PROMPT)]
 
     def suffix(self):
