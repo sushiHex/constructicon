@@ -1,12 +1,16 @@
 # M8 implementation record
 
-Status: PR A–D merged; authentication decision and slices E–H remain.
+Status: PR A–D merged; ADR 0021 accepted on 2026-09-13; N1–N7 remain, with
+N1 authorized as credential-free construction.
 
 Authority: [accepted ADR 0018](../../adr/0018-live-executors-are-leased-contained-processes.md)
 and [frozen rev 1](../milestones/M8-live-executors-rev1.md). PR #26 merged as
 `3ee1beb6a58fac0bab85841a1f34d96b514c3c34`, PR A's exact base. The merged
 tree equals its reviewed head `8308cf8`. Approval does not provision Linux or
 a gateway. Neither the frozen plan nor its planning evidence is edited here.
+From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-operator-stores.md)
+and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
+subscription route; see the dated section at the end of this record.
 
 ## PR A — contracts, coherence, and publication
 
@@ -701,3 +705,36 @@ The [controlled-startup investigation](M8-controlled-startup-evidence.md)
 continues #37 under the existing networkless recipe. It records its own
 evidence and provider-connectivity gap; it cannot borrow transport success
 as a claim of native authentication or durable recovery.
+
+## Authentication route decided: ADR 0021 accepted (2026-09-13)
+
+The owner accepted [ADR 0021](../../adr/0021-subscription-executors-bind-operator-stores.md)
+and [rev 3](../milestones/M8-live-executors-rev3.md) as written at reviewed
+head `e228ef8535bceb316bdbfd3c309066befa9f67f0` (merged as
+`9e55364f8cb8261eb50678936fd9170c00c83cf1` in PR #72), in the
+[decision record on issue #38](https://github.com/sushiHex/constructicon/issues/38#issuecomment-5651362966).
+ADR 0021 supersedes ADR 0018 only for the explicit v3 profile; gateway v1
+bytes, semantics and source-law revision are unchanged, and ADR 0019 still
+governs hosted Linux evidence. ADR 0020 and rev 2 remain proposed, neither
+accepted nor rejected; ADR 0020's proposed description-4 allocation is
+retired in favour of ADR 0021's.
+
+The rev-1 slice letters map onto the rev-3 sequence as follows. #41 owns
+Codex N1–N5 through native sub-issues, with only N1 marked ready; #40 owns
+independent Claude Code qualification N6 after applicable #41 proof; #42
+retains Pi and integrated closure N7; #39 stays the unselected, separately
+billed gateway option and no longer blocks the subscription adapters. The
+private qualified Linux deployment is tracked as its own decision (M8-D2)
+and blocks N4. Rev 2 section 6's transition was applied with ADR 0021/v3 as
+authority; no issue closed as a result of the proposal, and #38 closes with
+the acceptance record.
+
+What acceptance authorizes: N1, credential-free construction of the strict
+operator-mode contracts, the v1/v3 boundary decoders, one pure grant
+predicate, `SystemDescription` 4 and complete fake providers, with v1 goldens
+reproduced from `d2b8f94` in an independent worktree. What it does not
+authorize: credentials, account inspection, login, authenticated startup, a
+Linux deployment, model or provider calls, provisioning, or any live
+READ/WRITE profile. N4 and N5 each require separate explicit operator
+authorization per provider. No implementation had started when this section
+was recorded; N1 evidence is added below when its PR merges.

@@ -1,21 +1,24 @@
 # Executor authentication: feasibility and next decision
 
-Status: evidence and proposed successor decision; not an accepted ADR or a
-claim of working subscription integration. No login, credential inspection,
-remote provider request, or gateway provisioning was performed.
+Status: evidence record behind the accepted ADR 0021 decision (2026-09-13);
+not a claim of working subscription integration. No login, credential
+inspection, remote provider request, or gateway provisioning was performed.
 
 ## Current qualification decision
 
-[Issue #38](https://github.com/sushiHex/constructicon/issues/38) owns the
+[Issue #38](https://github.com/sushiHex/constructicon/issues/38) owned the
 decision. On 2026-09-12 the owner reaffirmed in-graph Claude Code/Codex
 subscription use as the immediate outcome and authorized drafting/review of
 [ADR 0021](../adr/0021-subscription-executors-bind-operator-stores.md) and
-[M8 rev 3](../plans/milestones/M8-live-executors-rev3.md). They propose an
-operator-bound store with vendor principal/workspace continuity explicitly
+[M8 rev 3](../plans/milestones/M8-live-executors-rev3.md). On 2026-09-13 the
+owner [accepted both as written](https://github.com/sushiHex/constructicon/issues/38#issuecomment-5651362966):
+an operator-bound store with vendor principal/workspace continuity explicitly
 unverified, preserving containment, mediated tools and lifecycle requirements.
-This is a proposed reduction in account assurance, not the same guarantee
-implemented with fewer checks. No architecture, deployment or live route is
-accepted; no credentials or calls are authorized. ADR 0018 still governs.
+This is an accepted reduction in account assurance, not the same guarantee
+implemented with fewer checks. ADR 0021 supersedes ADR 0018 only for the
+explicit v3 profile; gateway v1 is unchanged and unselected. Credential-free
+N1 is authorized; no deployment, credential, login, model call or live route
+is. The private qualified Linux deployment is a separate operator decision.
 
 ### Stronger proposal and retained evidence
 
@@ -37,8 +40,9 @@ now confirms that the pinned release exposes no supported combination of
 methods supplying that complete identity. Its richer account-session types
 are not a callable interface. A narrow vendor-managed file store is a
 source-supported candidate, not an executed physical-placement proof, and
-does not close the identity gap. N1 remains blocked and ADR 0020 remains
-proposed. A different release/interface requires a separately authorized
+does not close the identity gap. Rev 2's N1 remains blocked and ADR 0020
+remains proposed; rev 3's N1 proceeds under accepted ADR 0021 instead. A
+different release/interface requires a separately authorized
 candidate and requalification; no token-cache inspection, inferred principal
 or weaker identity law is an acceptable substitute.
 
