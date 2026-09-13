@@ -763,7 +763,8 @@ effort, an explicit model from the finite inventory and `network="allow"`;
 
 `SystemDescription` is version 4 with digest domain 4: `executor_profile` is
 the explicit v1/v3 union and each capability publishes `unavailable_reasons`
-beside `available`; strict version-3 readers refuse the document. Graph,
+beside `available`, with a validator refusing any record in which the two
+disagree; strict version-3 readers refuse the document. Graph,
 admission, manifest and SQLite schemas are unchanged. The assembly WRITE
 guard reads postures through `offered_postures`, so a v3 provider is checked
 by the same rule as v1; the capture mutation anchor moved with it.
@@ -783,11 +784,14 @@ generation changes the store identity and revision while a simulated refresh
 does not; overage `forbidden` and `operator_authorized` are distinct sealed
 profiles that no grant can select.
 
-Evidence at the code head: local gate 2,111 passed, 358 skipped; 22 of 22
+Evidence: local gate 2,111 passed, 358 skipped at the code head; 24 of 24
 assertion mutants killed by `scripts/check_m8_native_operator_mutations.py`,
 with the touched anchors in the capture, M8 and M7.1 suites re-checked; the
 compatibility script identical at `d2b8f94` and the working tree. The design
 was cross-reviewed before implementation; two redlines (the WRITE guard and
-the hybrid-profile refusal) were adopted. No native process, provider
-connection, credential, deployment or live profile exists; N2 (#75) is the
-next slice.
+the hybrid-profile refusal) were adopted. An independent review of the
+implementation found no blocking defect; its smaller items (the agreement
+validator, a guard test, the vendor-label scan, decoder guard inputs and one
+message) were folded in before merge, and its remaining observations are
+recorded on #74 for N2. No native process, provider connection, credential,
+deployment or live profile exists; N2 (#75) is the next slice.

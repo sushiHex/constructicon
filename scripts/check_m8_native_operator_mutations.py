@@ -17,6 +17,7 @@ REVISION = "constructicon.core.native_operator:NativeOperatorLaunchIdentityV3.re
 POSTURES = "constructicon.core.native_operator:offered_postures"
 NETWORKS = "constructicon.core.native_operator:NativeOperatorGrantPolicyV3._networks"
 DESCRIBE = "constructicon.api.introspection:build_system_description"
+AGREEMENT = "constructicon.core.introspection:CapabilityDescription._agrees"
 PROVIDER = "tests.native_operator_world:FakeNativeOperatorProvider.unavailable_reasons"
 
 CORE = "tests/core/test_native_operator_contracts.py::"
@@ -28,6 +29,10 @@ PROFILE_ROUTE = CORE + "test_a_declared_three_is_never_routed_to_the_unversioned
 PROFILE_VERSIONS = CORE + "test_profile_dispatch_selects_by_the_declared_version"
 LAUNCH_VERSIONS = CORE + "test_launch_dispatch_selects_by_the_declared_version"
 INGRESS = API + "test_unestablished_ingress_is_described_and_refused"
+# The cross-field validator turns a wrong published availability into a raised
+# refusal, so these two mutants are paired with the test that treats a refused
+# description as a value and fails by assertion rather than by error.
+AGREED = API + "test_published_availability_and_reasons_agree"
 
 MUTANTS = (
     *(
@@ -165,14 +170,28 @@ MUTANTS = (
         DESCRIBE,
         "available=not unavailability[capability_id],",
         "available=True,",
-        INGRESS,
+        AGREED,
     ),
     (
         "described reasons are published",
         DESCRIBE,
         "unavailable_reasons=tuple(unavailability[capability_id]),",
         "unavailable_reasons=(),",
-        INGRESS,
+        AGREED,
+    ),
+    (
+        "availability cannot disagree with its own reasons",
+        AGREEMENT,
+        "if self.available != (not self.unavailable_reasons):",
+        "if False:",
+        CORE + "test_published_availability_cannot_disagree_with_its_own_reasons",
+    ),
+    (
+        "a bool is not an integer launch version",
+        LAUNCH_DISPATCH,
+        "if type(version) is int and version == 1:",
+        "if version == 1:",
+        LAUNCH_VERSIONS,
     ),
     (
         "ingress establishment is an assembly fact",

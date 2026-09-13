@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, NonNegativeInt, PositiveInt
+from pydantic import BaseModel, ConfigDict, NonNegativeInt, PositiveInt, model_validator
 
 from constructicon.core.channel import ChannelEndpoint, ChannelProfile
 from constructicon.core.component import CapabilityRequirement, ComponentRole
@@ -78,6 +78,14 @@ class CapabilityDescription(BaseModel):
     channel_endpoint: ChannelEndpoint | None
     available: bool
     unavailable_reasons: tuple[str, ...]
+
+    @model_validator(mode="after")
+    def _agrees(self) -> CapabilityDescription:
+        """One availability fact, published twice, can never disagree with itself."""
+
+        if self.available != (not self.unavailable_reasons):
+            raise ValueError("available must equal the absence of unavailable reasons")
+        return self
 
 
 class GrantVocabulary(BaseModel):

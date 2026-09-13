@@ -13,10 +13,12 @@ import pytest
 from pydantic import ValidationError
 
 from constructicon.api.control import ControlPlane
+from constructicon.api.introspection import build_system_description
 from constructicon.api.system import DEFAULT_ROOT_GRANTS, Constructicon
 from constructicon.core.address import ScopePath
 from constructicon.core.admission import AdmissionAccepted, AdmissionCode, AdmissionRejected
 from constructicon.core.control import RunSubmission
+from constructicon.core.errors import ContractViolation
 from constructicon.core.grants import ModelSelection, Posture
 from constructicon.core.identity import canonical_json, digest
 from constructicon.core.introspection import DESCRIPTION_SCHEMA_VERSION, SystemDescription
@@ -35,6 +37,7 @@ from tests.native_operator_world import (
 INPUTS = {"issue": {"title": "operator mode"}}
 CAPABILITY = "native-fake"
 INGRESS_REASON = "private fixed-actor ingress is not established by assembly"
+VENDOR_LABEL = "acme-workspace-4242"
 
 
 class _V3Description(SystemDescription):
@@ -197,7 +200,7 @@ async def test_real_control_host_runs_the_native_fake_through_its_lease(journal:
 
 
 async def test_description_publishes_the_native_profile_in_schema_four(journal) -> None:
-    provider = FakeNativeOperatorProvider()
+    provider = FakeNativeOperatorProvider(vendor_principal_label=VENDOR_LABEL)
     system = native_system(journal, provider)
     await register_native_component(system, journal)
     description = system.describe()
@@ -213,7 +216,7 @@ async def test_description_publishes_the_native_profile_in_schema_four(journal) 
     assert published["executor_profile"]["schema_version"] == 3
     assert published["unavailable_reasons"] == []
     rendered = canonical_json(published)
-    for word in ("principal", "email", "tenant", "workspace_id"):
+    for word in ("principal", "email", "tenant", "workspace_id", VENDOR_LABEL):
         assert word not in rendered
     assert SystemDescription.model_validate_json(description.model_dump_json()) == description
     with pytest.raises(ValidationError):
@@ -221,6 +224,37 @@ async def test_description_publishes_the_native_profile_in_schema_four(journal) 
     body = {key: value for key, value in payload.items() if key != "description_digest"}
     assert description.description_digest == digest("system-description", 4, body)
     assert description.description_digest != digest("system-description", 3, body)
+
+
+def test_describe_refuses_a_catalog_capability_with_no_evaluated_availability(journal) -> None:
+    system = native_system(journal, FakeNativeOperatorProvider())
+    registry = system._registry
+    with pytest.raises(ContractViolation, match=CAPABILITY):
+        build_system_description(
+            registry=registry,
+            snapshot=registry.snapshot(),
+            catalog=system._catalog,
+            unavailability={},
+            root_grants=NATIVE_ROOT_GRANTS,
+            limits=system.admission_limits,
+            component_names=None,
+            limit=1,
+        )
+
+
+async def test_published_availability_and_reasons_agree(journal) -> None:
+    """A refused description is itself a wrong outcome, so a wrong route fails by assertion."""
+
+    provider = FakeNativeOperatorProvider(ingress_established=False)
+    system = native_system(journal, provider)
+    try:
+        described: Any = system.describe()
+    except (TypeError, ValueError) as refusal:
+        described = refusal
+    assert isinstance(described, SystemDescription), described
+    capability = described.capabilities[0]
+    assert capability.available is False
+    assert capability.unavailable_reasons == (INGRESS_REASON,)
 
 
 def test_overage_variants_are_two_distinct_described_capabilities(journal) -> None:

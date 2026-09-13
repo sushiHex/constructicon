@@ -269,10 +269,17 @@ def test_launch_dispatch_selects_by_the_declared_version() -> None:
         FakeExecutorProvider().identity
     )
     absent = {key: value for key, value in v1.items() if key != "schema_version"}
-    for candidate in (absent, {**raw, "schema_version": 2}, {**raw, "schema_version": 4}):
-        with pytest.raises(ValueError) as caught:
-            parse_executor_launch_identity(candidate)
-        assert "is unsupported" in str(caught.value)
+    # A bool is not an integer version: ``True == 1`` must never select schema 1.
+    near_one = tuple({**absent, "schema_version": near} for near in (True, 1.0, "1"))
+    for candidate in (
+        absent,
+        {**raw, "schema_version": 2},
+        {**raw, "schema_version": 4},
+        *near_one,
+    ):
+        outcome = _decode_outcome(parse_executor_launch_identity, candidate)
+        assert isinstance(outcome, ValueError), outcome
+        assert "is unsupported" in str(outcome), outcome
     with pytest.raises(ValueError, match="must be a JSON object"):
         parse_executor_launch_identity("null")
     with pytest.raises(ValidationError):
@@ -524,6 +531,33 @@ def test_native_profile_round_trips_through_the_description_records() -> None:
     absent = description.model_copy(update={"executor_profile": None})
     assert CapabilityDescription.model_validate_json(absent.model_dump_json()).executor_profile is (
         None
+    )
+
+
+def test_published_availability_cannot_disagree_with_its_own_reasons() -> None:
+    agreed = _described_capability(available=False, reasons=("ingress is not established",))
+    assert agreed.available is False and agreed.unavailable_reasons
+    for available, reasons in (
+        (True, ("ingress is not established",)),
+        (False, ()),
+    ):
+        with pytest.raises(ValidationError) as caught:
+            _described_capability(available=available, reasons=reasons)
+        assert "available must equal the absence of unavailable reasons" in str(caught.value)
+
+
+def _described_capability(*, available: bool, reasons: tuple[str, ...]) -> CapabilityDescription:
+    return CapabilityDescription(
+        capability_id="native-fake",
+        kind="executor",
+        revision=native_launch_identity(native_profile()).revision,
+        leased=True,
+        requires_posture=None,
+        executor_profile=native_profile(),
+        channel_profile=None,
+        channel_endpoint=None,
+        available=available,
+        unavailable_reasons=reasons,
     )
 
 

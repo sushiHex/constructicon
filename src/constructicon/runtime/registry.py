@@ -143,7 +143,7 @@ class CapabilityDescriptor:
         assert isinstance(capability, ExecutorProvider)
         identity = capability.identity
         if not isinstance(identity, (ExecutorLaunchIdentity, NativeOperatorLaunchIdentityV3)):
-            return "the provider supplies no ExecutorLaunchIdentity"
+            return "the provider supplies no launch identity"
         if canonical_json(identity.profile) != canonical_json(profile):
             return "the provider profile differs from the descriptor profile"
         if identity.revision != self.revision:
