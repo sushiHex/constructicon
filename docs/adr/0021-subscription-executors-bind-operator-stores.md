@@ -31,9 +31,10 @@ and deployment remain separately unauthorized.
 [Issue #38](https://github.com/sushiHex/constructicon/issues/38) owned the
 decision. [M8 rev 3](../plans/milestones/M8-live-executors-rev3.md) is the
 accepted implementation baseline. Accepted [ADR 0018](0018-live-executors-are-leased-contained-processes.md)
-and [ADR 0019](0019-hosted-linux-runners-are-requalified-not-image-pinned.md)
-continue to govern outside the explicit v3 profile; this ADR is the successor
-decision for that profile. Proposed
+continues to govern outside the explicit v3 profile, and this ADR is its
+successor decision for that profile only. Accepted
+[ADR 0019](0019-hosted-linux-runners-are-requalified-not-image-pinned.md)
+continues to govern hosted Linux evidence for every profile, v3 included. Proposed
 [ADR 0020](0020-native-harnesses-mediate-contained-tools.md) and M8 rev 2
 retain their bytes and stronger, currently unestablished identity guarantee;
 this document does not silently amend them or implement their profile.
