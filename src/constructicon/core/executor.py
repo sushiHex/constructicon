@@ -13,7 +13,7 @@ only the status-specific field.
 from __future__ import annotations
 
 import inspect
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from pydantic import (
     BaseModel,
@@ -28,6 +28,12 @@ from constructicon.core.envelope import ArtifactRef, GitRef, TextContext
 from constructicon.core.grants import EffectiveGrants, IsolationProfile, ModelSelection, Posture
 from constructicon.core.identity import Digest, digest
 from constructicon.core.workspace import LeasedCapability, WorkspaceView
+
+if TYPE_CHECKING:  # ADR 0021's schema-3 records; the v1 closure below never reads them.
+    from constructicon.core.native_operator import (
+        NativeOperatorExecutorProfileV3,
+        NativeOperatorLaunchIdentityV3,
+    )
 
 
 class TaskSpec(BaseModel):
@@ -270,7 +276,7 @@ class ExecutorProvider(LeasedCapability, Protocol):
     """
 
     @property
-    def identity(self) -> ExecutorLaunchIdentity: ...
+    def identity(self) -> ExecutorLaunchIdentity | NativeOperatorLaunchIdentityV3: ...
 
     @property
     def unavailable_reasons(self) -> tuple[str, ...]: ...
@@ -278,7 +284,7 @@ class ExecutorProvider(LeasedCapability, Protocol):
 
 class Executor(Protocol):
     @property
-    def profile(self) -> ExecutorProfile: ...
+    def profile(self) -> ExecutorProfile | NativeOperatorExecutorProfileV3: ...
 
     def validate_grants(self, grants: EffectiveGrants) -> tuple[str, ...]:
         """Itemized reasons this executor cannot honor the grants; empty = ok."""

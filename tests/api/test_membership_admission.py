@@ -51,7 +51,7 @@ class _V1Description(SystemDescription):
 def test_description_preserves_both_membership_laws(system: Constructicon) -> None:
     description = system.describe()
     payload = description.model_dump(mode="json")
-    assert description.schema_version == DESCRIPTION_SCHEMA_VERSION == 3
+    assert description.schema_version == DESCRIPTION_SCHEMA_VERSION == 4
     assert description.graph_schema.version == description.admission_schema.version == 1
     assert payload["authoring"]["bindings"]["explicit_map_source_cardinality"] == "one"
     assert payload["authoring"]["bindings"]["mapped_many_policy"] == (
@@ -61,7 +61,7 @@ def test_description_preserves_both_membership_laws(system: Constructicon) -> No
     with pytest.raises(ValidationError):
         _V1Description.model_validate(payload)
     body = {key: value for key, value in payload.items() if key != "description_digest"}
-    assert description.description_digest == digest("system-description", 3, body)
+    assert description.description_digest == digest("system-description", 4, body)
     assert description.description_digest != digest("system-description", 1, body)
     for field in ("explicit_map_source_cardinality", "mapped_many_policy"):
         changed = description.model_dump(mode="json", exclude={"description_digest"})

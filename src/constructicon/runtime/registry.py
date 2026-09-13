@@ -40,6 +40,10 @@ from constructicon.core.graph import Graph, Loop, Ref
 from constructicon.core.identity import Digest, canonical_json, digest
 from constructicon.core.journal import Journal
 from constructicon.core.manifest import SELF_BINDING, ExecutionManifest
+from constructicon.core.native_operator import (
+    NativeOperatorExecutorProfileV3,
+    NativeOperatorLaunchIdentityV3,
+)
 from constructicon.core.ports import same_boundary
 from constructicon.core.registry import (
     InvalidRegistryRevision,
@@ -63,7 +67,7 @@ class CapabilityDescriptor:
     capability_id: str
     kind: str
     revision: str
-    executor_profile: ExecutorProfile | None = None
+    executor_profile: ExecutorProfile | NativeOperatorExecutorProfileV3 | None = None
     channel_profile: ChannelProfile | None = None
     endpoint: ChannelEndpoint | None = None
     leased: bool = False
@@ -138,7 +142,7 @@ class CapabilityDescriptor:
             return "the injected executor does not implement ExecutorProvider"
         assert isinstance(capability, ExecutorProvider)
         identity = capability.identity
-        if not isinstance(identity, ExecutorLaunchIdentity):
+        if not isinstance(identity, (ExecutorLaunchIdentity, NativeOperatorLaunchIdentityV3)):
             return "the provider supplies no ExecutorLaunchIdentity"
         if canonical_json(identity.profile) != canonical_json(profile):
             return "the provider profile differs from the descriptor profile"

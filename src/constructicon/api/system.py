@@ -51,6 +51,7 @@ from constructicon.core.introspection import (
 )
 from constructicon.core.journal import Journal, JournalBackedChannel
 from constructicon.core.manifest import ExecutionManifest
+from constructicon.core.native_operator import offered_postures
 from constructicon.core.registry import RegistryStore
 from constructicon.core.run import AttemptCause, RunState, RunStatus
 from constructicon.runtime.authoring import admit_authored_graph
@@ -177,7 +178,7 @@ class Constructicon:
         # changing a descriptor label does not contain its implementation.
         if any(
             isinstance(resource, ExecutorProvider)
-            and Posture.WRITE in resource.identity.profile.postures
+            and Posture.WRITE in offered_postures(resource.identity.profile)
             for resource in self._capabilities.values()
         ) and (
             any(isinstance(resource, (GitWorkspaceCapability, GateRunner, BoundGateRunner))
@@ -558,12 +559,15 @@ class Constructicon:
             registry=self._registry,
             snapshot=snapshot,
             catalog=self._catalog,
-            available_capabilities=frozenset(
-                capability_id
-                for capability_id, capability in self._capabilities.items()
-                if (descriptor := self._catalog.get(capability_id)) is None
-                or not descriptor.executor_unavailability(capability)
-            ),
+            unavailability={
+                capability_id: (
+                    descriptor.executor_unavailability(self._capabilities[capability_id])
+                    if capability_id in self._capabilities
+                    else descriptor.executor_unavailability(None)
+                    or ("no capability is assembled",)
+                )
+                for capability_id, descriptor in self._catalog.items()
+            },
             root_grants=self._root_grants,
             limits=self._admission_limits,
             component_names=component_names,
