@@ -6,10 +6,22 @@ remote provider request, or gateway provisioning was performed.
 
 ## Current qualification decision
 
-This section is the current packet; the dated sections below preserve how the
-evidence changed. [#38](https://github.com/sushiHex/constructicon/issues/38)
-owns the authentication decision. The authorized bounded startup gate and
-separate durable-recovery slice are now merged as #62 and #64. They support
+[Issue #38](https://github.com/sushiHex/constructicon/issues/38) owns the
+decision. On 2026-09-12 the owner reaffirmed in-graph Claude Code/Codex
+subscription use as the immediate outcome and authorized drafting/review of
+[ADR 0021](../adr/0021-subscription-executors-bind-operator-stores.md) and
+[M8 rev 3](../plans/milestones/M8-live-executors-rev3.md). They propose an
+operator-bound store with vendor principal/workspace continuity explicitly
+unverified, preserving containment, mediated tools and lifecycle requirements.
+This is a proposed reduction in account assurance, not the same guarantee
+implemented with fewer checks. No architecture, deployment or live route is
+accepted; no credentials or calls are authorized. ADR 0018 still governs.
+
+### Stronger proposal and retained evidence
+
+The following packet describes ADR 0020's principal-attested proposal; the
+dated sections below preserve how the evidence changed. The authorized bounded
+startup gate and separate durable-recovery slice are now merged as #62 and #64. They support
 proposing [ADR 0020](../adr/0020-native-harnesses-mediate-contained-tools.md)
 and [M8 rev 2](../plans/milestones/M8-live-executors-rev2.md), not accepting
 native account authority. The proposal splits native account custody from
