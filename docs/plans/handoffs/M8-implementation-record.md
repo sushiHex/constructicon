@@ -739,4 +739,55 @@ authorize: credentials, account inspection, login, authenticated startup, a
 Linux deployment, model or provider calls, provisioning, or any live
 READ/WRITE profile. N4 and N5 each require separate explicit operator
 authorization per provider. No implementation had started when this section
-was recorded; N1 evidence is added below when its PR merges.
+was recorded; N1's evidence follows.
+
+## N1 — strict operator-mode contracts (#74)
+
+N1 implements rev 3's first slice under accepted ADR 0021; its PR and merge
+identifiers are recorded on #74. One new L0 module, `core.native_operator`,
+holds the six strict records (`NativeOperatorGrantPolicyV3`,
+`NativeOperatorIsolationProfileV3`, `NativeOperatorExecutorProfileV3`,
+`NativeEgressIdentityV1`, `NativeOperatorStoreIdentityV1` and
+`NativeOperatorLaunchIdentityV3`, whose revision uses the domain
+`executor-native-operator-launch` version 3), the operator-binding digest, the
+source-derived v3 law revision, and the two boundary decoders that dispatch
+on the raw `schema_version` outside the v1 source-law closure: absent selects
+the unversioned `ExecutorProfile`, exact 3 the native record, every other
+value refuses; schema 2 is reserved and refused; a failed v3 parse never
+falls through; and a schema-1 launch identity refuses a nested profile that
+carries any `schema_version`, because the v1 profile ignores extra keys. One
+pure predicate, `NativeOperatorExecutorProfileV3.grant_faults`, serves
+admission and the adapter: exact posture, exact tool set, an explicit listed
+effort, an explicit model from the finite inventory and `network="allow"`;
+`network="none"` is refused because it excludes model networking.
+
+`SystemDescription` is version 4 with digest domain 4: `executor_profile` is
+the explicit v1/v3 union and each capability publishes `unavailable_reasons`
+beside `available`; strict version-3 readers refuse the document. Graph,
+admission, manifest and SQLite schemas are unchanged. The assembly WRITE
+guard reads postures through `offered_postures`, so a v3 provider is checked
+by the same rule as v1; the capture mutation anchor moved with it.
+
+Preserved: the v1 legacy and complete profile bytes, the v1 launch-identity
+bytes and revision, and `EXECUTOR_LAW_REVISION`
+(`sha256:8da4745822d8915145e417f86273006010d66089b0fa0e8157a03e5c5c473f9b`)
+equal the goldens captured from a detached worktree at `d2b8f94`;
+`scripts/check_m8_native_operator_compatibility.py` reproduces all five from
+a base export on every run. Complete fakes (`FakeNativeOperatorExecutor` and
+the test-world `FakeNativeOperatorProvider`) exercise the same contract
+without publishing production availability: private fixed-actor ingress is
+an assembly constructor fact whose absence makes the provider unavailable;
+two providers with different private vendor labels publish identical
+identities and a description with no principal-like field; a new maintenance
+generation changes the store identity and revision while a simulated refresh
+does not; overage `forbidden` and `operator_authorized` are distinct sealed
+profiles that no grant can select.
+
+Evidence at the code head: local gate 2,111 passed, 358 skipped; 22 of 22
+assertion mutants killed by `scripts/check_m8_native_operator_mutations.py`,
+with the touched anchors in the capture, M8 and M7.1 suites re-checked; the
+compatibility script identical at `d2b8f94` and the working tree. The design
+was cross-reviewed before implementation; two redlines (the WRITE guard and
+the hybrid-profile refusal) were adopted. No native process, provider
+connection, credential, deployment or live profile exists; N2 (#75) is the
+next slice.

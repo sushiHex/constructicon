@@ -270,13 +270,19 @@ components remain usable but are marked honestly as capability-opaque or
 schema-opaque where applicable. See
 [adr/0011](adr/0011-agent-authoring-and-introspection.md).
 
-`SystemDescription` and its digest domain are version 3, publishing complete
-executor policy without silently extending version 2. Binding vocabulary
+`SystemDescription` and its digest domain are version 4. Each capability now
+carries `unavailable_reasons` beside `available`, and `executor_profile` is
+the explicit union of the unversioned v1 `ExecutorProfile` and
+`NativeOperatorExecutorProfileV3`, decoded by the raw object's
+`schema_version`: absent selects v1, exact 3 selects the native operator
+profile, and every other value refuses. Version 3 published complete
+executor policy without silently extending version 2; binding vocabulary
 separately publishes `explicit_map_source_cardinality="one"` and
-`mapped_many_policy="ordered_scalar_selector_union_replaces_pool"`; strict
-version-1 and version-2 description readers refuse the new description. The
-embedded Graph and admission schemas remain version 1. Graph's wire shape is unchanged; older
-validators reject the newly lawful multi-map fan-in rather than misread it.
+`mapped_many_policy="ordered_scalar_selector_union_replaces_pool"`. Strict
+version-1, version-2 and version-3 description readers refuse the new
+description. The embedded Graph and admission schemas remain version 1.
+Graph's wire shape is unchanged; older validators reject the newly lawful
+multi-map fan-in rather than misread it.
 
 ## Identity
 
@@ -786,9 +792,14 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
   check-runtime identification. Accepted
   [ADR 0021](adr/0021-subscription-executors-bind-operator-stores.md) selects
   operator-bound subscription executors for the explicit v3 profile; gateway
-  v1 is unchanged and unselected. The strict operator-mode contracts (N1),
-  the Codex and Claude Code adapters and Pi remain separate slices; no live
-  model adapter is available yet. Native CI evidence is described in
+  v1 is unchanged and unselected. N1 adds the strict operator-mode contracts:
+  schema-3 native operator policy, isolation, profile, egress, store and
+  launch-identity records in `core.native_operator`, v1/v3 boundary decoders
+  outside the v1 source-law closure, one pure grant predicate, schema-4
+  introspection with `unavailable_reasons`, and complete fake providers; v1
+  bytes and the v1 law revision are pinned by goldens captured from
+  `d2b8f94`. The Codex and Claude Code adapters and Pi remain separate
+  slices; no live model adapter is available yet. Native CI evidence is described in
   [M8_CI.md](M8_CI.md). See
   [ADR 0018](adr/0018-live-executors-are-leased-contained-processes.md) and the
   [implementation record](plans/handoffs/M8-implementation-record.md).
