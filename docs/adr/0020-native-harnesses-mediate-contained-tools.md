@@ -1,6 +1,9 @@
 # 0020 — Native harnesses mediate contained tools
 
-Status: proposed successor to ADR 0018; owner decision required.
+Status: proposed successor to ADR 0018; neither accepted nor rejected.
+[ADR 0021](0021-subscription-executors-bind-operator-stores.md) was accepted
+on 2026-09-13 as the narrower alternative and takes over this document's
+proposed description-4 allocation; the text below is unchanged.
 
 ## Decision record
 

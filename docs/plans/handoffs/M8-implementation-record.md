@@ -411,6 +411,8 @@ generation. These establish possible integration points, not complete native
 tool mediation or subscription availability. The proposed next experiment
 keeps scripted driver proof separate from actual native CLI proof. No successor
 ADR, credential access, or changed authentication policy follows from it.
+That prerequisite decision was made on 2026-09-13; see the ADR 0021 section
+at the end of this record.
 
 ## PR C — safe async WRITE capture (merged as #34)
 
@@ -614,7 +616,8 @@ and completion criteria live in the [M8 milestone](https://github.com/sushiHex/c
 under the repository's [issue-first workflow](../../WORK_TRACKING.md).
 No live WRITE profile is enabled before routed authority and its adapter are
 also proved. Public model contracts and completed containment slices are not
-substitutes for those proofs.
+substitutes for those proofs. This sequencing was superseded on 2026-09-13
+by the ADR 0021 acceptance recorded at the end of this record.
 
 ## Native mediation and OpenRouter investigation
 
@@ -719,15 +722,14 @@ governs hosted Linux evidence. ADR 0020 and rev 2 remain proposed, neither
 accepted nor rejected; ADR 0020's proposed description-4 allocation is
 retired in favour of ADR 0021's.
 
-The rev-1 slice letters map onto the rev-3 sequence as follows. #41 owns
-Codex N1–N5 through native sub-issues, with only N1 marked ready; #40 owns
-independent Claude Code qualification N6 after applicable #41 proof; #42
-retains Pi and integrated closure N7; #39 stays the unselected, separately
-billed gateway option and no longer blocks the subscription adapters. The
-private qualified Linux deployment is tracked as its own decision (M8-D2)
-and blocks N4. Rev 2 section 6's transition was applied with ADR 0021/v3 as
-authority; no issue closed as a result of the proposal, and #38 closes with
-the acceptance record.
+On the same day, rev 2 section 6's proposed transition was applied with ADR
+0021/v3 as authority: #41 was re-scoped to Codex N1–N5 with one sub-issue
+per slice (#74–#78), #40 to independent Claude Code qualification N6, #42
+retains Pi and integrated closure N7, #39 remains the unselected, separately
+billed gateway option, and #73 (M8-D2) was opened for the private qualified
+Linux deployment decision that N4 needs. No issue closed as a result of the
+proposal. Current readiness, dependencies and ownership live in GitHub
+Issues under the [issue-first workflow](../../WORK_TRACKING.md), not here.
 
 What acceptance authorizes: N1, credential-free construction of the strict
 operator-mode contracts, the v1/v3 boundary decoders, one pure grant

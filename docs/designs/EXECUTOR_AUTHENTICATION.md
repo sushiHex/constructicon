@@ -252,6 +252,11 @@ does not adjudicate an account's legal eligibility.
 
 ## Result and recommendation
 
+Decided on 2026-09-13: the owner accepted ADR 0021's operator-bound
+subscription route (see "Current qualification decision" above). The
+pre-decision recommendation below is preserved as written; its "keep
+gateway-only in force" advice no longer governs the explicit v3 profile.
+
 No documented, tested subscription route has yet been established that meets
 the accepted whole-CLI credential boundary. Do not implement a home-grown
 OAuth relay, copy desktop login files into CI, silently switch to paid API
