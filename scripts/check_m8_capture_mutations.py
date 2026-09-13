@@ -105,7 +105,7 @@ MUTANTS = (
     (
         "WRITE provider may use legacy host capture or gates",
         "constructicon.api.system:Constructicon.__init__",
-        "and Posture.WRITE in resource.identity.profile.postures", "and False",
+        "and Posture.WRITE in offered_postures(resource.identity.profile)", "and False",
         "tests/api/test_capture_assembly.py::"
         "test_new_write_provider_refuses_legacy_resources_even_when_relabeled",
     ),

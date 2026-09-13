@@ -137,12 +137,12 @@ async def test_public_admission_uses_the_shared_pure_grant_predicate(journal, ch
     assert provider.handles == [] and provider.ledger.operations == []
 
 
-async def test_description_publishes_complete_policy_in_schema_three(journal) -> None:
+async def test_description_publishes_complete_policy_in_schema_four(journal) -> None:
     provider = FakeExecutorProvider()
     system = executor_system(journal, provider)
     await register_component(system, journal)
     description = system.describe()
-    assert DESCRIPTION_SCHEMA_VERSION == description.schema_version == 3
+    assert DESCRIPTION_SCHEMA_VERSION == description.schema_version == 4
     assert description.graph_schema.version == description.admission_schema.version == 1
     capability = description.capabilities[0]
     assert capability.available and capability.revision == provider.identity.revision
@@ -153,7 +153,7 @@ async def test_description_publishes_complete_policy_in_schema_three(journal) ->
     with pytest.raises(ValidationError):
         _V2Description.model_validate(payload)
     body = {key: value for key, value in payload.items() if key != "description_digest"}
-    assert description.description_digest == digest("system-description", 3, body)
+    assert description.description_digest == digest("system-description", 4, body)
     assert description.description_digest != digest("system-description", 2, body)
 
 

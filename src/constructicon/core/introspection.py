@@ -9,16 +9,16 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, NonNegativeInt, PositiveInt
+from pydantic import BaseModel, ConfigDict, NonNegativeInt, PositiveInt, model_validator
 
 from constructicon.core.channel import ChannelEndpoint, ChannelProfile
 from constructicon.core.component import CapabilityRequirement, ComponentRole
-from constructicon.core.executor import ExecutorProfile
 from constructicon.core.grants import EffectiveGrants, Posture
 from constructicon.core.identity import Digest
+from constructicon.core.native_operator import ExecutorProfileUnion
 from constructicon.core.registry import Loadability
 
-DESCRIPTION_SCHEMA_VERSION = 3
+DESCRIPTION_SCHEMA_VERSION = 4
 
 
 class SchemaDocument(BaseModel):
@@ -73,10 +73,19 @@ class CapabilityDescription(BaseModel):
     revision: str
     leased: bool
     requires_posture: Posture | None
-    executor_profile: ExecutorProfile | None
+    executor_profile: ExecutorProfileUnion | None
     channel_profile: ChannelProfile | None
     channel_endpoint: ChannelEndpoint | None
     available: bool
+    unavailable_reasons: tuple[str, ...]
+
+    @model_validator(mode="after")
+    def _agrees(self) -> CapabilityDescription:
+        """One availability fact, published twice, can never disagree with itself."""
+
+        if self.available != (not self.unavailable_reasons):
+            raise ValueError("available must equal the absence of unavailable reasons")
+        return self
 
 
 class GrantVocabulary(BaseModel):
@@ -146,7 +155,7 @@ class AuthoringVocabulary(BaseModel):
 class SystemDescription(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[3] = 3
+    schema_version: Literal[4] = 4
     graph_schema: SchemaDocument
     admission_schema: SchemaDocument
     components: tuple[ComponentDescription, ...]

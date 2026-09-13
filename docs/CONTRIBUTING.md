@@ -95,15 +95,20 @@ is no separately maintained Markdown backlog.
   which admits again while creating the durable command and run.
 
 Read the versioned vocabulary instead of inferring new rules from an old
-description. `SystemDescription` and its digest domain are version 3, with
-complete executor grant policy and the existing
+description. `SystemDescription` and its digest domain are version 4: each
+capability publishes `unavailable_reasons` beside `available`, and
+`executor_profile` is the explicit v1/v3 profile union decoded by
+`schema_version` (absent selects the unversioned v1 profile, exact 3 the
+native operator profile, anything else refuses). Version 3 added complete
+executor grant policy and the existing
 `explicit_map_source_cardinality="one"` and
-`mapped_many_policy="ordered_scalar_selector_union_replaces_pool"` published
+`mapped_many_policy="ordered_scalar_selector_union_replaces_pool"`, published
 separately. The embedded Graph and admission schemas remain version 1.
-Contributor guidance: update version-1/2 readers to understand version 3 instead
-of loosening unknown-field checks. This is integration policy, not runtime
-enforcement over external readers. See
-[ADR 0017](adr/0017-panel-membership-is-an-authored-map.md).
+Contributor guidance: update version-1/2/3 readers to understand version 4
+instead of loosening unknown-field checks. This is integration policy, not
+runtime enforcement over external readers. See
+[ADR 0017](adr/0017-panel-membership-is-an-authored-map.md) and
+[ADR 0021](adr/0021-subscription-executors-bind-operator-stores.md).
 
 ## Adding a control operation (L0/L4)
 
@@ -236,7 +241,15 @@ on those capabilities, not on a shared model name.
    tool sets (including empty only if supported), network modes/access, eligible
    environment names, and workspace presence. `validate_grants` delegates to
    `profile.grant_faults`; dynamic task/host checks stay in the adapter. Never
-   infer completeness from a legacy profile whose policy is absent.
+   infer completeness from a legacy profile whose policy is absent. An
+   operator-bound subscription adapter instead declares
+   `NativeOperatorExecutorProfileV3` from `core.native_operator` (schema 3;
+   one posture, finite model/effort/tool inventories, `network="allow"` with
+   `native_vendor_session_only`, the published unverified account assurance
+   and an explicit overage policy) and derives `NativeOperatorLaunchIdentityV3`;
+   decode profiles and launch identities only through
+   `parse_executor_profile` / `parse_executor_launch_identity`, never by
+   guessing a version.
 3. Implement `ExecutorProvider` over the existing lease seam. Its trusted
    factory derives `ExecutorLaunchIdentity` from actual immutable content,
    configuration, limits, and any proved provider route; its revision already

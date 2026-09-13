@@ -42,7 +42,7 @@ def build_system_description(
     registry: ComponentRegistry,
     snapshot: RegistrySnapshot,
     catalog: Mapping[str, CapabilityDescriptor],
-    available_capabilities: frozenset[str],
+    unavailability: Mapping[str, tuple[str, ...]],
     root_grants: EffectiveGrants,
     limits: AdmissionLimits,
     component_names: Sequence[str] | None,
@@ -50,6 +50,13 @@ def build_system_description(
 ) -> SystemDescription:
     if limit <= 0:
         raise ValueError("describe limit must be positive")
+    unevaluated = sorted(set(catalog) - set(unavailability))
+    if unevaluated:
+        # Availability is a cached assembly fact, never inferred here (I4).
+        raise ContractViolation(
+            f"describe requires evaluated availability for every catalog capability; "
+            f"missing {unevaluated}"
+        )
     if limit > limits.max_description_components:
         raise ValueError(
             f"describe limit {limit} exceeds the published maximum "
@@ -102,7 +109,8 @@ def build_system_description(
             executor_profile=descriptor.executor_profile,
             channel_profile=descriptor.channel_profile,
             channel_endpoint=descriptor.endpoint,
-            available=capability_id in available_capabilities,
+            available=not unavailability[capability_id],
+            unavailable_reasons=tuple(unavailability[capability_id]),
         )
         for capability_id, descriptor in sorted(catalog.items())
     )

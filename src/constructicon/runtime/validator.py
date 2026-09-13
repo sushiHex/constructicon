@@ -21,6 +21,7 @@ from constructicon.core.channel import ChannelBinding, ChannelContract
 from constructicon.core.component import ComponentDef
 from constructicon.core.control import ResolutionLock, ResolutionPin
 from constructicon.core.errors import AdmissionError
+from constructicon.core.executor import ExecutorProfile
 from constructicon.core.grants import (
     EffectiveGrants,
     GrantRequest,
@@ -918,7 +919,7 @@ def _register_atomic(
                         },
                     )
                 )
-        elif profile is not None:
+        elif isinstance(profile, ExecutorProfile):
             if node_grants.posture not in profile.postures:
                 comp.faults.append(
                     f"{instance_scope.render()}: executor {capability_id!r} does not "
