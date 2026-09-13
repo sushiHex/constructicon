@@ -44,3 +44,12 @@ They propose vendor-managed account custody in a workspace-free native zone,
 separate contained tool workers, versioned authority, and Codex-first sequencing.
 They do not accept native authentication or replace the governing ADRs above;
 account access, production conformance and live calls remain separate gates.
+
+Proposed [ADR 0021](0021-subscription-executors-bind-operator-stores.md) and
+[M8 rev 3](../plans/milestones/M8-live-executors-rev3.md) offer an alternative
+for the owner's immediate Claude Code/Codex subscription goal: one private
+operator binding, with vendor principal/workspace continuity explicitly
+unverified. Physical containment, mediated tools, grants and lifecycle proofs
+remain required. The owner authorized drafting and review, not acceptance of
+this weaker account assurance, implementation, credentials or live use. ADR
+0020/rev 2 remain preserved proposals; ADR 0018/0019 still govern.

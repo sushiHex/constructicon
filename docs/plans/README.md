@@ -60,6 +60,7 @@ the eventual code differs.
 | M7.1 | [Panel membership rev 4](milestones/M7.1-panel-membership-rev4.md) | Successor that narrows the scope to authored panel membership, makes mapped fan-in an ordered union of scalar selectors, validates every map, and decides the Graph/description version boundary | Complete: PR A #23 and PR B #24 merged; ADR 0017 accepted. Preserved draft wording records the decision requested, not its current status |
 | M8 | [Live executors rev 1](milestones/M8-live-executors-rev1.md) | Reconciled against M7.1 closure at `71c4fe3`; technical proposal confirmed at `8f0c2e5` with source-grounded review corrections | Approved: ADR 0018 accepted; PR A authorized. Plan bytes are frozen; preserved pre-decision wording is historical, not its current approval status. Linux target and gateway remain separate operator prerequisites |
 | M8 | [Native harnesses, contained tools rev 2](milestones/M8-live-executors-rev2.md) | Proposed successor after credential-free startup #62 and native recovery #64, against `3718a86` | Review draft; ADR 0020 is proposed, not accepted. No implementation, account access or issue-dependency transition is authorized by its presence |
+| M8 | [Operator-bound subscription executors rev 3](milestones/M8-live-executors-rev3.md) | Owner-authorized alternative proposal against `d2b8f94`; vendor identity remains explicitly unverified | Review draft under proposed ADR 0021; narrower account assurance, unchanged physical authority requirements. Neither acceptance nor implementation/live-use authorization |
 
 ## Handoffs
 
