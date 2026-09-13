@@ -137,7 +137,7 @@ async def test_public_admission_uses_the_shared_pure_grant_predicate(journal, ch
     assert provider.handles == [] and provider.ledger.operations == []
 
 
-async def test_description_publishes_complete_policy_in_schema_three(journal) -> None:
+async def test_description_publishes_complete_policy_in_schema_four(journal) -> None:
     provider = FakeExecutorProvider()
     system = executor_system(journal, provider)
     await register_component(system, journal)

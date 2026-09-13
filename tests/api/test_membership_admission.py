@@ -66,7 +66,7 @@ def test_description_preserves_both_membership_laws(system: Constructicon) -> No
     for field in ("explicit_map_source_cardinality", "mapped_many_policy"):
         changed = description.model_dump(mode="json", exclude={"description_digest"})
         del changed["authoring"]["bindings"][field]
-        assert digest("system-description", 3, changed) != description.description_digest
+        assert digest("system-description", 4, changed) != description.description_digest
 
 
 @pytest.mark.parametrize("nested", [False, True])
