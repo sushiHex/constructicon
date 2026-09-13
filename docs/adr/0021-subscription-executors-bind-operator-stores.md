@@ -28,11 +28,13 @@ unverified. That authorized this proposal; the acceptance above is the
 separate decision. Credentials, account inspection, model calls, provisioning
 and deployment remain separately unauthorized.
 
-[Issue #38](https://github.com/sushiHex/constructicon/issues/38) owns the
-decision. [M8 rev 3](../plans/milestones/M8-live-executors-rev3.md) proposes
-its implementation gates. Accepted [ADR 0018](0018-live-executors-are-leased-contained-processes.md)
-and [ADR 0019](0019-hosted-linux-runners-are-requalified-not-image-pinned.md)
-continue to govern until an explicit successor decision. Proposed
+[Issue #38](https://github.com/sushiHex/constructicon/issues/38) owned the
+decision. [M8 rev 3](../plans/milestones/M8-live-executors-rev3.md) is the
+accepted implementation baseline. Accepted [ADR 0018](0018-live-executors-are-leased-contained-processes.md)
+continues to govern outside the explicit v3 profile, and this ADR is its
+successor decision for that profile only. Accepted
+[ADR 0019](0019-hosted-linux-runners-are-requalified-not-image-pinned.md)
+continues to govern hosted Linux evidence for every profile, v3 included. Proposed
 [ADR 0020](0020-native-harnesses-mediate-contained-tools.md) and M8 rev 2
 retain their bytes and stronger, currently unestablished identity guarantee;
 this document does not silently amend them or implement their profile.
@@ -74,8 +76,9 @@ during refresh. An operator mistake or an undetected vendor-side switch can
 send data to an unintended account context. Neither equal pre/post metadata
 nor an exclusive local lock establishes vendor identity continuity. Deployments
 requiring that guarantee must refuse this profile, not interpret its opaque
-binding as an account attestation. This residual risk is part of the decision
-requested, not evidence already accepted by the owner.
+binding as an account attestation. This residual risk was part of the decision
+requested and was accepted by the owner on 2026-09-13; acceptance is not
+evidence that the risk is absent.
 
 ## Decision
 
@@ -352,13 +355,13 @@ There is no native v2 or description-4 writer in the current code. These are
 proposed version allocations, not a v2-to-v3 data migration. Description 4
 can contain the v3-discriminated profile; a reader written for ADR 0020's
 proposed strict v2 profile must refuse it, not relabel its assurance.
-Acceptance would retire ADR 0020's proposed description-4 allocation in favor
+Acceptance retires ADR 0020's proposed description-4 allocation in favor
 of this one, without changing its historical text. Any later principal-attested
 profile must obtain a new native/description version in its own decision.
 
 ## Exact authority delta and acceptance gates
 
-If accepted, this ADR supersedes ADR 0018 **only for the explicit v3 profile**:
+As accepted, this ADR supersedes ADR 0018 **only for the explicit v3 profile**:
 gateway-only initial authentication becomes vendor-managed subscription mode;
 whole-CLI credential exclusion becomes native-only narrow custody; single-zone
 placement becomes native/worker separation; provider-route egress becomes
@@ -392,12 +395,12 @@ enables Hyper-V nor promises native Windows containment or remote dispatch.
 Source/interface screens, authenticated startup and real model use remain
 distinct gates; each provider and READ/WRITE posture qualifies independently.
 
-## Decision requested
+## Decision requested and made
 
-Accept or redline the operator-bound scope, residual wrong-account/data-context
-risk, explicit v3 compatibility boundary, and rev-3 sequence. An acceptance
-record must name this ADR and the reviewed plan/head. Merging a review draft
-does not supply that decision. Until then, no runtime changes, accounts,
-deployment or live executor are authorized by this proposal.
-
-Decided: accepted as written on 2026-09-13; see the decision record above.
+The decision requested was to accept or redline the operator-bound scope,
+residual wrong-account/data-context risk, explicit v3 compatibility boundary,
+and rev-3 sequence, in an acceptance record naming this ADR and the reviewed
+plan/head. Merging the review draft did not supply it, and until that record
+existed no runtime change, account, deployment or live executor was authorized
+by this proposal. The record was made on 2026-09-13 (see the decision record
+above): accepted as written.
