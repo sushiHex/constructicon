@@ -1,16 +1,32 @@
 # 0021 — Subscription executors bind operator stores
 
-Status: proposed alternative to ADR 0020; successor to ADR 0018 only if
-explicitly accepted. **Not implementation or live-use authorization.**
+**Status:** accepted (M8), 2026-09-13 — supersedes ADR 0018 only for the
+explicit v3 profile; credential-free N1 construction authorized. Credentials,
+deployment, authenticated startup, model calls and live profiles remain
+separately unauthorized.
 
 ## Decision record
+
+On 2026-09-13 the owner accepted this ADR and M8 rev 3 as written, at
+reviewed head `e228ef8535bceb316bdbfd3c309066befa9f67f0` (merged as
+`9e55364f8cb8261eb50678936fd9170c00c83cf1` in PR #72), in the
+[decision record on issue #38](https://github.com/sushiHex/constructicon/issues/38#issuecomment-5651362966).
+The acceptance covers the operator-bound scope, the residual
+wrong-account/data-context risk with vendor identity explicitly unverified,
+the v3 compatibility boundary and the rev-3 sequence. It authorizes
+credential-free N1 construction only; N4 and N5 each need separate explicit
+operator authorization per provider, and the private qualified Linux
+deployment is a separate operator decision. ADR 0020's proposed
+description-4 allocation is retired in favour of this one; its text is
+unchanged and it remains proposed.
 
 The owner requires Claude Code and Codex subscription use **inside the graph**.
 External authors/reviewers and separately billed APIs do not satisfy that
 outcome. On 2026-09-12 the owner authorized preparation and independent review
 of this narrower design, with vendor account/workspace identity explicitly
-unverified. That authorizes this proposal, not its acceptance, credentials,
-account inspection, model calls, provisioning, or implementation.
+unverified. That authorized this proposal; the acceptance above is the
+separate decision. Credentials, account inspection, model calls, provisioning
+and deployment remain separately unauthorized.
 
 [Issue #38](https://github.com/sushiHex/constructicon/issues/38) owns the
 decision. [M8 rev 3](../plans/milestones/M8-live-executors-rev3.md) proposes
@@ -383,3 +399,5 @@ risk, explicit v3 compatibility boundary, and rev-3 sequence. An acceptance
 record must name this ADR and the reviewed plan/head. Merging a review draft
 does not supply that decision. Until then, no runtime changes, accounts,
 deployment or live executor are authorized by this proposal.
+
+Decided: accepted as written on 2026-09-13; see the decision record above.

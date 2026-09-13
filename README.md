@@ -112,10 +112,12 @@ switches. An adapter is interchangeable only where it can enforce the admitted
 capabilities.
 
 Subscription reuse for solo developers is an explicit goal, **not a working
-integration today**. The accepted initial authentication boundary remains
-gateway-only. The [native-authentication investigation](docs/plans/handoffs/M8-native-auth-feasibility.md)
-identifies possible interfaces and the missing isolation proof; it does not
-authorize copying desktop credentials or silently substituting API billing.
+integration today**. Accepted [ADR 0021](docs/adr/0021-subscription-executors-bind-operator-stores.md)
+selects an operator-bound subscription route for the explicit v3 profile;
+gateway v1 under ADR 0018 is unchanged and unselected. The
+[authentication record](docs/designs/EXECUTOR_AUTHENTICATION.md) holds the
+evidence; nothing authorizes copying desktop credentials or silently
+substituting API billing.
 See [adding an executor](docs/CONTRIBUTING.md#adding-an-executor-l1).
 
 ## Quick start

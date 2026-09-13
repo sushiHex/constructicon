@@ -1,12 +1,16 @@
 # M8 implementation record
 
-Status: PR A–D merged; authentication decision and slices E–H remain.
+Status: PR A–D merged; ADR 0021 accepted on 2026-09-13; N1–N7 remain, with
+N1 authorized as credential-free construction.
 
 Authority: [accepted ADR 0018](../../adr/0018-live-executors-are-leased-contained-processes.md)
 and [frozen rev 1](../milestones/M8-live-executors-rev1.md). PR #26 merged as
 `3ee1beb6a58fac0bab85841a1f34d96b514c3c34`, PR A's exact base. The merged
 tree equals its reviewed head `8308cf8`. Approval does not provision Linux or
 a gateway. Neither the frozen plan nor its planning evidence is edited here.
+From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-operator-stores.md)
+and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
+subscription route; see the dated section at the end of this record.
 
 ## PR A — contracts, coherence, and publication
 
@@ -407,6 +411,8 @@ generation. These establish possible integration points, not complete native
 tool mediation or subscription availability. The proposed next experiment
 keeps scripted driver proof separate from actual native CLI proof. No successor
 ADR, credential access, or changed authentication policy follows from it.
+That prerequisite decision was made on 2026-09-13; see the ADR 0021 section
+at the end of this record.
 
 ## PR C — safe async WRITE capture (merged as #34)
 
@@ -610,7 +616,8 @@ and completion criteria live in the [M8 milestone](https://github.com/sushiHex/c
 under the repository's [issue-first workflow](../../WORK_TRACKING.md).
 No live WRITE profile is enabled before routed authority and its adapter are
 also proved. Public model contracts and completed containment slices are not
-substitutes for those proofs.
+substitutes for those proofs. This sequencing was superseded on 2026-09-13
+by the ADR 0021 acceptance recorded at the end of this record.
 
 ## Native mediation and OpenRouter investigation
 
@@ -701,3 +708,35 @@ The [controlled-startup investigation](M8-controlled-startup-evidence.md)
 continues #37 under the existing networkless recipe. It records its own
 evidence and provider-connectivity gap; it cannot borrow transport success
 as a claim of native authentication or durable recovery.
+
+## Authentication route decided: ADR 0021 accepted (2026-09-13)
+
+The owner accepted [ADR 0021](../../adr/0021-subscription-executors-bind-operator-stores.md)
+and [rev 3](../milestones/M8-live-executors-rev3.md) as written at reviewed
+head `e228ef8535bceb316bdbfd3c309066befa9f67f0` (merged as
+`9e55364f8cb8261eb50678936fd9170c00c83cf1` in PR #72), in the
+[decision record on issue #38](https://github.com/sushiHex/constructicon/issues/38#issuecomment-5651362966).
+ADR 0021 supersedes ADR 0018 only for the explicit v3 profile; gateway v1
+bytes, semantics and source-law revision are unchanged, and ADR 0019 still
+governs hosted Linux evidence. ADR 0020 and rev 2 remain proposed, neither
+accepted nor rejected; ADR 0020's proposed description-4 allocation is
+retired in favour of ADR 0021's.
+
+On the same day, rev 2 section 6's proposed transition was applied with ADR
+0021/v3 as authority: #41 was re-scoped to Codex N1–N5 with one sub-issue
+per slice (#74–#78), #40 to independent Claude Code qualification N6, #42
+retains Pi and integrated closure N7, #39 remains the unselected, separately
+billed gateway option, and #73 (M8-D2) was opened for the private qualified
+Linux deployment decision that N4 needs. No issue closed as a result of the
+proposal. Current readiness, dependencies and ownership live in GitHub
+Issues under the [issue-first workflow](../../WORK_TRACKING.md), not here.
+
+What acceptance authorizes: N1, credential-free construction of the strict
+operator-mode contracts, the v1/v3 boundary decoders, one pure grant
+predicate, `SystemDescription` 4 and complete fake providers, with v1 goldens
+reproduced from `d2b8f94` in an independent worktree. What it does not
+authorize: credentials, account inspection, login, authenticated startup, a
+Linux deployment, model or provider calls, provisioning, or any live
+READ/WRITE profile. N4 and N5 each require separate explicit operator
+authorization per provider. No implementation had started when this section
+was recorded; N1 evidence is added below when its PR merges.

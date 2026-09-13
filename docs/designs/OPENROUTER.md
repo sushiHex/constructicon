@@ -124,8 +124,11 @@ planned Pi adapter, qualify two explicit models independently, and permit no
 automatic fallback. This selects a reuse direction, not a model pair, billing
 route, deployed gateway, or implementation availability.
 
-The Pi harness needs qualification under #42 and authentication still needs
-the #38 decision before implementation can be promised. Do not reinterpret
+The Pi harness needs qualification under #42, and OpenRouter's API-key route
+still needs its own explicit provider and authentication decision before
+implementation can be promised: the #38 decision (accepted ADR 0021,
+2026-09-13) selected an operator-bound subscription route for Claude Code and
+Codex and qualifies no API-key route. Do not reinterpret
 the Codex native experiment as Pi or OpenRouter evidence. A future native
 subscription design would not by itself qualify OpenRouter's API-key route.
 The issue records these conditional prerequisites; no new unconditional

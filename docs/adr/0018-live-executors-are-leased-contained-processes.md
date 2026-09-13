@@ -1,6 +1,9 @@
 # 0018 — Live executors are leased, contained processes
 
-**Status:** accepted (M8), 2026-09-09; implementation proofs remain required
+**Status:** accepted (M8), 2026-09-09; implementation proofs remain required.
+Superseded only for the explicit v3 profile by
+[ADR 0021](0021-subscription-executors-bind-operator-stores.md), 2026-09-13;
+gateway v1 is unchanged.
 
 ## Decision record
 

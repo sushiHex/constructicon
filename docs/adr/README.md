@@ -20,11 +20,12 @@ connector liveness.
 
 Accepted [ADR 0018](0018-live-executors-are-leased-contained-processes.md)
 and the [frozen M8 plan](../plans/milestones/M8-live-executors-rev1.md)
-define a Linux-first leased process boundary, gateway-only initial
-authentication, and complete live executor profiles. PR A contracts and PR B
-networkless Linux containment are merged; deployed gateway conformance and
-native model adapters remain outstanding. Operator deployment is separate
-from GitHub Actions proof runs.
+define a Linux-first leased process boundary, complete live executor
+profiles, and gateway-only initial authentication for the v1 profile. PR A–D
+are merged; no live model adapter exists. Accepted ADR 0021 supersedes the
+authentication clauses for the explicit v3 profile only; gateway v1 is
+unchanged and unselected. Operator deployment is separate from GitHub
+Actions proof runs.
 
 Accepted [ADR 0019](0019-hosted-linux-runners-are-requalified-not-image-pinned.md)
 records the owner's GitHub Actions selection and the explicit adjustment from
@@ -38,18 +39,24 @@ enables a credential-bearing live executor. The
 changes no accepted ADR and records the additional proof a successor would need.
 
 Proposed [ADR 0020](0020-native-harnesses-mediate-contained-tools.md) and
-[M8 rev 2](../plans/milestones/M8-live-executors-rev2.md) now present that
-successor for decision after the credential-free startup and recovery gates.
-They propose vendor-managed account custody in a workspace-free native zone,
-separate contained tool workers, versioned authority, and Codex-first sequencing.
-They do not accept native authentication or replace the governing ADRs above;
-account access, production conformance and live calls remain separate gates.
+[M8 rev 2](../plans/milestones/M8-live-executors-rev2.md) presented a
+principal-attested successor for decision after the credential-free startup
+and recovery gates: vendor-managed account custody in a workspace-free native
+zone, separate contained tool workers, versioned authority, and Codex-first
+sequencing. They remain proposed, neither accepted nor rejected, after ADR
+0021 was accepted as the narrower alternative; ADR 0020's proposed
+description-4 allocation is retired in favour of ADR 0021's, and its text is
+unchanged. Account access, production conformance and live calls remain
+separate gates.
 
-Proposed [ADR 0021](0021-subscription-executors-bind-operator-stores.md) and
-[M8 rev 3](../plans/milestones/M8-live-executors-rev3.md) offer an alternative
-for the owner's immediate Claude Code/Codex subscription goal: one private
+Accepted [ADR 0021](0021-subscription-executors-bind-operator-stores.md)
+(2026-09-13) and [M8 rev 3](../plans/milestones/M8-live-executors-rev3.md)
+select the owner's immediate Claude Code/Codex subscription route: one private
 operator binding, with vendor principal/workspace continuity explicitly
-unverified. Physical containment, mediated tools, grants and lifecycle proofs
-remain required. The owner authorized drafting and review, not acceptance of
-this weaker account assurance, implementation, credentials or live use. ADR
-0020/rev 2 remain preserved proposals; ADR 0018/0019 still govern.
+unverified, under unchanged physical containment, mediated tools, grants and
+lifecycle proofs. It supersedes ADR 0018 only for the explicit v3 profile.
+Acceptance authorizes credential-free N1 construction; N4 and N5 need
+separate explicit operator authorization per provider, the private Linux
+deployment is a separate operator decision, and no credential, account
+inspection, model call or live profile is authorized. ADR 0019 still governs
+hosted Linux evidence.

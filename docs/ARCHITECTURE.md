@@ -783,9 +783,13 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
   per-call reaper, deferred READ/WRITE materialization and acquisition closure.
   PR C implements asynchronous contained capture, immutable pack verification,
   and atomic candidate closure. PR D adds contained async gates and mount-free
-  check-runtime identification. Gateway conformance and
-  ClaudeCode/Codex/Pi adapters remain separate slices; no live model adapter
-  is available yet. Native CI evidence is described in [M8_CI.md](M8_CI.md). See
+  check-runtime identification. Accepted
+  [ADR 0021](adr/0021-subscription-executors-bind-operator-stores.md) selects
+  operator-bound subscription executors for the explicit v3 profile; gateway
+  v1 is unchanged and unselected. The strict operator-mode contracts (N1),
+  the Codex and Claude Code adapters and Pi remain separate slices; no live
+  model adapter is available yet. Native CI evidence is described in
+  [M8_CI.md](M8_CI.md). See
   [ADR 0018](adr/0018-live-executors-are-leased-contained-processes.md) and the
   [implementation record](plans/handoffs/M8-implementation-record.md).
 - **M9** — self-improvement phase 1 (prompt/context skills); see
