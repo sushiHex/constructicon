@@ -66,15 +66,21 @@ all eight**, and the two candidates fail on disjoint predicates.
 | P1 | A mode fact exists | holds | holds |
 | P2 | Registered and dispatched | holds | holds |
 | P3 | Obtainable without a secret | holds | holds |
-| P4 | Reads live state, not startup state | holds | holds |
+| P4 | Reads live state, not startup state | holds, cache only | holds, reloads |
 | P5 | Refresh cannot switch mode unobserved | **fails** | **fails** |
 | P6 | Callable with no model request | holds | holds |
-| P7 | Supported, not deprecated | holds | **fails** |
+| P7 | Supported, not deprecated | holds, transport caveat | **fails** |
 | P8 | Names the permitted variant distinctly | **fails** | holds |
 
 P8 is the predicate the original scope missed. A mode fact can exist, be
 dispatched, be secret-free, be live and still fail to say which kind of ChatGPT
 credential is in use, which is exactly what happens here.
+
+The deprecated operation is the stronger carrier on every axis but one. It
+names the variant, and it is also the fresher of the two: it reloads and can
+proactively refresh, while the supported operation reads a cache without
+reloading. It loses only P7 — which is the axis the vendor controls, and the
+reason this record does not recommend it.
 
 ## Findings
 
@@ -126,13 +132,23 @@ A managed ChatGPT response carries an email address and a plan type. Not
 secrets, but account facts ADR 0021 keeps out of public identity, launch
 identity, the journal and logs: read the mode, discard the rest.
 
-### P4 — both read live state
+### P4 — both read live state, but not equally
 
-Both consult the auth manager at call time and reload configuration rather than
-a startup snapshot
-([`account_processor.rs` 1034-1129](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/app-server/src/request_processors/account_processor.rs#L1034-L1129)).
-The value is a process-global mutable cache, which makes P5 rather than
-freshness the live question. The handlers are not symmetric: `getAuthStatus`
+Neither uses a startup snapshot
+([`account_processor.rs` 1034-1129](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/app-server/src/request_processors/account_processor.rs#L1034-L1129)),
+but they differ in a way that matters. `account/read` reads the cached
+credentials only, never reloading and never proactively refreshing
+([`provider.rs` 406](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/model-provider/src/provider.rs#L406)).
+`getAuthStatus` goes through the awaiting accessor, which reloads under
+external auth and can refresh proactively
+([`account_processor.rs` 1059](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/app-server/src/request_processors/account_processor.rs#L1059),
+[`manager.rs` 2345-2359](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/login/src/auth/manager.rs#L2345-L2359)).
+The supported operation is therefore the less fresh of the two: after an
+on-disk change it can keep reporting the cached mode until something else
+reloads. The value both read is a process-global mutable cache, which makes P5
+rather than freshness the live question.
+
+The handlers are also not symmetric: `getAuthStatus`
 reports `Chatgpt` and `ChatgptAuthTokens` *through* a token fetch, so an empty
 or failing token yields no mode at all
 ([1084-1088](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/app-server/src/request_processors/account_processor.rs#L1084-L1088)),
@@ -180,6 +196,14 @@ There is no `#[deprecated]` attribute; the markers are those comments plus the
 schema strip. `GetAccount` is `account/read`, so the vendor's own direction
 points at the collapsing operation.
 
+`account/read` carries no deprecation of its own, but its support is not
+unqualified either: the vendor documents the app-server command and its
+WebSocket transport as
+"experimental and aren't supported for production workloads", and directs
+integrators automating jobs or running in CI to the Codex SDK instead
+([app-server](https://learn.chatgpt.com/codex/app-server)). That caveat covers
+the surface both operations live on.
+
 ### P8 — what collapses, exactly
 
 `account/read` consults neither mode accessor. It matches credential variants
@@ -210,6 +234,27 @@ It therefore reports all four as distinct values. The collapsing accessor's own
 documentation states that externally managed tokens are normalized to the
 managed value
 ([`manager.rs` 479-492](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/login/src/auth/manager.rs#L479-L492)).
+
+### Documentation agreement
+
+The published documentation independently describes `account/read` with the
+same response shape, including the managed-ChatGPT case carrying an email and
+plan type, and an `account/updated` notification whose `authMode` field is
+"emitted whenever auth mode changes"
+([app-server](https://learn.chatgpt.com/codex/app-server)). It names two sign-in
+methods, "Sign in with ChatGPT for subscription access" and "Sign in with an API
+key for usage-based access", and describes the external-token mode as
+"experimental and intended for host apps that already own the user's ChatGPT
+auth lifecycle"
+([auth](https://learn.chatgpt.com/codex/auth)). It also states that
+account-authenticated automation must not be used "for public or open-source
+repositories"
+([CI/CD auth](https://learn.chatgpt.com/codex/auth/ci-cd-auth)), consistent
+with ADR 0019's credential-free Actions posture.
+
+Nothing in the documentation describes the collapse, the store-resident variant
+selectors, or the account-id-only reload. Those are source facts with no
+documented counterpart, which is why the pinned source governs here.
 
 ## Why exclusion by construction fails
 
@@ -289,10 +334,22 @@ the guarantee fail at the moment the method is removed. ADR 0021 asks for a
   `getAuthStatus`, and carries three obligations: treat absence of a mode as
   refusal, since the permitted variant is the one that can go silent; prove the
   store cannot present another variant under refresh, which the store-resident
-  selectors make the hard part; and record the removal risk explicitly, because
-  a vendor release that deletes the method ends availability.
+  selectors make the hard part; and record its removal as a named
+  requalification trigger, because a vendor release that deletes the method
+  ends availability.
+- **A third reading exists and is recorded rather than recommended.** Keep
+  `account/read` as the carrier and move the whole burden onto the binding:
+  require N3 and N4 to prove that the operator store is provisioned only
+  through the supported managed login and cannot come to hold the variant
+  fields, so a ChatGPT reading is sound because of what the store is, not
+  because of what the wire says. This is weaker than it looks. The adapter may
+  not read the file to check, the vendor may rewrite it during refresh, and
+  `account/read` reads a cache that can lag an on-disk change, so the proof
+  would rest entirely on provisioning discipline and physical custody. It also
+  needs the freshness gap closed some other way.
 
-Even then P5 remains open, so acceptance alone does not qualify the adapter.
+Under every reading P5 remains open, so no acceptance here qualifies the
+adapter by itself.
 
 No later release was surveyed, so nothing here suggests an upgrade. Selecting a
 changed binary would repeat the catalog, startup, mediation and lifecycle
@@ -321,4 +378,14 @@ gh api -H "Accept: application/vnd.github.raw+json" "repos/openai/codex/contents
 gh api -H "Accept: application/vnd.github.raw+json" "repos/openai/codex/contents/codex-rs/model-provider/src/provider.rs?ref=3d2ee51ca2d5db578f328aa75e20aa22c0197c9a"
 gh api -H "Accept: application/vnd.github.raw+json" "repos/openai/codex/contents/codex-rs/protocol/src/auth.rs?ref=3d2ee51ca2d5db578f328aa75e20aa22c0197c9a"
 gh api -H "Accept: application/vnd.github.raw+json" "repos/openai/codex/contents/codex-rs/app-server-protocol/src/export.rs?ref=3d2ee51ca2d5db578f328aa75e20aa22c0197c9a"
+```
+
+The documentation quotes were taken from raw page source, not from a
+summarizing fetch tool, which on this material produced quote-marked text
+absent from the pages and missed the account surface entirely:
+
+```bash
+curl -sL https://learn.chatgpt.com/codex/app-server
+curl -sL https://learn.chatgpt.com/codex/auth
+curl -sL https://learn.chatgpt.com/codex/auth/ci-cd-auth
 ```
