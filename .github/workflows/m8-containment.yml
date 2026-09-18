@@ -33,7 +33,7 @@ jobs:
           test "$RUNNER_ENVIRONMENT" = github-hosted
           test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1
           sudo apt-get -q update
-          sudo apt-get -q -y install --no-install-recommends bubblewrap=0.9.0-1ubuntu0.1
+          sudo apt-get -q -y install --no-install-recommends bubblewrap=0.9.0-1ubuntu0.3
           sudo useradd --create-home --shell /bin/sh m8-service
           test ! -e /var/lib/constructicon-m8-launch
           test ! -L /var/lib/constructicon-m8-launch

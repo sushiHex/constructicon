@@ -19,8 +19,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 BWRAP = "/opt/constructicon-m8-qualification/bwrap"
-PACKAGE = "0.9.0-1ubuntu0.1"
-BWRAP_SHA256 = "52231e1caf55bcbc667b269f49c63599a6f7db4767ae6a039580d0ff853db712"
+PACKAGE = "0.9.0-1ubuntu0.3"
+BWRAP_SHA256 = "e318903862396f96de3df57264e0158682b952fd3fb53ac23d876413e7b30f71"
 POLICY = Path("/etc/apparmor.d/constructicon-m8-bwrap")
 POLICY_SHA256 = "9375aeda9db21f862c5456d0734c4fdc3f21769f23bbc2b6abd1503fc3b4590b"
 CHILD_PROFILE = "constructicon-m8-bwrap//&constructicon-m8-payload (enforce)"
