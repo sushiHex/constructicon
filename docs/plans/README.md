@@ -83,7 +83,7 @@ the eventual code differs.
 | [M8 hook execution evidence](handoffs/M8-hook-execution-evidence.md) | Narrow packaged-shell hook-control acceptance and evidence; preserves missing-shell history and keeps authentication/recovery gated |
 | [M8 native recovery evidence](handoffs/M8-native-recovery-evidence.md) | Credential-free journal/RunHost lifecycle acceptance after the scoped startup gate; not a native authentication or production profile claim |
 | [M8 native account interface preflight](handoffs/M8-native-account-interface-preflight.md) | Pinned-source and retained binary-schema evidence: Codex 0.153.4 lacks the supported complete identity interface required before N1; proposed authority stays unaccepted |
-| [M8 subscription-mode interface screen](handoffs/M8-subscription-mode-interface-screen.md) | Pinned-source and documentation screen of ADR 0021's mode-observation gate: no supported interface establishes subscription mode, because the undeprecated operation collapses four credential variants and store-resident selectors defeat exclusion by configuration; whether a deprecated carrier may hold the boundary is the owner's decision |
+| [M8 subscription-mode interface screen](handoffs/M8-subscription-mode-interface-screen.md) | Pinned-source and documentation screen of ADR 0021's mode-observation gate. The supported operation collapses four ChatGPT-account credential variants, which the corrected result finds immaterial to a requirement about billing route; no amendment needed, N2 proceeds, with fixtures owed by N3 and the account/workspace residue already disclosed. Preserves the original verdict and the reasoning error behind it |
 
 ## Completeness and recovery notes
 
