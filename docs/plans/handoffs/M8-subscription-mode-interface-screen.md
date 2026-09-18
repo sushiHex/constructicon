@@ -1,8 +1,10 @@
 # M8 subscription-mode interface screen
 
 Status: credential-free source and documentation screen, 2026-09-18
-(America/Los_Angeles). This is not implementation authority, login approval,
-candidate selection, or production qualification.
+(America/Los_Angeles). **Result corrected the same day**; the original verdict
+and the reasoning error behind it are preserved at the end. This is not
+implementation authority, login approval, candidate selection, or production
+qualification.
 
 Repository context: accepted [ADR 0021](../../adr/0021-subscription-executors-bind-operator-stores.md)
 and [frozen rev 3](../milestones/M8-live-executors-rev3.md) on `main` at
@@ -10,31 +12,39 @@ and [frozen rev 3](../milestones/M8-live-executors-rev3.md) on `main` at
 
 ## Result
 
-**No supported interface in the pinned Codex `0.153.4` candidate can establish
-subscription mode. N2's adapter cannot qualify on this fixture unless the owner
-accepts a deprecated operation as the carrier of a credential boundary.**
+**The pinned Codex `0.153.4` candidate satisfies ADR 0021's subscription-mode
+requirement as that requirement is written. No amendment is needed, and N2 may
+name `account/read` as its interface.**
 
-Existence was never the missing piece. The pinned release registers and
-dispatches `account/read`: supported, undeprecated, carrying no secret,
-reading live state, reachable with no model request. It fails for a different
-reason. It **collapses four credential variants** — managed ChatGPT,
+The pinned release registers and dispatches `account/read`: supported,
+undeprecated, carrying no secret, reading live state, reachable with no model
+request. It **collapses four credential variants** — managed ChatGPT,
 externally supplied host tokens, agent identity and personal access tokens —
-onto one account shape, and for the pair that matters most the two fields it
-carries can be identical. It therefore reports that a session is a ChatGPT
-account without saying which kind, which is precisely the distinction ADR 0021
-turns on.
+onto one account shape whose two fields can be identical for the first two. It
+reports that a session is a ChatGPT account without saying which kind.
 
-The obvious repair does not work. Three of those four variants can be selected
-by **fields inside the credential store itself**, which ADR 0021 forbids the
-adapter to read and licenses the vendor to rewrite during refresh. Sealing the
-environment and the configuration, which the ADR already requires, does not
-reach them. The one configuration knob that appears to help admits all four.
+That collapse is not a failure against this requirement. ADR 0021 states the
+outcome as subscription use in the graph, where "external authors/reviewers and
+**separately billed APIs** do not satisfy that outcome", and its enforcement
+clause asks qualification to prove that refresh "cannot silently select
+**API/cloud** authentication mid-turn". All four collapsed variants are
+ChatGPT-account credentials; none is a separately billed API. The distinction
+the wire cannot draw is one that does not change whether the requirement is
+met, and the per-turn observation detects every transition that does: a switch
+to API-key authentication, to Bedrock keys, to provider headers, and a refresh
+failure.
 
-One operation does name the variant exactly: `getAuthStatus` reports all four
-as distinct wire values. It is marked deprecated **in favour of the collapsing
-operation**, and is deliberately excluded from the vendor's generated JSON
-schema. Whether such a carrier may hold this boundary is the single question
-this screen puts to the owner; see **Decision requested**.
+What the collapse does leave unknown is which ChatGPT account or workspace is
+in use. ADR 0021 already disclaims exactly that and the owner accepted it:
+"Constructicon cannot guarantee which vendor account, organization or workspace
+receives task data or usage, or detect every change during refresh." The
+residue is therefore inside an accepted assurance rather than a new risk, and
+the published literal `operator_bound_vendor_identity_unverified` already names
+it. No schema value changes.
+
+`getAuthStatus` does report the variant exactly, and remains excluded as a
+boundary: it is deprecated in favour of the operation actually used and
+stripped from the vendor's generated schema. Nothing here needs it.
 
 ## Pins and evidence boundary
 
@@ -58,8 +68,9 @@ draft of this record.
 
 ## The conjunction
 
-Availability needs all eight predicates from one carrier. **No carrier supplies
-all eight**, and the two candidates fail on disjoint predicates.
+Eight predicates were screened. Seven are requirements ADR 0021 actually
+imposes; **P8 is not**, as the corrected result explains, and it is retained
+below as an interface fact rather than a gate.
 
 | # | Predicate | `account/read` | `getAuthStatus` |
 | --- | --- | --- | --- |
@@ -67,20 +78,27 @@ all eight**, and the two candidates fail on disjoint predicates.
 | P2 | Registered and dispatched | holds | holds |
 | P3 | Obtainable without a secret | holds | holds |
 | P4 | Reads live state, not startup state | holds, cache only | holds, reloads |
-| P5 | Refresh cannot switch mode unobserved | **fails** | **fails** |
+| P5 | Refresh cannot switch to API/cloud auth unobserved | holds, see below | holds |
 | P6 | Callable with no model request | holds | holds |
 | P7 | Supported, not deprecated | holds, transport caveat | **fails** |
-| P8 | Names the permitted variant distinctly | **fails** | holds |
+| P8 | Names the ChatGPT-family variant distinctly | fails, not required | holds |
 
-P8 is the predicate the original scope missed. A mode fact can exist, be
-dispatched, be secret-free, be live and still fail to say which kind of ChatGPT
-credential is in use, which is exactly what happens here.
+P5 is scored against the clause's own words, which name **API/cloud**
+authentication. A switch to API-key authentication, to Bedrock keys or to
+provider headers changes the account shape `account/read` reports, so the
+pre-acceptance reading observes it before a result is accepted. N3 must prove
+that with a fixture rather than inherit it from this reading. Switches within
+the ChatGPT family are not observable and are not what the clause asks about.
 
-The deprecated operation is the stronger carrier on every axis but one. It
-names the variant, and it is also the fresher of the two: it reloads and can
-proactively refresh, while the supported operation reads a cache without
-reloading. It loses only P7 — which is the axis the vendor controls, and the
-reason this record does not recommend it.
+P8 was written as a gate in the original scope and is not one. A mode fact can
+exist, be dispatched, be secret-free and be live while still not saying which
+kind of ChatGPT credential is in use — true here, and immaterial to a
+requirement about billing route.
+
+The deprecated operation is the stronger carrier on the axes it wins: it names
+the variant and it is the fresher of the two, reloading where the supported
+operation reads a cache. It loses P7, the axis the vendor controls, and nothing
+in the corrected reading needs what it offers.
 
 ## Findings
 
@@ -158,7 +176,7 @@ report
 The permitted variant is the one that can go silent; the forbidden ones cannot.
 Both fail closed, and an adapter must treat absence as refusal.
 
-### P5 — a refresh can change the variant, unobserved
+### P5 — a refresh can change the variant within the ChatGPT family, unobserved
 
 Refresh reloads whatever is on disk and replaces the cached credentials,
 guarded by account-id equality alone and not by variant
@@ -256,12 +274,13 @@ Nothing in the documentation describes the collapse, the store-resident variant
 selectors, or the account-id-only reload. Those are source facts with no
 documented counterpart, which is why the pinned source governs here.
 
-## Why exclusion by construction fails
+## Why the variants cannot be excluded by configuration
 
-An earlier draft of this record proposed that ADR 0021's fixed environment,
-configuration and startup could make the collapsed variants unreachable, so a
-ChatGPT reading would be unambiguous for a sealed profile. **That reading does
-not survive the source.**
+This matters less under the corrected result, since the variants it concerns
+all satisfy the requirement. It is retained because it is the source-backed
+answer to an idea that will occur to the next reader: seal the environment and
+configuration so only managed ChatGPT is reachable, and the collapse stops
+mattering. **That does not work**, and knowing why keeps N3 from attempting it.
 
 - **Two variants are selected by store content.** Agent identity and personal
   access tokens each have a dedicated field in the credential file
@@ -288,72 +307,89 @@ not survive the source.**
   ([`manager.rs` 584-596](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/login/src/auth/manager.rs#L584-L596)),
   so a store-resident variant is reachable mid-session, not only at startup.
 
-Externally supplied tokens are excluded by ADR 0021's own text. Agent identity
-and personal access tokens are not named there; excluding them is
-Constructicon's extension of "vendor-managed subscription", and this record
-treats them as excluded on that basis.
+Externally supplied tokens are excluded by ADR 0021's own text, and are
+unreachable anyway: only a host application can supply them, and this adapter
+never will. Agent identity and personal access tokens are not named there. An
+earlier version of this record excluded them on its own initiative and let that
+drive its verdict; the correction at the end explains why that was wrong.
 
-## What ADR 0021 requires, and what is missing
+## What ADR 0021 requires, and how this candidate meets it
 
 - "A supported, non-secret authentication-mode observation must establish
   subscription mode freshly for the executing session before each model turn
-  and before accepting its result." The supported carrier collapses; the
-  carrier that names the variant is deprecated.
+  and before accepting its result." `account/read` is supported, carries no
+  secret, and is read at both points. It establishes that the session holds a
+  ChatGPT-account credential rather than an API, Bedrock or header credential,
+  which is the fact the outcome turns on.
 - "Qualification must prove that vendor refresh cannot silently select
-  API/cloud authentication mid-turn." Unprovable while the reload swaps on
-  account id alone from a store the adapter may not read.
+  API/cloud authentication mid-turn." Such a switch changes the reported
+  account shape, so the pre-acceptance reading refuses the result. **N3 owes
+  the fixture**: flip the store to an API credential mid-turn and prove the
+  turn's result is refused.
 - "Every reachable input must be excluded, fixed and revision-bound, or
   mechanically constrained at its point of use." The credential file's variant
-  fields are a reachable input that is none of those.
+  fields select among ChatGPT-account credentials only. They cannot reach an
+  API or cloud credential, so they do not widen this authority. **N3 should
+  still make the store unreachable to host processes** by dedicated ownership
+  and mode, which removes every writer but the vendor's own qualified refresh.
 - "If the pinned interface cannot prove mode selection, that adapter remains
-  unavailable." The disposition, absent the decision below.
+  unavailable." It can, for the selection the clause is about.
 
-## Decision requested
+## Disposition
 
-One question, and it is narrower than it looks. `getAuthStatus` is the only
-operation at this pin that can establish the fact. It is registered,
-dispatched, secret-free by default, live, callable with no model request, and
-reports all four variants distinctly. It is also deprecated in favour of the
-operation that hides the distinction, and stripped from the vendor's generated
-schema.
+**No decision is required and no amendment is proposed.** ADR 0021 stands as
+written, and N2 may proceed naming `account/read`.
 
-**May a deprecated carrier hold a credential boundary?**
+The obligations this screen adds to later slices:
 
-This record's recommendation is **no**. Building the subscription guarantee on
-an operation the vendor has marked superseded, by the very operation that
-collapses the distinction, inverts the direction the vendor is moving and makes
-the guarantee fail at the moment the method is removed. ADR 0021 asks for a
-*supported* observation, and this one is signposted for removal.
+- **N2** implements refusal on every non-matching reading: a null account, an
+  error, an unknown value, `apiKey`, `amazonBedrock`, and a missing plan fact.
+  It does not name `getAuthStatus`, which stays excluded as a boundary in
+  either direction, usable at most as corroboration during qualification.
+- **N3** owes the two fixtures above: the mid-turn API switch must refuse, and
+  the store should be placed beyond host writers.
+- **N4** records the established account shape in the store conformance
+  revision when the binding is provisioned, so confirmation has something exact
+  to compare against.
 
-- **If the owner agrees**, the Codex adapter is unavailable on this fixture.
-  N2 is blocked and the choice returns to
-  [#38](https://github.com/sushiHex/constructicon/issues/38): authorize an
-  assessment of a different release under full requalification, reorder the
-  providers so Claude Code goes first, or revisit the route.
-- **If the owner accepts the deprecated carrier**, N2 may proceed naming
-  `getAuthStatus`, and carries three obligations: treat absence of a mode as
-  refusal, since the permitted variant is the one that can go silent; prove the
-  store cannot present another variant under refresh, which the store-resident
-  selectors make the hard part; and record its removal as a named
-  requalification trigger, because a vendor release that deletes the method
-  ends availability.
-- **A third reading exists and is recorded rather than recommended.** Keep
-  `account/read` as the carrier and move the whole burden onto the binding:
-  require N3 and N4 to prove that the operator store is provisioned only
-  through the supported managed login and cannot come to hold the variant
-  fields, so a ChatGPT reading is sound because of what the store is, not
-  because of what the wire says. This is weaker than it looks. The adapter may
-  not read the file to check, the vendor may rewrite it during refresh, and
-  `account/read` reads a cache that can lag an on-disk change, so the proof
-  would rest entirely on provisioning discipline and physical custody. It also
-  needs the freshness gap closed some other way.
-
-Under every reading P5 remains open, so no acceptance here qualifies the
-adapter by itself.
+What remains unknown, and is already disclosed: which ChatGPT account or
+workspace holds the credential. The published literal
+`operator_bound_vendor_identity_unverified` names it, ADR 0021 accepted the
+residual in terms, and nothing in this screen enlarges it. An operator who
+provisions a workspace credential rather than a personal one gets what they
+provisioned, and Constructicon will not detect the difference.
 
 No later release was surveyed, so nothing here suggests an upgrade. Selecting a
 changed binary would repeat the catalog, startup, mediation and lifecycle
 requalification rev 3 requires.
+
+## Correction: what this record first concluded, and why it was wrong
+
+As first published this record concluded that no supported interface could
+establish subscription mode, and asked the owner whether a deprecated carrier
+might hold a credential boundary. Every source finding above is unchanged and
+was independently verified. The verdict was wrong, for one reason worth
+keeping.
+
+The screen treated agent identity and personal access tokens as forbidden
+variants. ADR 0021 does not name them; it excludes "experimental externally
+supplied tokens", and that variant is unreachable anyway because only the host
+can supply such tokens and this adapter never will. The record flagged the
+extension as its own at the time, then let it drive the verdict. Both are
+ChatGPT-workspace credentials, so under a requirement whose own words exclude
+"separately billed APIs" they satisfy the outcome rather than violating it.
+
+An amendment was drafted on that mistaken basis, arguing from I1 that the
+per-turn check was a backend flag miscast as a boundary, and proposing that
+physical custody carry subscription mode instead. It was withdrawn before
+review concluded. Two findings killed it, and both are worth recording so the
+argument is not made again: the acquisition lock is an **advisory** `flock` on
+a guard inode outside the store, so it is not a write barrier on the store at
+all; and no isolation can own a vendor-side billing decision, so relocating
+the guarantee to the substrate moves it somewhere that cannot hold it. The
+narrower true statement is that a flag may not be the whole boundary, which
+ADR 0021 never asked it to be: the clause uses the observation to refuse, which
+is the defense-in-depth shape I1 endorses.
 
 ## Further questions this screen did not settle
 
