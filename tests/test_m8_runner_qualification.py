@@ -243,6 +243,10 @@ def test_workflow_is_exact_head_read_only_and_credential_free() -> None:
     assert "contents: read" in workflow
     assert "sudo -u m8-probe env -i" in workflow
     assert "bubblewrap=" + probe.PACKAGE in workflow
+    containment = (
+        Path(__file__).parents[1] / ".github/workflows/m8-containment.yml"
+    ).read_text()
+    assert "bubblewrap=" + probe.PACKAGE in containment
     assert "retention-days: 7" in workflow
     assert "if-no-files-found: error" in workflow
     assert 'test "$RUNNER_ENVIRONMENT" = github-hosted' in workflow
@@ -264,3 +268,15 @@ def test_workflow_is_exact_head_read_only_and_credential_free() -> None:
         "--Complain",
     ):
         assert prohibited not in workflow
+
+
+def test_probe_and_launcher_pin_the_same_bubblewrap_build() -> None:
+    """The probe imports no repository code, so only a test can hold the two in step.
+
+    A partial requalification that moved one constant and not the other would
+    qualify one build and launch another.
+    """
+
+    from constructicon.substrate.executors.linux import BWRAP_SHA256
+
+    assert probe.BWRAP_SHA256 == BWRAP_SHA256

@@ -31,7 +31,7 @@ from constructicon.substrate._lifetime import finish_owned
 from constructicon.substrate.executors._supervisor import NAMESPACE_SCRIPT
 
 SUPERVISOR_PATH = Path(NAMESPACE_SCRIPT.removeprefix("/"))
-BWRAP_SHA256 = "52231e1caf55bcbc667b269f49c63599a6f7db4767ae6a039580d0ff853db712"
+BWRAP_SHA256 = "e318903862396f96de3df57264e0158682b952fd3fb53ac23d876413e7b30f71"
 _PROBE = """
 import ctypes, errno, json, os
 from pathlib import Path

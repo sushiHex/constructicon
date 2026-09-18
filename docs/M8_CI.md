@@ -10,7 +10,7 @@ persisted checkout credential, and no model/provider secrets. The checkout
 and evidence name the exact PR head, not an implicitly generated merge tree.
 
 Provisioning is a visible workflow step, explicitly authorized by the owner:
-install Ubuntu's fixed `bubblewrap=0.9.0-1ubuntu0.1` package using authenticated
+install Ubuntu's fixed `bubblewrap=0.9.0-1ubuntu0.3` package using authenticated
 APT metadata, create `m8-probe` without sudo authority, and load the reviewed
 [qualification profile](../scripts/ci/constructicon-m8-bwrap.apparmor). A hosted
 runner guard precedes provisioning. No sysctl or existing profile is changed.
