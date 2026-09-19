@@ -8,6 +8,13 @@ Every fault of the gate has a mutant here, and so does the pre-acceptance
 discard — the behaviour ADR 0021 calls "refuses ... result acceptance", which
 is the single most important thing in this slice.
 
+One mechanical note that costs an hour to rediscover: the shared runner calls
+``textwrap.dedent`` on the target's source before mutating it, so a replacement
+spanning lines must be written at the *dedented* indentation — four spaces for a
+method body, not eight. Getting it wrong raises ``IndentationError`` in the
+child, which the runner scores as NOT PROVEN rather than a kill. That is the
+runner behaving correctly; it is not a failing mutant.
+
 A few mutants live in the handle's binding to the launcher, which only runs
 where the physical acquisition guard does. Those are listed in ``LINUX_ONLY``
 and are **filtered out entirely off Linux**, where they are reported as
@@ -32,12 +39,21 @@ THREAD_START = "constructicon.substrate.executors.codex_protocol:thread_start_re
 OBSERVE = "constructicon.substrate.executors.codex_protocol:observe_turn"
 DECODE = "constructicon.substrate.executors.codex_protocol:decode_turn"
 REFUSAL = "constructicon.substrate.executors.codex_protocol:unavailable_outcome"
+CALL = "constructicon.substrate.executors.codex:CodexConversation.__call__"
 CONVERSE = "constructicon.substrate.executors.codex:CodexConversation._converse"
+PARSE = "constructicon.substrate.executors.codex_protocol:parse_record"
+FINISH = "constructicon.substrate.executors.codex:CodexConversation._finish"
+RATE_LIMIT = "constructicon.substrate.executors.codex_protocol:_rate_limit"
+ACCOUNT_RECORD = "constructicon.substrate.executors.codex_protocol:is_account_record"
+TRANSCRIPT = "constructicon.substrate.executors.codex_protocol:_bounded_transcript"
+EVIDENCE = "constructicon.substrate.executors.codex_protocol:_evidence"
+EVIDENCE_ALLOWLIST = "constructicon.substrate.executors.codex_protocol:is_turn_evidence"
 PREAMBLE = "constructicon.substrate.executors.codex:CodexConversation._drain_preamble"
 COLLECT = "constructicon.substrate.executors.codex:CodexConversation._collect"
 BINDING = "constructicon.substrate.executors.codex:CodexOperatorHandle._converse"
 CORRELATE = "constructicon.substrate.executors.codex:CodexConversation._request"
 EXECUTE = "constructicon.substrate.executors.codex:CodexOperatorHandle.execute"
+CLOSE = "constructicon.substrate.executors.codex:CodexOperatorProvider.close"
 PROVIDER = "constructicon.substrate.executors.codex:CodexOperatorProvider.unavailable_reasons"
 CONSTRUCTOR = "constructicon.substrate.executors.codex:CodexOperatorProvider.__init__"
 
@@ -137,6 +153,28 @@ MUTANTS = (
         "if faults:",
         "if False:",
         ADAPTER + "test_a_pre_turn_gate_fault_refuses_without_sending_a_turn",
+    ),
+    (
+        "the gate's completion is recorded, never inferred from silence",
+        CALL,
+        "if not self.gate_completed and not self.faults:",
+        "if False:",
+        ADAPTER + "test_a_conversation_aborted_at_its_first_read_never_looks_clean",
+    ),
+    (
+        "nothing before the pre-acceptance reading may record completion",
+        CONVERSE,
+        # The runner dedents the method source, so the body sits at four spaces.
+        "after = await self._account(io)",
+        "self.gate_completed = True\n    after = await self._account(io)",
+        ADAPTER + "test_a_conversation_aborted_during_the_pre_acceptance_reading_refuses",
+    ),
+    (
+        "a pathological record is damage, not an escape",
+        PARSE,
+        "except (ValueError, UnicodeError, RecursionError) as exc:",
+        "except (ValueError, UnicodeError) as exc:",
+        ADAPTER + "test_a_pathological_record_is_damage_rather_than_an_escape",
     ),
     (
         "a reply must correlate with the request that earned it",
@@ -265,25 +303,11 @@ MUTANTS = (
         PROTOCOL + "test_a_refused_gate_discards_the_result_and_still_reports_that_a_turn_ran",
     ),
     (
-        "an account notification never reaches the transcript",
-        OBSERVE,
-        "if is_account_record(record):",
-        "if False:",
-        PROTOCOL + "test_an_id_less_account_notification_never_reaches_the_transcript",
-    ),
-    (
-        "unclassifiable bytes carrying account evidence keep only their count",
-        OBSERVE,
-        "if ACCOUNT_EVIDENCE_MARKER not in line:",
-        "if True:",
-        PROTOCOL + "test_unclassifiable_bytes_carrying_account_evidence_keep_only_their_count",
-    ),
-    (
-        "the excerpt guard is broader than the method namespace",
-        OBSERVE,
-        "if ACCOUNT_EVIDENCE_MARKER not in line:",
-        "if ACCOUNT_NAMESPACE.encode() not in line:",
-        PROTOCOL + "test_unclassifiable_bytes_carrying_account_evidence_keep_only_their_count",
+        "no account method is attested turn evidence",
+        EVIDENCE_ALLOWLIST,
+        "return method in TURN_EVIDENCE_METHODS or method.startswith(TURN_EVIDENCE_PREFIXES)",
+        "return not method.startswith('turn/completed-never')",
+        PROTOCOL + "test_no_account_method_is_attested_turn_evidence",
     ),
     (
         "an account notification mid-turn discards the turn",
@@ -314,6 +338,127 @@ MUTANTS = (
         ADAPTER + "test_execute_drives_the_contained_launcher_to_a_success",
     ),
     (
+        "a drifted launch recipe refuses",
+        BINDING,
+        "if provider.launcher.revision != provider.identity.isolation_revision:",
+        "if False:",
+        ADAPTER + "test_a_launch_recipe_that_drifts_after_construction_refuses",
+    ),
+    (
+        "a grouped cancellation stays a cancellation",
+        BINDING,
+        "if group.subgroup(asyncio.CancelledError) is not None:",
+        "if False:",
+        ADAPTER + "test_a_grouped_cleanup_failure_keeps_a_cancellation_a_cancellation",
+    ),
+    (
+        "close cancels an exchange still in flight",
+        CLOSE,
+        "if handle.active is not None:",
+        "if False:",
+        ADAPTER + "test_close_cancels_an_exchange_still_in_flight",
+    ),
+    (
+        "the rate-limit detail is constrained by value shape",
+        RATE_LIMIT,
+        "and (type(item) is bool or type(item) is int or type(item) is float)",
+        "",
+        PROTOCOL + "test_an_accepted_turn_publishes_only_numeric_rate_limit_facts",
+    ),
+    (
+        "a wire value reaches a public detail only when classified",
+        GATE,
+        "f\"account type {named_value(known.get(ACCOUNT_TYPE_KEY))} is not the \"",
+        "f\"account type {known.get(ACCOUNT_TYPE_KEY)!r} is not the \"",
+        PROTOCOL + "test_no_unbounded_wire_value_reaches_a_public_fault_detail",
+    ),
+    (
+        "no unparseable byte is republished",
+        OBSERVE,
+        # The runner dedents, so the fold's body sits at eight spaces.
+        "            continue\n        if not isinstance(record, dict)",
+        "            kept.append(line.decode('utf-8', errors='replace'))\n"
+        "            continue\n        if not isinstance(record, dict)",
+        PROTOCOL + "test_no_unparseable_byte_is_ever_published",
+    ),
+    (
+        "the transcript carries attested evidence only",
+        OBSERVE,
+        "if not is_turn_evidence(record):",
+        "if False:",
+        PROTOCOL + "test_an_unattested_method_is_excluded_without_being_called_damage",
+    ),
+    (
+        "the account namespace is a prefix, not an exact name",
+        ACCOUNT_RECORD,
+        "method.startswith(ACCOUNT_NAMESPACE)",
+        "method == ACCOUNT_NAMESPACE",
+        PROTOCOL + "test_the_whole_account_namespace_is_refused_not_a_list_of_known_methods",
+    ),
+    (
+        "an exclusion is counted rather than silent",
+        OBSERVE,
+        "unclassified += 1",
+        "unclassified += 0",
+        PROTOCOL + "test_the_item_namespace_is_excluded_and_says_so_rather_than_going_silent",
+    ),
+    (
+        "the item namespace is not attested evidence",
+        EVIDENCE_ALLOWLIST,
+        'TURN_EVIDENCE_PREFIXES',
+        '("turn/", "item/")',
+        PROTOCOL + "test_the_item_namespace_is_excluded_and_says_so_rather_than_going_silent",
+    ),
+    (
+        "the transcript is bounded",
+        TRANSCRIPT,
+        "if size + len(item) > TRANSCRIPT_CHARS:",
+        "if False:",
+        PROTOCOL + "test_the_transcript_is_bounded_and_says_how_much_it_dropped",
+    ),
+    (
+        "the stderr excerpt is bounded",
+        EVIDENCE,
+        "[:EVIDENCE_BYTES]",
+        "[:]",
+        PROTOCOL + "test_a_bound_breach_demotes_to_partial_with_bounded_stderr_evidence",
+    ),
+    (
+        "framing damage reaches the observation",
+        CALL,
+        "transport_damage=self._stream.damage,",
+        "transport_damage=None,",
+        ADAPTER + "test_framing_damage_reaches_the_outcome_rather_than_vanishing",
+    ),
+    (
+        "the drain runs to EOF",
+        FINISH,
+        "while await io.read(READ_WINDOW):",
+        "while False:",
+        ADAPTER + "test_the_conversation_drains_to_eof_after_closing_stdin",
+    ),
+    (
+        "a notification before the turn is not its evidence",
+        CORRELATE,
+        "if self._collecting:",
+        "if True:",
+        ADAPTER + "test_a_notification_before_the_turn_is_not_the_turns_evidence",
+    ),
+    (
+        "the configured model must equal the granted one",
+        EXECUTE,
+        "if grants.model_selection.model != self.provider.configured_model:",
+        "if False:",
+        ADAPTER + "test_a_grant_that_disagrees_with_the_configuration_is_refused",
+    ),
+    (
+        "the configuration's model must be in the inventory",
+        CONSTRUCTOR,
+        "if self.configured_model not in profile.grant_policy.model_ids:",
+        "if False:",
+        ADAPTER + "test_the_configuration_must_name_a_model_from_the_profiles_inventory",
+    ),
+    (
         "unavailability is published, not inferred",
         PROVIDER,
         "return self._unavailable",
@@ -339,6 +484,12 @@ MUTANTS = (
 LINUX_ONLY = frozenset({
     "the adapter discards a refused turn",
     "the launcher receives this acquisition's guard",
+    "a drifted launch recipe refuses",
+    "a grouped cancellation stays a cancellation",
+    "close cancels an exchange still in flight",
+    # Unmutated this refuses before the guard, so its test is cross-platform;
+    # mutated, control reaches the guard, which only exists on Linux.
+    "the configured model must equal the granted one",
 })
 """Mutants whose test needs the physical acquisition guard.
 
@@ -346,14 +497,19 @@ The guard is Linux-only and deliberately not injectable, because authority is
 physical (I1). Their tests skip elsewhere, and a skipped test proves nothing.
 """
 
+assert len({name for name, *_ in MUTANTS}) == len(MUTANTS), "mutant names must be unique"
+"""Names are the identity used for filtering and for reporting, so a duplicate
+would silently drop one copy from the unmeasured list."""
+
 # Built from the platform alone, so the parent and each child process agree on
 # the indices the runner passes between them.
 SELECTED = tuple(
     mutant for mutant in MUTANTS
     if sys.platform == "linux" or mutant[0] not in LINUX_ONLY
 )
-_MEASURED = {mutant[0] for mutant in SELECTED}
-UNMEASURED = tuple(name for name, *_ in MUTANTS if name not in _MEASURED)
+UNMEASURED = tuple(name for name, *_ in MUTANTS if name in LINUX_ONLY) if (
+    sys.platform != "linux"
+) else ()
 
 if __name__ == "__main__":
     status = run(SELECTED)

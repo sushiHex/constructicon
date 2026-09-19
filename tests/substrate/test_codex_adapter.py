@@ -49,7 +49,9 @@ from constructicon.substrate.executors.codex import (
     launch_identity,
 )
 from constructicon.substrate.executors.codex_protocol import (
+    GATE_INCOMPLETE_FAULT,
     NO_ACCOUNT_FAULT,
+    RECORD_BYTES,
     ExpectedAccount,
     account_faults,
     decode_turn,
@@ -128,7 +130,18 @@ class ScriptedNative:
     """A genuine scripted byte channel; not a Codex and not a containment proof."""
 
     def __init__(self, *, accounts, records=(), thread=THREAD, turn=TURN, initialize=None,
-                 hangs_up_after_turn=False, preamble=(), ends_after_preamble=False):
+                 hangs_up_after_turn=False, preamble=(), ends_after_preamble=False,
+                 read_fails=None, fails_on_nth_account=None, tail=b"", early=()):
+        # ``read_fails`` models a transport the adapter does not expect: an
+        # exception type no layer catches, which is how a conversation aborts
+        # without recording anything.
+        self.read_fails = read_fails
+        self.tail = tail
+        self.early = list(early)
+        self.reads_after_close = 0
+        self.fails_on_nth_account = fails_on_nth_account
+        self.armed = read_fails is not None and fails_on_nth_account is None
+        self.accounts_seen = 0
         self.accounts = list(accounts)
         self.records = list(records)
         self.hangs_up_after_turn = hangs_up_after_turn
@@ -154,7 +167,7 @@ class ScriptedNative:
         return [item.get("method") for item in self.received]
 
     def _emit(self, value) -> None:
-        raw = (json.dumps(value) + "\n").encode()
+        raw = value + b"\n" if isinstance(value, bytes) else (json.dumps(value) + "\n").encode()
         self.emitted.append(raw)
         self.pending.extend(raw)
         self.changed.set()
@@ -168,7 +181,14 @@ class ScriptedNative:
             return
         if method == "initialize":
             self._emit({"id": identifier, **(self.initialize or {"result": {"ok": True}})})
+            for value in self.early:
+                self._emit(value)
         elif method == "account/read":
+            self.accounts_seen += 1
+            if self.accounts_seen == self.fails_on_nth_account:
+                self.armed = True
+                self.changed.set()
+                return
             if not self.accounts:
                 self.eof = True  # the child exited before answering
                 self.changed.set()
@@ -180,6 +200,9 @@ class ScriptedNative:
             self._emit({"id": identifier, "result": {"turn": {"id": self.turn}}})
             for value in self.records:
                 self._emit(value)
+            if self.tail:
+                self.pending.extend(self.tail)  # deliberately unterminated
+                self.eof = True
             if self.hangs_up_after_turn:
                 self.eof = True
         else:
@@ -200,6 +223,10 @@ class ScriptedNative:
     async def read(self, maximum: int = 8192) -> bytes:
         if type(maximum) is not int or not 1 <= maximum <= 8192 or self.reading:
             raise ContractViolation("scripted read requires one reader and a bound in 1..8192")
+        if self.armed and not self.pending:
+            raise self.read_fails
+        if self.stdin_closed:
+            self.reads_after_close += 1
         self.reading = True
         try:
             while not self.pending and not self.eof:
@@ -243,7 +270,14 @@ class ScriptedLauncher(LinuxLauncher):
         })
         if self.raises is not None and not self.raises_after_conversation:
             raise self.raises
-        await conversation(self.native)
+        try:
+            await conversation(self.native)
+        except (ContractViolation, OSError, RuntimeError) as exc:
+            # linux.py collects anything that escapes the callback and re-raises
+            # it as ProcessExchangeError carrying the completed result, so the
+            # type is lost into __cause__. AssertionError is deliberately not
+            # caught: a broken test must still surface as a broken test.
+            raise ProcessExchangeError(self.result) from exc
         if self.raises is not None:
             raise self.raises
         return self.result
@@ -329,13 +363,14 @@ async def converse(native, **kwargs) -> CodexConversation:
     return conversation
 
 
-def clean_native(*, accounts=None, records=None, hangs_up_after_turn=False) -> ScriptedNative:
+def clean_native(*, accounts=None, records=None, hangs_up_after_turn=False, **overrides):
     return ScriptedNative(
         accounts=[{"result": MANAGED_RESULT}, {"result": MANAGED_RESULT}]
         if accounts is None else accounts,
         records=[completed(output={"summary": "done"}, model="gpt-5.6-sol")]
         if records is None else records,
         hangs_up_after_turn=hangs_up_after_turn,
+        **overrides,
     )
 
 
@@ -685,10 +720,10 @@ async def test_a_notification_after_the_terminal_record_is_still_the_turns_evide
     account-namespaced — never by when it arrived; a positional filter is
     exactly what let an account notification through before.
     """
-    native = clean_native(records=[completed(), {"method": "item/completed", "params": {}}])
+    native = clean_native(records=[completed(), {"method": "turn/delta", "params": {}}])
     conversation = await converse(native)
     assert conversation.faults == ()
-    assert "item/completed" in conversation.observation.raw
+    assert "turn/delta" in conversation.observation.raw
 
 
 async def test_a_second_terminal_record_after_the_turn_is_still_contradictory():
@@ -760,6 +795,203 @@ async def test_a_byte_scope_that_ends_inside_its_preamble_refuses():
     await asyncio.wait_for(conversation(native), 5)
     assert any("preamble" in fault for fault in conversation.faults)
     assert native.methods == []
+
+
+# --- the gate's completion is recorded, never inferred -----------------------
+
+
+class Hostile:
+    """A byte scope that fails in a way no layer of the adapter catches."""
+
+    def __init__(self, failure=None):
+        self.failure = failure if failure is not None else RuntimeError("transport exploded")
+        self.closed = False
+
+    async def read(self, maximum=8192):
+        raise self.failure
+
+    async def write(self, data):
+        return None
+
+    async def close_stdin(self):
+        self.closed = True
+
+
+def aborted_outcome(conversation):
+    return unavailable_outcome(
+        conversation.faults, conversation.observation, FINISHED, requested_model="gpt-5.6-sol",
+    )
+
+
+def test_a_conversation_refuses_a_backend_default_model_before_any_byte_moves():
+    """The precondition fails at construction, not halfway through a turn."""
+    backend_default = GRANTS.model_copy(
+        update={"model_selection": ModelSelection(kind="backend_default")},
+    )
+    with pytest.raises(ContractViolation, match="sealed model"):
+        CodexConversation(
+            task=TaskSpec(instruction="x"), grants=backend_default, expected=EXPECTED,
+            input_limit=1024 * 1024,
+        )
+
+
+async def test_a_clean_conversation_records_the_gate_as_completed():
+    conversation = await converse(clean_native())
+    assert conversation.gate_completed is True and conversation.faults == ()
+
+
+async def test_a_conversation_aborted_at_its_first_read_never_looks_clean():
+    """An empty fault tuple is not evidence that the gate cleared."""
+    conversation = conversation_for(None)
+    with pytest.raises(RuntimeError):
+        await asyncio.wait_for(conversation(Hostile()), 5)
+    assert conversation.gate_completed is False
+    assert GATE_INCOMPLETE_FAULT in conversation.faults
+    outcome = aborted_outcome(conversation)
+    assert outcome.status == "failure" and outcome.error.kind == "unavailable"
+    assert outcome.output is None and outcome.raw_reply is None
+
+
+async def test_a_conversation_aborted_during_the_pre_acceptance_reading_refuses():
+    """The turn succeeded and the second reading never landed: refuse anyway."""
+    native = clean_native(read_fails=RuntimeError("transport exploded"),
+                          fails_on_nth_account=2)
+    conversation = conversation_for(native)
+    with pytest.raises(RuntimeError):
+        await asyncio.wait_for(conversation(native), 5)
+    assert native.accounts_seen == 2  # the reading was sent and never answered
+    assert conversation.observation.terminal  # the turn itself had succeeded
+    assert conversation.gate_completed is False
+    assert GATE_INCOMPLETE_FAULT in conversation.faults
+    outcome = aborted_outcome(conversation)
+    assert outcome.status == "failure" and outcome.error.kind == "unavailable"
+    assert outcome.output is None and outcome.raw_reply is None
+
+
+DEEP_RECORD = ("[" * 4000 + "]" * 4000).encode()
+"""Thousands of nested arrays: far inside the record ceiling, yet the decoder
+exhausts the stack on it and raises ``RecursionError``."""
+
+
+async def test_a_pathological_record_is_damage_rather_than_an_escape():
+    native = clean_native(records=[completed(output={"summary": "done"}), DEEP_RECORD])
+    conversation = conversation_for(native)
+    escaped = None
+    try:
+        await asyncio.wait_for(conversation(native), 5)
+    except BaseException as exc:  # the point of the test is that nothing escapes
+        escaped = exc
+    assert escaped is None, escaped
+    assert any("malformed" in fault for fault in conversation.faults)
+    outcome = aborted_outcome(conversation)
+    assert outcome.status == "failure" and outcome.error.kind == "unavailable"
+
+
+async def test_a_pathological_record_inside_the_turn_is_counted_not_raised():
+    native = clean_native(records=[DEEP_RECORD, completed(output={"summary": "done"})])
+    conversation = conversation_for(native)
+    escaped = None
+    try:
+        await asyncio.wait_for(conversation(native), 5)
+    except BaseException as exc:  # the point of the test is that nothing escapes
+        escaped = exc
+    assert escaped is None, escaped
+    assert conversation.observation.malformed_records == 1
+    assert conversation.observation.first_error is not None
+
+
+# --- the configured model is the one that runs --------------------------------
+
+
+def two_model_profile():
+    policy = codex_profile().grant_policy.model_copy(
+        update={"model_ids": ("gpt-5.6-sol", "gpt-5.5")},
+    )
+    return codex_profile().model_copy(update={"grant_policy": policy})
+
+
+def provider_with(configuration, *, profile=None, launcher=None):
+    """Build the identity from the same configuration, so drift is not the fault."""
+    launcher = launcher if launcher is not None else bare_launcher()
+    resolved = profile if profile is not None else codex_profile()
+    identity = launch_identity(
+        launcher=launcher, profile=resolved, egress=native_egress(), store=native_store(),
+        executable_digest=digest("test-codex-executable", 1, BINARY),
+        configuration=configuration, catalog=(),
+        authenticated_startup_conformance_revision=digest("test-codex-startup", 1, "unproven"),
+        subscription_mode_conformance_revision=digest("test-codex-mode", 1, "unproven"),
+    )
+    return CodexOperatorProvider(
+        launcher=launcher, profile=resolved, identity=identity, expected_account=EXPECTED,
+        binary=BINARY, configuration=configuration, catalog=(),
+        acquisition_root=ACQUISITION_ROOT, unavailable_reasons=(),
+    )
+
+
+def test_the_configuration_must_name_a_model_from_the_profiles_inventory():
+    with pytest.raises(ContractViolation, match="inventory"):
+        provider_with('model = "never-offered"\n')
+
+
+@pytest.mark.parametrize("configuration,expected", [
+    ("this is not = = toml\n", "TOML"),
+    ('effort = "low"\n', "top-level model"),
+    ("model = 7\n", "top-level model"),
+], ids=["not-toml", "no-model", "not-a-string"])
+def test_an_unusable_configuration_is_refused_at_construction(configuration, expected):
+    with pytest.raises(ContractViolation, match=expected):
+        provider_with(configuration)
+
+
+def test_the_provider_reads_the_model_the_configuration_actually_names():
+    assert provider_with(CONFIGURATION).configured_model == "gpt-5.6-sol"
+
+
+async def test_a_grant_that_disagrees_with_the_configuration_is_refused():
+    """The turn sends no model, so the configuration decides what runs (I4)."""
+    launcher = bare_launcher(clean_native())
+    provider = provider_with(CONFIGURATION, profile=two_model_profile(), launcher=launcher)
+    other = GRANTS.model_copy(
+        update={"model_selection": ModelSelection(kind="explicit", model="gpt-5.5")},
+    )
+    acquired = await provider.acquire(context(grants=other))
+    await acquired.materialize()
+    outcome = await acquired.resource.execute(
+        TaskSpec(instruction="x"), workspace=None, grants=other,
+    )
+    assert outcome.status == "failure" and outcome.error.kind == "unavailable"
+    assert "different model" in outcome.error.detail
+    assert not launcher.commands
+
+
+# --- framing damage reaches an outcome ---------------------------------------
+
+
+@pytest.mark.parametrize("native_kwargs,marker", [
+    ({"records": [b"x" * (RECORD_BYTES + 10)]}, "ceiling"),
+    ({"records": [], "tail": b'{"method": "item/started"'}, "inside a record"),
+], ids=["oversized", "mid-record-eof"])
+async def test_framing_damage_reaches_the_outcome_rather_than_vanishing(native_kwargs, marker):
+    native = clean_native(**native_kwargs)
+    conversation = conversation_for(native)
+    await asyncio.wait_for(conversation(native), 5)
+    assert marker in (conversation.observation.first_error or "")
+    outcome = decode_turn(conversation.observation, FINISHED, requested_model=None)
+    assert outcome.status == "partial"
+    assert outcome.damage.first_error == conversation.observation.first_error
+
+
+async def test_a_notification_before_the_turn_is_not_the_turns_evidence():
+    native = clean_native(early=[{"method": "turn/delta", "params": {"marker": "beforehand"}}])
+    conversation = await converse(native)
+    assert conversation.faults == ()
+    assert "beforehand" not in conversation.observation.raw
+
+
+async def test_the_conversation_drains_to_eof_after_closing_stdin():
+    native = clean_native()
+    await converse(native)
+    assert native.stdin_closed and native.reads_after_close >= 1
 
 
 async def test_an_instruction_too_large_to_frame_refuses_rather_than_escaping():
@@ -879,3 +1111,110 @@ async def test_a_failed_conversation_still_decodes_the_evidence_it_carried(tmp_p
     assert outcome.error.exit_code == 1 and outcome.elapsed_s == 3.0
     # The salvage is the point: the evidence the error carried survives.
     assert outcome.output == {"summary": "done"}
+
+
+@LINUX
+async def test_an_aborted_conversation_refuses_rather_than_decoding_its_result(tmp_path):
+    """The shape that was broken: the salvage branch reached with no gate.
+
+    The launcher reports a clean, complete result because the conversation's own
+    ``finally`` closed stdin and drained before the exception propagated. Only
+    the recorded gate state distinguishes this from a turn that cleared.
+    """
+    aborting = clean_native(read_fails=RuntimeError("transport exploded"),
+                            fails_on_nth_account=2)
+    launcher = bare_launcher(aborting)
+    handle = await materialized(launcher, tmp_path)
+    outcome = await handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
+    assert outcome.status == "failure" and outcome.error.kind == "unavailable"
+    assert GATE_INCOMPLETE_FAULT in outcome.error.detail
+    assert outcome.output is None and outcome.raw_reply is None
+    assert_launch(launcher)
+
+
+@dataclass(frozen=True, kw_only=True)
+class DriftingLauncher(ScriptedLauncher):
+    """``revision`` is a property, so it can change after the provider is built."""
+
+    drifted: list[bool] = field(default_factory=list)
+
+    @property
+    def revision(self):
+        if self.drifted:
+            return digest("test-codex-drift", 1, "a later recipe")
+        launcher_revision = LinuxLauncher.revision
+        return launcher_revision.fget(self)
+
+
+@LINUX
+async def test_a_launch_recipe_that_drifts_after_construction_refuses(tmp_path):
+    launcher = DriftingLauncher(
+        runtime_root=Path("/opt/codex-runtime"),
+        expected_runtime=digest("test-codex-runtime", 1, "runtime"),
+        bubblewrap=Path("/usr/bin/bwrap"),
+        policy=Path("/etc/apparmor.d/constructicon-m8-launch"),
+        expected_policy_sha256="0" * 64,
+        native=clean_native(), result=FINISHED,
+    )
+    handle = await materialized(launcher, tmp_path)
+    launcher.drifted.append(True)  # the recipe's own sources changed under us
+    with pytest.raises(ContractViolation, match="drifted"):
+        await handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
+    assert not launcher.commands
+
+
+@LINUX
+@pytest.mark.parametrize("cancelled", [True, False], ids=["cancelled", "plain"])
+async def test_a_grouped_cleanup_failure_keeps_a_cancellation_a_cancellation(
+    tmp_path, cancelled,
+):
+    """A cancellation inside the group is still a cancellation, not an outcome."""
+    inner = asyncio.CancelledError() if cancelled else RuntimeError("cleanup failed")
+    group = BaseExceptionGroup("contained process cleanup failed", [inner])
+    launcher = bare_launcher(clean_native(), raises=group)
+    handle = await materialized(launcher, tmp_path)
+    call = handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
+    if cancelled:
+        with pytest.raises(asyncio.CancelledError):
+            await call
+    else:
+        outcome = await call
+        assert outcome.status == "failure" and outcome.error.kind == "unavailable"
+        assert "cleanup failed" in outcome.error.detail
+
+
+@LINUX
+async def test_close_cancels_an_exchange_still_in_flight(tmp_path):
+    entered = asyncio.Event()
+
+    @dataclass(frozen=True, kw_only=True)
+    class Blocking(ScriptedLauncher):
+        async def exchange(self, command, *, workspace, posture, guard_fds, conversation,
+                           timeout_s):
+            entered.set()
+            await asyncio.sleep(30)
+            raise AssertionError("the blocked exchange was never cancelled")
+
+    launcher = Blocking(
+        runtime_root=Path("/opt/codex-runtime"),
+        expected_runtime=digest("test-codex-runtime", 1, "runtime"),
+        bubblewrap=Path("/usr/bin/bwrap"),
+        policy=Path("/etc/apparmor.d/constructicon-m8-launch"),
+        expected_policy_sha256="0" * 64,
+        native=clean_native(), result=FINISHED,
+    )
+    provider = CodexOperatorProvider(
+        launcher=launcher, profile=codex_profile(), identity=identity_for(launcher),
+        expected_account=EXPECTED, binary=BINARY, configuration=CONFIGURATION, catalog=(),
+        acquisition_root=tmp_path, unavailable_reasons=(),
+    )
+    acquired = await provider.acquire(context())
+    await acquired.materialize()
+    running = asyncio.create_task(
+        acquired.resource.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS),
+    )
+    await asyncio.wait_for(entered.wait(), 5)
+    closure = await provider.close(acquired, "discard")
+    assert closure.disposition == "discarded"
+    with pytest.raises(asyncio.CancelledError):
+        await running

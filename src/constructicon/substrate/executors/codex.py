@@ -21,6 +21,16 @@ ADR 0021's "refuses availability/result acceptance". An ``account/`` notificatio
 arriving between the two readings discards the turn the same way: it is the only
 in-band signal for the window they bracket but cannot cover.
 
+**The gate records its completion; nothing infers it.** An empty fault tuple
+means either "the readings cleared" or "the conversation was aborted before it
+could record anything", and treating those alike published a turn whose
+pre-acceptance reading never ran. The conversation sets ``gate_completed`` only
+after the pre-acceptance comparison, and its ``finally`` states an explicit fault
+when it did not — so an escaped exception now fails closed instead of decoding
+the clean result the launcher reports once the conversation's teardown has closed
+stdin and drained. That invariant lives in the conversation rather than here,
+because the Linux lane builds its own outcome from the same faults.
+
 Nothing here reads, writes, parses or copies a credential, and no field of a
 published identity carries an account fact. The two readings are the supported
 non-secret observation; the module docstring of the protocol states exactly what
@@ -35,6 +45,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import tomllib
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import asdict
@@ -49,7 +60,7 @@ from constructicon.core.executor import (
     TaskSpec,
 )
 from constructicon.core.grants import EffectiveGrants
-from constructicon.core.identity import Digest, canonical_json, digest, parse_json_value
+from constructicon.core.identity import Digest, canonical_json, digest
 from constructicon.core.native_operator import (
     NativeEgressIdentityV1,
     NativeOperatorExecutorProfileV3,
@@ -72,8 +83,10 @@ from constructicon.substrate.executors import codex_protocol
 from constructicon.substrate.executors.codex_protocol import (
     ACCOUNT_NOTICE_FAULT,
     EMPTY_TURN,
+    GATE_INCOMPLETE_FAULT,
     READ_WINDOW,
     ExpectedAccount,
+    RecordDamaged,
     RecordStream,
     TurnObservation,
     account_change_faults,
@@ -85,7 +98,9 @@ from constructicon.substrate.executors.codex_protocol import (
     initialized_notification,
     is_account_record,
     is_terminal_record,
+    named_method,
     observe_turn,
+    parse_record,
     thread_start_request,
     turn_request,
     unavailable_outcome,
@@ -119,6 +134,29 @@ PROTOCOL_REVISION = digest("codex-operator-protocol", 1, inspect.getsource(codex
 
 def configuration_digest(configuration: str) -> Digest:
     return digest("codex-operator-configuration", 1, configuration)
+
+
+def configured_model(configuration: str) -> str:
+    """The model the sealed configuration names, read from its own bytes.
+
+    ``turn/start`` deliberately sends no model, so the model that will actually
+    run comes from this configuration. Publishing ``requested_model`` from the
+    grant while the configuration pins something else would be an I4 claim
+    resting on an unverified coupling: the adapter would report B and the vendor
+    would run A. Reading it here lets the provider refuse the disagreement.
+
+    The shape is the pinned client's ``--strict-config`` TOML with a top-level
+    ``model`` key, which is what every fixture in this repository supplies.
+    """
+
+    try:
+        parsed = tomllib.loads(configuration)
+    except tomllib.TOMLDecodeError as exc:
+        raise ContractViolation(f"the sealed configuration is not valid TOML: {exc}") from exc
+    model = parsed.get("model")
+    if not isinstance(model, str) or not model.strip():
+        raise ContractViolation("the sealed configuration must name a top-level model")
+    return model
 
 
 def callback_catalog_digest(catalog: Sequence[str]) -> Digest:
@@ -190,6 +228,13 @@ class CodexConversation:
         self, *, task: TaskSpec, grants: EffectiveGrants, expected: ExpectedAccount,
         input_limit: int, preamble: int = 0,
     ) -> None:
+        selection = grants.model_selection
+        if selection.kind != "explicit" or not (selection.model or "").strip():
+            # ``turn_request`` refuses this too, but there it raises mid-turn and
+            # out of the byte scope. A caller precondition belongs at
+            # construction, before any byte moves: one fewer way for an
+            # exception to escape the conversation.
+            raise ContractViolation("a native operator conversation requires a sealed model")
         self._task = task
         self._grants = grants
         self._expected = expected
@@ -206,6 +251,7 @@ class CodexConversation:
         self._collecting = False
         self._spent = 0
         self.faults: tuple[str, ...] = ()
+        self.gate_completed = False
         self.observation: TurnObservation = EMPTY_TURN
         self.preamble_records: list[bytes] = []
         self.thread_id: str | None = None
@@ -215,6 +261,18 @@ class CodexConversation:
         try:
             await self._converse(io)
         finally:
+            if not self.gate_completed and not self.faults:
+                # An aborted conversation records nothing, and an empty fault
+                # tuple would then read as "the gate cleared". It is not: this
+                # is the one place that turns silence into a refusal, and it is
+                # here rather than in the handle because every consumer — the
+                # handle and the Linux lane, which builds its own outcome from
+                # these faults — must inherit it.
+                #
+                # Conditional on ``not self.faults`` because every early return
+                # in ``_converse`` already records one, so an unconditional form
+                # would only add noise to an already-explained refusal.
+                self._refuse(GATE_INCOMPLETE_FAULT)
             self.observation = observe_turn(
                 self._transcript, thread_id=self.thread_id or "", turn_id=self.turn_id or "",
                 transport_damage=self._stream.damage,
@@ -236,7 +294,7 @@ class CodexConversation:
         Only the method name reaches the public detail; nothing from ``params``.
         """
 
-        self._refuse(ACCOUNT_NOTICE_FAULT.format(method=record.get("method")))
+        self._refuse(ACCOUNT_NOTICE_FAULT.format(method=named_method(record.get("method"))))
 
     def _next_identifier(self) -> int:
         self._identifier += 1
@@ -294,8 +352,8 @@ class CodexConversation:
                 self._refuse(f"the native client ended before answering {method!r}")
                 return None
             try:
-                record = parse_json_value(line.decode("utf-8"))
-            except (ValueError, UnicodeError) as exc:
+                record = parse_record(line)
+            except RecordDamaged as exc:
                 self._refuse(f"a malformed native record arrived awaiting {method!r}: {exc}")
                 return None
             if not isinstance(record, dict):
@@ -407,6 +465,9 @@ class CodexConversation:
             return
         self.faults += account_faults(after, self._expected)
         self.faults += account_change_faults(before, after)
+        # The gate ran to its end. Nothing earlier may set this: every path that
+        # does not reach here leaves a result unacceptable.
+        self.gate_completed = True
 
     async def _collect(self, io: ProcessIO) -> None:
         assert self.thread_id is not None and self.turn_id is not None
@@ -424,9 +485,9 @@ class CodexConversation:
         """Refuse an account notification before it can be transcribed."""
 
         try:
-            record = parse_json_value(line.decode("utf-8"))
-        except (ValueError, UnicodeError):
-            return False  # Malformed bytes are ordinary damage for the fold.
+            record = parse_record(line)
+        except RecordDamaged:
+            return False  # Damaged bytes are ordinary damage for the fold.
         if not isinstance(record, dict) or not is_account_record(record):
             return False
         self._refuse_account(record)
@@ -489,6 +550,13 @@ class CodexOperatorHandle:
             faults += ("the native zone takes no workspace",)
         if task.context or task.response_schema is not None:
             faults += ("this slice carries neither task context nor a response schema",)
+        if grants.model_selection.model != self.provider.configured_model:
+            # The turn sends no model, so the configuration decides what runs.
+            # Publishing the grant's model while the vendor ran another would be
+            # an untruthful observation, not a preference.
+            faults += (
+                "the sealed configuration names a different model than this grant selects",
+            )
         if faults:
             return ExecutorFailure(error=ExecutorError(
                 kind="unavailable", detail="; ".join(faults),
@@ -507,6 +575,11 @@ class CodexOperatorHandle:
         async with acquisition_guard(self.paths) as guard:
             if self.closed:
                 raise ContractViolation("codex acquisition closed while awaiting its guard")
+            # Reachable, and not a tautology over two frozen records:
+            # ``LinuxLauncher.revision`` is a property that re-hashes its own
+            # module and the L0 sources it binds at call time, so it is not a
+            # function of the launcher's fields and can differ between the
+            # provider's construction and this launch.
             if provider.launcher.revision != provider.identity.isolation_revision:
                 raise ContractViolation("the pinned launch recipe drifted from its identity")
             self.active = asyncio.create_task(provider.launcher.exchange(
@@ -520,8 +593,11 @@ class CodexOperatorHandle:
                 # Something escaped the callback; the evidence survives.
                 result = exc.result
             except (OSError, ContractViolation) as exc:
-                # A launch prerequisite failed: bubblewrap, policy, runtime
-                # digest, AppArmor or a non-Linux host.
+                # A launch prerequisite failed inside the launcher: bubblewrap,
+                # the policy, the runtime digest or AppArmor. Not the platform
+                # check — ``acquisition_guard`` raises that on entry, above this
+                # try, and production never reaches either, because ``acquire``
+                # refuses while any unavailable reason stands.
                 return _unavailable(str(exc), grants)
             except BaseExceptionGroup as group:
                 # Cleanup failed alongside the conversation, so there is no
@@ -594,6 +670,11 @@ class CodexOperatorProvider:
                 )
         if identity.profile != profile:
             raise ContractViolation("the published identity carries a different profile")
+        self.configured_model = configured_model(configuration)
+        if self.configured_model not in profile.grant_policy.model_ids:
+            raise ContractViolation(
+                "the sealed configuration names a model outside the profile's inventory"
+            )
         self.launcher = launcher
         self.profile = profile
         self.binary = binary

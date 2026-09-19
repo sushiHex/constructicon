@@ -36,13 +36,24 @@ and the fold below drops every id-bearing record. A server-initiated
 ``docs/plans/handoffs/M8-native-account-interface-preflight.md`` records, with
 pinned source links, that "Login responses and account notifications expose flow
 ids, auth mode, or plan type". So the fold drops the whole ``account/``
-namespace too, and the adapter refuses when one arrives. Bytes that fail to
-parse cannot be classified at all, so any that mention an account are dropped
-from the excerpt as well — a corrupted *reply* names the account object key
-rather than the method namespace, so the broader marker is the one that holds
-there. Their count and damage are still reported. The guarantee is therefore
-exactly this: no account frame, parseable or not, reaches
-``ExecutorObservation.raw_reply``.
+namespace too, and the adapter refuses when one arrives. Bytes that fail to parse
+cannot be classified at all, so none of them is published; their count and their
+parse error are, which keeps the report truthful without publishing content we
+could not read.
+
+**The exact scope of that guarantee, which is narrower than it sounds.** No
+*account frame* reaches ``ExecutorObservation.raw_reply``: not an id-bearing
+reply, not an ``account/``-namespaced notification, not unparseable bytes, and
+not a record whose method is outside the attested turn-evidence set. What the
+mechanism cannot promise is the *content of a legitimate turn record*. A
+``turn/completed`` for this thread and turn is this turn's evidence and its
+payload is the vendor's; if the vendor puts an account id inside it, it is in
+``raw``, and no filter can remove it without a payload vocabulary this slice does
+not hold and must not guess. Qualifying what those payloads may contain is an
+N3/N4 prerequisite. The same applies to the bounded stderr excerpt below: it is
+unfiltered vendor output, it is kept because it is the only transport diagnosis
+available, it cannot carry an account fact in this credential-free slice, and
+establishing what the pinned binary writes there is an N4 prerequisite.
 """
 
 from __future__ import annotations
@@ -77,7 +88,12 @@ channel; this smaller ceiling turns an unterminated record into ordinary
 damage first."""
 
 EVIDENCE_BYTES = 256
-"""Bounded stderr evidence; never the whole stream."""
+"""Bounded stderr evidence; never the whole stream.
+
+Unfiltered vendor output, deliberately: filtering it would be the same
+unwinnable heuristic as filtering bytes we could not parse. It is kept because
+it is the only transport diagnosis available. See the module docstring for the
+limit this records."""
 
 
 # --- framing -----------------------------------------------------------------
@@ -95,6 +111,33 @@ def encode_record(value: Mapping[str, Any]) -> bytes:
     if len(raw) > RECORD_BYTES:
         raise ContractViolation("an outbound protocol record exceeds the record ceiling")
     return raw
+
+
+class RecordDamaged(ValueError):
+    """One record's bytes cannot be decoded. Damage, never an escape."""
+
+
+def parse_record(line: bytes) -> Any:
+    """Decode one record's bytes, or raise :class:`RecordDamaged`.
+
+    The bounded set of decoder failures is named here, once, because it has four
+    call sites and they must not drift. ``RecursionError`` is in it and is the
+    reason this helper exists: a record of a few thousand nested arrays sits far
+    inside the record ceiling, yet the decoder exhausts the stack on it, and
+    ``RecursionError`` is neither a ``ValueError`` nor a ``UnicodeError``. Left
+    uncaught it escaped the whole conversation, whose ``finally`` had already
+    closed stdin and drained to EOF — so the child exited cleanly, the launcher
+    reported a complete result, and a turn was published although the
+    pre-acceptance gate never ran.
+
+    Shape checks stay with the callers, which want different things from a
+    record; only the decode is shared.
+    """
+
+    try:
+        return parse_json_value(line.decode("utf-8"))
+    except (ValueError, UnicodeError, RecursionError) as exc:
+        raise RecordDamaged(str(exc)) from exc
 
 
 def split_records(buffer: bytearray) -> list[bytes]:
@@ -287,6 +330,18 @@ PROVIDER_OVERRIDE_FAULT = (
 )
 NO_PLAN_FAULT = "the account carries no plan fact"
 
+GATE_INCOMPLETE_FAULT = (
+    "the subscription-mode gate did not complete, so no result may be accepted"
+)
+"""An empty fault tuple is not evidence that the gate cleared.
+
+Empty has a second meaning: the conversation was aborted before it could record
+anything. The adapter used to infer "cleared" from "empty", which published a
+turn although the pre-acceptance reading never ran. The conversation now records
+its completion affirmatively and states this fault when it did not, so the
+negative inference is gone.
+"""
+
 ACCOUNT_NAMESPACE = "account/"
 """Every account-bearing method, refused as a namespace rather than a list.
 
@@ -297,23 +352,110 @@ Naming individual notification methods would therefore be guessing at a list we
 do not have, so the namespace is the unit and the posture is fail closed.
 """
 
-ACCOUNT_EVIDENCE_MARKER = b"account"
-"""Deliberately broader than the namespace, and only for bytes that would not parse.
+TURN_EVIDENCE_PREFIXES = ("turn/",)
+TURN_EVIDENCE_METHODS = frozenset({"error", "warning", "configWarning"})
+"""What a turn transcript may carry: one earned prefix and three exact names.
 
-Classification needs a parsed record, so unparseable bytes get a substring test
-instead — and the namespace is the wrong substring for them. A corrupted
-``account/read`` **reply** carries the account *object* key, which has no slash:
-``{"id": 3, "result": {"account": {"email": ...`` contains ``account`` but not
-``account/``. Keying the excerpt guard on the namespace alone would therefore
-let a truncated reply carry an operator's email into a public field.
+``error``, ``warning`` and ``configWarning`` are **names** — a closed
+enumeration, and each was observed from the pinned binary directly
+(``tests/substrate/test_native_startup.py`` asserts an ``error`` carrying
+``threadId`` and ``turnId`` during a turn, and the bubblewrap ``warning``
+verbatim).
 
-The cost is that a malformed line mentioning "account" for any reason loses its
-excerpt. Its count and its damage are still reported, so the outcome stays
-truthful (I4); only the evidence text is lost, which is the right trade for this
-class of bytes.
+``turn/`` is the one **prefix**, and it is earned rather than assumed: its
+terminal member ``turn/completed`` is attested from the real binary
+(``tests/substrate/test_provider_placement.py``, ``test_native_startup.py``), and
+this module's entire projection — terminal detection, served model, usage, rate
+limits — is defined in terms of that namespace's semantics. A prefix still admits
+members never observed, so this is the one place that residual is accepted, and
+it is frame admission inside a namespace that is the invocation's own by
+construction.
+
+**``item/`` was considered and excluded**, deliberately, not by oversight. The
+only ``item/`` member this repository has ever seen is ``item/tool/call``
+(``tests/native_codex_probe.py``), and that is an **id-bearing request**, which
+this adapter refuses as damage by design. So the namespace has never been
+observed emitting a notification at all, and admitting it would be an assumption
+about an unobserved surface — the exact thing this allowlist exists to remove.
+``item/started`` and ``item/completed``, used in this repository's own tests, are
+invented names. Add ``item/`` back at N4 once a real stream has been observed and
+its methods can be named: a one-line change backed by evidence.
+``hook/started`` and ``hook/completed`` are attested but are session-start
+activity rather than turn evidence, so they stay out too.
+
+The cost is real and points the right way: an unattested notification is excluded
+from ``raw`` rather than published, and is not counted as malformed because it is
+not damage. But exclusion must never be *silent* — a near-empty transcript with
+no indication anything was withheld is an evidence blackout at exactly the moment
+N4 needs evidence, which is structurally the same defect as a gate that passes
+without running. So the fold counts what it excludes and says so in the
+transcript's own marker.
 """
 
-ACCOUNT_NOTICE_FAULT = "the session reported {method!r} during the turn"
+
+def is_turn_evidence(record: Mapping[str, Any]) -> bool:
+    """Whether one parsed notification is this turn's attested evidence."""
+
+    method = record.get("method")
+    if not isinstance(method, str):
+        return False
+    return method in TURN_EVIDENCE_METHODS or method.startswith(TURN_EVIDENCE_PREFIXES)
+
+
+NAMEABLE_VALUE = 32
+"""How much of a wire value may appear in a public fault detail."""
+
+NAMEABLE_METHOD = 64
+"""The same rule for a method name, which needs ``/`` and a little more room."""
+
+
+def _nameable(value: Any, *, limit: int, extra: str) -> str | None:
+    if isinstance(value, str) and 0 < len(value) <= limit and all(
+        character.isalnum() or character in extra for character in value
+    ):
+        return repr(value)
+    return None
+
+
+def named_method(value: Any) -> str:
+    """Report a wire method name, bounded, or its type.
+
+    Methods carry ``/`` by construction, so they cannot use the value charset;
+    that would classify every real method as unnameable and strip the account
+    refusal of the only specificity it has. The bound and the lexical check are
+    the same idea, with the namespace separator admitted.
+    """
+
+    return _nameable(value, limit=NAMEABLE_METHOD, extra="_-/") or named_value(value)
+
+
+def named_value(value: Any) -> str:
+    """Report a wire value only when it is short and lexically safe.
+
+    ``ExecutorError.detail`` is public and wire values are vendor-controlled, so
+    a value reaches it only when it is a ``str`` of at most
+    :data:`NAMEABLE_VALUE` characters drawn from ``[A-Za-z0-9_-]``. Anything else
+    is reported as its JSON type: an object under ``account.type`` would
+    otherwise carry an email into a public field, and a 200 KB plan name would
+    make a 200 KB detail.
+
+    This is why two assertions in the protocol tests that look contradictory are
+    both right. A plan literal like ``'free'`` **is** named, because that is the
+    diagnostic telling an operator why availability was refused; arbitrary wire
+    content never is. The rule is the value's shape, not the field it came from,
+    so do not "fix" either test by loosening this.
+    """
+
+    nameable = _nameable(value, limit=NAMEABLE_VALUE, extra="_-")
+    if nameable is not None:
+        return nameable
+    if value is None:
+        return "absent"
+    if isinstance(value, bool):
+        return repr(value)
+    return f"a {type(value).__name__} value"
+
+ACCOUNT_NOTICE_FAULT = "the session reported {method} during the turn"
 """Neutral by construction. ADR 0021 refuses on "an observed mode change" and
 requires qualification that refresh "cannot silently select API/cloud
 authentication mid-turn"; a mode-change notification lands in exactly the window
@@ -380,8 +522,8 @@ def account_faults(reply: Any, expected: ExpectedAccount) -> tuple[str, ...]:
         faults.append(NO_ACCOUNT_FAULT)
     if known is not None and known.get(ACCOUNT_TYPE_KEY) != expected.account_type:
         faults.append(
-            f"account type {known.get(ACCOUNT_TYPE_KEY)!r} is not the expected "
-            f"{expected.account_type!r}"
+            f"account type {named_value(known.get(ACCOUNT_TYPE_KEY))} is not the "
+            f"expected {expected.account_type!r}"
         )
     if result.get(PROVIDER_FLAG_KEY) is not True:
         faults.append(PROVIDER_OVERRIDE_FAULT)
@@ -391,7 +533,10 @@ def account_faults(reply: Any, expected: ExpectedAccount) -> tuple[str, ...]:
         # fail-closed for a scripted or future reply that omits it.
         faults.append(NO_PLAN_FAULT)
     if plan is not None and plan != expected.plan_type:
-        faults.append(f"account plan {plan!r} is not the expected {expected.plan_type!r}")
+        faults.append(
+            f"account plan {named_value(plan)} is not the expected "
+            f"{expected.plan_type!r}"
+        )
     return tuple(faults)
 
 
@@ -418,7 +563,7 @@ def account_change_faults(before: Any, after: Any) -> tuple[str, ...]:
 
     names = ("account type", "account plan", "provider authentication requirement")
     return tuple(
-        f"{name} changed from {old!r} to {new!r} across the turn"
+        f"{name} changed from {named_value(old)} to {named_value(new)} across the turn"
         for name, old, new in zip(names, _reading(before), _reading(after), strict=True)
         if old != new
     )
@@ -469,8 +614,8 @@ def is_terminal_record(line: bytes, *, thread_id: str, turn_id: str) -> bool:
     """
 
     try:
-        record = parse_json_value(line.decode("utf-8"))
-    except (ValueError, UnicodeError):
+        record = parse_record(line)
+    except RecordDamaged:
         return False
     if not isinstance(record, dict):
         return False
@@ -490,13 +635,74 @@ def _usage(value: Any) -> Usage | None:
     return Usage(**numbers) if numbers else None
 
 
+RATE_LIMIT_KEYS = 16
+RATE_LIMIT_KEY_LENGTH = 48
+
+TRANSCRIPT_CHARS = 64 * 1024
+"""What ``raw_reply`` may carry. The launcher's 32 MiB stdout bound is the only
+other ceiling and it arrives after the transcript is already in the outcome, so a
+chatty session would otherwise put megabytes into a field that flows wherever
+outcomes flow (I9: bounded surfaces)."""
+
+
+def _bounded_transcript(kept: Sequence[str], unclassified: int) -> str:
+    """Join the kept records, bounded, saying in-band what is missing and why.
+
+    Two things withhold evidence here and both must be visible. Our own byte
+    bound, and the evidence allowlist, which excludes records it cannot attest.
+    Neither is transport damage: neither may become ``first_error`` or demote a
+    clean success to partial. The markers carry that instead, so a reader holding
+    a near-empty transcript knows a count of what was withheld and can go attest
+    it rather than wondering whether the turn was silent.
+    """
+
+    transcript: list[str] = []
+    size = 0
+    dropped = 0
+    for index, item in enumerate(kept):
+        if size + len(item) > TRANSCRIPT_CHARS:
+            dropped = len(kept) - index
+            break
+        transcript.append(item)
+        size += len(item) + 1
+    if dropped:
+        transcript.append(
+            f"[transcript bounded at {TRANSCRIPT_CHARS} characters; "
+            f"{dropped} further records not shown]"
+        )
+    if unclassified:
+        transcript.append(f"[{unclassified} records excluded as unclassified]")
+    return "\n".join(transcript)
+
+
 def _rate_limit(value: Any) -> RateLimitInfo | None:
+    """Surface emitted rate-limit facts, constrained by value shape at use.
+
+    ADR 0021 asks to surface emitted rate-limit and overage facts, not to copy a
+    vendor object into a public field. We hold no schema for this payload, so the
+    constraint is the value's own shape: a key is carried only when its value is
+    a number or a flag. Rate-limit facts are numbers and flags; identity facts
+    are strings and objects, so an email, an account id and a plan name are
+    excluded mechanically rather than by vocabulary. Key names are wire-
+    controlled too, so both the count and the name length are bounded.
+
+    The cost, stated: a genuinely string-valued rate-limit fact is dropped. For
+    a public field that is the right direction, and this is the accepting path —
+    a refusal publishes no ``rate_limit`` at all.
+    """
+
     if not isinstance(value, Mapping):
-        return None
+        return None  # I4: an unemitted fact stays absent, never inferred.
     overage = value.get("usingOverage")
+    detail = {
+        key: item
+        for key, item in sorted(value.items())[:RATE_LIMIT_KEYS]
+        if isinstance(key, str) and len(key) <= RATE_LIMIT_KEY_LENGTH
+        and (type(item) is bool or type(item) is int or type(item) is float)
+    }
     return RateLimitInfo(
         is_using_overage=overage if type(overage) is bool else None,
-        detail=dict(value),
+        detail=detail or None,
     )
 
 
@@ -515,11 +721,22 @@ def observe_turn(
     ``raw`` exists — that is what keeps an ``account/read`` reply, and the email
     it carries, out of the public outcome.
 
-    An id-less ``account/`` notification carries the same class of fact and is
-    dropped in the same place for the same reason. It is not malformed, so it is
-    neither counted nor recorded as damage: it is simply not this turn's
-    evidence. The adapter refuses on it separately, which is where it becomes an
-    outcome.
+    Everything else is admitted by an **allowlist**, not by failing a denylist,
+    and that is this function's one rule: only attested turn evidence is kept.
+    The reason the account namespace is refused at all is that the notification
+    surface is unenumerated — and that same unenumerated-ness means an unknown
+    method is an open assumption, so ``raw`` carries records this module
+    classified as evidence rather than records it merely failed to reject. An
+    id-less ``account/`` notification is excluded because it is not attested
+    evidence, which needs no separate clause here: a redundant one would have no
+    observable effect and so could not be falsified, which is exactly what
+    invites a later reader to widen the allowlist and reopen the hole. The
+    adapter refuses on such a record separately, and there the denylist acts
+    alone and is falsifiable.
+
+    Unparseable bytes contribute their count and their parse error and nothing
+    else: a heuristic over content we could not classify is not a rule that can
+    be true.
     """
 
     output: Any = None
@@ -528,29 +745,28 @@ def observe_turn(
     rate_limit: RateLimitInfo | None = None
     terminal = False
     malformed = 0
+    unclassified = 0
     first_error = transport_damage
     kept: list[str] = []
     for line in records:
         if not line.strip():
             continue
         try:
-            record = parse_json_value(line.decode("utf-8"))
-        except (ValueError, UnicodeError) as exc:
+            record = parse_record(line)
+        except RecordDamaged as exc:
+            # Bytes we could not parse we cannot classify, so none of them is
+            # published. The count and the damage report them truthfully (I4).
             malformed += 1
             first_error = first_error or f"malformed native record: {exc}"
-            if ACCOUNT_EVIDENCE_MARKER not in line:
-                # Unparseable bytes are transport evidence worth keeping, but
-                # bytes that mention an account at all cannot be classified, so
-                # they are not worth the risk of carrying an account fact into a
-                # public field. The count and the damage still report them
-                # truthfully (I4); only the excerpt is lost.
-                kept.append(line.decode("utf-8", errors="replace"))
             continue
         if not isinstance(record, dict) or "id" in record or "method" not in record:
             malformed += 1
             first_error = first_error or "a turn transcript carries native notifications only"
             continue
-        if is_account_record(record):
+        if not is_turn_evidence(record):
+            # Not damage, so it is not counted as malformed and sets no error —
+            # but never silent either: the transcript states this count.
+            unclassified += 1
             continue
         kept.append(line.decode("utf-8", errors="replace"))
         if record.get("method") == "turn/completed":
@@ -574,7 +790,7 @@ def observe_turn(
     return TurnObservation(
         output=output, served_model=served_model, usage=usage, rate_limit=rate_limit,
         terminal=terminal, malformed_records=malformed, first_error=first_error,
-        raw="\n".join(kept),
+        raw=_bounded_transcript(kept, unclassified),
     )
 
 

@@ -6,6 +6,7 @@ account reply here is scripted; nothing in this file reaches a vendor.
 
 import ast
 import inspect
+import json
 
 import pytest
 
@@ -14,19 +15,23 @@ from constructicon.core.executor import RateLimitInfo, TaskSpec, Usage
 from constructicon.core.grants import EffectiveGrants, ModelSelection, Posture
 from constructicon.substrate.executors import codex_protocol
 from constructicon.substrate.executors.codex_protocol import (
-    ACCOUNT_EVIDENCE_MARKER,
     ACCOUNT_NAMESPACE,
     ACCOUNT_NOTICE_FAULT,
     ACCOUNT_TYPE_KEY,
+    NAMEABLE_VALUE,
     NO_ACCOUNT_FAULT,
     NO_PLAN_FAULT,
     NO_RESULT_FAULT,
     PLAN_TYPE_KEY,
     PROVIDER_FLAG_KEY,
     PROVIDER_OVERRIDE_FAULT,
+    RATE_LIMIT_KEY_LENGTH,
+    RATE_LIMIT_KEYS,
     READ_WINDOW,
     RECORD_BYTES,
+    TRANSCRIPT_CHARS,
     ExpectedAccount,
+    RecordDamaged,
     RecordStream,
     TurnObservation,
     account_change_faults,
@@ -38,7 +43,11 @@ from constructicon.substrate.executors.codex_protocol import (
     initialized_notification,
     is_account_record,
     is_terminal_record,
+    is_turn_evidence,
+    named_method,
+    named_value,
     observe_turn,
+    parse_record,
     split_records,
     thread_start_request,
     turn_request,
@@ -187,6 +196,36 @@ def test_split_records_consumes_only_complete_lines():
     assert bytes(buffer) == b"incomplete"
 
 
+DEEP_RECORD = ("[" * 4000 + "]" * 4000).encode()
+"""Thousands of nested arrays: far inside the record ceiling, yet the decoder
+exhausts the stack on it. ``RecursionError`` is neither a ``ValueError`` nor a
+``UnicodeError``, which is how it used to escape every parse site."""
+
+
+@pytest.mark.parametrize("line", [
+    DEEP_RECORD,
+    b"{not json",
+    b'{"method": "\xff\xfe"}',
+    b'{"a": 1, "a": 2}',
+], ids=["pathological", "malformed", "not-utf8", "duplicate-keys"])
+def test_every_decoder_failure_is_one_damage_type(line):
+    with pytest.raises(RecordDamaged):
+        parse_record(line)
+
+
+def test_a_valid_record_decodes_and_keeps_its_shape_checks_with_the_caller():
+    assert parse_record(b'{"method": "x"}') == {"method": "x"}
+    # A non-object is not damage here; each caller decides what shape it needs.
+    assert parse_record(b'"just a string"') == "just a string"
+
+
+def test_a_pathological_record_escapes_no_parse_site():
+    assert is_terminal_record(DEEP_RECORD, thread_id=THREAD, turn_id=TURN) is False
+    observation = folded([DEEP_RECORD, record(completed())])
+    assert observation.malformed_records == 1 and observation.first_error is not None
+    assert observation.terminal
+
+
 def test_an_oversized_outbound_record_is_refused_before_it_is_sent():
     with pytest.raises(ContractViolation):
         encode_record({"method": "x", "params": {"text": "y" * RECORD_BYTES}})
@@ -325,6 +364,49 @@ def test_the_gate_cannot_separate_the_chatgpt_credential_variants():
     assert "getAuthStatus" not in source and "authMode" not in source
 
 
+def test_a_wire_value_reaches_a_public_detail_only_when_it_is_short_and_lexical():
+    assert named_value("pro") == "'pro'" and named_value("free") == "'free'"
+    assert named_value("apiKey") == "'apiKey'"
+    assert named_value(None) == "absent" and named_value(True) == "True"
+    assert named_value("x" * (NAMEABLE_VALUE + 1)) == "a str value"
+    assert named_value({"email": EMAIL}) == "a dict value"
+    assert named_value([EMAIL]) == "a list value"
+    assert named_value("has space") == "a str value"
+    # A method carries "/" by construction, so it has its own bounded form;
+    # sharing the value charset would make every real method unnameable and
+    # strip the account refusal of its only specificity.
+    assert named_method("account/updated") == "'account/updated'"
+    assert named_value("account/updated") == "a str value"
+    assert named_method("account/" + "m" * 200) == "a str value"
+    assert named_method({"email": EMAIL}) == "a dict value"
+
+
+@pytest.mark.parametrize("account,leak", [
+    ({ACCOUNT_TYPE_KEY: {"chatgpt": {"email": EMAIL}}, PLAN_TYPE_KEY: "pro"}, EMAIL),
+    ({ACCOUNT_TYPE_KEY: "chatgpt", PLAN_TYPE_KEY: "p" * 200_000}, "p" * 200_000),
+], ids=["nested-type", "oversized-plan"])
+def test_no_unbounded_wire_value_reaches_a_public_fault_detail(account, leak):
+    faults = account_faults(account_reply(account=account), EXPECTED)
+    joined = "; ".join(faults)
+    assert faults and leak not in joined
+    assert len(joined) < 512
+
+
+def test_a_changed_reading_reports_a_type_rather_than_an_object():
+    after = account_reply(account={ACCOUNT_TYPE_KEY: {"nested": EMAIL}, PLAN_TYPE_KEY: "pro"})
+    faults = account_change_faults(account_reply(account=MANAGED), after)
+    joined = "; ".join(faults)
+    assert faults and EMAIL not in joined and "a dict value" in joined
+
+
+def test_the_account_notice_fault_classifies_its_wire_method():
+    long = "account/" + "m" * 200
+    detail = ACCOUNT_NOTICE_FAULT.format(method=named_method(long))
+    assert long not in detail and len(detail) < 200
+    named = ACCOUNT_NOTICE_FAULT.format(method=named_method("account/updated"))
+    assert "account/updated" in named
+
+
 def test_two_agreeing_readings_carry_no_change_fault():
     reply = account_reply(account=MANAGED)
     assert account_change_faults(reply, account_reply(2, account=MANAGED)) == ()
@@ -347,7 +429,7 @@ def test_a_reading_that_differs_from_the_pre_turn_one_refuses(after, named):
 
 def test_a_clean_turn_reports_only_what_the_stream_emitted():
     observation = folded([
-        record({"method": "item/started", "params": {"threadId": THREAD}}),
+        record({"method": "turn/delta", "params": {"threadId": THREAD}}),
         record(completed()),
     ])
     assert observation.terminal and observation.first_error is None
@@ -356,7 +438,7 @@ def test_a_clean_turn_reports_only_what_the_stream_emitted():
     assert observation.served_model is None
     assert observation.usage is None and observation.rate_limit is None
     assert observation.output is None
-    assert "item/started" in observation.raw
+    assert "turn/delta" in observation.raw
 
 
 def test_emitted_model_usage_and_rate_limit_are_carried_through():
@@ -371,6 +453,62 @@ def test_emitted_model_usage_and_rate_limit_are_carried_through():
         is_using_overage=True, detail={"usingOverage": True, "windowMinutes": 300},
     )
     assert observation.output == {"summary": "done"}
+
+
+def test_an_accepted_turn_publishes_only_numeric_rate_limit_facts():
+    """The accepting path, which every refusal-shaped leak test misses.
+
+    ADR 0021 asks to surface emitted rate-limit facts, not to copy a vendor
+    object. Identity facts are strings and objects, so constraining by value
+    shape excludes them mechanically.
+    """
+    observation = folded([record(completed(rateLimits={
+        "usingOverage": True, "windowMinutes": 300, "usedPercent": 12.5,
+        "accountId": "acct_9182736455", "email": EMAIL, "planType": "pro",
+        "note": "n" * 5000, "limits": [{"email": EMAIL}],
+    }))])
+    outcome = decode_turn(observation, Facts(), requested_model=None)
+    assert outcome.status == "success"
+    published = outcome.model_dump(mode="json")
+    transcript = published.pop("raw_reply")
+    for leaked in (EMAIL, "acct_9182736455", "pro", "n" * 5000):
+        assert leaked not in json.dumps(published)
+    assert outcome.rate_limit.is_using_overage is True
+    assert outcome.rate_limit.detail == {
+        "usedPercent": 12.5, "usingOverage": True, "windowMinutes": 300,
+    }
+    # The stated limit, pinned by a test rather than left in prose: a legitimate
+    # turn record's payload is the vendor's and passes through raw_reply. No
+    # filter can change that without a payload vocabulary this slice does not
+    # hold; qualifying what those payloads may contain is an N3/N4 prerequisite.
+    assert EMAIL in transcript
+
+
+def test_a_rate_limit_object_of_only_identity_facts_publishes_no_detail():
+    observation = folded([record(completed(rateLimits={"email": EMAIL}))])
+    outcome = decode_turn(observation, Facts(), requested_model=None)
+    assert outcome.status == "success" and outcome.rate_limit.detail is None
+    published = outcome.model_dump(mode="json")
+    published.pop("raw_reply")  # the vendor's own record; see the stated limit
+    assert EMAIL not in json.dumps(published)
+
+
+def test_the_dropped_string_rate_limit_fact_is_a_pinned_cost_not_an_accident():
+    """The stated cost of constraining by value shape, as a test rather than prose."""
+    observation = folded([record(completed(rateLimits={
+        "resetsAt": "2026-01-01T00:00:00Z", "windowMinutes": 300,
+    }))])
+    outcome = decode_turn(observation, Facts(), requested_model=None)
+    assert outcome.rate_limit.detail == {"windowMinutes": 300}
+
+
+def test_a_rate_limit_object_is_bounded_in_key_count_and_key_length():
+    emitted = {f"metric{index}": index for index in range(40)}
+    emitted["k" * 200] = 1
+    observation = folded([record(completed(rateLimits=emitted))])
+    outcome = decode_turn(observation, Facts(), requested_model=None)
+    assert len(outcome.rate_limit.detail) <= RATE_LIMIT_KEYS
+    assert all(len(key) <= RATE_LIMIT_KEY_LENGTH for key in outcome.rate_limit.detail)
 
 
 def test_a_malformed_record_is_damage_a_later_success_cannot_promote():
@@ -430,22 +568,23 @@ def test_an_id_less_account_notification_never_reaches_the_transcript():
     b'{"method": "account/updated", "params": {"email": "' + EMAIL.encode() + b'"',
     b'{"id": 3, "result": {"account": {"type": "chatgpt", "email": "' + EMAIL.encode()
     + b'", "planType": "pro"}, "requiresOpenaiAuth"',
-], ids=["notification", "reply"])
-def test_unclassifiable_bytes_carrying_account_evidence_keep_only_their_count(damaged):
-    """A corrupted reply names the account object key, not the method namespace.
+    b'{"method": "authStatusChange", "params": {"email": "' + EMAIL.encode() + b'"',
+    b"thread 'main' panicked: signed in as " + EMAIL.encode(),
+    b"[INFO] refreshed credentials for " + EMAIL.encode(),
+], ids=["account-notification", "account-reply", "other-namespace", "panic", "diagnostic"])
+def test_no_unparseable_byte_is_ever_published(damaged):
+    """Bytes we could not parse we could not classify, so none are published.
 
-    Bytes that cannot be parsed cannot be classified, so the guard is a
-    substring test — and it has to be the broader one, or a truncated
-    ``account/read`` reply carries an email into a public field.
+    A marker on the word "account" was a heuristic: it closed the two shapes it
+    was tested against and left the class open — a diagnostic line, a panic, or a
+    truncation one field earlier all name an operator without that word.
     """
-    assert ACCOUNT_NAMESPACE.encode() in damaged or ACCOUNT_EVIDENCE_MARKER in damaged
     observation = folded([damaged, record(completed())])
+    assert EMAIL not in observation.raw
+    assert damaged.decode("utf-8", errors="replace") not in observation.raw
+    # I4: the count and the damage still report them, so this is not silence.
     assert observation.malformed_records == 1 and observation.first_error is not None
-    assert EMAIL not in observation.raw and observation.raw != ""
-
-
-def test_ordinary_malformed_bytes_remain_transport_evidence():
-    assert "{not json" in folded([b"{not json", record(completed())]).raw
+    assert observation.terminal
 
 
 @pytest.mark.parametrize("method", [
@@ -453,6 +592,22 @@ def test_ordinary_malformed_bytes_remain_transport_evidence():
 ])
 def test_the_whole_account_namespace_is_refused_not_a_list_of_known_methods(method):
     assert is_account_record({"method": method})
+
+
+@pytest.mark.parametrize("method", [
+    "account/updated", "account/read", "account/login/start", "account/anythingUnenumerated",
+])
+def test_no_account_method_is_attested_turn_evidence(method):
+    """``observe_turn`` needs no account clause, and this is why.
+
+    The allowlist already excludes the namespace, so a second clause there would
+    have no observable effect and could not be falsified. This assertion is what
+    an author widening the allowlist to admit ``account/`` would break.
+    """
+    assert not is_turn_evidence({"method": method})
+    assert EMAIL not in folded([
+        record({"method": method, "params": {"email": EMAIL}}), record(completed()),
+    ]).raw
     assert EMAIL not in folded([record({"method": method, "params": {"email": EMAIL}})]).raw
 
 
@@ -470,6 +625,58 @@ def test_the_account_fault_names_the_method_and_nothing_from_its_params():
     assert EMAIL not in detail and "pro" not in detail and "chatgptAuthTokens" not in detail
     # Neutral about what changed: a non-updated account record need not be one.
     assert "mode change" not in detail
+
+
+@pytest.mark.parametrize("method", ["turn/delta", "turn/anything", "error", "warning"])
+def test_an_attested_turn_notification_is_kept_as_evidence(method):
+    observation = folded([record({"method": method, "params": {"x": 1}}), record(completed())])
+    assert method in observation.raw and observation.malformed_records == 0
+
+
+@pytest.mark.parametrize("method", [
+    "authStatusChange", "sessionConfigured", "hook/started", "item/started",
+])
+def test_an_unattested_method_is_excluded_without_being_called_damage(method):
+    """An unknown method is an open assumption, not evidence, and not damage."""
+    notice = {"method": method, "params": {"email": EMAIL}}
+    observation = folded([record(notice), record(completed())])
+    assert EMAIL not in observation.raw and method not in observation.raw
+    assert observation.malformed_records == 0 and observation.first_error is None
+    assert observation.terminal
+
+
+def test_the_item_namespace_is_excluded_and_says_so_rather_than_going_silent():
+    """``item/`` has never been observed emitting a notification, so it is out.
+
+    Its only attested member is the id-bearing ``item/tool/call`` request. The
+    exclusion is deliberate and must be *visible*: a near-empty transcript with
+    no count is an evidence blackout, which is the same class of defect as
+    something consequential happening invisibly.
+    """
+    records = [record({"method": "item/started", "params": {"index": index}})
+               for index in range(37)]
+    observation = folded([*records, record(completed())])
+    assert "item/started" not in observation.raw
+    assert "[37 records excluded as unclassified]" in observation.raw
+    # Our own classification is not transport damage.
+    assert observation.malformed_records == 0 and observation.first_error is None
+    assert decode_turn(observation, Facts(), requested_model=None).status == "success"
+
+
+def test_a_fully_classified_turn_carries_no_exclusion_marker():
+    observation = folded([record({"method": "turn/delta"}), record(completed())])
+    assert "excluded as unclassified" not in observation.raw
+
+
+def test_the_transcript_is_bounded_and_says_how_much_it_dropped():
+    chatty = [record({"method": "turn/delta", "params": {"text": "x" * 2000}})
+              for _ in range(200)]
+    observation = folded([*chatty, record(completed())])
+    assert len(observation.raw) <= TRANSCRIPT_CHARS + 200
+    assert "further records not shown" in observation.raw
+    # Our own bound is not transport damage and must not demote a clean success.
+    assert observation.first_error is None and observation.malformed_records == 0
+    assert decode_turn(observation, Facts(), requested_model=None).status == "success"
 
 
 def test_transport_damage_from_the_framing_is_carried_into_the_observation():
@@ -538,6 +745,19 @@ def test_a_bound_breach_demotes_to_partial_with_bounded_stderr_evidence():
     )
     assert outcome.status == "partial" and outcome.damage.first_error == "record"
     assert len(outcome.damage.evidence_excerpt) == 256
+
+
+def test_the_stderr_excerpt_is_unfiltered_vendor_output_by_decision():
+    """A pinned limit, not an oversight: filtering it is the unwinnable heuristic.
+
+    An author who starts filtering this field breaks this test and has to revisit
+    the stated N4 prerequisite rather than quietly closing the edge.
+    """
+    outcome = decode_turn(
+        CLEAN, Facts(bound_exceeded="record", stderr=f"signed in as {EMAIL}".encode()),
+        requested_model=None,
+    )
+    assert outcome.status == "partial" and EMAIL in outcome.damage.evidence_excerpt
 
 
 def test_a_malformed_record_demotes_to_partial():
