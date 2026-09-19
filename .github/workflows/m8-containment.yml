@@ -130,6 +130,7 @@ jobs:
               tests/substrate/test_combined_sender.py tests/substrate/test_codex_native.py \
               -v --tb=short -p no:cacheprovider
           uv run python scripts/check_m8_combined_mutations.py
+          uv run python scripts/check_m8_n2_mutations.py
       - name: Probe native mediation with loopback only and no credentials
         shell: bash
         run: |

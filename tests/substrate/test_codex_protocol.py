@@ -4,6 +4,7 @@ Cross-platform, credential-free, and with no process anywhere (I7). Every
 account reply here is scripted; nothing in this file reaches a vendor.
 """
 
+import ast
 import inspect
 
 import pytest
@@ -13,6 +14,9 @@ from constructicon.core.executor import RateLimitInfo, TaskSpec, Usage
 from constructicon.core.grants import EffectiveGrants, ModelSelection, Posture
 from constructicon.substrate.executors import codex_protocol
 from constructicon.substrate.executors.codex_protocol import (
+    ACCOUNT_EVIDENCE_MARKER,
+    ACCOUNT_NAMESPACE,
+    ACCOUNT_NOTICE_FAULT,
     ACCOUNT_TYPE_KEY,
     NO_ACCOUNT_FAULT,
     NO_PLAN_FAULT,
@@ -32,6 +36,7 @@ from constructicon.substrate.executors.codex_protocol import (
     encode_record,
     initialize_request,
     initialized_notification,
+    is_account_record,
     is_terminal_record,
     observe_turn,
     split_records,
@@ -128,11 +133,16 @@ def test_the_protocol_module_never_reaches_a_launcher_or_the_platform():
     assert "executors.linux" not in source and "LinuxLauncher" not in source
     assert "acquisition_guard" not in source
     assert "\nimport asyncio" not in source and "\nimport os" not in source
-    imported = {line for line in source.splitlines() if line.startswith(("import ", "from "))}
+    imported: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imported.add(node.module or "")
     assert all(
-        line.startswith(("import json", "from __future__", "from collections", "from dataclasses",
-                         "from typing", "from constructicon.core."))
-        for line in imported
+        module in {"json", "__future__", "collections.abc", "dataclasses", "typing"}
+        or module.startswith("constructicon.core.")
+        for module in imported
     ), imported
 
 
@@ -204,6 +214,11 @@ def test_neither_session_request_can_carry_a_model_or_a_provider():
         assert not {"model", "modelProvider"} & set(request["params"])
         assert b"modelProvider" not in encode_record(request)
     assert set(turn["params"]) == {"threadId", "input"}
+
+
+def test_the_account_namespace_is_the_wire_prefix():
+    assert ACCOUNT_NAMESPACE == "account/"
+    assert account_read_request(1)["method"].startswith(ACCOUNT_NAMESPACE)
 
 
 def test_a_thread_never_opts_into_an_approval_policy():
@@ -393,6 +408,68 @@ def test_a_reply_or_a_native_request_never_reaches_the_transcript():
     assert EMAIL not in observation.raw
     assert "item/tool/call" not in observation.raw
     assert observation.malformed_records == 2 and observation.terminal
+
+
+ACCOUNT_NOTICE = {"method": "account/updated", "params": {
+    "account": {ACCOUNT_TYPE_KEY: "chatgpt", "email": EMAIL, PLAN_TYPE_KEY: "pro"},
+    "authMode": "chatgptAuthTokens",
+}}
+
+
+def test_an_id_less_account_notification_never_reaches_the_transcript():
+    """The pin emits account notifications carrying auth mode and plan type."""
+    observation = folded([record(ACCOUNT_NOTICE), record(completed())])
+    assert EMAIL not in observation.raw
+    assert "chatgptAuthTokens" not in observation.raw and "account/updated" not in observation.raw
+    # It is not malformed; it is simply not this turn's evidence.
+    assert observation.malformed_records == 0 and observation.first_error is None
+    assert observation.terminal
+
+
+@pytest.mark.parametrize("damaged", [
+    b'{"method": "account/updated", "params": {"email": "' + EMAIL.encode() + b'"',
+    b'{"id": 3, "result": {"account": {"type": "chatgpt", "email": "' + EMAIL.encode()
+    + b'", "planType": "pro"}, "requiresOpenaiAuth"',
+], ids=["notification", "reply"])
+def test_unclassifiable_bytes_carrying_account_evidence_keep_only_their_count(damaged):
+    """A corrupted reply names the account object key, not the method namespace.
+
+    Bytes that cannot be parsed cannot be classified, so the guard is a
+    substring test — and it has to be the broader one, or a truncated
+    ``account/read`` reply carries an email into a public field.
+    """
+    assert ACCOUNT_NAMESPACE.encode() in damaged or ACCOUNT_EVIDENCE_MARKER in damaged
+    observation = folded([damaged, record(completed())])
+    assert observation.malformed_records == 1 and observation.first_error is not None
+    assert EMAIL not in observation.raw and observation.raw != ""
+
+
+def test_ordinary_malformed_bytes_remain_transport_evidence():
+    assert "{not json" in folded([b"{not json", record(completed())]).raw
+
+
+@pytest.mark.parametrize("method", [
+    "account/updated", "account/read", "account/login/start", "account/anythingUnenumerated",
+])
+def test_the_whole_account_namespace_is_refused_not_a_list_of_known_methods(method):
+    assert is_account_record({"method": method})
+    assert EMAIL not in folded([record({"method": method, "params": {"email": EMAIL}})]).raw
+
+
+@pytest.mark.parametrize("record_value", [
+    {"method": "item/started"}, {"method": "turn/completed"}, {"method": 7}, {"params": {}},
+    {"method": "accounts/other"},
+])
+def test_an_ordinary_notification_is_not_an_account_record(record_value):
+    assert not is_account_record(record_value)
+
+
+def test_the_account_fault_names_the_method_and_nothing_from_its_params():
+    detail = ACCOUNT_NOTICE_FAULT.format(method="account/updated")
+    assert "account/updated" in detail
+    assert EMAIL not in detail and "pro" not in detail and "chatgptAuthTokens" not in detail
+    # Neutral about what changed: a non-updated account record need not be one.
+    assert "mode change" not in detail
 
 
 def test_transport_damage_from_the_framing_is_carried_into_the_observation():

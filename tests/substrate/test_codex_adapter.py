@@ -6,14 +6,18 @@ nothing about the pinned binary. What it does prove is the adapter's
 correlation, its two subscription-mode readings, and that a refused
 pre-acceptance reading discards an otherwise successful turn.
 
-The physical launch path — the acquisition guard and ``LinuxLauncher.exchange``
-— is exercised in ``tests/substrate/test_codex_native.py`` on Linux only.
+The physical launch path — the real acquisition guard and the arguments the
+handle hands ``exchange`` — is exercised by the ``LINUX``-marked section at the
+end of this file, which skips everywhere else. That section is where ADR 0021's
+discard is proved in the production binding rather than in a pure function.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import os
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -51,9 +55,20 @@ from constructicon.substrate.executors.codex_protocol import (
     decode_turn,
     unavailable_outcome,
 )
-from constructicon.substrate.executors.linux import LinuxLauncher, ProcessResult
+from constructicon.substrate.executors.linux import (
+    LinuxLauncher,
+    ProcessExchangeError,
+    ProcessResult,
+)
 from tests.native_operator_world import native_egress, native_store
-from tests.substrate.test_codex_protocol import EMAIL, MANAGED, THREAD, TURN, completed
+from tests.substrate.test_codex_protocol import (
+    ACCOUNT_NOTICE,
+    EMAIL,
+    MANAGED,
+    THREAD,
+    TURN,
+    completed,
+)
 
 CAPABILITY = "codex-operator"
 BINARY = "/usr/bin/codex"
@@ -204,19 +219,37 @@ class ScriptedNative:
 
 @dataclass(frozen=True, kw_only=True)
 class ScriptedLauncher(LinuxLauncher):
-    """The pinned launcher with one scripted byte scope in place of a process."""
+    """The pinned launcher with one scripted byte scope in place of a process.
+
+    It records every argument it is handed, because the adapter's launch is
+    otherwise unchecked: the command, the absent workspace, the posture, the
+    deadline, and that each acquisition guard is a live descriptor.
+    """
 
     native: ScriptedNative
     result: ProcessResult
     commands: list[tuple[str, ...]] = field(default_factory=list)
+    calls: list[dict] = field(default_factory=list)
+    raises: BaseException | None = None
+    raises_after_conversation: bool = False
 
     async def exchange(self, command, *, workspace, posture, guard_fds, conversation, timeout_s):
         self.commands.append(command)
+        self.calls.append({
+            "command": command, "workspace": workspace, "posture": posture,
+            "timeout_s": timeout_s, "guard_fds": guard_fds,
+            # A guard the launcher cannot stat is not holding anything.
+            "guard_modes": [os.fstat(fd).st_mode for fd in guard_fds],
+        })
+        if self.raises is not None and not self.raises_after_conversation:
+            raise self.raises
         await conversation(self.native)
+        if self.raises is not None:
+            raise self.raises
         return self.result
 
 
-def bare_launcher(native=None, result=None) -> ScriptedLauncher:
+def bare_launcher(native=None, result=None, **overrides) -> ScriptedLauncher:
     return ScriptedLauncher(
         runtime_root=Path("/opt/codex-runtime"),
         expected_runtime=digest("test-codex-runtime", 1, "runtime"),
@@ -225,6 +258,7 @@ def bare_launcher(native=None, result=None) -> ScriptedLauncher:
         expected_policy_sha256="0" * 64,
         native=native if native is not None else ScriptedNative(accounts=[]),
         result=result if result is not None else FINISHED,
+        **overrides,
     )
 
 
@@ -602,6 +636,71 @@ async def test_an_account_email_in_the_stream_never_reaches_the_outcome():
     assert EMAIL not in json.dumps(outcome.model_dump(mode="json"))
 
 
+async def test_an_account_notification_mid_turn_discards_the_turn():
+    """The only in-band signal for the window the two readings cannot cover."""
+    native = clean_native(records=[ACCOUNT_NOTICE, completed(output={"summary": "done"})])
+    conversation = await converse(native)
+    assert any("account/updated" in fault for fault in conversation.faults)
+    outcome = unavailable_outcome(
+        conversation.faults, conversation.observation, FINISHED, requested_model="gpt-5.6-sol",
+    )
+    assert outcome.status == "failure" and outcome.error.kind == "unavailable"
+    # The refusal is public, so it names the method and nothing from its params.
+    assert EMAIL not in outcome.error.detail
+    assert "chatgptAuthTokens" not in outcome.error.detail
+    assert outcome.output is None and outcome.raw_reply is None
+    assert EMAIL not in json.dumps(outcome.model_dump(mode="json"))
+    # It never reached the transcript, so it could not have reached raw either.
+    assert EMAIL not in conversation.observation.raw
+
+
+@pytest.mark.parametrize("method", ["account/updated", "account/rateLimits/changed"])
+async def test_any_account_method_discards_the_turn_not_just_the_documented_one(method):
+    """We hold an enumeration of account *requests*, never of notifications."""
+    notice = {"method": method, "params": {"account": {"email": EMAIL, "planType": "pro"}}}
+    native = clean_native(records=[notice, completed(output={"summary": "done"})])
+    conversation = await converse(native)
+    assert any(method in fault for fault in conversation.faults)
+    assert EMAIL not in conversation.observation.raw
+    outcome = unavailable_outcome(
+        conversation.faults, conversation.observation, FINISHED, requested_model="gpt-5.6-sol",
+    )
+    assert outcome.status == "failure" and outcome.error.kind == "unavailable"
+    assert EMAIL not in json.dumps(outcome.model_dump(mode="json"))
+
+
+async def test_an_account_notification_after_the_turn_also_discards_it():
+    native = clean_native(records=[completed(output={"summary": "done"}), ACCOUNT_NOTICE])
+    conversation = await converse(native)
+    assert conversation.observation.terminal
+    assert any("account/updated" in fault for fault in conversation.faults)
+    assert EMAIL not in conversation.observation.raw
+
+
+async def test_a_notification_after_the_terminal_record_is_still_the_turns_evidence():
+    """The turn's stream does not stop at its terminal record.
+
+    Transcription stays open across the pre-acceptance reading deliberately.
+    What may not land there is decided by what a record *is* — id-bearing, or
+    account-namespaced — never by when it arrived; a positional filter is
+    exactly what let an account notification through before.
+    """
+    native = clean_native(records=[completed(), {"method": "item/completed", "params": {}}])
+    conversation = await converse(native)
+    assert conversation.faults == ()
+    assert "item/completed" in conversation.observation.raw
+
+
+async def test_a_second_terminal_record_after_the_turn_is_still_contradictory():
+    """This branch is only reachable because transcription stays open."""
+    native = clean_native(records=[
+        completed(output={"first": True}), completed(output={"second": True}),
+    ])
+    conversation = await converse(native)
+    assert conversation.observation.output == {"first": True}
+    assert "contradictory" in (conversation.observation.first_error or "")
+
+
 async def test_a_native_request_is_damage_and_is_never_answered():
     native = clean_native(records=[
         {"id": 900, "method": "item/tool/call", "params": {"tool": "shell"}},
@@ -682,3 +781,101 @@ async def test_the_conversation_stops_at_its_cumulative_input_budget():
     await asyncio.wait_for(conversation(native), 5)
     assert conversation.faults and any("budget" in fault for fault in conversation.faults)
     assert native.methods == []
+
+
+# --- the physical launch, through the real acquisition guard -----------------
+#
+# The guard is deliberately Linux-only and deliberately not injectable, because
+# authority is physical (I1). These follow the house precedent in
+# tests/substrate/test_contained_gates.py: skip off Linux, and drive a launcher
+# double through the real guard rather than around it. Everything below is
+# unexercised on any other platform.
+
+LINUX = pytest.mark.skipif(
+    sys.platform != "linux", reason="physical acquisition guard needs Linux",
+)
+
+
+async def materialized(launcher, root, *, grants=GRANTS) -> CodexOperatorHandle:
+    provider = CodexOperatorProvider(
+        launcher=launcher, profile=codex_profile(), identity=identity_for(launcher),
+        expected_account=EXPECTED, binary=BINARY, configuration=CONFIGURATION, catalog=(),
+        acquisition_root=root, unavailable_reasons=(),
+    )
+    acquired = await provider.acquire(context(grants=grants))
+    await acquired.materialize()
+    handle = acquired.resource
+    assert isinstance(handle, CodexOperatorHandle)
+    return handle
+
+
+def assert_launch(launcher, *, grants=GRANTS):
+    """Nothing else checks what the adapter actually hands the launcher."""
+    assert len(launcher.calls) == 1
+    call = launcher.calls[0]
+    assert call["command"] == (BINARY, "app-server", "--strict-config", "--stdio")
+    assert call["workspace"] is None
+    assert call["posture"] is grants.posture
+    assert call["timeout_s"] == grants.timeout_s
+    guards = call["guard_fds"]
+    assert guards and len(set(guards)) == len(guards)
+    assert len(call["guard_modes"]) == len(guards)
+
+
+@LINUX
+async def test_execute_drives_the_contained_launcher_to_a_success(tmp_path):
+    launcher = bare_launcher(clean_native())
+    handle = await materialized(launcher, tmp_path)
+    outcome = await handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
+    assert outcome.status == "success" and outcome.output == {"summary": "done"}
+    assert outcome.served_model == "gpt-5.6-sol" and outcome.requested_model == "gpt-5.6-sol"
+    assert_launch(launcher)
+
+
+@LINUX
+async def test_execute_discards_a_turn_whose_pre_acceptance_reading_faults(tmp_path):
+    """ADR 0021's discard, in the production binding rather than in a fixture."""
+    launcher = bare_launcher(
+        clean_native(accounts=[{"result": MANAGED_RESULT}, {"result": EMPTY_RESULT}]),
+    )
+    handle = await materialized(launcher, tmp_path)
+    outcome = await handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
+    assert outcome.status == "failure" and outcome.error.kind == "unavailable"
+    assert NO_ACCOUNT_FAULT in outcome.error.detail
+    assert outcome.error.produced_output is True
+    assert outcome.output is None and outcome.raw_reply is None
+    assert_launch(launcher)
+
+
+@LINUX
+async def test_execute_discards_a_turn_interrupted_by_an_account_notification(tmp_path):
+    launcher = bare_launcher(clean_native(records=[ACCOUNT_NOTICE, completed()]))
+    handle = await materialized(launcher, tmp_path)
+    outcome = await handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
+    assert outcome.status == "failure" and outcome.error.kind == "unavailable"
+    assert "account/updated" in outcome.error.detail
+    assert EMAIL not in json.dumps(outcome.model_dump(mode="json"))
+
+
+@LINUX
+async def test_a_launch_prerequisite_failure_is_unavailable_and_decodes_nothing(tmp_path):
+    launcher = bare_launcher(clean_native(), raises=OSError("no such runtime root"))
+    handle = await materialized(launcher, tmp_path)
+    outcome = await handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
+    assert outcome.status == "failure" and outcome.error.kind == "unavailable"
+    assert "no such runtime root" in outcome.error.detail
+    assert outcome.output is None and outcome.raw_reply is None
+
+
+@LINUX
+async def test_a_failed_conversation_still_decodes_the_evidence_it_carried(tmp_path):
+    damaged = ProcessResult(1, b"", b"stderr evidence", 3.0, payload_returncode=1)
+    launcher = bare_launcher(
+        clean_native(), raises=ProcessExchangeError(damaged), raises_after_conversation=True,
+    )
+    handle = await materialized(launcher, tmp_path)
+    outcome = await handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
+    assert outcome.status == "failure" and outcome.error.kind == "exit"
+    assert outcome.error.exit_code == 1 and outcome.elapsed_s == 3.0
+    # The salvage is the point: the evidence the error carried survives.
+    assert outcome.output == {"summary": "done"}

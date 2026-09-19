@@ -17,7 +17,9 @@ The conversation is strictly sequential per direction::
 
 Either gate faulting yields an unavailable failure naming the faults, and **a
 faulting pre-acceptance gate discards an otherwise successful turn**. That is
-ADR 0021's "refuses availability/result acceptance".
+ADR 0021's "refuses availability/result acceptance". An ``account/`` notification
+arriving between the two readings discards the turn the same way: it is the only
+in-band signal for the window they bracket but cannot cover.
 
 Nothing here reads, writes, parses or copies a credential, and no field of a
 published identity carries an account fact. The two readings are the supported
@@ -68,6 +70,7 @@ from constructicon.core.workspace import (
 )
 from constructicon.substrate.executors import codex_protocol
 from constructicon.substrate.executors.codex_protocol import (
+    ACCOUNT_NOTICE_FAULT,
     EMPTY_TURN,
     READ_WINDOW,
     ExpectedAccount,
@@ -80,6 +83,7 @@ from constructicon.substrate.executors.codex_protocol import (
     encode_record,
     initialize_request,
     initialized_notification,
+    is_account_record,
     is_terminal_record,
     observe_turn,
     thread_start_request,
@@ -222,6 +226,18 @@ class CodexConversation:
     def _refuse(self, reason: str) -> None:
         self.faults += (reason,)
 
+    def _refuse_account(self, record: Mapping[str, Any]) -> None:
+        """An account notification mid-turn is a refusal, never transcript.
+
+        ADR 0021 refuses on an observed mode change and requires proof that
+        refresh cannot silently select API or cloud authentication mid-turn.
+        This is the only in-band signal for the window the two readings bracket
+        but cannot cover, so it discards the turn exactly as a gate fault does.
+        Only the method name reaches the public detail; nothing from ``params``.
+        """
+
+        self._refuse(ACCOUNT_NOTICE_FAULT.format(method=record.get("method")))
+
     def _next_identifier(self) -> int:
         self._identifier += 1
         return self._identifier
@@ -288,6 +304,9 @@ class CodexConversation:
             if "id" not in record:
                 if "method" not in record:
                     self._refuse("a native record carries neither an id nor a method")
+                    return None
+                if is_account_record(record):
+                    self._refuse_account(record)
                     return None
                 if self._collecting:
                     self._transcript.append(line)
@@ -395,9 +414,23 @@ class CodexConversation:
             line = await self._read(io)
             if line is None:
                 return
+            if self._account_notice(line):
+                return
             self._transcript.append(line)
             if is_terminal_record(line, thread_id=self.thread_id, turn_id=self.turn_id):
                 return
+
+    def _account_notice(self, line: bytes) -> bool:
+        """Refuse an account notification before it can be transcribed."""
+
+        try:
+            record = parse_json_value(line.decode("utf-8"))
+        except (ValueError, UnicodeError):
+            return False  # Malformed bytes are ordinary damage for the fold.
+        if not isinstance(record, dict) or not is_account_record(record):
+            return False
+        self._refuse_account(record)
+        return True
 
 
 def _named(reply: Mapping[str, Any], field: str) -> str | None:

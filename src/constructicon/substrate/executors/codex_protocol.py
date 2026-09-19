@@ -29,8 +29,19 @@ adapter should move it there. It stays in L1 for this slice because promoting
 it makes this an L0 change, which carries an invariant review it does not need,
 and the protocol already has its two consumers here.
 
-Account facts never leave this module: the adapter strips ``account/read``
-frames before a transcript is built, so no email, plan or tenant can reach
+**Account facts never leave this module, and two distinct frames carry them.**
+An ``account/read`` *reply* carries an email and a plan type; it is id-bearing,
+and the fold below drops every id-bearing record. A server-initiated
+``account/`` *notification* carries the same class of fact with no id at all:
+``docs/plans/handoffs/M8-native-account-interface-preflight.md`` records, with
+pinned source links, that "Login responses and account notifications expose flow
+ids, auth mode, or plan type". So the fold drops the whole ``account/``
+namespace too, and the adapter refuses when one arrives. Bytes that fail to
+parse cannot be classified at all, so any that mention an account are dropped
+from the excerpt as well — a corrupted *reply* names the account object key
+rather than the method namespace, so the broader marker is the one that holds
+there. Their count and damage are still reported. The guarantee is therefore
+exactly this: no account frame, parseable or not, reaches
 ``ExecutorObservation.raw_reply``.
 """
 
@@ -199,7 +210,14 @@ def thread_start_request(request_id: int, *, cwd: str) -> dict[str, Any]:
 
     The native zone has no workspace and no admitted callback in this slice, so
     the vendor sandbox value is defense in depth over physical containment the
-    launcher already owns, never the boundary itself.
+    launcher already owns, never the boundary itself. ``"read-only"`` is
+    unexercised against the pinned binary and this slice cannot exercise it: the
+    credential-free lane refuses at the pre-turn gate, so no ``thread/start``
+    ever reaches it. The only sandbox value this repository has observed live is
+    ``"danger-full-access"``, and only from a session that opted into the
+    experimental capability, so it is not evidence for this adapter either.
+    Verify the reachable variants, here as for the approval policy, before a
+    later slice relies on one.
     """
 
     return _sealed({
@@ -242,6 +260,24 @@ def turn_request(
 ACCOUNT_TYPE_KEY = "type"
 PLAN_TYPE_KEY = "planType"
 PROVIDER_FLAG_KEY = "requiresOpenaiAuth"
+"""The three wire keys the gate reads, and what backs each of them.
+
+``requiresOpenaiAuth`` and the enclosing ``account`` key are confirmed against
+the pinned binary by a live capture: ``test_combined_startup_origins.py`` asserts
+``{"account": None, "requiresOpenaiAuth": False}`` from a real session. That
+capture also establishes the wire's camelCase convention, which the handoff
+records observe consistently — snake_case when quoting Rust identifiers,
+camelCase when quoting the wire.
+
+``planType`` is named by pinned source rather than guessed: the account
+interface preflight states that ``account/read`` returns ChatGPT ``email`` and
+``planType``, with source links. It is nonetheless the one key here with no live
+capture behind it, and that gap is structural rather than an oversight — the
+only credential-free lane we can run returns a *null* account, so no capture of
+a populated account exists or can be obtained without a credential. A wrong key
+would make fault 5 fire against a real managed account: fail closed, and first
+observable at N4 where a binding exists.
+"""
 
 NO_RESULT_FAULT = "the subscription-mode reading is an error or carries no result object"
 NO_ACCOUNT_FAULT = "the session reports no usable account"
@@ -250,6 +286,42 @@ PROVIDER_OVERRIDE_FAULT = (
     "can run without the subscription credential"
 )
 NO_PLAN_FAULT = "the account carries no plan fact"
+
+ACCOUNT_NAMESPACE = "account/"
+"""Every account-bearing method, refused as a namespace rather than a list.
+
+The enumeration this repository holds is of *requests*: the preflight record
+lists the retained binary's eleven ``account/``-prefixed methods from its
+generated inventory, and the notification surface is separate and unenumerated.
+Naming individual notification methods would therefore be guessing at a list we
+do not have, so the namespace is the unit and the posture is fail closed.
+"""
+
+ACCOUNT_EVIDENCE_MARKER = b"account"
+"""Deliberately broader than the namespace, and only for bytes that would not parse.
+
+Classification needs a parsed record, so unparseable bytes get a substring test
+instead — and the namespace is the wrong substring for them. A corrupted
+``account/read`` **reply** carries the account *object* key, which has no slash:
+``{"id": 3, "result": {"account": {"email": ...`` contains ``account`` but not
+``account/``. Keying the excerpt guard on the namespace alone would therefore
+let a truncated reply carry an operator's email into a public field.
+
+The cost is that a malformed line mentioning "account" for any reason loses its
+excerpt. Its count and its damage are still reported, so the outcome stays
+truthful (I4); only the evidence text is lost, which is the right trade for this
+class of bytes.
+"""
+
+ACCOUNT_NOTICE_FAULT = "the session reported {method!r} during the turn"
+"""Neutral by construction. ADR 0021 refuses on "an observed mode change" and
+requires qualification that refresh "cannot silently select API/cloud
+authentication mid-turn"; a mode-change notification lands in exactly the window
+the two readings bracket but cannot cover. Because the namespace is refused
+wholesale, a record that is not ``account/updated`` need not be a mode change,
+so the text claims none — the method name supplies the specificity. Nothing from
+``params`` may appear here: ``ExecutorError.detail`` is public.
+"""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -268,6 +340,13 @@ class ExpectedAccount:
     def __post_init__(self) -> None:
         if not self.plan_type.strip():
             raise ValueError("an expected account requires the plan recorded at provisioning")
+
+
+def is_account_record(record: Mapping[str, Any]) -> bool:
+    """Whether one parsed record belongs to the account namespace."""
+
+    method = record.get("method")
+    return isinstance(method, str) and method.startswith(ACCOUNT_NAMESPACE)
 
 
 def _result_object(reply: Any) -> Mapping[str, Any] | None:
@@ -435,6 +514,12 @@ def observe_turn(
     authorizes no callback, so such a record is damage and is dropped *before*
     ``raw`` exists — that is what keeps an ``account/read`` reply, and the email
     it carries, out of the public outcome.
+
+    An id-less ``account/`` notification carries the same class of fact and is
+    dropped in the same place for the same reason. It is not malformed, so it is
+    neither counted nor recorded as damage: it is simply not this turn's
+    evidence. The adapter refuses on it separately, which is where it becomes an
+    outcome.
     """
 
     output: Any = None
@@ -453,11 +538,19 @@ def observe_turn(
         except (ValueError, UnicodeError) as exc:
             malformed += 1
             first_error = first_error or f"malformed native record: {exc}"
-            kept.append(line.decode("utf-8", errors="replace"))
+            if ACCOUNT_EVIDENCE_MARKER not in line:
+                # Unparseable bytes are transport evidence worth keeping, but
+                # bytes that mention an account at all cannot be classified, so
+                # they are not worth the risk of carrying an account fact into a
+                # public field. The count and the damage still report them
+                # truthfully (I4); only the excerpt is lost.
+                kept.append(line.decode("utf-8", errors="replace"))
             continue
         if not isinstance(record, dict) or "id" in record or "method" not in record:
             malformed += 1
             first_error = first_error or "a turn transcript carries native notifications only"
+            continue
+        if is_account_record(record):
             continue
         kept.append(line.decode("utf-8", errors="replace"))
         if record.get("method") == "turn/completed":

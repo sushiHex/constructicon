@@ -7,6 +7,14 @@ mutant that merely errors is NOT PROVEN, never a kill.
 Every fault of the gate has a mutant here, and so does the pre-acceptance
 discard — the behaviour ADR 0021 calls "refuses ... result acceptance", which
 is the single most important thing in this slice.
+
+A few mutants live in the handle's binding to the launcher, which only runs
+where the physical acquisition guard does. Those are listed in ``LINUX_ONLY``
+and are **filtered out entirely off Linux**, where they are reported as
+UNMEASURED rather than counted as kills: the shared runner scores a skipped
+test as no assertion, so leaving them in would silently turn a real gap into a
+green line. They are measured in the M8 containment workflow, in the same step
+that runs ``tests/substrate/test_codex_native.py``.
 """
 
 import sys
@@ -26,6 +34,8 @@ DECODE = "constructicon.substrate.executors.codex_protocol:decode_turn"
 REFUSAL = "constructicon.substrate.executors.codex_protocol:unavailable_outcome"
 CONVERSE = "constructicon.substrate.executors.codex:CodexConversation._converse"
 PREAMBLE = "constructicon.substrate.executors.codex:CodexConversation._drain_preamble"
+COLLECT = "constructicon.substrate.executors.codex:CodexConversation._collect"
+BINDING = "constructicon.substrate.executors.codex:CodexOperatorHandle._converse"
 CORRELATE = "constructicon.substrate.executors.codex:CodexConversation._request"
 EXECUTE = "constructicon.substrate.executors.codex:CodexOperatorHandle.execute"
 PROVIDER = "constructicon.substrate.executors.codex:CodexOperatorProvider.unavailable_reasons"
@@ -255,6 +265,55 @@ MUTANTS = (
         PROTOCOL + "test_a_refused_gate_discards_the_result_and_still_reports_that_a_turn_ran",
     ),
     (
+        "an account notification never reaches the transcript",
+        OBSERVE,
+        "if is_account_record(record):",
+        "if False:",
+        PROTOCOL + "test_an_id_less_account_notification_never_reaches_the_transcript",
+    ),
+    (
+        "unclassifiable bytes carrying account evidence keep only their count",
+        OBSERVE,
+        "if ACCOUNT_EVIDENCE_MARKER not in line:",
+        "if True:",
+        PROTOCOL + "test_unclassifiable_bytes_carrying_account_evidence_keep_only_their_count",
+    ),
+    (
+        "the excerpt guard is broader than the method namespace",
+        OBSERVE,
+        "if ACCOUNT_EVIDENCE_MARKER not in line:",
+        "if ACCOUNT_NAMESPACE.encode() not in line:",
+        PROTOCOL + "test_unclassifiable_bytes_carrying_account_evidence_keep_only_their_count",
+    ),
+    (
+        "an account notification mid-turn discards the turn",
+        COLLECT,
+        "if self._account_notice(line):",
+        "if False:",
+        ADAPTER + "test_an_account_notification_mid_turn_discards_the_turn",
+    ),
+    (
+        "an account notification after the turn discards it too",
+        CORRELATE,
+        "if is_account_record(record):",
+        "if False:",
+        ADAPTER + "test_an_account_notification_after_the_turn_also_discards_it",
+    ),
+    (
+        "the adapter discards a refused turn",
+        BINDING,
+        "if conversation.faults:",
+        "if False:",
+        ADAPTER + "test_execute_discards_a_turn_whose_pre_acceptance_reading_faults",
+    ),
+    (
+        "the launcher receives this acquisition's guard",
+        BINDING,
+        "guard_fds=(guard,),",
+        "guard_fds=(),",
+        ADAPTER + "test_execute_drives_the_contained_launcher_to_a_success",
+    ),
+    (
         "unavailability is published, not inferred",
         PROVIDER,
         "return self._unavailable",
@@ -277,8 +336,33 @@ MUTANTS = (
     ),
 )
 
+LINUX_ONLY = frozenset({
+    "the adapter discards a refused turn",
+    "the launcher receives this acquisition's guard",
+})
+"""Mutants whose test needs the physical acquisition guard.
+
+The guard is Linux-only and deliberately not injectable, because authority is
+physical (I1). Their tests skip elsewhere, and a skipped test proves nothing.
+"""
+
+# Built from the platform alone, so the parent and each child process agree on
+# the indices the runner passes between them.
+SELECTED = tuple(
+    mutant for mutant in MUTANTS
+    if sys.platform == "linux" or mutant[0] not in LINUX_ONLY
+)
+_MEASURED = {mutant[0] for mutant in SELECTED}
+UNMEASURED = tuple(name for name, *_ in MUTANTS if name not in _MEASURED)
+
 if __name__ == "__main__":
-    status = run(MUTANTS)
-    if status == 0 and len(sys.argv) == 1:
-        print(f"{len(MUTANTS)}/{len(MUTANTS)} mutants KILLED by assertion.")
+    status = run(SELECTED)
+    if len(sys.argv) == 1:
+        for name in UNMEASURED:
+            print(f"UNMEASURED (requires Linux): {name}", flush=True)
+        if status == 0:
+            print(
+                f"{len(SELECTED)}/{len(SELECTED)} mutants KILLED by assertion; "
+                f"{len(UNMEASURED)} UNMEASURED."
+            )
     raise SystemExit(status)
