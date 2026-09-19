@@ -795,3 +795,161 @@ validator, a guard test, the vendor-label scan, decoder guard inputs and one
 message) were folded in before merge, and its remaining observations are
 recorded on #74 for N2. No native process, provider connection, credential,
 deployment or live profile exists; N2 (#75) is the next slice.
+
+## N2 — the Codex operator adapter, READ posture (#75)
+
+N2's first slice binds ADR 0021's operator-bound route to a real contained
+process for the READ posture. Two new L1 modules carry it. All of the
+interesting judgement lives in `substrate.executors.codex_protocol`, which
+performs no I/O and imports no launcher: process facts arrive through a
+structural `ProcessFacts` protocol, so framing, the subscription-mode gate, the
+turn fold and the decoder are provable on any platform with zero credentials
+(I7). Its two consumers are the adapter and the protocol tests (I6).
+`substrate.executors.codex` is the thin binding to `LinuxLauncher.exchange`:
+one task, one acquisition, one contained conversation, with no persistent agent
+service, no second controller and no scheduler.
+
+The conversation is strictly sequential per direction — `initialize`,
+`initialized`, `account/read`, `thread/start`, `turn/start`, records to a
+terminal `turn/completed`, `account/read`, then stdin close and a drain to EOF.
+Either reading faulting yields an unavailable failure naming the faults, and a
+faulting pre-acceptance reading discards an otherwise successful turn. That is
+ADR 0021's "refuses availability/result acceptance": the turn's output, its
+served model and its transcript do not survive into the outcome, and the single
+truthful fact that a turn ran is reported once through `produced_output`.
+
+**What the gate does and does not establish.** The supported observation is
+`account/read`. It reads a process-global credential cache and never reloads,
+so the second reading is not proof that anything was re-observed; it is
+load-bearing against a change that did occur, because a switch to an API key,
+to Bedrock keys or to provider headers changes the reported account shape and
+the pre-acceptance reading then refuses the result. Four pinned ChatGPT
+credential variants collapse onto one account shape, so the gate is silent
+about which is in use. That is covered by the published
+`operator_bound_vendor_identity_unverified` literal and recorded in
+`M8-subscription-mode-interface-screen.md`; the deprecated operation that would
+name the variant is excluded as a boundary in either direction. The expected
+account is an assembly fact, never caller input, and its plan is required: the
+pinned plan type is an untagged union with a known `free` member, so an
+accept-any default would admit a free plan as a vendor-managed subscription.
+
+**Three exclusions are structural rather than conventional.** `initialize`
+never sets `capabilities.experimentalApi`, which is what enables the externally
+supplied token login ADR 0021 excludes. No request builder has a parameter that
+can reach `model` or `modelProvider`, and a sealing helper refuses one that
+appears anyway, because the gate observes the configured provider and a
+per-turn override is a second channel it cannot see. `thread/start` sends
+exactly `{cwd, sandbox, ephemeral}`: `approvalPolicy` is experimental-nested at
+the pin, so the adapter does not send it at all, and a turn that blocks
+awaiting an approval is a refusal here and a finding for N3, never a prompt to
+answer.
+
+**Account facts do not reach the public outcome.** Three frames are dropped
+before a transcript exists: a record carrying an `id`, which is the
+`account/read` reply and the email it carries; a record whose method is in the
+`account/` namespace, which is the notification surface; and unparseable bytes
+carrying account evidence, which cannot be classified at all, so the excerpt
+guard keys on the broader `account` marker because a corrupted reply names the
+account object key rather than the method namespace. The namespace is refused
+whole because the enumeration the preflight holds is of requests, not
+notifications. An account notification arriving mid-turn is also a refusal, not
+merely a redaction: ADR 0021 refuses on "an observed mode change" and requires
+proof that vendor refresh cannot silently select API or cloud authentication
+mid-turn, and that notification is the only in-band signal for the window the
+two readings bracket but do not cover. The published fault names the method and
+carries nothing from its parameters. Transcription stays open across the
+pre-acceptance reading deliberately: what may not be transcribed is decided by
+what a record is, never by when it arrived, and a positional filter is exactly
+what let an account notification through in the first place.
+
+**Truthful telemetry.** Every field a record did not emit stays absent rather
+than inferred. Damage is sticky: a later terminal record never promotes an
+earlier malformed one, and a second terminal record is contradictory rather
+than last-wins. An absent or mismatched private exit report is infrastructure,
+not a task result, and is judged before any success or exit verdict, because
+judging on the bare return code would decode a missing exit report as success.
+A timeout salvages whatever output was seen.
+
+The provider is leased and schema 3. Availability is an assembly fact read
+without runtime I/O, and this slice delivers no store, no egress and no
+qualified ingress, so its published state is unavailable by default and nothing
+at runtime can clear it. Its constructor refuses a published identity that
+differs from this adapter's actual content in any of eight source-derived
+fields, refuses a mediated callback catalog, which arrives with the WRITE
+posture, and refuses a relative acquisition root or a non-absolute binary.
+Reconciliation reaps nothing because the slice owns no durable payload; the
+store binding, its exclusive lock and egress disposal arrive with N3.
+
+**The namespace refusal is deliberately over-broad, and that is a forward
+cost.** Refusing every `account/` notification means that if the pin emits a
+benign one during a normal turn — a rate-limit update, say — this adapter
+refuses a turn that would otherwise have succeeded. The alternative was to name
+the methods that count as mode changes, which on the evidence held here would
+be guessing: the preflight's enumeration is of requests, and the notification
+surface is unenumerated. Fail closed is the right direction for an authority
+gate, and the cost is bounded here because this slice is credential-free and
+refuses before any turn, so no account notification can fire at all. It first
+becomes reachable when a credentialed session runs at N4. The published fault
+names the method that fired, so the first occurrence identifies itself and
+narrowing the rule is a one-line change backed by evidence rather than a
+debugging exercise. Expect it rather than discover it.
+
+**Limits of this slice, stated rather than discovered later.** Several wire
+facts are not proved against the pinned binary and cannot be here, because the
+only credential-free lane returns a null account and refuses before a turn. The
+plan key `planType` is named by the preflight from pinned source and its casing
+is corroborated by the combined lane's live capture of the sibling
+`requiresOpenaiAuth`, but no capture of a populated account is obtainable
+without a credential; a wrong key means the plan fault fires against a real
+managed account, which is fail-closed and first observable at N4. The
+`thread/start` sandbox value is never sent in the lane, because the gate refuses
+first, so its reachable enum variants are unverified — the same caution
+`approvalPolicy` carries. The only sandbox value this repository has observed
+live is `danger-full-access`, in `tests/substrate/test_provider_placement.py`,
+and that session opts into the experimental capability, so it is not evidence
+for this adapter either. Whether the pinned schema requires `capabilities` on
+`initialize` is not verifiable from this repository; if it refuses the field,
+the lane fails loudly on its exact-fault assertion rather than degrading
+quietly. The turn projection keys are likewise unproven before N5, and each
+stays absent when unmatched, so a wrong name degrades to truthful absence
+rather than to an invented value.
+
+Evidence: local gate 2,229 passed, 365 skipped at the code head; 38 of 38
+measured assertion mutants killed by `scripts/check_m8_n2_mutations.py`, with 2
+entries reported UNMEASURED on the Windows host rather than counted as kills,
+because their tests need the physical acquisition guard. The script filters
+those by platform and prints them, and the M8 containment workflow now runs the
+inventory in the step that already runs the native lane, so they are measured
+there. `tests/substrate/test_codex_protocol.py` (70 tests) drives the pure
+protocol against scripted bytes. `tests/substrate/test_codex_adapter.py` (44
+passed, 5 Linux-gated skips) drives the adapter against a genuine scripted byte
+channel that enforces the launcher's one-reader and 1..8192 read contract; its
+`LINUX`-marked section drives `handle.execute` through the real acquisition
+guard and is the only place the production discard is exercised.
+`tests/substrate/test_codex_native.py` runs the pinned binary under containment
+in the combined lane. The last two are unexercised on the development host and
+are claimed from CI only.
+
+**What the native lane proves is refusal, and that is the honest result.** The
+lane is credential-free, so `account/read` returns a null account, the pre-turn
+gate refuses, and no turn is ever sent — the model peer behind the bridge is
+never reached. A second case sets the configured provider to require OpenAI
+authentication and observes that only the empty-store fault remains, which
+separates the two faults the first case reports together. No credential, no
+vendor account and no model call exists anywhere in this slice.
+
+Review before the PR opened found two defects, both reproduced by running code
+rather than by reading it. An id-less `account/updated` notification reached
+`raw_reply` through the turn transcript, carrying an email, plan and auth mode
+into a successful outcome and contradicting the module's own stated guarantee,
+while the mid-turn mode change it announces was never a refusal; a follow-up
+found the same hole in unparseable bytes. And `CodexOperatorHandle._converse`,
+the binding that performs the discard in production, had no coverage on any
+platform — a line trace showed all 33 executable lines unexecuted, because
+every `execute` test exited at a guard clause and the native lane drove the
+conversation directly. The discard had been proved on the pure function and on
+the conversation, never on the adapter that calls them. Manual Codex review
+remained paused at the owner's request for its weekly limit, so the independent
+review of this slice was a fresh-context Opus reviewer; that is a real
+reduction in independence and is recorded here rather than glossed. N3 is the
+next slice.
