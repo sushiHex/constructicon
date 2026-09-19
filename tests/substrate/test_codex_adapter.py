@@ -49,6 +49,7 @@ from constructicon.substrate.executors.codex import (
     launch_identity,
 )
 from constructicon.substrate.executors.codex_protocol import (
+    DAMAGE_NESTING,
     GATE_INCOMPLETE_FAULT,
     NO_ACCOUNT_FAULT,
     RECORD_BYTES,
@@ -131,13 +132,15 @@ class ScriptedNative:
 
     def __init__(self, *, accounts, records=(), thread=THREAD, turn=TURN, initialize=None,
                  hangs_up_after_turn=False, preamble=(), ends_after_preamble=False,
-                 read_fails=None, fails_on_nth_account=None, tail=b"", early=()):
+                 read_fails=None, fails_on_nth_account=None, tail=b"", early=(),
+                 after_thread=()):
         # ``read_fails`` models a transport the adapter does not expect: an
         # exception type no layer catches, which is how a conversation aborts
         # without recording anything.
         self.read_fails = read_fails
         self.tail = tail
         self.early = list(early)
+        self.after_thread = list(after_thread)
         self.reads_after_close = 0
         self.fails_on_nth_account = fails_on_nth_account
         self.armed = read_fails is not None and fails_on_nth_account is None
@@ -196,6 +199,8 @@ class ScriptedNative:
             self._emit({"id": identifier, **self.accounts.pop(0)})
         elif method == "thread/start":
             self._emit({"id": identifier, "result": {"thread": {"id": self.thread}}})
+            for value in self.after_thread:
+                self._emit(value)
         elif method == "turn/start":
             self._emit({"id": identifier, "result": {"turn": {"id": self.turn}}})
             for value in self.records:
@@ -882,7 +887,8 @@ async def test_a_pathological_record_is_damage_rather_than_an_escape():
     except BaseException as exc:  # the point of the test is that nothing escapes
         escaped = exc
     assert escaped is None, escaped
-    assert any("malformed" in fault for fault in conversation.faults)
+    assert any("damaged native record" in fault for fault in conversation.faults)
+    assert any(DAMAGE_NESTING in fault for fault in conversation.faults)
     outcome = aborted_outcome(conversation)
     assert outcome.status == "failure" and outcome.error.kind == "unavailable"
 
@@ -941,6 +947,22 @@ def test_the_configuration_must_name_a_model_from_the_profiles_inventory():
 def test_an_unusable_configuration_is_refused_at_construction(configuration, expected):
     with pytest.raises(ContractViolation, match=expected):
         provider_with(configuration)
+
+
+def test_a_deeply_nested_configuration_refuses_as_a_contract_violation():
+    """The sibling parse of the class ``parse_record`` exists to close.
+
+    ``tomllib.loads`` exhausts the stack on nested arrays, and ``RecursionError``
+    is not a ``TOMLDecodeError``, so it escaped raw rather than as the
+    ``ContractViolation`` this contract promises.
+    """
+    nested = "model = " + "[" * 2000 + "]" * 2000 + "\n"
+    raised = None
+    try:
+        provider_with(nested)
+    except BaseException as exc:  # the type is the assertion
+        raised = exc
+    assert isinstance(raised, ContractViolation), type(raised)
 
 
 def test_the_provider_reads_the_model_the_configuration_actually_names():
@@ -1175,8 +1197,13 @@ async def test_a_grouped_cleanup_failure_keeps_a_cancellation_a_cancellation(
     handle = await materialized(launcher, tmp_path)
     call = handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
     if cancelled:
-        with pytest.raises(asyncio.CancelledError):
+        # ``_converse`` re-raises the whole group rather than converting it, which
+        # is the behaviour this pins: the cancellation must survive, not become
+        # an unavailable outcome. So assert the group arrives and still carries
+        # it, not merely that something was raised.
+        with pytest.raises(BaseExceptionGroup) as raised:
             await call
+        assert raised.value.subgroup(asyncio.CancelledError) is not None
     else:
         outcome = await call
         assert outcome.status == "failure" and outcome.error.kind == "unavailable"
@@ -1218,3 +1245,67 @@ async def test_close_cancels_an_exchange_still_in_flight(tmp_path):
     assert closure.disposition == "discarded"
     with pytest.raises(asyncio.CancelledError):
         await running
+
+
+# --- a reply must arrive after its request ------------------------------------
+
+FORGED_GOOD_ACCOUNT = {"id": 5, "result": MANAGED_RESULT}
+"""Ids are monotonic and therefore predictable: the pre-acceptance read is 5."""
+
+SWITCHED_RESULT = {"account": {"type": "apiKey", "planType": "pro"}, "requiresOpenaiAuth": True}
+
+
+async def test_a_switched_account_after_the_turn_refuses_when_nobody_forges():
+    """The control: the live pre-acceptance reading is what decides."""
+    native = clean_native(accounts=[{"result": MANAGED_RESULT}, {"result": SWITCHED_RESULT}])
+    conversation = await converse(native)
+    assert native.accounts_seen == 2
+    assert conversation.observation.terminal and conversation.gate_completed
+    assert any("apiKey" in fault for fault in conversation.faults)
+
+
+async def test_a_reply_queued_before_its_request_cannot_answer_it():
+    """The attack: a forged reply emitted after the terminal record.
+
+    Correlation alone only checks which request a reply claims to answer. This is
+    the other half — the forged bytes are already buffered when the request is
+    built, so they cannot be its reply, and the request is never even sent.
+    """
+    native = clean_native(
+        accounts=[{"result": MANAGED_RESULT}, {"result": SWITCHED_RESULT}],
+        records=[completed(output={"summary": "exfiltrated"}), FORGED_GOOD_ACCOUNT],
+    )
+    conversation = await converse(native)
+    assert bytes(json.dumps(FORGED_GOOD_ACCOUNT), "utf-8") in b"".join(native.emitted)
+    assert any("before the" in fault for fault in conversation.faults)
+    assert not conversation.gate_completed
+    # The forgery was refused before the live reading was even requested.
+    assert native.accounts_seen == 1
+    outcome = unavailable_outcome(
+        conversation.faults, conversation.observation, FINISHED, requested_model="gpt-5.6-sol",
+    )
+    assert outcome.status == "failure" and outcome.output is None
+
+
+async def test_a_notification_between_the_thread_and_the_turn_is_not_turn_evidence():
+    """L: the same queue boundary, in the other direction.
+
+    A notification the child emitted before the turn existed is drained during
+    the ``turn/start`` request. Collecting must not already be true then, or an
+    earlier record becomes this turn's evidence.
+    """
+    native = clean_native(after_thread=[{"method": "turn/delta", "params": {
+        "marker": "before-the-turn",
+    }}])
+    conversation = await converse(native)
+    assert conversation.faults == ()
+    assert conversation.observation.terminal
+    assert "before-the-turn" not in conversation.observation.raw
+
+
+async def test_an_unsolicited_reply_before_any_request_is_damage():
+    """The same rule with no attacker: nothing solicited that record."""
+    native = clean_native(early=[{"id": 99, "result": {"unsolicited": True}}])
+    conversation = await converse(native)
+    assert any("before the" in fault for fault in conversation.faults)
+    assert "thread/start" not in native.methods

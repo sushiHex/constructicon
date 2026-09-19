@@ -12,11 +12,19 @@ bytes (I6).
 observation is ``account/read``. It reads a process-global credential cache and
 never reloads, so a turn that triggers no refresh returns a byte-identical
 reply; the second reading is therefore *not* proof that anything was
-re-observed. It is required by ADR 0021, and it is load-bearing against a
-change that did occur — a switch to an API key, to Bedrock keys or to provider
-headers changes the reported account shape, and the pre-acceptance reading then
-refuses the result. The gate is also silent about *which* ChatGPT credential is
-in use: four pinned credential variants collapse onto one account shape. That
+re-observed. It is required by ADR 0021, and it detects a mode change the
+session **honestly reports** — the vendor-refresh case that ADR names. A switch
+to an API key, to Bedrock keys or to provider headers changes the reported
+account shape, and the pre-acceptance reading then refuses the result.
+
+It is not, and cannot be, a defense against a session that *misreports* its own
+mode. The mode is the vendor's assertion about itself and the vendor holds the
+credentials, so a client willing to lie could run on an API key and answer
+``chatgpt`` in a perfectly ordinary reply. No correlation scheme distinguishes
+that from the truth, which is why the adapter does not attempt one.
+
+The gate is also silent about *which* ChatGPT credential is in use: four pinned
+credential variants collapse onto one account shape. That
 distinction is not observable through the supported operation, is covered by
 the published ``operator_bound_vendor_identity_unverified`` literal, and is
 recorded in ``docs/plans/handoffs/M8-subscription-mode-interface-screen.md``.
@@ -37,9 +45,10 @@ and the fold below drops every id-bearing record. A server-initiated
 pinned source links, that "Login responses and account notifications expose flow
 ids, auth mode, or plan type". So the fold drops the whole ``account/``
 namespace too, and the adapter refuses when one arrives. Bytes that fail to parse
-cannot be classified at all, so none of them is published; their count and their
-parse error are, which keeps the report truthful without publishing content we
-could not read.
+cannot be classified at all, so none of them is published: what is published is
+their *count* and a reason drawn from a closed set of literals. The decoder's own
+message is not published, because it names the offending key and a key name is
+wire content — that was a leak, not a caveat.
 
 **The exact scope of that guarantee, which is narrower than it sounds.** No
 *account frame* reaches ``ExecutorObservation.raw_reply``: not an id-bearing
@@ -114,7 +123,42 @@ def encode_record(value: Mapping[str, Any]) -> bytes:
 
 
 class RecordDamaged(ValueError):
-    """One record's bytes cannot be decoded. Damage, never an escape."""
+    """One record's bytes cannot be decoded. Damage, never an escape.
+
+    Its message is always one of :data:`DAMAGE_REASONS` and never the decoder's
+    own text, which names the offending key and is therefore wire content.
+    """
+
+
+DAMAGE_MALFORMED = "malformed json"
+DAMAGE_REPEATED_KEY = "a repeated object key"
+DAMAGE_ENCODING = "an encoding failure"
+DAMAGE_NESTING = "nesting too deep"
+DAMAGE_REASONS = frozenset({
+    DAMAGE_MALFORMED, DAMAGE_REPEATED_KEY, DAMAGE_ENCODING, DAMAGE_NESTING,
+})
+"""The closed set of reasons a record could not be decoded.
+
+Classified, not truncated. The decoder reports a duplicated key by naming it, and
+a key name is wire-controlled, so its message is exactly as publishable as an
+account field — and truncating still publishes the first characters, which an
+email fits inside. A reader needs the fact and the count of a decode failure;
+the offending bytes are what the value classifier exists to keep out of public
+fields, and this was the one channel that bypassed it.
+"""
+
+
+def _damage_reason(exc: ValueError) -> str:
+    """Choose a literal. The decoder's message is read here and never leaves.
+
+    The duplicate-key case has no distinct exception type to match on, so this
+    reads our own message — ``core/identity.py``'s wording, not the vendor's — to
+    pick a literal. Nothing derived from it is returned. If that wording is ever
+    reworded, the classification degrades to ``malformed json`` and a test
+    notices; no wire content escapes either way.
+    """
+
+    return DAMAGE_REPEATED_KEY if "repeats key" in str(exc) else DAMAGE_MALFORMED
 
 
 def parse_record(line: bytes) -> Any:
@@ -136,8 +180,13 @@ def parse_record(line: bytes) -> Any:
 
     try:
         return parse_json_value(line.decode("utf-8"))
-    except (ValueError, UnicodeError, RecursionError) as exc:
-        raise RecordDamaged(str(exc)) from exc
+    except RecursionError as exc:
+        raise RecordDamaged(DAMAGE_NESTING) from exc
+    except UnicodeError as exc:
+        # Before ``ValueError``: ``UnicodeError`` is one of its subclasses.
+        raise RecordDamaged(DAMAGE_ENCODING) from exc
+    except ValueError as exc:
+        raise RecordDamaged(_damage_reason(exc)) from exc
 
 
 def split_records(buffer: bytearray) -> list[bytes]:
@@ -388,8 +437,10 @@ from ``raw`` rather than published, and is not counted as malformed because it i
 not damage. But exclusion must never be *silent* — a near-empty transcript with
 no indication anything was withheld is an evidence blackout at exactly the moment
 N4 needs evidence, which is structurally the same defect as a gate that passes
-without running. So the fold counts what it excludes and says so in the
-transcript's own marker.
+without running. So the fold counts every record it excludes as
+unclassified and says so in the transcript's own marker. Blank lines are the one
+thing skipped without a count: they carry no evidence and there is nothing about
+them to report.
 """
 
 
@@ -405,13 +456,22 @@ def is_turn_evidence(record: Mapping[str, Any]) -> bool:
 NAMEABLE_VALUE = 32
 """How much of a wire value may appear in a public fault detail."""
 
+NAMEABLE_ALPHABET = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
+"""ASCII alphanumerics, spelled out because ``str.isalnum`` is Unicode-aware.
+
+The docstring below claimed ``[A-Za-z0-9_-]`` while the code admitted
+``日本語``, Arabic-Indic digits and ``pro²``. Not exploitable — ``@`` and ``.``
+stay out and the length bound holds — but a guarantee written stronger than its
+mechanism is the recurring defect in this slice, so the alphabet is now literally
+the one the docstring names."""
+
 NAMEABLE_METHOD = 64
 """The same rule for a method name, which needs ``/`` and a little more room."""
 
 
 def _nameable(value: Any, *, limit: int, extra: str) -> str | None:
     if isinstance(value, str) and 0 < len(value) <= limit and all(
-        character.isalnum() or character in extra for character in value
+        character in NAMEABLE_ALPHABET or character in extra for character in value
     ):
         return repr(value)
     return None
@@ -593,8 +653,14 @@ EMPTY_TURN = TurnObservation(
 
 
 def _turn_of(
-    record: Mapping[str, Any], *, thread_id: str, turn_id: str,
+    record: Mapping[str, Any], *, thread_id: str | None, turn_id: str | None,
 ) -> Mapping[str, Any] | None:
+    if thread_id is None or turn_id is None:
+        # An invocation that was never identified can have no terminal record.
+        # Comparing against "" instead let a child assert a terminal turn for a
+        # turn it had not named, which then published produced_output=True on a
+        # refusal — a truthfulness field (I4). Unreachable is better than guarded.
+        return None
     if record.get("method") != "turn/completed":
         return None
     params = record.get("params")
@@ -606,7 +672,7 @@ def _turn_of(
     return turn
 
 
-def is_terminal_record(line: bytes, *, thread_id: str, turn_id: str) -> bool:
+def is_terminal_record(line: bytes, *, thread_id: str | None, turn_id: str | None) -> bool:
     """Whether this record terminates *this* invocation's turn.
 
     A cheap stop condition for the reader. ``observe_turn`` remains the
@@ -630,13 +696,36 @@ def _usage(value: Any) -> Usage | None:
         "output_tokens": value.get("outputTokens"),
     }
     numbers = {
-        name: item for name, item in fields.items() if type(item) is int
+        name: item for name, item in fields.items()
+        if type(item) is int and len(repr(item)) <= NUMBER_CHARS
     }
     return Usage(**numbers) if numbers else None
 
 
 RATE_LIMIT_KEYS = 16
 RATE_LIMIT_KEY_LENGTH = 48
+NUMBER_CHARS = 32
+"""How long a wire number's own text may be.
+
+Bounding the key count and the key-name length left the *magnitude* unbounded:
+``json.loads`` accepts integers up to 4,300 digits, so sixteen admitted keys
+serialized to 68,918 characters — past the transcript bound this module already
+declares. A number is only a fact if it is a number-sized fact."""
+
+DETAIL_CHARS = 4096
+"""``ExecutorError.detail`` joins itemized faults, so several may accumulate."""
+
+FIRST_ERROR_CHARS = 512
+"""``TransportDamage.first_error``. It had neither a bound nor a classifier."""
+
+
+def _number(value: Any) -> bool:
+    """A wire number small enough to publish, magnitude included."""
+
+    return (
+        (type(value) is bool or type(value) is int or type(value) is float)
+        and len(repr(value)) <= NUMBER_CHARS
+    )
 
 TRANSCRIPT_CHARS = 64 * 1024
 """What ``raw_reply`` may carry. The launcher's 32 MiB stdout bound is the only
@@ -698,7 +787,7 @@ def _rate_limit(value: Any) -> RateLimitInfo | None:
         key: item
         for key, item in sorted(value.items())[:RATE_LIMIT_KEYS]
         if isinstance(key, str) and len(key) <= RATE_LIMIT_KEY_LENGTH
-        and (type(item) is bool or type(item) is int or type(item) is float)
+        and _number(item)
     }
     return RateLimitInfo(
         is_using_overage=overage if type(overage) is bool else None,
@@ -707,7 +796,7 @@ def _rate_limit(value: Any) -> RateLimitInfo | None:
 
 
 def observe_turn(
-    records: Sequence[bytes], *, thread_id: str, turn_id: str,
+    records: Sequence[bytes], *, thread_id: str | None, turn_id: str | None,
     transport_damage: str | None = None,
 ) -> TurnObservation:
     """Fold one turn's records into a truthful observation.
@@ -757,7 +846,7 @@ def observe_turn(
             # Bytes we could not parse we cannot classify, so none of them is
             # published. The count and the damage report them truthfully (I4).
             malformed += 1
-            first_error = first_error or f"malformed native record: {exc}"
+            first_error = first_error or f"a damaged native record: {exc}"
             continue
         if not isinstance(record, dict) or "id" in record or "method" not in record:
             malformed += 1
@@ -781,7 +870,9 @@ def observe_turn(
                 continue
             terminal = True
             if turn.get("status") != "completed":
-                first_error = first_error or f"the turn reported status {turn.get('status')!r}"
+                first_error = first_error or (
+                    f"the turn reported status {named_value(turn.get('status'))}"
+                )
             output = turn.get("output")
             model = turn.get("model")
             served_model = model if isinstance(model, str) else None
@@ -827,6 +918,26 @@ def _evidence(process: ProcessFacts) -> str:
     return process.stderr.decode("utf-8", errors="replace")[:EVIDENCE_BYTES]
 
 
+def _bounded(text: str, limit: int) -> str:
+    """Every public text surface is bounded by a named constant.
+
+    Four fields of a published outcome carry text, and this slice has now found a
+    leak or an unbounded field in three of them on three separate review passes —
+    each time by looking at one site rather than at the set. The set is finite and
+    enumerable, so the bound is applied by name here and asserted by enumeration
+    in the tests, which fails when a *new* surface appears instead of after
+    someone finds it.
+    """
+
+    return text if len(text) <= limit else text[:limit] + "[truncated]"
+
+
+def bounded_detail(detail: str) -> str:
+    """The public ``ExecutorError.detail`` bound, for the adapter's own faults."""
+
+    return _bounded(detail, DETAIL_CHARS)
+
+
 def decode_turn(
     observation: TurnObservation, process: ProcessFacts, *, requested_model: str | None,
 ) -> ExecutorOutcome:
@@ -868,7 +979,8 @@ def decode_turn(
         ))
     if damage:
         return ExecutorPartial(**fields, damage=TransportDamage(
-            malformed_records=observation.malformed_records, first_error=damage,
+            malformed_records=observation.malformed_records,
+            first_error=_bounded(damage, FIRST_ERROR_CHARS),
             evidence_excerpt=_evidence(process),
         ))
     return ExecutorSuccess(**fields)
@@ -890,7 +1002,7 @@ def unavailable_outcome(
         elapsed_s=process.elapsed_s,
         error=ExecutorError(
             kind="unavailable",
-            detail="; ".join(faults),
+            detail=_bounded("; ".join(faults), DETAIL_CHARS),
             produced_output=observation.terminal,
         ),
     )

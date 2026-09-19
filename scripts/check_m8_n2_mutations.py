@@ -54,6 +54,13 @@ BINDING = "constructicon.substrate.executors.codex:CodexOperatorHandle._converse
 CORRELATE = "constructicon.substrate.executors.codex:CodexConversation._request"
 EXECUTE = "constructicon.substrate.executors.codex:CodexOperatorHandle.execute"
 CLOSE = "constructicon.substrate.executors.codex:CodexOperatorProvider.close"
+DRAIN_BEFORE = "constructicon.substrate.executors.codex:CodexConversation._drain_before"
+ABSORB = "constructicon.substrate.executors.codex:CodexConversation._absorb"
+TURN_OF = "constructicon.substrate.executors.codex_protocol:_turn_of"
+CONFIGURED = "constructicon.substrate.executors.codex:configured_model"
+USAGE = "constructicon.substrate.executors.codex_protocol:_usage"
+NUMBER = "constructicon.substrate.executors.codex_protocol:_number"
+NAMEABLE = "constructicon.substrate.executors.codex_protocol:_nameable"
 PROVIDER = "constructicon.substrate.executors.codex:CodexOperatorProvider.unavailable_reasons"
 CONSTRUCTOR = "constructicon.substrate.executors.codex:CodexOperatorProvider.__init__"
 
@@ -172,9 +179,37 @@ MUTANTS = (
     (
         "a pathological record is damage, not an escape",
         PARSE,
-        "except (ValueError, UnicodeError, RecursionError) as exc:",
-        "except (ValueError, UnicodeError) as exc:",
+        "raise RecordDamaged(DAMAGE_NESTING) from exc",
+        "raise",
         ADAPTER + "test_a_pathological_record_is_damage_rather_than_an_escape",
+    ),
+    (
+        "a reply must arrive after the request it answers",
+        DRAIN_BEFORE,
+        "while self._queue:",
+        "while False:",
+        ADAPTER + "test_a_reply_queued_before_its_request_cannot_answer_it",
+    ),
+    (
+        "a queued id-bearing record is not a notification",
+        DRAIN_BEFORE,
+        'if "id" in record:',
+        "if False:",
+        ADAPTER + "test_a_reply_queued_before_its_request_cannot_answer_it",
+    ),
+    (
+        "the decoder's own message never reaches a public field",
+        PARSE,
+        "raise RecordDamaged(_damage_reason(exc)) from exc",
+        "raise RecordDamaged(str(exc)) from exc",
+        PROTOCOL + "test_a_duplicated_key_is_classified_never_quoted",
+    ),
+    (
+        "an account notification is refused wherever it arrives",
+        ABSORB,
+        "if is_account_record(record):",
+        "if False:",
+        ADAPTER + "test_an_account_notification_mid_turn_discards_the_turn",
     ),
     (
         "a reply must correlate with the request that earned it",
@@ -298,7 +333,7 @@ MUTANTS = (
     (
         "a refused gate names its faults",
         REFUSAL,
-        'detail="; ".join(faults),',
+        'detail=_bounded("; ".join(faults), DETAIL_CHARS),',
         'detail="",',
         PROTOCOL + "test_a_refused_gate_discards_the_result_and_still_reports_that_a_turn_ran",
     ),
@@ -308,20 +343,6 @@ MUTANTS = (
         "return method in TURN_EVIDENCE_METHODS or method.startswith(TURN_EVIDENCE_PREFIXES)",
         "return not method.startswith('turn/completed-never')",
         PROTOCOL + "test_no_account_method_is_attested_turn_evidence",
-    ),
-    (
-        "an account notification mid-turn discards the turn",
-        COLLECT,
-        "if self._account_notice(line):",
-        "if False:",
-        ADAPTER + "test_an_account_notification_mid_turn_discards_the_turn",
-    ),
-    (
-        "an account notification after the turn discards it too",
-        CORRELATE,
-        "if is_account_record(record):",
-        "if False:",
-        ADAPTER + "test_an_account_notification_after_the_turn_also_discards_it",
     ),
     (
         "the adapter discards a refused turn",
@@ -361,7 +382,7 @@ MUTANTS = (
     (
         "the rate-limit detail is constrained by value shape",
         RATE_LIMIT,
-        "and (type(item) is bool or type(item) is int or type(item) is float)",
+        "and _number(item)",
         "",
         PROTOCOL + "test_an_accepted_turn_publishes_only_numeric_rate_limit_facts",
     ),
@@ -439,7 +460,7 @@ MUTANTS = (
     ),
     (
         "a notification before the turn is not its evidence",
-        CORRELATE,
+        ABSORB,
         "if self._collecting:",
         "if True:",
         ADAPTER + "test_a_notification_before_the_turn_is_not_the_turns_evidence",
@@ -457,6 +478,90 @@ MUTANTS = (
         "if self.configured_model not in profile.grant_policy.model_ids:",
         "if False:",
         ADAPTER + "test_the_configuration_must_name_a_model_from_the_profiles_inventory",
+    ),
+    (
+        "the turn status reaches a public field classified",
+        OBSERVE,
+        "f\"the turn reported status {named_value(turn.get('status'))}\"",
+        "f\"the turn reported status {turn.get('status')!r}\"",
+        PROTOCOL + "test_no_planted_wire_string_escapes_its_permitted_field_on_a_turn",
+    ),
+    (
+        "the damage first error is bounded",
+        DECODE,
+        "first_error=_bounded(damage, FIRST_ERROR_CHARS),",
+        "first_error=damage,",
+        PROTOCOL + "test_a_long_transport_damage_string_is_bounded_in_the_outcome",
+    ),
+    (
+        "the refusal detail is bounded",
+        REFUSAL,
+        'detail=_bounded("; ".join(faults), DETAIL_CHARS),',
+        'detail="; ".join(faults),',
+        PROTOCOL + "test_a_long_refusal_detail_is_bounded_in_the_outcome",
+    ),
+    (
+        "a wire number's magnitude is bounded",
+        NUMBER,
+        "and len(repr(value)) <= NUMBER_CHARS",
+        "",
+        PROTOCOL + "test_no_published_number_is_larger_than_a_number"
+    ),
+    (
+        "a usage number's magnitude is bounded",
+        USAGE,
+        "if type(item) is int and len(repr(item)) <= NUMBER_CHARS",
+        "if type(item) is int",
+        PROTOCOL + "test_no_published_number_is_larger_than_a_number"
+    ),
+    (
+        "the nameable alphabet is ascii, not unicode alphanumerics",
+        NAMEABLE,
+        "character in NAMEABLE_ALPHABET",
+        "character.isalnum()",
+        PROTOCOL + "test_a_non_ascii_value_is_not_nameable_despite_being_alphanumeric",
+    ),
+    (
+        "the withheld record count is exact",
+        TRANSCRIPT,
+        "dropped = len(kept) - index",
+        "dropped = 1",
+        PROTOCOL + "test_the_withheld_record_count_is_exact_not_merely_present",
+    ),
+    (
+        "the transcript bound counts its newlines",
+        TRANSCRIPT,
+        "size += len(item) + 1",
+        "size += len(item)",
+        PROTOCOL + "test_the_transcript_bound_counts_the_newlines_it_adds",
+    ),
+    (
+        "the three attested names are load-bearing",
+        EVIDENCE_ALLOWLIST,
+        "return method in TURN_EVIDENCE_METHODS or method.startswith(TURN_EVIDENCE_PREFIXES)",
+        "return method.startswith(TURN_EVIDENCE_PREFIXES)",
+        PROTOCOL + "test_an_attested_turn_notification_is_kept_as_evidence",
+    ),
+    (
+        "an unidentified invocation has no terminal record",
+        TURN_OF,
+        "if thread_id is None or turn_id is None:",
+        "if False:",
+        PROTOCOL + "test_an_unidentified_invocation_can_have_no_terminal_record",
+    ),
+    (
+        "a nested configuration refuses as a contract violation",
+        CONFIGURED,
+        'raise ContractViolation(f"the sealed configuration is {DAMAGE_NESTING}") from exc',
+        "raise",
+        ADAPTER + "test_a_deeply_nested_configuration_refuses_as_a_contract_violation",
+    ),
+    (
+        "nothing read before the turn is the turn's evidence",
+        CONVERSE,
+        "self._collecting = True",
+        "",
+        ADAPTER + "test_a_notification_between_the_thread_and_the_turn_is_not_turn_evidence",
     ),
     (
         "unavailability is published, not inferred",
@@ -498,6 +603,9 @@ physical (I1). Their tests skip elsewhere, and a skipped test proves nothing.
 """
 
 assert len({name for name, *_ in MUTANTS}) == len(MUTANTS), "mutant names must be unique"
+assert {name for name, *_ in MUTANTS} >= LINUX_ONLY, "a stale LINUX_ONLY entry"
+"""A renamed mutant would otherwise shrink the reported UNMEASURED count
+silently, which is the one direction this script must never fail quietly."""
 """Names are the identity used for filtering and for reporting, so a duplicate
 would silently drop one copy from the unmeasured list."""
 

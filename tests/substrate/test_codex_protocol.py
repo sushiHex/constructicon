@@ -18,10 +18,16 @@ from constructicon.substrate.executors.codex_protocol import (
     ACCOUNT_NAMESPACE,
     ACCOUNT_NOTICE_FAULT,
     ACCOUNT_TYPE_KEY,
+    DAMAGE_REASONS,
+    DAMAGE_REPEATED_KEY,
+    DETAIL_CHARS,
+    EVIDENCE_BYTES,
+    FIRST_ERROR_CHARS,
     NAMEABLE_VALUE,
     NO_ACCOUNT_FAULT,
     NO_PLAN_FAULT,
     NO_RESULT_FAULT,
+    NUMBER_CHARS,
     PLAN_TYPE_KEY,
     PROVIDER_FLAG_KEY,
     PROVIDER_OVERRIDE_FAULT,
@@ -209,8 +215,39 @@ exhausts the stack on it. ``RecursionError`` is neither a ``ValueError`` nor a
     b'{"a": 1, "a": 2}',
 ], ids=["pathological", "malformed", "not-utf8", "duplicate-keys"])
 def test_every_decoder_failure_is_one_damage_type(line):
-    with pytest.raises(RecordDamaged):
+    with pytest.raises(RecordDamaged) as damaged:
         parse_record(line)
+    assert str(damaged.value) in DAMAGE_REASONS
+
+
+@pytest.mark.parametrize("key,leak", [
+    (EMAIL, EMAIL),
+    ("k" * 100_000, "k" * 100_000),
+], ids=["operator-string", "oversized"])
+def test_a_duplicated_key_is_classified_never_quoted(key, leak):
+    """A duplicated key is wire content, and the decoder reports it by name.
+
+    Classified rather than truncated: truncation still publishes the first
+    characters, and an email fits inside them.
+    """
+    line = ('{"method": "turn/delta", "' + key + '": 1, "' + key + '": 2}').encode()
+    with pytest.raises(RecordDamaged) as damaged:
+        parse_record(line)
+    assert str(damaged.value) == DAMAGE_REPEATED_KEY
+
+    observation = folded([line, record(completed())])
+    assert observation.malformed_records == 1
+    assert leak not in (observation.first_error or "")
+    assert DAMAGE_REPEATED_KEY in (observation.first_error or "")
+    outcome = decode_turn(observation, Facts(), requested_model=None)
+    assert leak not in json.dumps(outcome.model_dump(mode="json"))
+
+
+def test_the_duplicate_key_literal_is_pinned_to_the_decoders_wording():
+    """``_damage_reason`` reads our own message; a reword degrades, never leaks."""
+    with pytest.raises(RecordDamaged) as damaged:
+        parse_record(b'{"a": 1, "a": 2}')
+    assert str(damaged.value) == DAMAGE_REPEATED_KEY
 
 
 def test_a_valid_record_decodes_and_keeps_its_shape_checks_with_the_caller():
@@ -789,3 +826,228 @@ def test_a_refused_gate_discards_the_result_and_still_reports_that_a_turn_ran():
     # The turn's result is refused, not reported: none of it survives.
     assert outcome.output is None and outcome.raw_reply is None
     assert outcome.served_model is None and outcome.requested_model == "m"
+
+
+# --- the invariant over every published surface -------------------------------
+#
+# Three review passes each fixed a leak site and each missed one. The set of
+# public text surfaces on an ExecutorOutcome is finite and enumerable, so state
+# the rule over the set and let a test walk it. This fails when a *new* surface
+# appears, rather than after someone finds it.
+
+FIELD_BOUNDS = {
+    "raw_reply": TRANSCRIPT_CHARS,
+    "detail": DETAIL_CHARS,
+    "first_error": FIRST_ERROR_CHARS,
+    "evidence_excerpt": EVIDENCE_BYTES,
+}
+"""Every public text field, with the named constant that bounds it."""
+
+WIRE_PERMITTED = frozenset({"raw_reply", "evidence_excerpt"})
+"""The two fields a recorded limit permits wire content to reach.
+
+``raw_reply`` carries a legitimate turn record's payload, and ``evidence_excerpt``
+is unfiltered vendor stderr. Both limits are stated in the module docstring and
+pinned by their own tests; every other surface must be free of wire content.
+"""
+
+PLANTED = "planted-operator@example.invalid"
+
+
+def strings_of(value, field=None):
+    """Every string in a published outcome, with the field name it sits under."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield from strings_of(item, key)
+    elif isinstance(value, list):
+        for item in value:
+            yield from strings_of(item, field)
+    elif isinstance(value, str):
+        yield field, value
+
+
+def planted_records():
+    """One record per place the wire can put a string, all planting PLANTED."""
+    return {
+        "duplicated key": (
+            '{"method": "turn/delta", "' + PLANTED + '": 1, "' + PLANTED + '": 2}'
+        ).encode(),
+        "oversized status": record(completed(status={"note": PLANTED + "x" * 150_000})),
+        "oversized rate-limit key": record(completed(
+            rateLimits={PLANTED + "k" * 500: 1, "usedPercent": 3},
+        )),
+        "oversized usage": record(completed(usage={"inputTokens": 10 ** 4200})),
+        "long method": record({"method": "turn/" + PLANTED + "m" * 300, "params": {}}),
+    }
+
+
+def planted_replies():
+    return {
+        "account type of the wrong type": account_reply(
+            account={ACCOUNT_TYPE_KEY: {"nested": PLANTED}, PLAN_TYPE_KEY: "pro"},
+        ),
+        "oversized plan": account_reply(
+            account={ACCOUNT_TYPE_KEY: "chatgpt", PLAN_TYPE_KEY: PLANTED + "p" * 200_000},
+        ),
+    }
+
+
+def assert_published_surfaces_are_bounded(outcome, *, permitted=WIRE_PERMITTED):
+    published = outcome.model_dump(mode="json")
+    for field, text in strings_of(published):
+        bound = FIELD_BOUNDS.get(field)
+        if bound is not None:
+            assert len(text) <= bound + len("[truncated]"), (field, len(text))
+        if PLANTED in text:
+            assert field in permitted, (field, text[:200])
+    # No public surface is unbounded in aggregate either, whatever its type.
+    serialized = json.dumps(published)
+    assert len(serialized) <= sum(FIELD_BOUNDS.values()) + RECORD_BYTES + 4096, len(serialized)
+
+
+@pytest.mark.parametrize("name", sorted(planted_records()))
+def test_no_planted_wire_string_escapes_its_permitted_field_on_a_turn(name):
+    """The accepting and partial paths, over every record shape that plants one."""
+    observation = folded([planted_records()[name], record(completed())])
+    for facts in (Facts(), Facts(bound_exceeded="record", stderr=PLANTED.encode())):
+        assert_published_surfaces_are_bounded(
+            decode_turn(observation, facts, requested_model=None),
+        )
+
+
+@pytest.mark.parametrize("name", sorted(planted_replies()))
+def test_no_planted_wire_string_escapes_a_refusal(name):
+    """The refusing path: faults are built from the reply, and detail is public."""
+    reply = planted_replies()[name]
+    faults = account_faults(reply, EXPECTED) + account_change_faults(
+        account_reply(account=MANAGED), reply,
+    )
+    assert faults
+    outcome = unavailable_outcome(
+        faults, folded([record(completed())]), Facts(), requested_model=None,
+    )
+    # A refusal publishes no transcript at all, so nothing is permitted here.
+    assert_published_surfaces_are_bounded(outcome, permitted=frozenset())
+
+
+def test_the_bounded_fields_are_the_whole_public_text_surface():
+    """If a new text field appears on an outcome, this notices."""
+    observation = folded([record(completed(output={"summary": "done"}))])
+    outcome = decode_turn(observation, Facts(bound_exceeded="record", stderr=b"e"),
+                          requested_model="m")
+    fields = {field for field, _ in strings_of(outcome.model_dump(mode="json"))}
+    # ``output`` is the task result rather than a diagnostic, and ``status``,
+    # ``kind`` and ``requested_model`` are ours, not the wire's.
+    assert fields <= set(FIELD_BOUNDS) | {
+        "status", "kind", "summary", "requested_model", "served_model",
+    }, fields
+
+
+def test_the_withheld_record_count_is_exact_not_merely_present():
+    """The count *is* the feature: a marker with a wrong number is quieter silence."""
+    item = record({"method": "turn/delta", "params": {"text": "x" * 1000}})
+    observation = folded([*([item] * 200), record(completed())])
+    kept = observation.raw.count('"turn/delta"')
+    assert 0 < kept < 200
+    assert f"{201 - kept} further records not shown" in observation.raw
+
+
+def test_the_transcript_bound_counts_the_newlines_it_adds():
+    """Many small records, because that is where the newline term shows.
+
+    With large records the accumulated slack never adds up to another record and
+    the term is unobservable; with small ones it admits hundreds.
+    """
+    item = record({"method": "turn/delta"})
+    observation = folded([*([item] * 6000), record(completed())])
+    # Correct accounting keeps the joined records inside the bound, so only the
+    # marker may exceed it. Dropping the newline term lets the join overrun.
+    marker = observation.raw.rsplit("\n", 1)[-1]
+    assert "further records not shown" in marker
+    # Only the marker may exceed the bound; the joined records may not.
+    assert len(observation.raw) - len(marker) - 1 <= TRANSCRIPT_CHARS
+
+
+def test_a_non_ascii_value_is_not_nameable_despite_being_alphanumeric():
+    """``str.isalnum`` is Unicode-aware; the documented alphabet is not."""
+    for value in ("日本語", "pro²", "١٢٣"):
+        assert value.isalnum()
+        assert named_value(value) == "a str value"
+    assert named_value("pro") == "'pro'"
+
+
+def test_an_unidentified_invocation_can_have_no_terminal_record():
+    """K: ``produced_output`` is a truthfulness field, so make the case impossible."""
+    for ids in (None, ""):
+        claimed = {"method": "turn/completed", "params": {
+            "threadId": ids, "turn": {"id": ids, "status": "completed"},
+        }}
+        observation = observe_turn([record(claimed)], thread_id=None, turn_id=None)
+        assert not observation.terminal, ids
+        assert not is_terminal_record(record(claimed), thread_id=None, turn_id=None)
+    observation = observe_turn([record(completed())], thread_id=None, turn_id=None)
+    assert not observation.terminal
+    outcome = unavailable_outcome(
+        ("refused",), observation, Facts(), requested_model=None,
+    )
+    assert outcome.error.produced_output is False
+
+
+def test_a_long_transport_damage_string_is_bounded_in_the_outcome():
+    """``first_error`` needs its own bound, not only a classified source.
+
+    Every source this module feeds it is already a literal, so the bound is only
+    observable through ``observe_turn``'s own parameter — which is the contract a
+    caller can reach, and therefore the one worth pinning.
+    """
+    observation = folded([record(completed())], transport_damage="d" * 10_000)
+    outcome = decode_turn(observation, Facts(), requested_model=None)
+    assert outcome.status == "partial"
+    assert len(outcome.damage.first_error) <= FIRST_ERROR_CHARS + len("[truncated]")
+
+
+def numbers_of(value, field=None):
+    """Every number in a published outcome, skipping the task result."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key != "output":  # the payload, not a diagnostic
+                yield from numbers_of(item, key)
+    elif isinstance(value, list):
+        for item in value:
+            yield from numbers_of(item, field)
+    elif isinstance(value, (int, float)) and not isinstance(value, bool):
+        yield field, value
+
+
+def test_no_published_number_is_larger_than_a_number():
+    """Bounding key count and name length left magnitude unbounded.
+
+    ``json.loads`` accepts 4,300-digit integers, so sixteen admitted rate-limit
+    keys serialized past the transcript bound this module declares. Numeric bloat
+    is the same defect as a long string, in a different type.
+    """
+    huge = 10 ** 4200
+    observation = folded([record(completed(
+        rateLimits={f"metric{index}": huge for index in range(RATE_LIMIT_KEYS + 4)},
+        usage={"inputTokens": huge, "outputTokens": 7},
+    ))])
+    outcome = decode_turn(observation, Facts(), requested_model=None)
+    assert outcome.status == "success"
+    for field, number in numbers_of(outcome.model_dump(mode="json")):
+        assert len(repr(number)) <= NUMBER_CHARS, (field, len(repr(number)))
+    assert outcome.usage == Usage(input_tokens=None, output_tokens=7)
+    assert not outcome.rate_limit.detail
+
+
+def test_a_long_refusal_detail_is_bounded_in_the_outcome():
+    """``detail`` needs its own bound as well as its classifier.
+
+    Every fault this module produces is already classified and short, so the
+    bound is observable through the faults a caller supplies — which is how the
+    adapter reaches it, since a launch failure's ``str(exc)`` has no length rule
+    of its own.
+    """
+    outcome = unavailable_outcome(
+        ("x" * 10_000, "y" * 10_000), CLEAN, Facts(), requested_model=None,
+    )
+    assert len(outcome.error.detail) <= DETAIL_CHARS + len("[truncated]")

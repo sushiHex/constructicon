@@ -36,9 +36,15 @@ published identity carries an account fact. The two readings are the supported
 non-secret observation; the module docstring of the protocol states exactly what
 they do and do not establish.
 
-Replies are correlated explicitly, because the pure gate cannot see it: request
-ids are monotonic within one conversation, and a mismatched id, a native request
-where a reply was due, or a reply carrying neither result nor error is refused.
+Replies are correlated explicitly, because the pure gate cannot see it: a
+mismatched id, a native request where a reply was due, or a reply carrying
+neither result nor error is refused, and nothing already buffered when a request
+is built may answer it.
+
+Ids are allocated monotonically, which is only how they are generated and not a
+property correlation relies on. Predictability turned out to be a liability
+rather than a feature: a child that emits ``{"id": <next>, ...}`` before the
+request exists satisfies an id check, which is why arrival order is checked too.
 """
 
 from __future__ import annotations
@@ -82,6 +88,7 @@ from constructicon.core.workspace import (
 from constructicon.substrate.executors import codex_protocol
 from constructicon.substrate.executors.codex_protocol import (
     ACCOUNT_NOTICE_FAULT,
+    DAMAGE_NESTING,
     EMPTY_TURN,
     GATE_INCOMPLETE_FAULT,
     READ_WINDOW,
@@ -92,6 +99,7 @@ from constructicon.substrate.executors.codex_protocol import (
     account_change_faults,
     account_faults,
     account_read_request,
+    bounded_detail,
     decode_turn,
     encode_record,
     initialize_request,
@@ -151,7 +159,13 @@ def configured_model(configuration: str) -> str:
 
     try:
         parsed = tomllib.loads(configuration)
-    except tomllib.TOMLDecodeError as exc:
+    except RecursionError as exc:
+        # The sibling parse, and the same class ``parse_record`` exists to close:
+        # ``tomllib.loads`` exhausts the stack on deeply nested input, and
+        # ``RecursionError`` is not a ``TOMLDecodeError``, so it escaped raw
+        # instead of as the ContractViolation this contract promises.
+        raise ContractViolation(f"the sealed configuration is {DAMAGE_NESTING}") from exc
+    except (tomllib.TOMLDecodeError, ValueError) as exc:
         raise ContractViolation(f"the sealed configuration is not valid TOML: {exc}") from exc
     model = parsed.get("model")
     if not isinstance(model, str) or not model.strip():
@@ -274,7 +288,7 @@ class CodexConversation:
                 # would only add noise to an already-explained refusal.
                 self._refuse(GATE_INCOMPLETE_FAULT)
             self.observation = observe_turn(
-                self._transcript, thread_id=self.thread_id or "", turn_id=self.turn_id or "",
+                self._transcript, thread_id=self.thread_id, turn_id=self.turn_id,
                 transport_damage=self._stream.damage,
             )
             await self._finish(io)
@@ -299,6 +313,76 @@ class CodexConversation:
     def _next_identifier(self) -> int:
         self._identifier += 1
         return self._identifier
+
+    def _classify(self, line: bytes, *, method: str) -> Mapping[str, Any] | None:
+        """One record's shape while a reply is outstanding, or ``None`` if refused."""
+
+        try:
+            record = parse_record(line)
+        except RecordDamaged as exc:
+            self._refuse(f"a damaged native record arrived awaiting {method!r}: {exc}")
+            return None
+        if not isinstance(record, dict) or ("id" not in record and "method" not in record):
+            self._refuse(f"a native record awaiting {method!r} is not a protocol object")
+            return None
+        return record
+
+    def _absorb(self, line: bytes, record: Mapping[str, Any]) -> bool:
+        """Handle one id-less notification; ``False`` when it is a refusal.
+
+        The single place notifications are classified. Both sites that can meet
+        one — the pre-send drain and the read loop — and the turn collector route
+        through here, so the account refusal and the transcription rule cannot
+        drift apart between them.
+        """
+
+        if is_account_record(record):
+            self._refuse_account(record)
+            return False
+        if self._collecting:
+            self._transcript.append(line)
+        return True
+
+    def _drain_before(self, method: str) -> bool:
+        """Nothing already buffered can be a reply to a request not yet sent.
+
+        Request ids are monotonic and therefore predictable, and ``_collect``
+        returns the moment it sees the terminal record, so a child can leave
+        bytes queued and a forged ``{"id": <next>, ...}`` among them would
+        satisfy correlation before the live reply was ever read. Correlation
+        alone only checks which request a reply *claims* to answer; this is the
+        missing half — a reply must arrive **after** its request.
+
+        Every earlier request consumed its own reply, so no legitimate id-bearing
+        record can be in this queue. That makes the rule exact rather than
+        heuristic: it refuses the forged and the unsolicited case and nothing
+        else.
+
+        **The width of this rule, stated.** It covers bytes this adapter has
+        already framed. A reply still unread in the pipe cannot be ordered
+        against the request that provoked it — arrival order is only observable
+        as *our* read order — so that case is not closed and is not closeable by
+        any correlation rule. Randomizing the ids would not close it either, for
+        the same reason the larger case is open: the vendor authors the reply's
+        *content*, not merely its timing, so a client willing to forge a reply
+        could instead answer the real request with a lie. The gate trusts the
+        session's report of its own mode; this rule only stops a buggy or
+        confused client from having an earlier record answered as a later one.
+        """
+
+        while self._queue:
+            line = self._queue.pop(0)
+            record = self._classify(line, method=method)
+            if record is None:
+                return False
+            if "id" in record:
+                self._refuse(
+                    f"a reply arrived before the {method!r} request it claims to answer"
+                )
+                return False
+            if not self._absorb(line, record):
+                return False
+        return True
 
     async def _read(self, io: ProcessIO) -> bytes | None:
         """One framed record, or ``None`` at EOF or once framing is damaged."""
@@ -344,6 +428,8 @@ class CodexConversation:
 
         identifier = payload["id"]
         method = payload["method"]
+        if not self._drain_before(method):
+            return None
         if not await self._send(io, payload):
             return None
         while True:
@@ -351,23 +437,12 @@ class CodexConversation:
             if line is None:
                 self._refuse(f"the native client ended before answering {method!r}")
                 return None
-            try:
-                record = parse_record(line)
-            except RecordDamaged as exc:
-                self._refuse(f"a malformed native record arrived awaiting {method!r}: {exc}")
-                return None
-            if not isinstance(record, dict):
-                self._refuse(f"a native record awaiting {method!r} is not an object")
+            record = self._classify(line, method=method)
+            if record is None:
                 return None
             if "id" not in record:
-                if "method" not in record:
-                    self._refuse("a native record carries neither an id nor a method")
+                if not self._absorb(line, record):
                     return None
-                if is_account_record(record):
-                    self._refuse_account(record)
-                    return None
-                if self._collecting:
-                    self._transcript.append(line)
                 continue
             if "method" in record:
                 self._refuse("this slice authorizes no native request")
@@ -445,13 +520,18 @@ class CodexConversation:
             self._refuse("the native client started no identified thread")
             return
 
-        self._collecting = True
+        # Nothing read before the turn existed may be attributed to it. The queue
+        # can still hold records the child emitted earlier, and ``_request``
+        # drains it — so collecting must not already be true when that drain
+        # runs, or an earlier notification becomes this turn's evidence. Same
+        # boundary as the pre-send rule, in the other direction.
         opened_turn = await self._request(io, turn_request(
             self._next_identifier(), thread_id=self.thread_id, task=self._task,
             grants=self._grants,
         ))
         if opened_turn is None:
             return
+        self._collecting = True
         self.turn_id = _named(opened_turn, "turn")
         if self.turn_id is None:
             self._refuse("the native client started no identified turn")
@@ -475,23 +555,20 @@ class CodexConversation:
             line = await self._read(io)
             if line is None:
                 return
-            if self._account_notice(line):
-                return
-            self._transcript.append(line)
+            try:
+                record = parse_record(line)
+            except RecordDamaged:
+                # Damaged bytes are the fold's business, not a refusal here.
+                self._transcript.append(line)
+                continue
+            if isinstance(record, dict) and "id" not in record and "method" in record:
+                if not self._absorb(line, record):
+                    return
+            else:
+                # A reply or a native request inside a turn: the fold counts it.
+                self._transcript.append(line)
             if is_terminal_record(line, thread_id=self.thread_id, turn_id=self.turn_id):
                 return
-
-    def _account_notice(self, line: bytes) -> bool:
-        """Refuse an account notification before it can be transcribed."""
-
-        try:
-            record = parse_record(line)
-        except RecordDamaged:
-            return False  # Damaged bytes are ordinary damage for the fold.
-        if not isinstance(record, dict) or not is_account_record(record):
-            return False
-        self._refuse_account(record)
-        return True
 
 
 def _named(reply: Mapping[str, Any], field: str) -> str | None:
@@ -559,7 +636,7 @@ class CodexOperatorHandle:
             )
         if faults:
             return ExecutorFailure(error=ExecutorError(
-                kind="unavailable", detail="; ".join(faults),
+                kind="unavailable", detail=bounded_detail("; ".join(faults)),
             ))
         return await self._converse(task, grants)
 
@@ -619,7 +696,7 @@ class CodexOperatorHandle:
 def _unavailable(detail: str, grants: EffectiveGrants) -> ExecutorFailure:
     return ExecutorFailure(
         requested_model=grants.model_selection.model,
-        error=ExecutorError(kind="unavailable", detail=detail),
+        error=ExecutorError(kind="unavailable", detail=bounded_detail(detail)),
     )
 
 
