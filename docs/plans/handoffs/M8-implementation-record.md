@@ -974,22 +974,45 @@ holds the acquisition guard for the whole timeout. The two source-derived
 revisions use `inspect.getsource` and are unavailable under `-OO` or a frozen
 install, as N1's are.
 
-Evidence: local gate 2,278 passed, 370 skipped at the code head. The inventory
-`scripts/check_m8_n2_mutations.py` holds 58 mutants; 52 are killed by assertion
-on the Windows host and 6 are reported UNMEASURED rather than counted as kills,
-because their tests need the physical acquisition guard, which is Linux-only and
-deliberately not injectable since authority is physical (I1). The script filters
-those by platform, derives the selection from `sys.platform` alone so parent and
-child agree on indices, asserts its mutant names are unique, and prints each
-unmeasured entry. `verify.yml` runs on `ubuntu-latest` and the containment
-workflow now runs the inventory beside the native lane, so all six are measured
-by two checks. `tests/substrate/test_codex_protocol.py` drives the pure protocol
-against scripted bytes; `tests/substrate/test_codex_adapter.py` drives the
-adapter against a genuine scripted byte channel that enforces the launcher's
-one-reader and 1..8192 read contract, and its `LINUX`-marked section drives
-`handle.execute` through the real acquisition guard, which is the only place the
-production discard is exercised. `tests/substrate/test_codex_native.py` runs the
-pinned binary under containment.
+**Correlation enforces ordering and answers each id once.** A reply must arrive
+after its request, and the rule covers both the framed queue and the record
+currently being framed — an earlier version inspected only the queue, so a
+forgery straddling an 8192-byte read boundary still cleared the gate, and 24
+ordinary notifications were enough to arrange it. The primary defence is the
+narrower-sounding rule: no id may be answered twice, checked at the reply site
+and in the drain to EOF. That closes every confused or buggy client, because
+such a client still answers the real request; what escapes is a client that
+forges and then suppresses its own genuine reply, which no correlation rule
+reaches, because the vendor authors the reply's content and not merely its
+timing. Randomizing the ids would not change that, which is why they were not
+randomized. The gate therefore detects a mode change the session honestly
+reports — ADR 0021's vendor-refresh case — and cannot detect a session
+misreporting itself.
+
+Evidence: local gate 2,323 passed, 361 skipped at the code head, and the
+inventory `scripts/check_m8_n2_mutations.py` holds 77 mutants, all killed by
+assertion with none unmeasured. That last fact is the outcome of a restructure
+rather than of luck. Nine handle-level tests were originally gated to Linux
+because the acquisition guard is physical and deliberately not injectable
+(I1) — so they were written, type-checked, reasoned through, and executed on no
+platform at all, which is how a broken cancellation assertion reached CI. They
+now run everywhere against a fixture substituting only `acquisition_guard`,
+which still yields a live descriptor, with handle, provider, conversation,
+launcher and every assertion the repository's own. One test stays gated,
+asserting `S_ISREG`, `st_uid`, `st_nlink` and that a second holder waits on the
+non-blocking `flock`; it pins no mutant because it pins a property of the OS
+rather than a decision of ours, which is why the inventory lost nothing. The
+principle is the same one the unmeasured-mutant reporting already applied: a
+test that has never run is not evidence, exactly as a mutant that was never
+measured is not a kill.
+
+`tests/substrate/test_codex_protocol.py` drives the pure protocol against
+scripted bytes; `tests/substrate/test_codex_adapter.py` drives the adapter
+against a genuine scripted byte channel that enforces the launcher's one-reader
+and 1..8192 read contract, and its handle section drives `execute` end to end,
+which is the only place the production discard is exercised.
+`tests/substrate/test_codex_native.py` runs the pinned binary under containment
+and remains the one thing this development host cannot execute.
 
 **What the native lane proves is refusal, and that is the honest result.** The
 lane is credential-free, so `account/read` returns a null account, the pre-turn
@@ -1000,17 +1023,50 @@ only the empty-store fault remains, which separates the two faults the first
 case reports together.
 
 **Review history, because it is the most transferable thing in this slice.**
-Ten defects were found before merge across three passes — one by the supervising
-session and six by an independent adversarial reviewer, each reproduced by
-running code rather than by reading it. The first head had passed a green gate
-and killed 38 mutants while carrying a complete gate bypass. The reason is worth
-recording: **every account-leak test in the suite drove a refusal**, and the
-refusal path correctly discards `rate_limit` and `raw_reply`, so the whole suite
-was blind to the accepting path, which is where a real turn's data is published.
-Two of the fixes made the code smaller — a substring heuristic and an
-unfalsifiable clause were deleted — and removing the unfalsifiable clause added
-a kill rather than losing one, because what replaced it was a test a future
-widening of the allowlist would break. Manual Codex review remained paused at the
-owner's request for its weekly limit, so the independent reviews were
+Twenty-two defects were found before merge across four passes — two by the
+supervising session and the rest by independent adversarial reviewers — every one
+reproduced by running code rather than by reading it. The first head had passed a
+green gate and killed 38 mutants while carrying a complete subscription-gate
+bypass, so neither a green gate nor a full inventory was evidence of correctness
+here, and later rounds were told to treat them as carrying no weight.
+
+**Each round found a defect inside the previous round's fix.** Round one fixed an
+account-notification leak; round two found the same hole in unparseable bytes and
+a fourth unclassified `!r` site the fix had missed. Round two added value
+classifiers to keep wire content out of public fields; round three found the
+decoder's own exception message bypassing them, and 150 KB of vendor payload
+published through `first_error` while the *same record* was correctly excluded
+from the bounded `raw_reply`. Round three fixed reply ordering with a pre-send
+drain; the same round then found the drain inspected the framed queue but not the
+adapter's own framing buffer. Two things follow. A fix is not evidence that a
+class is closed, and the narrow follow-up pass that only attacks the newest fix
+has paid for itself every time.
+
+Two causes account for nearly all of it. **Every account-leak test drove a
+refusal**, and the refusal path correctly discards `rate_limit` and `raw_reply`,
+so the suite was structurally blind to the accepting path where a real turn's
+data is published — four separate leaks were living there. And **what state can
+exist when an `await` resumes** was untested: the gate bypass and the forged
+reply are both "something buffered, latched or aborted between two steps, and a
+later step assuming it cannot be there". Both classes are cheap to test from the
+first commit and expensive to retrofit, which is recorded on #76 as a constraint
+on N3.
+
+Underneath all of it sits one principle: **a negative inference is not a positive
+fact.** An empty fault list meant both "the gate cleared" and "the conversation
+died before recording anything". An id match meant both "this is the reply" and
+"something guessed the id". A passing test meant both "the behaviour holds" and
+"the test never ran". Where this slice now records the fact affirmatively — a
+latch set only after the comparison, ordering over framed and framing bytes, a
+duplicate-id refusal, a substituted guard that lets a written test actually
+execute — the class closes. Where it still infers, the limit is written down and
+pinned by an assertion.
+
+Three fixes made the code smaller: a substring heuristic, an unfalsifiable
+clause, and a test-only IO shim were deleted. Removing the unfalsifiable clause
+added a kill rather than losing one, because what replaced it was a test that a
+future widening of the allowlist would break. Manual Codex review remained paused
+at the owner's request for its weekly limit, so the independent reviews were
 fresh-context Opus reviewers; that is a real reduction in independence and is
-recorded here rather than glossed. N3 is the next slice.
+recorded here rather than glossed. N3 is the next slice, and #76 carries its
+delivery slicing and constraints.
