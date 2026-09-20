@@ -291,6 +291,11 @@ The first complete-diff implementation review found further introduced defects:
 - A FIFO at a metadata path blocked before its type could be checked. Reads
   now open nonblocking and then require a regular file. Deeply nested JSON
   within the byte bound must become a typed refusal, not `RecursionError`.
+- Initial metadata I/O errors escaped with a private locator, unlike lock and
+  held checks. Runtime failure events publish exception text, so the initial
+  boundary now also converts these to a generic typed refusal. A three-phase
+  regression failed only for the initial phase before the fix; all three pass
+  afterward. This is introduced by N3a, not a pre-existing main defect.
 - An awaited acquisition-fence read could observe open, then resume after
   recovery committed permanent closure. Materialization now reads the real
   durable fence again after the positive binding observation, synchronously

@@ -768,6 +768,9 @@ class BindingStore:
         except FileNotFoundError as exc:
             self.close_candidate(opened)
             raise ContractViolation("native store active selection is unavailable") from exc
+        except OSError as exc:
+            self.close_candidate(opened)
+            raise ContractViolation("native store binding is unavailable") from exc
         except BaseException:
             self.close_candidate(opened)
             raise

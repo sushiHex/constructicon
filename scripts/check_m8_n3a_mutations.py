@@ -21,6 +21,17 @@ METADATA_TEST = "tests/substrate/test_operator_store_metadata.py::"
 
 MUTANTS = (
     (
+        "initial metadata I/O refusal does not publish the private locator",
+        STORE + "BindingStore.open_candidate",
+        "except OSError as exc:\n"
+        "        self.close_candidate(opened)\n"
+        '        raise ContractViolation("native store binding is unavailable") from exc',
+        "except OSError:\n"
+        "        self.close_candidate(opened)\n"
+        "        raise",
+        STORE_TEST + "test_metadata_io_refusal_never_exposes_the_private_locator[candidate]",
+    ),
+    (
         "missing binding check reaches no spawn",
         LAUNCHER + "LinuxLauncher._run",
         "if not isinstance(checked, BindingCheck):",

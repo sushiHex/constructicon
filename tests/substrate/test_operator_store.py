@@ -37,6 +37,47 @@ async def test_active_exact_descriptor_is_a_positive_binding_check(tmp_path, mon
         binding.close_held(held)
 
 
+@pytest.mark.parametrize("phase", ["candidate", "acquire", "held"])
+async def test_metadata_io_refusal_never_exposes_the_private_locator(
+    tmp_path, monkeypatch, phase,
+):
+    world = StoreWorld(tmp_path)
+    world.install(monkeypatch)
+    binding = world.binding()
+    candidate = binding.open_candidate() if phase == "acquire" else None
+    held = None
+    if phase == "held":
+        binding, held = await _open_and_hold(world)
+    private = "/private-operator-root/active.json"
+
+    def denied(opened, name):
+        raise PermissionError(13, "denied", private)
+
+    async def closure():
+        return None
+
+    monkeypatch.setattr(operator_store, "_read_metadata", denied)
+    failure = None
+    try:
+        try:
+            if phase == "candidate":
+                binding.open_candidate()
+            elif phase == "acquire":
+                await binding.acquire_lock(candidate, lambda: None, closure)
+            else:
+                binding.check_held(held)
+        except Exception as exc:
+            failure = exc
+        # Runtime failure events publish str(exc), so lifecycle refusals share
+        # the outcome's private-locator boundary, not just its size bound.
+        assert isinstance(failure, ContractViolation)
+        assert private not in str(failure)
+    finally:
+        if held is not None:
+            binding.close_held(held)
+    assert len(world.closed) >= 5
+
+
 @pytest.mark.parametrize("state", ["missing", "wrong-generation", "noncanonical"])
 def test_no_absent_or_ambiguous_active_selection_is_accepted(tmp_path, monkeypatch, state):
     world = StoreWorld(tmp_path)

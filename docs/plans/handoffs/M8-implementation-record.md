@@ -1170,6 +1170,10 @@ fence is read synchronously after each positive binding observation. Metadata
 FIFOs and deeply nested JSON also now refuse without blocking or escaping the
 typed failure path. Accepting and refusing outcomes share the public-field
 bound test. The state-review ledger records the evidence and limits.
+An additional root/independent-review reproduction found initial metadata I/O
+errors exposing a private path through runtime failure-event text. The initial
+reader now uses the same typed-refusal discipline as the lock and held checks;
+a regression covers all three phases and its removal mutant fails by assertion.
 
 The complete-diff reviewer was interrupted by a platform safety filter before
 issuing its final verdict. Its confirmed findings are retained, but this is not
@@ -1183,6 +1187,8 @@ removal of the final materialization fence read. N2's compatibility inventory
 previously ran with 82/82 assertion kills and zero unmeasured mutants; it must
 also pass on the final head. These focused results do not replace the final
 repository gate or exact-head CI, which are recorded on the PR.
+The initial-metadata error regression adds a 46th mutant; its individual
+assertion kill is established and the complete final inventory is a PR gate.
 
 The hosted-Linux workflow now runs fresh-interpreter root/lock replacement and
 no-overwrite publication tests, unprivileged native-only mount and retained
@@ -1198,3 +1204,6 @@ head's ordinary verify run passed 2,460 tests but failed Linux mypy on a local
 name reused with incompatible types; that introduced defect is corrected.
 The final corrected head must pass both runs, including the added FIFO cases;
 Windows skips are never counted as that proof.
+The next physical run passed all three FIFO cases but caught Windows-specific
+absolute paths in two portable fixtures. Those fixtures now use pytest's actual
+absolute temporary path; the test was corrected, not the production refusal.
