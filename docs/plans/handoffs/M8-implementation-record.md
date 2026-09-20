@@ -974,23 +974,60 @@ holds the acquisition guard for the whole timeout. The two source-derived
 revisions use `inspect.getsource` and are unavailable under `-OO` or a frozen
 install, as N1's are.
 
-**Correlation enforces ordering and answers each id once.** A reply must arrive
-after its request, and the rule covers both the framed queue and the record
-currently being framed — an earlier version inspected only the queue, so a
-forgery straddling an 8192-byte read boundary still cleared the gate, and 24
-ordinary notifications were enough to arrange it. The primary defence is the
-narrower-sounding rule: no id may be answered twice, checked at the reply site
-and in the drain to EOF. That closes every confused or buggy client, because
-such a client still answers the real request; what escapes is a client that
-forges and then suppresses its own genuine reply, which no correlation rule
-reaches, because the vendor authors the reply's content and not merely its
-timing. Randomizing the ids would not change that, which is why they were not
-randomized. The gate therefore detects a mode change the session honestly
-reports — ADR 0021's vendor-refresh case — and cannot detect a session
-misreporting itself.
+**An id-bearing record is judged by ownership, and an unfinished check is a
+refusal.** Ids are recorded as they are allocated, and one classifier runs at
+every site that can meet an id-bearing record. Ownership is settled first,
+because an id this conversation allocated is exactly the id a forger can
+predict: a second answer, or an answer where none is awaited, refuses. Only
+then does the record's shape matter, and only to separate a reply that answers
+no request — which refuses promptly, so the outcome names the violation rather
+than a deadline — from an unauthorized callback attempt, which is damage. An
+earlier version decided severity from the presence of a `method` key, so one
+extra key moved a pre-send forgery from a refusal to a published partial; the
+key was the wrong discriminator, because ownership is what makes such a record
+an attack.
 
-Evidence: local gate 2,323 passed, 361 skipped at the code head, and the
-inventory `scripts/check_m8_n2_mutations.py` holds 77 mutants, all killed by
+The duplicate-id rule is the primary defence and the ordering marker is a
+narrow complement — established by testing, not by argument: in a turn of
+ordinary-sized records the straddling record is a filler that consumes the
+marker, and what refuses the forgery is the genuine reply arriving behind it
+under the same id. Because that rule carries the weight, an unfinished check is
+treated as a failure: the drain runs to EOF whatever the framing does, its
+inconclusive flag defaults to true and clears only at EOF, and its fault is
+raised in a `finally` so an exception leaving the drain records it rather than
+routing around it. Four bytes — an unterminated line between two replies — used
+to silence the whole check and publish the turn as a success, with the damage
+structurally unobservable because the observation is folded before the drain is
+awaited. The fault, not the observation, is therefore the channel that reaches
+the outcome.
+
+**The vendor's message ordering is no longer assumed.** A `turn/completed` read
+before the `turn/start` reply names the turn is buffered and judged once the
+reply arrives, rather than refused on sight. Refusing it bet on the pinned
+app-server never emitting a turn's notifications ahead of its response, and
+nothing here could verify that bet — no test drives a turn against the real
+binary, so a wrong bet would have refused every live turn and first surfaced on
+the M8-D2 host. The containment lane then showed the server emitting two
+notifications before any turn exists at all, which makes the bet worse than
+cautious. Those two methods are instrumented rather than identified: the lane
+now records the withheld method names, bounded and classified, so a later run
+names them.
+
+Ordering covers the framed queue **and the record currently being framed**: an
+earlier version inspected only the queue, so a forgery straddling an 8192-byte
+read boundary still cleared the gate. What escapes every rule here is a client
+that forges a reply and then suppresses its own genuine one, because the vendor
+authors the reply's *content* and not merely its timing — a client willing to
+forge could instead answer the real request with a lie. Randomizing the ids
+would not change that, which is why they were not randomized, and it is why the
+gate detects a mode change the session **honestly reports** — ADR 0021's
+vendor-refresh case — and cannot detect a session misreporting itself. What is
+claimed about the duplicate rule is only the four shapes that are tested; a
+shape not among them fails closed under the inconclusive rule, which is a
+property of that rule rather than a proof that no other shape exists.
+
+Evidence: local gate 2,335 passed, 361 skipped at the code head, and the
+inventory `scripts/check_m8_n2_mutations.py` holds 82 mutants, all killed by
 assertion with none unmeasured. That last fact is the outcome of a restructure
 rather than of luck. Nine handle-level tests were originally gated to Linux
 because the acquisition guard is physical and deliberately not injectable
@@ -1023,7 +1060,7 @@ only the empty-store fault remains, which separates the two faults the first
 case reports together.
 
 **Review history, because it is the most transferable thing in this slice.**
-Twenty-two defects were found before merge across four passes — two by the
+Twenty-eight defects were found before merge across four passes — two by the
 supervising session and the rest by independent adversarial reviewers — every one
 reproduced by running code rather than by reading it. The first head had passed a
 green gate and killed 38 mutants while carrying a complete subscription-gate
