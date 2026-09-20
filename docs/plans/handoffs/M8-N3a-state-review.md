@@ -250,3 +250,32 @@ The actual boundary is a parent that descendants cannot modify, the retained
 lock for cooperative trusted maintenance, and the post-probe and terminal
 checks. It does not defend against a privileged operator ignoring the lock
 and rewriting trusted configuration, which ADR 0021 explicitly excludes.
+
+## Implementation review ledger
+
+The implementation is still under review; this section records reproduced
+corrections, not a completed Linux qualification. The following introduced
+defects were found while the permitting and refusing tests were being built:
+
+- A held check reused identities captured before a lock wait. It must reopen
+  the protected paths and compare their current identity to the retained
+  descriptors, without taking another lock or releasing the held one.
+- Matching descriptor and sealed law digests did not establish that either
+  named the running implementation. Both must match the actual source-derived
+  laws. The publisher-derived store instance must also be re-derived, not
+  accepted merely because its downstream digests agree.
+- A directory's link count grows when the native client creates a child
+  directory. That mutable count is not root replacement. The root object
+  identity stays pinned; a retained regular lock must still have one link.
+- Offline publication followed existing paths during ownership changes before
+  proving they were direct, nonsymlink children. A later refusal cannot undo
+  that side effect. Verification must precede any ownership mutation, using
+  the opened descriptor rather than resolving the path again.
+
+One implementation review claim was rejected after checking primary sources:
+`name_to_handle_at(..., AT_EMPTY_PATH)` was said to require
+`CAP_DAC_READ_SEARCH`. That capability check belongs to `open_by_handle_at`,
+which this implementation never calls. The reviewer withdrew the finding;
+the [Linux 6.8 source](https://github.com/torvalds/linux/blob/v6.8/fs/fhandle.c)
+keeps the two paths distinct. The existing FD-based identity primitive remains;
+the unprivileged Actions lane must still demonstrate it on the actual host.

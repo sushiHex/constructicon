@@ -29,6 +29,7 @@ from constructicon.core.identity import Digest, digest
 from constructicon.core.process import ProcessIO
 from constructicon.substrate._lifetime import finish_owned
 from constructicon.substrate.executors._supervisor import NAMESPACE_SCRIPT
+from constructicon.substrate.executors.operator_store import BindingCheck
 
 SUPERVISOR_PATH = Path(NAMESPACE_SCRIPT.removeprefix("/"))
 BWRAP_SHA256 = "e318903862396f96de3df57264e0158682b952fd3fb53ac23d876413e7b30f71"
@@ -133,6 +134,24 @@ class ProcessResult:
 DEFAULT_PROCESS_LIMITS = ProcessLimits()
 
 Conversation = Callable[[ProcessIO], Awaitable[None]]
+
+
+@dataclass(frozen=True)
+class NativeStoreMount:
+    """One trusted native-only mount, never a caller-selected mount catalogue.
+
+    The binding owns its retained lock and protected parent. The launcher
+    rechecks it after its asynchronous probe; this object does not grant
+    authority merely by containing a path.
+    """
+
+    path: Path
+    lock_fd: int
+    before_spawn: Callable[[], BindingCheck]
+
+    def __post_init__(self) -> None:
+        if not self.path.is_absolute():
+            raise ContractViolation("the native store requires an absolute private locator")
 
 
 class ProcessExchangeError(Exception):
@@ -293,11 +312,14 @@ class LinuxLauncher:
 
     def argv(
         self, command: tuple[str, ...], *, workspace: Path | None, posture: Posture,
+        native_store: NativeStoreMount | None = None,
     ) -> list[str]:
         if sys.platform != "linux":
             raise ContractViolation("contained command construction requires Linux")
         if not command or not command[0].startswith("/") or any("\0" in item for item in command):
             raise ContractViolation("contained command requires a fixed absolute executable")
+        if native_store is not None and workspace is not None:
+            raise ContractViolation("a native store and worker workspace cannot share a namespace")
         args = [
             str(self.bubblewrap), "--unshare-user", "--unshare-pid", "--unshare-ipc",
             "--unshare-uts", "--unshare-net", "--new-session", "--die-with-parent",
@@ -312,6 +334,8 @@ class LinuxLauncher:
                 "--ro-bind" if posture is Posture.READ else "--bind",
                 str(workspace), "/workspace",
             ]
+        if native_store is not None:
+            args += ["--bind", str(native_store.path), "/vendor-store"]
         args += ["--chdir", "/workspace" if workspace is not None else "/tmp", "--", *command]
         return args
 
@@ -337,19 +361,21 @@ class LinuxLauncher:
     async def exchange(
         self, command: tuple[str, ...], *, workspace: Path | None, posture: Posture,
         guard_fds: tuple[int, ...], conversation: Conversation, timeout_s: float,
+        native_store: NativeStoreMount | None = None,
     ) -> ProcessResult:
         """Exchange bytes within the same owned, networkless process lifetime."""
 
         return await self._launch(
             command, workspace=workspace, posture=posture, guard_fds=guard_fds,
             stdin=b"", input_limit=self.limits.input_bytes,
-            conversation=conversation, timeout_s=timeout_s,
+            conversation=conversation, timeout_s=timeout_s, native_store=native_store,
         )
 
     async def _launch(
         self, command: tuple[str, ...], *, workspace: Path | None, posture: Posture,
         guard_fds: tuple[int, ...], stdin: bytes, input_limit: int,
         conversation: Conversation | None, timeout_s: float,
+        native_store: NativeStoreMount | None = None,
     ) -> ProcessResult:
 
         started = time.monotonic()
@@ -365,6 +391,7 @@ class LinuxLauncher:
             result = await self._run(
                 command, workspace=workspace, posture=posture, guard_fds=guard_fds,
                 stdin=stdin, deadline=deadline, input_limit=input_limit, conversation=conversation,
+                native_store=native_store,
             )
         except ProcessExchangeError as exc:
             exc.result = replace(exc.result, elapsed_s=time.monotonic() - started)
@@ -419,6 +446,7 @@ class LinuxLauncher:
         self, command: tuple[str, ...], *, workspace: Path | None, posture: Posture,
         guard_fds: tuple[int, ...], stdin: bytes = b"", deadline: float,
         input_limit: int | None = None, conversation: Conversation | None = None,
+        native_store: NativeStoreMount | None = None,
     ) -> ProcessResult:
         if sys.platform != "linux":
             raise ContractViolation("contained process ownership requires Linux")
@@ -426,7 +454,15 @@ class LinuxLauncher:
             raise ContractViolation("contained work requires its distinct acquisition guards")
         if asyncio.get_running_loop().time() >= deadline:
             return ProcessResult(125, b"", b"", 0, timed_out=True)
-        args = self.argv(command, workspace=workspace, posture=posture)
+        args = self.argv(
+            command, workspace=workspace, posture=posture, native_store=native_store,
+        )
+        if native_store is not None:
+            if native_store.lock_fd not in guard_fds:
+                raise ContractViolation("the native store requires its retained supervisor guard")
+            checked = native_store.before_spawn()
+            if not isinstance(checked, BindingCheck):
+                raise ContractViolation("the native store did not complete its binding check")
         # asyncio may use another clock origin; the child needs Linux's shared
         # monotonic clock, with only the already-remaining budget transferred.
         child_deadline = time.monotonic() + (deadline - asyncio.get_running_loop().time())

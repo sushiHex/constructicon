@@ -60,7 +60,7 @@ def main() -> None:
     supervisor = destination / SUPERVISOR_PATH
     supervisor.parent.mkdir(parents=True)
     shutil.copyfile(_supervisor.__file__, supervisor)
-    for name in ("proc", "dev", "tmp", "workspace"):
+    for name in ("proc", "dev", "tmp", "workspace", "vendor-store"):
         (destination / name).mkdir()
     for path in [*destination.rglob("*"), destination]:
         if not path.is_symlink():

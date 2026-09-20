@@ -58,6 +58,27 @@ jobs:
           test ! -e "$M8_EVIDENCE"
           sudo install -d -o m8-service -g m8-service -m 0755 "$M8_EVIDENCE"
           sudo chmod o+x /home/runner /home/runner/work /home/runner/work/constructicon
+      - name: Prove N3a protected descriptors and native-only store custody
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo env RUNNER_ENVIRONMENT=github-hosted M8_STORE_PROVISION_REQUIRED=1 \
+            M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
+            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_operator_store_restart.py \
+              tests/substrate/test_operator_store_publication.py \
+              -v --tb=short -p no:cacheprovider
+          sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" \
+            scripts/ci/build_m8_store_fixture.py | tee "$RUNNER_TEMP/m8-operator-store.json"
+          sudo install -m 0444 "$RUNNER_TEMP/m8-operator-store.json" \
+            /var/lib/constructicon-m8-launch/operator-store-fixture.json
+          sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
+            M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
+            M8_OPERATOR_STORE_REQUIRED=1 \
+            M8_OPERATOR_STORE_ROOT=/var/lib/constructicon-m8-launch/operator-stores \
+            M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
+            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_operator_store_containment.py \
+              -v --tb=short -p no:cacheprovider
+          uv run python scripts/check_m8_n3a_mutations.py
       - name: Acquire the pinned native investigation artifact (no account)
         shell: bash
         run: |
@@ -210,10 +231,12 @@ jobs:
             ${{ runner.temp }}/m8-runtime.json
             ${{ runner.temp }}/m8-startup-runtime.json
             ${{ runner.temp }}/m8-placement-runtime.json
+            ${{ runner.temp }}/m8-operator-store.json
             ${{ runner.temp }}/m8-host.txt
             ${{ env.M8_EVIDENCE }}/boundary.json
             ${{ env.M8_EVIDENCE }}/codex-*.json
             ${{ env.M8_EVIDENCE }}/duplex-*.json
+            ${{ env.M8_EVIDENCE }}/n3a-*.json
           if-no-files-found: error
           retention-days: 7
       - name: Report bounded launch-policy denials

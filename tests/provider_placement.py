@@ -22,7 +22,7 @@ class PlacementLauncher(LinuxLauncher):
     endpoint: Path
     endpoint_identity: tuple[int, int]
 
-    def argv(self, command, *, workspace, posture):
+    def argv(self, command, *, workspace, posture, native_store=None):
         if workspace is not None:
             raise ValueError("placement fixture has no workspace")
         endpoint = self.endpoint.lstat()
@@ -31,7 +31,9 @@ class PlacementLauncher(LinuxLauncher):
                 or endpoint.st_uid != os.getuid()
                 or (endpoint.st_dev, endpoint.st_ino) != self.endpoint_identity):
             raise ValueError("fixture endpoint changed or is not an owned socket")
-        argv = LinuxLauncher.argv(self, command, workspace=None, posture=posture)
+        argv = LinuxLauncher.argv(
+            self, command, workspace=None, posture=posture, native_store=native_store,
+        )
         index = argv.index("--")
         return (*argv[:index], "--ro-bind", str(self.endpoint), ENDPOINT, *argv[index:])
 
