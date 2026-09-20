@@ -200,6 +200,15 @@ def validate_child(child: dict, host: dict, uid: int, gid: int) -> None:
 
 def qualify(evidence: dict) -> None:
     require(sys.platform == "linux", "Linux prerequisites were not exercised on this host")
+    # The launcher's runtime root is x86_64 by construction: it execs
+    # ``lib64/ld-linux-x86-64.so.2`` with an x86_64 library path. Recording the
+    # architecture without requiring it let another architecture report
+    # ``qualified`` and then fail at the first launch, which is a qualification
+    # that passes on a host the launcher cannot use.
+    require(
+        platform.machine() == "x86_64",
+        f"the launcher requires x86_64; this host is {platform.machine()}",
+    )
     uid, gid = os.getuid(), os.getgid()
     evidence["service"] = {"uid": uid, "gid": gid, "groups": os.getgroups()}
     require(uid != 0 and gid != 0, "qualification must not run as root")

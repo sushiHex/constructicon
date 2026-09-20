@@ -152,8 +152,44 @@ def test_policy_pin_and_private_attachment_match_reviewed_file() -> None:
     assert "unconfined" not in rules
 
 
+def test_an_architecture_the_launcher_cannot_use_never_qualifies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Recording the architecture is not requiring it.
+
+    The launcher execs ``lib64/ld-linux-x86-64.so.2`` with an x86_64 library
+    path, so qualifying an aarch64 host would report success about a machine
+    the launcher cannot launch on at all.
+    """
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(probe.platform, "machine", lambda: "aarch64")
+    # A non-root service account, so removing the architecture check reaches the
+    # subprocess below and fails by assertion rather than erroring on a missing
+    # os.getuid: the runner scores an error as NOT PROVEN, never as a kill.
+    monkeypatch.setattr(probe.os, "getuid", lambda: 1001, raising=False)
+    monkeypatch.setattr(probe.os, "getgid", lambda: 1001, raising=False)
+    monkeypatch.setattr(probe.os, "getgroups", lambda: [1001], raising=False)
+
+    def unexpected_command(argv: list[str]) -> None:
+        pytest.fail("the architecture refusal must precede any subprocess")
+
+    monkeypatch.setattr(probe, "run", unexpected_command)
+    with pytest.raises(ValueError, match="requires x86_64"):
+        probe.qualify({})
+
+
+def test_the_launcher_names_the_architecture_qualification_requires() -> None:
+    """The requirement is only meaningful while the launcher is x86_64-specific."""
+    launcher = Path("src/constructicon/substrate/executors/linux.py").read_text(encoding="utf-8")
+    assert "ld-linux-x86-64.so.2" in launcher
+    assert "x86_64-linux-gnu" in launcher
+    source = Path("scripts/ci/qualify_m8_runner.py").read_text(encoding="utf-8")
+    assert 'platform.machine() == "x86_64"' in source
+
+
 def test_root_is_never_a_qualification_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(probe.platform, "machine", lambda: "x86_64")
     monkeypatch.setattr(probe.os, "getuid", lambda: 0, raising=False)
     monkeypatch.setattr(probe.os, "getgid", lambda: 0, raising=False)
     monkeypatch.setattr(probe.os, "getgroups", lambda: [0], raising=False)
@@ -180,6 +216,7 @@ def test_host_refusals_precede_namespace_launch(
     broken: str, fault: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(probe.platform, "machine", lambda: "x86_64")
     monkeypatch.setattr(probe.os, "getuid", lambda: 1001, raising=False)
     monkeypatch.setattr(probe.os, "getgid", lambda: 1001, raising=False)
     monkeypatch.setattr(probe.os, "getgroups", lambda: [1001], raising=False)
