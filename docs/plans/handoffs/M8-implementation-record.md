@@ -795,3 +795,315 @@ validator, a guard test, the vendor-label scan, decoder guard inputs and one
 message) were folded in before merge, and its remaining observations are
 recorded on #74 for N2. No native process, provider connection, credential,
 deployment or live profile exists; N2 (#75) is the next slice.
+
+## N2 — the Codex operator adapter, READ posture (#75)
+
+N2's first slice binds ADR 0021's operator-bound route to a real contained
+process for the READ posture. Two new L1 modules carry it. All of the
+interesting judgement lives in `substrate.executors.codex_protocol`, which
+performs no I/O and imports no launcher: process facts arrive through a
+structural `ProcessFacts` protocol, so framing, the subscription-mode gate, the
+turn fold and the decoder are provable on any platform with zero credentials
+(I7). Its two consumers are the adapter and the protocol tests (I6).
+`substrate.executors.codex` is the thin binding to `LinuxLauncher.exchange`:
+one task, one acquisition, one contained conversation, with no persistent agent
+service, no second controller and no scheduler.
+
+The conversation is strictly sequential per direction — `initialize`,
+`initialized`, `account/read`, `thread/start`, `turn/start`, records to a
+terminal `turn/completed`, `account/read`, then stdin close and a drain to EOF.
+Either reading faulting yields an unavailable failure naming the faults, and a
+faulting pre-acceptance reading discards an otherwise successful turn. That is
+ADR 0021's "refuses availability/result acceptance": the turn's output, its
+served model and its transcript do not survive into the outcome, and the single
+truthful fact that a turn ran is reported once through `produced_output`.
+
+**The gate's completion is a positive record, not an inference.** The first
+implementation read "the gate cleared" from the fault list being empty, and
+empty had a second meaning: the conversation was aborted before it could record
+anything. A `RecursionError` from a few thousand nested arrays — 8 KB, well
+inside the record ceiling — is neither a `ValueError` nor a `UnicodeError`, so
+it escaped every parse site; the conversation's `finally` had already closed
+stdin and drained, so the child exited cleanly and the handle published
+`ExecutorSuccess` carrying a turn whose pre-acceptance reading never ran. The
+repair is `gate_completed`, set only after the pre-acceptance comparison, with
+an explicit fault stated in the `finally` when it was not. One `parse_record`
+helper now names the bounded decoder-failure set once across four call sites;
+the fourth, `is_terminal_record`, was found late and raised the same way.
+
+What this establishes is narrower than exhaustiveness and is worth stating in
+those terms. `asyncio.CancelledError` escapes by design, a `ProcessIO` raising
+outside `(ContractViolation, OSError)` escapes the reader, `MemoryError` and its
+siblings are uncatchable without `except BaseException`, and `json.dumps` would
+raise on a non-serializable payload no current builder can produce. The claim
+that holds is that **an escape can no longer publish a result**, because the
+`finally` runs on every one of those paths and leaves the fault list non-empty.
+
+**What the gate does and does not establish.** The supported observation is
+`account/read`. It reads a process-global credential cache and never reloads,
+so the second reading is not proof that anything was re-observed; it is
+load-bearing against a change that did occur, because a switch to an API key,
+to Bedrock keys or to provider headers changes the reported account shape and
+the pre-acceptance reading then refuses the result. Four pinned ChatGPT
+credential variants collapse onto one account shape, so the gate is silent
+about which is in use. That is covered by the published
+`operator_bound_vendor_identity_unverified` literal and recorded in
+`M8-subscription-mode-interface-screen.md`; the deprecated operation that would
+name the variant is excluded as a boundary in either direction. The expected
+account is an assembly fact, never caller input, and its plan is required: the
+pinned plan type is an untagged union with a known `free` member, so an
+accept-any default would admit a free plan as a vendor-managed subscription.
+
+**Three exclusions are structural rather than conventional.** `initialize`
+never sets `capabilities.experimentalApi`, which is what enables the externally
+supplied token login ADR 0021 excludes. No request builder has a parameter that
+can reach `model` or `modelProvider`, and a sealing helper refuses one that
+appears anyway, because the gate observes the configured provider and a
+per-turn override is a second channel it cannot see. `thread/start` sends
+exactly `{cwd, sandbox, ephemeral}`: `approvalPolicy` is experimental-nested at
+the pin, so the adapter does not send it at all, and a turn that blocks
+awaiting an approval is a refusal here and a finding for N3.
+
+**Account frames cannot reach the public outcome, and the guarantee is scoped
+to frames rather than contents.** Three frames are excluded before a transcript
+exists: a record carrying an `id`, which is the `account/read` reply and the
+email it carries; a record whose method is in the `account/` namespace, which is
+the notification surface; and unparseable bytes, which by definition cannot be
+classified and are therefore never published at all — only their count and their
+parse error are. An earlier attempt to filter those bytes by substring closed two
+shapes and left the class open, which is why the rule is now "publish nothing
+unclassifiable" rather than a marker.
+
+Transcription is an allowlist of attested evidence rather than a denylist. A
+denylist over a surface the design itself calls unenumerated is an open
+assumption: an id-less record with an unknown method carrying an operator fact
+was kept, uncounted, in a success. The attested set is one earned prefix and
+three exact names — `turn/`, whose terminal member is observed from the real
+binary and in whose terms this projection is defined, plus `error`, `warning`
+and `configWarning`. `item/` was considered and excluded, because its only
+observed member is the id-bearing `item/tool/call` request, so the namespace has
+never been seen emitting a notification; it returns at N4 once a real stream has
+been observed. The set is not a closed enumeration, and the docstring says which
+entries are names and which is a prefix.
+
+Because that exclusion can blank most of a real transcript, it is never silent:
+the fold counts what it could not classify and states the count in the
+transcript's own marker, beside the byte bound's. Neither becomes `first_error`
+and neither demotes a clean success, because our own classification is not
+transport damage — but a reader holding a near-empty `raw_reply` sees how many
+records were withheld and knows what to go attest. An invisible withholding of
+evidence is the same class of defect as a gate that passes without running.
+
+The guarantee stops at frames. A legitimate `turn/completed` is this turn's
+evidence and its payload is the vendor's, so filtering its contents would need a
+schema this repository does not hold and must not guess at. That pass-through is
+pinned by an assertion rather than left in prose, and qualifying what those
+payloads may contain is an N3/N4 prerequisite.
+
+**Every public surface is bounded at its point of use**, which is what ADR 0021
+requires of an untrusted authority input. `RateLimitInfo.detail` admits a key
+only when its value is a number or a flag, bounded in count and key length, so
+identity facts are excluded by shape rather than by a vocabulary; the earlier
+code copied the whole wire object, and an account id, an email and a plan type
+alongside `usingOverage` all reached a **successful** outcome. Fault details
+name a wire value only when it is short and lexical and report its JSON type
+otherwise; the earlier code interpolated raw values, so a nested `account.type`
+published an email and a 200 KB plan value produced a 200,041-character
+`ExecutorError.detail`. The joined transcript is capped and says how many
+records it dropped. Method names in the refusal fault are separately bounded,
+with `/` admitted, because a classifier that stripped it would destroy exactly
+the specificity that fault exists to provide.
+
+**`requested_model` no longer rests on an unverified coupling.** The turn sends
+no model, so the sealed configuration decides what runs, and nothing checked
+that the configuration named the granted model — an assembly pinning A while the
+grant said B published B and ran A. The provider now reads the model out of the
+configuration with `tomllib`, refuses one outside the profile's inventory, and
+refuses a grant that disagrees.
+
+The provider is leased and schema 3. Availability is an assembly fact read
+without runtime I/O, and this slice delivers no store, no egress and no
+qualified ingress, so its published state is unavailable by default and nothing
+at runtime can clear it. Its constructor refuses a published identity that
+differs from this adapter's actual content in any of eight source-derived
+fields, refuses a mediated callback catalog, and refuses a relative acquisition
+root or a non-absolute binary. The launch-recipe drift check is reachable rather
+than dead, because `LinuxLauncher.revision` is a property that re-hashes its own
+sources at call time, and it is tested by a launcher whose revision changes
+after construction. Reconciliation reaps nothing because the slice owns no
+durable payload; the store binding, its exclusive lock and egress disposal
+arrive with N3.
+
+**The account refusal is deliberately over-broad, and that is a forward cost.**
+Refusing every `account/` notification means that if the pin emits a benign one
+during a normal turn — a rate-limit update, say — this adapter refuses a turn
+that would otherwise have succeeded. Naming the methods that count as mode
+changes would be guessing, because the enumeration held here is of requests. The
+cost is zero in this slice, which refuses before any turn, and it first becomes
+reachable when a credentialed session runs at N4; the published fault names the
+method that fired, so the first occurrence identifies itself and narrowing is a
+one-line change backed by evidence.
+
+**Limits, stated rather than discovered later, and pinned by assertion wherever
+a test can hold them.** A limit in prose gets quietly widened; a limit that
+fails a test when it changes survives. The stderr `evidence_excerpt` is
+unfiltered vendor output, kept because it is the only transport diagnosis
+available and pinned by a test asserting an operator string does reach it —
+establishing what the pinned binary writes there is an N4 prerequisite. The
+numeric-only rate-limit rule stands in for a schema not held, so a mostly-string
+payload publishes almost nothing, and a test pins a dropped timestamp as
+intended. `configured_model` reads one top-level TOML key, verified against both
+fixture helpers, so a production configuration using a profile table or a
+layered include is refused rather than misread — fail closed, and an N4
+prerequisite. The plan key `planType` is named by the preflight from pinned
+source and its casing is corroborated by the combined lane's live capture of the
+sibling `requiresOpenaiAuth`, but no capture of a populated account is
+obtainable without a credential; a wrong key fails the plan check against a real
+managed account. The `thread/start` sandbox value is never sent in the lane
+because the gate refuses first, so its reachable variants are unverified, and
+the only value observed live in this repository came from a session that opts
+into the experimental capability. Whether the pinned schema requires
+`capabilities` on `initialize` is not verifiable here; if it refuses the field,
+the lane fails loudly on its exact-fault assertion. The turn projection keys are
+unproven before N5 and each stays absent when unmatched, so a wrong name
+degrades to truthful absence. `ExpectedAccount.plan_type` is a bare string, so a
+vendor tier rename fails closed but is indistinguishable from a lapsed plan —
+right posture, operational trap for N4. `_collect` has no deadline of its own
+beyond the launcher's, so a child emitting one record just inside every window
+holds the acquisition guard for the whole timeout. The two source-derived
+revisions use `inspect.getsource` and are unavailable under `-OO` or a frozen
+install, as N1's are.
+
+**An id-bearing record is judged by ownership, and an unfinished check is a
+refusal.** Ids are recorded as they are allocated, and one classifier runs at
+every site that can meet an id-bearing record. Ownership is settled first,
+because an id this conversation allocated is exactly the id a forger can
+predict: a second answer, or an answer where none is awaited, refuses. Only
+then does the record's shape matter, and only to separate a reply that answers
+no request — which refuses promptly, so the outcome names the violation rather
+than a deadline — from an unauthorized callback attempt, which is damage. An
+earlier version decided severity from the presence of a `method` key, so one
+extra key moved a pre-send forgery from a refusal to a published partial; the
+key was the wrong discriminator, because ownership is what makes such a record
+an attack.
+
+The duplicate-id rule is the primary defence and the ordering marker is a
+narrow complement — established by testing, not by argument: in a turn of
+ordinary-sized records the straddling record is a filler that consumes the
+marker, and what refuses the forgery is the genuine reply arriving behind it
+under the same id. Because that rule carries the weight, an unfinished check is
+treated as a failure: the drain runs to EOF whatever the framing does, its
+inconclusive flag defaults to true and clears only at EOF, and its fault is
+raised in a `finally` so an exception leaving the drain records it rather than
+routing around it. Four bytes — an unterminated line between two replies — used
+to silence the whole check and publish the turn as a success, with the damage
+structurally unobservable because the observation is folded before the drain is
+awaited. The fault, not the observation, is therefore the channel that reaches
+the outcome.
+
+**The vendor's message ordering is no longer assumed.** A `turn/completed` read
+before the `turn/start` reply names the turn is buffered and judged once the
+reply arrives, rather than refused on sight. Refusing it bet on the pinned
+app-server never emitting a turn's notifications ahead of its response, and
+nothing here could verify that bet — no test drives a turn against the real
+binary, so a wrong bet would have refused every live turn and first surfaced on
+the M8-D2 host. The containment lane then showed the server emitting two
+notifications before any turn exists at all, which makes the bet worse than
+cautious. Those two methods are instrumented rather than identified: the lane
+now records the withheld method names, bounded and classified, so a later run
+names them.
+
+Ordering covers the framed queue **and the record currently being framed**: an
+earlier version inspected only the queue, so a forgery straddling an 8192-byte
+read boundary still cleared the gate. What escapes every rule here is a client
+that forges a reply and then suppresses its own genuine one, because the vendor
+authors the reply's *content* and not merely its timing — a client willing to
+forge could instead answer the real request with a lie. Randomizing the ids
+would not change that, which is why they were not randomized, and it is why the
+gate detects a mode change the session **honestly reports** — ADR 0021's
+vendor-refresh case — and cannot detect a session misreporting itself. What is
+claimed about the duplicate rule is only the four shapes that are tested; a
+shape not among them fails closed under the inconclusive rule, which is a
+property of that rule rather than a proof that no other shape exists.
+
+Evidence: local gate 2,335 passed, 361 skipped at the code head, and the
+inventory `scripts/check_m8_n2_mutations.py` holds 82 mutants, all killed by
+assertion with none unmeasured. That last fact is the outcome of a restructure
+rather than of luck. Nine handle-level tests were originally gated to Linux
+because the acquisition guard is physical and deliberately not injectable
+(I1) — so they were written, type-checked, reasoned through, and executed on no
+platform at all, which is how a broken cancellation assertion reached CI. They
+now run everywhere against a fixture substituting only `acquisition_guard`,
+which still yields a live descriptor, with handle, provider, conversation,
+launcher and every assertion the repository's own. One test stays gated,
+asserting `S_ISREG`, `st_uid`, `st_nlink` and that a second holder waits on the
+non-blocking `flock`; it pins no mutant because it pins a property of the OS
+rather than a decision of ours, which is why the inventory lost nothing. The
+principle is the same one the unmeasured-mutant reporting already applied: a
+test that has never run is not evidence, exactly as a mutant that was never
+measured is not a kill.
+
+`tests/substrate/test_codex_protocol.py` drives the pure protocol against
+scripted bytes; `tests/substrate/test_codex_adapter.py` drives the adapter
+against a genuine scripted byte channel that enforces the launcher's one-reader
+and 1..8192 read contract, and its handle section drives `execute` end to end,
+which is the only place the production discard is exercised.
+`tests/substrate/test_codex_native.py` runs the pinned binary under containment
+and remains the one thing this development host cannot execute.
+
+**What the native lane proves is refusal, and that is the honest result.** The
+lane is credential-free, so `account/read` returns a null account, the pre-turn
+gate refuses, and no turn is ever sent — the model peer behind the bridge is
+never reached. Both cases passed against the pinned binary in CI. A second case
+sets the configured provider to require OpenAI authentication and observes that
+only the empty-store fault remains, which separates the two faults the first
+case reports together.
+
+**Review history, because it is the most transferable thing in this slice.**
+Twenty-eight defects were found before merge across four passes — two by the
+supervising session and the rest by independent adversarial reviewers — every one
+reproduced by running code rather than by reading it. The first head had passed a
+green gate and killed 38 mutants while carrying a complete subscription-gate
+bypass, so neither a green gate nor a full inventory was evidence of correctness
+here, and later rounds were told to treat them as carrying no weight.
+
+**Each round found a defect inside the previous round's fix.** Round one fixed an
+account-notification leak; round two found the same hole in unparseable bytes and
+a fourth unclassified `!r` site the fix had missed. Round two added value
+classifiers to keep wire content out of public fields; round three found the
+decoder's own exception message bypassing them, and 150 KB of vendor payload
+published through `first_error` while the *same record* was correctly excluded
+from the bounded `raw_reply`. Round three fixed reply ordering with a pre-send
+drain; the same round then found the drain inspected the framed queue but not the
+adapter's own framing buffer. Two things follow. A fix is not evidence that a
+class is closed, and the narrow follow-up pass that only attacks the newest fix
+has paid for itself every time.
+
+Two causes account for nearly all of it. **Every account-leak test drove a
+refusal**, and the refusal path correctly discards `rate_limit` and `raw_reply`,
+so the suite was structurally blind to the accepting path where a real turn's
+data is published — four separate leaks were living there. And **what state can
+exist when an `await` resumes** was untested: the gate bypass and the forged
+reply are both "something buffered, latched or aborted between two steps, and a
+later step assuming it cannot be there". Both classes are cheap to test from the
+first commit and expensive to retrofit, which is recorded on #76 as a constraint
+on N3.
+
+Underneath all of it sits one principle: **a negative inference is not a positive
+fact.** An empty fault list meant both "the gate cleared" and "the conversation
+died before recording anything". An id match meant both "this is the reply" and
+"something guessed the id". A passing test meant both "the behaviour holds" and
+"the test never ran". Where this slice now records the fact affirmatively — a
+latch set only after the comparison, ordering over framed and framing bytes, a
+duplicate-id refusal, a substituted guard that lets a written test actually
+execute — the class closes. Where it still infers, the limit is written down and
+pinned by an assertion.
+
+Three fixes made the code smaller: a substring heuristic, an unfalsifiable
+clause, and a test-only IO shim were deleted. Removing the unfalsifiable clause
+added a kill rather than losing one, because what replaced it was a test that a
+future widening of the allowlist would break. Manual Codex review remained paused
+at the owner's request for its weekly limit, so the independent reviews were
+fresh-context Opus reviewers; that is a real reduction in independence and is
+recorded here rather than glossed. N3 is the next slice, and #76 carries its
+delivery slicing and constraints.
