@@ -941,7 +941,7 @@ class CodexOperatorHandle:
         expected = self.provider.identity.store.operator_binding_digest
         if not isinstance(value, BindingCheck) or value.binding_digest != expected:
             raise ContractViolation(
-                f"the {phase} operator binding check was not an affirmative sealed receipt"
+                f"the {phase} operator binding check was not an affirmative sealed observation"
             )
         return value
 
@@ -953,6 +953,16 @@ class CodexOperatorHandle:
         await finish_owned(asyncio.create_task(asyncio.to_thread(
             closure.require_open, self.paths,
         )))
+        self._check_control()
+
+    def _require_open_sync(self) -> None:
+        """Read the durable fence inside a no-await transfer boundary."""
+
+        closure = self.provider.closure
+        if closure is None:
+            raise ContractViolation("codex store materialization requires acquisition closure")
+        self._check_control()
+        closure.require_open(self.paths)
         self._check_control()
 
     async def _materialize_owned(self) -> None:
@@ -977,7 +987,10 @@ class CodexOperatorHandle:
             # acquire_lock's successful return is only custody, not acceptance.
             await self._require_open()
             check = self._checked_binding(store.check_held(held), "initial")
-            self._check_control()
+            # Recovery can commit closure after the awaited read's worker
+            # observed absence but before this task resumes. Re-read it after
+            # the binding observation, with no await before readiness transfer.
+            self._require_open_sync()
             self._guard_owner = guard_owner
             self._guard_fd = guard_fd
             self._store_lock = held
@@ -1075,12 +1088,8 @@ class CodexOperatorHandle:
             # spawning. It is synchronous so no close/withdrawal can interleave
             # on this event loop after the positive check.
             self._check_control()
-            closure = provider.closure
-            if closure is None:
-                raise ContractViolation("codex launch requires acquisition closure")
-            closure.require_open(self.paths)
             check = self._checked_binding(store.check_held(held), "pre-launch")
-            self._check_control()
+            self._require_open_sync()
             self.launch_check = check
             return check
 
@@ -1110,12 +1119,8 @@ class CodexOperatorHandle:
         requested = grants.model_selection.model
         try:
             self._check_control()
-            closure = provider.closure
-            if closure is None:
-                raise ContractViolation("codex result acceptance requires acquisition closure")
-            closure.require_open(self.paths)
             terminal = self._checked_binding(store.check_held(held), "terminal")
-            self._check_control()
+            self._require_open_sync()
             if self.launch_check is None:
                 raise ContractViolation("the pre-launch binding check did not complete")
             self.terminal_check = terminal

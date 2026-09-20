@@ -74,19 +74,14 @@ def test_schema_version_requires_an_exact_integer(tmp_path, monkeypatch, name, v
         world.binding().open_candidate()
 
 
+@pytest.mark.parametrize("field", ["layout_law_digest", "mount_lock_law_digest"])
 def test_selection_requires_the_current_runtime_law_not_only_matching_configuration(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, field,
 ):
     world = StoreWorld(tmp_path)
-    wrong_layout = operator_store.digest("wrong-runtime-law", 1, "layout")
-    wrong_mount = operator_store.digest("wrong-runtime-law", 1, "mount")
-    world.sealed = world.sealed.model_copy(update={
-        "layout_law_digest": wrong_layout,
-        "mount_lock_law_digest": wrong_mount,
-    })
-    world.write_descriptor(
-        1, layout_law_digest=wrong_layout, mount_lock_law_digest=wrong_mount,
-    )
+    wrong_law = operator_store.digest("wrong-runtime-law", 1, field)
+    world.sealed = world.sealed.model_copy(update={field: wrong_law})
+    world.write_descriptor(1, **{field: wrong_law})
     world.activate(1)
     world.install(monkeypatch)
     with pytest.raises(ContractViolation, match="binding"):
@@ -118,8 +113,14 @@ def test_store_directory_link_count_is_not_a_restart_identity_component(tmp_path
     world = StoreWorld(tmp_path)
     world.store = replace(world.store, nlink=world.store.nlink + 1)
     world.install(monkeypatch)
-    opened = world.binding().open_candidate()
-    world.binding().close_candidate(opened)
+    opened = None
+    try:
+        opened = world.binding().open_candidate()
+    except ContractViolation as exc:
+        pytest.fail(f"a growing store directory changed its binding identity: {exc}")
+    finally:
+        if opened is not None:
+            world.binding().close_candidate(opened)
 
 
 async def test_terminal_identity_drift_refuses_after_an_initial_acceptance(tmp_path, monkeypatch):

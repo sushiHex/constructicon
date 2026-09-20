@@ -32,11 +32,16 @@ MAX_METADATA_BYTES = 64 * 1024
 MAX_HANDLE_BYTES = 128
 MAX_DESCRIPTOR_COUNT = 1024
 MAX_MOUNTINFO_BYTES = 1024 * 1024
+_BUNDLE_MODE = 0o750
+_DESCRIPTORS_MODE = 0o750
+_STORE_MODE = 0o700
+_LOCK_MODE = 0o600
 _GENERATION = re.compile(r"[1-9][0-9]*\.json\Z")
 _AT_EMPTY_PATH = 0x1000
 _O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+_O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
 
 
 @dataclass(frozen=True)
@@ -185,10 +190,10 @@ def _metadata(raw: bytes) -> Mapping[str, Any]:
     try:
         text = raw.decode("utf-8")
         parsed = parse_json_value(text)
-    except (UnicodeDecodeError, ValueError) as exc:
+        if not isinstance(parsed, dict) or canonical_json(parsed).encode() != raw:
+            raise ValueError("metadata is not a canonical object")
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
         raise ContractViolation("native store metadata is unavailable") from exc
-    if not isinstance(parsed, dict) or canonical_json(parsed).encode() != raw:
-        raise ContractViolation("native store metadata is unavailable")
     return parsed
 
 
@@ -383,6 +388,14 @@ def _open_bundle(root: Path, token: str) -> OpenedBundle:
             _identity(lock_fd),
         )
         if (
+            bundle_identity.mode != _BUNDLE_MODE
+            or descriptors_identity.mode != _DESCRIPTORS_MODE
+            or store_identity.mode != _STORE_MODE
+            or lock_identity.mode != _LOCK_MODE
+            or store_identity.uid != lock_identity.uid
+        ):
+            raise ContractViolation("native store fixed layout is unavailable")
+        if (
             bundle_identity.mount_id != root_identity.mount_id
             or descriptors_identity.mount_id != root_identity.mount_id
             or store_identity.mount_id != root_identity.mount_id
@@ -413,7 +426,12 @@ def _read_metadata(opened: OpenedBundle, name: str) -> bytes:
         directory, target = opened.descriptors_fd, name
     else:
         raise ContractViolation("native store metadata is unavailable")
-    fd = os.open(target, os.O_RDONLY | _O_CLOEXEC | _O_NOFOLLOW, dir_fd=directory)
+    # A malformed FIFO must not block this event loop before fstat can refuse
+    # it. O_NONBLOCK does not change regular-file reads.
+    fd = os.open(
+        target, os.O_RDONLY | _O_CLOEXEC | _O_NOFOLLOW | _O_NONBLOCK,
+        dir_fd=directory,
+    )
     try:
         info = os.fstat(fd)
         if (
@@ -547,7 +565,6 @@ def _provision_directory(
     mode: int,
     owner_uid: int,
     owner_gid: int | None,
-    private: bool,
 ) -> int:
     """Create or verify one fixed child before applying any ownership mutation."""
 
@@ -566,12 +583,11 @@ def _provision_directory(
             _fchown(descriptor, owner_uid, -1 if owner_gid is None else owner_gid)
             _fchmod(descriptor, mode)
         info = os.fstat(descriptor)
-        forbidden = 0o077 if private else 0o022
         if (
             not stat.S_ISDIR(info.st_mode)
             or info.st_uid != owner_uid
             or (owner_gid is not None and info.st_gid != owner_gid)
-            or info.st_mode & forbidden
+            or stat.S_IMODE(info.st_mode) != mode
         ):
             raise ContractViolation("native store provisioned directory is unavailable")
         return descriptor
@@ -588,7 +604,7 @@ def _provision_lock(bundle_fd: int, *, runtime_uid: int) -> int:
         descriptor = os.open(
             "retained.lock",
             os.O_RDWR | os.O_CREAT | os.O_EXCL | _O_CLOEXEC | _O_NOFOLLOW,
-            0o600,
+            _LOCK_MODE,
             dir_fd=bundle_fd,
         )
         created = True
@@ -600,13 +616,13 @@ def _provision_lock(bundle_fd: int, *, runtime_uid: int) -> int:
     try:
         if created:
             _fchown(descriptor, runtime_uid, -1)
-            _fchmod(descriptor, 0o600)
+            _fchmod(descriptor, _LOCK_MODE)
         info = os.fstat(descriptor)
         if (
             not stat.S_ISREG(info.st_mode)
             or info.st_uid != runtime_uid
             or info.st_nlink != 1
-            or info.st_mode & 0o077
+            or stat.S_IMODE(info.st_mode) != _LOCK_MODE
         ):
             raise ContractViolation("native store retained lock is unavailable")
         return descriptor
@@ -631,8 +647,12 @@ def publish_descriptor_offline(
     outside N3a.  The caller supplies no store-instance label or child paths.
     """
 
-    if not root.is_absolute() or not key.strip() or type(generation) is not int or generation < 1:
+    if not root.is_absolute() or type(generation) is not int or generation < 1:
         raise ContractViolation("native store descriptor publication is unavailable")
+    try:
+        key = _require_token(key, field="key")
+    except ValueError as exc:
+        raise ContractViolation("native store descriptor publication is unavailable") from exc
     if type(runtime_uid) is not int or runtime_uid < 0:
         raise ContractViolation("native store descriptor publication is unavailable")
     if sys.platform != "linux":
@@ -645,22 +665,21 @@ def publish_descriptor_offline(
             _trusted_directory(root_fd)
             root_group = os.fstat(root_fd).st_gid
             bundle_fd = _provision_directory(
-                root_fd, token, mode=0o750, owner_uid=0, owner_gid=root_group,
-                private=False,
+                root_fd, token, mode=_BUNDLE_MODE, owner_uid=0, owner_gid=root_group,
             )
             descriptors_fd = _provision_directory(
-                bundle_fd, "descriptors", mode=0o750, owner_uid=0,
-                owner_gid=root_group, private=False,
+                bundle_fd, "descriptors", mode=_DESCRIPTORS_MODE, owner_uid=0,
+                owner_gid=root_group,
             )
             store_fd = _provision_directory(
-                bundle_fd, "store", mode=0o700, owner_uid=runtime_uid,
-                owner_gid=None, private=True,
+                bundle_fd, "store", mode=_STORE_MODE, owner_uid=runtime_uid,
+                owner_gid=None,
             )
             lock_fd = _provision_lock(bundle_fd, runtime_uid=runtime_uid)
             # Persist the fixed topology before any immutable metadata can be
             # acknowledged. Metadata publication fsyncs its own file/directory.
-            for descriptor in (lock_fd, store_fd, descriptors_fd, bundle_fd, root_fd):
-                os.fsync(descriptor)
+            for retained_fd in (lock_fd, store_fd, descriptors_fd, bundle_fd, root_fd):
+                os.fsync(retained_fd)
         finally:
             close_failure = _close_fds(
                 lock_fd, store_fd, descriptors_fd, bundle_fd, root_fd,
@@ -678,14 +697,6 @@ def publish_descriptor_offline(
             anchor_body = {
                 "schema_version": 1, "key": key, "bundle": opened.bundle_identity.model_dump(),
             }
-            anchor_name = "anchor.json"
-            try:
-                current_anchor = _anchor(_read_metadata(opened, anchor_name))
-            except FileNotFoundError:
-                _publish_new(opened.bundle_fd, anchor_name, canonical_json(anchor_body).encode())
-            else:
-                if current_anchor != _Anchor(key, opened.bundle_identity):
-                    raise ContractViolation("native store anchor is unavailable")
             descriptor = _Descriptor(
                 key=key, generation=generation, store_instance_id=instance,
                 binding_digest=sealed.operator_binding_digest, bundle=opened.bundle_identity,
@@ -693,6 +704,20 @@ def publish_descriptor_offline(
                 layout_law_digest=sealed.layout_law_digest,
                 mount_lock_law_digest=sealed.mount_lock_law_digest,
             )
+            anchor_raw = canonical_json(anchor_body).encode()
+            descriptor_raw = canonical_json(descriptor.body()).encode()
+            # Prove that both exact byte strings satisfy the strict reader and
+            # its size bound before creating either immutable metadata file.
+            _anchor(anchor_raw)
+            _descriptor(descriptor_raw)
+            anchor_name = "anchor.json"
+            try:
+                current_anchor = _anchor(_read_metadata(opened, anchor_name))
+            except FileNotFoundError:
+                _publish_new(opened.bundle_fd, anchor_name, anchor_raw)
+            else:
+                if current_anchor != _Anchor(key, opened.bundle_identity):
+                    raise ContractViolation("native store anchor is unavailable")
             for name in _descriptor_names(opened):
                 old = _descriptor(_read_metadata(opened, name))
                 if old.store_instance_id == instance and (
@@ -702,7 +727,7 @@ def publish_descriptor_offline(
                     raise ContractViolation("native store instance history is unavailable")
             _publish_new(
                 opened.descriptors_fd, f"{generation}.json",
-                canonical_json(descriptor.body()).encode(),
+                descriptor_raw,
             )
             return sealed
         finally:

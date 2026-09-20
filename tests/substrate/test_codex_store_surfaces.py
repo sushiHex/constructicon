@@ -16,15 +16,17 @@ from tests.substrate.test_codex_store import (
 )
 
 
-@pytest.mark.parametrize("withdrawn", [False, True])
+@pytest.mark.parametrize("state", ["active", "withdrawn", "deep-malformed"])
 async def test_whole_public_surface_excludes_binding_metadata_on_acceptance_and_refusal(
-    tmp_path, store_lifecycle, withdrawn,
+    tmp_path, store_lifecycle, state,
 ):
     world = store_lifecycle[0]
 
     def terminal_state():
-        if withdrawn:
+        if state == "withdrawn":
             del world.metadata["active.json"]
+        elif state == "deep-malformed":
+            world.metadata["active.json"] = ("[" * 1000 + "0" + "]" * 1000).encode()
 
     base = bare_launcher(clean_native())
     launcher = MutatingLauncher(
@@ -40,7 +42,9 @@ async def test_whole_public_surface_excludes_binding_metadata_on_acceptance_and_
         outcome = await acquired.resource.execute(
             TaskSpec(instruction="bounded fixture"), workspace=None, grants=GRANTS,
         )
-        assert outcome.status == ("failure" if withdrawn else "success")
+        assert outcome.status == ("success" if state == "active" else "failure")
+        if state != "active":
+            assert outcome.output is None and outcome.raw_reply is None
         assert_published_surfaces_are_bounded(outcome)
         # Traverse the complete serialized surface, including new fields and
         # dict keys. Only the sealed opaque binding digest belongs in the inert

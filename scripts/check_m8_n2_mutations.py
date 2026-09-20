@@ -365,7 +365,7 @@ MUTANTS = (
         "guard_fds=(guard, held.lock_fd),",
         "guard_fds=(held.lock_fd,),",
         STORE_ADAPTER
-        + "test_materialization_retains_one_store_lock_and_publishes_three_receipts",
+        + "test_materialization_retains_one_store_lock_and_records_three_checks",
     ),
     (
         "a drifted launch recipe refuses",
@@ -387,7 +387,7 @@ MUTANTS = (
         "await handle.cleanup(disposition)",
         "handle.closed = True",
         STORE_ADAPTER
-        + "test_materialization_retains_one_store_lock_and_publishes_three_receipts",
+        + "test_materialization_retains_one_store_lock_and_records_three_checks",
     ),
     (
         "the rate-limit detail is constrained by value shape",

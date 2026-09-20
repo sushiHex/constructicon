@@ -1160,21 +1160,41 @@ reviewer's claimed privilege requirement for `name_to_handle_at(AT_EMPTY_PATH)`
 was withdrawn after primary-source verification: it confused that syscall with
 `open_by_handle_at`, which is not used. The state-review ledger preserves the
 reasoning and source. A narrow second review of launcher/tests/provisioning
-found no additional introduced blocker; the independent complete-diff pass is
-still running.
+found no additional introduced blocker. The complete-diff review subsequently
+found publisher inputs that its own reader refused, unusable fixed-child modes,
+and a stale awaited acquisition-fence observation before readiness. The last
+case was reproduced with the real durable closure and a deterministic barrier,
+not a substitute closed flag. All are corrected; strict reader validation is
+reused before publication, fixed modes are explicit, and the final durable
+fence is read synchronously after each positive binding observation. Metadata
+FIFOs and deeply nested JSON also now refuse without blocking or escaping the
+typed failure path. Accepting and refusing outcomes share the public-field
+bound test. The state-review ledger records the evidence and limits.
 
-At this first implementation review point, the focused portable store/public
-surface set passed 31 tests with 10 explicit Linux skips. Ruff, strict mypy for
-the 101 source files, and all four import contracts passed independently; the
-full-suite rerun is not yet final-head evidence. N2's compatibility inventory
-ran with 82/82 assertion kills and zero unmeasured mutants. N3a has its own
-inventory in `scripts/check_m8_n3a_mutations.py`; its final count and native
-evidence must be recorded after review stabilizes the head.
+The complete-diff reviewer was interrupted by a platform safety filter before
+issuing its final verdict. Its confirmed findings are retained, but this is not
+a completed review or approval. A bounded independent review of the fixes is
+separate evidence; final review status belongs with the exact PR head.
+
+After these corrections, the focused Codex/store/surface suite passed 113 tests
+with one explicit privileged skip. N3a's inventory in
+`scripts/check_m8_n3a_mutations.py` killed 45/45 mutants by assertion, including
+removal of the final materialization fence read. N2's compatibility inventory
+previously ran with 82/82 assertion kills and zero unmeasured mutants; it must
+also pass on the final head. These focused results do not replace the final
+repository gate or exact-head CI, which are recorded on the PR.
 
 The hosted-Linux workflow now runs fresh-interpreter root/lock replacement and
 no-overwrite publication tests, unprivileged native-only mount and retained
 lock handoff tests, and a real controller-death/supervisor-custody test.
 Run-scoped `n3a-*.json` artifacts contain only bounded positive fixture facts
-and opaque sealed digests, not private descriptor contents. These tests are
-written but have not yet executed on this Windows development host. Their
-Actions result, not a local skip, is the required physical evidence.
+and opaque sealed digests, not private descriptor contents. Actions containment
+run `35542612151` passed on `4e7b2f2`: both fresh-interpreter replacement cases,
+explicit selection/no-overwrite publication, native-only read/write including
+child-directory creation, lock handoff and controller-death custody produced
+positive artifacts. The ordinary worker did not receive the store. This is
+credential-free physical fixture evidence, not vendor conformance. The same
+head's ordinary verify run passed 2,460 tests but failed Linux mypy on a local
+name reused with incompatible types; that introduced defect is corrected.
+The final corrected head must pass both runs, including the added FIFO cases;
+Windows skips are never counted as that proof.

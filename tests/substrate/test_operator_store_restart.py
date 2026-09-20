@@ -173,6 +173,8 @@ def test_physical_alias_refuses_and_removing_alias_restores_exact_binding(protec
     sealed = publish(protected_root, 1)
     activate_fixture(protected_root, 1)
     assert fresh_read(protected_root, sealed) == "accepted"
+
+
     bundle = protected_root / stores._bundle_token(KEY)
     if alias == "store-symlink":
         original = bundle / "store"
@@ -192,3 +194,18 @@ def test_physical_alias_refuses_and_removing_alias_restores_exact_binding(protec
         finally:
             link.unlink()
     assert fresh_read(protected_root, sealed) == "accepted"
+
+
+@pytest.mark.parametrize("name", ["anchor.json", "active.json", "descriptors/1.json"])
+def test_fifo_metadata_refuses_without_waiting_for_a_writer(protected_root, name):
+    sealed = publish(protected_root, 1)
+    activate_fixture(protected_root, 1)
+    assert fresh_read(protected_root, sealed) == "accepted"
+    target = protected_root / stores._bundle_token(KEY) / name
+    target.unlink()
+    os.mkfifo(target, 0o600)
+    try:
+        observed = fresh_read(protected_root, sealed)
+    except subprocess.TimeoutExpired:
+        pytest.fail("metadata FIFO blocked before its nonregular-file refusal")
+    assert observed == "refused"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import threading
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
@@ -102,7 +103,7 @@ def test_acquisition_and_persistent_store_roots_must_be_disjoint(
         )
 
 
-async def test_materialization_retains_one_store_lock_and_publishes_three_receipts(
+async def test_materialization_retains_one_store_lock_and_records_three_checks(
     tmp_path, store_lifecycle,
 ):
     world, _, closure, guard_fds, released_guards = store_lifecycle
@@ -188,20 +189,20 @@ async def test_terminal_binding_drift_discards_the_completed_turn(tmp_path, stor
     await provider.close(acquired, "discard")
 
 
-async def test_an_absent_initial_receipt_never_mints_readiness(
+async def test_an_absent_initial_check_never_mints_readiness(
     tmp_path, store_lifecycle, monkeypatch,
 ):
     world, store = store_lifecycle[:2]
     monkeypatch.setattr(store, "check_held", lambda held: None)
     provider = available_provider(tmp_path, store_lifecycle)
     acquired = await provider.acquire(context())
-    with pytest.raises(ContractViolation, match="affirmative sealed receipt"):
+    with pytest.raises(ContractViolation, match="affirmative sealed observation"):
         await acquired.materialize()
     assert not acquired.resource.ready and acquired.resource.initial_check is None
     assert len(world.closed) == 5
 
 
-async def test_a_well_typed_receipt_for_another_binding_never_mints_readiness(
+async def test_a_well_typed_check_for_another_binding_never_mints_readiness(
     tmp_path, store_lifecycle, monkeypatch,
 ):
     store = store_lifecycle[1]
@@ -209,9 +210,54 @@ async def test_a_well_typed_receipt_for_another_binding_never_mints_readiness(
     monkeypatch.setattr(store, "check_held", lambda held: wrong)
     provider = available_provider(tmp_path, store_lifecycle)
     acquired = await provider.acquire(context())
-    with pytest.raises(ContractViolation, match="affirmative sealed receipt"):
+    with pytest.raises(ContractViolation, match="affirmative sealed observation"):
         await acquired.materialize()
     assert not acquired.resource.ready and acquired.resource.initial_check is None
+
+
+async def test_durable_closure_after_final_await_never_mints_readiness(
+    tmp_path, store_lifecycle, monkeypatch,
+):
+    world, _, closure, _, released_guards = store_lifecycle
+    original_require_open = closure.require_open
+    observed = threading.Event()
+    release = threading.Event()
+    calls = 0
+
+    def pause_after_real_open_observation(paths):
+        nonlocal calls
+        calls += 1
+        original_require_open(paths)
+        if calls == 4:
+            observed.set()
+            if not release.wait(5):
+                raise TimeoutError("the closure race fixture was not released")
+
+    monkeypatch.setattr(closure, "require_open", pause_after_real_open_observation)
+    provider = available_provider(tmp_path, store_lifecycle)
+    acquired = await provider.acquire(context())
+    materializing = asyncio.create_task(acquired.materialize())
+    assert await asyncio.to_thread(observed.wait, 5)
+    try:
+        closure.commit(acquired.resource.paths)
+    finally:
+        release.set()
+
+    failure: BaseException | None = None
+    try:
+        try:
+            await materializing
+        except BaseException as exc:
+            failure = exc
+        assert isinstance(failure, ContractViolation)
+        assert "permanently closed" in str(failure)
+        assert not acquired.resource.ready
+        assert acquired.resource.initial_check is None
+        assert released_guards
+        assert len(world.closed) >= 5
+    finally:
+        with pytest.raises(ContractViolation, match="permanently closed"):
+            await provider.close(acquired, "discard")
 
 
 async def test_one_acquisition_cannot_execute_a_second_task(tmp_path, store_lifecycle):

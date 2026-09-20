@@ -278,4 +278,30 @@ One implementation review claim was rejected after checking primary sources:
 which this implementation never calls. The reviewer withdrew the finding;
 the [Linux 6.8 source](https://github.com/torvalds/linux/blob/v6.8/fs/fhandle.c)
 keeps the two paths distinct. The existing FD-based identity primitive remains;
-the unprivileged Actions lane must still demonstrate it on the actual host.
+the unprivileged Actions lane subsequently demonstrated it on the actual host
+in run `35542612151`, at implementation head `4e7b2f2`.
+
+The first complete-diff implementation review found further introduced defects:
+
+- Publication accepted tokens and oversized metadata its own strict reader
+  could not accept. Both exact immutable byte strings now pass that reader
+  before either is published. Existing fixed children must also have the
+  declared usable modes and matching store/lock ownership; merely having no
+  excess permission does not establish usability.
+- A FIFO at a metadata path blocked before its type could be checked. Reads
+  now open nonblocking and then require a regular file. Deeply nested JSON
+  within the byte bound must become a typed refusal, not `RecursionError`.
+- An awaited acquisition-fence read could observe open, then resume after
+  recovery committed permanent closure. Materialization now reads the real
+  durable fence again after the positive binding observation, synchronously
+  before transferring readiness. Launch and terminal acceptance use the same
+  final check. This closes the event-loop resume window; it does not claim an
+  atomic transaction with a different process committing after that read.
+
+The last case was reproduced against the real Git-backed acquisition closure:
+pause after the worker's successful read, commit closure, then resume. Removing
+the final read now fails an assertion that readiness was never transferred and
+both guards were released. Permitting lifecycle tests remain in the same suite.
+The review worker was interrupted by a platform safety filter before its final
+verdict. Its reproduced findings count; an unissued approval does not. A bounded
+independent follow-up reviews the resulting fixes separately.
