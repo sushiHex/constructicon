@@ -1,24 +1,18 @@
 # M8 rev 3: operator-bound subscription executors
 
-Status: **accepted for implementation** on 2026-09-13, with the acceptance of
-ADR 0021. N1 (#74) and N2's first slice (#75) are implemented and merged
-against it.
+Status: review draft; **not approved for implementation**.
 
 Decision: [#38](https://github.com/sushiHex/constructicon/issues/38).
-Authority: accepted [ADR 0021](../../adr/0021-subscription-executors-bind-operator-stores.md).
+Proposed authority: [ADR 0021](../../adr/0021-subscription-executors-bind-operator-stores.md).
 Baseline: `d2b8f9421e3b3a5d9edeec42064fa3b42100fa52`.
 
-This is the successor to [rev 2](M8-live-executors-rev2.md), whose bytes and
+The owner authorized drafting/review, not acceptance or live use. This is a
+successor proposal to [rev 2](M8-live-executors-rev2.md), whose bytes and
 unestablished vendor-identity requirement remain intact. Accepted
 [ADR 0018](../../adr/0018-live-executors-are-leased-contained-processes.md),
 [ADR 0019](../../adr/0019-hosted-linux-runners-are-requalified-not-image-pinned.md)
-and [rev 1](M8-live-executors-rev1.md) still govern, and no old test obtains a
-new meaning retroactively.
-
-**Acceptance is of this plan, not of anything it describes as separate.** It
-does not authorize a vendor account, a credential, a paid call, a deployment,
-or live use. Each of those remains its own decision, as the sequence below and
-ADR 0021 state.
+and [rev 1](M8-live-executors-rev1.md) still govern. No issue is unblocked by
+this file, and no old test obtains a new meaning retroactively.
 
 ## Outcome and reuse
 
