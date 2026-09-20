@@ -656,6 +656,11 @@ def _turn_of(
     record: Mapping[str, Any], *, thread_id: str | None, turn_id: str | None,
 ) -> Mapping[str, Any] | None:
     if thread_id is None or turn_id is None:
+        # Defensive rather than live: from the adapter the transcript is provably
+        # empty when the turn has no id, because both append sites require either
+        # ``_collecting`` or ``_collect`` itself. This matters for a direct
+        # ``observe_turn`` caller, which the protocol tests are, and that is where
+        # its coverage lives.
         # An invocation that was never identified can have no terminal record.
         # Comparing against "" instead let a child assert a terminal turn for a
         # turn it had not named, which then published produced_output=True on a
@@ -797,7 +802,7 @@ def _rate_limit(value: Any) -> RateLimitInfo | None:
 
 def observe_turn(
     records: Sequence[bytes], *, thread_id: str | None, turn_id: str | None,
-    transport_damage: str | None = None,
+    transport_damage: str | None = None, excluded: int = 0,
 ) -> TurnObservation:
     """Fold one turn's records into a truthful observation.
 
@@ -834,7 +839,10 @@ def observe_turn(
     rate_limit: RateLimitInfo | None = None
     terminal = False
     malformed = 0
-    unclassified = 0
+    # Records the *caller* excluded before the turn was named. They are
+    # counted here so one marker reports every withheld record, whichever
+    # side of the boundary withheld it.
+    unclassified = excluded
     first_error = transport_damage
     kept: list[str] = []
     for line in records:

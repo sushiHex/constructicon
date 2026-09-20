@@ -17,8 +17,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import stat
 import sys
 import tempfile
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -38,8 +40,9 @@ from constructicon.core.native_operator import (
     NativeOperatorIsolationProfileV3,
 )
 from constructicon.core.run import RunLease
-from constructicon.core.workspace import LeaseContext, StaleAcquisition
+from constructicon.core.workspace import LeaseContext, StaleAcquisition, acquisition_id_for
 from constructicon.runtime.registry import CapabilityDescriptor
+from constructicon.substrate.executors import codex
 from constructicon.substrate.executors.codex import (
     ADAPTER_REVISION,
     UNQUALIFIED_PREREQUISITES,
@@ -63,6 +66,7 @@ from constructicon.substrate.executors.linux import (
     ProcessExchangeError,
     ProcessResult,
 )
+from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisition_guard
 from tests.native_operator_world import native_egress, native_store
 from tests.substrate.test_codex_protocol import (
     ACCOUNT_NOTICE,
@@ -133,7 +137,7 @@ class ScriptedNative:
     def __init__(self, *, accounts, records=(), thread=THREAD, turn=TURN, initialize=None,
                  hangs_up_after_turn=False, preamble=(), ends_after_preamble=False,
                  read_fails=None, fails_on_nth_account=None, tail=b"", early=(),
-                 after_thread=()):
+                 after_thread=(), duplicate_last_reply=False, read_limit=None):
         # ``read_fails`` models a transport the adapter does not expect: an
         # exception type no layer catches, which is how a conversation aborts
         # without recording anything.
@@ -141,6 +145,10 @@ class ScriptedNative:
         self.tail = tail
         self.early = list(early)
         self.after_thread = list(after_thread)
+        self.duplicate_last_reply = duplicate_last_reply
+        # A small cap makes the adapter read part of a record and then stop,
+        # which is the state the pre-send marker exists for.
+        self.read_limit = read_limit
         self.reads_after_close = 0
         self.fails_on_nth_account = fails_on_nth_account
         self.armed = read_fails is not None and fails_on_nth_account is None
@@ -196,7 +204,10 @@ class ScriptedNative:
                 self.eof = True  # the child exited before answering
                 self.changed.set()
                 return
-            self._emit({"id": identifier, **self.accounts.pop(0)})
+            reply = {"id": identifier, **self.accounts.pop(0)}
+            self._emit(reply)
+            if self.duplicate_last_reply and not self.accounts:
+                self._emit(reply)  # the same id, answered twice
         elif method == "thread/start":
             self._emit({"id": identifier, "result": {"thread": {"id": self.thread}}})
             for value in self.after_thread:
@@ -237,8 +248,9 @@ class ScriptedNative:
             while not self.pending and not self.eof:
                 self.changed.clear()
                 await self.changed.wait()
-            value = bytes(self.pending[:maximum])
-            del self.pending[:maximum]
+            window = maximum if self.read_limit is None else min(maximum, self.read_limit)
+            value = bytes(self.pending[:window])
+            del self.pending[:window]
             return value
         finally:
             self.reading = False
@@ -751,20 +763,27 @@ async def test_a_native_request_is_damage_and_is_never_answered():
     assert 900 not in [item.get("id") for item in native.received]
 
 
-async def test_a_turn_that_never_terminates_demotes_rather_than_refusing():
+async def test_a_turn_that_never_terminates_refuses_through_the_adapter():
+    """What this consumer actually publishes, which is not a partial.
+
+    Every path by which ``_collect`` returns without a terminal record has already
+    recorded a fault — EOF or damage, after which the pre-acceptance read also
+    fails, or an ``_absorb`` refusal. So ``terminal is False`` with no faults is
+    unreachable from here, and ``decode_turn``'s missing-terminal branch is dead
+    from the adapter. The branch keeps its own direct test below; this one states
+    the production outcome.
+    """
     native = clean_native(
         records=[{"method": "item/started", "params": {"threadId": THREAD}}],
         hangs_up_after_turn=True,
     )
     conversation = await converse(native)
-    # The scripted child ends after its records, so the reader sees EOF.
     assert not conversation.observation.terminal
-    outcome = decode_turn(
-        conversation.observation,
-        FINISHED,
-        requested_model=None,
+    assert conversation.faults, "the adapter cannot reach a faultless missing terminal"
+    outcome = unavailable_outcome(
+        conversation.faults, conversation.observation, FINISHED, requested_model=None,
     )
-    assert outcome.status == "partial"
+    assert outcome.status == "failure" and outcome.error.kind == "unavailable"
 
 
 async def test_a_composed_byte_scope_preamble_is_drained_and_never_transcribed():
@@ -916,7 +935,7 @@ def two_model_profile():
     return codex_profile().model_copy(update={"grant_policy": policy})
 
 
-def provider_with(configuration, *, profile=None, launcher=None):
+def provider_with(configuration, *, profile=None, launcher=None, root=ACQUISITION_ROOT):
     """Build the identity from the same configuration, so drift is not the fault."""
     launcher = launcher if launcher is not None else bare_launcher()
     resolved = profile if profile is not None else codex_profile()
@@ -930,7 +949,7 @@ def provider_with(configuration, *, profile=None, launcher=None):
     return CodexOperatorProvider(
         launcher=launcher, profile=resolved, identity=identity, expected_account=EXPECTED,
         binary=BINARY, configuration=configuration, catalog=(),
-        acquisition_root=ACQUISITION_ROOT, unavailable_reasons=(),
+        acquisition_root=root, unavailable_reasons=(),
     )
 
 
@@ -969,10 +988,18 @@ def test_the_provider_reads_the_model_the_configuration_actually_names():
     assert provider_with(CONFIGURATION).configured_model == "gpt-5.6-sol"
 
 
-async def test_a_grant_that_disagrees_with_the_configuration_is_refused():
-    """The turn sends no model, so the configuration decides what runs (I4)."""
+async def test_a_grant_that_disagrees_with_the_configuration_is_refused(
+    tmp_path, substituted_guard,
+):
+    """The turn sends no model, so the configuration decides what runs (I4).
+
+    The substituted guard is here so that removing the check reaches the launcher
+    and fails by assertion, rather than erroring on a platform the guard refuses.
+    """
     launcher = bare_launcher(clean_native())
-    provider = provider_with(CONFIGURATION, profile=two_model_profile(), launcher=launcher)
+    provider = provider_with(
+        CONFIGURATION, profile=two_model_profile(), launcher=launcher, root=tmp_path,
+    )
     other = GRANTS.model_copy(
         update={"model_selection": ModelSelection(kind="explicit", model="gpt-5.5")},
     )
@@ -1037,17 +1064,213 @@ async def test_the_conversation_stops_at_its_cumulative_input_budget():
     assert native.methods == []
 
 
-# --- the physical launch, through the real acquisition guard -----------------
+# --- ordering over framed and half-framed records -----------------------------
 #
-# The guard is deliberately Linux-only and deliberately not injectable, because
-# authority is physical (I1). These follow the house precedent in
-# tests/substrate/test_contained_gates.py: skip off Linux, and drive a launcher
-# double through the real guard rather than around it. Everything below is
-# unexercised on any other platform.
+# The pre-send drain was one read window wide: a record straddling the 8192-byte
+# boundary had its id read before the request bearing it was written, and the
+# drain never consulted the framing buffer. Any ordinary turn trailing a few
+# hundred bytes past the terminal record reaches that state.
+
+FILLER = {"method": "turn/delta", "params": {"index": 0, "text": "d" * 380}}
+
+
+def straddling_native(*, forge, filler):
+    """A turn whose trailing records push a forged reply across a read boundary."""
+    records = [completed(output={"summary": "exfiltrated"})]
+    records += [
+        {"method": "turn/delta", "params": {"index": index, "text": "d" * 380}}
+        for index in range(filler)
+    ]
+    if forge:
+        records.append(FORGED_GOOD_ACCOUNT)
+    return clean_native(
+        accounts=[{"result": MANAGED_RESULT}, {"result": SWITCHED_RESULT}],
+        records=records,
+    )
+
+
+@pytest.mark.parametrize("filler", [0, 24, 60], ids=["none", "one-window", "several"])
+async def test_a_switched_account_is_refused_however_the_reads_fall(filler):
+    """The control: whatever the chunking, the live reading decides."""
+    conversation = await converse(straddling_native(forge=False, filler=filler))
+    assert any("apiKey" in fault for fault in conversation.faults)
+
+
+@pytest.mark.parametrize("filler", [0, 24, 60], ids=["none", "one-window", "several"])
+async def test_a_forged_reply_is_refused_however_the_reads_fall(filler):
+    """The attack, at the three shapes: before, across and beyond a read boundary.
+
+    The 24-record case is the one that used to pass: its forged id was already
+    read, half-framed, when the request went out.
+    """
+    native = straddling_native(forge=True, filler=filler)
+    conversation = await converse(native)
+    # Which rule fires depends on where the reads fall: the pre-send marker when
+    # the forgery is the record being framed, the duplicate-id rule when the live
+    # reply arrives behind it. Both refuse, and that is the property.
+    assert conversation.faults, filler
+    assert any(
+        "before the" in fault or "already answered" in fault
+        for fault in conversation.faults
+    ), conversation.faults
+    outcome = unavailable_outcome(
+        conversation.faults, conversation.observation, FINISHED, requested_model="gpt-5.6-sol",
+    )
+    assert outcome.status == "failure" and outcome.output is None
+
+
+async def test_a_duplicate_reply_id_is_refused_even_during_the_drain_to_eof():
+    """A confused client still answers the real request, so the duplicate lands.
+
+    A fault appended during ``_finish`` still reaches the handle, because
+    ``__call__``'s ``finally`` runs before ``exchange`` returns.
+    """
+    native = clean_native(
+        records=[completed(output={"summary": "done"})], duplicate_last_reply=True,
+    )
+    conversation = await converse(native)
+    assert native.accounts_seen == 2 and conversation.gate_completed
+    assert any("already answered" in fault for fault in conversation.faults)
+
+
+async def test_a_half_framed_forgery_is_refused_with_no_genuine_reply_behind_it():
+    """Isolates the pre-send rule from the duplicate-id rule.
+
+    The forged reply is the record being framed when the request goes out, and the
+    session never answers the real request — so a duplicate can never arrive and
+    only ordering over the framing buffer can refuse this.
+    """
+    native = clean_native(
+        accounts=[{"result": MANAGED_RESULT}],  # no second reply, ever
+        records=[completed(output={"summary": "exfiltrated"}), FORGED_GOOD_ACCOUNT],
+        read_limit=48,  # forces the forgery to straddle a read
+    )
+    conversation = await converse(native)
+    assert any("before the" in fault for fault in conversation.faults), conversation.faults
+    assert not conversation.gate_completed
+    outcome = unavailable_outcome(
+        conversation.faults, conversation.observation, FINISHED, requested_model="gpt-5.6-sol",
+    )
+    assert outcome.status == "failure" and outcome.output is None
+
+
+async def test_records_withheld_at_the_turn_boundary_are_counted_not_dropped():
+    """M: the ordering boundary stays, and the silence goes.
+
+    A record read before the turn was named cannot be its evidence, but it must
+    not vanish either — that was the adapter's one uncounted exclusion, and the
+    fold's own docstring says a withheld record is never silent.
+    """
+    native = clean_native(early=[
+        {"method": "turn/delta", "params": {"index": index}} for index in range(3)
+    ])
+    conversation = await converse(native)
+    assert conversation.faults == ()
+    assert "3 records excluded as unclassified" in conversation.observation.raw
+
+
+async def test_a_turn_completed_before_it_was_named_refuses_rather_than_hanging():
+    """A child cannot complete a turn whose id we were never told.
+
+    Dropping it and then waiting meant a completed turn published as a timeout
+    once the deadline fired. It is a protocol violation, so it is refused.
+    """
+    native = clean_native(early=[completed()])
+    conversation = await converse(native)
+    assert any("before it was named" in fault for fault in conversation.faults)
+    assert "thread/start" not in native.methods
+
+
+async def test_a_native_request_in_the_drain_is_damage_not_a_refusal():
+    """P: judge a record by what it is, in the drain as everywhere else.
+
+    A reply found before its request is aimed at the gate, so it discards the
+    turn's result. A native request is an unauthorized callback attempt: trust in
+    the output degraded, the gate's authority did not, so the result is demoted.
+    """
+    native = clean_native(records=[
+        completed(output={"summary": "done"}),
+        {"id": 900, "method": "item/tool/call", "params": {"tool": "shell"}},
+    ])
+    conversation = await converse(native)
+    assert conversation.faults == (), conversation.faults
+    assert conversation.observation.malformed_records >= 1
+    outcome = decode_turn(conversation.observation, FINISHED, requested_model=None)
+    assert outcome.status == "partial"
+    assert 900 not in [item.get("id") for item in native.received]
+
+
+async def test_a_conversation_drives_one_byte_scope_only():
+    """N: the latch and the transcript carry over, so a second run must refuse.
+
+    ``materialize`` already guards entry this way, and this callable is advertised
+    to a second consumer, which is the argument for the symmetry.
+    """
+    native = clean_native()
+    conversation = conversation_for(native)
+    await asyncio.wait_for(conversation(native), 5)
+    assert conversation.gate_completed
+    with pytest.raises(ContractViolation, match="one byte scope"):
+        await conversation(clean_native())
+
+
+# --- the handle's own behaviour, and the guard's physical properties ----------
+#
+# These two things were entangled and are now separated, because they need
+# different evidence. What the handle *does* — the closed check at guard entry,
+# the recipe-drift comparison, the four exception branches, the choice between
+# unavailable_outcome and decode_turn, the salvage — depends only on receiving a
+# live descriptor. That runs everywhere, with one substitution: the guard, and
+# nothing else. Handle, provider, conversation and both doubles are the real ones.
+#
+# What the guard *is* — Linux, O_NOFOLLOW, a regular file we own with one link,
+# and a non-blocking flock that makes a second holder wait — is the "authority is
+# physical" claim (I1) and keeps its Linux gate below.
+#
+# Entangling them meant nine tests that had never run on any host, and one of them
+# was wrong: CI caught a grouped-cancellation assertion that this structure would
+# have caught here.
 
 LINUX = pytest.mark.skipif(
-    sys.platform != "linux", reason="physical acquisition guard needs Linux",
+    sys.platform != "linux", reason="the guard's physical properties need Linux",
 )
+
+
+@pytest.fixture
+def substituted_guard(monkeypatch):
+    """Replace only the adapter's reference to the guard, never the guard."""
+
+    @asynccontextmanager
+    async def guard(paths):
+        paths.guard.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(paths.guard, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            yield descriptor
+        finally:
+            os.close(descriptor)
+
+    monkeypatch.setattr(codex, "acquisition_guard", guard)
+
+
+@LINUX
+async def test_the_real_guard_is_an_owned_single_link_file_held_exclusively(tmp_path):
+    """The physical properties the substitution deliberately does not stand in for."""
+    paths = AcquisitionPaths(tmp_path, acquisition_id_for("codex-guard-proof", 1))
+    held = []
+
+    async def second_holder():
+        async with acquisition_guard(paths):
+            held.append(True)
+
+    async with acquisition_guard(paths) as descriptor:
+        info = os.fstat(descriptor)
+        assert stat.S_ISREG(info.st_mode)
+        assert info.st_uid == os.getuid() and info.st_nlink == 1
+        waiting = asyncio.create_task(second_holder())
+        await asyncio.sleep(0.05)
+        assert not waiting.done() and not held, "the guard is not exclusive"
+    await asyncio.wait_for(waiting, 5)
+    assert held == [True]
 
 
 async def materialized(launcher, root, *, grants=GRANTS) -> CodexOperatorHandle:
@@ -1076,8 +1299,7 @@ def assert_launch(launcher, *, grants=GRANTS):
     assert len(call["guard_modes"]) == len(guards)
 
 
-@LINUX
-async def test_execute_drives_the_contained_launcher_to_a_success(tmp_path):
+async def test_execute_drives_the_contained_launcher_to_a_success(tmp_path, substituted_guard):
     launcher = bare_launcher(clean_native())
     handle = await materialized(launcher, tmp_path)
     outcome = await handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
@@ -1086,8 +1308,9 @@ async def test_execute_drives_the_contained_launcher_to_a_success(tmp_path):
     assert_launch(launcher)
 
 
-@LINUX
-async def test_execute_discards_a_turn_whose_pre_acceptance_reading_faults(tmp_path):
+async def test_execute_discards_a_turn_whose_pre_acceptance_reading_faults(
+    tmp_path, substituted_guard,
+):
     """ADR 0021's discard, in the production binding rather than in a fixture."""
     launcher = bare_launcher(
         clean_native(accounts=[{"result": MANAGED_RESULT}, {"result": EMPTY_RESULT}]),
@@ -1101,8 +1324,9 @@ async def test_execute_discards_a_turn_whose_pre_acceptance_reading_faults(tmp_p
     assert_launch(launcher)
 
 
-@LINUX
-async def test_execute_discards_a_turn_interrupted_by_an_account_notification(tmp_path):
+async def test_execute_discards_a_turn_interrupted_by_an_account_notification(
+    tmp_path, substituted_guard,
+):
     launcher = bare_launcher(clean_native(records=[ACCOUNT_NOTICE, completed()]))
     handle = await materialized(launcher, tmp_path)
     outcome = await handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
@@ -1111,8 +1335,9 @@ async def test_execute_discards_a_turn_interrupted_by_an_account_notification(tm
     assert EMAIL not in json.dumps(outcome.model_dump(mode="json"))
 
 
-@LINUX
-async def test_a_launch_prerequisite_failure_is_unavailable_and_decodes_nothing(tmp_path):
+async def test_a_launch_prerequisite_failure_is_unavailable_and_decodes_nothing(
+    tmp_path, substituted_guard,
+):
     launcher = bare_launcher(clean_native(), raises=OSError("no such runtime root"))
     handle = await materialized(launcher, tmp_path)
     outcome = await handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
@@ -1121,8 +1346,9 @@ async def test_a_launch_prerequisite_failure_is_unavailable_and_decodes_nothing(
     assert outcome.output is None and outcome.raw_reply is None
 
 
-@LINUX
-async def test_a_failed_conversation_still_decodes_the_evidence_it_carried(tmp_path):
+async def test_a_failed_conversation_still_decodes_the_evidence_it_carried(
+    tmp_path, substituted_guard,
+):
     damaged = ProcessResult(1, b"", b"stderr evidence", 3.0, payload_returncode=1)
     launcher = bare_launcher(
         clean_native(), raises=ProcessExchangeError(damaged), raises_after_conversation=True,
@@ -1135,8 +1361,9 @@ async def test_a_failed_conversation_still_decodes_the_evidence_it_carried(tmp_p
     assert outcome.output == {"summary": "done"}
 
 
-@LINUX
-async def test_an_aborted_conversation_refuses_rather_than_decoding_its_result(tmp_path):
+async def test_an_aborted_conversation_refuses_rather_than_decoding_its_result(
+    tmp_path, substituted_guard,
+):
     """The shape that was broken: the salvage branch reached with no gate.
 
     The launcher reports a clean, complete result because the conversation's own
@@ -1168,8 +1395,7 @@ class DriftingLauncher(ScriptedLauncher):
         return launcher_revision.fget(self)
 
 
-@LINUX
-async def test_a_launch_recipe_that_drifts_after_construction_refuses(tmp_path):
+async def test_a_launch_recipe_that_drifts_after_construction_refuses(tmp_path, substituted_guard):
     launcher = DriftingLauncher(
         runtime_root=Path("/opt/codex-runtime"),
         expected_runtime=digest("test-codex-runtime", 1, "runtime"),
@@ -1185,15 +1411,19 @@ async def test_a_launch_recipe_that_drifts_after_construction_refuses(tmp_path):
     assert not launcher.commands
 
 
-@LINUX
 @pytest.mark.parametrize("cancelled", [True, False], ids=["cancelled", "plain"])
 async def test_a_grouped_cleanup_failure_keeps_a_cancellation_a_cancellation(
-    tmp_path, cancelled,
+    tmp_path, cancelled, substituted_guard,
 ):
     """A cancellation inside the group is still a cancellation, not an outcome."""
     inner = asyncio.CancelledError() if cancelled else RuntimeError("cleanup failed")
     group = BaseExceptionGroup("contained process cleanup failed", [inner])
-    launcher = bare_launcher(clean_native(), raises=group)
+    # After the conversation, so the gate has run and the ``finally`` has fired —
+    # the state this review round is about. Raising before it would test the group
+    # passthrough with no conversation in play.
+    launcher = bare_launcher(
+        clean_native(), raises=group, raises_after_conversation=True,
+    )
     handle = await materialized(launcher, tmp_path)
     call = handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
     if cancelled:
@@ -1210,8 +1440,7 @@ async def test_a_grouped_cleanup_failure_keeps_a_cancellation_a_cancellation(
         assert "cleanup failed" in outcome.error.detail
 
 
-@LINUX
-async def test_close_cancels_an_exchange_still_in_flight(tmp_path):
+async def test_close_cancels_an_exchange_still_in_flight(tmp_path, substituted_guard):
     entered = asyncio.Event()
 
     @dataclass(frozen=True, kw_only=True)

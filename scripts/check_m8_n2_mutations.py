@@ -20,8 +20,11 @@ where the physical acquisition guard does. Those are listed in ``LINUX_ONLY``
 and are **filtered out entirely off Linux**, where they are reported as
 UNMEASURED rather than counted as kills: the shared runner scores a skipped
 test as no assertion, so leaving them in would silently turn a real gap into a
-green line. They are measured in the M8 containment workflow, in the same step
-that runs ``tests/substrate/test_codex_native.py``.
+green line.
+
+That list is currently empty. It held six entries until the adapter tests were
+restructured to substitute only the acquisition guard, which made the handle's
+own behaviour measurable everywhere; see ``LINUX_ONLY`` below.
 """
 
 import sys
@@ -56,6 +59,7 @@ EXECUTE = "constructicon.substrate.executors.codex:CodexOperatorHandle.execute"
 CLOSE = "constructicon.substrate.executors.codex:CodexOperatorProvider.close"
 DRAIN_BEFORE = "constructicon.substrate.executors.codex:CodexConversation._drain_before"
 ABSORB = "constructicon.substrate.executors.codex:CodexConversation._absorb"
+ONCE = "constructicon.substrate.executors.codex:CodexConversation._once"
 TURN_OF = "constructicon.substrate.executors.codex_protocol:_turn_of"
 CONFIGURED = "constructicon.substrate.executors.codex:configured_model"
 USAGE = "constructicon.substrate.executors.codex_protocol:_usage"
@@ -454,7 +458,7 @@ MUTANTS = (
     (
         "the drain runs to EOF",
         FINISH,
-        "while await io.read(READ_WINDOW):",
+        "while (line := await self._read(io)) is not None:",
         "while False:",
         ADAPTER + "test_the_conversation_drains_to_eof_after_closing_stdin",
     ),
@@ -564,6 +568,41 @@ MUTANTS = (
         ADAPTER + "test_a_notification_between_the_thread_and_the_turn_is_not_turn_evidence",
     ),
     (
+        "the drain accounts for the record still being framed",
+        DRAIN_BEFORE,
+        "self._pre_send_record = bool(self._stream.pending)",
+        "self._pre_send_record = False",
+        ADAPTER + "test_a_half_framed_forgery_is_refused_with_no_genuine_reply_behind_it",
+    ),
+    (
+        "a pre-send record cannot answer the request",
+        CORRELATE,
+        "if pre_send:",
+        "if False:",
+        ADAPTER + "test_a_half_framed_forgery_is_refused_with_no_genuine_reply_behind_it",
+    ),
+    (
+        "no id is answered twice",
+        ONCE,
+        "if identifier in self._correlated:",
+        "if False:",
+        ADAPTER + "test_a_duplicate_reply_id_is_refused_even_during_the_drain_to_eof",
+    ),
+    (
+        "the drain to eof applies the duplicate rule",
+        FINISH,
+        'if isinstance(record, dict) and "id" in record:',
+        "if False:",
+        ADAPTER + "test_a_duplicate_reply_id_is_refused_even_during_the_drain_to_eof",
+    ),
+    (
+        "a correlated id is remembered",
+        CORRELATE,
+        "self._correlated.add(record[\"id\"])",
+        "pass",
+        ADAPTER + "test_a_duplicate_reply_id_is_refused_even_during_the_drain_to_eof",
+    ),
+    (
         "unavailability is published, not inferred",
         PROVIDER,
         "return self._unavailable",
@@ -586,20 +625,19 @@ MUTANTS = (
     ),
 )
 
-LINUX_ONLY = frozenset({
-    "the adapter discards a refused turn",
-    "the launcher receives this acquisition's guard",
-    "a drifted launch recipe refuses",
-    "a grouped cancellation stays a cancellation",
-    "close cancels an exchange still in flight",
-    # Unmutated this refuses before the guard, so its test is cross-platform;
-    # mutated, control reaches the guard, which only exists on Linux.
-    "the configured model must equal the granted one",
-})
-"""Mutants whose test needs the physical acquisition guard.
+LINUX_ONLY: frozenset[str] = frozenset()
+"""Empty, and that is the point.
 
-The guard is Linux-only and deliberately not injectable, because authority is
-physical (I1). Their tests skip elsewhere, and a skipped test proves nothing.
+Every mutant here used to need Linux, because the tests that killed them entered
+the physical acquisition guard. The adapter tests now substitute *only* the
+guard — the handle, provider, conversation and both doubles are the real ones —
+so the behaviour those mutants pin is measurable on every host. What stays
+Linux-gated is one test of the guard's own physical properties, which pins no
+mutant because it pins a property of the OS rather than a decision of ours.
+
+The machinery is kept rather than deleted: it is the honest shape for any future
+mutant that genuinely needs a platform, and an unmeasured mutant must never read
+as a killed one.
 """
 
 assert len({name for name, *_ in MUTANTS}) == len(MUTANTS), "mutant names must be unique"

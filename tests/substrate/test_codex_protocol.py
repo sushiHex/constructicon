@@ -807,6 +807,12 @@ def test_a_malformed_record_demotes_to_partial():
 
 
 def test_a_turn_with_no_terminal_record_demotes_to_partial():
+    """A branch only a direct ``decode_turn`` caller reaches.
+
+    The adapter cannot produce ``terminal is False`` with no faults, so this
+    covers the branch rather than the production outcome; the adapter's own test
+    states what it publishes instead.
+    """
     observation = TurnObservation(
         output=None, served_model=None, usage=None, rate_limit=None, terminal=False,
         malformed_records=0, first_error=None, raw="",
