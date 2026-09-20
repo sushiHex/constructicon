@@ -1,7 +1,7 @@
 # Constructicon — agent contributor guide
 
 Agents are this repository's first-class contributor. Everything you need is
-three documents and one command:
+four documents and one command:
 
 - `docs/INVARIANTS.md` — the thirteen laws, the four-noun execution kernel,
   and the never list. Read first; a change that violates one is wrong even if
@@ -10,6 +10,9 @@ three documents and one command:
   durable control plane, manifest, effects, registry, journal, milestones, and
   failure tests.
 - `docs/CONTRIBUTING.md` — one page per extension kind.
+- `docs/AGENT_HANDOFF.md` — what recent slices actually established, what they
+  deliberately did not, and which reported facts turned out to be wrong. Read
+  it when arriving cold; it is context, never a task ledger.
 
 ```bash
 uv run verify        # ruff + mypy --strict + import-linter + pytest — what CI runs
@@ -81,3 +84,77 @@ docs/adr/        history by reference — why things are the way they are
 - **Frozen decisions stay frozen.** The never list and ADRs are not reopened
   because an implementation detail feels inconvenient — make the implementation
   satisfy the invariant.
+- **Frozen bytes stay frozen too.** An accepted plan was accepted *as written*,
+  so its bytes are the approved artifact, not a description of one. Current
+  status lives in `docs/plans/README.md` and the living implementation record;
+  preserved pre-decision wording inside a plan is history, not a stale status
+  to correct. Editing it destroys the thing that was approved.
+
+## What the gate does not cover
+
+`uv run verify` is ruff, mypy, import-linter and pytest. Everything below is
+real and passes a green gate, so it is yours to check by hand.
+
+- **`docs/plans/MANIFEST.sha256` is unchecked.** Change any document under
+  `docs/plans/` and refresh its digest in the same commit, then verify all of
+  them with `sha256sum --check MANIFEST.sha256` from that directory.
+- **`scripts/` is linted and type-checked by nothing.** ruff covers `src` and
+  `tests`; mypy covers `src/constructicon`. Pytest is different: `testpaths`
+  limits *discovery*, not what a test may import, and tests do import scripts —
+  `tests/test_m8_runner_qualification.py` exercises `scripts.ci.qualify_m8_runner`
+  directly and reads its source and policy bytes. So a script a test imports is
+  covered by that test; a script no test imports has only its mutation
+  inventory, and the inventories themselves are neither linted, type-checked
+  nor collected.
+- **Workflows never execute locally.** A change to `.github/workflows/` is
+  tested only by CI, so the PR's own run is the first execution.
+- **Never `ruff format` a pre-existing file.** The repository is not
+  format-clean and the gate runs `ruff check` only; a format pass drags
+  unrelated reflows into the diff.
+- **Set `PYTHONIOENCODING=utf-8`** or import-linter falsely reports FAILED
+  under cp1252 on Windows.
+
+## Evidence
+
+The recurring failure in this repository is not a wrong answer; it is an
+absence of evidence read as a positive result. Each rule below was bought.
+
+- **A negative inference is not a positive fact.** An empty fault list can mean
+  "the check passed" *and* "the code died before recording anything". An id
+  match can mean "this is the reply" *and* "something guessed the id". Record
+  the fact affirmatively, or write the limit down and pin it with an assertion.
+- **A test that never ran is not evidence**, exactly as an unmeasured mutant is
+  not a kill. Report written-but-unexecuted work as unverified, and prefer
+  substituting only the platform-bound primitive so the test actually runs.
+- **A mutant that errors is not a kill.** `scripts/_mutations.py` requires an
+  assertion failure and reports NOT PROVEN otherwise, correctly. Sharpen the
+  test rather than dropping the mutant. It also dedents the target's source, so
+  a multi-line replacement is written at four spaces.
+- **A bound needs an input where the bound binds**, or its mutant survives
+  against a case too small to reach it.
+- **Test the accepting path from the first commit.** A suite whose checks all
+  drive a refusal proves nothing about what it permits, and the permitting path
+  is where real data is published.
+- **Review what state exists when each `await` resumes** — before implementing,
+  not after. Something buffered, latched or aborted between two steps, which a
+  later step assumes cannot be there, is the defect class that survives both a
+  green gate and a full inventory.
+- **Bound public surfaces by invariant, not site by site.** Walk every field of
+  the published outcome and assert each against its declared bound; a rule
+  fails when a *new* site appears, a site-by-site fix only after someone finds
+  it.
+
+## Review
+
+- **A review is a claim.** Reproduce its premise against source before acting.
+  Premises here have been false, and one correct-sounding finding would have
+  removed a live guard.
+- **Classify every finding** as introduced, pre-existing, or a design choice you
+  disagree with. Only the first two block. **Record what you reject and why**,
+  beside what you adopt, or it gets re-litigated.
+- **Expect a defect inside the fix.** Every review round on N2 found one in the
+  previous round's fix — four for four. A narrow follow-up pass attacking only
+  the newest change is cheap and has paid for itself every time.
+- **Read the PR conversation, review comments and reviews before marking ready
+  or merging.** Unaddressed comments block. "One instance found" and "one
+  instance exists" are different claims: check the class, not the report.

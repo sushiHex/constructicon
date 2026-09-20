@@ -73,6 +73,11 @@ what remains, and the exact blocker or next action. Release/reconfirm ownership
 as appropriate. Restore `ready` only if the work is actually available and
 unblocked. Issue comments are handoffs and decisions, not raw session logs.
 
+A *pause* hands over in the issue. A *merge* adds one entry to
+`docs/AGENT_HANDOFF.md`: what the slice established, what it deliberately did
+not, and any reported fact that turned out to be wrong. That file carries what
+outlives an issue and holds no open work — the issue keeps that.
+
 ## Implement, review, close
 
 1. Read the issue, dependencies, linked plan, and accepted decisions. Inspect
