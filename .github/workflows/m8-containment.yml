@@ -155,10 +155,10 @@ jobs:
               M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
               M8_CODEX_BINARY=/var/lib/constructicon-m8-launch/native-codex/bin/codex \
               M8_CODEX_CATALOG=/var/lib/constructicon-m8-launch/codex-models.json \
-              M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
+              M8_EVIDENCE_DIRECTORY="$2" \
               "$1/.venv/bin/python" -m pytest tests/substrate/test_native_codex_mediation.py \
                 -v --tb=short -p no:cacheprovider
-          ' sh "$PWD"
+          ' sh "$PWD" "$M8_EVIDENCE"
           uv run python scripts/check_native_codex_probe_mutations.py
       - name: Prove containment as the non-sudo service user
         shell: bash
