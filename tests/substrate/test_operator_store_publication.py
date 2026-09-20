@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import stat
 from dataclasses import replace
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -141,7 +140,9 @@ def test_existing_lock_requires_its_exact_fixed_mode(monkeypatch):
 
 
 @pytest.mark.parametrize("fault", ["mode", "uid"])
-def test_reader_refuses_a_wrong_fixed_child_mode_or_store_lock_owner(monkeypatch, fault):
+def test_reader_refuses_a_wrong_fixed_child_mode_or_store_lock_owner(
+    tmp_path, monkeypatch, fault,
+):
     identities = [
         _identity("root"),
         replace(_identity("bundle"), mode=0o700 if fault == "mode" else 0o750),
@@ -165,12 +166,12 @@ def test_reader_refuses_a_wrong_fixed_child_mode_or_store_lock_owner(monkeypatch
     monkeypatch.setattr(operator_store, "_close", closed.append)
 
     with pytest.raises(ContractViolation, match="fixed layout"):
-        operator_store._open_bundle(Path("C:/trusted"), "a" * 64)
+        operator_store._open_bundle(tmp_path.resolve(), "a" * 64)
     assert closed == [14, 13, 12, 11, 10]
 
 
-def test_oversized_publisher_metadata_refuses_before_any_immutable_write(monkeypatch):
-    root = Path("C:/trusted")
+def test_oversized_publisher_metadata_refuses_before_any_immutable_write(tmp_path, monkeypatch):
+    root = tmp_path.resolve()
     identities = [
         replace(_identity("bundle"), mode=0o750),
         replace(_identity("store"), mode=0o700),
