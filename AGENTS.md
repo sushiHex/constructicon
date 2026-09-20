@@ -98,9 +98,14 @@ real and passes a green gate, so it is yours to check by hand.
 - **`docs/plans/MANIFEST.sha256` is unchecked.** Change any document under
   `docs/plans/` and refresh its digest in the same commit, then verify all of
   them with `sha256sum --check MANIFEST.sha256` from that directory.
-- **`scripts/` is outside every step.** mypy covers `src/constructicon`, ruff
-  covers `src` and `tests`, pytest's testpaths is `tests`. Running a mutation
-  inventory is its only validation.
+- **`scripts/` is linted and type-checked by nothing.** ruff covers `src` and
+  `tests`; mypy covers `src/constructicon`. Pytest is different: `testpaths`
+  limits *discovery*, not what a test may import, and tests do import scripts —
+  `tests/test_m8_runner_qualification.py` exercises `scripts.ci.qualify_m8_runner`
+  directly and reads its source and policy bytes. So a script a test imports is
+  covered by that test; a script no test imports has only its mutation
+  inventory, and the inventories themselves are neither linted, type-checked
+  nor collected.
 - **Workflows never execute locally.** A change to `.github/workflows/` is
   tested only by CI, so the PR's own run is the first execution.
 - **Never `ruff format` a pre-existing file.** The repository is not

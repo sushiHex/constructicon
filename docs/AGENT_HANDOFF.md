@@ -86,8 +86,7 @@ buffered and judged once the reply names the turn.
 
 ## The M8-D2 private Linux host
 
-**Provisioned 2026-09-20. Issue #73. Not qualified, and that is a decision
-awaiting the owner, not an unfinished task.**
+**Provisioned 2026-09-20. Issue #73 owns its status and what remains.**
 
 `constructicon-m8` is a Hyper-V VM: Ubuntu 24.04.5, kernel 6.8.0-139, key-only
 SSH, bubblewrap `0.9.0-1ubuntu0.3` held with its digest verified, AppArmor
@@ -100,9 +99,10 @@ start/stop, no daemon — and its address is DHCP, so nothing should hardcode it
 containment workflow checks out `pull_request.head.sha` and executes it as root,
 installing that checkout's AppArmor policy. Any PR would therefore run as root on
 the machine holding the subscription credential. No authorization mechanism
-repairs that, because the untrusted input *is* the code being executed. The
-recommendation on #73 is three roles across two hosts, with the credential host
-supplied reviewed, pinned artifacts rather than a checkout.
+repairs that, because the untrusted input *is* the code being executed. #73
+carries the recommendation that followed — three roles across two hosts, with
+the credential host supplied reviewed, pinned artifacts rather than a checkout —
+and owns the decision on it.
 
 **A proposal that was withdrawn.** A root-owned authorization marker was proposed
 to replace the `RUNNER_ENVIRONMENT == "github-hosted"` gate, and withdrawn: a
