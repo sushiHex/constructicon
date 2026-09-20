@@ -76,6 +76,11 @@ MUTANTS = (
         (label, MODULE + "qualify", condition, "True", TESTS + test)
         for label, condition, test in (
             (
+                "architecture requirement",
+                'platform.machine() == "x86_64"',
+                "test_an_architecture_the_launcher_cannot_use_never_qualifies",
+            ),
+            (
                 "root refusal",
                 "uid != 0 and gid != 0",
                 "test_root_is_never_a_qualification_fallback",

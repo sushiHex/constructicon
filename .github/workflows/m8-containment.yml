@@ -17,6 +17,13 @@ jobs:
     # Run 34659442292 took 19m39s. Keep job headroom separate from the
     # unchanged per-invocation deadlines and byte/connection budgets.
     timeout-minutes: 30
+    env:
+      # Run-scoped, so evidence can never outlive the run that produced it. A
+      # fixed directory is harmless while the runner is destroyed afterwards,
+      # but a run that fails before writing its evidence would otherwise leave
+      # the previous run's file to be uploaded and read as current — and
+      # `if-no-files-found: error` would not fire, because a file is present.
+      M8_EVIDENCE: /home/m8-service/evidence/${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -48,7 +55,8 @@ jobs:
           sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" scripts/ci/build_m8_runtime.py /var/lib/constructicon-m8-launch/runtime \
             | tee "$RUNNER_TEMP/m8-runtime.json"
           sudo install -m 0444 "$RUNNER_TEMP/m8-runtime.json" /var/lib/constructicon-m8-launch/runtime.json
-          sudo install -d -o m8-service -g m8-service -m 0755 /home/m8-service/evidence
+          test ! -e "$M8_EVIDENCE"
+          sudo install -d -o m8-service -g m8-service -m 0755 "$M8_EVIDENCE"
           sudo chmod o+x /home/runner /home/runner/work /home/runner/work/constructicon
       - name: Acquire the pinned native investigation artifact (no account)
         shell: bash
@@ -81,7 +89,7 @@ jobs:
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
             M8_STARTUP_REQUIRED=1 M8_STARTUP_ROOT=/var/lib/constructicon-m8-launch/startup-runtime \
-            M8_EVIDENCE_DIRECTORY=/home/m8-service/evidence \
+            M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_native_startup.py -v --tb=short -p no:cacheprovider
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
@@ -101,7 +109,7 @@ jobs:
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
             M8_PLACEMENT_REQUIRED=1 M8_PLACEMENT_ROOT=/var/lib/constructicon-m8-launch/placement-runtime \
-            M8_EVIDENCE_DIRECTORY=/home/m8-service/evidence \
+            M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_provider_placement.py \
               tests/test_native_provider.py tests/test_provider_placement.py -v --tb=short -p no:cacheprovider
           uv run python scripts/check_m8_placement_mutations.py
@@ -112,7 +120,7 @@ jobs:
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
             M8_PLACEMENT_REQUIRED=1 M8_PLACEMENT_ROOT=/var/lib/constructicon-m8-launch/placement-runtime \
-            M8_EVIDENCE_DIRECTORY=/home/m8-service/evidence \
+            M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_native_recovery.py \
               tests/test_native_lifecycle.py -v --tb=short -p no:cacheprovider
           uv run python scripts/check_m8_native_recovery_mutations.py
@@ -124,7 +132,7 @@ jobs:
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
             M8_PLACEMENT_REQUIRED=1 M8_PLACEMENT_ROOT=/var/lib/constructicon-m8-launch/placement-runtime \
             M8_CODEX_CATALOG=/var/lib/constructicon-m8-launch/codex-models.json \
-            M8_EVIDENCE_DIRECTORY=/home/m8-service/evidence \
+            M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_native_combined.py \
               tests/substrate/test_combined_startup_origins.py tests/test_native_combined.py \
               tests/substrate/test_combined_sender.py tests/substrate/test_codex_native.py \
@@ -147,10 +155,10 @@ jobs:
               M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
               M8_CODEX_BINARY=/var/lib/constructicon-m8-launch/native-codex/bin/codex \
               M8_CODEX_CATALOG=/var/lib/constructicon-m8-launch/codex-models.json \
-              M8_EVIDENCE_DIRECTORY=/home/m8-service/evidence \
+              M8_EVIDENCE_DIRECTORY="$2" \
               "$1/.venv/bin/python" -m pytest tests/substrate/test_native_codex_mediation.py \
                 -v --tb=short -p no:cacheprovider
-          ' sh "$PWD"
+          ' sh "$PWD" "$M8_EVIDENCE"
           uv run python scripts/check_native_codex_probe_mutations.py
       - name: Prove containment as the non-sudo service user
         shell: bash
@@ -159,7 +167,7 @@ jobs:
           cat "$RUNNER_TEMP/m8-host.txt"
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
-            M8_EVIDENCE_DIRECTORY=/home/m8-service/evidence \
+            M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_linux_containment.py \
               tests/substrate/test_contained_workspace.py tests/substrate/test_acquisition_closure.py \
               tests/substrate/test_recorded_executor.py \
@@ -203,9 +211,9 @@ jobs:
             ${{ runner.temp }}/m8-startup-runtime.json
             ${{ runner.temp }}/m8-placement-runtime.json
             ${{ runner.temp }}/m8-host.txt
-            /home/m8-service/evidence/boundary.json
-            /home/m8-service/evidence/codex-*.json
-            /home/m8-service/evidence/duplex-*.json
+            ${{ env.M8_EVIDENCE }}/boundary.json
+            ${{ env.M8_EVIDENCE }}/codex-*.json
+            ${{ env.M8_EVIDENCE }}/duplex-*.json
           if-no-files-found: error
           retention-days: 7
       - name: Report bounded launch-policy denials
