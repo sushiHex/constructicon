@@ -89,9 +89,13 @@ from constructicon.core.workspace import (
 from constructicon.substrate.executors import codex_protocol
 from constructicon.substrate.executors.codex_protocol import (
     ACCOUNT_NOTICE_FAULT,
+    ANSWERED_NOTHING_FAULT,
     DAMAGE_NESTING,
+    DUPLICATE_REPLY_FAULT,
     EMPTY_TURN,
     GATE_INCOMPLETE_FAULT,
+    INCONCLUSIVE_DRAIN_FAULT,
+    UNSOLICITED_REPLY_FAULT,
     ExpectedAccount,
     RecordDamaged,
     RecordStream,
@@ -127,6 +131,9 @@ NATIVE_CWD = "/tmp"
 """The native zone has no workspace; the launcher already chdirs here."""
 
 APP_SERVER_ARGUMENTS = ("app-server", "--strict-config", "--stdio")
+
+WITHHELD_METHODS = 16
+"""How many withheld method names to retain for reporting."""
 
 INGRESS_NOT_ESTABLISHED = "private fixed-actor ingress is not established by assembly"
 UNQUALIFIED_PREREQUISITES: tuple[str, ...] = (
@@ -264,9 +271,15 @@ class CodexConversation:
         self._transcript: list[bytes] = []
         self._collecting = False
         self._spent = 0
+        self._allocated: set[int] = set()
         self._correlated: set[int] = set()
+        self._deferred: bytes | None = None
         self._pre_send_record = False
         self._excluded = 0
+        # Classified and bounded: what the session emitted before the turn
+        # existed is a fact about the pinned interface worth reporting, and
+        # the native lane records it.
+        self.withheld_methods: list[str] = []
         self._entered = False
         self.faults: tuple[str, ...] = ()
         self.gate_completed = False
@@ -282,6 +295,11 @@ class CodexConversation:
             # with no incomplete-gate fault. ``materialize`` already guards entry
             # this way, and this callable is advertised to a second consumer, so
             # the asymmetry is the argument for the guard.
+            # Before the raise: this precedes the ``try``, so the ``finally``
+            # does not run and the first run's faults, latch and observation
+            # survive. A caller that swallowed the raise would otherwise publish
+            # run one's output against run two's result.
+            self._refuse("a codex conversation drives one byte scope only")
             raise ContractViolation("a codex conversation drives one byte scope only")
         self._entered = True
         try:
@@ -324,7 +342,69 @@ class CodexConversation:
 
     def _next_identifier(self) -> int:
         self._identifier += 1
+        self._allocated.add(self._identifier)
         return self._identifier
+
+    def _owned(self, identifier: Any) -> bool:
+        """Whether this conversation allocated that id.
+
+        Ownership, not record shape, is what separates an attack on the gate from
+        unsolicited noise. Shape was an inference: one extra ``method`` key moved
+        a pre-send forgery from refusal to demotion, because the shape test ran
+        first. An id we allocated is the id a forger can predict, and that is the
+        positive fact worth keying on.
+        """
+
+        return _hashable(identifier) and identifier in self._allocated
+
+    def _judge_identified(
+        self, line: bytes, record: Mapping[str, Any], *, context: str,
+        awaiting: int | None = None,
+    ) -> bool:
+        """The one rule for an id-bearing record, applied at every site.
+
+        Four sites can meet one — the pre-send drain, the reply loop, the turn
+        collector and the drain to EOF — and each used to decide for itself, which
+        is why ``_once`` was untrue in three places. They all route through here.
+
+        Two facts are used, each for a stated reason, and the order matters.
+        **Ownership** decides whether the record attacks our correlation: an id we
+        allocated is ours, so a second answer to it is a duplicate and an answer
+        arriving where none is awaited is an ordering violation. Both are aimed at
+        the gate, so both refuse and discard the turn's result.
+
+        Only then does the **method key** matter, and only to separate two kinds of
+        unowned record: one *without* a method is a reply answering a request that
+        does not exist — a protocol violation, refused, because letting it pass as
+        noise made the loop wait for a reply that never comes and publish a
+        deadline when the real cause was a violation. One *with* a method is a
+        native request this slice authorizes nowhere: damage, so the result is
+        demoted rather than discarded — trust in the output degraded, the gate's
+        authority did not.
+
+        This is not the shape heuristic it replaced. There the method key decided
+        the severity of a record whose id we *owned*, which was wrong because
+        ownership is what made it an attack. Here ownership is settled first and
+        the method key only distinguishes "you answered nothing" from "you asked
+        for a callback". A simplification that collapses the two will re-break it.
+        """
+
+        identifier = record["id"]
+        if not self._owned(identifier):
+            if "method" not in record:
+                self._refuse(ANSWERED_NOTHING_FAULT)
+                return False
+            # The fold counts it from the transcript. At the drain to EOF the
+            # observation is already folded, so this is a no-op there, which is
+            # harmless: an unsolicited request at EOF changes no verdict.
+            self._transcript.append(line)
+            return True
+        if not self._once(identifier):
+            return False
+        if awaiting is not None and identifier == awaiting:
+            return True  # the reply we are waiting for; the caller checks it
+        self._refuse(f"{UNSOLICITED_REPLY_FAULT}: {context}")
+        return False
 
     def _classify(self, line: bytes, *, method: str) -> Mapping[str, Any] | None:
         """One record's shape while a reply is outstanding, or ``None`` if refused."""
@@ -358,12 +438,31 @@ class CodexConversation:
         # but it must not vanish either. Counting it here is what keeps the
         # ordering boundary from becoming the adapter's one silent exclusion.
         if record.get("method") == "turn/completed":
-            # A child cannot complete a turn whose id we have not been told. The
-            # old code dropped this and then waited for it, so a completed turn
-            # published as a timeout.
-            self._refuse("a native turn completed before it was named")
-            return False
+            # Held, not judged. Refusing this rested on an assumption about the
+            # pin that nothing here verifies: if the app-server emits a turn's
+            # notifications before the ``turn/start`` response, every live turn
+            # would refuse, and no test in this repository would show it — the
+            # native lanes both refuse at the pre-turn gate. The probe's own wire
+            # skips notifications while awaiting a response
+            # (``tests/native_codex_probe.py``), so whoever wrote it expected the
+            # interleaving. The containment lane then observed it directly: the
+            # pinned app-server emits notifications before any turn exists, which
+            # is recorded in ``withheld_methods``. A server that does that is not
+            # one to bet on about reply-versus-notification ordering, so the
+            # deferral rests on an observation rather than on caution.
+            #
+            # Deferring removes the assumption instead of betting on it, and still
+            # fixes the hang, because the record is no longer discarded and then
+            # waited for. One record of buffer is enough:
+            # a second unattributable completion is a protocol violation.
+            if self._deferred is not None:
+                self._refuse("two turn completions arrived before either was named")
+                return False
+            self._deferred = line
+            return True
         self._excluded += 1
+        if len(self.withheld_methods) < WITHHELD_METHODS:
+            self.withheld_methods.append(named_method(record.get("method")))
         return True
 
     def _drain_before(self, method: str) -> bool:
@@ -391,9 +490,9 @@ class CodexConversation:
         applies to that first one only and then clears.
 
         **What this does not reach.** A client that forges a reply and then
-        suppresses its own genuine one. The duplicate-id rule below catches every
-        confused client, because a confused client still answers the real request;
-        only deliberate suppression escapes, and no correlation rule reaches it
+        suppresses its own genuine one. The duplicate-id rule below catches a
+        confused client that answers the real request, and refuses when it cannot
+        complete that check; deliberate suppression escapes, and no rule reaches it
         because the vendor authors the reply's *content*, not merely its timing —
         a client willing to forge could instead answer the real request with a
         lie. The gate trusts the session's report of its own mode.
@@ -404,20 +503,12 @@ class CodexConversation:
             record = self._classify(line, method=method)
             if record is None:
                 return False
-            if "id" in record and "method" in record:
-                # A native request, which this slice authorizes nowhere. Damage,
-                # exactly as it is mid-turn: trust in the output degraded, but the
-                # gate's authority is not in question, so the result is demoted
-                # rather than discarded. The fold counts it from the transcript.
-                self._transcript.append(line)
-                continue
             if "id" in record:
-                # A reply, and a reply found before its request is aimed at the
-                # gate, so this refuses and discards the turn's result.
-                self._refuse(
-                    f"a reply arrived before the {method!r} request it claims to answer"
-                )
-                return False
+                if not self._judge_identified(
+                    line, record, context=f"the {method!r} request",
+                ):
+                    return False
+                continue
             if not self._absorb(line, record):
                 return False
         self._pre_send_record = bool(self._stream.pending)
@@ -494,10 +585,15 @@ class CodexConversation:
                     f"a reply arrived before the {method!r} request it claims to answer"
                 )
                 return None
-            if not self._once(record["id"]):
+            if not self._judge_identified(
+                line, record, context=f"the {method!r} request", awaiting=identifier,
+            ):
                 return None
-            if type(record["id"]) is not int or record["id"] != identifier:
-                self._refuse(f"a reply does not correlate with the {method!r} request")
+            if type(record["id"]) is not int:
+                # Reachable although ownership already passed: ``1.0 in {1}`` is
+                # true, so a float can be "owned" and equal to an awaited int. The
+                # wire form still has to be the one the protocol specifies.
+                self._refuse(f"a reply to {method!r} carries a non-integer id")
                 return None
             if ("result" in record) == ("error" in record):
                 self._refuse(f"the {method!r} reply carries neither a result nor an error")
@@ -508,18 +604,45 @@ class CodexConversation:
     def _once(self, identifier: Any) -> bool:
         """No second record may bear an id already correlated.
 
-        The stronger of the two ordering rules, and the one that closes the
-        buggy-or-confused client completely: such a client still answers the real
-        request, so its genuine reply arrives as a duplicate of the forged id and
-        is refused wherever it appears — including the drain to EOF, since a
-        fault appended there still reaches the handle. ``__call__``'s ``finally``
-        runs before ``exchange`` returns.
+        The stronger of the two ordering rules: a confused client still answers
+        the real request, so its genuine reply arrives as a duplicate of the
+        forged id. It is applied at the reply site and in the drain to EOF, and a
+        fault raised in either reaches the handle, because ``__call__``'s
+        ``finally`` completes before ``exchange`` returns.
+
+        What is tested, rather than a claim about the class: a duplicate arriving
+        immediately, behind unterminated bytes, and behind an oversized record;
+        and an id that is not an integer at either site. A drain that cannot be
+        completed refuses in its own right, so a shape not listed here fails
+        closed rather than passing silently — but that is a property of the
+        inconclusive rule, not a proof that no other shape exists.
         """
 
+        # Hashability is guaranteed by ``_owned``, which is the only caller and
+        # tests it first. Membership rather than type is deliberate: ``1.0 in {1}``
+        # and ``True in {1}`` are both true, so a duplicate spelled ``1.0`` or
+        # ``true`` against a correlated ``1`` is caught, and an ``int``-only guard
+        # would have narrowed the rule while fixing the TypeError.
         if identifier in self._correlated:
-            self._refuse("a second native reply bears an id already answered")
+            self._refuse(DUPLICATE_REPLY_FAULT)
             return False
         return True
+
+    def _audit(self, line: bytes) -> bool:
+        """Apply the duplicate-id rule to one drained record.
+
+        Returns whether the record left the check inconclusive: bytes we could not
+        decode mean we cannot say whether a duplicate was among them.
+        """
+
+        try:
+            record = parse_record(line)
+        except RecordDamaged:
+            return True
+        if not isinstance(record, dict) or "id" not in record:
+            return False
+        self._judge_identified(line, record, context="the drain to EOF")
+        return False
 
     async def _finish(self, io: ProcessIO) -> None:
         """Close stdin and drain to EOF, applying the duplicate-id rule.
@@ -535,14 +658,41 @@ class CodexConversation:
 
         with suppress(ContractViolation, OSError):
             await io.close_stdin()
-        with suppress(ContractViolation, OSError):
-            while (line := await self._read(io)) is not None:
-                try:
-                    record = parse_record(line)
-                except RecordDamaged:
-                    continue
-                if isinstance(record, dict) and "id" in record:
-                    self._once(record["id"])
+        # Framing its own way rather than through ``_read``, which stops at the
+        # first damage — inheriting that stop let four unterminated bytes end the
+        # drain before the duplicate arrived, and the turn published as a success.
+        # Records already framed sit in the queue, so they are audited first.
+        before = self._stream.damage
+        damaged: list[bool] = []
+        inconclusive = True  # until the drain reaches EOF, it has not completed
+        try:
+            with suppress(ContractViolation, OSError):
+                while True:
+                    if self._queue:
+                        lines, self._queue, ended = self._queue, [], False
+                    else:
+                        chunk = await io.read(self._stream.next_read())
+                        lines, ended = self._stream.feed(chunk), not chunk
+                    for line in lines:
+                        if self._audit(line):
+                            damaged.append(True)
+                    if self._stream.damage is not None and self._stream.damage != before:
+                        damaged.append(True)
+                    if ended:
+                        inconclusive = bool(damaged)
+                        break
+        finally:
+            # In a ``finally`` and defaulting to true, so the rule holds on every
+            # way out of the drain and not only the clean ones — an exception
+            # leaving here used to route around it entirely.
+            #
+            # The fault, not the observation, is the channel that reaches the
+            # outcome: ``__call__`` folds the observation *before* awaiting this,
+            # so damage first seen here reaches no field, while faults are read by
+            # the handle after ``exchange`` returns. Do not route this through
+            # ``transport_damage``; it would be silently dropped.
+            if inconclusive:
+                self._refuse(INCONCLUSIVE_DRAIN_FAULT)
 
     # -- the conversation -----------------------------------------------------
 
@@ -623,7 +773,8 @@ class CodexConversation:
         if self.turn_id is None:
             self._refuse("the native client started no identified turn")
             return
-        await self._collect(io)
+        if not self._claim_deferred():
+            await self._collect(io)
 
         after = await self._account(io)
         if after is None:
@@ -635,6 +786,22 @@ class CodexConversation:
         # The gate ran to its end. Nothing earlier may set this: every path that
         # does not reach here leaves a result unacceptable.
         self.gate_completed = True
+
+    def _claim_deferred(self) -> bool:
+        """Evaluate a completion held from before the turn was named.
+
+        Now that the reply has named the turn the record is attributable, so it is
+        judged rather than waited for: this turn's terminal record if it names
+        this turn, and damage through the ordinary fold if it names another.
+        Returns whether the turn is already complete.
+        """
+
+        line, self._deferred = self._deferred, None
+        if line is None:
+            return False
+        assert self.thread_id is not None and self.turn_id is not None
+        self._transcript.append(line)
+        return is_terminal_record(line, thread_id=self.thread_id, turn_id=self.turn_id)
 
     async def _collect(self, io: ProcessIO) -> None:
         assert self.thread_id is not None and self.turn_id is not None
@@ -648,11 +815,14 @@ class CodexConversation:
                 # Damaged bytes are the fold's business, not a refusal here.
                 self._transcript.append(line)
                 continue
-            if isinstance(record, dict) and "id" not in record and "method" in record:
+            if isinstance(record, dict) and "id" in record:
+                if not self._judge_identified(line, record, context="this turn"):
+                    return
+            elif isinstance(record, dict) and "method" in record:
                 if not self._absorb(line, record):
                     return
             else:
-                # A reply or a native request inside a turn: the fold counts it.
+                # Neither a reply nor a notification: the fold counts it.
                 self._transcript.append(line)
             if is_terminal_record(line, thread_id=self.thread_id, turn_id=self.turn_id):
                 return
@@ -778,6 +948,22 @@ class CodexOperatorHandle:
                 conversation.faults, conversation.observation, result, requested_model=requested,
             )
         return decode_turn(conversation.observation, result, requested_model=requested)
+
+
+def _hashable(value: Any) -> bool:
+    """Whether a wire value can be a set member at all.
+
+    ``parse_record`` admits any JSON value as an ``id``, and an object or a list
+    raises ``unhashable type`` from a membership test — which escaped the byte
+    scope, was converted by the launcher into a ``ProcessExchangeError`` carrying
+    a clean result, and published the turn as a success.
+    """
+
+    try:
+        hash(value)
+    except TypeError:
+        return False
+    return True
 
 
 def _unavailable(detail: str, grants: EffectiveGrants) -> ExecutorFailure:

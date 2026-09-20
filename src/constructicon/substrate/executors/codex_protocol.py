@@ -379,6 +379,21 @@ PROVIDER_OVERRIDE_FAULT = (
 )
 NO_PLAN_FAULT = "the account carries no plan fact"
 
+UNSOLICITED_REPLY_FAULT = "a reply arrived before the request it claims to answer"
+ANSWERED_NOTHING_FAULT = "a native reply answers no request this conversation made"
+DUPLICATE_REPLY_FAULT = "a second native reply bears an id already answered"
+
+INCONCLUSIVE_DRAIN_FAULT = (
+    "the duplicate-reply check could not be completed, so no result may be accepted"
+)
+"""An unfinished check is not a pass.
+
+The drain to EOF is the primary defence against a client answering one request
+twice, so damage that stops it short leaves us unable to prove no duplicate
+arrived. This slice already refuses to count an unmeasured mutant as a kill or a
+test that never ran as evidence; the same rule applies here.
+"""
+
 GATE_INCOMPLETE_FAULT = (
     "the subscription-mode gate did not complete, so no result may be accepted"
 )
@@ -765,7 +780,7 @@ def _bounded_transcript(kept: Sequence[str], unclassified: int) -> str:
             f"{dropped} further records not shown]"
         )
     if unclassified:
-        transcript.append(f"[{unclassified} records excluded as unclassified]")
+        transcript.append(f"[{unclassified} records withheld from this turn]")
     return "\n".join(transcript)
 
 

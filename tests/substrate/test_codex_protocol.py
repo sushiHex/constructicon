@@ -694,7 +694,7 @@ def test_the_item_namespace_is_excluded_and_says_so_rather_than_going_silent():
                for index in range(37)]
     observation = folded([*records, record(completed())])
     assert "item/started" not in observation.raw
-    assert "[37 records excluded as unclassified]" in observation.raw
+    assert "[37 records withheld from this turn]" in observation.raw
     # Our own classification is not transport damage.
     assert observation.malformed_records == 0 and observation.first_error is None
     assert decode_turn(observation, Facts(), requested_model=None).status == "success"
@@ -702,7 +702,7 @@ def test_the_item_namespace_is_excluded_and_says_so_rather_than_going_silent():
 
 def test_a_fully_classified_turn_carries_no_exclusion_marker():
     observation = folded([record({"method": "turn/delta"}), record(completed())])
-    assert "excluded as unclassified" not in observation.raw
+    assert "withheld from this turn" not in observation.raw
 
 
 def test_the_transcript_is_bounded_and_says_how_much_it_dropped():

@@ -137,7 +137,8 @@ class ScriptedNative:
     def __init__(self, *, accounts, records=(), thread=THREAD, turn=TURN, initialize=None,
                  hangs_up_after_turn=False, preamble=(), ends_after_preamble=False,
                  read_fails=None, fails_on_nth_account=None, tail=b"", early=(),
-                 after_thread=(), duplicate_last_reply=False, read_limit=None):
+                 after_thread=(), duplicate_last_reply=False, read_limit=None,
+                 wedge=b"", reply_id=None, trailing=(), ends_after_initialize=False):
         # ``read_fails`` models a transport the adapter does not expect: an
         # exception type no layer catches, which is how a conversation aborts
         # without recording anything.
@@ -146,6 +147,15 @@ class ScriptedNative:
         self.early = list(early)
         self.after_thread = list(after_thread)
         self.duplicate_last_reply = duplicate_last_reply
+        # Bytes inserted between the two replies: an unterminated prefix or an
+        # oversized record used to end the drain before the duplicate arrived.
+        self.wedge = wedge
+        # A wire id of any JSON shape, which must never reach a hash.
+        self.reply_id = reply_id
+        # Emitted with the final reply, so they are only ever seen by the
+        # drain to EOF rather than by the pre-send ordering rule.
+        self.trailing = list(trailing)
+        self.ends_after_initialize = ends_after_initialize
         # A small cap makes the adapter read part of a record and then stop,
         # which is the state the pre-send marker exists for.
         self.read_limit = read_limit
@@ -194,6 +204,8 @@ class ScriptedNative:
             self._emit({"id": identifier, **(self.initialize or {"result": {"ok": True}})})
             for value in self.early:
                 self._emit(value)
+            if self.ends_after_initialize:
+                self.eof = True
         elif method == "account/read":
             self.accounts_seen += 1
             if self.accounts_seen == self.fails_on_nth_account:
@@ -204,10 +216,20 @@ class ScriptedNative:
                 self.eof = True  # the child exited before answering
                 self.changed.set()
                 return
-            reply = {"id": identifier, **self.accounts.pop(0)}
+            entry = self.accounts.pop(0)
+            if self.reply_id is not None and not self.accounts:
+                self._emit({"id": self.reply_id, **entry})
+                self.eof = True  # nothing further will answer the real request
+                return
+            reply = {"id": identifier, **entry}
             self._emit(reply)
             if self.duplicate_last_reply and not self.accounts:
+                if self.wedge:
+                    self.pending.extend(self.wedge)  # deliberately unframed
                 self._emit(reply)  # the same id, answered twice
+            if not self.accounts:
+                for value in self.trailing:
+                    self._emit(value)
         elif method == "thread/start":
             self._emit({"id": identifier, "result": {"thread": {"id": self.thread}}})
             for value in self.after_thread:
@@ -651,9 +673,15 @@ async def test_a_reply_that_does_not_correlate_with_its_request_is_refused():
         accounts=[{"result": MANAGED_RESULT}, {"result": MANAGED_RESULT}],
         records=[completed()],
         initialize={"id": 99, "result": {"ok": True}},
+        ends_after_initialize=True,
     )
     conversation = await converse(native)
-    assert conversation.faults and any("correlate" in fault for fault in conversation.faults)
+    # A reply bearing an id we never allocated answers nothing, which is a
+    # protocol violation rather than noise — refused promptly, so the outcome names
+    # the violation instead of a deadline the loop would otherwise have waited for.
+    assert any("answers no request" in fault for fault in conversation.faults), (
+        conversation.faults
+    )
     assert "thread/start" not in native.methods
 
 
@@ -1166,19 +1194,30 @@ async def test_records_withheld_at_the_turn_boundary_are_counted_not_dropped():
     ])
     conversation = await converse(native)
     assert conversation.faults == ()
-    assert "3 records excluded as unclassified" in conversation.observation.raw
+    assert "3 records withheld from this turn" in conversation.observation.raw
 
 
-async def test_a_turn_completed_before_it_was_named_refuses_rather_than_hanging():
-    """A child cannot complete a turn whose id we were never told.
+async def test_a_turn_completed_before_it_was_named_is_deferred_not_refused():
+    """Held until the reply names the turn, then judged.
 
-    Dropping it and then waiting meant a completed turn published as a timeout
-    once the deadline fired. It is a protocol violation, so it is refused.
+    Refusing rested on an assumption about the pin that nothing here verifies: if
+    the app-server emits a turn's notifications before the ``turn/start``
+    response, refusing would fail every live turn. Deferring removes the
+    assumption and still fixes the hang, because the record is no longer
+    discarded and then waited for.
     """
-    native = clean_native(early=[completed()])
+    native = clean_native(early=[completed(output={"summary": "done"})], records=[])
     conversation = await converse(native)
-    assert any("before it was named" in fault for fault in conversation.faults)
-    assert "thread/start" not in native.methods
+    assert conversation.faults == (), conversation.faults
+    assert conversation.observation.terminal
+    assert conversation.observation.output == {"summary": "done"}
+
+
+async def test_two_completions_before_either_is_named_refuse():
+    """One record of buffer; a second is genuinely unattributable."""
+    native = clean_native(early=[completed(), completed()], records=[])
+    conversation = await converse(native)
+    assert any("two turn completions" in fault for fault in conversation.faults)
 
 
 async def test_a_native_request_in_the_drain_is_damage_not_a_refusal():
@@ -1212,6 +1251,103 @@ async def test_a_conversation_drives_one_byte_scope_only():
     assert conversation.gate_completed
     with pytest.raises(ContractViolation, match="one byte scope"):
         await conversation(clean_native())
+
+
+# --- the drain fails closed rather than falling silent ------------------------
+
+WEDGES = {
+    "nothing": b"",
+    "unterminated prefix": b'{"x"',
+    "oversized record": b"z" * (RECORD_BYTES + 16),
+}
+"""What a client can put between its two replies. The first two are the shapes
+that used to end the drain before the duplicate was read; the third is the one
+that sets framing damage."""
+
+
+@pytest.mark.parametrize("wedge", sorted(WEDGES), ids=sorted(WEDGES))
+async def test_a_twice_answered_id_is_refused_whatever_sits_between_the_replies(wedge):
+    """The drain is the primary defence, so an incomplete check is not a pass.
+
+    Four unterminated bytes used to silence it and publish the turn as a full
+    success with ``damage=None`` — the observation is folded before the drain runs,
+    so damage first seen there reaches no field. The fault is the channel.
+    """
+    native = clean_native(
+        records=[completed(output={"summary": "done"})],
+        duplicate_last_reply=True, wedge=WEDGES[wedge],
+    )
+    conversation = await converse(native)
+    assert conversation.faults, wedge
+    assert any(
+        "already answered" in fault or "could not be completed" in fault
+        for fault in conversation.faults
+    ), conversation.faults
+    outcome = unavailable_outcome(
+        conversation.faults, conversation.observation, FINISHED, requested_model=None,
+    )
+    assert outcome.status == "failure" and outcome.output is None
+
+
+@pytest.mark.parametrize("identifier", [{}, [], "five"], ids=["object", "list", "string"])
+async def test_a_non_integer_reply_id_is_refused_before_anything_hashes_it(identifier):
+    """R: ``_once`` hashes the id, and an object or a list is unhashable.
+
+    It used to raise ``TypeError`` out of the byte scope, which the drain's
+    ``suppress(ContractViolation, OSError)`` does not cover.
+    """
+    native = clean_native(records=[completed()], reply_id=identifier)
+    escaped = None
+    try:
+        conversation = await converse(native)
+    except BaseException as exc:  # nothing may escape
+        escaped = exc
+    assert escaped is None, escaped
+    # Unhashable, so it cannot be an id this conversation allocated, and it
+    # carries no method: a reply answering nothing. Refused promptly, and — the
+    # point of R — nothing reached a hash on the way.
+    assert any("answers no request" in fault for fault in conversation.faults), (
+        conversation.faults
+    )
+
+
+@pytest.mark.parametrize("identifier", [{}, []], ids=["object", "list"])
+async def test_an_unhashable_id_in_the_drain_escapes_nothing(identifier):
+    """The same shape at the other call site, which sits inside a suppress.
+
+    It used to raise ``TypeError`` there — uncovered by
+    ``suppress(ContractViolation, OSError)`` — which the launcher converted into a
+    ``ProcessExchangeError`` carrying a clean result, publishing the turn as a
+    success. It escapes nothing now, and answers no request, so it refuses.
+    """
+    native = clean_native(
+        records=[completed()], trailing=[{"id": identifier, "result": {"stray": True}}],
+    )
+    escaped = None
+    try:
+        conversation = await converse(native)
+    except BaseException as exc:
+        escaped = exc
+    assert escaped is None, escaped
+    assert any("answers no request" in fault for fault in conversation.faults), (
+        conversation.faults
+    )
+
+
+@pytest.mark.parametrize("identifier", [1.0, True], ids=["float", "bool"])
+async def test_a_duplicate_spelled_differently_is_still_refused(identifier):
+    """Hashability, not ``int``: ``1.0 in {1}`` and ``True in {1}`` are both true.
+
+    An ``int``-only guard would have fixed the escape and quietly narrowed the
+    duplicate rule, so the breadth is pinned rather than assumed.
+    """
+    native = clean_native(
+        records=[completed()], trailing=[{"id": identifier, "result": {"stray": True}}],
+    )
+    conversation = await converse(native)
+    assert any("already answered" in fault for fault in conversation.faults), (
+        conversation.faults
+    )
 
 
 # --- the handle's own behaviour, and the guard's physical properties ----------
@@ -1532,9 +1668,28 @@ async def test_a_notification_between_the_thread_and_the_turn_is_not_turn_eviden
     assert "before-the-turn" not in conversation.observation.raw
 
 
-async def test_an_unsolicited_reply_before_any_request_is_damage():
-    """The same rule with no attacker: nothing solicited that record."""
+async def test_a_reply_whose_id_is_the_awaited_int_spelled_as_a_float_is_refused():
+    """Ownership passes — ``1.0 in {1}`` is true — but the wire form must hold."""
+    native = ScriptedNative(
+        accounts=[{"result": MANAGED_RESULT}],
+        initialize={"id": 1.0, "result": {"ok": True}},
+        ends_after_initialize=True,
+    )
+    conversation = await converse(native)
+    assert any("non-integer id" in fault for fault in conversation.faults), (
+        conversation.faults
+    )
+
+
+async def test_an_unsolicited_reply_before_any_request_is_refused():
+    """The same rule with no attacker: nothing solicited that record.
+
+    Renamed once already, when ownership briefly made it damage. It answers no
+    request this conversation made, which is a violation rather than noise.
+    """
     native = clean_native(early=[{"id": 99, "result": {"unsolicited": True}}])
     conversation = await converse(native)
-    assert any("before the" in fault for fault in conversation.faults)
+    assert any("answers no request" in fault for fault in conversation.faults), (
+        conversation.faults
+    )
     assert "thread/start" not in native.methods

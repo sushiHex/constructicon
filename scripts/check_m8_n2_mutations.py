@@ -60,6 +60,9 @@ CLOSE = "constructicon.substrate.executors.codex:CodexOperatorProvider.close"
 DRAIN_BEFORE = "constructicon.substrate.executors.codex:CodexConversation._drain_before"
 ABSORB = "constructicon.substrate.executors.codex:CodexConversation._absorb"
 ONCE = "constructicon.substrate.executors.codex:CodexConversation._once"
+AUDIT = "constructicon.substrate.executors.codex:CodexConversation._audit"
+OWNED = "constructicon.substrate.executors.codex:CodexConversation._owned"
+JUDGE = "constructicon.substrate.executors.codex:CodexConversation._judge_identified"
 TURN_OF = "constructicon.substrate.executors.codex_protocol:_turn_of"
 CONFIGURED = "constructicon.substrate.executors.codex:configured_model"
 USAGE = "constructicon.substrate.executors.codex_protocol:_usage"
@@ -218,9 +221,9 @@ MUTANTS = (
     (
         "a reply must correlate with the request that earned it",
         CORRELATE,
-        'if type(record["id"]) is not int or record["id"] != identifier:',
+        'if type(record["id"]) is not int:',
         "if False:",
-        ADAPTER + "test_a_reply_that_does_not_correlate_with_its_request_is_refused",
+        ADAPTER + "test_a_reply_whose_id_is_the_awaited_int_spelled_as_a_float_is_refused",
     ),
     (
         "an executor call must match its sealed grants",
@@ -458,8 +461,8 @@ MUTANTS = (
     (
         "the drain runs to EOF",
         FINISH,
-        "while (line := await self._read(io)) is not None:",
-        "while False:",
+        "chunk = await io.read(self._stream.next_read())",
+        "chunk = b''",
         ADAPTER + "test_the_conversation_drains_to_eof_after_closing_stdin",
     ),
     (
@@ -590,9 +593,9 @@ MUTANTS = (
     ),
     (
         "the drain to eof applies the duplicate rule",
-        FINISH,
-        'if isinstance(record, dict) and "id" in record:',
-        "if False:",
+        AUDIT,
+        'self._judge_identified(line, record, context="the drain to EOF")',
+        "pass",
         ADAPTER + "test_a_duplicate_reply_id_is_refused_even_during_the_drain_to_eof",
     ),
     (
@@ -601,6 +604,41 @@ MUTANTS = (
         "self._correlated.add(record[\"id\"])",
         "pass",
         ADAPTER + "test_a_duplicate_reply_id_is_refused_even_during_the_drain_to_eof",
+    ),
+    (
+        "an incomplete duplicate check is not a pass",
+        FINISH,
+        "if inconclusive:",
+        "if False:",
+        ADAPTER + "test_a_twice_answered_id_is_refused_whatever_sits_between_the_replies",
+    ),
+    (
+        "damaged bytes leave the check inconclusive",
+        AUDIT,
+        "return True",
+        "return False",
+        ADAPTER + "test_a_twice_answered_id_is_refused_whatever_sits_between_the_replies",
+    ),
+    (
+        "the drain audits records already framed",
+        FINISH,
+        "if self._queue:",
+        "if False:",
+        ADAPTER + "test_a_twice_answered_id_is_refused_whatever_sits_between_the_replies",
+    ),
+    (
+        "an unhashable id never reaches a hash",
+        OWNED,
+        "return _hashable(identifier) and identifier in self._allocated",
+        "return identifier in self._allocated",
+        ADAPTER + "test_an_unhashable_id_in_the_drain_escapes_nothing",
+    ),
+    (
+        "an id we allocated is judged, not merely matched",
+        OWNED,
+        "identifier in self._allocated",
+        "False",
+        ADAPTER + "test_a_reply_queued_before_its_request_cannot_answer_it",
     ),
     (
         "unavailability is published, not inferred",

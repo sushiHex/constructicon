@@ -38,6 +38,7 @@ is the store-empty proof.
 """
 
 import json
+import re
 
 from constructicon.core.executor import TaskSpec
 from constructicon.core.grants import EffectiveGrants, ModelSelection, Posture
@@ -88,6 +89,10 @@ def refusal_query(held):
         observed["bootstrap"] = json.loads(bootstrap)
         observed["codex_faults"] = list(conversation.faults)
         observed["codex_transcript"] = conversation.observation.raw
+        # New information about the pinned interface: which notifications the
+        # app-server emits before a turn exists. Recorded rather than asserted,
+        # because this lane is the only place it is observable.
+        observed["codex_withheld_methods"] = list(conversation.withheld_methods)
 
     return query
 
@@ -102,8 +107,17 @@ async def refuse(image, guard_root, *, config=None):
     assert held, "the adapter conversation never ran"
     conversation = held[0]
     assert len(conversation.preamble_records) == BOOTSTRAP_RECORDS
-    # The bootstrap's own records belong to the fixture, never to the turn.
-    assert conversation.observation.raw == ""
+    # The bootstrap's own records belong to the fixture and are retained
+    # separately; they never reach the transcript and are not counted as withheld.
+    for record in conversation.preamble_records:
+        assert record.decode() not in conversation.observation.raw
+    # What *is* in the transcript is the withheld-record marker, and nothing else.
+    # The pinned app-server emits notifications before the gate refuses — a fact
+    # about the vendor this lane is the only place to observe, so the count is
+    # pinned rather than erased, and the methods are recorded as evidence.
+    assert re.fullmatch(r"\[\d+ records withheld from this turn\]",
+                        conversation.observation.raw), conversation.observation.raw
+    assert conversation.withheld_methods, "the marker implies at least one record"
     # No turn was sent, so the model peer behind the bridge was never reached.
     assert not peer.requests
     assert not conversation.observation.terminal
