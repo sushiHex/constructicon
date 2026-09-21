@@ -1287,11 +1287,16 @@ class CodexOperatorProvider:
             raise ContractViolation(
                 "the physical operator binding differs from the published store identity"
             )
+        acquisition_locator = acquisition_root
         if binding_store is not None:
             if ".." in binding_store.root.parts:
                 raise ContractViolation("the operator binding root must be canonical")
             acquisition_locator = acquisition_root.resolve(strict=False)
             binding_locator = binding_store.root.resolve(strict=False)
+            if acquisition_root != acquisition_locator:
+                raise ContractViolation(
+                    "the acquisition root must be a canonical path without symlink ancestry"
+                )
             if (
                 acquisition_locator == binding_locator
                 or acquisition_locator.is_relative_to(binding_locator)
@@ -1310,7 +1315,9 @@ class CodexOperatorProvider:
         self.binary = binary
         self.expected_account = expected_account
         self._identity = identity
-        self._acquisition_root = acquisition_root
+        # Retain the same canonical locator whose disjointness was checked.
+        # Trusted host custody protects its ancestors; this is not an inode pin.
+        self._acquisition_root = acquisition_locator
         reasons = tuple(unavailable_reasons)
         if binding_store is None and STORE_NOT_ESTABLISHED not in reasons:
             reasons += (STORE_NOT_ESTABLISHED,)

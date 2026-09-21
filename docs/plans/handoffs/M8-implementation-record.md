@@ -1207,3 +1207,14 @@ Windows skips are never counted as that proof.
 The next physical run passed all three FIFO cases but caught Windows-specific
 absolute paths in two portable fixtures. Those fixtures now use pytest's actual
 absolute temporary path; the test was corrected, not the production refusal.
+
+Marking PR #89 ready triggered the GitHub Codex connector's review of `62ac3bb`.
+It found an introduced P1: the provider checked resolved acquisition/store roots
+but retained the original acquisition path. The finding was reproduced with
+harmless temporary directories. Merely retaining the resolved path was rejected
+after a second-provider counterexample: a mutable alias could resolve to a new,
+still-disjoint guard root on restart. The bound provider instead refuses
+noncanonical acquisition roots and retains the exact checked locator. Guard,
+cleanup and reconciliation paths all derive from that one field. The state
+review records the trusted-ancestor limit; this is not a claim of inode pinning.
+Regression and exact-head review/CI evidence are recorded on PR #89.

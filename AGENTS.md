@@ -158,3 +158,12 @@ absence of evidence read as a positive result. Each rule below was bought.
 - **Read the PR conversation, review comments and reviews before marking ready
   or merging.** Unaddressed comments block. "One instance found" and "one
   instance exists" are different claims: check the class, not the report.
+- **Mark review-ready PRs ready.** Once implementation and verification are
+  complete, mark it ready to trigger the `chatgpt-codex-connector` review.
+  Ready for review is not approval to merge; address its findings and obtain
+  the required final-head evidence before recommending merge.
+- **Resolve findings, not just threads.** The default branch requires resolved
+  review conversations before merge, with no ruleset bypass actors. Reply with
+  the verified fix or evidence-based disposition before resolving a thread;
+  never resolve one merely to clear the merge blocker. Ordinary PR discussion
+  comments have no native resolved state and still require manual review.

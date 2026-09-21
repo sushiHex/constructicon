@@ -310,3 +310,20 @@ both guards were released. Permitting lifecycle tests remain in the same suite.
 The review worker was interrupted by a platform safety filter before its final
 verdict. Its reproduced findings count; an unissued approval does not. A bounded
 independent follow-up reviews the resulting fixes separately.
+
+The GitHub connector review of `62ac3bb` found an introduced acquisition-path
+defect: construction checked resolved roots for disjointness, then retained the
+original acquisition locator. Retargeting an alias could move subsequent guard
+or disposal operations into persistent vendor state. Retaining only the resolved
+path closes that provider's window, but not restart: a newly constructed provider
+could resolve the same alias to a different, still-disjoint guard tree while the
+old supervisor retains the original guard.
+
+Bound construction therefore requires the supplied acquisition root to equal
+its resolved locator, and retains that same checked locator for every later
+`AcquisitionPaths`. Existing symlink or junction ancestry is refused, not silently
+normalized. A plain canonical root remains permitted; unavailable construction
+without a binding is unchanged and cannot acquire. This is a canonical-path
+contract, not an inode pin: canonical ancestors outside the native namespace
+remain in trusted host/operator custody. No new filesystem owner, persistent
+mapping or recovery authority is introduced.

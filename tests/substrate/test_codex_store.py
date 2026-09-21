@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 import threading
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 
@@ -85,6 +87,30 @@ async def test_empty_reasons_cannot_claim_an_absent_store_is_available():
         await provider.acquire(context())
 
 
+async def test_unbound_provider_does_not_resolve_an_unused_acquisition_locator(
+    tmp_path, monkeypatch,
+):
+    supplied_root = tmp_path / "unused-alias"
+    resolved_root = tmp_path / "unused-target"
+    original_resolve = Path.resolve
+    resolved: list[Path] = []
+
+    def mapped_resolve(path, *, strict=False):
+        resolved.append(path)
+        if path == supplied_root:
+            return resolved_root
+        return original_resolve(path, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", mapped_resolve)
+    provider = provider_for(
+        bare_launcher(), unavailable_reasons=(), root=supplied_root,
+    )
+    assert resolved == []
+    assert provider.unavailable_reasons == (STORE_NOT_ESTABLISHED,)
+    with pytest.raises(ContractViolation, match="unavailable"):
+        await provider.acquire(context())
+
+
 def test_acquisition_and_persistent_store_roots_must_be_disjoint(
     tmp_path, store_lifecycle,
 ):
@@ -101,6 +127,104 @@ def test_acquisition_and_persistent_store_roots_must_be_disjoint(
             binding=(nested, closure),
             root=tmp_path,
         )
+
+
+async def test_one_canonical_acquisition_locator_feeds_handles_and_recovery(
+    tmp_path, store_lifecycle, monkeypatch,
+):
+    """The disjointness observation is the locator every later consumer uses."""
+
+    supplied_parent = tmp_path / "direct"
+    canonical_root = supplied_parent / "acquisitions"
+    provider = provider_for(
+        bare_launcher(), unavailable_reasons=(), binding=store_lifecycle[1:3],
+        root=supplied_parent,
+    )
+    acquired = await provider.acquire(context(epoch=1))
+    assert acquired.resource.paths.root == canonical_root
+
+    current = context(epoch=2)
+    row = CapabilityLease(
+        lease_id=acquired.lease_id, acquisition_epoch=1,
+        run_id=current.run_lease.run_id, binding_id=current.binding.binding,
+        path=current.path, state="active", resource_ref=acquired.resource_ref,
+    )
+    disposed: list[Path] = []
+
+    async def dispose(closure, paths, **kwargs):
+        disposed.append(paths.root)
+        return False
+
+    monkeypatch.setattr(codex, "dispose_acquisition", dispose)
+    await provider.reconcile(
+        current, (StaleAcquisition(lease=row, disposition="discard"),),
+    )
+    assert disposed == [canonical_root]
+
+
+def test_binding_refuses_an_acquisition_locator_that_differs_from_its_resolution(
+    tmp_path, store_lifecycle, monkeypatch,
+):
+    supplied_parent = tmp_path / "supplied"
+    supplied_root = supplied_parent / "acquisitions"
+    resolved_root = tmp_path / "resolved" / "acquisitions"
+    original_resolve = Path.resolve
+
+    def mapped_resolve(path, *, strict=False):
+        if path == supplied_root:
+            return resolved_root
+        return original_resolve(path, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", mapped_resolve)
+    with pytest.raises(ContractViolation, match="canonical path without symlink ancestry"):
+        provider_for(
+            bare_launcher(), unavailable_reasons=(), binding=store_lifecycle[1:3],
+            root=supplied_parent,
+        )
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="real symlink proof runs in Linux CI")
+def test_symlinked_acquisition_ancestry_is_refused_before_it_can_target_the_store(
+    tmp_path, store_lifecycle,
+):
+    safe_parent = tmp_path / "safe"
+    safe_root = safe_parent / "acquisitions"
+    safe_root.mkdir(parents=True)
+    root_link_parent = tmp_path / "root-link-parent"
+    root_link_parent.mkdir()
+    (root_link_parent / "acquisitions").symlink_to(
+        safe_root, target_is_directory=True,
+    )
+    alias = tmp_path / "acquisition-alias"
+    alias.symlink_to(safe_parent, target_is_directory=True)
+    world, binding, closure = store_lifecycle[:3]
+    vendor_root = world.root / "acquisitions"
+    vendor_marker = vendor_root / "payloads" / "persistent"
+    vendor_marker.parent.mkdir(parents=True)
+    vendor_marker.write_text("keep me", encoding="utf-8")
+
+    with pytest.raises(ContractViolation, match="canonical path without symlink ancestry"):
+        provider_for(
+            bare_launcher(), unavailable_reasons=(), binding=(binding, closure),
+            root=root_link_parent,
+        )
+    with pytest.raises(ContractViolation, match="canonical path without symlink ancestry"):
+        provider_for(
+            bare_launcher(), unavailable_reasons=(), binding=(binding, closure), root=alias,
+        )
+    second_safe_parent = tmp_path / "second-safe"
+    second_safe_parent.mkdir()
+    for retarget in (second_safe_parent, world.root):
+        alias.unlink()
+        alias.symlink_to(retarget, target_is_directory=True)
+        with pytest.raises(
+            ContractViolation, match="canonical path without symlink ancestry",
+        ):
+            provider_for(
+                bare_launcher(), unavailable_reasons=(), binding=(binding, closure), root=alias,
+            )
+    assert vendor_marker.read_text(encoding="utf-8") == "keep me"
+    assert not (vendor_root / "guards").exists()
 
 
 async def test_materialization_retains_one_store_lock_and_records_three_checks(

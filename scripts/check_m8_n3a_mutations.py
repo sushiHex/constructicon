@@ -95,6 +95,14 @@ MUTANTS = (
         CODEX_STORE_TEST + "test_empty_reasons_cannot_claim_an_absent_store_is_available",
     ),
     (
+        "a mutable acquisition alias is refused before it can target the native store",
+        CODEX + "CodexOperatorProvider.__init__",
+        "if acquisition_root != acquisition_locator:",
+        "if False:",
+        CODEX_STORE_TEST
+        + "test_binding_refuses_an_acquisition_locator_that_differs_from_its_resolution",
+    ),
+    (
         "initial readiness requires a sealed binding observation",
         CODEX + "CodexOperatorHandle._checked_binding",
         "if not isinstance(value, BindingCheck) or value.binding_digest != expected:",
