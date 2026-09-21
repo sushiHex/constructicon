@@ -115,8 +115,12 @@ Documentation selection checks archive completeness/digests and relative file
 links; it does not claim to validate every Markdown anchor or external URL.
 Its aggregate result explicitly says physical proof was not required, never
 that physical containment passed. A failed or cancelled prerequisite cannot
-become a successful aggregate. The ordinary repository `verify` workflow still
-runs on every PR.
+become a successful aggregate. Aggregation also runs the exact base's policy,
+not the PR's gate implementation. During introduction, when that base policy
+does not yet exist, the bootstrap accepts only the successful full-proof shape;
+it cannot grant a docs-only exemption. This does not make a modified workflow
+definition trustworthy: workflow changes still require review as CI policy.
+The ordinary repository `verify` workflow still runs on every PR.
 
 This avoids rebuilding a physical lab for prose-only changes. Runner isolation
 reduces the serial critical path for code changes, at the cost of repeated host
