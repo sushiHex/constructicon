@@ -46,12 +46,14 @@ from constructicon.core.executor import TaskSpec
 from constructicon.core.grants import EffectiveGrants, ModelSelection, Posture
 from constructicon.substrate.executors.codex import CodexConversation
 from constructicon.substrate.executors.codex_protocol import (
+    CONTAINED_PYTHON_TOOL,
     NO_ACCOUNT_FAULT,
     PROVIDER_OVERRIDE_FAULT,
     ExpectedAccount,
+    initialize_request,
+    thread_start_request,
     unavailable_outcome,
 )
-from tests.native_codex_probe import TOOL
 from tests.native_startup import MODELS, configuration
 from tests.substrate.test_linux_containment import launcher as launcher
 from tests.substrate.test_native_startup import assert_outcome
@@ -170,17 +172,17 @@ async def test_pinned_dynamic_tool_registration_requires_explicit_opt_in(
     async def register(wire, observed):
         observed["placement"] = (await wire.read())["placement"]
         observed["bootstrap"] = await wire.read()
-        observed["initialize"] = await wire.rpc("initialize", {
-            "clientInfo": {"name": "constructicon_callback_gate", "version": "0"},
-            "capabilities": {"experimentalApi": True} if experimental_api else {},
-        })
+        initialization = initialize_request(
+            1, client="constructicon_callback_gate", version="0",
+            experimental_api=experimental_api,
+        )
+        observed["initialize"] = await wire.rpc("initialize", initialization["params"])
         await wire.send({"method": "initialized"})
         wire.sequence += 1
         request_id = wire.sequence
-        await wire.send({"id": request_id, "method": "thread/start", "params": {
-            "cwd": "/tmp/native-startup", "sandbox": "read-only", "ephemeral": True,
-            "dynamicTools": [TOOL],
-        }})
+        await wire.send(thread_start_request(
+            request_id, cwd="/tmp/native-startup", dynamic_tools=(CONTAINED_PYTHON_TOOL,),
+        ))
         while True:
             reply = await wire.read()
             if "id" not in reply and "method" in reply:

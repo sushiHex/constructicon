@@ -225,6 +225,7 @@ jobs:
               -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           uv run python scripts/check_m8_combined_mutations.py
           uv run python scripts/check_m8_n2_mutations.py
+          uv run python scripts/check_m8_n2_write_mutations.py
       - name: Probe native mediation with loopback only and no credentials
         if: matrix.lane == 'mediation'
         shell: bash
@@ -263,6 +264,7 @@ jobs:
               tests/substrate/test_lifetime.py \
               tests/substrate/test_contained_capture.py tests/substrate/test_git_pack.py \
               tests/substrate/test_capture_lifecycle.py \
+              tests/substrate/test_codex_write_capture.py \
               tests/substrate/test_git_process.py \
               tests/substrate/test_git_executable.py \
               tests/runtime/test_async_workspace.py tests/api/test_capture_assembly.py \

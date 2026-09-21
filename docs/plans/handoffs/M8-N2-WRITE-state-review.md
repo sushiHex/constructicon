@@ -167,6 +167,24 @@ The worker launcher's supervisor owns all worker descendants. It inherits only
 the workspace guard; the native acquisition/store guards remain with the outer
 native supervisor and must never enter the worker zone.
 
+The conversation must observe native death while that worker is active; awaiting
+the worker alone cannot do so because the launcher does not cancel its protocol
+task merely when the child reaches EOF. Under the same absolute deadline, race
+one owned worker task with the conversation's sole read task. Judge a read first
+when both complete. EOF, damage, an account notice, a terminal record, a client
+reply or any non-exact server request refuses, cancels and joins the worker.
+Ordinary id-less nonterminal notifications pass through the existing absorber
+under a finite record-count bound. Strictly parsed same-turn callbacks may arrive
+while one effect is active: reserve unique inbound request and call ids, and hold
+their raw records in wire order under both the remaining call ceiling and a
+code-bound aggregate byte ceiling. They perform no effect. After the active
+worker has joined, write its response first; only a successful complete write
+prepends the held calls ahead of the existing queue for sequential dispatch.
+Response loss discards them, so it cannot start the next effect. Cancel and join
+the pending read and worker on every exit. A pre-turn callback and completion
+buffered together refuse before dispatch regardless of their order: no callback
+response existed when the claimed completion arrived.
+
 A worker timeout, bound, nonzero/incoherent exit, control loss, workspace fence
 failure, response-write loss, or callback-protocol fault records refusal. Even
 if the native turn later says completed, no `ExecutorSuccess` is published.
@@ -229,9 +247,9 @@ separate Linux lane supplies the physical launcher/worker/capture/gate proof.
 | Tool request before turn identity | A valid-looking request may be buffered before the `turn/start` reply names its turn | Defer only within the same record/total/call bounds and perform no effect; after the reply, validate its named turn before dispatch. If the reply never arrives, refuse at the existing deadline. Do not assume notification ordering |
 | Tool request classification | Request may be foreign, duplicate, late, oversized, collide with a client id, or name a non-granted surface | Validate the distinct inbound request id plus call/thread/turn/catalog/schema/grant facts; spend the call id before worker await |
 | Workspace guard wait | Workspace closed/recovered or run control lost | Revalidate invocation identity and both control checks after entry; launch no worker on failure |
-| Worker launch/probe | Native process may exit; outer cancellation/close may latch; deadline shrank | Use remaining absolute time; retain and join the owned worker; no detached task |
-| Worker completion | Workspace or control may have closed; output may be partial/bounded | Recheck both acquisitions, interpret complete `ProcessResult`, then record callback completion; otherwise refuse |
-| Tool response write | Worker may have changed the stage but peer may have vanished | Keep call spent; write once; response loss refuses so capture never publishes those changes |
+| Worker launch/probe | Native process may exit; another exact call may arrive; outer cancellation/close may latch; deadline shrank | Under the shared deadline race the owned worker with the sole read; boundedly hold exact unique calls without effects; retain and join both tasks |
+| Worker completion | EOF, terminal/account/damage or a foreign request may already be readable; workspace or control may have closed; output may be partial/bounded | Judge a simultaneously completed read first; refuse and join on terminal damage; otherwise recheck both acquisitions and interpret the complete `ProcessResult` |
+| Tool response write | Worker may have changed the stage, exact later calls may be held, but peer may have vanished | Keep the call spent; write once; only after a complete write restore held calls in wire order. Response loss refuses and dispatches none of them |
 | Turn completion | A callback may still be pending or terminal record may precede its naming reply | Buffer only under the existing bounded rule; require no pending callback and positive callback accounting |
 | Second account gate | Forged/buffered reply, mode change, parse escape or unfinished drain | Reuse the positive gate/drain rules; discard turn fields on any refusal |
 | Launcher completion | Child exit can be clean despite callback/protocol failure | Require conversation gate, callback ledger, complete process result, launch check and fresh terminal binding check |
