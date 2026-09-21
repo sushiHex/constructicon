@@ -1330,6 +1330,16 @@ expanded cleanup tuple invalidated an older N3a mutation anchor. Both are
 introduced test-integration defects, not qualifying evidence. Their corrections
 preserve the complete inventory and the original mutant's active-exchange law.
 
+At `897eb1f`, the
+[foundation lane](https://github.com/sushiHex/constructicon/actions/runs/35564666753/job/106224039563)
+executed the accepting capture/gate, red-gate and literal controller-death cases
+successfully. Its checkpoint cases stopped at a test API error after host
+shutdown: `RunState` has no `cancel_requested` field. The correction queries the
+existing `journal.cancel_requested(run_id)` method instead. Neither checkpoint
+case earned successor-recovery credit from that run; both require re-execution.
+Ordinary verification, qualification, mediation and lifecycle passed on this
+head; the failed foundation lane still blocks readiness.
+
 ### Evidence limits
 
 Portable tests exercise callback acceptance and refusal, exact byte bounds,
@@ -1342,7 +1352,8 @@ and skipped native tests remain unproved.
 The new Linux composition lane uses a scripted native peer and substituted
 store syscalls with a real contained worker, Git capture and contained gate.
 Its accepting and red-gate cases are distinct from the pinned-binary protocol
-fixture. Until its exact-head CI succeeds it is written, not physical evidence.
+fixture. The executed cases and their exact heads are recorded above; they do
+not qualify an unexecuted successor-recovery path or a later changed head.
 The complete WRITE controller-death, successor and checkpoint matrix is not
 inherited from READ or from separate workspace tests. Current evidence and
 remaining ownership stay on issue #75 and PR #95.

@@ -133,7 +133,8 @@ async def test_write_abandonment_reconstruction_replays_only_the_uncheckpointed_
         # host work, leaves no user cancellation intent, and releases its lease.
         await first.shutdown()
         state = journal.run_state(submitted.run_id)
-        assert state.status is RunStatus.RUNNING and not state.cancel_requested
+        assert state.status is RunStatus.RUNNING
+        assert not journal.cancel_requested(submitted.run_id)
 
         native_b = write_native(program=program)
         worker_b = _worker_launcher(launcher, native_b)
