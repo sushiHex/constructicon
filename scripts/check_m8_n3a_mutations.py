@@ -134,8 +134,8 @@ MUTANTS = (
     (
         "cleanup cancels and joins the active exchange before releasing custody",
         CODEX + "CodexOperatorHandle._cleanup_owned",
-        "task for task in (self._materialization, self.active) if task is not None",
-        "task for task in (self._materialization,) if task is not None",
+        "(self._materialization, self.active, self.worker_active)",
+        "(self._materialization, self.worker_active)",
         CODEX_ADAPTER_TEST + "test_close_cancels_an_exchange_still_in_flight",
     ),
     (

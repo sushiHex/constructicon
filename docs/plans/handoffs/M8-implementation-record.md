@@ -1299,6 +1299,15 @@ gate produces no attestation. The existing gate records failed checks too; its
 The fixture now checks the retained attestation's subject and checks for both
 outcomes. Its physical execution still requires the Linux lane below.
 
+A later public-handle test initially reported lost cancellation/cleanup
+evidence. That premise did not survive isolation: its one-second deadline could
+expire while durable close was still recording its fence. With a finite
+30-second budget, close reported the worker's cleanup error and active execution
+reported cancellation. Those are the two owning await channels; requiring a
+duplicate cleanup error inside the active task's exception group would add a new
+contract. The test now pins both observable facts and guard-exit order without
+that assumption. No production change was made for the withdrawn finding.
+
 ### First physical protocol evidence
 
 At `e33ae98`, the
@@ -1310,6 +1319,16 @@ requests. All four physical lanes, qualification and ordinary verification
 passed on that test-only head. It is evidence about the pinned interface, not
 the later production implementation or authenticated model use. The later
 fixture uses the production request constructors and requires its own CI run.
+
+At `3a3e514`, the
+[combined Linux lane](https://github.com/sushiHex/constructicon/actions/runs/35563296122/job/106220153099)
+executed both production-constructor registration cases successfully: 135 tests,
+82/82 retained N2 mutants and all 49 WRITE mutants passed their respective
+assertions. Mediation and lifecycle lanes also passed. The overall gate did not:
+the new workflow files were missing from the pinned proof inventory, and the
+expanded cleanup tuple invalidated an older N3a mutation anchor. Both are
+introduced test-integration defects, not qualifying evidence. Their corrections
+preserve the complete inventory and the original mutant's active-exchange law.
 
 ### Evidence limits
 
@@ -1327,6 +1346,15 @@ fixture. Until its exact-head CI succeeds it is written, not physical evidence.
 The complete WRITE controller-death, successor and checkpoint matrix is not
 inherited from READ or from separate workspace tests. Current evidence and
 remaining ownership stay on issue #75 and PR #95.
+
+The added checkpoint fixture uses lawful host abandonment and a reconstructed
+control plane, with real contained capture. It distinguishes pre-checkpoint
+re-execution from post-checkpoint reuse of the exact candidate and zero new
+native exchanges, callbacks or captures. The literal-death companion stops a
+real worker supervisor, kills its controller, and checks guard custody before
+successor disposal. Its native peer remains scripted, so it cannot prove native
+supervisor retention of the store lock. Both new fixtures require the provisioned
+Linux lane; their local skips are not executed proofs.
 
 Production availability remains refused. This work installs no vendor
 configuration, credentials or deployment, proves no live subscription turn,

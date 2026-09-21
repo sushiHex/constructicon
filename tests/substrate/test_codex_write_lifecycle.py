@@ -224,6 +224,7 @@ class BlockingWorkerLauncher(ScriptedLauncher):
     events: list[str] = field(default_factory=list)
     exchange_timeout_s: float | None = None
     worker_timeout_s: float | None = None
+    fail_worker_cleanup: bool = False
 
     async def exchange(self, command, **kwargs):
         object.__setattr__(self, "exchange_timeout_s", kwargs["timeout_s"])
@@ -239,14 +240,16 @@ class BlockingWorkerLauncher(ScriptedLauncher):
         except asyncio.CancelledError:
             self.events.append("worker-cancelled")
             self.worker_cancelled.set()
+            if self.fail_worker_cleanup:
+                raise RuntimeError("owned worker cleanup failed") from None
             raise
 
 
-def _write_grants():
+def _write_grants(*, timeout_s=1):
     return GRANTS.model_copy(update={
         "posture": Posture.WRITE,
         "allowed_tools": CONTAINED_PYTHON_CATALOG,
-        "timeout_s": 1,
+        "timeout_s": timeout_s,
     })
 
 
@@ -262,6 +265,12 @@ def _write_profile():
     })
 
 
+def _contains(exception: BaseException, kind: type[BaseException]) -> bool:
+    if isinstance(exception, BaseExceptionGroup):
+        return exception.subgroup(kind) is not None
+    return isinstance(exception, kind)
+
+
 @asynccontextmanager
 async def _portable_guard(paths):
     paths.guard.parent.mkdir(parents=True, exist_ok=True)
@@ -272,8 +281,9 @@ async def _portable_guard(paths):
         os.close(descriptor)
 
 
+@pytest.mark.parametrize("worker_cleanup_failure", (False, True))
 async def test_close_joins_worker_before_workspace_exit_and_uses_remaining_deadline(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, worker_cleanup_failure,
 ):
     """The actual WRITE handle owns both cancellation ordering and one deadline.
 
@@ -292,7 +302,7 @@ async def test_close_joins_worker_before_workspace_exit_and_uses_remaining_deadl
     closure = AcquisitionClosure(GitAuthority(
         seed_authority(authority_root), authority_root / "legacy",
     ))
-    grants = _write_grants()
+    grants = _write_grants(timeout_s=30)
     native = ScriptedNative(
         accounts=[
             {"result": {"account": {"type": "chatgpt", "planType": "pro"},
@@ -310,6 +320,7 @@ async def test_close_joins_worker_before_workspace_exit_and_uses_remaining_deadl
         expected_policy_sha256="0" * 64,
         native=native,
         result=FINISHED,
+        fail_worker_cleanup=worker_cleanup_failure,
     )
     profile = _write_profile()
     identity = launch_identity(
@@ -369,12 +380,26 @@ async def test_close_joins_worker_before_workspace_exit_and_uses_remaining_deadl
         assert launcher.exchange_timeout_s is not None and launcher.worker_timeout_s is not None
         assert 0 < launcher.worker_timeout_s < launcher.exchange_timeout_s
 
-        await provider.close(acquired, "discard")
+        cleanup_failure = None
+        try:
+            await provider.close(acquired, "discard")
+        except BaseException as exc:
+            cleanup_failure = exc
         assert launcher.worker_cancelled.is_set()
         assert launcher.events.index("worker-cancelled") < launcher.events.index("workspace-exit")
         assert acquired.resource.worker_active is None
-        with pytest.raises(asyncio.CancelledError):
-            await running
+        if worker_cleanup_failure:
+            done, _ = await asyncio.wait((running,), timeout=5)
+            assert running in done, "active WRITE execution did not finish after worker cleanup"
+            assert cleanup_failure is not None
+            assert _contains(cleanup_failure, RuntimeError)
+            with pytest.raises(BaseException) as raised:
+                await running
+            assert _contains(raised.value, asyncio.CancelledError)
+        else:
+            assert cleanup_failure is None
+            with pytest.raises(asyncio.CancelledError):
+                await running
     finally:
         if running is not None and not running.done():
             running.cancel()

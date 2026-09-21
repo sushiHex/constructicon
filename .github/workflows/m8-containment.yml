@@ -256,6 +256,8 @@ jobs:
           cat "$RUNNER_TEMP/m8-host.txt"
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
+            M8_OPERATOR_STORE_REQUIRED=1 \
+            M8_OPERATOR_STORE_ROOT=/var/lib/constructicon-m8-launch/operator-stores \
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_linux_containment.py \
               tests/substrate/test_contained_workspace.py tests/substrate/test_acquisition_closure.py \
@@ -265,6 +267,8 @@ jobs:
               tests/substrate/test_contained_capture.py tests/substrate/test_git_pack.py \
               tests/substrate/test_capture_lifecycle.py \
               tests/substrate/test_codex_write_capture.py \
+              tests/substrate/test_codex_write_restart.py \
+              tests/substrate/test_codex_write_recovery.py \
               tests/substrate/test_git_process.py \
               tests/substrate/test_git_executable.py \
               tests/runtime/test_async_workspace.py tests/api/test_capture_assembly.py \

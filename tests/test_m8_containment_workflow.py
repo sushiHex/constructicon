@@ -13,7 +13,7 @@ import pytest
 WORKFLOW = Path(__file__).parents[1] / ".github/workflows/m8-containment.yml"
 CLASSIFIER = Path(__file__).parents[1] / "scripts/ci/m8_ci_scope.py"
 
-# Every pre-split proof belongs to exactly one isolated runner. These are not
+# Every provisioned proof belongs to exactly one isolated runner. These are not
 # sampled smoke tests: removing a file or mutation inventory must fail here.
 PROOFS = {
     "Prove N3a protected descriptors and native-only store custody": (
@@ -42,7 +42,7 @@ PROOFS = {
         "tests/substrate/test_native_combined.py tests/substrate/test_combined_startup_origins.py "
         "tests/test_native_combined.py tests/substrate/test_combined_sender.py "
         "tests/substrate/test_codex_native.py scripts/check_m8_combined_mutations.py "
-        "scripts/check_m8_n2_mutations.py",
+        "scripts/check_m8_n2_mutations.py scripts/check_m8_n2_write_mutations.py",
     ),
     "Probe native mediation with loopback only and no credentials": (
         "mediation",
@@ -56,6 +56,8 @@ PROOFS = {
         "tests/substrate/test_linux_duplex.py tests/substrate/test_process_io.py "
         "tests/substrate/test_lifetime.py tests/substrate/test_contained_capture.py "
         "tests/substrate/test_git_pack.py tests/substrate/test_capture_lifecycle.py "
+        "tests/substrate/test_codex_write_capture.py tests/substrate/test_codex_write_restart.py "
+        "tests/substrate/test_codex_write_recovery.py "
         "tests/substrate/test_git_process.py tests/substrate/test_git_executable.py "
         "tests/runtime/test_async_workspace.py tests/api/test_capture_assembly.py "
         "tests/substrate/test_contained_gates.py tests/substrate/test_gate_lifecycle.py "
