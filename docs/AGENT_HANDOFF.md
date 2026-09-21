@@ -15,6 +15,48 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## M8 CI — isolated proof lanes and explicit documentation disposition
+
+**Merged `2677fbb` (PR #92) on 2026-09-21 UTC, base `7e5eb03`.**
+
+The same physical proof inventory now runs across four independently
+provisioned runners: foundation, lifecycle, combined and mediation. Tests and
+mutants remain serial within each lane, with fresh mutation children and
+assertion-only kills. Exact-base policy classifies ordinary prose changes and
+aggregates the selected evidence; unknown changes require all physical lanes,
+and missing Git evidence refuses. Documentation success explicitly means that
+physical proof was not required, not that it ran. Manual dispatch remains full.
+
+**Measured, not inferred.** Final head `68cf1d7` passed CI verification with
+2,563 tests and 299 platform skips, qualification, and all four physical lanes.
+All 341 mutants were assertion-killed. First job start to aggregate completion
+was 8m52s, versus the earlier serial baseline's 24m37s. The first split run on
+`c2652af` took 10m40s but summed to 27m58s of successful job durations, about
+14% more than the serial baseline because provisioning is repeated. These are
+observed durations, not billing estimates or a guaranteed speedup. That first
+run's downloaded artifacts retained the baseline's evidence families and
+multiplicities; bytes are not claimed identical across hosts. PR #92 carries
+the run links and exact-head evidence.
+
+**The correction worth carrying.** Trusting the base classifier was not enough:
+the initial aggregate still executed the PR-head gate, which could accept failed
+proofs. Both now execute exact-base policy. An introducing base without that
+policy permits only the complete successful full-proof shape; an absent base
+commit refuses before fallback. Executable workflow-shell tests put a permissive
+gate at the head and prove it cannot authorize either path. Workflow definitions
+themselves remain reviewed CI policy, not a defended boundary against arbitrary
+workflow rewrites. The connector finding was fixed, independently checked and
+resolved only after final-head CI passed; the merged tree matches that head.
+
+**What this slice does NOT establish.** No runtime authority, credential,
+provider call, deployment or vendor qualification changed. Physical evidence
+still belongs to the exact head and observed host; prose-only validation cannot
+qualify a native route. Deadlines, pins and proof inventory were not reduced.
+Windows skips remain skips. The introducing PR ran full because its base had no
+classifier, so its runs do not measure the documentation-only Actions path.
+
+---
+
 ## N3a — native operator-store custody and binding generations
 
 **Merged `7535903` (PR #89) on 2026-09-21 UTC, base `153ab8e`. Issue #76 remains
