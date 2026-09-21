@@ -1107,3 +1107,114 @@ at the owner's request for its weekly limit, so the independent reviews were
 fresh-context Opus reviewers; that is a real reduction in independence and is
 recorded here rather than glossed. N3 is the next slice, and #76 carries its
 delivery slicing and constraints.
+
+## N3a: native-store custody (implementation under review)
+
+N3a implements only the dedicated native-only store, retained lock, binding
+generation checks and immutable descriptor/restart rules from #76. It does not
+close that issue. N3b's acquisition-scoped egress and N3c's complete maintenance,
+refresh, crash, non-widening and overage matrix remain separate. No credential,
+account, live vendor call, host deployment or production qualification is part
+of this evidence.
+
+The required pre-code async-resume design pass is
+[`M8-N3a-state-review.md`](M8-N3a-state-review.md). Its independent Sol/Terra
+review corrected idle-holder recovery and local-close lock ordering before
+implementation. It was posted to #76 before code was written. An additional
+Hardline review timed out and is not counted as evidence.
+
+One private substrate binding owns the protected descriptor bundle. Its active
+selection is explicit; publication alone cannot activate it. Immutable
+generation files pin a publisher-derived physical store instance, the retained
+lock and the actual source-derived laws. Current paths are reopened and checked
+against held identities without reacquiring the retained lock. The existing
+acquisition guard is acquired first and both guards span the materialized
+lifetime; the existing supervisor inherits them. Local cleanup commits the
+existing durable acquisition fence before joining owned work and closing its
+copies. No new scheduler, journal schema, custody daemon or public identity
+contract is introduced.
+
+Readiness, post-probe launch and terminal result acceptance each require an
+affirmative sealed `BindingCheck`. A missing check is not success. A terminal
+refusal discards the completed turn. The launcher mounts only the selected
+writable store at `/vendor-store`, separately from disposable HOME; native
+store and worker workspace mounts cannot coexist. The native proof client is
+harmless Python, not authenticated Codex. N3a does not install sealed vendor
+configuration, route `CODEX_HOME`, or establish vendor refresh conformance.
+Default production availability remains refused.
+
+The portable proof substitutes only filesystem/lock primitives. It drives the
+real provider, lifecycle, strict descriptor reader and conversation on both
+accepting and refusing paths. The complete published outcome is checked using
+N2's existing surface-bound walker, with private binding facts excluded from
+the identity, outcome and inert acquisition reference. Descriptor tests reject
+mutually consistent but wrong runtime laws, forged instances and wrong active
+selection witnesses rather than trusting one stored record as its own proof.
+
+Review has already corrected introduced defects: stale pre-wait identity
+observations; source-law comparison only against another supplied value;
+directory link growth misclassified as root replacement; offline ownership
+changes before nonsymlink proof; and a portable double that recorded closes
+without closing its real descriptors. Tests now cover those classes. One
+reviewer's claimed privilege requirement for `name_to_handle_at(AT_EMPTY_PATH)`
+was withdrawn after primary-source verification: it confused that syscall with
+`open_by_handle_at`, which is not used. The state-review ledger preserves the
+reasoning and source. A narrow second review of launcher/tests/provisioning
+found no additional introduced blocker. The complete-diff review subsequently
+found publisher inputs that its own reader refused, unusable fixed-child modes,
+and a stale awaited acquisition-fence observation before readiness. The last
+case was reproduced with the real durable closure and a deterministic barrier,
+not a substitute closed flag. All are corrected; strict reader validation is
+reused before publication, fixed modes are explicit, and the final durable
+fence is read synchronously after each positive binding observation. Metadata
+FIFOs and deeply nested JSON also now refuse without blocking or escaping the
+typed failure path. Accepting and refusing outcomes share the public-field
+bound test. The state-review ledger records the evidence and limits.
+An additional root/independent-review reproduction found initial metadata I/O
+errors exposing a private path through runtime failure-event text. The initial
+reader now uses the same typed-refusal discipline as the lock and held checks;
+a regression covers all three phases and its removal mutant fails by assertion.
+
+The complete-diff reviewer was interrupted by a platform safety filter before
+issuing its final verdict. Its confirmed findings are retained, but this is not
+a completed review or approval. A bounded independent review of the fixes is
+separate evidence; final review status belongs with the exact PR head.
+
+After these corrections, the focused Codex/store/surface suite passed 113 tests
+with one explicit privileged skip. N3a's inventory in
+`scripts/check_m8_n3a_mutations.py` killed 45/45 mutants by assertion, including
+removal of the final materialization fence read. N2's compatibility inventory
+previously ran with 82/82 assertion kills and zero unmeasured mutants; it must
+also pass on the final head. These focused results do not replace the final
+repository gate or exact-head CI, which are recorded on the PR.
+The initial-metadata error regression adds a 46th mutant; its individual
+assertion kill is established and the complete final inventory is a PR gate.
+
+The hosted-Linux workflow now runs fresh-interpreter root/lock replacement and
+no-overwrite publication tests, unprivileged native-only mount and retained
+lock handoff tests, and a real controller-death/supervisor-custody test.
+Run-scoped `n3a-*.json` artifacts contain only bounded positive fixture facts
+and opaque sealed digests, not private descriptor contents. Actions containment
+run `35542612151` passed on `4e7b2f2`: both fresh-interpreter replacement cases,
+explicit selection/no-overwrite publication, native-only read/write including
+child-directory creation, lock handoff and controller-death custody produced
+positive artifacts. The ordinary worker did not receive the store. This is
+credential-free physical fixture evidence, not vendor conformance. The same
+head's ordinary verify run passed 2,460 tests but failed Linux mypy on a local
+name reused with incompatible types; that introduced defect is corrected.
+The final corrected head must pass both runs, including the added FIFO cases;
+Windows skips are never counted as that proof.
+The next physical run passed all three FIFO cases but caught Windows-specific
+absolute paths in two portable fixtures. Those fixtures now use pytest's actual
+absolute temporary path; the test was corrected, not the production refusal.
+
+Marking PR #89 ready triggered the GitHub Codex connector's review of `62ac3bb`.
+It found an introduced P1: the provider checked resolved acquisition/store roots
+but retained the original acquisition path. The finding was reproduced with
+harmless temporary directories. Merely retaining the resolved path was rejected
+after a second-provider counterexample: a mutable alias could resolve to a new,
+still-disjoint guard root on restart. The bound provider instead refuses
+noncanonical acquisition roots and retains the exact checked locator. Guard,
+cleanup and reconciliation paths all derive from that one field. The state
+review records the trusted-ancestor limit; this is not a claim of inode pinning.
+Regression and exact-head review/CI evidence are recorded on PR #89.

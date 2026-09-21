@@ -42,7 +42,7 @@ from constructicon.core.native_operator import (
 from constructicon.core.run import RunLease
 from constructicon.core.workspace import LeaseContext, StaleAcquisition, acquisition_id_for
 from constructicon.runtime.registry import CapabilityDescriptor
-from constructicon.substrate.executors import codex
+from constructicon.substrate.executors import codex, operator_store
 from constructicon.substrate.executors.codex import (
     ADAPTER_REVISION,
     UNQUALIFIED_PREREQUISITES,
@@ -66,8 +66,16 @@ from constructicon.substrate.executors.linux import (
     ProcessExchangeError,
     ProcessResult,
 )
-from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisition_guard
+from constructicon.substrate.git import acquisition as acquisition_module
+from constructicon.substrate.git.acquisition import (
+    AcquisitionClosure,
+    AcquisitionPaths,
+    acquisition_guard,
+)
+from constructicon.substrate.git.authority import GitAuthority
+from tests.gitworld import seed_authority
 from tests.native_operator_world import native_egress, native_store
+from tests.operator_store_world import StoreWorld
 from tests.substrate.test_codex_protocol import (
     ACCOUNT_NOTICE,
     EMAIL,
@@ -299,16 +307,31 @@ class ScriptedLauncher(LinuxLauncher):
     raises: BaseException | None = None
     raises_after_conversation: bool = False
 
-    async def exchange(self, command, *, workspace, posture, guard_fds, conversation, timeout_s):
+    async def exchange(
+        self,
+        command,
+        *,
+        workspace,
+        posture,
+        guard_fds,
+        conversation,
+        timeout_s,
+        native_store=None,
+    ):
         self.commands.append(command)
         self.calls.append({
             "command": command, "workspace": workspace, "posture": posture,
             "timeout_s": timeout_s, "guard_fds": guard_fds,
+            "native_store": native_store,
             # A guard the launcher cannot stat is not holding anything.
             "guard_modes": [os.fstat(fd).st_mode for fd in guard_fds],
         })
         if self.raises is not None and not self.raises_after_conversation:
             raise self.raises
+        if native_store is not None:
+            if native_store.lock_fd not in guard_fds:
+                raise ContractViolation("scripted store lock was not retained by the supervisor")
+            native_store.before_spawn()
         try:
             await conversation(self.native)
         except (ContractViolation, OSError, RuntimeError) as exc:
@@ -335,12 +358,12 @@ def bare_launcher(native=None, result=None, **overrides) -> ScriptedLauncher:
     )
 
 
-def identity_for(launcher, profile=None):
+def identity_for(launcher, profile=None, store_identity=None):
     return launch_identity(
         launcher=launcher,
         profile=profile if profile is not None else codex_profile(),
         egress=native_egress(),
-        store=native_store(),
+        store=native_store() if store_identity is None else store_identity,
         executable_digest=digest("test-codex-executable", 1, BINARY),
         configuration=CONFIGURATION,
         catalog=(),
@@ -350,23 +373,34 @@ def identity_for(launcher, profile=None):
 
 
 def provider_for(
-    launcher, *, unavailable_reasons=UNQUALIFIED_PREREQUISITES, profile=None,
+    launcher,
+    *,
+    unavailable_reasons=UNQUALIFIED_PREREQUISITES,
+    profile=None,
+    binding=None,
+    root=ACQUISITION_ROOT,
 ) -> CodexOperatorProvider:
     resolved = profile if profile is not None else codex_profile()
     return CodexOperatorProvider(
         launcher=launcher,
         profile=resolved,
-        identity=identity_for(launcher, resolved),
+        identity=identity_for(
+            launcher,
+            resolved,
+            None if binding is None else binding[0].sealed,
+        ),
         expected_account=EXPECTED,
         binary=BINARY,
         configuration=CONFIGURATION,
         catalog=(),
-        acquisition_root=ACQUISITION_ROOT,
+        acquisition_root=root if binding is None else root / "acquisitions",
         unavailable_reasons=unavailable_reasons,
+        binding_store=None if binding is None else binding[0],
+        closure=None if binding is None else binding[1],
     )
 
 
-def context(*, epoch=1, grants=GRANTS, run_id="codex-run"):
+def context(*, epoch=1, grants=GRANTS, run_id="codex-run", check_control=lambda: None):
     scope = ScopePath(segments=("root", "worker"))
     return LeaseContext(
         run_lease=RunLease(
@@ -379,7 +413,29 @@ def context(*, epoch=1, grants=GRANTS, run_id="codex-run"):
         ),
         path=ExecutionPath(scope=scope),
         manifest_hash=digest("test-manifest", 1, "codex"),
+        check_control=check_control,
     )
+
+
+@pytest.fixture
+def portable_binding(tmp_path, monkeypatch):
+    """Actual BindingStore parsing/checks with only its Linux syscalls substituted."""
+
+    world = StoreWorld(tmp_path)
+    world.install(monkeypatch)
+
+    def close_fd(fd):
+        world.closed.append(fd)
+        os.close(fd)
+
+    monkeypatch.setattr(operator_store, "_close", close_fd)
+    authority_root = tmp_path / "authority"
+    authority_root.mkdir()
+    closure = AcquisitionClosure(GitAuthority(
+        seed_authority(authority_root),
+        authority_root / "legacy",
+    ))
+    return world, world.binding(), closure
 
 
 def descriptor_of(provider, capability_id=CAPABILITY) -> CapabilityDescriptor:
@@ -490,12 +546,16 @@ def test_the_descriptor_matches_the_identity_and_assembly_accepts_it(journal):
 # --- the lease lifecycle -----------------------------------------------------
 
 
-async def test_acquire_is_inert_and_materialize_enters_once():
-    provider = provider_for(bare_launcher(), unavailable_reasons=())
+async def test_acquire_is_inert_and_materialize_enters_once(
+    tmp_path, portable_binding, substituted_guard,
+):
+    provider = provider_for(
+        bare_launcher(), unavailable_reasons=(), binding=portable_binding[1:], root=tmp_path,
+    )
     acquired = await provider.acquire(context())
     handle = acquired.resource
     assert isinstance(handle, CodexOperatorHandle)
-    assert acquired.resource_ref == acquired.acquisition_id
+    assert json.loads(acquired.resource_ref)["acquisition_id"] == acquired.acquisition_id
     assert acquired.materialize is not None
     assert not handle.entered and not handle.ready
     await acquired.materialize()
@@ -504,9 +564,13 @@ async def test_acquire_is_inert_and_materialize_enters_once():
         await acquired.materialize()
 
 
-async def test_close_before_entry_writes_nothing_and_prevents_later_entry():
+async def test_close_before_entry_writes_nothing_and_prevents_later_entry(
+    tmp_path, portable_binding,
+):
     launcher = bare_launcher()
-    provider = provider_for(launcher, unavailable_reasons=())
+    provider = provider_for(
+        launcher, unavailable_reasons=(), binding=portable_binding[1:], root=tmp_path,
+    )
     acquired = await provider.acquire(context())
     closure = await provider.close(acquired, "release")
     assert closure.disposition == "released"
@@ -515,17 +579,25 @@ async def test_close_before_entry_writes_nothing_and_prevents_later_entry():
         await acquired.materialize()
 
 
-async def test_close_refuses_a_handle_that_is_not_its_own():
+async def test_close_refuses_a_handle_that_is_not_its_own(tmp_path, portable_binding):
     launcher = bare_launcher()
-    provider = provider_for(launcher, unavailable_reasons=())
-    other = provider_for(bare_launcher(), unavailable_reasons=())
+    provider = provider_for(
+        launcher, unavailable_reasons=(), binding=portable_binding[1:], root=tmp_path,
+    )
+    other = provider_for(
+        bare_launcher(), unavailable_reasons=(), binding=portable_binding[1:], root=tmp_path,
+    )
     acquired = await provider.acquire(context())
     with pytest.raises(ContractViolation):
         await other.close(acquired, "discard")
 
 
-async def test_reconciliation_refuses_a_row_that_contradicts_its_identity():
-    provider = provider_for(bare_launcher(), unavailable_reasons=())
+async def test_reconciliation_refuses_a_row_that_contradicts_its_identity(
+    tmp_path, portable_binding, substituted_guard,
+):
+    provider = provider_for(
+        bare_launcher(), unavailable_reasons=(), binding=portable_binding[1:], root=tmp_path,
+    )
     ctx = context(epoch=2)
     acquired = await provider.acquire(ctx)
     row = CapabilityLease(
@@ -541,8 +613,12 @@ async def test_reconciliation_refuses_a_row_that_contradicts_its_identity():
         await provider.reconcile(ctx, (StaleAcquisition(lease=absent, disposition="discard"),))
 
 
-async def test_reconciliation_reaps_nothing_because_this_slice_owns_no_payload():
-    provider = provider_for(bare_launcher(), unavailable_reasons=())
+async def test_reconciliation_closes_the_stale_acquisition_without_deleting_the_store(
+    tmp_path, portable_binding, substituted_guard,
+):
+    provider = provider_for(
+        bare_launcher(), unavailable_reasons=(), binding=portable_binding[1:], root=tmp_path,
+    )
     ctx = context(epoch=3)
     older = await provider.acquire(context(epoch=1))
     row = CapabilityLease(
@@ -551,11 +627,16 @@ async def test_reconciliation_reaps_nothing_because_this_slice_owns_no_payload()
         resource_ref=older.resource_ref,
     )
     outcome = await provider.reconcile(ctx, (StaleAcquisition(lease=row, disposition="discard"),))
-    assert outcome.reaped == () and outcome.detail
+    assert outcome.reaped == (older.resource_ref,)
+    assert portable_binding[0].root.exists()
 
 
-async def test_grants_differing_from_the_sealed_set_are_refused():
-    provider = provider_for(bare_launcher(), unavailable_reasons=())
+async def test_grants_differing_from_the_sealed_set_are_refused(
+    tmp_path, portable_binding, substituted_guard,
+):
+    provider = provider_for(
+        bare_launcher(), unavailable_reasons=(), binding=portable_binding[1:], root=tmp_path,
+    )
     acquired = await provider.acquire(context())
     handle = acquired.resource
     await acquired.materialize()
@@ -564,9 +645,13 @@ async def test_grants_differing_from_the_sealed_set_are_refused():
         await handle.execute(TaskSpec(instruction="x"), workspace=None, grants=widened)
 
 
-async def test_an_unsupported_grant_or_task_refuses_before_any_launch():
+async def test_an_unsupported_grant_or_task_refuses_before_any_launch(
+    tmp_path, portable_binding, substituted_guard,
+):
     launcher = bare_launcher()
-    provider = provider_for(launcher, unavailable_reasons=())
+    provider = provider_for(
+        launcher, unavailable_reasons=(), binding=portable_binding[1:], root=tmp_path,
+    )
     unlisted = GRANTS.model_copy(
         update={"model_selection": ModelSelection(kind="explicit", model="unlisted")},
     )
@@ -579,9 +664,13 @@ async def test_an_unsupported_grant_or_task_refuses_before_any_launch():
     assert not launcher.commands
 
 
-async def test_a_response_schema_is_refused_by_this_slice():
+async def test_a_response_schema_is_refused_by_this_slice(
+    tmp_path, portable_binding, substituted_guard,
+):
     launcher = bare_launcher()
-    provider = provider_for(launcher, unavailable_reasons=())
+    provider = provider_for(
+        launcher, unavailable_reasons=(), binding=portable_binding[1:], root=tmp_path,
+    )
     acquired = await provider.acquire(context())
     await acquired.materialize()
     outcome = await acquired.resource.execute(
@@ -592,8 +681,10 @@ async def test_a_response_schema_is_refused_by_this_slice():
     assert not launcher.commands
 
 
-async def test_execute_refuses_before_materialization():
-    provider = provider_for(bare_launcher(), unavailable_reasons=())
+async def test_execute_refuses_before_materialization(tmp_path, portable_binding):
+    provider = provider_for(
+        bare_launcher(), unavailable_reasons=(), binding=portable_binding[1:], root=tmp_path,
+    )
     acquired = await provider.acquire(context())
     with pytest.raises(ContractViolation):
         await acquired.resource.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
@@ -963,12 +1054,17 @@ def two_model_profile():
     return codex_profile().model_copy(update={"grant_policy": policy})
 
 
-def provider_with(configuration, *, profile=None, launcher=None, root=ACQUISITION_ROOT):
+def provider_with(
+    configuration, *, profile=None, launcher=None, root=ACQUISITION_ROOT, binding=None,
+):
     """Build the identity from the same configuration, so drift is not the fault."""
     launcher = launcher if launcher is not None else bare_launcher()
     resolved = profile if profile is not None else codex_profile()
     identity = launch_identity(
-        launcher=launcher, profile=resolved, egress=native_egress(), store=native_store(),
+        launcher=launcher,
+        profile=resolved,
+        egress=native_egress(),
+        store=native_store() if binding is None else binding[0].sealed,
         executable_digest=digest("test-codex-executable", 1, BINARY),
         configuration=configuration, catalog=(),
         authenticated_startup_conformance_revision=digest("test-codex-startup", 1, "unproven"),
@@ -977,7 +1073,10 @@ def provider_with(configuration, *, profile=None, launcher=None, root=ACQUISITIO
     return CodexOperatorProvider(
         launcher=launcher, profile=resolved, identity=identity, expected_account=EXPECTED,
         binary=BINARY, configuration=configuration, catalog=(),
-        acquisition_root=root, unavailable_reasons=(),
+        acquisition_root=root if binding is None else root / "acquisitions",
+        unavailable_reasons=(),
+        binding_store=None if binding is None else binding[0],
+        closure=None if binding is None else binding[1],
     )
 
 
@@ -1017,7 +1116,7 @@ def test_the_provider_reads_the_model_the_configuration_actually_names():
 
 
 async def test_a_grant_that_disagrees_with_the_configuration_is_refused(
-    tmp_path, substituted_guard,
+    tmp_path, portable_binding, substituted_guard,
 ):
     """The turn sends no model, so the configuration decides what runs (I4).
 
@@ -1027,6 +1126,7 @@ async def test_a_grant_that_disagrees_with_the_configuration_is_refused(
     launcher = bare_launcher(clean_native())
     provider = provider_with(
         CONFIGURATION, profile=two_model_profile(), launcher=launcher, root=tmp_path,
+        binding=portable_binding[1:],
     )
     other = GRANTS.model_copy(
         update={"model_selection": ModelSelection(kind="explicit", model="gpt-5.5")},
@@ -1386,6 +1486,7 @@ def substituted_guard(monkeypatch):
             os.close(descriptor)
 
     monkeypatch.setattr(codex, "acquisition_guard", guard)
+    monkeypatch.setattr(acquisition_module, "acquisition_guard", guard)
 
 
 @LINUX
@@ -1409,11 +1510,13 @@ async def test_the_real_guard_is_an_owned_single_link_file_held_exclusively(tmp_
     assert held == [True]
 
 
-async def materialized(launcher, root, *, grants=GRANTS) -> CodexOperatorHandle:
+async def materialized(launcher, root, binding, *, grants=GRANTS) -> CodexOperatorHandle:
     provider = CodexOperatorProvider(
-        launcher=launcher, profile=codex_profile(), identity=identity_for(launcher),
+        launcher=launcher, profile=codex_profile(),
+        identity=identity_for(launcher, store_identity=binding[0].sealed),
         expected_account=EXPECTED, binary=BINARY, configuration=CONFIGURATION, catalog=(),
-        acquisition_root=root, unavailable_reasons=(),
+        acquisition_root=root / "acquisitions", unavailable_reasons=(),
+        binding_store=binding[0], closure=binding[1],
     )
     acquired = await provider.acquire(context(grants=grants))
     await acquired.materialize()
@@ -1435,9 +1538,11 @@ def assert_launch(launcher, *, grants=GRANTS):
     assert len(call["guard_modes"]) == len(guards)
 
 
-async def test_execute_drives_the_contained_launcher_to_a_success(tmp_path, substituted_guard):
+async def test_execute_drives_the_contained_launcher_to_a_success(
+    tmp_path, portable_binding, substituted_guard,
+):
     launcher = bare_launcher(clean_native())
-    handle = await materialized(launcher, tmp_path)
+    handle = await materialized(launcher, tmp_path, portable_binding[1:])
     outcome = await handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
     assert outcome.status == "success" and outcome.output == {"summary": "done"}
     assert outcome.served_model == "gpt-5.6-sol" and outcome.requested_model == "gpt-5.6-sol"
@@ -1445,13 +1550,13 @@ async def test_execute_drives_the_contained_launcher_to_a_success(tmp_path, subs
 
 
 async def test_execute_discards_a_turn_whose_pre_acceptance_reading_faults(
-    tmp_path, substituted_guard,
+    tmp_path, portable_binding, substituted_guard,
 ):
     """ADR 0021's discard, in the production binding rather than in a fixture."""
     launcher = bare_launcher(
         clean_native(accounts=[{"result": MANAGED_RESULT}, {"result": EMPTY_RESULT}]),
     )
-    handle = await materialized(launcher, tmp_path)
+    handle = await materialized(launcher, tmp_path, portable_binding[1:])
     outcome = await handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
     assert outcome.status == "failure" and outcome.error.kind == "unavailable"
     assert NO_ACCOUNT_FAULT in outcome.error.detail
@@ -1461,10 +1566,10 @@ async def test_execute_discards_a_turn_whose_pre_acceptance_reading_faults(
 
 
 async def test_execute_discards_a_turn_interrupted_by_an_account_notification(
-    tmp_path, substituted_guard,
+    tmp_path, portable_binding, substituted_guard,
 ):
     launcher = bare_launcher(clean_native(records=[ACCOUNT_NOTICE, completed()]))
-    handle = await materialized(launcher, tmp_path)
+    handle = await materialized(launcher, tmp_path, portable_binding[1:])
     outcome = await handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
     assert outcome.status == "failure" and outcome.error.kind == "unavailable"
     assert "account/updated" in outcome.error.detail
@@ -1472,10 +1577,10 @@ async def test_execute_discards_a_turn_interrupted_by_an_account_notification(
 
 
 async def test_a_launch_prerequisite_failure_is_unavailable_and_decodes_nothing(
-    tmp_path, substituted_guard,
+    tmp_path, portable_binding, substituted_guard,
 ):
     launcher = bare_launcher(clean_native(), raises=OSError("no such runtime root"))
-    handle = await materialized(launcher, tmp_path)
+    handle = await materialized(launcher, tmp_path, portable_binding[1:])
     outcome = await handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
     assert outcome.status == "failure" and outcome.error.kind == "unavailable"
     assert "no such runtime root" in outcome.error.detail
@@ -1483,13 +1588,13 @@ async def test_a_launch_prerequisite_failure_is_unavailable_and_decodes_nothing(
 
 
 async def test_a_failed_conversation_still_decodes_the_evidence_it_carried(
-    tmp_path, substituted_guard,
+    tmp_path, portable_binding, substituted_guard,
 ):
     damaged = ProcessResult(1, b"", b"stderr evidence", 3.0, payload_returncode=1)
     launcher = bare_launcher(
         clean_native(), raises=ProcessExchangeError(damaged), raises_after_conversation=True,
     )
-    handle = await materialized(launcher, tmp_path)
+    handle = await materialized(launcher, tmp_path, portable_binding[1:])
     outcome = await handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
     assert outcome.status == "failure" and outcome.error.kind == "exit"
     assert outcome.error.exit_code == 1 and outcome.elapsed_s == 3.0
@@ -1498,7 +1603,7 @@ async def test_a_failed_conversation_still_decodes_the_evidence_it_carried(
 
 
 async def test_an_aborted_conversation_refuses_rather_than_decoding_its_result(
-    tmp_path, substituted_guard,
+    tmp_path, portable_binding, substituted_guard,
 ):
     """The shape that was broken: the salvage branch reached with no gate.
 
@@ -1509,7 +1614,7 @@ async def test_an_aborted_conversation_refuses_rather_than_decoding_its_result(
     aborting = clean_native(read_fails=RuntimeError("transport exploded"),
                             fails_on_nth_account=2)
     launcher = bare_launcher(aborting)
-    handle = await materialized(launcher, tmp_path)
+    handle = await materialized(launcher, tmp_path, portable_binding[1:])
     outcome = await handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
     assert outcome.status == "failure" and outcome.error.kind == "unavailable"
     assert GATE_INCOMPLETE_FAULT in outcome.error.detail
@@ -1531,7 +1636,9 @@ class DriftingLauncher(ScriptedLauncher):
         return launcher_revision.fget(self)
 
 
-async def test_a_launch_recipe_that_drifts_after_construction_refuses(tmp_path, substituted_guard):
+async def test_a_launch_recipe_that_drifts_after_construction_refuses(
+    tmp_path, portable_binding, substituted_guard,
+):
     launcher = DriftingLauncher(
         runtime_root=Path("/opt/codex-runtime"),
         expected_runtime=digest("test-codex-runtime", 1, "runtime"),
@@ -1540,7 +1647,7 @@ async def test_a_launch_recipe_that_drifts_after_construction_refuses(tmp_path, 
         expected_policy_sha256="0" * 64,
         native=clean_native(), result=FINISHED,
     )
-    handle = await materialized(launcher, tmp_path)
+    handle = await materialized(launcher, tmp_path, portable_binding[1:])
     launcher.drifted.append(True)  # the recipe's own sources changed under us
     with pytest.raises(ContractViolation, match="drifted"):
         await handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
@@ -1549,7 +1656,7 @@ async def test_a_launch_recipe_that_drifts_after_construction_refuses(tmp_path, 
 
 @pytest.mark.parametrize("cancelled", [True, False], ids=["cancelled", "plain"])
 async def test_a_grouped_cleanup_failure_keeps_a_cancellation_a_cancellation(
-    tmp_path, cancelled, substituted_guard,
+    tmp_path, portable_binding, cancelled, substituted_guard,
 ):
     """A cancellation inside the group is still a cancellation, not an outcome."""
     inner = asyncio.CancelledError() if cancelled else RuntimeError("cleanup failed")
@@ -1560,7 +1667,7 @@ async def test_a_grouped_cleanup_failure_keeps_a_cancellation_a_cancellation(
     launcher = bare_launcher(
         clean_native(), raises=group, raises_after_conversation=True,
     )
-    handle = await materialized(launcher, tmp_path)
+    handle = await materialized(launcher, tmp_path, portable_binding[1:])
     call = handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
     if cancelled:
         # ``_converse`` re-raises the whole group rather than converting it, which
@@ -1576,13 +1683,26 @@ async def test_a_grouped_cleanup_failure_keeps_a_cancellation_a_cancellation(
         assert "cleanup failed" in outcome.error.detail
 
 
-async def test_close_cancels_an_exchange_still_in_flight(tmp_path, substituted_guard):
+async def test_close_cancels_an_exchange_still_in_flight(
+    tmp_path, portable_binding, substituted_guard,
+):
     entered = asyncio.Event()
 
     @dataclass(frozen=True, kw_only=True)
     class Blocking(ScriptedLauncher):
-        async def exchange(self, command, *, workspace, posture, guard_fds, conversation,
-                           timeout_s):
+        async def exchange(
+            self,
+            command,
+            *,
+            workspace,
+            posture,
+            guard_fds,
+            conversation,
+            timeout_s,
+            native_store=None,
+        ):
+            if native_store is not None:
+                native_store.before_spawn()
             entered.set()
             await asyncio.sleep(30)
             raise AssertionError("the blocked exchange was never cancelled")
@@ -1596,9 +1716,11 @@ async def test_close_cancels_an_exchange_still_in_flight(tmp_path, substituted_g
         native=clean_native(), result=FINISHED,
     )
     provider = CodexOperatorProvider(
-        launcher=launcher, profile=codex_profile(), identity=identity_for(launcher),
+        launcher=launcher, profile=codex_profile(),
+        identity=identity_for(launcher, store_identity=portable_binding[1].sealed),
         expected_account=EXPECTED, binary=BINARY, configuration=CONFIGURATION, catalog=(),
-        acquisition_root=tmp_path, unavailable_reasons=(),
+        acquisition_root=tmp_path / "acquisitions", unavailable_reasons=(),
+        binding_store=portable_binding[1], closure=portable_binding[2],
     )
     acquired = await provider.acquire(context())
     await acquired.materialize()

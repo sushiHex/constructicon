@@ -54,7 +54,7 @@ import asyncio
 import inspect
 import tomllib
 from collections.abc import Mapping, Sequence
-from contextlib import suppress
+from contextlib import AbstractAsyncContextManager, suppress
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -67,7 +67,7 @@ from constructicon.core.executor import (
     TaskSpec,
 )
 from constructicon.core.grants import EffectiveGrants
-from constructicon.core.identity import Digest, canonical_json, digest
+from constructicon.core.identity import Digest, canonical_json, digest, parse_json_value
 from constructicon.core.native_operator import (
     NativeEgressIdentityV1,
     NativeOperatorExecutorProfileV3,
@@ -86,6 +86,7 @@ from constructicon.core.workspace import (
     acquisition_id_for,
     lease_id_for,
 )
+from constructicon.substrate._lifetime import finish_owned
 from constructicon.substrate.executors import codex_protocol
 from constructicon.substrate.executors.codex_protocol import (
     ACCOUNT_NOTICE_FAULT,
@@ -119,11 +120,22 @@ from constructicon.substrate.executors.codex_protocol import (
 )
 from constructicon.substrate.executors.linux import (
     LinuxLauncher,
+    NativeStoreMount,
     ProcessExchangeError,
     ProcessLimits,
     ProcessResult,
 )
-from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisition_guard
+from constructicon.substrate.executors.operator_store import (
+    BindingCheck,
+    BindingStore,
+    HeldStoreLock,
+)
+from constructicon.substrate.git.acquisition import (
+    AcquisitionClosure,
+    AcquisitionPaths,
+    acquisition_guard,
+    dispose_acquisition,
+)
 
 CLIENT_NAME = "constructicon"
 CLIENT_VERSION = "0"
@@ -136,13 +148,19 @@ WITHHELD_METHODS = 16
 """How many withheld method names to retain for reporting."""
 
 INGRESS_NOT_ESTABLISHED = "private fixed-actor ingress is not established by assembly"
+STORE_NOT_ESTABLISHED = "the operator store binding has no physical qualification"
 UNQUALIFIED_PREREQUISITES: tuple[str, ...] = (
     INGRESS_NOT_ESTABLISHED,
-    "the operator store binding has no physical qualification",
+    STORE_NOT_ESTABLISHED,
     "the native vendor-session egress boundary has not been qualified",
 )
 """The default published unavailability. Assembly narrows this only once the
 physical prerequisites actually hold; nothing at runtime can clear it."""
+
+
+class _LocalClose(asyncio.CancelledError):
+    """Owned physical work stopped by this handle's permanent close latch."""
+
 
 PROTOCOL_REVISION = digest("codex-operator-protocol", 1, inspect.getsource(codex_protocol))
 
@@ -163,7 +181,6 @@ def configured_model(configuration: str) -> str:
     The shape is the pinned client's ``--strict-config`` TOML with a top-level
     ``model`` key, which is what every fixture in this repository supplies.
     """
-
     try:
         parsed = tomllib.loads(configuration)
     except RecursionError as exc:
@@ -839,8 +856,40 @@ def _named(reply: Mapping[str, Any], field: str) -> str | None:
     return identifier if isinstance(identifier, str) and identifier else None
 
 
+def _resource_reference(acquisition_id: str, binding_digest: Digest) -> str:
+    """The complete durable recovery reference, with no private store locator."""
+
+    return canonical_json({
+        "schema_version": 1,
+        "acquisition_id": acquisition_id,
+        "operator_binding_digest": binding_digest,
+    })
+
+
+def _read_resource_reference(raw: str) -> tuple[str, Digest]:
+    try:
+        value = parse_json_value(raw)
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise ContractViolation("a codex recovery reference is malformed") from exc
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"schema_version", "acquisition_id", "operator_binding_digest"}
+        or type(value["schema_version"]) is not int
+        or value["schema_version"] != 1
+        or not isinstance(value["acquisition_id"], str)
+        or not isinstance(value["operator_binding_digest"], str)
+        or canonical_json(value) != raw
+    ):
+        raise ContractViolation("a codex recovery reference is not strict canonical metadata")
+    try:
+        binding_digest = Digest(value["operator_binding_digest"])
+    except ValueError as exc:
+        raise ContractViolation("a codex recovery reference has an invalid binding digest") from exc
+    return value["acquisition_id"], binding_digest
+
+
 class CodexOperatorHandle:
-    """One acquisition. It never retains a byte scope or a process handle."""
+    """One acquisition and the two physical guards held for its whole life."""
 
     def __init__(
         self, provider: CodexOperatorProvider, context: LeaseContext, paths: AcquisitionPaths,
@@ -851,7 +900,17 @@ class CodexOperatorHandle:
         self.entered = False
         self.ready = False
         self.closed = False
+        self.executed = False
         self.active: asyncio.Task[ProcessResult] | None = None
+        self._materialization: asyncio.Task[None] | None = None
+        self._cleanup: asyncio.Task[None] | None = None
+        self._close_disposition: Disposition | None = None
+        self._guard_owner: AbstractAsyncContextManager[int] | None = None
+        self._guard_fd: int | None = None
+        self._store_lock: HeldStoreLock | None = None
+        self.initial_check: BindingCheck | None = None
+        self.launch_check: BindingCheck | None = None
+        self.terminal_check: BindingCheck | None = None
 
     @property
     def profile(self) -> NativeOperatorExecutorProfileV3:
@@ -861,22 +920,130 @@ class CodexOperatorHandle:
         return self.profile.grant_faults(grants)
 
     async def materialize(self) -> None:
-        """Entry is marked before any await; this slice owns no durable payload.
-
-        The exclusive store lock, its qualified layout and the mount identity
-        arrive with N3. There is deliberately nothing to undo here yet.
-        """
-
+        """Acquire then retain the acquisition guard and binding-store lock."""
         if self.closed or self.entered:
             raise ContractViolation("a closed or entered codex acquisition cannot materialize")
         self.entered = True
-        self.ready = True
+        self._materialization = asyncio.create_task(self._materialize_owned())
+        await self._materialization
+
+    def _check_control(self) -> None:
+        if self.closed:
+            raise _LocalClose("codex acquisition closed during physical work")
+        control = self.context.check_control
+        if control is None:
+            raise ContractViolation("codex acquisition lost its invocation control check")
+        control()
+        if self.closed:
+            raise _LocalClose("codex acquisition closed during physical work")
+
+    def _checked_binding(self, value: object, phase: str) -> BindingCheck:
+        expected = self.provider.identity.store.operator_binding_digest
+        if not isinstance(value, BindingCheck) or value.binding_digest != expected:
+            raise ContractViolation(
+                f"the {phase} operator binding check was not an affirmative sealed observation"
+            )
+        return value
+
+    async def _require_open(self) -> None:
+        closure = self.provider.closure
+        if closure is None:
+            raise ContractViolation("codex store materialization requires acquisition closure")
+        self._check_control()
+        await finish_owned(asyncio.create_task(asyncio.to_thread(
+            closure.require_open, self.paths,
+        )))
+        self._check_control()
+
+    def _require_open_sync(self) -> None:
+        """Read the durable fence inside a no-await transfer boundary."""
+
+        closure = self.provider.closure
+        if closure is None:
+            raise ContractViolation("codex store materialization requires acquisition closure")
+        self._check_control()
+        closure.require_open(self.paths)
+        self._check_control()
+
+    async def _materialize_owned(self) -> None:
+        store = self.provider.binding_store
+        if store is None:
+            raise ContractViolation("codex store materialization requires a physical binding")
+        guard_owner = acquisition_guard(self.paths)
+        held: HeldStoreLock | None = None
+        guard_entered = False
+        failure: BaseException | None = None
+        try:
+            guard_fd = await guard_owner.__aenter__()
+            guard_entered = True
+            await self._require_open()
+            candidate = store.open_candidate()
+            held = await store.acquire_lock(
+                candidate,
+                check_control=self._check_control,
+                check_closure=self._require_open,
+            )
+            # Nothing before this fresh check can mint readiness. In particular,
+            # acquire_lock's successful return is only custody, not acceptance.
+            await self._require_open()
+            check = self._checked_binding(store.check_held(held), "initial")
+            # Recovery can commit closure after the awaited read's worker
+            # observed absence but before this task resumes. Re-read it after
+            # the binding observation, with no await before readiness transfer.
+            self._require_open_sync()
+            self._guard_owner = guard_owner
+            self._guard_fd = guard_fd
+            self._store_lock = held
+            self.initial_check = check
+            self.ready = True
+            guard_entered = False
+            held = None
+        except BaseException as exc:
+            failure = exc
+        errors = [failure] if failure is not None else []
+        errors.extend(await self._release_custody(
+            store=store,
+            held=held,
+            owner=guard_owner if guard_entered else None,
+        ))
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise BaseExceptionGroup("codex materialization and cleanup failed", errors)
+
+    async def _release_custody(
+        self,
+        *,
+        store: BindingStore | None,
+        held: HeldStoreLock | None,
+        owner: AbstractAsyncContextManager[int] | None,
+    ) -> list[BaseException]:
+        """Release both independent owners, preserving every cleanup failure."""
+
+        errors: list[BaseException] = []
+        if held is not None:
+            if store is None:
+                errors.append(ContractViolation("retained codex store lost its owner"))
+            else:
+                try:
+                    store.close_held(held)
+                except BaseException as exc:
+                    errors.append(exc)
+        if owner is not None:
+            try:
+                await owner.__aexit__(None, None, None)
+            except BaseException as exc:
+                errors.append(exc)
+        return errors
 
     async def execute(
         self, task: TaskSpec, *, workspace: WorkspaceView | None, grants: EffectiveGrants,
     ) -> ExecutorOutcome:
         if self.closed or not self.ready:
             raise ContractViolation("codex acquisition is not open and materialized")
+        if self.executed:
+            raise ContractViolation("a codex acquisition executes one task only")
+        self.executed = True
         if canonical_json(grants) != canonical_json(self.context.binding.effective_grants):
             raise ContractViolation("codex executor call differs from its sealed grants")
         faults = self.validate_grants(grants)
@@ -899,6 +1066,11 @@ class CodexOperatorHandle:
 
     async def _converse(self, task: TaskSpec, grants: EffectiveGrants) -> ExecutorOutcome:
         provider = self.provider
+        store = provider.binding_store
+        held = self._store_lock
+        guard = self._guard_fd
+        if store is None or held is None or guard is None or self.initial_check is None:
+            raise ContractViolation("codex acquisition has no retained binding custody")
         conversation = CodexConversation(
             task=task, grants=grants, expected=provider.expected_account,
             input_limit=provider.launcher.limits.input_bytes,
@@ -906,48 +1078,130 @@ class CodexOperatorHandle:
         # The deadline covers the launcher's own prerequisite probe, which
         # re-hashes bubblewrap, the policy and the whole runtime root before the
         # child starts. It does not begin at the first byte.
-        async with acquisition_guard(self.paths) as guard:
-            if self.closed:
-                raise ContractViolation("codex acquisition closed while awaiting its guard")
-            # Reachable, and not a tautology over two frozen records:
-            # ``LinuxLauncher.revision`` is a property that re-hashes its own
-            # module and the L0 sources it binds at call time, so it is not a
-            # function of the launcher's fields and can differ between the
-            # provider's construction and this launch.
-            if provider.launcher.revision != provider.identity.isolation_revision:
-                raise ContractViolation("the pinned launch recipe drifted from its identity")
-            self.active = asyncio.create_task(provider.launcher.exchange(
-                (provider.binary, *APP_SERVER_ARGUMENTS),
-                workspace=None, posture=grants.posture, guard_fds=(guard,),
-                conversation=conversation, timeout_s=grants.timeout_s,
-            ))
-            try:
-                result = await self.active
-            except ProcessExchangeError as exc:
-                # Something escaped the callback; the evidence survives.
-                result = exc.result
-            except (OSError, ContractViolation) as exc:
-                # A launch prerequisite failed inside the launcher: bubblewrap,
-                # the policy, the runtime digest or AppArmor. Not the platform
-                # check — ``acquisition_guard`` raises that on entry, above this
-                # try, and production never reaches either, because ``acquire``
-                # refuses while any unavailable reason stands.
-                return _unavailable(str(exc), grants)
-            except BaseExceptionGroup as group:
-                # Cleanup failed alongside the conversation, so there is no
-                # result at all and nothing may be decoded as a turn. A grouped
-                # cancellation is still a cancellation and must not become one.
-                if group.subgroup(asyncio.CancelledError) is not None:
-                    raise
-                return _unavailable(repr(group), grants)
-            finally:
-                self.active = None
+        self._check_control()
+        await self._require_open()
+        if provider.launcher.revision != provider.identity.isolation_revision:
+            raise ContractViolation("the pinned launch recipe drifted from its identity")
+
+        def before_spawn() -> BindingCheck:
+            # LinuxLauncher invokes this after its probe and immediately before
+            # spawning. It is synchronous so no close/withdrawal can interleave
+            # on this event loop after the positive check.
+            self._check_control()
+            check = self._checked_binding(store.check_held(held), "pre-launch")
+            self._require_open_sync()
+            self.launch_check = check
+            return check
+
+        native_store = NativeStoreMount(
+            path=held.store_path,
+            lock_fd=held.lock_fd,
+            before_spawn=before_spawn,
+        )
+        self.active = asyncio.create_task(provider.launcher.exchange(
+            (provider.binary, *APP_SERVER_ARGUMENTS),
+            workspace=None, posture=grants.posture, guard_fds=(guard, held.lock_fd),
+            conversation=conversation, timeout_s=grants.timeout_s, native_store=native_store,
+        ))
+        try:
+            result = await self.active
+        except ProcessExchangeError as exc:
+            # Something escaped the callback; the evidence survives.
+            result = exc.result
+        except (OSError, ContractViolation) as exc:
+            return _unavailable(str(exc), grants)
+        except BaseExceptionGroup as group:
+            if group.subgroup(asyncio.CancelledError) is not None:
+                raise
+            return _unavailable(repr(group), grants)
+        finally:
+            self.active = None
         requested = grants.model_selection.model
+        try:
+            self._check_control()
+            terminal = self._checked_binding(store.check_held(held), "terminal")
+            self._require_open_sync()
+            if self.launch_check is None:
+                raise ContractViolation("the pre-launch binding check did not complete")
+            self.terminal_check = terminal
+        except (OSError, ContractViolation) as exc:
+            return unavailable_outcome(
+                (f"operator binding terminal check failed: {bounded_detail(str(exc))}",),
+                conversation.observation,
+                result,
+                requested_model=requested,
+            )
         if conversation.faults:
             return unavailable_outcome(
                 conversation.faults, conversation.observation, result, requested_model=requested,
             )
         return decode_turn(conversation.observation, result, requested_model=requested)
+
+    async def cleanup(self, disposition: Disposition) -> None:
+        if self._close_disposition is None:
+            self._close_disposition = disposition
+        elif self._close_disposition != disposition:
+            raise ContractViolation("repeated codex close changed its disposition")
+        self.closed = True
+        if self._cleanup is None:
+            self._cleanup = asyncio.create_task(self._cleanup_owned())
+        await finish_owned(self._cleanup)
+
+    async def _cleanup_owned(self) -> None:
+        errors: list[BaseException] = []
+        closure = self.provider.closure
+        if self.entered:
+            if closure is None:
+                errors.append(ContractViolation(
+                    "entered codex acquisition has no permanent closure fence"
+                ))
+            else:
+                try:
+                    await finish_owned(asyncio.create_task(asyncio.to_thread(
+                        closure.commit, self.paths,
+                    )))
+                except BaseException as exc:
+                    errors.append(exc)
+
+        # These tasks own all work that can still acquire or pass the retained
+        # descriptions. Join them before closing either parent copy.
+        pending = tuple(dict.fromkeys(
+            task for task in (self._materialization, self.active) if task is not None
+        ))
+        cancelled_here: set[asyncio.Task[object]] = set()
+        for task in pending:
+            if not task.done():
+                cancelled_here.add(task)
+                task.cancel()
+        if pending:
+            results = await asyncio.gather(*pending, return_exceptions=True)
+            for task, result in zip(pending, results, strict=True):
+                if not isinstance(result, BaseException):
+                    continue
+                if isinstance(result, asyncio.CancelledError) and (
+                    task in cancelled_here or self.closed
+                ):
+                    continue
+                if isinstance(result, BaseExceptionGroup) and task in cancelled_here:
+                    _, remainder = result.split(asyncio.CancelledError)
+                    if remainder is not None:
+                        errors.append(remainder)
+                    continue
+                errors.append(result)
+
+        self.ready = False
+        held, self._store_lock = self._store_lock, None
+        owner, self._guard_owner = self._guard_owner, None
+        self._guard_fd = None
+        errors.extend(await self._release_custody(
+            store=self.provider.binding_store,
+            held=held,
+            owner=owner,
+        ))
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise BaseExceptionGroup("codex acquisition cleanup failed", errors)
 
 
 def _hashable(value: Any) -> bool:
@@ -976,9 +1230,10 @@ def _unavailable(detail: str, grants: EffectiveGrants) -> ExecutorFailure:
 class CodexOperatorProvider:
     """A leased schema-3 provider whose published facts describe this adapter.
 
-    Availability is an assembly fact read without runtime I/O. This slice
-    delivers no store, no egress and no qualified ingress, so the default
-    published state is unavailable and nothing at runtime can change it.
+    Availability is an assembly fact read without runtime I/O. A configured
+    binding still starts unavailable unless assembly explicitly clears every
+    independent prerequisite; an absent binding can never be cleared by an
+    empty caller-supplied reason tuple.
     """
 
     def __init__(
@@ -993,11 +1248,15 @@ class CodexOperatorProvider:
         catalog: Sequence[str],
         acquisition_root: Path,
         unavailable_reasons: tuple[str, ...] = UNQUALIFIED_PREREQUISITES,
+        binding_store: BindingStore | None = None,
+        closure: AcquisitionClosure | None = None,
     ) -> None:
         if not binary.startswith("/") or "\0" in binary:
             raise ContractViolation("the native client requires a fixed absolute executable")
         if not acquisition_root.is_absolute():
             raise ContractViolation("the acquisition root must be absolute")
+        if ".." in acquisition_root.parts:
+            raise ContractViolation("the acquisition root must be canonical")
         if catalog:
             raise ContractViolation(
                 "this slice publishes no mediated callback catalog; the WRITE posture and "
@@ -1020,6 +1279,32 @@ class CodexOperatorProvider:
                 )
         if identity.profile != profile:
             raise ContractViolation("the published identity carries a different profile")
+        if (binding_store is None) != (closure is None):
+            raise ContractViolation(
+                "a physical operator binding and acquisition closure must be injected together"
+            )
+        if binding_store is not None and binding_store.sealed != identity.store:
+            raise ContractViolation(
+                "the physical operator binding differs from the published store identity"
+            )
+        acquisition_locator = acquisition_root
+        if binding_store is not None:
+            if ".." in binding_store.root.parts:
+                raise ContractViolation("the operator binding root must be canonical")
+            acquisition_locator = acquisition_root.resolve(strict=False)
+            binding_locator = binding_store.root.resolve(strict=False)
+            if acquisition_root != acquisition_locator:
+                raise ContractViolation(
+                    "the acquisition root must be a canonical path without symlink ancestry"
+                )
+            if (
+                acquisition_locator == binding_locator
+                or acquisition_locator.is_relative_to(binding_locator)
+                or binding_locator.is_relative_to(acquisition_locator)
+            ):
+                raise ContractViolation(
+                    "the acquisition and operator binding roots must be disjoint"
+                )
         self.configured_model = configured_model(configuration)
         if self.configured_model not in profile.grant_policy.model_ids:
             raise ContractViolation(
@@ -1030,8 +1315,15 @@ class CodexOperatorProvider:
         self.binary = binary
         self.expected_account = expected_account
         self._identity = identity
-        self._acquisition_root = acquisition_root
-        self._unavailable = tuple(unavailable_reasons)
+        # Retain the same canonical locator whose disjointness was checked.
+        # Trusted host custody protects its ancestors; this is not an inode pin.
+        self._acquisition_root = acquisition_locator
+        reasons = tuple(unavailable_reasons)
+        if binding_store is None and STORE_NOT_ESTABLISHED not in reasons:
+            reasons += (STORE_NOT_ESTABLISHED,)
+        self._unavailable = reasons
+        self.binding_store = binding_store
+        self.closure = closure
         self.handles: list[CodexOperatorHandle] = []
 
     @property
@@ -1045,6 +1337,10 @@ class CodexOperatorProvider:
     async def acquire(self, context: LeaseContext) -> AcquiredCapability:
         if self.unavailable_reasons:
             raise ContractViolation("an unavailable operator provider cannot acquire")
+        if self.binding_store is None or self.closure is None:
+            raise ContractViolation("an available operator provider requires a physical binding")
+        if context.check_control is None:
+            raise ContractViolation("an operator acquisition requires invocation control")
         logical = lease_id_for(context.run_lease.run_id, context.path, context.binding.binding)
         acquisition = acquisition_id_for(logical, context.run_lease.epoch)
         handle = CodexOperatorHandle(
@@ -1053,38 +1349,73 @@ class CodexOperatorProvider:
         self.handles.append(handle)
         return AcquiredCapability(
             resource=handle, lease_id=logical, acquisition_id=acquisition,
-            resource_ref=acquisition, materialize=handle.materialize,
+            resource_ref=_resource_reference(
+                acquisition, self.identity.store.operator_binding_digest,
+            ),
+            materialize=handle.materialize,
         )
 
     async def close(
         self, acquisition: AcquiredCapability, disposition: Disposition,
     ) -> LeaseClosure:
         handle = acquisition.resource
-        if not isinstance(handle, CodexOperatorHandle) or handle.provider is not self:
+        expected_logical = lease_id_for(
+            handle.context.run_lease.run_id,
+            handle.context.path,
+            handle.context.binding.binding,
+        ) if isinstance(handle, CodexOperatorHandle) else ""
+        expected_acquisition = acquisition_id_for(
+            expected_logical, handle.context.run_lease.epoch,
+        ) if isinstance(handle, CodexOperatorHandle) else ""
+        expected_ref = _resource_reference(
+            expected_acquisition, self.identity.store.operator_binding_digest,
+        ) if isinstance(handle, CodexOperatorHandle) else ""
+        if (
+            not isinstance(handle, CodexOperatorHandle)
+            or handle.provider is not self
+            or handle not in self.handles
+            or acquisition.lease_id != expected_logical
+            or acquisition.acquisition_id != expected_acquisition
+            or acquisition.resource_ref != expected_ref
+        ):
             raise ContractViolation("codex close requires its own handle")
-        handle.closed = True
-        if handle.active is not None:
-            # The launcher owns teardown and reaping of everything it started.
-            handle.active.cancel()
+        await handle.cleanup(disposition)
         return LeaseClosure(disposition="released" if disposition == "release" else "discarded")
 
     async def reconcile(
         self, context: LeaseContext, stale: tuple[StaleAcquisition, ...],
     ) -> LeaseReconciliation:
+        if self.binding_store is None or self.closure is None:
+            raise ContractViolation("codex recovery requires its configured physical binding")
         logical = lease_id_for(context.run_lease.run_id, context.path, context.binding.binding)
+        pending: list[tuple[str, str, Disposition]] = []
         for item in stale:
             row = item.lease
             expected = acquisition_id_for(logical, row.acquisition_epoch)
             if (
                 row.lease_id != logical or row.run_id != context.run_lease.run_id
+                or row.path != context.path or row.binding_id != context.binding.binding
                 or row.acquisition_epoch >= context.run_lease.epoch
-                or row.resource_ref != expected
+                or row.resource_ref is None
             ):
-                raise ContractViolation("a codex recovery row contradicts its own identity")
-        return LeaseReconciliation(reaped=(), detail=(
-            "this slice owns no durable native payload; the store binding, its exclusive "
-            "lock and egress disposal arrive with N3"
-        ))
+                raise ContractViolation("a codex recovery row is not this stale invocation")
+            acquired, binding_digest = _read_resource_reference(row.resource_ref)
+            if (
+                acquired != expected
+                or binding_digest != self.identity.store.operator_binding_digest
+            ):
+                raise ContractViolation(
+                    "a codex recovery reference contradicts its durable row"
+                )
+            pending.append((expected, row.resource_ref, item.disposition))
+        # Validate the complete batch before committing any irreversible fence.
+        for acquired, _, disposition in pending:
+            await dispose_acquisition(
+                self.closure,
+                AcquisitionPaths(self._acquisition_root, acquired),
+                disposition=disposition,
+            )
+        return LeaseReconciliation(reaped=tuple(reference for _, reference, _ in pending))
 
 
 ADAPTER_REVISION = digest("codex-operator-adapter", 1, {

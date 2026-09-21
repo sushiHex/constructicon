@@ -73,6 +73,7 @@ CONSTRUCTOR = "constructicon.substrate.executors.codex:CodexOperatorProvider.__i
 
 PROTOCOL = "tests/substrate/test_codex_protocol.py::"
 ADAPTER = "tests/substrate/test_codex_adapter.py::"
+STORE_ADAPTER = "tests/substrate/test_codex_store.py::"
 
 ERROR_REPLY = PROTOCOL + "test_an_error_or_missing_result_refuses"
 NULL_ACCOUNT = PROTOCOL + "test_a_null_account_refuses_without_naming_a_cause"
@@ -361,9 +362,10 @@ MUTANTS = (
     (
         "the launcher receives this acquisition's guard",
         BINDING,
-        "guard_fds=(guard,),",
-        "guard_fds=(),",
-        ADAPTER + "test_execute_drives_the_contained_launcher_to_a_success",
+        "guard_fds=(guard, held.lock_fd),",
+        "guard_fds=(held.lock_fd,),",
+        STORE_ADAPTER
+        + "test_materialization_retains_one_store_lock_and_records_three_checks",
     ),
     (
         "a drifted launch recipe refuses",
@@ -382,9 +384,10 @@ MUTANTS = (
     (
         "close cancels an exchange still in flight",
         CLOSE,
-        "if handle.active is not None:",
-        "if False:",
-        ADAPTER + "test_close_cancels_an_exchange_still_in_flight",
+        "await handle.cleanup(disposition)",
+        "handle.closed = True",
+        STORE_ADAPTER
+        + "test_materialization_retains_one_store_lock_and_records_three_checks",
     ),
     (
         "the rate-limit detail is constrained by value shape",
