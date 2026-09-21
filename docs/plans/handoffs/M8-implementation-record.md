@@ -1108,7 +1108,7 @@ fresh-context Opus reviewers; that is a real reduction in independence and is
 recorded here rather than glossed. N3 is the next slice, and #76 carries its
 delivery slicing and constraints.
 
-## N3a: native-store custody (implementation under review)
+## N3a: native-store custody (merged)
 
 N3a implements only the dedicated native-only store, retained lock, binding
 generation checks and immutable descriptor/restart rules from #76. It does not
@@ -1178,17 +1178,16 @@ a regression covers all three phases and its removal mutant fails by assertion.
 The complete-diff reviewer was interrupted by a platform safety filter before
 issuing its final verdict. Its confirmed findings are retained, but this is not
 a completed review or approval. A bounded independent review of the fixes is
-separate evidence; final review status belongs with the exact PR head.
+separate evidence; final review status is recorded in the exact-head N3a
+closure below.
 
-After these corrections, the focused Codex/store/surface suite passed 113 tests
-with one explicit privileged skip. N3a's inventory in
-`scripts/check_m8_n3a_mutations.py` killed 45/45 mutants by assertion, including
-removal of the final materialization fence read. N2's compatibility inventory
-previously ran with 82/82 assertion kills and zero unmeasured mutants; it must
-also pass on the final head. These focused results do not replace the final
-repository gate or exact-head CI, which are recorded on the PR.
-The initial-metadata error regression adds a 46th mutant; its individual
-assertion kill is established and the complete final inventory is a PR gate.
+At an intermediate implementation head, the focused Codex/store/surface suite
+passed 113 tests with one explicit privileged skip. N3a's inventory in
+`scripts/check_m8_n3a_mutations.py` then killed 45/45 mutants by assertion,
+including removal of the final materialization fence read. The initial-metadata
+error regression added a 46th mutant and its individual assertion kill was
+established. These interim focused results did not replace the later final-head
+repository, compatibility, mutation or Linux evidence recorded below.
 
 The hosted-Linux workflow now runs fresh-interpreter root/lock replacement and
 no-overwrite publication tests, unprivileged native-only mount and retained
@@ -1202,8 +1201,8 @@ positive artifacts. The ordinary worker did not receive the store. This is
 credential-free physical fixture evidence, not vendor conformance. The same
 head's ordinary verify run passed 2,460 tests but failed Linux mypy on a local
 name reused with incompatible types; that introduced defect is corrected.
-The final corrected head must pass both runs, including the added FIFO cases;
-Windows skips are never counted as that proof.
+That head therefore was not final closure evidence; Windows skips are never
+counted as physical proof.
 The next physical run passed all three FIFO cases but caught Windows-specific
 absolute paths in two portable fixtures. Those fixtures now use pytest's actual
 absolute temporary path; the test was corrected, not the production refusal.
@@ -1217,4 +1216,39 @@ still-disjoint guard root on restart. The bound provider instead refuses
 noncanonical acquisition roots and retains the exact checked locator. Guard,
 cleanup and reconciliation paths all derive from that one field. The state
 review records the trusted-ancestor limit; this is not a claim of inode pinning.
-Regression and exact-head review/CI evidence are recorded on PR #89.
+Regression and exact-head review/CI evidence are recorded on PR #89 and in the
+N3a closure below.
+
+### N3a closure
+
+[PR #89](https://github.com/sushiHex/constructicon/pull/89) merged on
+2026-09-21 at 01:08:54Z as
+`7535903d4ccbb9c5e4583567995db152d08153d0`, from base
+`153ab8e390fdb85b48094f277969b3806fcfab62`. Its merged tree
+`a428dfaeadeb415b70c9da0926e2118b1e5666f2` is identical to reviewed head
+`c12a681d8156e14aaca1fe86afa6ba3585f31ea9`.
+
+On that final head, local `uv run verify` passed 2,407 tests with 375 skips,
+alongside clean ruff, strict mypy across 101 source files and all four import
+contracts. The
+[Linux verify run](https://github.com/sushiHex/constructicon/actions/runs/35548285797)
+passed 2,483 tests with 299 skips; the
+[runner qualification](https://github.com/sushiHex/constructicon/actions/runs/35548285720)
+and [containment run](https://github.com/sushiHex/constructicon/actions/runs/35548285699)
+also succeeded. N3a's final inventory killed 47/47 mutants by assertion both
+locally and on Linux. N2's local compatibility inventory retained 82/82
+assertion kills with zero unmeasured mutants, and Linux platform mypy was clean.
+
+The containment run's native artifact
+[`m8-containment-35548285699-1`](https://github.com/sushiHex/constructicon/actions/runs/35548285699/artifacts/10617603819)
+contains six N3a JSON records. They affirm publication and generation,
+fresh-interpreter store and lock replacement refusals with unchanged accepting
+controls, native-only read/write, owner-death retained-supervisor custody, and
+lock handoff. This remains credential-free physical fixture evidence:
+`vendor_conformance_qualified` is false, no production use or credentials are
+qualified, N3b and N3c remain incomplete, and issue #76 remains open.
+
+The [final-head connector review](https://github.com/sushiHex/constructicon/pull/89#issuecomment-5754017758)
+reported no major issues. Its introduced acquisition-path P1 was fixed and the
+[review thread](https://github.com/sushiHex/constructicon/pull/89#discussion_r4058671099)
+was resolved before merge.
