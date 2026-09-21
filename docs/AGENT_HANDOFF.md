@@ -15,6 +15,49 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## N3a — native operator-store custody and binding generations
+
+**Merged `7535903` (PR #89) on 2026-09-21 UTC, base `153ab8e`. Issue #76 remains
+open: N3a is the store/lock/generation slice, not all of N3.**
+
+The slice establishes a dedicated native-only store, a lock retained through
+the materialized lifetime, affirmative initial/launch/terminal binding checks,
+immutable descriptor publication, and same-path replacement refusal after a
+fresh interpreter starts. Linux evidence covers native-only access, lock
+handoff and supervisor custody after controller death. The merged tree is
+byte-identical to the reviewed head `c12a681`.
+
+**The correction worth carrying.** Checking a resolved acquisition path while
+retaining its original alias left later guard and cleanup operations vulnerable
+to alias retargeting. Retaining only the resolved path was also insufficient:
+a fresh provider could resolve the alias to a second disjoint guard tree while
+the old supervisor still held the first. Bound construction now refuses a path
+that differs from its canonical resolution and retains that checked locator.
+This is not an inode pin; canonical ancestors remain in trusted host custody.
+
+**Measured, not inferred.** Exact-head local verification passed 2,407 tests
+with 375 platform skips; Linux CI passed 2,483 with 299 skips. Qualification and
+containment passed, with 47 N3a mutants assertion-killed locally and in Linux.
+The N2 local inventory killed all 82 mutants. The connector found the alias
+defect, then reviewed the corrected full head and reported no major issues.
+The finding was resolved only after verification; the default branch now
+requires resolved review conversations with no bypass actors.
+
+**What this slice does NOT establish.** N3b acquisition-scoped egress and N3c's
+complete maintenance/refresh/crash/non-widening/overage matrix remain separate.
+No credential, paid call, live subscription turn or production qualification is
+proved. Native store evidence uses a harmless credential-free proof client;
+`vendor_conformance_qualified` remains false and default production availability
+remains refused. Detailed evidence and limits live in the M8 implementation
+record and PR #89, not in a claim that all of issue #76 is complete.
+
+**A tracking assumption that was wrong.** GitHub interpreted a negated closing
+phrase in the PR body as an issue-closing keyword and closed #76 on merge.
+The wording was corrected and the issue reopened. Use `Refs` for partial work;
+do not put a closing keyword next to the issue reference even in a negation.
+
+---
+
 ## N2's first slice — the Codex operator adapter, READ posture
 
 **Merged `919f9e3` (PR #85) on 2026-09-20, base `ae40ed7`. Issue #75 remains
