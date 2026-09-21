@@ -12,6 +12,7 @@ import inspect
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 
@@ -63,6 +64,7 @@ def run(mutants) -> int:
 
     failed = False
     for index, (name, *_) in enumerate(mutants):
+        started = time.monotonic()
         try:
             result = subprocess.run(
                 [sys.executable, sys.argv[0], str(index)],
@@ -71,11 +73,13 @@ def run(mutants) -> int:
                 timeout=60,
             )
         except subprocess.TimeoutExpired:
-            print(f"{name}: NOT PROVEN (harness timeout)", flush=True)
+            elapsed = time.monotonic() - started
+            print(f"{name}: NOT PROVEN (harness timeout; {elapsed:.3f}s)", flush=True)
             failed = True
             continue
+        elapsed = time.monotonic() - started
         killed = result.returncode == 1 and "MUTATION_ASSERTION_FAILURE" in result.stdout
-        print(f"{name}: {'KILLED' if killed else 'NOT PROVEN'}", flush=True)
+        print(f"{name}: {'KILLED' if killed else 'NOT PROVEN'} ({elapsed:.3f}s)", flush=True)
         if not killed:
             print(result.stdout[-3000:], result.stderr[-3000:])
             failed = True

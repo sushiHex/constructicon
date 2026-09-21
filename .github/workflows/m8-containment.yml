@@ -12,10 +12,60 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  containment:
+  classify:
     runs-on: ubuntu-24.04
-    # Run 34659442292 took 19m39s. Keep job headroom separate from the
-    # unchanged per-invocation deadlines and byte/connection budgets.
+    timeout-minutes: 5
+    outputs:
+      scope: ${{ steps.scope.outputs.scope }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Classify exact changes; unknown changes require physical proofs
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          scope=full
+          if [ "$EVENT" = pull_request ]; then
+            # PR code cannot decide that its own physical proof is unnecessary.
+            # The introducing PR has no base classifier and runs every lane.
+            if git cat-file -e "$BASE_SHA:scripts/ci/m8_ci_scope.py"; then
+              git show "$BASE_SHA:scripts/ci/m8_ci_scope.py" > "$RUNNER_TEMP/m8-ci-scope.py"
+              scope=$(python3 "$RUNNER_TEMP/m8-ci-scope.py" classify --base "$BASE_SHA" --head "$HEAD_SHA")
+            fi
+          fi
+          printf 'scope=%s\n' "$scope" >> "$GITHUB_OUTPUT"
+          printf 'M8 scope: **%s** (head `%s`).\n' "$scope" "$HEAD_SHA" >> "$GITHUB_STEP_SUMMARY"
+
+  docs:
+    needs: classify
+    if: needs.classify.outputs.scope == 'docs'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - run: python3 scripts/ci/m8_ci_scope.py docs
+
+  proofs:
+    name: proof (${{ matrix.lane }})
+    needs: classify
+    if: needs.classify.outputs.scope == 'full'
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [foundation, lifecycle, combined, mediation]
+    runs-on: ubuntu-24.04
+    # Isolated runners shorten the critical path; physical tests stay serial.
+    # Keep headroom separate from unchanged per-invocation deadlines/budgets.
     timeout-minutes: 30
     env:
       # Run-scoped, so evidence can never outlive the run that produced it. A
@@ -23,7 +73,7 @@ jobs:
       # but a run that fails before writing its evidence would otherwise leave
       # the previous run's file to be uploaded and read as current — and
       # `if-no-files-found: error` would not fire, because a file is present.
-      M8_EVIDENCE: /home/m8-service/evidence/${{ github.run_id }}-${{ github.run_attempt }}
+      M8_EVIDENCE: /home/m8-service/evidence/${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.lane }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -58,7 +108,17 @@ jobs:
           test ! -e "$M8_EVIDENCE"
           sudo install -d -o m8-service -g m8-service -m 0755 "$M8_EVIDENCE"
           sudo chmod o+x /home/runner /home/runner/work /home/runner/work/constructicon
+      - name: Record exact host and head for this lane
+        env:
+          EVIDENCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVIDENCE_LANE: ${{ matrix.lane }}
+        run: |
+          set -euo pipefail
+          printf 'commit=%s lane=%s image=%s/%s kernel=%s\n' "$EVIDENCE_COMMIT" "$EVIDENCE_LANE" "$ImageOS" "$ImageVersion" "$(uname -r)" > "$RUNNER_TEMP/m8-host.txt"
+          id m8-service >> "$RUNNER_TEMP/m8-host.txt"
+          sudo cat /sys/kernel/security/apparmor/profiles | awk '/constructicon-m8-/ {print}' >> "$RUNNER_TEMP/m8-host.txt"
       - name: Prove N3a protected descriptors and native-only store custody
+        if: matrix.lane == 'foundation'
         shell: bash
         run: |
           set -euo pipefail
@@ -66,7 +126,7 @@ jobs:
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_operator_store_restart.py \
               tests/substrate/test_operator_store_publication.py \
-              -v --tb=short -p no:cacheprovider
+              -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" \
             scripts/ci/build_m8_store_fixture.py | tee "$RUNNER_TEMP/m8-operator-store.json"
           sudo install -m 0444 "$RUNNER_TEMP/m8-operator-store.json" \
@@ -77,9 +137,10 @@ jobs:
             M8_OPERATOR_STORE_ROOT=/var/lib/constructicon-m8-launch/operator-stores \
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_operator_store_containment.py \
-              -v --tb=short -p no:cacheprovider
+              -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           uv run python scripts/check_m8_n3a_mutations.py
       - name: Acquire the pinned native investigation artifact (no account)
+        if: matrix.lane != 'foundation'
         shell: bash
         run: |
           set -euo pipefail
@@ -94,14 +155,10 @@ jobs:
           printf '%s  %s\n' d7136a413cfac1b5b1686d9e0dcc5c80ca05bebed5e9fc3911376561d0ef6ee8 "$RUNNER_TEMP/codex-models.json" | sha256sum --check --strict
           sudo install -m 0444 "$RUNNER_TEMP/codex-models.json" /var/lib/constructicon-m8-launch/codex-models.json
       - name: Prove bounded native startup without a provider route
+        if: matrix.lane == 'lifecycle'
         shell: bash
-        env:
-          EVIDENCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          printf 'commit=%s image=%s/%s kernel=%s\n' "$EVIDENCE_COMMIT" "$ImageOS" "$ImageVersion" "$(uname -r)" > "$RUNNER_TEMP/m8-host.txt"
-          id m8-service >> "$RUNNER_TEMP/m8-host.txt"
-          sudo cat /sys/kernel/security/apparmor/profiles | awk '/constructicon-m8-/ {print}' >> "$RUNNER_TEMP/m8-host.txt"
           sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" scripts/ci/build_m8_startup_fixture.py \
             /var/lib/constructicon-m8-launch/runtime /var/lib/constructicon-m8-launch/startup-runtime \
             /var/lib/constructicon-m8-launch/native-codex/bin/codex \
@@ -111,13 +168,14 @@ jobs:
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
             M8_STARTUP_REQUIRED=1 M8_STARTUP_ROOT=/var/lib/constructicon-m8-launch/startup-runtime \
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
-            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_native_startup.py -v --tb=short -p no:cacheprovider
+            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_native_startup.py -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
             M8_STARTUP_REQUIRED=1 M8_STARTUP_ROOT=/var/lib/constructicon-m8-launch/startup-runtime \
             PYTEST_ADDOPTS=-pno:cacheprovider \
             "$PWD/.venv/bin/python" scripts/check_m8_startup_mutations.py
-      - name: Prove the accepted test-only provider placement
+      - name: Build the accepted test-only provider placement
+        if: matrix.lane == 'lifecycle' || matrix.lane == 'combined'
         shell: bash
         run: |
           set -euo pipefail
@@ -127,14 +185,20 @@ jobs:
             /var/lib/constructicon-m8-launch/codex-models.json --provider-placement \
             | tee "$RUNNER_TEMP/m8-placement-runtime.json"
           sudo install -m 0444 "$RUNNER_TEMP/m8-placement-runtime.json" /var/lib/constructicon-m8-launch/placement-runtime.json
+      - name: Prove the accepted test-only provider placement
+        if: matrix.lane == 'lifecycle'
+        shell: bash
+        run: |
+          set -euo pipefail
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
             M8_PLACEMENT_REQUIRED=1 M8_PLACEMENT_ROOT=/var/lib/constructicon-m8-launch/placement-runtime \
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_provider_placement.py \
-              tests/test_native_provider.py tests/test_provider_placement.py -v --tb=short -p no:cacheprovider
+              tests/test_native_provider.py tests/test_provider_placement.py -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           uv run python scripts/check_m8_placement_mutations.py
       - name: Prove journal-owned native fixture recovery
+        if: matrix.lane == 'lifecycle'
         shell: bash
         run: |
           set -euo pipefail
@@ -143,9 +207,10 @@ jobs:
             M8_PLACEMENT_REQUIRED=1 M8_PLACEMENT_ROOT=/var/lib/constructicon-m8-launch/placement-runtime \
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_native_recovery.py \
-              tests/test_native_lifecycle.py -v --tb=short -p no:cacheprovider
+              tests/test_native_lifecycle.py -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           uv run python scripts/check_m8_native_recovery_mutations.py
       - name: Measure combined native startup and mediation
+        if: matrix.lane == 'combined'
         shell: bash
         run: |
           set -euo pipefail
@@ -157,10 +222,11 @@ jobs:
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_native_combined.py \
               tests/substrate/test_combined_startup_origins.py tests/test_native_combined.py \
               tests/substrate/test_combined_sender.py tests/substrate/test_codex_native.py \
-              -v --tb=short -p no:cacheprovider
+              -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           uv run python scripts/check_m8_combined_mutations.py
           uv run python scripts/check_m8_n2_mutations.py
       - name: Probe native mediation with loopback only and no credentials
+        if: matrix.lane == 'mediation'
         shell: bash
         run: |
           set -euo pipefail
@@ -178,10 +244,11 @@ jobs:
               M8_CODEX_CATALOG=/var/lib/constructicon-m8-launch/codex-models.json \
               M8_EVIDENCE_DIRECTORY="$2" \
               "$1/.venv/bin/python" -m pytest tests/substrate/test_native_codex_mediation.py \
-                -v --tb=short -p no:cacheprovider
+                -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           ' sh "$PWD" "$M8_EVIDENCE"
           uv run python scripts/check_native_codex_probe_mutations.py
       - name: Prove containment as the non-sudo service user
+        if: matrix.lane == 'foundation'
         shell: bash
         run: |
           set -euo pipefail
@@ -201,8 +268,9 @@ jobs:
               tests/runtime/test_async_workspace.py tests/api/test_capture_assembly.py \
               tests/substrate/test_contained_gates.py tests/substrate/test_gate_lifecycle.py \
               tests/runtime/test_async_gates.py \
-              -v --tb=short -p no:cacheprovider
+              -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
       - name: Kill the native review-regression mutants
+        if: matrix.lane == 'foundation'
         shell: bash
         run: |
           set -euo pipefail
@@ -226,7 +294,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: m8-containment-${{ github.run_id }}-${{ github.run_attempt }}
+          name: m8-containment-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.lane }}
           path: |
             ${{ runner.temp }}/m8-runtime.json
             ${{ runner.temp }}/m8-startup-runtime.json
@@ -245,3 +313,42 @@ jobs:
         run: |
           set -euo pipefail
           sudo dmesg --color=never | awk '/apparmor="DENIED"/ && /constructicon-m8-/ {if (count++ < 32) print}'
+
+  containment:
+    # One stable check, including explicit docs-only disposition. A failed,
+    # missing or cancelled prerequisite must never become a successful gate.
+    if: always()
+    needs: [classify, docs, proofs]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require the selected proof set
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          SCOPE: ${{ needs.classify.outputs.scope }}
+          CLASSIFICATION: ${{ needs.classify.result }}
+          DOCS: ${{ needs.docs.result }}
+          PROOFS: ${{ needs.proofs.result }}
+        run: |
+          set -euo pipefail
+          git cat-file -e "$BASE_SHA^{commit}"
+          if git cat-file -e "$BASE_SHA:scripts/ci/m8_ci_scope.py"; then
+            git show "$BASE_SHA:scripts/ci/m8_ci_scope.py" > "$RUNNER_TEMP/m8-ci-scope-gate.py"
+            python3 "$RUNNER_TEMP/m8-ci-scope-gate.py" gate --scope "$SCOPE" \
+              --classification "$CLASSIFICATION" --docs "$DOCS" --proofs "$PROOFS" \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            # The introducing PR has no trusted base gate. Its only admissible
+            # result is the complete physical proof set; docs may never bypass.
+            test "$SCOPE" = full
+            test "$CLASSIFICATION" = success
+            test "$DOCS" = skipped
+            test "$PROOFS" = success
+            printf '%s\n' 'all selected physical proof lanes succeeded (bootstrap)' \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+          fi

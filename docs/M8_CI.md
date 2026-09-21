@@ -78,12 +78,57 @@ launcher, workspace, closure and recorded-executor suites. Missing prerequisites
 are failures when `M8_CONTAINMENT_REQUIRED=1`; ordinary unsupported-host skips
 never satisfy this job. The assertion-only mutation inventory runs separately.
 
-The combined containment job has a thirty-minute ceiling: the exact-head run
+Each physical lane has a thirty-minute ceiling: the earlier serial run
 [34659442292](https://github.com/sushiHex/constructicon/actions/runs/34659442292)
 took 19m39s against its former twenty-minute limit. This gives provisioning,
 the accumulated suites, and evidence upload headroom; it does not renew any
 invocation deadline or change fixture byte/connection limits. It is not a
 target duration or permission to retry a failing test until it passes.
+
+### Selection, isolation and timing
+
+The stable `containment` check aggregates four independent hosted-runner lanes:
+
+| Lane | Proofs |
+| --- | --- |
+| `foundation` | N3a store custody; launcher, workspace, capture, gates and duplex; their mutation inventories |
+| `lifecycle` | Native startup, test-only provider placement and journal recovery; their mutation inventories |
+| `combined` | Combined startup/mediation and Codex adapter; combined and N2 mutation inventories |
+| `mediation` | Credential-free native mediation probes and their mutation inventory |
+
+Every lane provisions its own host, immutable runtime, service user and evidence
+directory. Tests and mutants remain serial inside a lane; each mutant still
+gets a fresh process. No deadline, test file or mutation inventory is removed.
+The workflow inventory test pins that routing. Each pytest invocation reports
+its ten slowest phases, and each mutant reports elapsed time, including failure
+and timeout outcomes. Only assertion failures count as killed mutants.
+
+For pull requests, the classifier from the exact base commit inspects a complete
+committed merge-base-to-head diff; PR code cannot grant itself the prose-only
+exemption. A missing base classifier selects the full set, including the PR
+that introduces this optimization. A verified diff may select the
+documentation path instead: only ordinary non-executable Markdown under `docs/`,
+the explicit root prose files and the plan manifest qualify. Unknown paths,
+type/mode changes and empty diffs select the full proof set; unavailable Git
+evidence fails classification. Manual dispatch always runs all physical lanes.
+Documentation selection checks archive completeness/digests and relative file
+links; it does not claim to validate every Markdown anchor or external URL.
+Its aggregate result explicitly says physical proof was not required, never
+that physical containment passed. A failed or cancelled prerequisite cannot
+become a successful aggregate. Aggregation also runs the exact base's policy,
+not the PR's gate implementation. During introduction, when that base policy
+does not yet exist, the bootstrap accepts only the successful full-proof shape;
+it cannot grant a docs-only exemption. This does not make a modified workflow
+definition trustworthy: workflow changes still require review as CI policy.
+The ordinary repository `verify` workflow still runs on every PR.
+
+This avoids rebuilding a physical lab for prose-only changes. Runner isolation
+reduces the serial critical path for code changes, at the cost of repeated host
+provisioning. The pre-split baselines are runs
+[35548285699](https://github.com/sushiHex/constructicon/actions/runs/35548285699)
+and [35544549472](https://github.com/sushiHex/constructicon/actions/runs/35544549472),
+both about 24.5 minutes. New-head timings and total runner cost belong in the
+optimization PR's evidence, not an assumed speedup.
 
 The closure contains curated Python/Git and their runtime libraries, plus the
 standalone reaper. Content, topology and permissions contribute to its digest;
@@ -91,12 +136,14 @@ the service cannot rewrite it. Root-owned installation and every ancestor are
 checked. Provisioning stays an explicit disposable-host operation, not code
 an unavailable adapter runs to repair its environment.
 
-The seven-day `m8-containment-*` artifact includes `m8-runtime.json` (the same
+Each seven-day `m8-containment-<run>-<attempt>-<lane>` artifact includes
+`m8-runtime.json` (the same
 inventory hashed by the launcher, executable/policy/ABI digests), `m8-host.txt`
-(commit, observed image/kernel/service/profile facts), and `boundary.json`
+(commit, lane, observed image/kernel/service/profile facts), and the evidence
+produced by that lane. The foundation lane supplies `boundary.json`
 (selected child namespace, mount, descriptor, ID-map, device and limit facts).
 It never captures the host environment or credentials. Read these alongside
-the exact job's test and mutation results: files alone are not a passing gate,
+all four lanes' exact test and mutation results: files alone are not a passing gate,
 and an earlier job does not qualify a later rolling image.
 
 PR B's portion demonstrates the networkless boundary, not an always-on execution
