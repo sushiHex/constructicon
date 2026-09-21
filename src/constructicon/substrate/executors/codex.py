@@ -1,4 +1,4 @@
-"""The operator-bound Codex adapter (ADR 0021, READ posture).
+"""The operator-bound Codex adapter (ADR 0021, READ and mediated WRITE).
 
 One task, one acquisition, one contained conversation: no persistent agent
 service, no second controller and no scheduler. The interesting logic lives in
@@ -8,10 +8,10 @@ module is the thin binding between that protocol and
 
 The conversation is strictly sequential per direction::
 
-    initialize            (never the experimental capability)
+    initialize            (WRITE opts into the exact dynamic-tool field)
     initialized           (notification)
     account/read          -> account_faults(...)      pre-turn gate
-    <turn>                   collect records until terminal
+    <turn>                   collect records and mediate exact WRITE callbacks
     account/read          -> account_faults(...)      pre-acceptance gate
     close stdin, drain to EOF
 
@@ -52,8 +52,9 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import math
 import tomllib
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, suppress
 from dataclasses import asdict
 from pathlib import Path
@@ -66,7 +67,7 @@ from constructicon.core.executor import (
     ExecutorOutcome,
     TaskSpec,
 )
-from constructicon.core.grants import EffectiveGrants
+from constructicon.core.grants import EffectiveGrants, Posture
 from constructicon.core.identity import Digest, canonical_json, digest, parse_json_value
 from constructicon.core.native_operator import (
     NativeEgressIdentityV1,
@@ -91,11 +92,15 @@ from constructicon.substrate.executors import codex_protocol
 from constructicon.substrate.executors.codex_protocol import (
     ACCOUNT_NOTICE_FAULT,
     ANSWERED_NOTHING_FAULT,
+    CONTAINED_PYTHON_CATALOG,
+    CONTAINED_PYTHON_TOOL,
     DAMAGE_NESTING,
     DUPLICATE_REPLY_FAULT,
     EMPTY_TURN,
     GATE_INCOMPLETE_FAULT,
     INCONCLUSIVE_DRAIN_FAULT,
+    MAX_TOOL_CALLS,
+    RECORD_BYTES,
     UNSOLICITED_REPLY_FAULT,
     ExpectedAccount,
     RecordDamaged,
@@ -114,7 +119,9 @@ from constructicon.substrate.executors.codex_protocol import (
     named_method,
     observe_turn,
     parse_record,
+    parse_tool_call,
     thread_start_request,
+    tool_call_response,
     turn_request,
     unavailable_outcome,
 )
@@ -136,6 +143,10 @@ from constructicon.substrate.git.acquisition import (
     acquisition_guard,
     dispose_acquisition,
 )
+from constructicon.substrate.git.capture import (
+    ContainedWriteWorkspace,
+    ContainedWriteWorkspaceProvider,
+)
 
 CLIENT_NAME = "constructicon"
 CLIENT_VERSION = "0"
@@ -143,9 +154,14 @@ NATIVE_CWD = "/tmp"
 """The native zone has no workspace; the launcher already chdirs here."""
 
 APP_SERVER_ARGUMENTS = ("app-server", "--strict-config", "--stdio")
+WORKER_ARGUMENTS = ("/usr/bin/python3", "-I", "-c", "import sys; exec(sys.stdin.read())")
 
 WITHHELD_METHODS = 16
 """How many withheld method names to retain for reporting."""
+
+CALLBACK_PENDING_RECORDS = 64
+CALLBACK_PENDING_BYTES = RECORD_BYTES
+"""What one active callback may observe and defer before it must refuse."""
 
 INGRESS_NOT_ESTABLISHED = "private fixed-actor ingress is not established by assembly"
 STORE_NOT_ESTABLISHED = "the operator store binding has no physical qualification"
@@ -264,7 +280,9 @@ class CodexConversation:
 
     def __init__(
         self, *, task: TaskSpec, grants: EffectiveGrants, expected: ExpectedAccount,
-        input_limit: int, preamble: int = 0,
+        input_limit: int, preamble: int = 0, catalog: Sequence[str] = (),
+        worker: Callable[[str], Awaitable[str]] | None = None,
+        deadline: float | None = None,
     ) -> None:
         selection = grants.model_selection
         if selection.kind != "explicit" or not (selection.model or "").strip():
@@ -273,6 +291,19 @@ class CodexConversation:
             # construction, before any byte moves: one fewer way for an
             # exception to escape the conversation.
             raise ContractViolation("a native operator conversation requires a sealed model")
+        resolved_catalog = tuple(catalog)
+        if resolved_catalog not in ((), CONTAINED_PYTHON_CATALOG):
+            raise ContractViolation("a codex conversation has an unknown callback catalog")
+        if tuple(sorted(set(grants.allowed_tools))) != resolved_catalog:
+            raise ContractViolation("the callback catalog differs from the sealed tool grant")
+        if bool(resolved_catalog) != (worker is not None):
+            raise ContractViolation("a callback catalog and worker must be supplied together")
+        if bool(resolved_catalog) != (deadline is not None):
+            raise ContractViolation("a callback conversation requires its shared deadline")
+        if deadline is not None and (
+            type(deadline) not in (int, float) or not math.isfinite(deadline)
+        ):
+            raise ContractViolation("a callback conversation requires a finite deadline")
         self._task = task
         self._grants = grants
         self._expected = expected
@@ -282,6 +313,9 @@ class CodexConversation:
         # allowance is still available.
         self._input_limit = input_limit
         self._preamble = preamble
+        self._catalog = resolved_catalog
+        self._worker = worker
+        self._deadline = deadline
         self._stream = RecordStream()
         self._queue: list[bytes] = []
         self._identifier = 0
@@ -291,8 +325,13 @@ class CodexConversation:
         self._allocated: set[int] = set()
         self._correlated: set[int] = set()
         self._deferred: bytes | None = None
+        self._deferred_request: bytes | None = None
         self._pre_send_record = False
         self._excluded = 0
+        self._server_requests: set[tuple[str, int | str]] = set()
+        self._tool_calls: set[str] = set()
+        self._callbacks_started = 0
+        self._callbacks_completed = 0
         # Classified and bounded: what the session emitted before the turn
         # existed is a fact about the pinned interface worth reporting, and
         # the native lane records it.
@@ -521,6 +560,9 @@ class CodexConversation:
             if record is None:
                 return False
             if "id" in record:
+                if "method" in record and self._catalog:
+                    self._refuse("a native request arrived outside the active turn")
+                    return False
                 if not self._judge_identified(
                     line, record, context=f"the {method!r} request",
                 ):
@@ -593,7 +635,20 @@ class CodexConversation:
                     return None
                 continue
             if "method" in record:
-                self._refuse("this slice authorizes no native request")
+                if pre_send:
+                    self._refuse(
+                        f"a native request arrived before the {method!r} request"
+                    )
+                    return None
+                if (
+                    bool(self._catalog)
+                    and method == "turn/start"
+                    and record.get("method") == "item/tool/call"
+                ):
+                    if not self._defer_tool_request(line, record):
+                        return None
+                    continue
+                self._refuse("this conversation authorizes no native request here")
                 return None
             if pre_send:
                 # Its bytes were read before this request was written, so it
@@ -617,6 +672,271 @@ class CodexConversation:
                 return None
             self._correlated.add(record["id"])
             return record
+
+    def _defer_tool_request(self, line: bytes, record: Mapping[str, Any]) -> bool:
+        """Hold at most one validated request until ``turn/start`` names its turn."""
+
+        if self._deferred is not None:
+            self._refuse("a callback request arrived after the deferred turn completion")
+            return False
+        if self._deferred_request is not None:
+            self._refuse("two callback requests arrived before the turn was named")
+            return False
+        if self.thread_id is None:
+            self._refuse("a callback request arrived before the thread was named")
+            return False
+        try:
+            parse_tool_call(record, thread_id=self.thread_id, turn_id=None)
+        except ContractViolation as exc:
+            self._refuse(bounded_detail(str(exc)))
+            return False
+        self._deferred_request = line
+        return True
+
+    @staticmethod
+    def _server_key(request_id: int | str) -> tuple[str, int | str]:
+        """Keep inbound request ids separate from client RPC reply ids."""
+
+        return type(request_id).__name__, request_id
+
+    async def _dispatch_tool(
+        self, io: ProcessIO, record: Mapping[str, Any],
+    ) -> bool:
+        """Run and answer one admitted callback, recording completion positively."""
+
+        if (
+            self.thread_id is None
+            or self.turn_id is None
+            or self._worker is None
+            or self._deadline is None
+            or self._catalog != CONTAINED_PYTHON_CATALOG
+        ):
+            self._refuse("the callback authority is not open for this turn")
+            return False
+        try:
+            call = parse_tool_call(
+                record, thread_id=self.thread_id, turn_id=self.turn_id,
+            )
+        except ContractViolation as exc:
+            self._refuse(bounded_detail(str(exc)))
+            return False
+        request_key = self._server_key(call.request_id)
+        if request_key in self._server_requests:
+            self._refuse("the native client repeated a callback request id")
+            return False
+        self._server_requests.add(request_key)
+        if call.call_id in self._tool_calls:
+            self._refuse("the native client repeated a callback call id")
+            return False
+        if len(self._tool_calls) >= MAX_TOOL_CALLS:
+            self._refuse("the native client exceeded the callback call ceiling")
+            return False
+        # Spend before the first effect await. A lost response can never make
+        # this call eligible to run again.
+        self._tool_calls.add(call.call_id)
+        self._callbacks_started += 1
+        try:
+            completed = await self._await_callback(io, call.program)
+            if completed is None:
+                return False
+            output, held = completed
+            response = tool_call_response(call, output)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._refuse(f"the contained callback failed ({type(exc).__name__})")
+            return False
+        if not await self._send(io, response):
+            return False
+        # These calls arrived before this response. They can become eligible
+        # only now; prepending preserves their wire order ahead of records that
+        # were still unread when the response completed.
+        self._queue = held + self._queue
+        # Worker return and the complete response write are both positive facts.
+        self._callbacks_completed += 1
+        return True
+
+    async def _await_callback(
+        self, io: ProcessIO, program: str,
+    ) -> tuple[str, list[bytes]] | None:
+        """Race one effect with native death while preserving sequential calls."""
+
+        assert self._worker is not None and self._deadline is not None
+        async def invoke_worker() -> str:
+            assert self._worker is not None
+            return await self._worker(program)
+
+        worker: asyncio.Task[str] = asyncio.create_task(invoke_worker())
+        reads: list[asyncio.Task[bytes | None]] = []
+        current = asyncio.create_task(self._read(io))
+        reads.append(current)
+        held: list[bytes] = []
+        held_bytes = 0
+        held_requests: set[tuple[str, int | str]] = set()
+        held_calls: set[str] = set()
+        records = 0
+        cancelled_here: set[asyncio.Task[object]] = set()
+
+        async def join_owned() -> None:
+            tasks = (worker, *reads)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            errors: list[BaseException] = []
+            for task, result in zip(tasks, results, strict=True):
+                if not isinstance(result, BaseException):
+                    continue
+                if isinstance(result, asyncio.CancelledError) and task in cancelled_here:
+                    continue
+                if isinstance(result, BaseExceptionGroup) and task in cancelled_here:
+                    _, remainder = result.split(asyncio.CancelledError)
+                    if remainder is not None:
+                        errors.append(remainder)
+                    continue
+                errors.append(result)
+            if len(errors) == 1:
+                raise errors[0]
+            if errors:
+                raise BaseExceptionGroup("callback cleanup failed", errors)
+
+        primary: BaseException | None = None
+        try:
+            try:
+                async with asyncio.timeout_at(self._deadline):
+                    while True:
+                        done, _ = await asyncio.wait(
+                            (worker, current), return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        # A simultaneously observable native fact precedes the
+                        # worker result: without a live peer no response can be
+                        # credited, however close the two completions were.
+                        if current in done:
+                            line = current.result()
+                            if line is None:
+                                self._refuse(
+                                    "the native client ended while a callback was active"
+                                )
+                                return None
+                            records += 1
+                            if records > CALLBACK_PENDING_RECORDS:
+                                self._refuse(
+                                    "the native client flooded an active callback"
+                                )
+                                return None
+                            try:
+                                pending = parse_record(line)
+                            except RecordDamaged:
+                                self._refuse(
+                                    "a damaged native record arrived while a callback was active"
+                                )
+                                return None
+                            if not isinstance(pending, dict) or (
+                                "id" not in pending and "method" not in pending
+                            ):
+                                self._refuse(
+                                    "a malformed native record arrived while a callback was active"
+                                )
+                                return None
+                            if "method" in pending and not isinstance(
+                                pending["method"], str,
+                            ):
+                                self._refuse(
+                                    "a malformed native method arrived while a callback was active"
+                                )
+                                return None
+                            if "id" in pending:
+                                if "method" not in pending:
+                                    self._judge_identified(
+                                        line, pending, context="an active callback",
+                                    )
+                                    return None
+                                try:
+                                    deferred = parse_tool_call(
+                                        pending,
+                                        thread_id=self.thread_id or "",
+                                        turn_id=self.turn_id,
+                                    )
+                                except ContractViolation as exc:
+                                    self._refuse(bounded_detail(str(exc)))
+                                    return None
+                                request_key = self._server_key(deferred.request_id)
+                                if (
+                                    request_key in self._server_requests
+                                    or request_key in held_requests
+                                ):
+                                    self._refuse(
+                                        "the native client repeated a pending callback request id"
+                                    )
+                                    return None
+                                if (
+                                    deferred.call_id in self._tool_calls
+                                    or deferred.call_id in held_calls
+                                ):
+                                    self._refuse(
+                                        "the native client repeated a pending callback call id"
+                                    )
+                                    return None
+                                if len(self._tool_calls) + len(held) >= MAX_TOOL_CALLS:
+                                    self._refuse(
+                                        "the native client exceeded the callback call ceiling"
+                                    )
+                                    return None
+                                if held_bytes + len(line) > CALLBACK_PENDING_BYTES:
+                                    self._refuse(
+                                        "pending callback requests exceeded their byte ceiling"
+                                    )
+                                    return None
+                                held_requests.add(request_key)
+                                held_calls.add(deferred.call_id)
+                                held.append(line)
+                                held_bytes += len(line)
+                            elif pending.get("method") == "turn/completed":
+                                self._transcript.append(line)
+                                self._refuse(
+                                    "the turn completed while a callback was active"
+                                )
+                                return None
+                            elif not self._absorb(line, pending):
+                                return None
+                            if worker in done:
+                                return worker.result(), held
+                            current = asyncio.create_task(self._read(io))
+                            reads.append(current)
+                            continue
+                        return worker.result(), held
+            except TimeoutError:
+                self._refuse("the shared deadline expired while a callback was active")
+                return None
+        except BaseException as exc:
+            primary = exc
+            raise
+        finally:
+            for task in (worker, *reads):
+                if not task.done():
+                    cancelled_here.add(task)
+                    task.cancel()
+            try:
+                await finish_owned(asyncio.create_task(join_owned()))
+            except BaseException as cleanup:
+                if primary is not None:
+                    raise BaseExceptionGroup(
+                        "callback failed during cleanup", [primary, cleanup],
+                    ) from None
+                raise
+
+    async def _claim_deferred_request(self, io: ProcessIO) -> bool:
+        """Validate and dispatch the no-effect request held before turn identity."""
+
+        line, self._deferred_request = self._deferred_request, None
+        if line is None:
+            return True
+        try:
+            record = parse_record(line)
+        except RecordDamaged:
+            self._refuse("the deferred callback request became damaged")
+            return False
+        if not isinstance(record, dict):
+            self._refuse("the deferred callback request is not an object")
+            return False
+        return await self._dispatch_tool(io, record)
 
     def _once(self, identifier: Any) -> bool:
         """No second record may bear an id already correlated.
@@ -657,6 +977,9 @@ class CodexConversation:
         except RecordDamaged:
             return True
         if not isinstance(record, dict) or "id" not in record:
+            return False
+        if "method" in record and self._catalog:
+            self._refuse("a native request arrived during the terminal drain")
             return False
         self._judge_identified(line, record, context="the drain to EOF")
         return False
@@ -746,6 +1069,7 @@ class CodexConversation:
             return
         opened = await self._request(io, initialize_request(
             self._next_identifier(), client=CLIENT_NAME, version=CLIENT_VERSION,
+            experimental_api=bool(self._catalog),
         ))
         if opened is None:
             return
@@ -766,6 +1090,7 @@ class CodexConversation:
 
         started = await self._request(io, thread_start_request(
             self._next_identifier(), cwd=NATIVE_CWD,
+            dynamic_tools=(CONTAINED_PYTHON_TOOL,) if self._catalog else (),
         ))
         if started is None:
             return
@@ -790,8 +1115,20 @@ class CodexConversation:
         if self.turn_id is None:
             self._refuse("the native client started no identified turn")
             return
+        if self._deferred_request is not None and self._deferred is not None:
+            self._refuse("the turn completed before its deferred callback was answered")
+            return
+        if not await self._claim_deferred_request(io):
+            return
         if not self._claim_deferred():
             await self._collect(io)
+
+        if (
+            self._deferred_request is not None
+            or self._callbacks_started != self._callbacks_completed
+        ):
+            self._refuse("the callback completion check did not complete")
+            return
 
         after = await self._account(io)
         if after is None:
@@ -833,7 +1170,10 @@ class CodexConversation:
                 self._transcript.append(line)
                 continue
             if isinstance(record, dict) and "id" in record:
-                if not self._judge_identified(line, record, context="this turn"):
+                if "method" in record and self._catalog:
+                    if not await self._dispatch_tool(io, record):
+                        return
+                elif not self._judge_identified(line, record, context="this turn"):
                     return
             elif isinstance(record, dict) and "method" in record:
                 if not self._absorb(line, record):
@@ -902,6 +1242,7 @@ class CodexOperatorHandle:
         self.closed = False
         self.executed = False
         self.active: asyncio.Task[ProcessResult] | None = None
+        self.worker_active: asyncio.Task[ProcessResult] | None = None
         self._materialization: asyncio.Task[None] | None = None
         self._cleanup: asyncio.Task[None] | None = None
         self._close_disposition: Disposition | None = None
@@ -1047,8 +1388,17 @@ class CodexOperatorHandle:
         if canonical_json(grants) != canonical_json(self.context.binding.effective_grants):
             raise ContractViolation("codex executor call differs from its sealed grants")
         faults = self.validate_grants(grants)
-        if workspace is not None:
-            faults += ("the native zone takes no workspace",)
+        write_workspace: ContainedWriteWorkspace | None = None
+        if self.profile.posture is Posture.WRITE:
+            if not isinstance(workspace, ContainedWriteWorkspace):
+                faults += ("the WRITE operator requires its contained workspace",)
+            else:
+                try:
+                    write_workspace = self._validated_workspace(workspace, grants)
+                except (OSError, ContractViolation) as exc:
+                    faults += (f"the WRITE workspace is unavailable: {bounded_detail(str(exc))}",)
+        elif workspace is not None:
+            faults += ("the READ native zone takes no workspace",)
         if task.context or task.response_schema is not None:
             faults += ("this slice carries neither task context nor a response schema",)
         if grants.model_selection.model != self.provider.configured_model:
@@ -1062,19 +1412,46 @@ class CodexOperatorHandle:
             return ExecutorFailure(error=ExecutorError(
                 kind="unavailable", detail=bounded_detail("; ".join(faults)),
             ))
-        return await self._converse(task, grants)
+        return await self._converse(task, grants, write_workspace)
 
-    async def _converse(self, task: TaskSpec, grants: EffectiveGrants) -> ExecutorOutcome:
+    def _validated_workspace(
+        self, workspace: ContainedWriteWorkspace, grants: EffectiveGrants,
+    ) -> ContainedWriteWorkspace:
+        """Compose the provider's ownership proof with the three missing facts."""
+
+        provider = workspace.provider
+        if not isinstance(provider, ContainedWriteWorkspaceProvider):
+            raise ContractViolation("the WRITE workspace has another provider kind")
+        owned = provider.owned_view(workspace, self.context)
+        if not isinstance(owned, ContainedWriteWorkspace):
+            raise ContractViolation("the WRITE workspace provider returned another view kind")
+        actual = owned.context
+        if actual.run_lease.owner_id != self.context.run_lease.owner_id:
+            raise ContractViolation("the WRITE workspace belongs to another lease owner")
+        if actual.binding.revision != provider.revision:
+            raise ContractViolation("the WRITE workspace binding revision drifted")
+        if (
+            canonical_json(actual.binding.effective_grants) != canonical_json(grants)
+            or canonical_json(self.context.binding.effective_grants) != canonical_json(grants)
+        ):
+            raise ContractViolation("the WRITE workspace carries different sealed grants")
+        control = actual.check_control
+        if control is None:
+            raise ContractViolation("the WRITE workspace lost invocation control")
+        self._check_control()
+        control()
+        return owned
+
+    async def _converse(
+        self, task: TaskSpec, grants: EffectiveGrants,
+        workspace: ContainedWriteWorkspace | None,
+    ) -> ExecutorOutcome:
         provider = self.provider
         store = provider.binding_store
         held = self._store_lock
         guard = self._guard_fd
         if store is None or held is None or guard is None or self.initial_check is None:
             raise ContractViolation("codex acquisition has no retained binding custody")
-        conversation = CodexConversation(
-            task=task, grants=grants, expected=provider.expected_account,
-            input_limit=provider.launcher.limits.input_bytes,
-        )
         # The deadline covers the launcher's own prerequisite probe, which
         # re-hashes bubblewrap, the policy and the whole runtime root before the
         # child starts. It does not begin at the first byte.
@@ -1082,6 +1459,21 @@ class CodexOperatorHandle:
         await self._require_open()
         if provider.launcher.revision != provider.identity.isolation_revision:
             raise ContractViolation("the pinned launch recipe drifted from its identity")
+        deadline = asyncio.get_running_loop().time() + grants.timeout_s
+        worker = None
+        if workspace is not None:
+            async def run_worker(program: str) -> str:
+                return await self._run_worker(
+                    program, workspace=workspace, grants=grants, deadline=deadline,
+                )
+
+            worker = run_worker
+        conversation = CodexConversation(
+            task=task, grants=grants, expected=provider.expected_account,
+            input_limit=provider.launcher.limits.input_bytes,
+            catalog=provider.catalog, worker=worker,
+            deadline=deadline if worker is not None else None,
+        )
 
         def before_spawn() -> BindingCheck:
             # LinuxLauncher invokes this after its probe and immediately before
@@ -1098,10 +1490,13 @@ class CodexOperatorHandle:
             lock_fd=held.lock_fd,
             before_spawn=before_spawn,
         )
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            return _unavailable("the native operator deadline expired before launch", grants)
         self.active = asyncio.create_task(provider.launcher.exchange(
             (provider.binary, *APP_SERVER_ARGUMENTS),
             workspace=None, posture=grants.posture, guard_fds=(guard, held.lock_fd),
-            conversation=conversation, timeout_s=grants.timeout_s, native_store=native_store,
+            conversation=conversation, timeout_s=remaining, native_store=native_store,
         ))
         try:
             result = await self.active
@@ -1137,6 +1532,79 @@ class CodexOperatorHandle:
             )
         return decode_turn(conversation.observation, result, requested_model=requested)
 
+    async def _run_worker(
+        self, program: str, *, workspace: ContainedWriteWorkspace,
+        grants: EffectiveGrants, deadline: float,
+    ) -> str:
+        """Execute one program in the workspace-only zone and join its owner."""
+
+        if self.worker_active is not None:
+            raise ContractViolation("contained callbacks must be sequential")
+        validated = self._validated_workspace(workspace, grants)
+        async with validated.use() as guard:
+            self._validated_workspace(validated, grants)
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise ContractViolation("the shared operator deadline expired")
+            task = asyncio.create_task(self.provider.launcher.run(
+                WORKER_ARGUMENTS,
+                workspace=Path(validated.path), posture=Posture.WRITE,
+                guard_fds=(guard,), stdin=program.encode("utf-8"), input_kind="task",
+                timeout_s=remaining,
+            ))
+            self.worker_active = task
+            result: ProcessResult | None = None
+            primary: BaseException | None = None
+            try:
+                # Shield distinguishes cancellation of this callback owner from
+                # the worker's own terminal result, so cleanup failure cannot
+                # overwrite the cancellation fact.
+                result = await asyncio.shield(task)
+            except BaseException as exc:
+                primary = exc
+
+            cleanup: BaseException | None = None
+            if isinstance(primary, asyncio.CancelledError) and not task.done():
+                task.cancel()
+                try:
+                    await finish_owned(task)
+                except BaseException as exc:
+                    if isinstance(exc, asyncio.CancelledError):
+                        pass
+                    elif isinstance(exc, BaseExceptionGroup):
+                        _, cleanup = exc.split(asyncio.CancelledError)
+                    else:
+                        cleanup = exc
+            try:
+                if primary is not None and cleanup is not None:
+                    raise BaseExceptionGroup(
+                        "contained callback cancelled during failed cleanup",
+                        [primary, cleanup],
+                    )
+                if primary is not None:
+                    raise primary
+                if cleanup is not None:
+                    raise cleanup
+            finally:
+                # No await may follow clearing this latch: the task is either
+                # terminal already or was explicitly cancelled and joined.
+                if not task.done():
+                    raise ContractViolation("contained callback worker lost ownership")
+                self.worker_active = None
+            assert result is not None
+            self._validated_workspace(validated, grants)
+            if (
+                result.returncode != 0
+                or result.payload_returncode != 0
+                or result.timed_out
+                or result.bound_exceeded is not None
+            ):
+                raise ContractViolation("the contained callback worker did not complete")
+            try:
+                return result.stdout.decode("utf-8")
+            except UnicodeError as exc:
+                raise ContractViolation("the contained callback returned invalid UTF-8") from exc
+
     async def cleanup(self, disposition: Disposition) -> None:
         if self._close_disposition is None:
             self._close_disposition = disposition
@@ -1166,7 +1634,8 @@ class CodexOperatorHandle:
         # These tasks own all work that can still acquire or pass the retained
         # descriptions. Join them before closing either parent copy.
         pending = tuple(dict.fromkeys(
-            task for task in (self._materialization, self.active) if task is not None
+            task for task in (self._materialization, self.active, self.worker_active)
+            if task is not None
         ))
         cancelled_here: set[asyncio.Task[object]] = set()
         for task in pending:
@@ -1257,10 +1726,23 @@ class CodexOperatorProvider:
             raise ContractViolation("the acquisition root must be absolute")
         if ".." in acquisition_root.parts:
             raise ContractViolation("the acquisition root must be canonical")
-        if catalog:
+        resolved_catalog = tuple(catalog)
+        policy = profile.grant_policy
+        if profile.posture is Posture.READ:
+            coherent = (
+                resolved_catalog == ()
+                and policy.tool_sets == ((),)
+                and not policy.workspace_required
+            )
+        else:
+            coherent = (
+                resolved_catalog == CONTAINED_PYTHON_CATALOG
+                and policy.tool_sets == (CONTAINED_PYTHON_CATALOG,)
+                and policy.workspace_required
+            )
+        if not coherent:
             raise ContractViolation(
-                "this slice publishes no mediated callback catalog; the WRITE posture and "
-                "its contained worker arrive with N2's second slice"
+                "the native operator profile and mediated callback catalog disagree"
             )
         drift = {
             "adapter_revision": ADAPTER_REVISION,
@@ -1312,6 +1794,7 @@ class CodexOperatorProvider:
             )
         self.launcher = launcher
         self.profile = profile
+        self.catalog = resolved_catalog
         self.binary = binary
         self.expected_account = expected_account
         self._identity = identity

@@ -234,9 +234,9 @@ MUTANTS = (
         ADAPTER + "test_grants_differing_from_the_sealed_set_are_refused",
     ),
     (
-        "initialize never requests the experimental capability",
+        "READ initialize never requests the experimental capability",
         INITIALIZE,
-        '"capabilities": {},',
+        '"capabilities": {"experimentalApi": True} if experimental_api else {},',
         '"capabilities": {"experimentalApi": True},',
         PROTOCOL + "test_initialize_never_requests_the_experimental_capability",
     ),
@@ -583,8 +583,8 @@ MUTANTS = (
     (
         "a pre-send record cannot answer the request",
         CORRELATE,
-        "if pre_send:",
-        "if False:",
+        "if pre_send:\n            # Its bytes were read before this request",
+        "if False:\n            # Its bytes were read before this request",
         ADAPTER + "test_a_half_framed_forgery_is_refused_with_no_genuine_reply_behind_it",
     ),
     (
@@ -658,11 +658,11 @@ MUTANTS = (
         ADAPTER + "test_an_identity_that_drifts_from_the_actual_content_is_refused",
     ),
     (
-        "this slice publishes no mediated callback catalog",
+        "READ refuses a mediated callback catalog",
         CONSTRUCTOR,
-        "if catalog:",
+        "if not coherent:",
         "if False:",
-        ADAPTER + "test_this_slice_publishes_no_mediated_callback_catalog",
+        ADAPTER + "test_read_profile_refuses_a_write_callback_catalog",
     ),
 )
 

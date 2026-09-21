@@ -508,11 +508,23 @@ def test_an_identity_that_drifts_from_the_actual_content_is_refused(field_name):
     assert field_name in str(refused.value)
 
 
-def test_this_slice_publishes_no_mediated_callback_catalog():
+def test_read_profile_refuses_a_write_callback_catalog():
     launcher = bare_launcher()
-    with pytest.raises(ContractViolation, match="mediated callback catalog"):
+    identity = launch_identity(
+        launcher=launcher, profile=codex_profile(), egress=native_egress(),
+        store=native_store(),
+        executable_digest=digest("test-codex-executable", 1, BINARY),
+        configuration=CONFIGURATION, catalog=("contained_python",),
+        authenticated_startup_conformance_revision=digest(
+            "test-codex-startup", 1, "unproven",
+        ),
+        subscription_mode_conformance_revision=digest(
+            "test-codex-mode", 1, "unproven",
+        ),
+    )
+    with pytest.raises(ContractViolation, match="profile and mediated callback catalog"):
         CodexOperatorProvider(
-            launcher=launcher, profile=codex_profile(), identity=identity_for(launcher),
+            launcher=launcher, profile=codex_profile(), identity=identity,
             expected_account=EXPECTED, binary=BINARY, configuration=CONFIGURATION,
             catalog=("contained_python",),
             acquisition_root=ACQUISITION_ROOT, unavailable_reasons=(),
@@ -1532,7 +1544,7 @@ def assert_launch(launcher, *, grants=GRANTS):
     assert call["command"] == (BINARY, "app-server", "--strict-config", "--stdio")
     assert call["workspace"] is None
     assert call["posture"] is grants.posture
-    assert call["timeout_s"] == grants.timeout_s
+    assert 0 < call["timeout_s"] <= grants.timeout_s
     guards = call["guard_fds"]
     assert guards and len(set(guards)) == len(guards)
     assert len(call["guard_modes"]) == len(guards)

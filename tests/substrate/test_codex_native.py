@@ -40,13 +40,18 @@ is the store-empty proof.
 import json
 import re
 
+import pytest
+
 from constructicon.core.executor import TaskSpec
 from constructicon.core.grants import EffectiveGrants, ModelSelection, Posture
 from constructicon.substrate.executors.codex import CodexConversation
 from constructicon.substrate.executors.codex_protocol import (
+    CONTAINED_PYTHON_TOOL,
     NO_ACCOUNT_FAULT,
     PROVIDER_OVERRIDE_FAULT,
     ExpectedAccount,
+    initialize_request,
+    thread_start_request,
     unavailable_outcome,
 )
 from tests.native_startup import MODELS, configuration
@@ -152,3 +157,57 @@ async def test_a_provider_requiring_openai_auth_leaves_only_the_empty_store_faul
     )
     assert conversation.faults == (NO_ACCOUNT_FAULT,)
     assert outcome.error.detail == NO_ACCOUNT_FAULT
+
+
+@pytest.mark.parametrize("experimental_api", [False, True])
+async def test_pinned_dynamic_tool_registration_requires_explicit_opt_in(
+    placement_image, tmp_path, experimental_api,
+):
+    """Protocol availability only: no turn, account, credential or model call.
+
+    Both cases send identical registration bytes. Only this connection's
+    initialization capability differs. The fixture's private configuration
+    selects its inert provider; the request cannot select a model or route.
+    """
+    async def register(wire, observed):
+        observed["placement"] = (await wire.read())["placement"]
+        observed["bootstrap"] = await wire.read()
+        initialization = initialize_request(
+            1, client="constructicon_callback_gate", version="0",
+            experimental_api=experimental_api,
+        )
+        observed["initialize"] = await wire.rpc("initialize", initialization["params"])
+        await wire.send({"method": "initialized"})
+        wire.sequence += 1
+        request_id = wire.sequence
+        await wire.send(thread_start_request(
+            request_id, cwd="/tmp/native-startup", dynamic_tools=(CONTAINED_PYTHON_TOOL,),
+        ))
+        while True:
+            reply = await wire.read()
+            if "id" not in reply and "method" in reply:
+                continue  # Wire enforces cumulative and per-record bounds.
+            assert type(reply.get("id")) is int and reply["id"] == request_id
+            assert "method" not in reply
+            observed["registration"] = reply
+            break
+        await wire.io.close_stdin()
+
+    async with placement(placement_image) as (composed, peer, record):
+        observations, result = await observe(
+            composed, peer, tmp_path, record=record, query=register,
+        )
+    assert_outcome(result)
+    assert peer.requests == [], "registration must not start a model turn"
+    registration = observations["registration"]
+    if experimental_api:
+        assert "error" not in registration
+        thread_id = registration["result"]["thread"]["id"]
+        assert isinstance(thread_id, str) and thread_id
+    else:
+        assert "result" not in registration
+        error = registration["error"]
+        assert error["code"] == -32600
+        assert error["message"] == (
+            "thread/start.dynamicTools requires experimentalApi capability"
+        )

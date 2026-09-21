@@ -1252,3 +1252,121 @@ The [final-head connector review](https://github.com/sushiHex/constructicon/pull
 reported no major issues. Its introduced acquisition-path P1 was fixed and the
 [review thread](https://github.com/sushiHex/constructicon/pull/89#discussion_r4058671099)
 was resolved before merge.
+
+## N2 WRITE — callback and contained-workspace composition (#75)
+
+[PR #95](https://github.com/sushiHex/constructicon/pull/95) carries the remaining
+credential-free WRITE work. It references, rather than closes, issue #75 until
+the complete acceptance matrix is established. The independent pre-code
+[state review](M8-N2-WRITE-state-review.md) was committed as `f906137` before
+implementation. It records the positive facts required across callback,
+worker, workspace, capture and close awaits; no accepted plan bytes changed.
+
+The implementation extends the existing adapter with one fixed
+`contained_python` callback. WRITE opts into that carrier explicitly; READ's
+requests retain their previous bytes. Callback request identities and client
+reply identities remain separate, while both request and call identities are
+spent before effects. A bounded pre-turn request waits for the naming reply;
+a previously observed terminal record closes that authority. Worker completion
+and response delivery are recorded separately from subscription-gate completion.
+
+The handle reuses the workspace provider's ownership law, adding only owner,
+revision and exact-grant checks. Its worker receives the workspace guard only,
+not the native acquisition or store guards, and spends the native exchange's
+remaining deadline. The unchanged proposal/capture and gate components compose
+the behavior; there is no new graph primitive, journal record or scheduler.
+
+### Introduced findings reproduced during implementation
+
+The first callback implementation awaited the worker without observing native
+EOF. Source inspection and an executable regression confirmed that the exchange
+supervisor did not itself cancel the conversation at that seam. The state review
+was amended before replacing that await with one owned worker/read race. It
+judges a simultaneous native fact first, joins on refusal, and holds only exact,
+bounded pending callbacks until the preceding response is completely written.
+
+The correction initially discarded exceptions returned by its cleanup join.
+Preserving those exceptions then exposed a second defect: a cleanup failure
+could replace an enclosing cancellation and become an ordinary refusal. Separate
+regressions reproduced both. Cleanup now retains the cancellation and failure
+together; the workspace worker follows the same ownership rule. The independent
+follow-up review found no remaining blocker in these two cleanup paths. These
+are portable lifecycle proofs, not evidence of physical Linux process cleanup.
+
+A source-based review also corrected the Linux fixture's assumption that a red
+gate produces no attestation. The existing gate records failed checks too; its
+`ok` verdict, not the existence of an attestation, distinguishes authorization.
+The fixture now checks the retained attestation's subject and checks for both
+outcomes. Its physical execution still requires the Linux lane below.
+
+A later public-handle test initially reported lost cancellation/cleanup
+evidence. That premise did not survive isolation: its one-second deadline could
+expire while durable close was still recording its fence. With a finite
+30-second budget, close reported the worker's cleanup error and active execution
+reported cancellation. Those are the two owning await channels; requiring a
+duplicate cleanup error inside the active task's exception group would add a new
+contract. The test now pins both observable facts and guard-exit order without
+that assumption. No production change was made for the withdrawn finding.
+
+### First physical protocol evidence
+
+At `e33ae98`, the
+[Linux containment run](https://github.com/sushiHex/constructicon/actions/runs/35560627314)
+executed both callback-registration cases against the retained Codex `0.153.4`:
+explicit opt-in admitted `thread/start.dynamicTools`, while absent opt-in returned
+code `-32600` and the exact required-capability refusal. Both asserted zero model
+requests. All four physical lanes, qualification and ordinary verification
+passed on that test-only head. It is evidence about the pinned interface, not
+the later production implementation or authenticated model use. The later
+fixture uses the production request constructors and requires its own CI run.
+
+At `3a3e514`, the
+[combined Linux lane](https://github.com/sushiHex/constructicon/actions/runs/35563296122/job/106220153099)
+executed both production-constructor registration cases successfully: 135 tests,
+82/82 retained N2 mutants and all 49 WRITE mutants passed their respective
+assertions. Mediation and lifecycle lanes also passed. The overall gate did not:
+the new workflow files were missing from the pinned proof inventory, and the
+expanded cleanup tuple invalidated an older N3a mutation anchor. Both are
+introduced test-integration defects, not qualifying evidence. Their corrections
+preserve the complete inventory and the original mutant's active-exchange law.
+
+At `897eb1f`, the
+[foundation lane](https://github.com/sushiHex/constructicon/actions/runs/35564666753/job/106224039563)
+executed the accepting capture/gate, red-gate and literal controller-death cases
+successfully. Its checkpoint cases stopped at a test API error after host
+shutdown: `RunState` has no `cancel_requested` field. The correction queries the
+existing `journal.cancel_requested(run_id)` method instead. Neither checkpoint
+case earned successor-recovery credit from that run; both require re-execution.
+Ordinary verification, qualification, mediation and lifecycle passed on this
+head; the failed foundation lane still blocks readiness.
+
+### Evidence limits
+
+Portable tests exercise callback acceptance and refusal, exact byte bounds,
+request/call identity separation, duplicate and over-limit calls, response loss,
+workspace identity and cleanup ordering. Whole-outcome assertions cover both
+acceptance and refusal. Their scripted managed-account replies are not a vendor
+identity or subscription proof. Mutants must fail by assertion; fixture errors
+and skipped native tests remain unproved.
+
+The new Linux composition lane uses a scripted native peer and substituted
+store syscalls with a real contained worker, Git capture and contained gate.
+Its accepting and red-gate cases are distinct from the pinned-binary protocol
+fixture. The executed cases and their exact heads are recorded above; they do
+not qualify an unexecuted successor-recovery path or a later changed head.
+The complete WRITE controller-death, successor and checkpoint matrix is not
+inherited from READ or from separate workspace tests. Current evidence and
+remaining ownership stay on issue #75 and PR #95.
+
+The added checkpoint fixture uses lawful host abandonment and a reconstructed
+control plane, with real contained capture. It distinguishes pre-checkpoint
+re-execution from post-checkpoint reuse of the exact candidate and zero new
+native exchanges, callbacks or captures. The literal-death companion stops a
+real worker supervisor, kills its controller, and checks guard custody before
+successor disposal. Its native peer remains scripted, so it cannot prove native
+supervisor retention of the store lock. Both new fixtures require the provisioned
+Linux lane; their local skips are not executed proofs.
+
+Production availability remains refused. This work installs no vendor
+configuration, credentials or deployment, proves no live subscription turn,
+and does not complete N3b egress, N3c conformance or private-host qualification.

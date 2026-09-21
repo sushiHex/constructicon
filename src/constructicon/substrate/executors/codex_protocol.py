@@ -258,20 +258,26 @@ def _sealed(request: dict[str, Any]) -> dict[str, Any]:
     return request
 
 
-def initialize_request(request_id: int, *, client: str, version: str) -> dict[str, Any]:
-    """Initialize one session without the experimental capability.
+def initialize_request(
+    request_id: int, *, client: str, version: str, experimental_api: bool = False,
+) -> dict[str, Any]:
+    """Initialize one session, opting in only for the sealed WRITE callback.
 
-    ``capabilities.experimentalApi`` is what enables the externally supplied
-    token login ADR 0021 excludes. The investigation fixture sets it for its own
-    purposes; this adapter must never copy that line.
+    The default deliberately preserves the READ request bytes. At the retained
+    pin the boolean admits experimental request fields on this client
+    connection; it is not itself an authentication or routing operation. The
+    adapter's closed request constructors remain the authority boundary.
     """
+
+    if type(experimental_api) is not bool:
+        raise ContractViolation("the experimental capability selector must be boolean")
 
     return _sealed({
         "id": request_id,
         "method": "initialize",
         "params": {
             "clientInfo": {"name": client, "version": version},
-            "capabilities": {},
+            "capabilities": {"experimentalApi": True} if experimental_api else {},
         },
     })
 
@@ -288,39 +294,160 @@ def account_read_request(request_id: int) -> dict[str, Any]:
     })
 
 
-def thread_start_request(request_id: int, *, cwd: str) -> dict[str, Any]:
+CONTAINED_PYTHON = "contained_python"
+CONTAINED_PYTHON_CATALOG = (CONTAINED_PYTHON,)
+CONTAINED_PYTHON_TOOL: dict[str, Any] = {
+    "type": "function",
+    "name": CONTAINED_PYTHON,
+    "description": "Run Python in the invocation's isolated contained worker.",
+    "inputSchema": {
+        "type": "object",
+        "properties": {"program": {"type": "string"}},
+        "required": ["program"],
+        "additionalProperties": False,
+    },
+}
+"""The one callback declaration this protocol can register."""
+
+MAX_TOOL_CALLS = 8
+TOOL_IDENTIFIER_BYTES = 1024
+TOOL_PROGRAM_BYTES = 128 * 1024
+TOOL_OUTPUT_BYTES = 32 * 1024
+"""Code-bound per-turn mediation limits, included in ``PROTOCOL_REVISION``."""
+
+
+def thread_start_request(
+    request_id: int, *, cwd: str,
+    dynamic_tools: tuple[Mapping[str, Any], ...] = (),
+) -> dict[str, Any]:
     """One ephemeral thread, with no model, no provider and no approval policy.
 
-    ``approvalPolicy`` is marked experimental-nested at the pin, so which of its
-    variants are reachable without the experimental capability depends on that
-    enum's own markers. The investigation fixture can set it only because it
-    opts in, which this adapter must never do, so the field is not sent at all:
-    the fixed configuration already disables every native tool, so no approval
-    can arise. A turn that blocks awaiting one is a refusal here and a finding
-    for N3, never a prompt to answer. Verify the reachable variants before any
-    later slice relies on a value.
+    ``approvalPolicy`` is marked experimental-nested at the pin. Even WRITE,
+    which opts in for ``dynamicTools``, omits it: the fixed configuration is
+    responsible for disabling native tools and every server request except the
+    exact dynamic callback is refused. A turn that asks for approval is never
+    answered here.
 
-    The native zone has no workspace and no admitted callback in this slice, so
-    the vendor sandbox value is defense in depth over physical containment the
-    launcher already owns, never the boundary itself. ``"read-only"`` is
-    unexercised against the pinned binary and this slice cannot exercise it: the
-    credential-free lane refuses at the pre-turn gate, so no ``thread/start``
-    ever reaches it. The only sandbox value this repository has observed live is
-    ``"danger-full-access"``, and only from a session that opted into the
-    experimental capability, so it is not evidence for this adapter either.
-    Verify the reachable variants, here as for the approval policy, before a
-    later slice relies on one.
+    The native zone has no workspace, so the vendor sandbox value is defense in
+    depth over physical containment the launcher already owns, never the worker
+    boundary. The admitted callback executes in a distinct contained process.
     """
 
+    if dynamic_tools and tuple(dynamic_tools) != (CONTAINED_PYTHON_TOOL,):
+        raise ContractViolation("the native session can register only contained_python")
+    params: dict[str, Any] = {
+        "cwd": cwd,
+        "sandbox": "read-only",
+        "ephemeral": True,
+    }
+    if dynamic_tools:
+        # Construct fresh nested objects so a caller cannot retain and mutate a
+        # request after this constructor has admitted it.
+        params["dynamicTools"] = [{
+            "type": "function",
+            "name": CONTAINED_PYTHON,
+            "description": CONTAINED_PYTHON_TOOL["description"],
+            "inputSchema": {
+                "type": "object",
+                "properties": {"program": {"type": "string"}},
+                "required": ["program"],
+                "additionalProperties": False,
+            },
+        }]
     return _sealed({
         "id": request_id,
         "method": "thread/start",
-        "params": {
-            "cwd": cwd,
-            "sandbox": "read-only",
-            "ephemeral": True,
-        },
+        "params": params,
     })
+
+
+@dataclass(frozen=True)
+class ToolCall:
+    """One strictly decoded server request in its own identifier domain."""
+
+    request_id: int | str
+    thread_id: str
+    turn_id: str
+    call_id: str
+    program: str
+
+
+def _bounded_wire_name(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and len(value.encode("utf-8")) <= TOOL_IDENTIFIER_BYTES
+    )
+
+
+def parse_tool_call(
+    record: Mapping[str, Any], *, thread_id: str, turn_id: str | None,
+) -> ToolCall:
+    """Decode the sole server request without exposing an extensible router.
+
+    ``turn_id=None`` is the bounded pre-identity check: all other fields are
+    validated, but no effect is authorized until the turn-start reply supplies
+    the identity and the same record is checked again.
+    """
+
+    if set(record) != {"id", "method", "params"}:
+        raise ContractViolation("the callback request has an unknown top-level field")
+    request_id = record["id"]
+    if not (
+        type(request_id) is int
+        or (type(request_id) is str and _bounded_wire_name(request_id))
+    ):
+        raise ContractViolation("the callback request has an invalid request id")
+    if record["method"] != "item/tool/call":
+        raise ContractViolation("the native client requested an unauthorized operation")
+    params = record["params"]
+    required = {"threadId", "turnId", "callId", "tool", "arguments"}
+    allowed = required | {"namespace"}
+    if (
+        not isinstance(params, dict)
+        or not required <= set(params)
+        or set(params) - allowed
+        or params.get("namespace") is not None
+    ):
+        raise ContractViolation("the callback request has an invalid parameter shape")
+    if params["threadId"] != thread_id:
+        raise ContractViolation("the callback request belongs to another thread")
+    if turn_id is not None and params["turnId"] != turn_id:
+        raise ContractViolation("the callback request belongs to another turn")
+    if not _bounded_wire_name(params["turnId"]):
+        raise ContractViolation("the callback request has an invalid turn id")
+    if params["tool"] != CONTAINED_PYTHON:
+        raise ContractViolation("the callback request names an unauthorized tool")
+    call_id = params["callId"]
+    if not _bounded_wire_name(call_id):
+        raise ContractViolation("the callback request has an invalid call id")
+    arguments = params["arguments"]
+    if not isinstance(arguments, dict) or set(arguments) != {"program"}:
+        raise ContractViolation("the callback request has invalid tool arguments")
+    program = arguments["program"]
+    if not isinstance(program, str) or len(program.encode("utf-8")) > TOOL_PROGRAM_BYTES:
+        raise ContractViolation("the callback program exceeds its closed input bound")
+    return ToolCall(
+        request_id=request_id,
+        thread_id=params["threadId"],
+        turn_id=params["turnId"],
+        call_id=call_id,
+        program=program,
+    )
+
+
+def tool_call_response(call: ToolCall, output: str) -> dict[str, Any]:
+    """Build the only response to a server request this adapter can send."""
+
+    if not isinstance(output, str) or len(output.encode("utf-8")) > TOOL_OUTPUT_BYTES:
+        raise ContractViolation("the callback output exceeds its closed output bound")
+    return {
+        "id": call.request_id,
+        "result": {
+            "contentItems": [{"type": "inputText", "text": output}],
+            "success": True,
+        },
+    }
 
 
 def turn_request(
