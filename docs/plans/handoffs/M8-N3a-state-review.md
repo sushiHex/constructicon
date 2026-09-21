@@ -1,6 +1,6 @@
 # M8 N3a: state and resume review
 
-Status: pre-implementation design review. Base: `153ab8e`. Scope: N3a of
+Status: historical pre-implementation design review. Base: `153ab8e`. Scope: N3a of
 [issue 76](https://github.com/sushiHex/constructicon/issues/76).
 Authority: [ADR 0021](../../adr/0021-subscription-executors-bind-operator-stores.md)
 and [M8 rev 3, N3](../milestones/M8-live-executors-rev3.md).
@@ -25,10 +25,10 @@ The supervisor already inherits guard open-file descriptions, retains them
 until its descendants are reaped, and excludes them from payload descriptors.
 The new store guard joins that same tuple; it is not a second launcher.
 
-Current gaps are explicit: `CodexOperatorHandle.materialize` is a no-op;
-`close` cancels without joining; `reconcile` owns no durable native payload;
-`LinuxLauncher` has no native-store mount. N3a must close these seams, not
-claim a filesystem proof from descriptor models alone.
+The pre-implementation gaps were explicit: `CodexOperatorHandle.materialize`
+was a no-op; `close` cancelled without joining; `reconcile` owned no durable
+native payload; `LinuxLauncher` had no native-store mount. N3a had to close
+these seams, not claim a filesystem proof from descriptor models alone.
 
 ## Private configuration, not an identity service
 
@@ -253,9 +253,12 @@ and rewriting trusted configuration, which ADR 0021 explicitly excludes.
 
 ## Implementation review ledger
 
-The implementation is still under review; this section records reproduced
-corrections, not a completed Linux qualification. The following introduced
-defects were found while the permitting and refusing tests were being built:
+This section preserves reproduced implementation-review corrections. Final
+merged-head review, qualification, artifact and limit evidence is recorded once
+in the implementation record's [N3a closure](M8-implementation-record.md#n3a-closure);
+that closure supersedes prospective status in this historical ledger. The
+following introduced defects were found while the permitting and refusing tests
+were being built:
 
 - A held check reused identities captured before a lock wait. It must reopen
   the protected paths and compare their current identity to the retained
