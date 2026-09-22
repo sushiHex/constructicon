@@ -1340,6 +1340,26 @@ case earned successor-recovery credit from that run; both require re-execution.
 Ordinary verification, qualification, mediation and lifecycle passed on this
 head; the failed foundation lane still blocks readiness.
 
+**Superseded at the reviewed head.** That re-execution happened. At `7b89dcc`,
+the reviewed head PR #95 merged as `184ff4d` byte-identically, every lane
+passed: [foundation](https://github.com/sushiHex/constructicon/actions/runs/35565464075/job/106226317981),
+[lifecycle](https://github.com/sushiHex/constructicon/actions/runs/35565464075/job/106226317980),
+[combined](https://github.com/sushiHex/constructicon/actions/runs/35565464075/job/106226317977)
+and [mediation](https://github.com/sushiHex/constructicon/actions/runs/35565464075/job/106226317913),
+with [containment](https://github.com/sushiHex/constructicon/actions/runs/35565464075/job/106228161751),
+[qualification](https://github.com/sushiHex/constructicon/actions/runs/35565464069/job/106226283373)
+and [verification](https://github.com/sushiHex/constructicon/actions/runs/35565464105/job/106226283233)
+beside them. Both sides of the candidate checkpoint executed, so the two cases
+that earned no credit at `897eb1f` earned it here, and successor recovery is
+executed rather than inferred: recovery reused a checkpoint without another
+native exchange, callback or capture, while uncheckpointed work took a fresh
+acquisition.
+
+The `897eb1f` paragraph above is kept rather than rewritten, because the
+correction it describes — `RunState` has no `cancel_requested` field, and the
+journal owns that query — is the reason the later run could pass. A failed lane
+that produced a real fix is evidence, not noise.
+
 ### Evidence limits
 
 Portable tests exercise callback acceptance and refusal, exact byte bounds,
@@ -1352,8 +1372,8 @@ and skipped native tests remain unproved.
 The new Linux composition lane uses a scripted native peer and substituted
 store syscalls with a real contained worker, Git capture and contained gate.
 Its accepting and red-gate cases are distinct from the pinned-binary protocol
-fixture. The executed cases and their exact heads are recorded above; they do
-not qualify an unexecuted successor-recovery path or a later changed head.
+fixture. The executed cases and their exact heads are recorded above; they
+qualify those heads and no later changed one.
 The complete WRITE controller-death, successor and checkpoint matrix is not
 inherited from READ or from separate workspace tests. Current evidence and
 remaining ownership stay on issue #75 and PR #95.

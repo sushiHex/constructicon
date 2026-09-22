@@ -15,6 +15,42 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## N2 WRITE — owned callbacks, capture and restart evidence
+
+**Merged `184ff4d` (PR #95) on 2026-09-21 UTC, base `c38f53d`.** The merged
+tree is byte-identical to reviewed head `7b89dcc`.
+
+One fixed `contained_python` callback now composes the Codex task adapter with
+the existing contained workspace, capture and gate components. WRITE explicitly
+opts into callback registration; READ's request bytes remain unchanged. One
+deadline bounds the native exchange and sequential workers. Request identities,
+callback completion and binding observations are affirmative facts, not inferred
+from absent errors. Workers join before their workspace guard is released.
+
+**Measured, not inferred.** Final-head verification, qualification and all four
+Linux proof lanes passed. Linux executed both capture/gate outcomes, both sides
+of the candidate checkpoint, and literal controller death with a stopped worker
+supervisor retaining the workspace guard. Recovery reused a checkpoint without
+another native exchange, callback or capture; uncheckpointed work used a fresh
+acquisition. The connector completed its exact-head review with no findings.
+
+**Corrections worth carrying.** Awaiting a worker alone did not observe native
+EOF. The corrected owned read/worker race also had to retain cleanup errors and
+cancellation. A later report of lost cleanup evidence was refuted: explicit
+close reports its cleanup error while active execution reports cancellation;
+requiring both in the same exception group invented a contract. Red gates retain
+attestations as evidence, not merge authority. Linux-only tests also exposed a
+nonexistent `RunState.cancel_requested` field; the journal owns that query.
+
+**What this slice does NOT establish.** The native peer in the WRITE lifecycle
+proofs is scripted. Physical worker custody is not native-supervisor store-lock
+custody, a live subscription turn, applied vendor configuration, or deployment
+qualification. The provider remains unavailable by default. No credentials,
+vendor calls, paid API use, frozen-plan changes or new kernel primitive were
+introduced. N3b/N3c and private-host qualification are not inherited from N2.
+
+---
+
 ## M8 CI — isolated proof lanes and explicit documentation disposition
 
 **Merged `2677fbb` (PR #92) on 2026-09-21 UTC, base `7e5eb03`.**
