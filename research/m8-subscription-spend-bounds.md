@@ -208,8 +208,12 @@ plus "If no credits are available in the workspace pool, the feature is
 blocked". Enterprise has an overage limit of 0, which "blocks new requests".
 These are **candidates for request-admission refusal**, not proofs of it: the
 actual refusal behaviour for the bound workspace still needs separately
-authorized N5 proof. Both admit in-flight overshoot, so even a proved control
-refuses at request admission and is **not a hard monetary bound**. The client
+authorized N5 proof. Enterprise documents in-flight overshoot ("requests
+already in progress may finish and settle afterward"), so even a proved
+Enterprise control refuses at request admission and is **not a hard monetary
+bound**. The Business sources state no such thing either way; whether an
+admitted Business request can settle past its limit is unverified, and its
+absence from the pages is not evidence that it cannot. The client
 can read the settings back: `account/rateLimits/read` shows `individualLimit`
 and `spendControlReached`. Whether Business accepts a per-user limit of 0 is
 not stated.
@@ -277,8 +281,9 @@ YAGNI. Considered and rejected as unnecessary:
 The pre-run and post-run readback plus the operator attestation is the
 smallest documentary set to bring to the N5 authorization. It meets neither
 ADR 0021 nor #78's hard-bound condition by itself: `forbidden` also needs the
-separately authorized N5 refusal proof above, and in-flight overshoot means even
-a proved control is request-admission refusal, not a hard spending bound. If
+separately authorized N5 refusal proof above, and wherever in-flight overshoot
+is documented (Enterprise, Claude Team) or unverified (Business, Pro/Max) a
+proved control is at most request-admission refusal, not a hard spending bound. If
 the operator requests a hard bound, #78 says to stop for a different operator
 decision rather than promise one.
 
@@ -295,6 +300,8 @@ decision rather than promise one.
   blocks all credit use.
 - How far a negative balance or overshoot can go on any Codex plan. It is
   called "small" only for Enterprise.
+- Whether an admitted ChatGPT Business request can settle past its credit
+  limit. The Business pages read do not say either way.
 - Whether the Pro/Max monthly spend limit can be overshot. Overshoot is
   documented for Team only.
 - Whether `rate_limit_event` is emitted at session start, or only on status
