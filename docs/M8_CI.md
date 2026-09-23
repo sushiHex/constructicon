@@ -91,7 +91,7 @@ The stable `containment` check aggregates four independent hosted-runner lanes:
 
 | Lane | Proofs |
 | --- | --- |
-| `foundation` | N3a store custody; launcher, workspace, capture, gates and duplex; their mutation inventories |
+| `foundation` | N3a store custody; N3b egress; the N4-preparation proxy bridge, including the pinned binary's telemetry flush to a controlled peer; launcher, workspace, capture, gates and duplex; their mutation inventories |
 | `lifecycle` | Native startup, test-only provider placement and journal recovery; their mutation inventories |
 | `combined` | Combined startup/mediation and Codex adapter; combined and N2 mutation inventories |
 | `mediation` | Credential-free native mediation probes and their mutation inventory |

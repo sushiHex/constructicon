@@ -1795,3 +1795,130 @@ probe on the private host. Those run only in a separately authorized operator
 session under the runbook. #73 stays open until that evidence exists, and a CI
 result never qualifies the host. The runtime and launch closure is carried to
 N4 (#77).
+
+## N4 preparation: proxy bridge
+
+Credential-free preparation for N4 (#77), on branch `m8/n4-proxy-bridge` off
+`6c41ca3`. It closes the gap N3b carried: "the pinned Codex client's
+`HTTPS_PROXY` path". The design, the pinned-source census and the review
+disposition live in [M8-N4-proxy-bridge.md](M8-N4-proxy-bridge.md). It was
+committed as `c1c3131`, reviewed once by Codex (`gpt-5.6-terra`, effort high,
+job `job_8257a0ea4e68`) and amended in `afb1ffc`: one P1 whose premise was
+narrowed, four P2 and one P3 adopted, one installer note carried. No second
+Codex round was run.
+
+**The finding that required code.** The pinned client reaches a proxy only as
+`http://host:port` over TCP: reqwest's environment proxy for HTTPS and the
+forked tungstenite's for WSS. No transport accepts a Unix-socket proxy, and a
+`unix://` value in `HTTPS_PROXY` is silently dropped by hyper-util, so the
+client would go direct and fail. The N3b leaf is a Unix socket, so a shim is
+required.
+
+**What was built.** One standalone stdlib file,
+`substrate/executors/_egress_bridge.py`, installed in the immutable runtime at
+`/usr/libexec/constructicon-egress-bridge.py` beside the supervisor.
+`LinuxLauncher.argv` prefixes the vendor command with it exactly when it mounts
+the egress leaf, so no worker and no leaf-less launch gets one. The script:
+
+1. refuses unless `/vendor-egress.sock` is a socket;
+2. binds `127.0.0.1:18080`;
+3. forks the forwarder, which drops the payload's stdio and every other
+   descriptor and then writes one readiness byte;
+4. reads that byte, treating EOF as a refusal;
+5. `execve`s the vendor with `HTTPS_PROXY=http://127.0.0.1:18080` added.
+
+The forwarder joins each accepted connection, byte for byte and with
+half-close, to one new leaf connection. It parses nothing, answers nothing and
+never writes a byte it did not read. It is not a boundary: the relay is. PID 1
+terminates and reaps it with the payload. The relay, its policy and its five
+egress identity digests are unchanged. The launcher revision and the runtime
+digest change.
+
+**Relay compatibility, by source.** The relayed dependency reads say that
+hyper-util's tunnel writes `CONNECT host:port HTTP/1.1` + `Host` + a lower-case
+`user-agent` line, and that tungstenite adds `Proxy-Connection: Keep-Alive`.
+`parse_connect` judges only the request line (`egress.py:204-227`). The relay's
+reply is exactly `HTTP/1.1 200 Connection established\r\n\r\n` with nothing
+after it before the hello (`egress.py:64, 648`), which reqwest's
+`HTTP/1.1 200` rule and tungstenite's dropped-tail read both accept. The pinned
+user agent is built from the adapter's fixed `clientInfo`, an empty environment
+and the immutable runtime, so a realistic head is about 200 bytes against the
+8192-byte bound. The bound is unchanged.
+
+### Local evidence (Windows 11, Python 3.11)
+
+- `tests/substrate/test_egress_bridge.py`: 12 passed, 5 Linux skips. The
+  forwarder moves bytes unchanged both ways (256 KiB out, 200 KB of
+  non-HTTP bytes in) and half-closes each way. A failed leaf dial closes the
+  client with zero bytes. The environment is exactly inherited plus
+  `HTTPS_PROXY`. The leaf check and the script refuse an absent leaf, a
+  regular-file leaf and a relative command before binding. Both client head
+  shapes pass **through the forwarder into the real N3b relay**: accepted,
+  replied to with exactly the established line and nothing after it, the hello
+  forwarded byte-identical, and the decoy refused as `destination`.
+- `tests/substrate/test_egress_launch.py`: the prefix follows the leaf, is
+  absent without one and absent for a worker.
+- `scripts/check_m8_n4_bridge_mutations.py`: 13 of 20 killed by assertion.
+  Mutants 4, 13-17 and 20 reported NOT PROVEN, as expected on Windows; their
+  killing tests are Linux-only. Two mutants (1, 12) first reported NOT PROVEN
+  because their tests errored rather than asserted. A timed-out read and a
+  `None` listener were both harness errors. The tests were sharpened: read to
+  EOF and compare, and use a closable fake listener.
+- Retained inventories against the changed `argv`: N3b 59/60 (mutant 29 NOT
+  PROVEN on Windows as before), N3a 47/47. The containment and duplex
+  inventories killed 16 and 13, and their NOT PROVEN mutants all need the
+  provisioned lane. None reported an anchor mismatch.
+- `PYTHONIOENCODING=utf-8 uv run --python 3.11 verify` on the implemented tree
+  (`56713c6` plus uncommitted record text): clean ruff, strict mypy over 103
+  source files, four import contracts kept. 2,757 tests passed and 532 were
+  skipped for platform. The one failure was
+  `test_docs_validation_accepts_the_actual_repository`, run before these
+  documents' manifest lines were refreshed. After the refresh that test passed
+  on its own, and `sha256sum --check` passed.
+
+**Deviations from the design, found in implementation.**
+
+- On Windows, `shutdown(SHUT_RDWR)` does not wake a `recv` blocked in another
+  thread. A probe measured a blocked `recv` still blocked 2 s after the
+  shutdown. The forwarder is Linux-only and relies on Linux's behaviour, so the
+  two reset tests and mutant 4 are Linux-only. The design document says so.
+- Python's descriptors are close-on-exec (PEP 446), so the parent's explicit
+  listener close before `execve` is a second, independent guarantee. Mutant 17
+  proves the close exists, not that it is the only protection.
+- **A defect inside the design, found by self-review.** The script's own
+  interpreter ignores `SIGPIPE` and `SIGXFSZ`, and `execve` keeps ignored
+  signals. PID 1 launches through `subprocess`, whose `restore_signals`
+  restored them, so without a fix the bridge would have changed the vendor's
+  signal dispositions. Under the supervisor's `RLIMIT_FSIZE` that turns a
+  `SIGXFSZ` kill into an `EFBIG` error. The script now resets both to
+  `SIG_DFL` before `execve`. A Linux unit test asserts it at the exec point,
+  and mutant 20 covers it. This is reasoning about CPython and the kernel until
+  the Linux job runs the test.
+
+### Limits and unexecuted proofs
+
+These have **no execution** until Linux CI runs them, and Windows skips are not
+passes:
+
+- the fork, readiness, isolation and exec unit tests and mutants 4, 13-17 and 20
+  (unprivileged `verify` job, and the foundation lane's mutation step);
+- the bridge inside the real zone (`test_native_egress_bridge.py`, the new
+  foundation step "Prove the N4 proxy bridge in the native zone", evidence
+  `n4-*.json`): an environment-proxy client reaching the pinned peer through
+  forwarder, leaf and relay; the decoy refused by the relay; `ENETUNREACH`
+  direct; the zone's only listener at `127.0.0.1:18080`; the forwarder's stdio
+  on `/dev/null`; the exact CONNECT preface;
+- **the pinned binary through the bridge**: `codex app-server` with
+  `[analytics] enabled` and an `otlp-http` metrics exporter aimed at a
+  controlled peer, no login and no model request. It must export
+  `codex.process.start` on stdin EOF through `HTTPS_PROXY`. The source says it
+  will; only the lane can say it does. The foundation lane now downloads the
+  pinned package and builds a startup image for this step;
+- N3b's probe with the new listener inventory, which now runs under the
+  bridge, like every leaf-bearing launch.
+
+Carried to N4: the websocket and the other reqwest client families (proved
+from source only), `otlp-grpc` and the code-mode `unix:` transport (unknown or
+bypassing), refused hosts unnamed by the relay, and the private-host runtime
+closure, which must carry the script. The provider stays unavailable and
+`vendor_conformance_qualified` stays false.

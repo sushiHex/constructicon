@@ -51,7 +51,7 @@ def main() -> None:
         for value in re.findall(r"(?:=>\s+)?(/[\w./+-]+)", result.stdout):
             copy(Path(value))
     (destination / "usr/bin/python3").symlink_to("python3.12")
-    from constructicon.substrate.executors import _supervisor
+    from constructicon.substrate.executors import _egress_bridge, _supervisor
     from constructicon.substrate.executors.linux import (
         SUPERVISOR_PATH,
         runtime_digest,
@@ -61,6 +61,10 @@ def main() -> None:
     supervisor = destination / SUPERVISOR_PATH
     supervisor.parent.mkdir(parents=True)
     shutil.copyfile(_supervisor.__file__, supervisor)
+    # The native zone's proxy bridge, run only with the egress leaf (N4 preparation).
+    shutil.copyfile(
+        _egress_bridge.__file__, destination / _egress_bridge.BRIDGE_SCRIPT.removeprefix("/"),
+    )
     for name in ("proc", "dev", "tmp", "workspace", "vendor-store"):
         (destination / name).mkdir()
     # Only the native egress relay's socket is overmounted onto this leaf; every
