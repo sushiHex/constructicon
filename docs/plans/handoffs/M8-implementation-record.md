@@ -1694,16 +1694,22 @@ started its successor after observing the peer's EOF.
 - **Controller death (finding 6).** The claim is now supervisor-observed
   physical quiescence before successor disposal, not an in-process join. The
   death test starts `dispose_acquisition` at the kill and asserts that it
-  completes after the peer's EOF and that, when it completes, neither the
-  controller nor the supervisor it launched still has the guard open. Those are
-  the only processes the guard is passed to: the supervisor launches
-  bubblewrap with `close_fds`. A positive control first shows the scan finding
-  both holding it. A candidate whose descriptors cannot be read fails the
-  test. The first form of this scan walked every process of the uid and hit
-  `EACCES` on `/proc/<pid>/fd` in the foundation lane (a same-uid process it
-  could not read, for example the non-dumpable namespace init); skipping those
-  would have read "could not see" as "no holder", so the scan is limited to
-  the known candidates instead.
+  completes after the peer's EOF and that, when it completes, a non-blocking
+  try of the guard's exclusive `flock` on a fresh open file description is
+  granted: no process holds any copy. Before the kill the same try is refused,
+  the positive control. Two earlier forms scanned descriptors and failed in the
+  foundation lane with `EACCES` on `/proc/<pid>/fd`. The first walked every
+  process of the uid. The second walked only the controller and its direct
+  children, and its pre-kill scan passed: both were readable and held the
+  guard. It failed after disposal instead, on a candidate with its original
+  start time. Linux makes `/proc/<pid>/fd` root-owned once a task's memory is
+  gone (`task_dump_owner`, `fs/proc/base.c`, v6.8). So the likeliest identity
+  of that pid is the supervisor after it had exited but before it was reaped.
+  That is reasoning: the log does not name the process. The statement that the
+  guard reaches only the controller and its supervisor stands, because the
+  supervisor launches bubblewrap with `close_fds`. Skipping unreadable
+  processes would have read "could not see" as "no holder", so the test now
+  observes the lock itself.
 - **Mutants (finding 7).** Sixteen new mutants, 45-60: control in the pump, the
   routability terms and the zone, and `parse_connect`'s token count, method,
   version, port grammar, port bound, host grammar, unbracketed and bracketed

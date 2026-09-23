@@ -406,57 +406,27 @@ def send_queue_to(port: int) -> int:
     return largest
 
 
-def process_stat(pid: int) -> tuple[int, int] | None:
-    """``(ppid, start time)`` of a live process, or None once it has gone."""
+def guard_is_held(guard: Path) -> bool:
+    """Whether any process still holds the acquisition guard's lock.
+
+    The guard is an exclusive ``flock`` (``acquisition_guard``). A
+    non-blocking try on a fresh open file description is refused while any
+    copy of a holder's description is open, and granted once none is; a
+    granted lock is released at once by the close. This observes the lock
+    itself, where a descriptor scan cannot see an exited, unreaped process:
+    Linux makes its ``/proc/<pid>/fd`` root-owned once its memory is gone.
+    """
+    import fcntl
+
+    fd = os.open(guard, os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW)
     try:
-        text = Path(f"/proc/{pid}/stat").read_text()
-    except FileNotFoundError:
-        return None
-    fields = text[text.rindex(")") + 2:].split()
-    return int(fields[1]), int(fields[19])
-
-
-def launched_tree(pid: int) -> dict[int, int]:
-    """A process this test launched and its direct children, by start time.
-
-    Only these can hold the acquisition guard: the controller opens it, and it
-    passes it to its supervisor alone, which launches bubblewrap with
-    ``close_fds`` (``_supervisor.py``).
-    """
-    root = process_stat(pid)
-    assert root is not None, "the launched controller is not running"
-    tree = {pid: root[1]}
-    for entry in Path("/proc").iterdir():
-        if entry.name.isdigit() and (info := process_stat(int(entry.name))) and info[0] == pid:
-            tree[int(entry.name)] = info[1]
-    return tree
-
-
-def guard_holders(guard: Path, candidates: dict[int, int]) -> list[int]:
-    """The candidates that still have the guard open.
-
-    A candidate that has exited, or whose pid now names another process,
-    holds nothing. One whose descriptors cannot be read raises, so "could not
-    see" never reads as "no holder".
-    """
-    target = str(guard.resolve())
-    holders = []
-    for pid, started in candidates.items():
-        info = process_stat(pid)
-        if info is None or info[1] != started:
-            continue
         try:
-            descriptors = list(Path(f"/proc/{pid}/fd").iterdir())
-        except FileNotFoundError:
-            if process_stat(pid) is None:
-                continue  # it exited during the scan
-            raise
-        for item in descriptors:
-            with suppress(FileNotFoundError):
-                if os.readlink(item) == target:
-                    holders.append(pid)
-                    break
-    return holders
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        return False
+    finally:
+        os.close(fd)
 
 
 def plan_for(pki: Pki, allowed: TlsPeer, **extra) -> dict:
@@ -740,11 +710,8 @@ async def test_controller_death_ends_streams_and_a_successor_disposes_the_relay(
         assert owner.stdout is not None
         assert await asyncio.wait_for(owner.stdout.readline(), 60) == b"streaming\n"
         assert await until(lambda: allowed.connections and allowed.connections[0].bytes > 0)
-        # The positive control for the holder scan: the live controller and its
-        # supervisor both hold the guard, and both are readable.
-        candidates = launched_tree(owner.pid)
-        before = guard_holders(paths.guard, candidates)
-        assert owner.pid in before and len(before) >= 2, f"live holders {before}"
+        # The positive control for the lock probe: the live owner holds the guard.
+        assert guard_is_held(paths.guard), "the probe was granted the live owner's guard"
         owner.kill()
         stale = paths.payload / "egress.sock"
         assert stat.S_ISSOCK(os.lstat(stale).st_mode), "the dead owner left no stale socket"
@@ -752,9 +719,9 @@ async def test_controller_death_ends_streams_and_a_successor_disposes_the_relay(
         successor = asyncio.create_task(dispose_acquisition(closure, paths))
         disposed = await asyncio.wait_for(successor, 30)
         completed_at = time.monotonic()
-        holders = guard_holders(paths.guard, candidates)
+        released = not guard_is_held(paths.guard)
         assert disposed is True and not paths.payload.exists()
-        assert holders == [], f"processes {holders} held the guard after disposal completed"
+        assert released, "a process still held the guard after disposal completed"
         assert await until(lambda: owner.returncode is not None, 5.0)
         connection = allowed.connections[0]
         assert connection.eof and connection.eof_at is not None, "a stream outlived its owner"
@@ -769,8 +736,8 @@ async def test_controller_death_ends_streams_and_a_successor_disposes_the_relay(
     write_evidence("n3b-owner-death.json", {
         "schema_version": 1, "controller_killed": True, "peer_eof_after_death": True,
         "stale_socket_disposed_by_successor": True,
-        "successor_started_at_kill": True, "guard_holders_before_kill": len(before),
-        "guard_holders_after_disposal": holders,
+        "successor_started_at_kill": True, "guard_held_before_kill": True,
+        "guard_free_after_disposal": released,
         "peer_eof_before_disposal_completed_s": round(completed_at - connection.eof_at, 3),
     })
 
