@@ -1734,3 +1734,61 @@ reordered controller-death test with its guard scan, the flood client mode,
 the seam inside the owner subprocess, and every containment test under the
 routable-address rule. The partial-write limit on Linux keeps its existing
 stalled-controller assertion.
+
+### Merged at the reviewed head
+
+**Merged `6dac9f2` (PR #97) on 2026-09-23 UTC from reviewed head `9a94959`.**
+Everything in the "unexecuted" list above then ran. The Linux results at that
+head are in the [containment run 35816848792](https://github.com/sushiHex/constructicon/actions/runs/35816848792):
+
+- **Proofs.** All 9 N3b containment proofs passed. They include the queue on
+  controller death, and the controller-death test observing the guard by its
+  lock.
+- **Mutants.** 60/60 N3b mutants were killed by assertion, including mutant 29,
+  which only runs on Linux. 47/47 N3a mutants and 110/110 native
+  review-regression mutants were also killed.
+- **Tests.** Containment as the non-sudo service user passed 330; combined,
+  mediation and lifecycle passed 135, 87 and 101; `verify` passed 2,764.
+
+The GitHub connector reviewed that exact head and posted no findings. One
+Codex pass covered the implementation (`job_b21d1b3a3fbb`). Its fixes were
+verified by tests, mutants and this run rather than by another review round.
+
+This section supersedes the "unexecuted" lists above for head `9a94959`. It
+qualifies that head and no later changed one. What N3b does not establish
+stays as stated under Limits: real vendor destinations, the Codex
+`HTTPS_PROXY` path, a phase-separation claim, and anything assigned to N3c.
+
+## M8-D2 reviewed-artifact installation (#94), merged
+
+**Merged `8c1b14e` (PR #99) on 2026-09-23 UTC.** The merge was a squash of
+reviewed heads `6e13409` and `5eefafa` onto `6dac9f2`; #94's own files are
+byte-identical to `5eefafa`. The design, the operator runbook (R0-R7) and every
+review disposition live in
+[M8-D2-host-installation.md](M8-D2-host-installation.md).
+
+**The ruling.** Root on the private host executes no repository code. Stock git
+proves that commit C is on main's first-parent line, running as the operator,
+with grafts disabled. An unprivileged judge then proves four things:
+
+- the staged bytes equal the blobs at C;
+- bubblewrap and each root tool are in root custody;
+- every destination is absent;
+- every destination ancestor is a real directory that only root can write.
+
+Only after that does root run a fixed stock sequence: `install`, then
+`apparmor_parser --add`. An unprivileged verifier recomputes the installed
+state against git. `installed` defaults to false.
+
+**Measured.** The Linux `verify` job at the merged tree
+([run 35818944312](https://github.com/sushiHex/constructicon/actions/runs/35818944312))
+killed 37/37 host-artifact mutants by assertion and passed 2,954 tests. The same
+inventory had already run on the reviewed heads. The connector reviewed
+`5eefafa` and posted no findings.
+
+**Not established.** CI never executes the real host path: a real `sudo`
+install, a real `apparmor_parser` load, the kernel's profile list, and the
+probe on the private host. Those run only in a separately authorized operator
+session under the runbook. #73 stays open until that evidence exists, and a CI
+result never qualifies the host. The runtime and launch closure is carried to
+N4 (#77).

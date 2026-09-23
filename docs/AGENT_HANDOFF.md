@@ -15,6 +15,109 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## N3b — acquisition-scoped vendor-session egress
+
+**Merged `6dac9f2` (PR #97) on 2026-09-23 UTC from reviewed head `9a94959`.**
+Issue #76 stays open for N3c.
+
+**What changed.** The native zone now has a way out. Its route-less namespace
+gets one read-only socket leaf, `/vendor-egress.sock`, which leads to a
+host-side CONNECT relay. Worker launches cannot receive it.
+
+The relay enforces these rules:
+
+- it dials only sealed, pinned, globally routable addresses, and never
+  resolves a name;
+- the first ClientHello must carry an SNI equal to the CONNECT host, and ECH is
+  refused;
+- control, stop and deadline are rechecked after every resumed read, before
+  anything is forwarded;
+- every upstream socket gets zero linger when it is created, so nothing it
+  queued survives a controller `SIGKILL`.
+
+**Measured, not inferred.** On Linux, all 9 containment proofs passed and
+60/60 mutants were killed by assertion. The evidence and its limits are in the
+implementation record.
+
+**Corrections worth carrying.**
+
+- **Inode reuse is real.** A path's `(dev, ino)` is only an identity while
+  something holds the inode. Releasing the socket path after closing the
+  listener let a replacement socket reuse the number and be unlinked as the
+  relay's own. Release the path first.
+- **`/proc/<pid>/fd` becomes unreadable once a process's memory is freed.**
+  That happens before the process is reaped. A descriptor scan therefore read
+  "could not see" as "no holder". Observe a lock by trying to take it.
+- **A 0444 socket leaf refuses `connect` with `EACCES`, not `ECONNREFUSED`.**
+  Linux checks write permission before the socket type.
+- **A pinned address is not automatically resolver-free.** An IPv6 literal with
+  a zone id (`%eth0`) goes through `getaddrinfo`. Non-global addresses would
+  have reached host-local services.
+
+**What this slice does NOT establish.**
+
+- real vendor destinations, CDN rotation, or the pinned client's
+  `HTTPS_PROXY` path (all N4);
+- any claim that startup and model traffic are separated;
+- the store, maintenance, overage and crash matrix (N3c).
+
+The provider remains unavailable by default.
+
+---
+
+## M8-D2 — reviewed-artifact installation for the private host
+
+**Merged `8c1b14e` (PR #99) on 2026-09-23 UTC. It closes #94; #73 stays open.**
+
+**Root on the credential host executes no repository code.** Stock git, run as
+the operator, proves that commit C is on main. An unprivileged judge proves
+custody and absence. Only then does root run fixed stock commands. An
+unprivileged verifier checks the installed state against git.
+
+**Corrections worth carrying.**
+
+- **`--no-replace-objects` does not disable `info/grafts`.** Also set
+  `GIT_GRAFT_FILE=/nonexistent`.
+- **Custody applies to the binaries root runs, not only to what is staged.**
+  A hashed file that is reopened by path is a new file.
+- **Root must not run repository code, including a reviewed installer.** The
+  first design ran the reviewed installer as root. The owner's decision reads
+  "never running repository code" at the root boundary, and the unprivileged
+  judge/verify split is also smaller.
+
+**What this slice does NOT establish.** The real install, the AppArmor load
+and the probe on the host run only in a separately authorized operator session
+(runbook R0-R7). The runtime and launch closure is N4's prerequisite.
+
+---
+
+## N4-N6 preparation — Claude Code screen and spend bounds
+
+**Merged `5aad791` (PR #98) on 2026-09-23 UTC.** It adds two credential-free
+documents: the Claude Code 2.1.267 interface screen and the subscription
+spend-bound research.
+
+**Findings that change later decisions.**
+
+- **Claude is blocked on every plan by `EndConversation`.** It cannot be
+  removed, and it is neither an admitted callback nor unreachable. Only Pro and
+  Max are candidates for R8. Team and Enterprise fail it because server-managed
+  settings can inject hooks.
+- **Codex on ChatGPT Plus or Pro cannot qualify `forbidden` overage.** No
+  vendor setting forbids it; only automatic reload has a cap.
+- **An observed zero balance never proves `forbidden`.** Vendor controls are
+  candidates that still need N5 refusal proof.
+- **The pinned Codex `Turn` has no rate-limit field.** Overage evidence must
+  come from `account/rateLimits/read`.
+
+The owner decisions are drafted on #77 and #78.
+
+**Corrections worth carrying.** Business in-flight overshoot is unverified,
+not documented. Only the Enterprise source documents it, and the absence of a
+Business statement is not evidence either way.
+
+---
+
 ## N2 WRITE — owned callbacks, capture and restart evidence
 
 **Merged `184ff4d` (PR #95) on 2026-09-21 UTC, base `c38f53d`.** The merged
