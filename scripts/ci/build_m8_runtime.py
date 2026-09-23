@@ -18,6 +18,7 @@ from pathlib import Path
 
 
 def main() -> None:
+    # CI only; the private host takes reviewed artifacts via scripts/ci/m8_host_artifacts.py (#94).
     if os.getuid() != 0 or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
         raise SystemExit("provisioning requires the explicitly authorized disposable runner")
     destination = Path(sys.argv[1])
