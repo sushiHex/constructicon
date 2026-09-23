@@ -473,7 +473,7 @@ defence, and its mutant would be equivalent. The load-bearing facts are that
 | No resolver call seen means no DNS | `socket.getaddrinfo`/`loop.getaddrinfo` are substituted with a recorder that raises. The test first calls it once itself (positive control), then asserts zero relay calls on both the accepting and refusing paths |
 | No route in `/proc/net/route` means egress denied | In-zone attempts assert errnos: TCP and UDP/53 to 192.0.2.1 give `ENETUNREACH`; namespace `127.0.0.1:<peer port>` gives `ECONNREFUSED`; name lookup raises `gaierror`; a host abstract socket that the host can reach (control) gives `ECONNREFUSED` in the zone; an unmounted host socket path gives `ENOENT` |
 | No second socket was used, so only the leaf is reachable | The in-zone walk lists every `S_ISSOCK` outside `/proc`; a socket planted in the store is found by the same walk |
-| A socket at the path is our relay | `S_ISSOCK` + uid + `(dev, ino)` from bind, checked in `argv`, and identity again before unlink |
+| A socket at the path is our relay | `S_ISSOCK` + uid + `(dev, ino)` from bind, checked in `argv`, and identity again before unlink. `(dev, ino)` names the socket only while the relay's listener holds its inode, so both checks run while it does: the unlink precedes the listener's close (added after the first Linux CI run, which measured a released inode number handed to the next file) |
 | A clean native exit means streams were revoked | The relay closes every upstream before `__aexit__` returns; the peer's own EOF observation is asserted after the join returns. That is the peer's observation, not the relay's |
 | A successful TLS handshake means the relay judged SNI | `observed["accepted"] == 1` is asserted beside the handshake, and each refusal pair drives the same code |
 | A handshake succeeded, so the hello was intact | Affirmative: a verified TLS 1.3 handshake fails on any transcript change. The portable test also asserts byte identity at a recording peer |
@@ -569,7 +569,10 @@ real primitives:
 - a real `AF_UNIX` bind and recorded identity;
 - `SCM_RIGHTS` refused, with the passed descriptor closed, alongside the same
   bytes accepted without ancillary data;
-- a replaced socket refused by `require_current()`.
+- a replaced socket refused by `require_current()`, the replacement bound while
+  the first listener still holds its inode (the only state the relay checks
+  in);
+- a real socket replaced before exit is not unlinked, and the exit raises.
 
 **Linux containment** (foundation lane, `m8-service`, the production runtime and
 store fixture). The Linux cases drive `EgressRelay` and `launcher.exchange`
@@ -596,7 +599,8 @@ test uses a short acquisition root under `/tmp`.
 - The native zone sees `S_ISSOCK` only at `/vendor-egress.sock`; a socket
   planted in the store is found by the same walk. An ordinary worker, through
   `LinuxLauncher.run` with a workspace, sees an empty regular file, and its
-  connect is refused.
+  connect is refused with `EACCES`: Linux checks write permission on the path
+  before its type, so the 0444 leaf never reaches `ECONNREFUSED`.
 - Revocation:
   - Cancel mid-stream: the peer sees EOF after the join returns (asserted within
     2 s).
@@ -674,9 +678,10 @@ which is expected; it is measured in the foundation lane. Test files: `E` is
 | 41 | Every stream `TimeoutError` counts as `denied:deadline` | `E::test_a_stream_timeout_before_the_deadline_is_a_reset` |
 | 42 | The hello record bound is off by one | `E::test_the_hello_record_bound_binds_at_its_limit` |
 | 43 | Teardown no longer closes the accepted clients | `E::test_teardown_closes_a_client_whose_handler_never_ran` |
+| 44 | Exit closes the listener before releasing the socket path | `E::test_the_socket_is_released_while_the_listener_still_holds_its_inode` |
 
-Mutants 36-43 were added by the implementation review (see the implementation
-record's N3b section).
+Mutants 36-43 were added by the implementation review, and mutant 44 after the
+first Linux CI run (see the implementation record's N3b section).
 
 The existing N3a mutants for `--unshare-net` and store/workspace exclusion are
 retained unchanged.
@@ -803,7 +808,9 @@ Each limit is written down, and pinned by an assertion where a test can hold it.
   and its concurrent successor have no execution until Linux CI runs them.
   Windows skips are not passes. The abortive close has run on Windows only; how
   Linux discards the queue on reset is reasoning until CI runs the portable
-  test there.
+  test there. The first Linux CI run executed most of these; what it
+  established, what failed and what is still unexecuted is recorded in the
+  implementation record's "First Linux CI run".
 
 ## Rejected as unnecessary
 

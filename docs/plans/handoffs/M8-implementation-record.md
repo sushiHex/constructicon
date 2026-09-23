@@ -1583,3 +1583,64 @@ against the fix, measured 0 bytes after exit and classed `ETIMEDOUT` as
 four import contracts kept, and 2,637 tests passed with 408 platform skips.
 After that run only this sentence and its manifest line changed. Both were
 rechecked with `sha256sum --check` and the plan-manifest test.
+
+### First Linux CI run
+
+PR #97's first run at `1ec4943` is the slice's first physical evidence. In the
+foundation lane
+([run 35808396680](https://github.com/sushiHex/constructicon/actions/runs/35808396680)),
+six of the eight containment proofs passed as `m8-service` with the production
+runtime and store fixture:
+
+- `test_the_zone_reaches_only_the_pinned_destination`: the accepting TLS path,
+  the decoy, IP-literal, SNI, ECH and redirect refusals, the in-zone errnos,
+  the abstract and unmounted socket controls and the resolver recorder;
+- `test_the_zone_walk_finds_a_socket_planted_in_the_store`, including the
+  `/proc/self/fd/<dirfd>` bind;
+- `test_cancel_mid_stream_revokes_the_upstream`;
+- `test_controller_death_ends_streams_and_a_successor_disposes_the_relay`;
+- `test_a_stalled_controller_holds_its_guard_until_its_streams_end`;
+- `test_no_evidence_file_contains_key_material`.
+
+On the unprivileged Linux `verify` job
+([run 35808396701](https://github.com/sushiHex/constructicon/actions/runs/35808396701)),
+2,727 tests passed and 4 failed. The passes include the real bind
+(`test_the_real_bind_records_the_socket_it_created`), the `SCM_RIGHTS` refusal
+and every portable relay test, among them the abortive close that discards the
+upstream queue. The lane's mutation step did not run, because the containment
+step failed first, so mutant 29 still has no kill.
+
+Six tests failed. One was a product defect, the other five wrong test
+assumptions:
+
+| Failure | Cause | Class | Fix |
+| --- | --- | --- | --- |
+| `test_require_current_refuses_a_replaced_socket` did not raise | The test closed the first listener before binding the replacement. `S_ISSOCK`, owner and path matched by construction, so only `(dev, ino)` could have refused it: the runner's `/tmp` handed the released inode number to the replacement. A bound socket holds its own inode until its last descriptor closes (`unix_bind_bsd` keeps `dget(dentry)` in `u->path`, v6.8), so a replacement bound while the listener is open cannot share the number | test assumption; exposed the defect below | The replacement is bound while the first listener is open, and the test asserts the two identities differ |
+| `test_a_replaced_socket_is_not_unlinked_and_exit_raises` and `test_no_private_locator_reaches_the_outcome[substituted-socket]`: exit accepted the substitute | The portable stand-in inode was held by nothing, so its number was reused at once by the substitute; the stand-in did not model the listener's hold | test assumption | The stand-in is held by a hard link that the substituted listener removes on close, which is what a bound socket does |
+| (defect) `__aexit__` closed the listener before `_release_path` compared `(dev, ino)` and unlinked | Between the close and the check, the number was free: a replacement created in that gap could receive it and be unlinked as the relay's own. Same-uid custody only, and a synchronous window, but the identity law was read past the point where it holds | introduced | Test first: `test_the_socket_is_released_while_the_listener_still_holds_its_inode` failed before the fix (the path still existed when the listener closed). `_release_path` now runs before any socket closes. Mutant 44 |
+| `test_teardown_closes_a_client_whose_handler_never_ran`: `CORO_SUSPENDED` | The scenario polled for the handler with `sleep(0)`; whether its wake-up ran before the handler's first step is a scheduling race, which the Windows runs won and the Linux run lost | test assumption | Deterministic: the scenario connects with a blocking loopback connect, then awaits a future resolved inside `_clients.append`, which queues its wake-up before the handler's first step |
+| `test_an_ordinary_worker_sees_an_empty_regular_leaf`: `EACCES`, not `ECONNREFUSED` | `unix_find_bsd` checks `path_permission(MAY_WRITE)` before `S_ISSOCK` (`net/unix/af_unix.c`, v6.8). The leaf is 0444 and the worker holds no capability, so write permission refuses first | test assumption | Asserts `EACCES` exactly |
+| `test_the_deadline_cuts_an_actively_streaming_client`: `deadline > started + seconds` by 3 ms | `run_native` takes its deadline after `started`, so `started + seconds` is its lower bound, not its upper | test assumption | `started + seconds <= deadline <= streaming_at + seconds`, where `streaming_at` is when the client first reports streaming through the relay |
+
+The kernel really did reuse the number. The wrong part was an unstated premise,
+that `(dev, ino)` still names a file after nothing holds it. The documents now
+state the hold, and the relay compares only while its listener provides it.
+Comparing `os.fstat` of the listener instead would not help: a socket
+descriptor's `fstat` reports its sockfs inode, not the path's.
+
+**Verification of this correction:** the three portable N3b files passed 96
+with 4 platform skips on Windows. `test_the_socket_is_released_while_the_listener_still_holds_its_inode`
+failed before the reorder and passed after it.
+`scripts/check_m8_n3b_mutations.py` killed 43 of 44 by assertion, including
+the new mutant 44 and mutant 43 under the deterministic test; mutant 29 again
+reported NOT PROVEN on Windows. `uv run verify` on the complete tree: clean
+ruff, strict mypy over 102 source files, four import contracts kept, and 2,637
+tests passed with 409 platform skips. Its one failure was the plan-manifest
+test, run before these two documents' manifest lines were refreshed; after the
+refresh that test passed on its own, and `sha256sum --check` passed.
+
+**Unexecuted until the next Linux CI run:** both corrected Linux unit tests,
+the new real-socket exit test
+(`test_a_replaced_real_socket_is_not_unlinked_and_exit_raises`), the two
+corrected containment tests, the deterministic unstarted-handler test on the
+selector loop, the pinned stand-in on the runner's filesystem, and mutant 29.
