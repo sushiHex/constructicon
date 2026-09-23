@@ -33,6 +33,7 @@ import pytest
 
 from constructicon.core.grants import Posture
 from constructicon.core.workspace import acquisition_id_for
+from constructicon.substrate.executors import egress
 from constructicon.substrate.executors.egress import (
     CHUNK_BYTES,
     EgressDestination,
@@ -49,7 +50,13 @@ from constructicon.substrate.git.acquisition import (
 )
 from constructicon.substrate.git.authority import GitAuthority
 from tests.gitworld import seed_authority
-from tests.substrate.test_egress import refuse_resolution, until
+from tests.substrate.test_egress import (
+    CONTROLLED,
+    HeldPeer,
+    controlled,
+    refuse_resolution,
+    until,
+)
 from tests.substrate.test_linux_containment import launcher as launcher
 from tests.substrate.test_native_codex_mediation import write_evidence
 from tests.substrate.test_operator_store_containment import binding as binding
@@ -177,6 +184,23 @@ def sockets():
 results = {'ssl': True}
 if plan['mode'] == 'walk':
     results['sockets'] = sockets()
+elif plan['mode'] == 'flood':
+    # One genuine hello for the relay to judge, then raw bytes for as long as
+    # the path accepts them; the peer never completes TLS and never reads.
+    sock = connect(plan['allowed'], plan['allowed_port'])
+    outgoing = ssl.MemoryBIO()
+    tls = context.wrap_bio(ssl.MemoryBIO(), outgoing, server_hostname=plan['allowed'])
+    try:
+        tls.do_handshake()
+    except ssl.SSLWantReadError:
+        pass
+    sock.sendall(outgoing.read())
+    print('streaming', flush=True)
+    try:
+        while True:
+            sock.sendall(b'x' * 65536)
+    except OSError as exc:
+        results['stream_ended'] = type(exc).__name__
 elif plan['mode'] == 'stream':
     sock = connect(plan['allowed'], plan['allowed_port'])
     tls = context.wrap_socket(sock, server_hostname=plan['allowed'])
@@ -362,8 +386,49 @@ class TlsPeer:
             sock.close()
 
 
+@pytest.fixture(autouse=True)
+def controlled_peers(monkeypatch):
+    """Every peer in this module is a controlled loopback server (see ``controlled``)."""
+    monkeypatch.setattr(egress, "_routable", controlled(egress._routable))
+
+
 def policy_for(port: int) -> EgressPolicy:
-    return EgressPolicy((EgressDestination(ALLOWED, port, "127.0.0.1"),), 16)
+    return EgressPolicy((EgressDestination(ALLOWED, port, CONTROLLED),), 16)
+
+
+def send_queue_to(port: int) -> int:
+    """The largest host TCP send queue toward ``127.0.0.1:<port>`` (``/proc/net/tcp``)."""
+    largest = 0
+    for line in Path("/proc/net/tcp").read_text().splitlines()[1:]:
+        fields = line.split()
+        if int(fields[2].split(":")[1], 16) == port:
+            largest = max(largest, int(fields[4].split(":")[0], 16))
+    return largest
+
+
+def guard_holders(guard: Path) -> list[str]:
+    """Every process of this uid that still has the acquisition guard open.
+
+    A process whose ``/proc`` entry this uid does not own (another uid, or a
+    non-dumpable process) is not scanned: a limit, not a finding. The native
+    tree and its supervisor run as this uid.
+    """
+    target = str(guard.resolve())
+    holders = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            if entry.stat().st_uid != os.getuid():
+                continue
+            descriptors = list((entry / "fd").iterdir())
+        except FileNotFoundError:
+            continue  # the process exited during the scan
+        for item in descriptors:
+            with suppress(FileNotFoundError):
+                if os.readlink(item) == target:
+                    holders.append(entry.name)
+    return holders
 
 
 def plan_for(pki: Pki, allowed: TlsPeer, **extra) -> dict:
@@ -642,20 +707,30 @@ async def test_controller_death_ends_streams_and_a_successor_disposes_the_relay(
                     seconds=60, stall_extra=0)
     paths = AcquisitionPaths(short_root, acquisition_id_for("n3b-owner-death", 1))
     owner = await owner_process("death", short_root, plan)
+    successor = None
     try:
         assert owner.stdout is not None
         assert await asyncio.wait_for(owner.stdout.readline(), 60) == b"streaming\n"
         assert await until(lambda: allowed.connections and allowed.connections[0].bytes > 0)
+        # The positive control for the holder scan: the live owner's tree holds the guard.
+        assert guard_holders(paths.guard), "the guard scan saw no live holder"
         owner.kill()
-        async with asyncio.timeout(5):
-            while owner.returncode is None:
-                await asyncio.sleep(0.01)
-        assert await until(lambda: allowed.connections[0].eof, 5.0), "a stream outlived its owner"
         stale = paths.payload / "egress.sock"
         assert stat.S_ISSOCK(os.lstat(stale).st_mode), "the dead owner left no stale socket"
-        disposed = await asyncio.wait_for(dispose_acquisition(closure, paths), 20)
+        # Started at once: nothing but the guard orders it after quiescence.
+        successor = asyncio.create_task(dispose_acquisition(closure, paths))
+        disposed = await asyncio.wait_for(successor, 30)
+        completed_at = time.monotonic()
+        holders = guard_holders(paths.guard)
         assert disposed is True and not paths.payload.exists()
+        assert holders == [], f"processes {holders} held the guard after disposal completed"
+        assert await until(lambda: owner.returncode is not None, 5.0)
+        connection = allowed.connections[0]
+        assert connection.eof and connection.eof_at is not None, "a stream outlived its owner"
+        assert connection.eof_at <= completed_at, "the successor finished before the peer's EOF"
     finally:
+        if successor is not None and not successor.done():
+            successor.cancel()
         if owner.returncode is None:
             owner.kill()
         await asyncio.wait_for(owner.communicate(), 10)
@@ -663,6 +738,43 @@ async def test_controller_death_ends_streams_and_a_successor_disposes_the_relay(
     write_evidence("n3b-owner-death.json", {
         "schema_version": 1, "controller_killed": True, "peer_eof_after_death": True,
         "stale_socket_disposed_by_successor": True,
+        "successor_started_at_kill": True, "guard_holders_after_disposal": holders,
+        "peer_eof_before_disposal_completed_s": round(completed_at - connection.eof_at, 3),
+    })
+
+
+async def test_controller_death_discards_the_upstream_queue(
+    binding, launcher, pki, short_root, closure,
+):
+    """No cleanup runs in a killed controller, so only linger set at creation
+    can turn the kernel's close into a reset that discards the send queue."""
+    peer = HeldPeer()
+    plan = plan_for(pki, peer, mode="flood", lease="n3b-death-queue", seconds=60, stall_extra=0)
+    paths = AcquisitionPaths(short_root, acquisition_id_for("n3b-death-queue", 1))
+    owner = await owner_process("death", short_root, plan)
+    try:
+        assert owner.stdout is not None
+        assert await asyncio.wait_for(owner.stdout.readline(), 60) == b"streaming\n"
+        # The bound needs an input where it binds: bytes queued beyond the peer.
+        assert await until(lambda: send_queue_to(peer.port) > 0, 10.0), "nothing was queued"
+        queued = send_queue_to(peer.port)
+        owner.kill()
+        async with asyncio.timeout(5):
+            while owner.returncode is None:
+                await asyncio.sleep(0.01)
+        # A graceful close would leave an orphan still holding the queue.
+        assert await until(lambda: send_queue_to(peer.port) == 0, 5.0), "the queue outlived death"
+        held, total = await asyncio.to_thread(peer.drain)
+        assert total <= held, f"{total - held} queued bytes reached the peer after death"
+        assert await asyncio.wait_for(dispose_acquisition(closure, paths), 30) is True
+    finally:
+        if owner.returncode is None:
+            owner.kill()
+        await asyncio.wait_for(owner.communicate(), 10)
+        peer.close()
+    write_evidence("n3b-owner-death-queue.json", {
+        "schema_version": 1, "queued_at_kill": queued, "peer_held": held,
+        "bytes_after_death": max(0, total - held),
     })
 
 

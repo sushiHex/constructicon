@@ -13,6 +13,7 @@ from pathlib import Path
 
 from constructicon.core.grants import Posture
 from constructicon.core.workspace import acquisition_id_for
+from constructicon.substrate.executors import egress
 from constructicon.substrate.executors.egress import (
     EgressDestination,
     EgressPolicy,
@@ -20,9 +21,13 @@ from constructicon.substrate.executors.egress import (
 )
 from constructicon.substrate.executors.linux import NativeStoreMount, ProcessExchangeError
 from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisition_guard
+from tests.substrate.test_egress import CONTROLLED, controlled
 from tests.substrate.test_linux_containment import launcher
 from tests.substrate.test_native_egress_containment import ALLOWED, CLIENT
 from tests.substrate.test_operator_store_containment import binding, hold
+
+# The peers are controlled loopback servers, as in the test process.
+egress._routable = controlled(egress._routable)
 
 
 async def main():
@@ -34,7 +39,7 @@ async def main():
     paths = AcquisitionPaths(root, acquisition_id_for(plan["lease"], 1))
     seconds = plan["seconds"]
     deadline = asyncio.get_running_loop().time() + seconds
-    policy = EgressPolicy((EgressDestination(ALLOWED, plan["allowed_port"], "127.0.0.1"),), 4)
+    policy = EgressPolicy((EgressDestination(ALLOWED, plan["allowed_port"], CONTROLLED),), 4)
 
     async def conversation(io):
         await io.write((json.dumps(plan) + "\n").encode())

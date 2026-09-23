@@ -62,12 +62,17 @@ from tests.substrate.test_codex_protocol import (
 )
 from tests.substrate.test_egress import (
     ALLOWED,
+    CONTROLLED,
     DECOY,
     ESTABLISHED,
+    UNDIALLED,
     head,
     real_hello,
     reply_of,
     until,
+)
+from tests.substrate.test_egress import (
+    controlled_loopback as controlled_loopback,
 )
 from tests.substrate.test_egress import (
     listeners as listeners,
@@ -79,8 +84,9 @@ from tests.substrate.test_egress import (
 EGRESS_REASON = "the native vendor-session egress boundary has not been qualified"
 
 
-def policy_for(port: int) -> EgressPolicy:
-    return EgressPolicy((EgressDestination(ALLOWED, port, "127.0.0.1"),), 4)
+def policy_for(port: int, address: str = UNDIALLED) -> EgressPolicy:
+    """A dialled policy names ``CONTROLLED``, admissible only under the ``listeners`` seam."""
+    return EgressPolicy((EgressDestination(ALLOWED, port, address),), 4)
 
 
 def egress_identity(policy: EgressPolicy) -> NativeEgressIdentityV1:
@@ -227,7 +233,7 @@ async def test_the_relay_is_listening_during_the_exchange_and_gone_afterwards(
 ):
     facts: dict = {}
     launcher = egress_launcher(connecting(listeners, peer, relays, ALLOWED, facts))
-    provider = provider_for(launcher, policy=policy_for(peer.port), root=short_root,
+    provider = provider_for(launcher, policy=policy_for(peer.port, CONTROLLED), root=short_root,
                             binding=portable_binding[1:])
     acquired, handle = await open_handle(provider)
     loop = asyncio.get_running_loop()
@@ -371,7 +377,7 @@ async def test_control_lost_during_the_exchange_denies_the_connect(
         facts["judged"] = await until(lambda: bool(relays[0].observed), 2.0)
         writer.close()
 
-    provider = provider_for(egress_launcher(native), policy=policy_for(peer.port),
+    provider = provider_for(egress_launcher(native), policy=policy_for(peer.port, CONTROLLED),
                             root=short_root, binding=portable_binding[1:])
     acquired, handle = await open_handle(provider, check_control=control)
     with pytest.raises(OwnershipLost):
@@ -461,7 +467,7 @@ async def test_no_private_locator_reaches_the_outcome(
             await until(lambda: relays[0]._handlers and relays[0]._handlers[0].done())
             writer.close()
 
-    provider = provider_for(egress_launcher(client), policy=policy_for(peer.port),
+    provider = provider_for(egress_launcher(client), policy=policy_for(peer.port, CONTROLLED),
                             root=short_root, binding=portable_binding[1:])
     acquired, handle = await open_handle(provider)
     if case == "existing-payload":

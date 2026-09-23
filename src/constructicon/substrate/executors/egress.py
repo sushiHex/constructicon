@@ -5,8 +5,11 @@ network namespace it already has, which holds only ``lo``, and reaches this
 relay through one read-only pathname-socket leaf. The namespace bounds network
 sockets; the relay adds the destination, resolver, TLS and lifetime rules:
 
-* a destination is a sealed ``(host, port)`` with one pinned literal address.
-  Nothing resolves a name, and the CONNECT host never reaches the dialler;
+* a destination is a sealed ``(host, port)`` with one pinned, globally
+  routable literal address and no zone. Nothing resolves a name, and the
+  CONNECT host never reaches the dialler;
+* control is checked before the dial, after it, and after every resumed read
+  of an established stream; its loss stops the relay;
 * the first ClientHello must name exactly the CONNECT host and carry no ECH.
   That rule binds only the first hello and is not a boundary: the pinned
   address is;
@@ -99,6 +102,22 @@ def _is_literal(host: str) -> bool:
     return True
 
 
+def _routable(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Globally routable unicast only, so no host-local service is reachable.
+
+    Refuses loopback, unspecified, private, shared, link-local, site-local,
+    documentation, multicast and reserved addresses (ADR 0020 excludes any
+    localhost service inventory). The test suites' controlled loopback peers
+    substitute this predicate, as they substitute the platform primitives;
+    nothing in ``src`` does.
+    """
+
+    return (
+        address.is_global and not address.is_multicast and not address.is_reserved
+        and not (isinstance(address, ipaddress.IPv6Address) and address.is_site_local)
+    )
+
+
 @dataclass(frozen=True)
 class EgressDestination:
     """One sealed ``(host, port)`` and the one literal address it is pinned to."""
@@ -116,6 +135,12 @@ class EgressDestination:
             raise ContractViolation("an egress destination pins one literal address")
         if str(ipaddress.ip_address(self.address)) != self.address:
             raise ContractViolation("an egress destination pins one canonical literal address")
+        # A zone id is refused on its own, outside the substitutable predicate:
+        # asyncio resolves any dial host containing "%" through getaddrinfo.
+        if "%" in self.address:
+            raise ContractViolation("an egress destination pins an address without a zone")
+        if not _routable(ipaddress.ip_address(self.address)):
+            raise ContractViolation("an egress destination pins a globally routable address")
 
 
 @dataclass(frozen=True)
@@ -346,13 +371,21 @@ def _bind_private_socket(path: Path) -> tuple[socket.socket, tuple[int, int]]:
     return listener, (info.st_dev, info.st_ino)
 
 
-def _abort(sock: socket.socket) -> None:
-    """Close with a reset: the kernel discards whatever is still queued for the peer."""
+def _upstream(family: socket.AddressFamily) -> socket.socket:
+    """An upstream whose every close is a reset, set before anything can queue.
 
+    With zero linger the kernel discards the send queue on close, including
+    the close it performs when the controller dies and no cleanup runs.
+    """
+
+    sock = socket.socket(family, socket.SOCK_STREAM)
     try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
-    finally:
+        sock.setblocking(False)
+    except BaseException:
         sock.close()
+        raise
+    return sock
 
 
 def _wake(ready: asyncio.Future[None]) -> None:
@@ -583,9 +616,10 @@ class EgressRelay:
         finally:
             client.close()
             if upstream is not None:
-                # Every end, a clean one too: a graceful close would keep
-                # sending the queue after exit and after the guards go.
-                _abort(upstream)
+                # A reset on every end, a clean one too (zero linger since
+                # creation): a graceful close would keep sending the queue
+                # after exit and after the guards go.
+                upstream.close()
 
     async def _fill(
         self, client: socket.socket, buffer: bytearray, limit: int,
@@ -622,11 +656,8 @@ class EgressRelay:
             raise EgressRefused("sni")
         self._admit(loop)
         pinned = ipaddress.ip_address(destination.address)
-        upstream = socket.socket(
-            socket.AF_INET6 if pinned.version == 6 else socket.AF_INET, socket.SOCK_STREAM,
-        )
+        upstream = _upstream(socket.AF_INET6 if pinned.version == 6 else socket.AF_INET)
         try:
-            upstream.setblocking(False)
             try:
                 await loop.sock_connect(upstream, (destination.address, destination.port))
             except OSError:
@@ -634,7 +665,7 @@ class EgressRelay:
             self._admit(loop)
             await loop.sock_sendall(upstream, bytes(buffer))
         except BaseException:
-            _abort(upstream)
+            upstream.close()
             raise
         return upstream
 
@@ -645,8 +676,9 @@ class EgressRelay:
         while True:
             data = await _receive(source, CHUNK_BYTES)
             # A queued wake-up runs before a timer expiring in the same
-            # iteration, so the deadline and stop latch are rechecked here.
-            self._require_live(loop)
+            # iteration, so the deadline and stop latch are rechecked here,
+            # and control too: its loss latches stop before the send below.
+            self._admit(loop)
             if not data:
                 try:
                     destination.shutdown(socket.SHUT_WR)

@@ -1,9 +1,11 @@
-"""N3b relay rules; portable: only the two platform primitives are substituted.
+"""N3b relay rules; portable: only platform primitives and the peers' address seam.
 
 ``_bind_private_socket`` becomes a loopback TCP listener plus a stand-in file
 whose inode is the recorded identity, held until the listener closes as a bound
 socket holds its own, and ``_receive`` becomes a plain
-``sock_recv``. Everything else is the production relay, driven against a real
+``sock_recv``. ``_routable`` additionally admits the controlled peers' loopback
+address, and nothing else; the policy tests use the real predicate. Everything
+else is the production relay, driven against a real
 recording peer in its own thread. The accepting path comes first. Assertions
 run after the relay has exited, so an exit failure can never mask them. The
 ``LINUX`` section at the end uses the real primitives and skips elsewhere; a
@@ -48,6 +50,10 @@ ALLOWED = "allowed.invalid"
 DECOY = "decoy.invalid"
 ESTABLISHED = b"HTTP/1.1 200 Connection established\r\n\r\n"
 LINUX = pytest.mark.skipif(sys.platform != "linux", reason="the real primitives need Linux")
+CONTROLLED = "127.0.0.1"
+"""The controlled peers' address: never admissible outside the test seam."""
+UNDIALLED = "1.1.1.1"
+"""A routable address for policies that no test ever dials."""
 
 
 class LocalClose(asyncio.CancelledError):
@@ -55,6 +61,21 @@ class LocalClose(asyncio.CancelledError):
 
 
 # --- substituted primitives, peer and client ---------------------------------
+
+
+def controlled(routable):
+    """The routability predicate widened by exactly the controlled peers' address.
+
+    Production destinations must be globally routable. The peers here live on
+    host loopback, so the suites replace the predicate, as they replace the
+    platform primitives; the zone refusal sits outside it and stays real.
+    """
+    return lambda address: str(address) == CONTROLLED or routable(address)
+
+
+@pytest.fixture
+def controlled_loopback(monkeypatch):
+    monkeypatch.setattr(egress, "_routable", controlled(egress._routable))
 
 
 class PinningListener(socket.socket):
@@ -79,7 +100,7 @@ class PinningListener(socket.socket):
 
 
 @pytest.fixture
-def listeners(monkeypatch, tmp_path_factory):
+def listeners(monkeypatch, tmp_path_factory, controlled_loopback):
     bound: list[PinningListener] = []
     pins = tmp_path_factory.mktemp("pins")
 
@@ -249,7 +270,7 @@ def head(host=ALLOWED, port=443, *, pad=0) -> bytes:
 
 def policy_for(port: int, *, connections=4) -> EgressPolicy:
     return EgressPolicy(
-        destinations=(EgressDestination(ALLOWED, port, "127.0.0.1"),),
+        destinations=(EgressDestination(ALLOWED, port, CONTROLLED),),
         connections=connections,
     )
 
@@ -511,6 +532,38 @@ CONNECTS = {
     "userinfo": (lambda port: head(f"user@{ALLOWED}", port), "connect"),
     "numeric-host": (lambda port: head("0x7f.1", port), "connect"),
 }
+
+
+def test_the_connect_parser_returns_the_exact_target():
+    assert parse_connect(head(ALLOWED, 443)) == (ALLOWED, 443)
+    assert parse_connect(head(ALLOWED, 65535)) == (ALLOWED, 65535)
+    assert parse_connect(b"CONNECT a.invalid:1 HTTP/1.1\r\n\r\n") == ("a.invalid", 1)
+
+
+CONNECT_HEADS = {
+    # case: (head, reason); each is refused by parse_connect's own gate.
+    "unterminated": (b"CONNECT allowed.invalid:443 HTTP/1.1\r\n", "connect"),
+    "non-ascii": ("CONNECT allowed.invalid:443 HTTP/1.1\r\nX: é\r\n\r\n".encode(), "connect"),
+    "extra-token": (b"CONNECT allowed.invalid:443 HTTP/1.1 x\r\n\r\n", "connect"),
+    "method": (b"POST allowed.invalid:443 HTTP/1.1\r\n\r\n", "connect"),
+    "version": (b"CONNECT allowed.invalid:443 HTTP/1.0\r\n\r\n", "connect"),
+    "zero-padded-port": (b"CONNECT allowed.invalid:0443 HTTP/1.1\r\n\r\n", "connect"),
+    "signed-port": (b"CONNECT allowed.invalid:+443 HTTP/1.1\r\n\r\n", "connect"),
+    "port-over-bound": (b"CONNECT allowed.invalid:65536 HTTP/1.1\r\n\r\n", "connect"),
+    "no-port": (b"CONNECT allowed.invalid HTTP/1.1\r\n\r\n", "connect"),
+    "userinfo": (b"CONNECT user@allowed.invalid:443 HTTP/1.1\r\n\r\n", "connect"),
+    "numeric-host": (b"CONNECT 0x7f.1:443 HTTP/1.1\r\n\r\n", "connect"),
+    "literal": (b"CONNECT 127.0.0.1:443 HTTP/1.1\r\n\r\n", "ip_literal"),
+    "bracketed": (b"CONNECT [::1]:443 HTTP/1.1\r\n\r\n", "ip_literal"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(CONNECT_HEADS))
+def test_connect_parser_refusals(case):
+    data, reason = CONNECT_HEADS[case]
+    with pytest.raises(EgressRefused) as refused:
+        parse_connect(data)
+    assert refused.value.reason == reason
 
 
 @pytest.mark.parametrize("case", sorted(CONNECTS))
@@ -894,10 +947,10 @@ async def test_control_lost_during_the_dial_closes_the_upstream_before_any_byte(
     assert bytes(peer.connections[0].data) == b"", "a byte reached the peer after control loss"
 
 
-async def test_ownership_loss_leaves_an_established_stream_until_the_relay_stops(
+async def test_control_lost_on_an_established_stream_forwards_nothing_more(
     tmp_path, listeners, peer,
 ):
-    """The recorded limit, pinned: control is observed only at connect points."""
+    """Control is rechecked after every resumed read, before its send, and latches stop."""
     lost = []
 
     def control():
@@ -908,28 +961,32 @@ async def test_ownership_loss_leaves_an_established_stream_until_the_relay_stops
     relay = relay_for(tmp_path, peer.port, control=control)
 
     async def scenario(facts):
-        _, writer, facts["established"] = await established(listeners, peer, hello)
+        reader, writer, facts["established"] = await established(listeners, peer, hello)
+        writer.write(b"before-loss")
+        await writer.drain()
+        facts["forwarded"] = await until(lambda: peer.received().endswith(b"before-loss"))
         lost.append(True)
         writer.write(b"after-loss")
         await writer.drain()
-        facts["survived"] = await until(lambda: peer.received().endswith(b"after-loss"))
-        reader, second = await client(listeners)
+        facts["cut"] = await until(lambda: peer.connections[0].eof, 2.0)
+        facts["client"] = await reply_of(reader, 1)
+        # The pump's control denial latched stop: a new connect is refused unread.
+        second_reader, second = await client(listeners)
         second.write(head(port=peer.port) + hello)
         await second.drain()
-        await reply_of(reader)
-        await until(lambda: relay.observed["denied:control"] == 1)
-        writer.write(b"after-stop")
-        await writer.drain()
-        facts["cut"] = await until(lambda: peer.connections[0].eof, 2.0)
+        facts["second"] = await reply_of(second_reader)
+        await until(lambda: relay.observed["denied:stopped"] == 1)
         facts["observed"] = dict(relay.observed)
         writer.close()
         second.close()
 
     facts, failure = await drive(relay, scenario)
     assert failure is None and facts["established"]
-    assert facts["survived"], "ownership loss alone cut an established stream"
-    assert facts["cut"], "the stopped relay kept the established stream"
-    assert peer.received() == hello + b"after-loss", "a stopped relay forwarded bytes"
+    assert facts["forwarded"], "the established stream did not forward before the loss"
+    assert facts["cut"], "control loss left the established stream open"
+    assert facts["client"] == b""
+    assert peer.received() == hello + b"before-loss", "bytes read after control loss were sent"
+    assert facts["second"] == b""
     assert facts["observed"] == {"accepted": 1, "denied:control": 1, "denied:stopped": 1}
     assert len(peer.connections) == 1
 
@@ -1018,7 +1075,9 @@ async def test_the_socket_is_released_while_the_listener_still_holds_its_inode(
     assert not facts["socket"].path.parent.exists()
 
 
-async def test_a_bind_failure_removes_its_directory_and_names_no_path(tmp_path, monkeypatch):
+async def test_a_bind_failure_removes_its_directory_and_names_no_path(
+    tmp_path, monkeypatch, controlled_loopback,
+):
     def bind(path):
         raise OSError(22, "AF_UNIX path too long", str(path))
 
@@ -1035,15 +1094,15 @@ async def test_a_bind_failure_removes_its_directory_and_names_no_path(tmp_path, 
 # --- the sealed policy ------------------------------------------------------------
 
 
-def destination(host=ALLOWED, port=443, address="127.0.0.1"):
+def destination(host=ALLOWED, port=443, address=UNDIALLED):
     return EgressDestination(host, port, address)
 
 
 def test_a_policy_digests_its_destinations_and_pins():
-    other = destination(DECOY, 8443, "192.0.2.7")
+    other = destination(DECOY, 8443, "2606:4700:4700::1111")
     first = EgressPolicy((destination(), other), 2)
     same = EgressPolicy((other, destination()), 2)
-    moved = EgressPolicy((destination(address="127.0.0.2"), other), 2)
+    moved = EgressPolicy((destination(address="1.0.0.1"), other), 2)
     digests = identity_digests(first)
     assert set(digests) == {
         "enforcement_build_digest", "destination_policy_digest", "resolver_policy_digest",
@@ -1055,23 +1114,69 @@ def test_a_policy_digests_its_destinations_and_pins():
 
 
 POLICIES = {
-    "numeric-host": lambda: destination("127.1"),
-    "hex-host": lambda: destination("0x7f.1"),
-    "decimal-host": lambda: destination("2130706433"),
-    "upper-case": lambda: destination("Allowed.invalid"),
-    "trailing-dot": lambda: destination("allowed.invalid."),
-    "non-canonical-address": lambda: destination(address="::FFFF:7f00:1"),
-    "port-zero": lambda: destination(port=0),
-    "list": lambda: EgressPolicy([destination()], 1),
-    "bool-bound": lambda: EgressPolicy((destination(),), True),
-    "duplicate": lambda: EgressPolicy((destination(), destination(address="127.0.0.2")), 1),
+    # case: (factory, the refusal's own reason)
+    "numeric-host": (lambda: destination("127.1"), "DNS name"),
+    "hex-host": (lambda: destination("0x7f.1"), "DNS name"),
+    "decimal-host": (lambda: destination("2130706433"), "DNS name"),
+    "upper-case": (lambda: destination("Allowed.invalid"), "DNS name"),
+    "trailing-dot": (lambda: destination("allowed.invalid."), "DNS name"),
+    "non-canonical-address": (lambda: destination(address="2606:4700:4700:0::1111"), "canonical"),
+    "port-zero": (lambda: destination(port=0), "port"),
+    "list": (lambda: EgressPolicy([destination()], 1), "tuple"),
+    "bool-bound": (lambda: EgressPolicy((destination(),), True), "connection bound"),
+    "duplicate": (
+        lambda: EgressPolicy((destination(), destination(address="1.0.0.1")), 1), "once",
+    ),
+}
+ADDRESSES = {
+    # case: (address, the refusal's own reason); each is refused by the real rule.
+    "loopback": ("127.0.0.1", "globally routable"),
+    "loopback-v6": ("::1", "globally routable"),
+    "mapped-loopback": ("::ffff:127.0.0.1", "globally routable"),
+    "unspecified": ("0.0.0.0", "globally routable"),
+    "private": ("10.0.0.1", "globally routable"),
+    "shared": ("100.64.0.1", "globally routable"),
+    "link-local": ("169.254.1.1", "globally routable"),
+    "documentation": ("192.0.2.7", "globally routable"),
+    "unique-local": ("fc00::1", "globally routable"),
+    "site-local": ("fec0::1", "globally routable"),
+    "multicast": ("224.0.0.1", "globally routable"),
+    "multicast-v6": ("ff0e::1", "globally routable"),
+    "reserved-v6": ("4000::1", "globally routable"),
+    "scoped-link-local": ("fe80::1%eth0", "without a zone"),
+    "zone": ("2606:4700:4700::1111%eth0", "without a zone"),
 }
 
 
 @pytest.mark.parametrize("case", sorted(POLICIES))
 def test_a_policy_refuses_ambiguous_or_mutable_input(case):
-    with pytest.raises(ContractViolation):
-        POLICIES[case]()
+    factory, reason = POLICIES[case]
+    with pytest.raises(ContractViolation, match=reason):
+        factory()
+
+
+def test_a_globally_routable_address_is_admissible():
+    for address in (UNDIALLED, "2606:4700:4700::1111"):
+        assert destination(address=address).address == address
+
+
+@pytest.mark.parametrize("case", sorted(ADDRESSES))
+def test_a_host_local_or_zoned_address_is_never_admissible(case):
+    """No loopback, private, link-local, multicast or reserved pin, and no zone.
+
+    ADR 0020 excludes any localhost service inventory, and a zone id would
+    send the dial through ``getaddrinfo``. This runs the real predicate.
+    """
+    address, reason = ADDRESSES[case]
+    with pytest.raises(ContractViolation, match=reason):
+        destination(address=address)
+
+
+def test_the_controlled_seam_admits_the_peers_address_and_nothing_else(controlled_loopback):
+    assert destination(address=CONTROLLED).address == CONTROLLED
+    for address in ("127.0.0.2", "10.0.0.1", "fe80::1%lo"):
+        with pytest.raises(ContractViolation):
+            destination(address=address)
 
 
 # --- the real primitives (Linux only) ----------------------------------------------
