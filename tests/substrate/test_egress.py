@@ -1,7 +1,8 @@
 """N3b relay rules; portable: only the two platform primitives are substituted.
 
 ``_bind_private_socket`` becomes a loopback TCP listener plus a stand-in file
-whose inode is the recorded identity, and ``_receive`` becomes a plain
+whose inode is the recorded identity, held until the listener closes as a bound
+socket holds its own, and ``_receive`` becomes a plain
 ``sock_recv``. Everything else is the production relay, driven against a real
 recording peer in its own thread. The accepting path comes first. Assertions
 run after the relay has exited, so an exit failure can never mask them. The
@@ -56,13 +57,37 @@ class LocalClose(asyncio.CancelledError):
 # --- substituted primitives, peer and client ---------------------------------
 
 
+class PinningListener(socket.socket):
+    """A loopback listener that holds its stand-in inode until it closes.
+
+    A bound ``AF_UNIX`` socket holds its own inode until its last descriptor
+    closes, so no other file can take that inode number meanwhile; once it is
+    released, Linux CI measured the next file receiving it. The stand-in
+    is held by a hard link outside the relay's directory, removed on close.
+    ``path_at_close`` records whether the relay's path still existed then.
+    """
+
+    pin: Path | None = None
+    path: Path | None = None
+    path_at_close: bool | None = None
+
+    def close(self) -> None:
+        if self.pin is not None and self.path_at_close is None:
+            self.path_at_close = os.path.lexists(self.path)
+            self.pin.unlink()
+        super().close()
+
+
 @pytest.fixture
-def listeners(monkeypatch):
-    bound: list[socket.socket] = []
+def listeners(monkeypatch, tmp_path_factory):
+    bound: list[PinningListener] = []
+    pins = tmp_path_factory.mktemp("pins")
 
     def bind(path):
         path.write_bytes(b"")  # the inode whose identity the relay records
-        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener = PinningListener(socket.AF_INET, socket.SOCK_STREAM)
+        listener.path, listener.pin = path, pins / str(len(bound))
+        os.link(path, listener.pin)
         listener.bind(("127.0.0.1", 0))
         listener.listen()
         listener.setblocking(False)
@@ -684,12 +709,23 @@ async def test_teardown_delivers_peer_eof_once_exit_returns(tmp_path, listeners,
 async def test_teardown_closes_a_client_whose_handler_never_ran(tmp_path, listeners, peer):
     """A handler cancelled before its first step never reaches its own finally."""
     relay = relay_for(tmp_path, peer.port)
+    accepted = asyncio.get_running_loop().create_future()
+
+    class Clients(list):
+        def append(self, item):
+            super().append(item)
+            # Queues the owner's wake-up before the handler's first step, which
+            # the accept loop schedules next in the same step. Polling for the
+            # handler instead raced it: Linux CI saw it already started.
+            accepted.set_result(None)
+
+    relay._clients = Clients()
 
     async def scenario(facts):
-        facts["reader"], facts["writer"] = await client(listeners)
-        # The accept loop creates the handler; this step exits before it runs.
-        while not relay._handlers:
-            await asyncio.sleep(0)
+        # A blocking loopback connect completes in the kernel, so the accept
+        # happens while this step is already awaiting it.
+        facts["sock"] = socket.create_connection(listeners[-1].getsockname()[:2], timeout=2.0)
+        await accepted
         facts["state"] = inspect.getcoroutinestate(relay._handlers[0].get_coro())
 
     facts, failure = await drive(relay, scenario)
@@ -697,10 +733,12 @@ async def test_teardown_closes_a_client_whose_handler_never_ran(tmp_path, listen
         assert failure is None and relay.closed
         assert facts["state"] == inspect.CORO_CREATED, "the handler had already started"
         assert relay._handlers[0].cancelled()
-        assert await reply_of(facts["reader"], 1) == b"", "an accepted client outlived exit"
+        reader, writer = await asyncio.open_connection(sock=facts["sock"])
+        assert await reply_of(reader, 1) == b"", "an accepted client outlived exit"
+        writer.close()
         assert relay.observed == {}
     finally:
-        facts["writer"].close()
+        facts["sock"].close()
 
 
 class HeldPeer:
@@ -960,6 +998,26 @@ async def test_a_replaced_socket_is_not_unlinked_and_exit_raises(tmp_path, liste
     assert not relay.closed
 
 
+async def test_the_socket_is_released_while_the_listener_still_holds_its_inode(
+    tmp_path, listeners, peer,
+):
+    """``(dev, ino)`` names one file only while something holds that inode.
+
+    Once the listener closes, a replacement created in the gap can receive the
+    same number (Linux CI observed it on the runner's filesystem), so the
+    identity check and unlink must both run while the listener still holds it.
+    """
+    relay = relay_for(tmp_path, peer.port)
+
+    async def scenario(facts):
+        pass
+
+    facts, failure = await drive(relay, scenario)
+    assert failure is None and relay.closed
+    assert listeners[-1].path_at_close is False, "the listener closed before the release"
+    assert not facts["socket"].path.parent.exists()
+
+
 async def test_a_bind_failure_removes_its_directory_and_names_no_path(tmp_path, monkeypatch):
     def bind(path):
         raise OSError(22, "AF_UNIX path too long", str(path))
@@ -1036,16 +1094,47 @@ def test_the_real_bind_records_the_socket_it_created(tmp_path):
 
 @LINUX
 def test_require_current_refuses_a_replaced_socket(tmp_path):
+    """The replacement is bound while the relay's listener still holds its inode.
+
+    That is the only state in which the relay checks: closing the first
+    listener before the replacement releases the inode, and Linux CI then
+    measured the replacement receiving the same ``(dev, ino)``.
+    """
     path = tmp_path / "egress.sock"
     first, identity = egress._bind_private_socket(path)
-    first.close()
-    path.unlink()
-    second, _ = egress._bind_private_socket(path)
     try:
-        with pytest.raises(ContractViolation, match="changed"):
-            EgressSocket(path, identity).require_current()
+        path.unlink()
+        second, replaced = egress._bind_private_socket(path)
+        try:
+            assert replaced != identity
+            with pytest.raises(ContractViolation, match="changed"):
+                EgressSocket(path, identity).require_current()
+        finally:
+            second.close()
     finally:
-        second.close()
+        first.close()
+
+
+@LINUX
+async def test_a_replaced_real_socket_is_not_unlinked_and_exit_raises(tmp_path):
+    relay = relay_for(tmp_path, 443)
+    replacement: list = []
+
+    async def scenario(facts):
+        path = facts["socket"].path
+        path.unlink()
+        replacement.append(egress._bind_private_socket(path))
+
+    try:
+        facts, failure = await drive(relay, scenario)
+        assert isinstance(failure, ContractViolation) and str(failure) == RELAY_FAILED
+        assert str(failure.__cause__) == SOCKET_CHANGED
+        info = os.lstat(facts["socket"].path)
+        assert (info.st_dev, info.st_ino) == replacement[0][1], "the replacement was unlinked"
+        assert not relay.closed
+    finally:
+        for sock, _ in replacement:
+            sock.close()
 
 
 @LINUX

@@ -299,7 +299,13 @@ def client_hello_sni(record: bytes) -> str:
 
 @dataclass(frozen=True)
 class EgressSocket:
-    """The relay's bound socket, identified by the inode recorded at bind."""
+    """The relay's bound socket, identified by the inode recorded at bind.
+
+    ``(dev, ino)`` names this socket only while the relay's listener holds the
+    inode: once released, the next file created can receive the same number,
+    as Linux CI measured on the runner's ``/tmp``. Every check therefore runs
+    while the relay is live, and after exit the identity names nothing.
+    """
 
     path: Path
     identity: tuple[int, int]
@@ -482,16 +488,17 @@ class EgressRelay:
             failed = None if task.cancelled() else task.exception()
             if failed is not None:
                 failures.append(failed)
+        # Before the listener closes: its inode number is ours only while held.
+        try:
+            self._release_path()
+        except (OSError, ContractViolation) as exc:
+            failures.append(exc)
         # A handler cancelled before its first step never ran its finally.
         for sock in (*self._clients, self._listener):
             try:
                 sock.close()
             except OSError as exc:
                 failures.append(exc)
-        try:
-            self._release_path()
-        except (OSError, ContractViolation) as exc:
-            failures.append(exc)
         if failures:
             failure = _fixed(RELAY_FAILED, failures)
             if cancellation is not None:
@@ -502,7 +509,11 @@ class EgressRelay:
         self.closed = True
 
     def _release_path(self) -> None:
-        """Unlink only the socket this relay bound, then its own directory."""
+        """Unlink only the socket this relay bound, then its own directory.
+
+        Called while the listener still holds the socket's inode, so a
+        replacement cannot share its ``(dev, ino)``.
+        """
 
         assert self._socket is not None
         info = os.lstat(self._socket.path)

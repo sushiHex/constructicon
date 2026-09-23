@@ -320,6 +320,13 @@ MUTANTS = (
         "for sock in (self._listener,):",
         E + "test_teardown_closes_a_client_whose_handler_never_ran",
     ),
+    (
+        "44 the socket is released while the listener still holds its inode",
+        RELAY + "__aexit__",
+        "self._release_path()",
+        "self._listener.close()\n        self._release_path()",
+        E + "test_the_socket_is_released_while_the_listener_still_holds_its_inode",
+    ),
 )
 
 

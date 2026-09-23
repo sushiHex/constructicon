@@ -550,8 +550,11 @@ async def test_an_ordinary_worker_sees_an_empty_regular_leaf(launcher, short_roo
         )
     assert result.returncode == result.payload_returncode == 0, result
     facts = json.loads(result.stdout)
+    # Linux's unix_find_bsd checks write permission on the path before its
+    # type, so an 0444 leaf refuses with EACCES before ECONNREFUSED could
+    # report that it is not a socket (net/unix/af_unix.c, v6.8).
     assert facts == {"regular": True, "size": 0, "mode": 0o444,
-                     "connect_errno": errno.ECONNREFUSED}
+                     "connect_errno": errno.EACCES}
     write_evidence("n3b-worker-leaf.json", {"schema_version": 1, **facts})
 
 
@@ -585,16 +588,30 @@ async def test_the_deadline_cuts_an_actively_streaming_client(
 ):
     allowed = TlsPeer(pki.server("allowed"))
     seconds = 12.0
-    started = asyncio.get_running_loop().time()
+    loop = asyncio.get_running_loop()
+
+    class Stamped(asyncio.Event):
+        at: float | None = None
+
+        def set(self) -> None:
+            if self.at is None:
+                self.at = loop.time()
+            super().set()
+
+    streaming = Stamped()
+    started = loop.time()
     try:
         result, relay, _ = await run_native(
             launcher, binding, short_root, "n3b-deadline", plan_for(pki, allowed, mode="stream"),
-            policy=policy_for(allowed.port), seconds=seconds,
+            policy=policy_for(allowed.port), seconds=seconds, streaming=streaming,
         )
     finally:
         allowed.close()
     deadline = relay._deadline
-    assert started <= deadline <= started + seconds
+    # run_native takes the deadline after `started` and before the client can
+    # stream through the relay, so it lies within seconds of that interval.
+    assert streaming.at is not None
+    assert started + seconds <= deadline <= streaming.at + seconds
     connection = allowed.connections[0]
     assert connection.bytes > 0 and connection.eof_at is not None
     tick = time.get_clock_info("monotonic").resolution  # asyncio may fire one tick early
