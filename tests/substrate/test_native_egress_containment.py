@@ -490,7 +490,8 @@ async def run_native(launcher, binding, root: Path, lease: str, plan: dict, *,
 def facts_of(result, output: bytearray) -> dict:
     assert result.returncode == result.payload_returncode == 0, result
     facts = json.loads(bytes(output).strip().splitlines()[-1])
-    assert facts.get("ssl") is True, "ssl cannot import inside the production runtime"
+    assert "ssl" in facts, "the in-zone client's ssl fact is absent: it never reported it"
+    assert facts["ssl"] is True, "ssl cannot import inside the production runtime"
     return facts
 
 

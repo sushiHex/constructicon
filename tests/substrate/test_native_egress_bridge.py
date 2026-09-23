@@ -19,6 +19,7 @@ import socket
 import ssl
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -49,8 +50,13 @@ PROXY = f"http://127.0.0.1:{PROXY_PORT}"
 ZONE_ENVIRONMENT = {"HOME": "/tmp/home", "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "PWD": "/tmp"}
 
 CLIENT = r"""
-import errno, json, os, socket, ssl, sys
+import errno, json, os, socket, sys
 plan = json.loads(sys.stdin.readline())
+try:
+    import ssl
+except ImportError:
+    print(json.dumps({'ssl': False}), flush=True)
+    raise SystemExit(0)
 context = ssl.create_default_context(cadata=plan['ca'])
 proxy_host, _, proxy_port = os.environ['HTTPS_PROXY'].removeprefix('http://').rpartition(':')
 
@@ -122,6 +128,7 @@ def forwarders():
              for name in os.listdir(f'/proc/{child}/fd')} for child in children]
 
 results = {
+    'ssl': True,
     'environment': dict(os.environ),
     'listening': listening(),
     'forwarders': forwarders(),
@@ -316,6 +323,25 @@ async def test_the_pinned_client_reaches_a_controlled_peer_through_the_bridge(
         ],
         "process_start_exported": True,
     })
+
+
+@pytest.mark.parametrize(("reported", "message"), [
+    ({}, "absent"), ({"ssl": False}, "cannot import"),
+])
+def test_the_ssl_precondition_names_an_absent_fact_apart_from_a_failed_import(
+    reported, message,
+):
+    """Portable: first Linux run of this file failed on a client that never
+    reported the fact, under a message claiming the import had failed."""
+    result = SimpleNamespace(returncode=0, payload_returncode=0)
+    output = bytearray((json.dumps(reported) + "\n").encode())
+    with pytest.raises(AssertionError, match=message):
+        facts_of(result, output)
+    assert facts_of(result, bytearray(b'{"ssl": true}\n')) == {"ssl": True}
+
+
+def test_the_bridge_client_reports_the_ssl_fact():
+    assert "'ssl': True" in CLIENT.split("results = {", 1)[1]
 
 
 def test_no_evidence_file_contains_key_material():

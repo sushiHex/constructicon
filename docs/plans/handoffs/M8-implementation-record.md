@@ -1922,3 +1922,54 @@ from source only), `otlp-grpc` and the code-mode `unix:` transport (unknown or
 bypassing), refused hosts unnamed by the relay, and the private-host runtime
 closure, which must carry the script. The provider stays unavailable and
 `vendor_conformance_qualified` stays false.
+
+### First Linux CI run (PR #103)
+
+The first run was at head `cce8651`, the diff applied onto main `c950016`.
+[Containment run 35911952425](https://github.com/sushiHex/constructicon/actions/runs/35911952425)
+is the slice's first physical evidence.
+
+**Passed:**
+
+- **The pinned client through the bridge.**
+  `test_the_pinned_client_reaches_a_controlled_peer_through_the_bridge` ran
+  the pinned `codex app-server` with no login and no model request. It
+  exported `codex.process.start` to the controlled peer via `HTTPS_PROXY`, the
+  forwarder, the leaf and the relay: one `POST /v1/metrics`, and the relay
+  counted `accepted: 1`. The captured preface was exactly
+  `CONNECT allowed.invalid:<port> HTTP/1.1\r\nHost: allowed.invalid:<port>\r\n\r\n`.
+- **N3b under the bridge.** All nine N3b containment proofs passed with the
+  bridge prefix, including the new listener inventory.
+- **`verify` on Linux:** 2,972 tests passed, including this slice's fork,
+  readiness, isolation, exec and signal unit tests.
+
+**An unsolicited startup connection.** The same pinned run also opened
+`CONNECT chatgpt.com:443 HTTP/1.1` with no `user-agent` line, before any login.
+The relay denied it as `destination`. The evidence names the host because the
+test records every head the relay's parser judged. The source path behind it
+is not identified here. One candidate is the curated-plugin export fallback
+(`core-plugins/src/startup_sync.rs:26`), but that is unverified. This is N4
+startup-traffic evidence: the census's claim that such paths fire without a
+model request is now measured once.
+
+**Failed:** two tests, one cause.
+
+| Failure | Cause | Class | Fix |
+| --- | --- | --- | --- |
+| `test_an_environment_proxy_client_reaches_only_the_pinned_peer`: `facts.get("ssl")` was `None` | The bridge proof's in-zone client never reported an `ssl` fact, unlike N3b's client, whose precondition `facts_of` it reuses. The fact was absent, not false: the client imports `ssl` and ran in the production runtime. The precondition's message ("ssl cannot import") claimed the negative the absence did not show | introduced (test) | Test first: `test_the_ssl_precondition_names_an_absent_fact_apart_from_a_failed_import` and `test_the_bridge_client_reports_the_ssl_fact` both failed before the fix. `facts_of` now fails an absent fact as "absent" and a false one as "cannot import". The client reports `ssl` the way N3b's does, after a guarded import |
+| `test_no_evidence_file_contains_key_material`: only `n4-pinned-client.json` | Consequence of the first: `n4-bridge.json` is written after the failed assertion | consequence | None needed |
+
+The N4 mutation step did not run, because pytest failed first.
+
+**Verification of this correction (Windows):** the four portable bridge and
+egress files passed 24 with 17 platform skips.
+`scripts/check_m8_n4_bridge_mutations.py` killed 13 of 20, unchanged, with the
+seven Linux-only mutants NOT PROVEN. `uv run verify` on the corrected tree:
+clean ruff, strict mypy over 103 source files, four import contracts kept.
+2,760 tests passed and 532 were skipped for platform. The one failure was
+`test_docs_validation_accepts_the_actual_repository`, a digest mismatch on
+this record, run before its manifest line was refreshed. After the refresh
+that test passed on its own, and `sha256sum --check` passed.
+
+**Unexecuted until the next Linux CI run:** the environment-proxy client proof
+and its evidence file, and the N4 mutation step (mutants 4, 13-17 and 20).
