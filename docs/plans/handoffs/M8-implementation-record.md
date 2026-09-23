@@ -1390,3 +1390,347 @@ Linux lane; their local skips are not executed proofs.
 Production availability remains refused. This work installs no vendor
 configuration, credentials or deployment, proves no live subscription turn,
 and does not complete N3b egress, N3c conformance or private-host qualification.
+
+## N3b — acquisition-scoped egress (#76)
+
+N3b is the egress slice of issue #76; it does not close the issue. The pre-code
+[state review](M8-N3b-state-review.md) was committed as `9058290`, reviewed
+independently by Codex (`gpt-5.6-terra`, job `job_7914037954a5`), and amended
+in `60c51a5` for one P1, seven P2 and the adopted P3 findings. The rejected
+findings and their reasons are recorded in that document. The amended text has
+not itself been re-reviewed.
+
+The slice adds one stdlib-only substrate module, `executors/egress.py`: a
+host-side CONNECT relay per native execution, reached from the native zone
+through one read-only socket leaf, `/vendor-egress.sock`, bound into the zone's
+existing `--unshare-net` namespace. A destination is a sealed `(host, port)`
+with one pinned literal address; nothing resolves a name, and the CONNECT host
+never reaches the dialler. The first ClientHello must be one complete record
+naming exactly the CONNECT host, with no ECH, no duplicate extension and one
+`host_name`. That rule binds the first hello only; the pinned address is the
+boundary. Every handler await is bounded by the acquisition deadline, and the
+relay rechecks its stop latch, the owner task's cancellation and the deadline
+synchronously after every resumed read, before any dial and before any
+forward. `NativeStoreMount` carries the leaf, so no worker launch can; `argv`
+re-identifies the bound socket (`S_ISSOCK`, owner, `(dev, ino)`) before mounting
+it. The relay is entered inside the `self.active` task that `_cleanup_owned`
+already cancels and joins, so it is torn down before either guard is released.
+Allocation is an exclusive `mkdir` of the acquisition's own payload directory.
+The provider refuses an egress identity that differs from the sealed policy and
+an acquisition root too long for the socket path. The production runtime
+reserves the leaf as an immutable empty regular file, which changes the runtime
+digest. No L0 contract, journal record, supervisor or AppArmor change, and no
+new forced unavailability reason: the default reasons still publish the
+unqualified egress boundary, and a provider with no policy mounts no leaf.
+
+Denials are counted in `observed` as evidence and are never fatal to a turn.
+Every allocation, handler and teardown failure becomes one fixed-text
+`ContractViolation` inside the relay, because the original exception text
+carries private locators (review finding 1).
+
+### Local evidence
+
+Everything below was executed on Windows 11 with Python 3.11, with only the
+relay's two platform primitives substituted (a loopback TCP listener with a
+stand-in inode, and a plain `sock_recv`). It is portable evidence about the
+relay's rules, not physical evidence.
+
+- The portable suites (`test_egress.py`, `test_egress_launch.py`,
+  `test_codex_egress.py`) drive every relay rule in both directions: CONNECT
+  membership, IP literals and the head bound at its limit; a real stdlib
+  ClientHello against twelve refusals; pipelining, including the pinned
+  first-hello limit; the connection bound at its limit; the deadline on an
+  active stream and an idle handler; stop, control, control lost during the
+  dial, and ownership loss after the dial; exclusive allocation, a replaced
+  socket and exit failures; the launcher leaf; the provider's identity and path
+  budget; and the handle's allocation, close ordering and `network="none"`
+  refusal. A resolver recorder with a same-run control saw zero relay calls on
+  the accepting and refusing paths.
+- The field-walking surface test seeds the acquisition root, socket name, pinned
+  address and denial prefix on an accepted path, a refused path and four failure
+  paths (existing payload, a bind error naming the path, a substituted socket at
+  exit, an unclassified handler failure). None reaches any published field.
+- `scripts/check_m8_n3b_mutations.py`: 34 of 35 mutants killed by assertion. The
+  Linux-only ancillary mutant (29) reported NOT PROVEN, as expected on Windows;
+  it has no kill until the foundation lane runs it.
+- The retained inventories still kill every mutant by assertion against the
+  changed `_converse`, `argv` and provider: N3a 47/47, N2 82/82, N2 WRITE 49/49.
+- `uv run verify` on the complete tree passed: clean ruff, strict mypy over 102
+  source files, four import contracts kept, and 2,630 tests passed with 408
+  platform skips. The only change after that run was this record's own text and
+  its manifest line, rechecked with `sha256sum --check` and the plan-manifest
+  test.
+
+### Deviations from the amended design
+
+- The task body is a new `CodexOperatorHandle._exchange` method rather than
+  inline code in `_converse`, so the N2 mutation anchor
+  `guard_fds=(guard, held.lock_fd),` stays in `_converse` exactly once.
+- The deadline tests accept a peer EOF up to one monotonic clock tick before the
+  deadline. asyncio runs timers up to its clock resolution early; on Windows the
+  first run measured EOF 3 ms before the deadline, with a 15.6 ms resolution. The
+  state review's row now says so. The upper bound (deadline + 1 s) is unchanged.
+- The store-socket positive control binds through `/proc/self/fd/<dirfd>`,
+  because the store path is longer than `sun_path`. That mechanism is Linux
+  reasoning until the lane runs it.
+- Self-review after implementation found a second instance of review finding
+  2's class: `sock_sendall` completes a partial write from an I/O callback that
+  bypasses the pump's liveness check. It is recorded as a limit in the state
+  review rather than fixed with a third substituted primitive, and the
+  stalled-controller test asserts at most one chunk after resume instead of zero
+  bytes. The "at most one 8 KiB chunk" bound first recorded here was false:
+  the implementation review below found the kernel send queue behind it.
+
+### Limits and unexecuted proofs
+
+The state review's limits apply unchanged: pinned addresses, the direct CONNECT
+client (the Codex `HTTPS_PROXY` path is N4), same-uid trust for pathname
+sockets in the store, the first-hello-only rule, ownership loss observed only at
+connect points, stalled-controller sockets, queued bytes (what the kernel sends
+before a handler's abortive close, and a clean end's unacknowledged tail
+discarded), an accept completed during teardown left for the garbage
+collector, an unstarted handler's connection counted nowhere, an orphaned
+payload after a teardown failure on a normally closed lease, and native TLS
+validation as an N4 assumption.
+
+These have **no execution** until Linux CI runs them, and Windows skips are not
+passes: the real `AF_UNIX` bind and identity, `recvmsg` ancillary refusal
+(mutant 29), `require_current` against a replaced real socket, the 107-byte
+`sun_path` budget, the leaf in the production runtime, `ssl` inside the runtime
+and `openssl` on the runner, the throwaway-CA TLS peers, the redirect, ECH, SNI
+and IP-literal refusals through the real zone, the in-zone errno assertions,
+the zone socket walk and its planted-socket control, the worker's empty leaf,
+cancel and deadline revocation, controller death with successor disposal, and
+the stalled-controller pin with its concurrent successor. They are
+`tests/substrate/test_native_egress_containment.py` in the foundation lane's
+"Prove N3b acquisition-scoped egress denial" step, with evidence in
+`n3b-*.json`. `vendor_conformance_qualified` stays false, and production
+availability remains refused. The portable tests added by the implementation
+review below have run on Windows only; their first Linux run is CI's, including
+the reset that discards the upstream queue.
+
+### Implementation review
+
+A single-model review of `6bc9500...ccee567` reproduced each finding with a
+probe against the real relay before reporting it. No independent-model review
+ran. Codex was paused under a weekly limit, and the round's rules forbade model
+calls. **Neither the amended design, the implementation, the partial-write
+deviation nor this round's fixes has had an independent-model review. That
+review is still owed (finding 10).** Each finding below was reproduced again
+before it was acted on. Findings 1, 6 and 8 failed a new test before the fix and
+passed after it. The coverage findings (2-5, 7) are proven by new mutants 36-43
+of `scripts/check_m8_n3b_mutations.py`, each killed by assertion.
+
+| # | Finding | Class | Disposition |
+| --- | --- | --- | --- |
+| 1 | P2: the "at most one 8 KiB chunk after stop" limit is false. A graceful `upstream.close()` let the kernel keep sending the send queue after the deadline, after exit and after guard release | introduced | Fixed. Every upstream close in `_handle` and `_open` is abortive (`SO_LINGER` zero). Reproduced by the review probe: 75,250 bytes (peer buffer 1 KiB) and 599,538 bytes (256 KiB) reached the peer after exit; 0 after the fix. `test_nothing_queued_before_the_deadline_reaches_the_peer_after_exit` failed before the fix (75,250 bytes beyond what the peer held). Mutant 40. The limit text is rewritten as "Queued bytes" |
+| 2 | P2: the owner-`cancelling()` liveness term had no test or mutant | introduced | Fixed. `test_a_cancelled_owner_still_reaping_admits_nothing`; mutant 36 (it survived all 88 portable tests before) |
+| 3 | P2: the synchronous deadline term was unproven | introduced | Fixed. `test_a_read_resumed_past_the_deadline_forwards_nothing` blocks a substituted read past the deadline in the step that resumed; mutant 37 |
+| 4 | P2: the handle's control wiring was unproven | introduced | Fixed. `test_control_lost_during_the_exchange_denies_the_connect` loses control inside the native exchange and asserts `denied:control` and zero peer connections; mutant 38 |
+| 5 | P3: the handle's deadline wiring was unproven | introduced | Fixed. The accepting handle test bounds the relay's deadline by the exchange's own `loop.time() + timeout_s`; mutant 39 |
+| 6 | P3: a mid-stream `ETIMEDOUT` counted as `denied:deadline` | introduced | Fixed. A stream `TimeoutError` is `denied:deadline` only when the handler's timeout expired, otherwise `reset`. `test_a_stream_timeout_before_the_deadline_is_a_reset` failed before the fix; mutant 41 |
+| 7 | P3: the hello record bound was never tested where it binds | introduced | Fixed. A real hello grown to a 16,384-byte body is accepted and forwarded byte-identical, and 16,385 is refused; mutant 42 |
+| 8 | P3: a handler cancelled before its first step never ran its `finally`, so its client stayed open after exit | introduced | Fixed. The relay keeps every accepted client and closes them after the join. `test_teardown_closes_a_client_whose_handler_never_ran` produces a genuinely unstarted handler (asserted `CORO_CREATED`), and it failed before the fix; mutant 43. The accept-future limit is narrowed: it was reasoning, and the same retention shape applies |
+| 9 | P3: the README index row was stale | introduced | Fixed |
+| 10 | Process: no independent-model review of design amendments, implementation or deviation | process | Recorded above as owed; not satisfiable in this round |
+
+**Defects inside this round's fixes, found by self-review:**
+
+- The first form of the finding 1 fix kept a graceful close for a stream that
+  ended cleanly in both directions. That re-opened the same class: a clean end
+  shortly before exit, with a slow peer, would keep sending after exit and
+  after the guards are released. A probe also showed the branch cannot be
+  discriminated portably: on Windows loopback, a completed send is already in
+  the peer's buffer, so a clean-end test passed under both branches. Every
+  upstream close is now abortive. The recorded cost is that a peer that
+  half-closed and then reads slowly can lose the tail of what the client sent.
+- Closing the accepted clients at exit made mutant 18 (teardown skips
+  cancelling handlers) escape. An unjoined handler now saw its client closed
+  and ended by itself, so the peer still saw EOF. The killing test now asserts
+  the affirmative fact, before any await: every handler task is done when exit
+  returns.
+
+**Rejected or not adopted:**
+
+- **Vendor-path network errors other than `ETIMEDOUT` as `reset`** (review
+  finding 6, flagged by the reviewer as a design-choice disagreement). A
+  mid-stream `EHOSTUNREACH` stays a fatal fixed-text `RELAY_FAILED`. That fails
+  closed and costs the turn, not the boundary. Widening the non-fatal set beyond
+  `ConnectionError` and a non-expired `TimeoutError` would need an errno list
+  with evidence behind it, which this slice does not have. Linux can report a
+  path failure as `EHOSTUNREACH` after a retransmission timeout. That is
+  reasoning about the kernel, not measured here, so the classification is a
+  recorded design choice rather than a claim that the two cases differ.
+- The reviewer's own rejections stand:
+  - A read-only bind does not block `connect`. This rests on the placement
+    lane's measurement.
+  - The selector loop's `sock_connect` resolves through `_ensure_resolved`,
+    which returns a numeric host without calling `loop.getaddrinfo` (read in
+    the Python 3.11.15 stdlib).
+  - A group-swallowed cancellation cannot hang the join, because
+    `finish_owned` waits until the task is done (`_lifetime.py`).
+  - Mutants E, G and H are equivalent in effect.
+- `_open`'s abortive close on a failed dial or hello forward is not separately
+  pinned. The queue there holds at most the judged hello. No portable input
+  separates it from a graceful close.
+
+**Verification of this round:** the three portable N3b files passed 95 with 3
+platform skips (88 before). `scripts/check_m8_n3b_mutations.py` killed 42 of 43
+by assertion. Mutant 29 reported NOT PROVEN on Windows as expected, and it has
+no kill until the foundation lane runs it. The reviewer's probes, re-run
+against the fix, measured 0 bytes after exit and classed `ETIMEDOUT` as
+`reset`. `uv run verify` on the complete tree passed: clean ruff, strict mypy,
+four import contracts kept, and 2,637 tests passed with 408 platform skips.
+After that run only this sentence and its manifest line changed. Both were
+rechecked with `sha256sum --check` and the plan-manifest test.
+
+### First Linux CI run
+
+PR #97's first run at `1ec4943` is the slice's first physical evidence. In the
+foundation lane
+([run 35808396680](https://github.com/sushiHex/constructicon/actions/runs/35808396680)),
+six of the eight containment proofs passed as `m8-service` with the production
+runtime and store fixture:
+
+- `test_the_zone_reaches_only_the_pinned_destination`: the accepting TLS path,
+  the decoy, IP-literal, SNI, ECH and redirect refusals, the in-zone errnos,
+  the abstract and unmounted socket controls and the resolver recorder;
+- `test_the_zone_walk_finds_a_socket_planted_in_the_store`, including the
+  `/proc/self/fd/<dirfd>` bind;
+- `test_cancel_mid_stream_revokes_the_upstream`;
+- `test_controller_death_ends_streams_and_a_successor_disposes_the_relay`;
+- `test_a_stalled_controller_holds_its_guard_until_its_streams_end`;
+- `test_no_evidence_file_contains_key_material`.
+
+On the unprivileged Linux `verify` job
+([run 35808396701](https://github.com/sushiHex/constructicon/actions/runs/35808396701)),
+2,727 tests passed and 4 failed. The passes include the real bind
+(`test_the_real_bind_records_the_socket_it_created`), the `SCM_RIGHTS` refusal
+and every portable relay test, among them the abortive close that discards the
+upstream queue. The lane's mutation step did not run, because the containment
+step failed first, so mutant 29 still has no kill.
+
+Six tests failed. One was a product defect, the other five wrong test
+assumptions:
+
+| Failure | Cause | Class | Fix |
+| --- | --- | --- | --- |
+| `test_require_current_refuses_a_replaced_socket` did not raise | The test closed the first listener before binding the replacement. `S_ISSOCK`, owner and path matched by construction, so only `(dev, ino)` could have refused it: the runner's `/tmp` handed the released inode number to the replacement. A bound socket holds its own inode until its last descriptor closes (`unix_bind_bsd` keeps `dget(dentry)` in `u->path`, v6.8), so a replacement bound while the listener is open cannot share the number | test assumption; exposed the defect below | The replacement is bound while the first listener is open, and the test asserts the two identities differ |
+| `test_a_replaced_socket_is_not_unlinked_and_exit_raises` and `test_no_private_locator_reaches_the_outcome[substituted-socket]`: exit accepted the substitute | The portable stand-in inode was held by nothing, so its number was reused at once by the substitute; the stand-in did not model the listener's hold | test assumption | The stand-in is held by a hard link that the substituted listener removes on close, which is what a bound socket does |
+| (defect) `__aexit__` closed the listener before `_release_path` compared `(dev, ino)` and unlinked | Between the close and the check, the number was free: a replacement created in that gap could receive it and be unlinked as the relay's own. Same-uid custody only, and a synchronous window, but the identity law was read past the point where it holds | introduced | Test first: `test_the_socket_is_released_while_the_listener_still_holds_its_inode` failed before the fix (the path still existed when the listener closed). `_release_path` now runs before any socket closes. Mutant 44 |
+| `test_teardown_closes_a_client_whose_handler_never_ran`: `CORO_SUSPENDED` | The scenario polled for the handler with `sleep(0)`; whether its wake-up ran before the handler's first step is a scheduling race, which the Windows runs won and the Linux run lost | test assumption | Deterministic: the scenario connects with a blocking loopback connect, then awaits a future resolved inside `_clients.append`, which queues its wake-up before the handler's first step |
+| `test_an_ordinary_worker_sees_an_empty_regular_leaf`: `EACCES`, not `ECONNREFUSED` | `unix_find_bsd` checks `path_permission(MAY_WRITE)` before `S_ISSOCK` (`net/unix/af_unix.c`, v6.8). The leaf is 0444 and the worker holds no capability, so write permission refuses first | test assumption | Asserts `EACCES` exactly |
+| `test_the_deadline_cuts_an_actively_streaming_client`: `deadline > started + seconds` by 3 ms | `run_native` takes its deadline after `started`, so `started + seconds` is its lower bound, not its upper | test assumption | `started + seconds <= deadline <= streaming_at + seconds`, where `streaming_at` is when the client first reports streaming through the relay |
+
+The kernel really did reuse the number. The wrong part was an unstated premise,
+that `(dev, ino)` still names a file after nothing holds it. The documents now
+state the hold, and the relay compares only while its listener provides it.
+Comparing `os.fstat` of the listener instead would not help: a socket
+descriptor's `fstat` reports its sockfs inode, not the path's.
+
+**Verification of this correction:** the three portable N3b files passed 96
+with 4 platform skips on Windows. `test_the_socket_is_released_while_the_listener_still_holds_its_inode`
+failed before the reorder and passed after it.
+`scripts/check_m8_n3b_mutations.py` killed 43 of 44 by assertion, including
+the new mutant 44 and mutant 43 under the deterministic test; mutant 29 again
+reported NOT PROVEN on Windows. `uv run verify` on the complete tree: clean
+ruff, strict mypy over 102 source files, four import contracts kept, and 2,637
+tests passed with 409 platform skips. Its one failure was the plan-manifest
+test, run before these two documents' manifest lines were refreshed; after the
+refresh that test passed on its own, and `sha256sum --check` passed.
+
+**Unexecuted until the next Linux CI run:** both corrected Linux unit tests,
+the new real-socket exit test
+(`test_a_replaced_real_socket_is_not_unlinked_and_exit_raises`), the two
+corrected containment tests, the deterministic unstarted-handler test on the
+selector loop, the pinned stand-in on the runner's filesystem, and mutant 29.
+
+### Codex review of `1ec4943`
+
+One independent Codex pass (job `job_b21d1b3a3fbb`, requested by the
+orchestrator) reviewed head `1ec4943`. It is the slice's only Codex round, so
+this is the independent-model review that the implementation review recorded
+as owed (its finding 10); its fixes have had no model review of their own. The
+state review's "Codex review of the implementation" table carries the
+classification and the rejected finding 1 with its reason. Every premise was
+reproduced first. A probe on the selector loop showed `EgressDestination`
+accepting `127.0.0.1`, `10.0.0.1`, `224.0.0.1`, `::1` and `fe80::1%eth0`, and
+`sock_connect` to `fe80::1%eth0` calling a recorded `loop.getaddrinfo` once
+(asyncio's `_ipaddr_info` returns `None` for any host containing `%`). The
+others are source facts: the pump called `_require_live` only, the zero
+linger was set only in `_abort` during cleanup, and the controller-death test
+started its successor after observing the peer's EOF.
+
+- **Destinations (findings 2 and 3).** A pinned address must be globally
+  routable unicast (`is_global`, not multicast, not reserved, not IPv6
+  site-local) and carry no zone id. The zone refusal is its own check. The
+  routability rule is a module predicate, `_routable`, which the suites replace
+  with one that admits exactly `127.0.0.1`, the controlled peers' address. That
+  is the smallest honest seam: the same kind of substitution the suites
+  already make for the socket primitives, visible at every use as the
+  `controlled_loopback` fixture (implied by `listeners`), an autouse fixture in
+  the containment module, and one line in `_egress_owner.py`. The policy tests
+  run the real predicate, and one test proves the seam admits nothing but
+  `127.0.0.1`. A policy flag or a test subclass was not taken, because
+  production code could select either. Policies that are never dialled now pin
+  a routable address. Fifteen refusals, two acceptances.
+- **Established streams (finding 4).** The pump now calls `_admit` (liveness,
+  then `check_control`, a raise latching stop) after every resumed read,
+  before its send. `test_ownership_loss_leaves_an_established_stream_until_the_relay_stops`,
+  which pinned the opposite, is replaced by
+  `test_control_lost_on_an_established_stream_forwards_nothing_more`: bytes
+  before the loss arrive, nothing read after it does, the stream is cut as
+  `denied:control`, and the next connect is refused as `stopped`. The cost, one
+  synchronous journal read per resumed read, is recorded as a limit. The "only
+  at connect points" limit in this section's earlier text is superseded.
+- **Queued bytes on controller death (finding 5).** Upstream sockets come from
+  `_upstream`, which sets zero linger before anything can queue; `_abort` is
+  gone and cleanup closes plainly. New Linux containment test
+  `test_controller_death_discards_the_upstream_queue`: a controller floods a
+  raw peer that never reads until `/proc/net/tcp` shows a non-empty send queue
+  toward it, is killed, and the test asserts the queue gone within 5 s and no
+  byte beyond what the peer held. The `sock_sendall` partial-write limit is
+  unchanged.
+- **Controller death (finding 6).** The claim is now supervisor-observed
+  physical quiescence before successor disposal, not an in-process join. The
+  death test starts `dispose_acquisition` at the kill and asserts that it
+  completes after the peer's EOF and that, when it completes, a non-blocking
+  try of the guard's exclusive `flock` on a fresh open file description is
+  granted: no process holds any copy. Before the kill the same try is refused,
+  the positive control. Two earlier forms scanned descriptors and failed in the
+  foundation lane with `EACCES` on `/proc/<pid>/fd`. The first walked every
+  process of the uid. The second walked only the controller and its direct
+  children, and its pre-kill scan passed: both were readable and held the
+  guard. It failed after disposal instead, on a candidate with its original
+  start time. Linux makes `/proc/<pid>/fd` root-owned once a task's memory is
+  gone (`task_dump_owner`, `fs/proc/base.c`, v6.8). So the likeliest identity
+  of that pid is the supervisor after it had exited but before it was reaped.
+  That is reasoning: the log does not name the process. The statement that the
+  guard reaches only the controller and its supervisor stands, because the
+  supervisor launches bubblewrap with `close_fds`. Skipping unreadable
+  processes would have read "could not see" as "no holder", so the test now
+  observes the lock itself.
+- **Mutants (finding 7).** Sixteen new mutants, 45-60: control in the pump, the
+  routability terms and the zone, and `parse_connect`'s token count, method,
+  version, port grammar, port bound, host grammar, unbracketed and bracketed
+  literals, and terminator. Pure parser cases assert each refusal's reason,
+  plus the accepting targets at ports 1 and 65535. Mutant 17 is retargeted at
+  `_admit` and mutant 40 at the creation-time linger. Two gates, the missing
+  separator and the non-ASCII refusal, have no meaningful mutant (state
+  review, Mutation inventory).
+
+**Verification of this round (Windows):** the three portable N3b files passed
+127 with 4 platform skips. The new address tests failed against the previous
+relay: 15 refusals were not raised. `scripts/check_m8_n3b_mutations.py` killed
+59 of 60 by assertion, and mutant 29 reported NOT PROVEN as expected.
+`uv run verify` on the complete tree: clean ruff, strict mypy over 102 source
+files, four import contracts kept, and 2,668 tests passed with 410 platform
+skips. Its one failure was again the plan-manifest test, run before the two
+documents' manifest lines were refreshed; after the refresh that test passed
+on its own, and `sha256sum --check` passed.
+
+**Unexecuted until the next Linux CI run:** the new queue-on-death proof, the
+reordered controller-death test with its guard scan, the flood client mode,
+the seam inside the owner subprocess, and every containment test under the
+routable-address rule. The partial-write limit on Linux keeps its existing
+stalled-controller assertion.

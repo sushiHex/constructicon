@@ -53,10 +53,11 @@ from __future__ import annotations
 import asyncio
 import inspect
 import math
+import os
 import tomllib
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, suppress
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
@@ -125,7 +126,15 @@ from constructicon.substrate.executors.codex_protocol import (
     turn_request,
     unavailable_outcome,
 )
+from constructicon.substrate.executors.egress import (
+    MAX_SOCKET_PATH_BYTES,
+    SOCKET_NAME,
+    EgressPolicy,
+    EgressRelay,
+    identity_digests,
+)
 from constructicon.substrate.executors.linux import (
+    Conversation,
     LinuxLauncher,
     NativeStoreMount,
     ProcessExchangeError,
@@ -1493,10 +1502,11 @@ class CodexOperatorHandle:
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
             return _unavailable("the native operator deadline expired before launch", grants)
-        self.active = asyncio.create_task(provider.launcher.exchange(
+        self.active = asyncio.create_task(self._exchange(
             (provider.binary, *APP_SERVER_ARGUMENTS),
-            workspace=None, posture=grants.posture, guard_fds=(guard, held.lock_fd),
+            posture=grants.posture, guard_fds=(guard, held.lock_fd),
             conversation=conversation, timeout_s=remaining, native_store=native_store,
+            deadline=deadline,
         ))
         try:
             result = await self.active
@@ -1531,6 +1541,33 @@ class CodexOperatorHandle:
                 conversation.faults, conversation.observation, result, requested_model=requested,
             )
         return decode_turn(conversation.observation, result, requested_model=requested)
+
+    async def _exchange(
+        self, command: tuple[str, ...], *, posture: Posture, guard_fds: tuple[int, ...],
+        conversation: Conversation, timeout_s: float, native_store: NativeStoreMount,
+        deadline: float,
+    ) -> ProcessResult:
+        """The owned native exchange, inside its acquisition's egress relay.
+
+        This body is the task ``_cleanup_owned`` cancels and joins, so the
+        relay's teardown finishes before either guard is released.
+        """
+
+        launcher = self.provider.launcher
+        policy = self.provider.egress
+        if policy is None:
+            return await launcher.exchange(
+                command, workspace=None, posture=posture, guard_fds=guard_fds,
+                conversation=conversation, timeout_s=timeout_s, native_store=native_store,
+            )
+        # A close latched after this task was created allocates nothing.
+        self._check_control()
+        async with EgressRelay(policy, self.paths.payload, deadline, self._check_control) as egress:
+            return await launcher.exchange(
+                command, workspace=None, posture=posture, guard_fds=guard_fds,
+                conversation=conversation, timeout_s=timeout_s,
+                native_store=replace(native_store, egress=egress),
+            )
 
     async def _run_worker(
         self, program: str, *, workspace: ContainedWriteWorkspace,
@@ -1702,7 +1739,9 @@ class CodexOperatorProvider:
     Availability is an assembly fact read without runtime I/O. A configured
     binding still starts unavailable unless assembly explicitly clears every
     independent prerequisite; an absent binding can never be cleared by an
-    empty caller-supplied reason tuple.
+    empty caller-supplied reason tuple. An absent egress policy is not forced
+    the same way: it allocates no relay and mounts no leaf, so the native zone
+    keeps only ``lo``, a stronger denial rather than a widening.
     """
 
     def __init__(
@@ -1719,6 +1758,7 @@ class CodexOperatorProvider:
         unavailable_reasons: tuple[str, ...] = UNQUALIFIED_PREREQUISITES,
         binding_store: BindingStore | None = None,
         closure: AcquisitionClosure | None = None,
+        egress: EgressPolicy | None = None,
     ) -> None:
         if not binary.startswith("/") or "\0" in binary:
             raise ContractViolation("the native client requires a fixed absolute executable")
@@ -1761,6 +1801,13 @@ class CodexOperatorProvider:
                 )
         if identity.profile != profile:
             raise ContractViolation("the published identity carries a different profile")
+        if egress is not None:
+            # Checked where the policy is supplied. Conformance is never minted.
+            for field, value in identity_digests(egress).items():
+                if getattr(identity.egress, field) != value:
+                    raise ContractViolation(
+                        f"the published egress {field} differs from the sealed relay policy"
+                    )
         if (binding_store is None) != (closure is None):
             raise ContractViolation(
                 "a physical operator binding and acquisition closure must be injected together"
@@ -1787,6 +1834,14 @@ class CodexOperatorProvider:
                 raise ContractViolation(
                     "the acquisition and operator binding roots must be disjoint"
                 )
+        if egress is not None:
+            # The real layout, not a hard-coded suffix: every acquisition id has
+            # this length, so one probe covers every socket this root can bind.
+            longest = AcquisitionPaths(acquisition_locator, "acq-" + "0" * 32).payload
+            if len(os.fsencode(longest / SOCKET_NAME)) > MAX_SOCKET_PATH_BYTES:
+                raise ContractViolation(
+                    "the acquisition root is too long for the native egress socket"
+                )
         self.configured_model = configured_model(configuration)
         if self.configured_model not in profile.grant_policy.model_ids:
             raise ContractViolation(
@@ -1807,6 +1862,7 @@ class CodexOperatorProvider:
         self._unavailable = reasons
         self.binding_store = binding_store
         self.closure = closure
+        self.egress = egress
         self.handles: list[CodexOperatorHandle] = []
 
     @property

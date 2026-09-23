@@ -62,6 +62,9 @@ def main() -> None:
     shutil.copyfile(_supervisor.__file__, supervisor)
     for name in ("proc", "dev", "tmp", "workspace", "vendor-store"):
         (destination / name).mkdir()
+    # Only the native egress relay's socket is overmounted onto this leaf; every
+    # other zone sees an immutable empty regular file, never a socket.
+    (destination / "vendor-egress.sock").touch()
     for path in [*destination.rglob("*"), destination]:
         if not path.is_symlink():
             path.chmod(0o555 if path.is_dir() or path.stat().st_mode & 0o111 else 0o444)

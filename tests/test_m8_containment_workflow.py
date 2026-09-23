@@ -23,6 +23,10 @@ PROOFS = {
         "tests/substrate/test_operator_store_containment.py "
         "scripts/check_m8_n3a_mutations.py",
     ),
+    "Prove N3b acquisition-scoped egress denial": (
+        "foundation",
+        "tests/substrate/test_native_egress_containment.py scripts/check_m8_n3b_mutations.py",
+    ),
     "Prove bounded native startup without a provider route": (
         "lifecycle",
         "tests/substrate/test_native_startup.py scripts/check_m8_startup_mutations.py",
@@ -129,6 +133,8 @@ def test_lane_evidence_is_disjoint_and_bound_to_the_reviewed_head():
     assert "EVIDENCE_LANE: ${{ matrix.lane }}" in text
     assert "if-no-files-found: error" in text
     assert "n3a-*.json" in text
+    assert "n3b-*.json" in text
+    assert "M8_EGRESS_REQUIRED=1" in text
     assert "codex-*.json" in text
     assert "duplex-*.json" in text
 
