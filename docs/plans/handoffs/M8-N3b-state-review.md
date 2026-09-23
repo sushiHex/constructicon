@@ -431,7 +431,7 @@ affirmatively.
 | Before dial (synchronous) | Latch set, owner cancelling, deadline passed, `check_control` raising | Check all of them. `check_control` may raise `_LocalClose`, a `CancelledError` subclass (`codex.py:177-179`); because the call is synchronous, the relay catches any exception from this call only as a control denial and sets `_stopping` | Close. Never mistake it for the handler's own cancellation |
 | Dial resumes | Stop latched, owner cancelling, deadline passed, control lost, dial failed | Check again after the await | Close the new upstream before any byte. `upstream_unreachable` is a denial |
 | Forward of buffered bytes resumes | Upstream closed | - | Close both |
-| Pump read resumes | Stop latched, owner cancelling, deadline passed (a queued wake-up runs before the expiring timer), peer EOF, client EOF, ancillary data mid-stream | Synchronous liveness check before the send, in both directions. Half-close on EOF | Close both halves. The handler's `finally` closes sockets only and counts nothing |
+| Pump read resumes | Stop latched, owner cancelling, deadline passed (a queued wake-up runs before the expiring timer), peer EOF, client EOF, ancillary data mid-stream | Synchronous liveness check before the send, in both directions. Half-close on EOF | Close both halves; the upstream closes abortively (see Limits: queued bytes). The handler's `finally` closes sockets only and counts nothing |
 | Handler finishes | A classified outcome is already counted, or an unclassified exception | The exit collects the terminal state of every handler task it created. Cancellation by teardown is not a failure | - |
 | `exchange` returns (native exited) | Handlers still open upstream; a failure is recorded | The relay exit must still revoke streams | - |
 | `__aexit__` | Body result, `ProcessExchangeError` or cancellation; open handlers; repeated `cleanup` cancellation | In order: (1) set `_stopping`; (2) cancel the accept task and every handler; (3) join them through `finish_owned`; (4) close the listener only after the accept task has finished, so its reader is removed before the descriptor can be reused; (5) unlink only if identity still matches, then remove the directory; (6) raise recorded failures as fixed text (grouped with a pending cancellation); (7) set `closed = True` last | Step (7) never runs in a `finally`. After a raise, nothing reports clean. A substituted socket is never unlinked, and its directory is left for the successor |
@@ -607,7 +607,7 @@ test uses a short acquisition root under `/tmp`.
 - The stalled-controller limit is pinned: a child controller blocks its loop
   past the deadline with an upstream open. Its native process is reaped; no byte
   reaches the peer during the stall (after a settling interval), and at most one
-  partial pump write completes after it resumes (see Limits: partial writes); a
+  partial pump write completes after it resumes (see Limits: queued bytes); a
   successor `dispose_acquisition` started in the test process has not completed
   while the upstream is open; after the controller resumes, the peer sees EOF
   and only then does the successor complete. If a later change hosts the relay
@@ -666,6 +666,17 @@ which is expected; it is measured in the foundation lane. Test files: `E` is
 | 33 | `/vendor-egress.sock` becomes another path | `L::test_a_current_egress_socket_gets_one_read_only_leaf` |
 | 34 | `require_current()` in `argv` is removed | `L::test_a_changed_or_foreign_egress_socket_is_refused[identity]` |
 | 35 | `require_current()` no longer checks `S_ISSOCK` | `L::test_a_changed_or_foreign_egress_socket_is_refused[regular-file]` |
+| 36 | The owner's `cancelling()` term is dropped from liveness | `E::test_a_cancelled_owner_still_reaping_admits_nothing` |
+| 37 | The synchronous deadline term becomes `if False:` | `E::test_a_read_resumed_past_the_deadline_forwards_nothing` |
+| 38 | The handle gives the relay a no-op control check | `C::test_control_lost_during_the_exchange_denies_the_connect` |
+| 39 | The handle gives the relay `deadline + 3600` | `C::test_the_relay_is_listening_during_the_exchange_and_gone_afterwards` |
+| 40 | The handler closes its upstream gracefully | `E::test_nothing_queued_before_the_deadline_reaches_the_peer_after_exit` |
+| 41 | Every stream `TimeoutError` counts as `denied:deadline` | `E::test_a_stream_timeout_before_the_deadline_is_a_reset` |
+| 42 | The hello record bound is off by one | `E::test_the_hello_record_bound_binds_at_its_limit` |
+| 43 | Teardown no longer closes the accepted clients | `E::test_teardown_closes_a_client_whose_handler_never_ran` |
+
+Mutants 36-43 were added by the implementation review (see the implementation
+record's N3b section).
 
 The existing N3a mutants for `--unshare-net` and store/workspace exclusion are
 retained unchanged.
@@ -711,26 +722,50 @@ Each limit is written down, and pinned by an assertion where a test can hold it.
   maximum connection lifetime is the remaining deadline. Pinned by a portable
   test.
 - **Stalled-controller sockets.** If the controller's event loop is blocked past
-  the deadline, its upstream sockets stay open until it resumes. They carry no
-  native bytes, and the guards stay held. This is pinned in the Linux lane,
-  including a concurrent successor. Hosting the relay in the supervisor was
-  rejected: it would put the policy, the CONNECT parser and the ClientHello
-  parser inside the stdlib-only trusted reaper and make that reaper a network
-  peer, for one limit whose exposure is an open socket that carries nothing.
+  the deadline, its upstream sockets stay open until it resumes, and the guards
+  stay held. The relay reads and forwards nothing during the stall, but the
+  kernel keeps transmitting what the relay queued before it, up to the upstream
+  socket's send buffer (see Queued bytes). The Linux pin measures zero bytes
+  during the stall only after a 0.5 s settle, against a peer that reads
+  continuously; it includes a concurrent successor. Hosting the relay in the
+  supervisor was rejected: it would put the policy, the CONNECT parser and the
+  ClientHello parser inside the stdlib-only trusted reaper and make that reaper
+  a network peer, for one limit whose exposure is an open socket that carries
+  nothing read after the stop.
   (The first draft's reason, that it "would change runtime content", was wrong:
   this design changes runtime content too, by reserving the leaf.)
-- **Partial writes.** Found in implementation self-review, after the review:
-  `sock_sendall` finishes a partial write from an I/O callback, which runs
-  before a timer expiring in the same iteration and never passes through the
-  relay's liveness check. So the unsent remainder of one chunk that was read and
-  checked before a stop or the deadline can still reach its peer after it: at
-  most one 8 KiB pump chunk per direction, and never a byte read after the stop.
-  Removing it would need a third substituted send primitive; it is recorded
-  instead, and the Linux stalled-controller test asserts the bound.
+- **Queued bytes.** Bytes the relay hands the kernel sit in the upstream
+  socket's send queue until the peer's window takes them. The first
+  implementation closed the upstream gracefully, so that queue kept reaching
+  the pinned peer after the deadline, after exit and after the guards were
+  released: a review probe measured 599,538 bytes reaching a peer that read
+  only after exit (Windows; Linux send-buffer autotuning allows more). Every
+  upstream close is now abortive (`SO_LINGER` zero): the peer gets a reset and
+  the kernel discards the queue. That includes a stream that ended cleanly in
+  both directions, because a graceful close would keep sending after exit too;
+  the cost is that a peer that half-closed and then reads slowly can lose the
+  tail of what the client sent. What can still reach the peer after a stop or
+  the deadline is only what the kernel transmits before the handler's close
+  runs: the queue as it stood at the stop, plus the unsent remainder of one
+  pump chunk, because `sock_sendall` finishes a partial write from an I/O
+  callback that runs before a timer expiring in the same iteration and never
+  passes the liveness check. Never a byte read after the stop. That window is
+  one loop step, or the whole stall of a blocked controller. A portable test
+  with a non-reading peer pins that nothing queued reaches it after exit; the
+  Linux stalled-controller test still asserts at most one chunk after resume.
+  In this document and the tests, a peer "sees EOF" when its stream ends, by a
+  reset included.
 - **An accept completed during teardown.** If the accept future completes in the
   same loop iteration that cancels the accept task, the accepted socket is
-  reachable only through that future and closes when CPython frees it. The
-  client sees EOF; no relay code reads, dials or forwards for it.
+  reachable only through that future. No relay code reads, dials or forwards
+  for it. It is not closed by the relay: the cancelled task's traceback can
+  retain it until the garbage collector frees the relay's tasks, so the client
+  may see no EOF until then. That is reasoning from the handler case below, not
+  measured for this case.
+- **A handler cancelled before its first step.** Teardown can cancel a handler
+  that the accept loop created in the same iteration; its `finally` never runs.
+  The relay keeps every accepted client and closes them all after the join, so
+  the client sees EOF. Such a connection is counted in no `observed` key.
 - **Payload left after a teardown failure.** If a normally closed lease's relay
   exit fails (for example a replaced socket), its payload directory stays. The
   lease is disposed by the ordinary close path, not by `reconcile`, which handles
@@ -766,7 +801,9 @@ Each limit is written down, and pinned by an assertion where a test can hold it.
   `ssl` inside the runtime, `openssl` on the runner, the in-zone errno
   assertions, the zone socket walk, controller death, the stalled-controller pin
   and its concurrent successor have no execution until Linux CI runs them.
-  Windows skips are not passes.
+  Windows skips are not passes. The abortive close has run on Windows only; how
+  Linux discards the queue on reset is reasoning until CI runs the portable
+  test there.
 
 ## Rejected as unnecessary
 

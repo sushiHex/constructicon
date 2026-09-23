@@ -32,6 +32,7 @@ import re
 import socket
 import stat
 import string
+import struct
 import sys
 from collections import Counter
 from collections.abc import Callable
@@ -339,6 +340,15 @@ def _bind_private_socket(path: Path) -> tuple[socket.socket, tuple[int, int]]:
     return listener, (info.st_dev, info.st_ino)
 
 
+def _abort(sock: socket.socket) -> None:
+    """Close with a reset: the kernel discards whatever is still queued for the peer."""
+
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    finally:
+        sock.close()
+
+
 def _wake(ready: asyncio.Future[None]) -> None:
     if not ready.done():
         ready.set_result(None)
@@ -425,6 +435,7 @@ class EgressRelay:
         self._listener: socket.socket | None = None
         self._accept: asyncio.Task[None] | None = None
         self._handlers: list[asyncio.Task[None]] = []
+        self._clients: list[socket.socket] = []
 
     async def __aenter__(self) -> EgressSocket:
         if self._owner is not None:
@@ -471,10 +482,12 @@ class EgressRelay:
             failed = None if task.cancelled() else task.exception()
             if failed is not None:
                 failures.append(failed)
-        try:
-            self._listener.close()
-        except OSError as exc:
-            failures.append(exc)
+        # A handler cancelled before its first step never ran its finally.
+        for sock in (*self._clients, self._listener):
+            try:
+                sock.close()
+            except OSError as exc:
+                failures.append(exc)
         try:
             self._release_path()
         except (OSError, ContractViolation) as exc:
@@ -535,6 +548,7 @@ class EgressRelay:
                 client.close()
                 self.observed["denied:connection_bound"] += 1
                 continue
+            self._clients.append(client)
             self._handlers.append(asyncio.create_task(self._handle(client)))
 
     async def _handle(self, client: socket.socket) -> None:
@@ -542,7 +556,7 @@ class EgressRelay:
         upstream: socket.socket | None = None
         try:
             try:
-                async with asyncio.timeout_at(self._deadline):
+                async with asyncio.timeout_at(self._deadline) as timeout:
                     upstream = await self._open(client, loop)
                     self.observed["accepted"] += 1
                     async with asyncio.TaskGroup() as streams:
@@ -551,13 +565,16 @@ class EgressRelay:
             except* EgressRefused as refused:
                 self.observed["denied:" + _reason(refused)] += 1
             except* TimeoutError:
-                self.observed["denied:deadline"] += 1
+                # A stream's ETIMEDOUT is a TimeoutError too.
+                self.observed["denied:deadline" if timeout.expired() else "reset"] += 1
             except* ConnectionError:
                 self.observed["reset"] += 1
         finally:
             client.close()
             if upstream is not None:
-                upstream.close()
+                # Every end, a clean one too: a graceful close would keep
+                # sending the queue after exit and after the guards go.
+                _abort(upstream)
 
     async def _fill(
         self, client: socket.socket, buffer: bytearray, limit: int,
@@ -606,7 +623,7 @@ class EgressRelay:
             self._admit(loop)
             await loop.sock_sendall(upstream, bytes(buffer))
         except BaseException:
-            upstream.close()
+            _abort(upstream)
             raise
         return upstream
 

@@ -264,6 +264,62 @@ MUTANTS = (
         "or False",
         L + "test_a_changed_or_foreign_egress_socket_is_refused[regular-file]",
     ),
+    (
+        "36 a cancelled owner still reaping admits nothing",
+        RELAY + "_require_live",
+        "if self._stopping or (owner is not None and owner.cancelling()):",
+        "if self._stopping:",
+        E + "test_a_cancelled_owner_still_reaping_admits_nothing",
+    ),
+    (
+        "37 a read resumed past the deadline is refused before its timer runs",
+        RELAY + "_require_live",
+        "if loop.time() >= self._deadline:",
+        "if False:",
+        E + "test_a_read_resumed_past_the_deadline_forwards_nothing",
+    ),
+    (
+        "38 the handle wires its own control check into the relay",
+        CODEX + "CodexOperatorHandle._exchange",
+        "EgressRelay(policy, self.paths.payload, deadline, self._check_control)",
+        "EgressRelay(policy, self.paths.payload, deadline, lambda: None)",
+        C + "test_control_lost_during_the_exchange_denies_the_connect",
+    ),
+    (
+        "39 the handle wires its shared deadline into the relay",
+        CODEX + "CodexOperatorHandle._exchange",
+        "EgressRelay(policy, self.paths.payload, deadline, self._check_control)",
+        "EgressRelay(policy, self.paths.payload, deadline + 3600, self._check_control)",
+        C + "test_the_relay_is_listening_during_the_exchange_and_gone_afterwards",
+    ),
+    (
+        "40 a handler's upstream close discards its queue",
+        RELAY + "_handle",
+        "_abort(upstream)",
+        "upstream.close()",
+        E + "test_nothing_queued_before_the_deadline_reaches_the_peer_after_exit",
+    ),
+    (
+        "41 only the expired deadline is a deadline denial",
+        RELAY + "_handle",
+        '"denied:deadline" if timeout.expired() else "reset"',
+        '"denied:deadline"',
+        E + "test_a_stream_timeout_before_the_deadline_is_a_reset",
+    ),
+    (
+        "42 the hello record bound binds at its limit",
+        EGRESS + "_record_length",
+        "if not 0 < length <= HELLO_RECORD_BYTES - 5:",
+        "if not 0 < length < HELLO_RECORD_BYTES - 5:",
+        E + "test_the_hello_record_bound_binds_at_its_limit",
+    ),
+    (
+        "43 teardown closes a client whose handler never ran",
+        RELAY + "__aexit__",
+        "for sock in (*self._clients, self._listener):",
+        "for sock in (self._listener,):",
+        E + "test_teardown_closes_a_client_whose_handler_never_ran",
+    ),
 )
 
 

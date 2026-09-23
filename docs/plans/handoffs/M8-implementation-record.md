@@ -1475,21 +1475,23 @@ relay's rules, not physical evidence.
   reasoning until the lane runs it.
 - Self-review after implementation found a second instance of review finding
   2's class: `sock_sendall` completes a partial write from an I/O callback that
-  bypasses the pump's liveness check. At most the remainder of one 8 KiB chunk,
-  read before the stop, can still reach the peer. It is recorded as a limit in
-  the state review rather than fixed with a third substituted primitive, and the
-  stalled-controller test asserts that bound instead of zero bytes after resume.
-  No review has examined this finding yet.
+  bypasses the pump's liveness check. It is recorded as a limit in the state
+  review rather than fixed with a third substituted primitive, and the
+  stalled-controller test asserts at most one chunk after resume instead of zero
+  bytes. The "at most one 8 KiB chunk" bound first recorded here was false:
+  the implementation review below found the kernel send queue behind it.
 
 ### Limits and unexecuted proofs
 
 The state review's limits apply unchanged: pinned addresses, the direct CONNECT
 client (the Codex `HTTPS_PROXY` path is N4), same-uid trust for pathname
 sockets in the store, the first-hello-only rule, ownership loss observed only at
-connect points, stalled-controller sockets, partial writes completing after a
-stop (at most one 8 KiB chunk read before it), the reference-count close of an
-accept completed during teardown, an orphaned payload after a teardown failure
-on a normally closed lease, and native TLS validation as an N4 assumption.
+connect points, stalled-controller sockets, queued bytes (what the kernel sends
+before a handler's abortive close, and a clean end's unacknowledged tail
+discarded), an accept completed during teardown left for the garbage
+collector, an unstarted handler's connection counted nowhere, an orphaned
+payload after a teardown failure on a normally closed lease, and native TLS
+validation as an N4 assumption.
 
 These have **no execution** until Linux CI runs them, and Windows skips are not
 passes: the real `AF_UNIX` bind and identity, `recvmsg` ancillary refusal
@@ -1503,4 +1505,81 @@ the stalled-controller pin with its concurrent successor. They are
 `tests/substrate/test_native_egress_containment.py` in the foundation lane's
 "Prove N3b acquisition-scoped egress denial" step, with evidence in
 `n3b-*.json`. `vendor_conformance_qualified` stays false, and production
-availability remains refused.
+availability remains refused. The portable tests added by the implementation
+review below have run on Windows only; their first Linux run is CI's, including
+the reset that discards the upstream queue.
+
+### Implementation review
+
+A single-model review of `6bc9500...ccee567` reproduced each finding with a
+probe against the real relay before reporting it. No independent-model review
+ran. Codex was paused under a weekly limit, and the round's rules forbade model
+calls. **Neither the amended design, the implementation, the partial-write
+deviation nor this round's fixes has had an independent-model review. That
+review is still owed (finding 10).** Each finding below was reproduced again
+before it was acted on. Findings 1, 6 and 8 failed a new test before the fix and
+passed after it. The coverage findings (2-5, 7) are proven by new mutants 36-43
+of `scripts/check_m8_n3b_mutations.py`, each killed by assertion.
+
+| # | Finding | Class | Disposition |
+| --- | --- | --- | --- |
+| 1 | P2: the "at most one 8 KiB chunk after stop" limit is false. A graceful `upstream.close()` let the kernel keep sending the send queue after the deadline, after exit and after guard release | introduced | Fixed. Every upstream close in `_handle` and `_open` is abortive (`SO_LINGER` zero). Reproduced by the review probe: 75,250 bytes (peer buffer 1 KiB) and 599,538 bytes (256 KiB) reached the peer after exit; 0 after the fix. `test_nothing_queued_before_the_deadline_reaches_the_peer_after_exit` failed before the fix (75,250 bytes beyond what the peer held). Mutant 40. The limit text is rewritten as "Queued bytes" |
+| 2 | P2: the owner-`cancelling()` liveness term had no test or mutant | introduced | Fixed. `test_a_cancelled_owner_still_reaping_admits_nothing`; mutant 36 (it survived all 88 portable tests before) |
+| 3 | P2: the synchronous deadline term was unproven | introduced | Fixed. `test_a_read_resumed_past_the_deadline_forwards_nothing` blocks a substituted read past the deadline in the step that resumed; mutant 37 |
+| 4 | P2: the handle's control wiring was unproven | introduced | Fixed. `test_control_lost_during_the_exchange_denies_the_connect` loses control inside the native exchange and asserts `denied:control` and zero peer connections; mutant 38 |
+| 5 | P3: the handle's deadline wiring was unproven | introduced | Fixed. The accepting handle test bounds the relay's deadline by the exchange's own `loop.time() + timeout_s`; mutant 39 |
+| 6 | P3: a mid-stream `ETIMEDOUT` counted as `denied:deadline` | introduced | Fixed. A stream `TimeoutError` is `denied:deadline` only when the handler's timeout expired, otherwise `reset`. `test_a_stream_timeout_before_the_deadline_is_a_reset` failed before the fix; mutant 41 |
+| 7 | P3: the hello record bound was never tested where it binds | introduced | Fixed. A real hello grown to a 16,384-byte body is accepted and forwarded byte-identical, and 16,385 is refused; mutant 42 |
+| 8 | P3: a handler cancelled before its first step never ran its `finally`, so its client stayed open after exit | introduced | Fixed. The relay keeps every accepted client and closes them after the join. `test_teardown_closes_a_client_whose_handler_never_ran` produces a genuinely unstarted handler (asserted `CORO_CREATED`), and it failed before the fix; mutant 43. The accept-future limit is narrowed: it was reasoning, and the same retention shape applies |
+| 9 | P3: the README index row was stale | introduced | Fixed |
+| 10 | Process: no independent-model review of design amendments, implementation or deviation | process | Recorded above as owed; not satisfiable in this round |
+
+**Defects inside this round's fixes, found by self-review:**
+
+- The first form of the finding 1 fix kept a graceful close for a stream that
+  ended cleanly in both directions. That re-opened the same class: a clean end
+  shortly before exit, with a slow peer, would keep sending after exit and
+  after the guards are released. A probe also showed the branch cannot be
+  discriminated portably: on Windows loopback, a completed send is already in
+  the peer's buffer, so a clean-end test passed under both branches. Every
+  upstream close is now abortive. The recorded cost is that a peer that
+  half-closed and then reads slowly can lose the tail of what the client sent.
+- Closing the accepted clients at exit made mutant 18 (teardown skips
+  cancelling handlers) escape. An unjoined handler now saw its client closed
+  and ended by itself, so the peer still saw EOF. The killing test now asserts
+  the affirmative fact, before any await: every handler task is done when exit
+  returns.
+
+**Rejected or not adopted:**
+
+- **Vendor-path network errors other than `ETIMEDOUT` as `reset`** (review
+  finding 6, flagged by the reviewer as a design-choice disagreement). A
+  mid-stream `EHOSTUNREACH` stays a fatal fixed-text `RELAY_FAILED`. That fails
+  closed and costs the turn, not the boundary. Widening the non-fatal set beyond
+  `ConnectionError` and a non-expired `TimeoutError` would need an errno list
+  with evidence behind it, which this slice does not have. Linux can report a
+  path failure as `EHOSTUNREACH` after a retransmission timeout. That is
+  reasoning about the kernel, not measured here, so the classification is a
+  recorded design choice rather than a claim that the two cases differ.
+- The reviewer's own rejections stand:
+  - A read-only bind does not block `connect`. This rests on the placement
+    lane's measurement.
+  - The selector loop's `sock_connect` resolves through `_ensure_resolved`,
+    which returns a numeric host without calling `loop.getaddrinfo` (read in
+    the Python 3.11.15 stdlib).
+  - A group-swallowed cancellation cannot hang the join, because
+    `finish_owned` waits until the task is done (`_lifetime.py`).
+  - Mutants E, G and H are equivalent in effect.
+- `_open`'s abortive close on a failed dial or hello forward is not separately
+  pinned. The queue there holds at most the judged hello. No portable input
+  separates it from a graceful close.
+
+**Verification of this round:** the three portable N3b files passed 95 with 3
+platform skips (88 before). `scripts/check_m8_n3b_mutations.py` killed 42 of 43
+by assertion. Mutant 29 reported NOT PROVEN on Windows as expected, and it has
+no kill until the foundation lane runs it. The reviewer's probes, re-run
+against the fix, measured 0 bytes after exit and classed `ETIMEDOUT` as
+`reset`. `uv run verify` on the complete tree passed: clean ruff, strict mypy,
+four import contracts kept, and 2,637 tests passed with 408 platform skips.
+After that run only this sentence and its manifest line changed. Both were
+rechecked with `sha256sum --check` and the plan-manifest test.

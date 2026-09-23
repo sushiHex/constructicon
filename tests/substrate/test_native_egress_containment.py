@@ -653,8 +653,9 @@ async def test_a_stalled_controller_holds_its_guard_until_its_streams_end(
     binding, launcher, pki, short_root, closure,
 ):
     """The recorded limit, pinned: a stalled owner keeps an upstream open, carries
-    no byte during the stall and at most one partial pump write after it, and a
-    concurrent successor waits for the peer's EOF."""
+    no byte during the stall once its queue drained (the settle below) and at
+    most one partial pump write after it, and a concurrent successor waits for
+    the peer's EOF."""
     allowed = TlsPeer(pki.server("allowed"))
     plan = plan_for(pki, allowed, mode="stream", lease="n3b-stalled-owner",
                     seconds=12, stall_extra=6)

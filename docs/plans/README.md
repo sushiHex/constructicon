@@ -86,7 +86,7 @@ the eventual code differs.
 | [M8 subscription-mode interface screen](handoffs/M8-subscription-mode-interface-screen.md) | Pinned-source and documentation screen of ADR 0021's mode-observation gate. The supported operation collapses four ChatGPT-account credential variants, which the corrected result finds immaterial to a requirement about billing route; no amendment needed, N2 proceeds, with fixtures owed by N3 and the account/workspace residue already disclosed. Preserves the original verdict and the reasoning error behind it |
 | [M8 N2 WRITE state review](handoffs/M8-N2-WRITE-state-review.md) | Pre-code callback, contained-worker and async-resume design for the remaining N2 slice; evidence gates, not implementation or vendor qualification |
 | [M8 N3a state review](handoffs/M8-N3a-state-review.md) | Preserved pre-code lifecycle review and later correction ledger; final N3a results live in the [M8 implementation record](handoffs/M8-implementation-record.md#n3a-native-store-custody-merged); no vendor qualification |
-| [M8 N3b state review](handoffs/M8-N3b-state-review.md) | Pre-code async-resume review and egress design for acquisition-scoped `native_vendor_session_only` relay; independent review pending; no implementation, vendor traffic or qualification |
+| [M8 N3b state review](handoffs/M8-N3b-state-review.md) | Pre-code async-resume review and egress design for the acquisition-scoped `native_vendor_session_only` relay, independently reviewed and amended before implementation; the implementation, its review and its limits are in the [M8 implementation record](handoffs/M8-implementation-record.md#n3b--acquisition-scoped-egress-76); no vendor traffic or qualification |
 
 ## Completeness and recovery notes
 

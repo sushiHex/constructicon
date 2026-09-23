@@ -230,8 +230,13 @@ async def test_the_relay_is_listening_during_the_exchange_and_gone_afterwards(
     provider = provider_for(launcher, policy=policy_for(peer.port), root=short_root,
                             binding=portable_binding[1:])
     acquired, handle = await open_handle(provider)
+    loop = asyncio.get_running_loop()
+    before = loop.time()
     outcome = await outcome_of(handle)
+    after = loop.time()
     assert outcome.status == "success" and outcome.output == {"summary": "done"}
+    # The relay's deadline is the exchange's own shared deadline.
+    assert before + GRANTS.timeout_s <= relays[0]._deadline <= after + GRANTS.timeout_s
     assert facts == {"reply": ESTABLISHED, "forwarded": True, "judged": True}
     seen = launcher.seen[0]
     assert seen["exists"] and seen["egress"].path.parent == handle.paths.payload
@@ -340,6 +345,42 @@ async def test_close_during_the_exchange_joins_the_relay_before_the_guard_owner_
         await running
     assert events == ["relay-exited", "guard-released"]
     assert relays[0].closed and not handle.paths.payload.exists()
+
+
+class OwnershipLost(Exception):
+    """Shaped like the walker's control raise: neither OSError nor ContractViolation."""
+
+
+async def test_control_lost_during_the_exchange_denies_the_connect(
+    short_root, portable_binding, recorded_guard, listeners, peer, relays,
+):
+    lost: list[bool] = []
+    facts: dict = {}
+
+    def control():
+        if lost:
+            raise OwnershipLost("ownership lost")
+
+    async def native(native_store):
+        lost.append(True)
+        reader, writer = await asyncio.open_connection(*listeners[-1].getsockname()[:2])
+        writer.write(head(ALLOWED, peer.port) + real_hello())
+        await writer.drain()
+        facts["reply"] = await reply_of(reader)
+        facts["closed"] = await reply_of(reader, 1)
+        facts["judged"] = await until(lambda: bool(relays[0].observed), 2.0)
+        writer.close()
+
+    provider = provider_for(egress_launcher(native), policy=policy_for(peer.port),
+                            root=short_root, binding=portable_binding[1:])
+    acquired, handle = await open_handle(provider, check_control=control)
+    with pytest.raises(OwnershipLost):
+        await handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
+    assert facts == {"reply": ESTABLISHED, "closed": b"", "judged": True}
+    assert relays[0].observed == {"denied:control": 1}
+    assert peer.connections == [], "the relay dialled after the handle lost control"
+    assert relays[0].closed and not handle.paths.payload.exists()
+    await provider.close(acquired, "discard")
 
 
 async def test_a_close_latched_after_the_task_is_created_allocates_nothing(

@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import array
 import asyncio
+import errno
+import inspect
 import os
 import socket
 import ssl
@@ -400,6 +402,38 @@ async def test_the_connection_bound_binds_at_its_limit(tmp_path, listeners, peer
     assert len(peer.connections) == 2
 
 
+def hello_of_body(size: int) -> bytes:
+    """A real hello grown to exactly ``size`` record-body bytes by one opaque extension."""
+    base = real_hello()
+
+    def grown(pad):
+        return rebuild(base, extensions=lambda ext: [*ext, (0x1234, b"\x00" * pad)])
+
+    record = grown(size - (len(grown(0)) - 5))
+    assert len(record) - 5 == size
+    return record
+
+
+async def test_the_hello_record_bound_binds_at_its_limit(tmp_path, listeners, peer):
+    exact, over = hello_of_body(16384), hello_of_body(16385)
+    try:
+        assert client_hello_sni(exact) == ALLOWED
+    except EgressRefused as exc:
+        pytest.fail(f"a hello record at the bound was refused: {exc.reason}")
+    with pytest.raises(EgressRefused) as refused:
+        client_hello_sni(over)
+    assert refused.value.reason == "tls"
+    relay = relay_for(tmp_path, peer.port)
+
+    async def scenario(facts):
+        _, writer, facts["established"] = await established(listeners, peer, exact)
+        writer.close()
+
+    facts, failure = await drive(relay, scenario)
+    assert failure is None and facts["established"]
+    assert peer.received() == exact
+
+
 # --- refusals ------------------------------------------------------------------
 
 
@@ -534,6 +568,101 @@ async def test_the_deadline_cuts_an_idle_handler(tmp_path, listeners, peer):
     assert peer.connections == []
 
 
+async def test_a_read_resumed_past_the_deadline_forwards_nothing(
+    tmp_path, listeners, peer, monkeypatch,
+):
+    """A read can resume in the same step that passes the deadline, before its
+    timer runs; the synchronous check refuses it before the forward."""
+    hello = real_hello()
+    relay = relay_for(tmp_path, peer.port, seconds=1.0)
+    deadline = relay._deadline
+
+    async def late(sock, count):
+        data = await asyncio.get_running_loop().sock_recv(sock, count)
+        if b"after-deadline" in data:
+            time.sleep(max(0.0, deadline - time.monotonic()) + 0.05)
+        return data
+
+    monkeypatch.setattr(egress, "_receive", late)
+
+    async def scenario(facts):
+        _, writer, facts["established"] = await established(listeners, peer, hello)
+        writer.write(b"after-deadline")
+        await writer.drain()
+        facts["cut"] = await until(lambda: peer.connections[0].eof, 3.0)
+        facts["observed"] = dict(relay.observed)
+        writer.close()
+
+    facts, failure = await drive(relay, scenario)
+    assert failure is None and facts["established"] and facts["cut"]
+    assert peer.received() == hello, "a read resumed past the deadline was forwarded"
+    assert facts["observed"] == {"accepted": 1, "denied:deadline": 1}
+
+
+async def test_a_stream_timeout_before_the_deadline_is_a_reset(
+    tmp_path, listeners, peer, monkeypatch,
+):
+    """ETIMEDOUT is a ``TimeoutError`` too; only the expired acquisition
+    deadline is a deadline denial."""
+    timed_out = OSError(errno.ETIMEDOUT, os.strerror(errno.ETIMEDOUT))
+    assert isinstance(timed_out, TimeoutError)
+
+    async def upstream_times_out(sock, count):
+        if sock.getpeername()[1] == peer.port:
+            raise timed_out
+        return await asyncio.get_running_loop().sock_recv(sock, count)
+
+    monkeypatch.setattr(egress, "_receive", upstream_times_out)
+    relay = relay_for(tmp_path, peer.port, seconds=3600.0)
+
+    async def scenario(facts):
+        _, writer, facts["established"] = await established(listeners, peer)
+        await until(lambda: relay.observed.total() > 1)
+        facts["observed"] = dict(relay.observed)
+        writer.close()
+
+    facts, failure = await drive(relay, scenario)
+    assert failure is None and facts["established"]
+    assert facts["observed"] == {"accepted": 1, "reset": 1}
+
+
+async def test_a_cancelled_owner_still_reaping_admits_nothing(tmp_path, listeners, peer):
+    """The owner's pending cancellation refuses before exit latches the stop,
+    while the owner is still reaping its native tree."""
+    relay = relay_for(tmp_path, peer.port)
+    reaping, reaped = asyncio.Event(), asyncio.Event()
+    facts: dict = {}
+
+    async def owner():
+        async with relay:
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                reaping.set()
+                await reaped.wait()
+                raise
+
+    task = asyncio.create_task(owner())
+    try:
+        assert await until(lambda: bool(listeners))
+        task.cancel()
+        await asyncio.wait_for(reaping.wait(), 5)
+        reader, writer = await client(listeners)
+        writer.write(head(port=peer.port) + real_hello())
+        await writer.drain()
+        facts["reply"] = await reply_of(reader)
+        await until(lambda: bool(relay.observed))
+        facts["observed"] = dict(relay.observed)
+        writer.close()
+    finally:
+        reaped.set()
+        await asyncio.gather(task, return_exceptions=True)
+    assert task.cancelled() and relay.closed
+    assert facts["reply"] == b"", "a cancelled owner's relay answered a CONNECT"
+    assert facts["observed"] == {"denied:stopped": 1}
+    assert peer.connections == []
+
+
 async def test_teardown_delivers_peer_eof_once_exit_returns(tmp_path, listeners, peer):
     relay = relay_for(tmp_path, peer.port)
     kept = []
@@ -544,10 +673,104 @@ async def test_teardown_delivers_peer_eof_once_exit_returns(tmp_path, listeners,
 
     facts, failure = await drive(relay, scenario)
     try:
+        # Checked before any await: exit returned only after joining every handler.
+        assert relay._handlers and all(task.done() for task in relay._handlers)
         assert failure is None and relay.closed and facts["established"]
         assert await until(lambda: peer.connections[0].eof, 2.0), "a stream outlived the relay"
     finally:
         kept[0].close()
+
+
+async def test_teardown_closes_a_client_whose_handler_never_ran(tmp_path, listeners, peer):
+    """A handler cancelled before its first step never reaches its own finally."""
+    relay = relay_for(tmp_path, peer.port)
+
+    async def scenario(facts):
+        facts["reader"], facts["writer"] = await client(listeners)
+        # The accept loop creates the handler; this step exits before it runs.
+        while not relay._handlers:
+            await asyncio.sleep(0)
+        facts["state"] = inspect.getcoroutinestate(relay._handlers[0].get_coro())
+
+    facts, failure = await drive(relay, scenario)
+    try:
+        assert failure is None and relay.closed
+        assert facts["state"] == inspect.CORO_CREATED, "the handler had already started"
+        assert relay._handlers[0].cancelled()
+        assert await reply_of(facts["reader"], 1) == b"", "an accepted client outlived exit"
+        assert relay.observed == {}
+    finally:
+        facts["writer"].close()
+
+
+class HeldPeer:
+    """A peer that accepts one connection and reads nothing until drained."""
+
+    def __init__(self) -> None:
+        self.server = socket.create_server(("127.0.0.1", 0))
+        self.server.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        self.port = self.server.getsockname()[1]
+        self.sock: socket.socket | None = None
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self) -> None:
+        with suppress(OSError):
+            self.sock, _ = self.server.accept()
+
+    def drain(self) -> tuple[int, int]:
+        """Bytes already held by this peer's kernel, then every byte it can read."""
+        assert self.sock is not None
+        self.sock.settimeout(1.0)
+        try:
+            held = len(self.sock.recv(1 << 22, socket.MSG_PEEK))
+        except OSError:
+            held = 0
+        total = 0
+        with suppress(OSError):
+            while chunk := self.sock.recv(65536):
+                total += len(chunk)
+        return held, total
+
+    def close(self) -> None:
+        for sock in (self.server, self.sock):
+            if sock is not None:
+                sock.close()
+
+
+async def test_nothing_queued_before_the_deadline_reaches_the_peer_after_exit(
+    tmp_path, listeners,
+):
+    """A handler that ends by the deadline discards the upstream's send queue."""
+    held_peer = HeldPeer()
+    relay = relay_for(tmp_path, held_peer.port, seconds=1.0)
+    deadline = relay._deadline
+
+    async def scenario(facts):
+        loop = asyncio.get_running_loop()
+        reader, writer = await client(listeners)
+        writer.write(head(port=held_peer.port) + real_hello())
+        await writer.drain()
+        facts["reply"] = await reply_of(reader)
+        written = 0
+        with suppress(OSError):
+            while loop.time() < deadline + 0.3:
+                writer.write(b"x" * 65536)
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(writer.drain(), 0.1)
+                    written += 65536
+        facts["written"] = written
+        facts["observed"] = dict(relay.observed)
+        writer.close()
+
+    try:
+        facts, failure = await drive(relay, scenario)
+        assert failure is None and relay.closed and facts["reply"] == ESTABLISHED
+        assert facts["written"] >= 1 << 17, "the client never outran the peer"
+        assert facts["observed"] == {"accepted": 1, "denied:deadline": 1}
+        held, total = await asyncio.to_thread(held_peer.drain)
+        assert total <= held, f"{total - held} queued bytes reached the peer after exit"
+    finally:
+        held_peer.close()
 
 
 async def test_an_accept_after_stop_is_closed_unread(tmp_path, listeners, peer):
