@@ -29,6 +29,7 @@ from constructicon.core.identity import Digest, digest
 from constructicon.core.process import ProcessIO
 from constructicon.substrate._lifetime import finish_owned
 from constructicon.substrate.executors._supervisor import NAMESPACE_SCRIPT
+from constructicon.substrate.executors.egress import ZONE_SOCKET, EgressSocket
 from constructicon.substrate.executors.operator_store import BindingCheck
 
 SUPERVISOR_PATH = Path(NAMESPACE_SCRIPT.removeprefix("/"))
@@ -142,12 +143,14 @@ class NativeStoreMount:
 
     The binding owns its retained lock and protected parent. The launcher
     rechecks it after its asynchronous probe; this object does not grant
-    authority merely by containing a path.
+    authority merely by containing a path. The egress leaf travels only with
+    the native store, so no worker launch can carry it.
     """
 
     path: Path
     lock_fd: int
     before_spawn: Callable[[], BindingCheck]
+    egress: EgressSocket | None = None
 
     def __post_init__(self) -> None:
         if not self.path.is_absolute():
@@ -336,6 +339,9 @@ class LinuxLauncher:
             ]
         if native_store is not None:
             args += ["--bind", str(native_store.path), "/vendor-store"]
+            if native_store.egress is not None:
+                native_store.egress.require_current()
+                args += ["--ro-bind", str(native_store.egress.path), ZONE_SOCKET]
         args += ["--chdir", "/workspace" if workspace is not None else "/tmp", "--", *command]
         return args
 
