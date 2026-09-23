@@ -3,7 +3,8 @@
 Status: credential-free source and documentation screen, 2026-09-22
 (America/Los_Angeles). **Every load-bearing citation was re-verified the same
 day by a second reader**, who corrected several claims; the corrections are
-listed under [Second reading](#second-reading-what-changed). This is not
+listed under [Second reading](#second-reading-what-changed). A later review's
+verdict corrections are listed under [Review](#review-what-changed). This is not
 implementation authority, login approval, candidate selection, or production
 qualification. It is the N6 analogue of the
 [Codex subscription-mode screen](M8-subscription-mode-interface-screen.md).
@@ -23,19 +24,30 @@ credential-free interface review "may run alongside Codex work".
 observation that needs no model request: the `account` object returned by a
 repeated stream-json `initialize` control request, which the CLI recomputes on
 every call. It can carry ADR 0021's per-turn gate the way `account/read`
-carries it for Codex. The candidate does not qualify as a whole.** Of the ten
-ADR 0021 requirements screened:
+carries it for Codex. The candidate does not qualify as a whole, and no plan
+is available at this pin.** Of the ten ADR 0021 requirements screened:
 
-- four are SATISFIED at the source and documentation level: supported direct
-  login, exclusion of alternate credentials, the mode observation, and refresh
-  detection;
+- two are SATISFIED at the source and documentation level: supported direct
+  login (R1) and the mode observation (R4);
+- three have an **interface affordance found** but remain UNKNOWN as
+  requirements: exclusion of alternate credentials (R3), refresh detection
+  (R5) and overage surfacing (R6);
 - one is NOT SATISFIED for Team and Enterprise subscriptions: cloud-managed
-  inputs;
+  inputs (R8);
 - the remainder are UNKNOWN, each with named resolving evidence.
+
+**Open blocker for every plan (R9).** `EndConversation` cannot be removed while
+any other tool remains, and it is not mechanically unreachable. Mapping it to a
+non-success outcome is a fail-closed result mapping, not an admitted callback
+and not unreachability, which is what ADR 0021 requires of every
+model-selectable operation (`0021:103-105`). Every plan, Pro and Max included,
+therefore stays unavailable until there is either evidence that
+`EndConversation` is unreachable under the fixed launch, or an ADR-backed
+treatment of it. This blocker is independent of the plan.
 
 Nothing here was executed.
 
-The decisive finding is **server-managed settings**. For a Team or Enterprise
+The decisive plan-scoping finding is **server-managed settings**. For a Team or Enterprise
 login, Anthropic's servers deliver settings at startup and hourly during the
 session. Those settings can carry hooks and environment variables. They outrank
 every local source including command-line arguments. In `-p` or Agent SDK runs
@@ -45,13 +57,18 @@ remove them". That is exactly the vendor-side widening ADR 0021 forbids
 (`0021:267-275`).
 
 At this pin the fetch is gated on the client side: a Pro or Max OAuth login
-with no API key is ineligible and makes no fetch. So **the smallest Claude
-profile that can qualify is individual Pro/Max only**, with every other plan
-refused by the same per-turn reading. That narrows ADR 0021's outcome, which
-names Claude subscriptions without a plan. It needs no amendment, because the
-ADR already requires every reachable input to be excluded, fixed or
-constrained, and says a profile that cannot do so cannot qualify
-(`0021:267-275`). The owner should know it before N6 proceeds.
+with no API key is ineligible and makes no fetch. This screen evaluated four
+plans: Pro, Max, Team and Enterprise. Of those, **individual Pro and Max are
+the only R8 candidates**; Team and Enterprise fail R8. Being an R8 candidate is
+not qualifying: Pro and Max still carry R8's own residue and the plan-independent
+R9 blocker above. Free, and any plan the pinned mapping does not name, were not
+evaluated. They fall outside the adapter's accept rule (R4) and are refused by
+that adapter policy, not shown here to be unqualifiable. The R8 narrowing is
+within ADR 0021, which already requires every reachable input to be excluded,
+fixed or constrained and says a profile that cannot do so cannot qualify
+(`0021:267-275`); it narrows the ADR's outcome, which names Claude
+subscriptions without a plan. Whether `EndConversation` can be treated without
+an ADR amendment is open. The owner should know both before N6 proceeds.
 
 The observation **collapses one distinction that does not matter**. It reports
 a plan as a display string (`"Claude Pro"`, `"Claude Max"`, …) and falls back
@@ -117,18 +134,25 @@ the current product, not this pin. Where the two disagree, the binary governs.
 | --- | --- | --- | --- |
 | R1 | Supported direct login; vendor owns creation, storage, refresh and logout | `0021:208-215`, `219-221` | **SATISFIED** (docs); login itself is N4 |
 | R2 | Proven narrow store layout; refresh stays inside it | `0021:127-137`, `171-176`, `212-215` | **UNKNOWN**: single-file candidate is source-feasible; refresh locks sit outside the file |
-| R3 | Alternate keys, helpers, provider overrides and paid fallback excluded by fixed environment and configuration | `0021:228-230` | **SATISFIED** by construction (allowlist), except R8's input |
+| R3 | Alternate keys, helpers, provider overrides and paid fallback excluded by fixed environment and configuration | `0021:228-230` | **Interface affordance found** (allowlist construction), except R8's input; requirement **UNKNOWN** until the adapter's configuration and fixtures prove it |
 | R4 | Supported, non-secret, fresh per-session mode observation before each turn and before acceptance; no model request | `0021:230-236`, `239-240` | **SATISFIED**, with a transport caveat |
-| R5 | Refresh cannot silently select API/cloud authentication mid-turn | `0021:236-238` | **SATISFIED** as for Codex; fixture owed |
-| R6 | Surface overage facts; `forbidden` needs proved mechanical refusal | `0021:242-254` | Surfacing **SATISFIED**; `forbidden` **UNKNOWN** |
+| R5 | Refresh cannot silently select API/cloud authentication mid-turn | `0021:236-238` | **Interface affordance found**, as for Codex; requirement **UNKNOWN** until the owed fixture passes |
+| R6 | Surface overage facts; `forbidden` needs proved mechanical refusal | `0021:242-254` | Surfacing: **interface affordance found**, requirement **UNKNOWN** until the adapter emits it; `forbidden` **UNKNOWN** |
 | R7 | Bounded startup: no model request or account-dependent code before the gate; protocol enforces the phase | `0021:258-265` | **UNKNOWN**: one pre-turn model path found and guarded |
 | R8 | Account and cloud-managed inputs excluded, fixed or constrained; vendor-side change cannot widen | `0021:267-275` | **NOT SATISFIED** (Team/Enterprise); **UNKNOWN** (Pro/Max) |
-| R9 | Every model-selectable operation is an admitted callback or unreachable | `0021:103-116` | **UNKNOWN**: interface fits, one vendor-mandated exception |
+| R9 | Every model-selectable operation is an admitted callback or unreachable | `0021:103-116` | **UNKNOWN**, and an **open blocker for every plan**: interface fits, but `EndConversation` is neither admitted nor unreachable |
 | R10 | Fixed qualified vendor destinations; no arbitrary proxy/DNS/URL; startup and redirects proved | `0021:277-288` | **UNKNOWN** |
 
 The "SATISFIED" verdicts are interface verdicts in the Codex screen's sense.
 They mean the pinned artifact offers what the requirement needs. They do not
 mean it was observed working.
+
+**Interface affordance found** is weaker, and this definition covers every use
+of it in this screen: the
+pinned artifact offers a mechanism the requirement could rest on, but the
+requirement is met only by adapter configuration, fixtures or emitted behaviour
+that are future work. The requirement itself therefore stays UNKNOWN until that
+work proves it.
 
 ## Findings
 
@@ -209,7 +233,7 @@ What this does not establish, all N3/N4 work:
   credential-bearing;
 - refresh behaviour under the real Linux boundary.
 
-### R3: every identified alternate input is excludable by construction
+### R3: every identified alternate input is excludable by construction (interface affordance found)
 
 The documented precedence runs cloud-provider variables, `ANTHROPIC_AUTH_TOKEN`,
 `ANTHROPIC_API_KEY`, `apiKeyHelper`, `CLAUDE_CODE_OAUTH_TOKEN`, Anthropic
@@ -243,6 +267,11 @@ An input the adapter never supplies cannot select a credential. Unknown
 variables fall to the allowlist, not to enumeration. The one input no local
 construction removes is server-managed settings (R8). R4's reading is the
 backstop for anything missed, because it reports every API-key source it finds.
+
+That is the affordance, not the requirement. The allowlist, the disposable
+`HOME` and configuration directory, and the emptied `settingSources` are adapter
+configuration that does not exist yet, so R3 stays UNKNOWN until that
+configuration is built and its fixtures show each listed input refused.
 
 ### R4: the observation is a repeated `initialize`, not the SDK's cached accessor
 
@@ -354,27 +383,31 @@ descriptor is consumed (B@180831408, B@178995830). Both are subscription credent
 collapse does not change the billing route. Both are excluded because the path
 is absent and the variables are not allowlisted.
 
-### R5: an honest mid-turn switch to API authentication is caught
+### R5: an honest mid-turn switch to API authentication would be caught (interface affordance found)
 
 Refresh writes only `claudeAiOauth` (B@181853512). API-key sources come from
 the process environment (fixed), settings (sources emptied), `.claude.json`
 (disposable), the well-known `/home/claude/.claude/remote/` files (absent) or
 server-managed settings (refused plans, R8). A switch that the session
 honestly reports adds `apiKeySource` or drops `subscriptionType`, and the
-pre-acceptance `initialize` then refuses the result.
+pre-acceptance `initialize` would then refuse the result.
 
 As with Codex, this defends against honest reports only. A client that
 misreports its own mode is out of reach (`codex_protocol.py:20-24`). **The N3
 analogue owes the fixture**: introduce an API credential mid-turn and prove the
-result is refused.
+result is refused. Until that fixture passes against the built adapter, R5
+stays UNKNOWN.
 
-### R6: overage facts are surfaced; `forbidden` has no client-side refusal
+### R6: overage facts can be surfaced; `forbidden` has no client-side refusal
 
 `rate_limit_event` carries `overageStatus`, `overageDisabledReason`,
 `isUsingOverage` and a `credits_required` error code (`sdk.d.ts:4950-4981`).
 The experimental `get_usage` control request (`sdk.d.ts:3751`) returns
-`extra_usage.is_enabled` (`sdk.d.ts:3847`) without a turn. Surfacing
-therefore holds.
+`extra_usage.is_enabled` (`sdk.d.ts:3847`) without a turn. That is an
+interface affordance for surfacing. Surfacing itself stays UNKNOWN: no adapter
+decodes these fields yet, and whether the CLI emits them for a given session is
+not observed (the companion research records that `rate_limit_event` is
+documented as emitted on status change).
 
 Refusal at the included limit is vendor-side. The account's usage-credits
 setting ("you can turn usage credits on or off", on claude.ai;
@@ -384,10 +417,14 @@ subscription whose included usage is exhausted"
 ([TypeScript reference](https://code.claude.com/docs/en/agent-sdk/typescript)).
 The client offers no switch.
 
-`subscription_overage="forbidden"` stays UNKNOWN. What would resolve it is N4
-evidence that `extra_usage.is_enabled == false`, read before the turn and again
-before acceptance, coincides with vendor refusal at the limit. ADR 0021 already
-says an unproved arrangement makes that profile unavailable (`0021:247-248`).
+`subscription_overage="forbidden"` stays UNKNOWN. A reading of
+`extra_usage.is_enabled == false` is observed state, and state alone never
+creates a `forbidden` profile. What would resolve it is separately authorized
+N5 evidence that the vendor actually refuses at the included limit while that
+reading, taken before the turn and again before acceptance, is false. ADR 0021
+already says an unproved arrangement makes that profile unavailable
+(`0021:247-248`); the alternative is explicitly approved
+`operator_authorized` overage (`0021:249-250`).
 The companion [spend-bound research](../../../research/m8-subscription-spend-bounds.md)
 records the vendor's own words on disabling credits.
 
@@ -523,8 +560,15 @@ remains. The docs say deny and ask rules, `--disallowedTools` and `--tools` all
 fail, and PreToolUse hooks do not run for it; it "does nothing except end the
 conversation, never reading or modifying files or data"
 ([tools reference](https://code.claude.com/docs/en/tools-reference)). It is not
-mechanically unreachable. The fixed catalog must name it as a vendor-owned
-terminal operation, and the adapter must map it to a non-success outcome.
+mechanically unreachable, and it is not an admitted callback: it is a vendor
+built-in, not one of the adapter's callbacks. ADR 0021 accepts only those two dispositions
+for a model-selectable operation (`0021:103-105`). Mapping it to a non-success
+outcome is still required as a fail-closed result mapping, but it satisfies
+neither. **This is an open blocker for every plan.** R9 stays UNKNOWN, and no
+plan is available, until there is evidence that `EndConversation` is
+unreachable under the fixed launch or an ADR-backed treatment of it. Its
+documented harmlessness is vendor documentation for the current product, not a
+qualified property of this pin, and does not substitute for either.
 
 **Pre-turn catalog observation.** `get_context_usage` with
 `detail:'summary'`, which avoids token-count API calls (`sdk.d.ts:3631-3635`),
@@ -533,9 +577,11 @@ servers with their `scope`, including `claudeai` (`sdk.d.ts:1117-1156`). The
 effective inventory under these flags is UNKNOWN until observed.
 
 **Resolving evidence, credential-free:** an account-empty launch with the fixed
-flags, reading both, must list exactly the adapter's callbacks plus
-`EndConversation`. ADR 0021 says a claimed empty inventory proves nothing
-(`0021:108`), so this must be observed, not inferred.
+flags, reading both, must list exactly the adapter's callbacks, and at most
+`EndConversation` besides. ADR 0021 says a claimed empty inventory proves
+nothing (`0021:108`), so this must be observed, not inferred. If
+`EndConversation` is listed, the observation confirms the blocker rather than
+resolving it; the remaining route is an ADR-backed treatment.
 
 ### R10: destinations are few and documented; nothing is proved
 
@@ -574,15 +620,29 @@ These become N6 work under separate authorization (N4 and N5 lanes):
 - the vendor's refusal at the included limit with usage credits off.
 
 Everything else in R7 and R9 has a credential-free resolving test and belongs to
-the N2 analogue.
+the N2 analogue, except that R9's `EndConversation` blocker may need an
+ADR-backed decision rather than a test.
 
 ## Disposition
 
-**No ADR amendment is proposed.** N6 may proceed to its credential-free N2
-analogue, naming repeated `initialize` as the mode interface. The owner should
-see one scoping consequence first: **only individual Pro and Max plans can
-qualify at this pin**. Team and Enterprise are refused by the gate, because
-their cloud-managed settings cannot be excluded.
+**No plan is available at this pin, and this screen does not conclude that no
+ADR amendment is needed.** Two consequences need the owner before N6 proceeds:
+
+- **R9, every plan:** `EndConversation` is neither an admitted callback nor
+  mechanically unreachable. Every plan stays unavailable until evidence shows it
+  unreachable under the fixed launch, or an ADR-backed treatment of it is
+  decided. Whether that treatment fits inside ADR 0021 or needs an amendment is
+  an owner decision this screen does not make.
+- **R8, plan scope:** of the four plans evaluated, **individual Pro and Max
+  are the only R8 candidates**. Team and Enterprise are refused by the gate,
+  because their cloud-managed settings cannot be excluded. Free and unmapped
+  plans were not evaluated; the accept rule refuses them as adapter policy.
+
+The owner decides whether the credential-free N2 analogue, naming repeated
+`initialize` as the mode interface, proceeds while the R9 blocker is open. If it
+does, it publishes no availability: fake providers exercise the contract
+without production availability, and missing mediation proof blocks the
+affected adapter (`0021:325-327`, `0021:386-388`).
 
 Obligations this screen adds:
 
@@ -601,7 +661,8 @@ Obligations this screen adds:
   - launch with `-p --input-format stream-json --output-format stream-json
     --verbose --tools "" --strict-mcp-config --mcp-config <one sdk server>
     --setting-sources= --disable-slash-commands --no-session-persistence`;
-  - admit `EndConversation` as a terminal non-success;
+  - map `EndConversation` to a terminal non-success, as a fail-closed result
+    mapping only; it does not admit the operation or resolve the R9 blocker;
   - prove the offline-gate and catalog tests from R7 and R9 against an
     account-empty store.
 - **N3 analogue:**
@@ -692,6 +753,27 @@ corrections:
   `is_enabled` is `sdk.d.ts:3847`, `GZ` and `tp` start at B@181876435 and
   B@201189544, and two ADR ranges were narrowed to the sentences they cite
   (`0021:247-248`, `0021:273-274`).
+
+## Review: what changed
+
+An independent review of this screen and its companion research raised
+findings that were all accepted. Those touching this screen were corrected here
+as wording and verdict changes, with no new research:
+
+- **R9 overstated.** The draft said mapping `EndConversation` to a non-success
+  outcome sufficed, that no ADR amendment was needed and that Pro/Max could
+  qualify. A fail-closed mapping is neither an admitted callback nor
+  unreachability. `EndConversation` is now an open blocker for every plan, and
+  Pro/Max are only the R8 candidates.
+- **Future work labelled SATISFIED.** R3, R5 and R6's surfacing rested on
+  adapter configuration, fixtures and emitted behaviour that do not exist yet.
+  They are now "interface affordance found", with the requirement UNKNOWN.
+- **`forbidden` from state.** R6 now says an `extra_usage.is_enabled` reading is
+  state that never creates a `forbidden` profile by itself, and that the vendor's
+  refusal needs separately authorized N5 proof.
+- **Plan scope.** The draft refused "every other plan" as if shown
+  unqualifiable. Only Pro, Max, Team and Enterprise were evaluated; Free and
+  unmapped plans are refused by adapter policy.
 
 ## Reproducing this screen
 

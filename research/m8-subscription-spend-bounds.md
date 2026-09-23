@@ -26,6 +26,14 @@ its response and snapshot types in 1d; and from this repository the adapter
 lines, issue #78's text and the rev 3, preflight, implementation-record and
 test citations. The other `codex-rs` citations were not independently re-read.
 
+**Review.** A later independent review corrected two points, by wording only
+and with no new research. The draft let a state-only observation ("zero balance
+and reload off at time T") stand as a `forbidden` record and described the
+evidence set in section 3 as meeting ADR 0021 by itself; neither holds. It also
+said the adapter emits `is_using_overage=None` for a Codex turn; it publishes
+`rate_limit=None`, and 1d now separates the repository fact from the pinned
+vendor premise.
+
 Mainframe: `mcp__mainframe__search` was available and was searched first. It
 had no vendor overage-policy research. Its useful hit was this repository's
 `docs/plans/handoffs/M8-native-account-interface-preflight.md` (account method
@@ -119,7 +127,11 @@ The following is registered and reachable in the pin:
 - Other account methods: `account/rateLimitResetCredit/consume` (spends an earned reset, `common.rs:1240-1244`), `account/usage/read` (`common.rs:1246-1250`; README says it can read "estimated credits, optional cost" per thread, `README.md:2531`) and `account/sendAddCreditsNudgeEmail` (`common.rs:1258-1262`). None of the registered account methods buys credits or changes automatic reload. That comes from the registrations listed at `common.rs:1201-1262` and the retained-binary inventory in `docs/plans/handoffs/M8-native-account-interface-preflight.md:76-80`. A grep for `auto_reload|autoReload|recharge` across `codex-rs` found nothing, so automatic-reload state is not visible to the client.
 
 **Findings about this repository's adapter (for the N5 design, not defects I am filing):**
-- **Verified: the turn carries no overage fact at the pin.** At openai/codex `3d2ee51ca2d5db578f328aa75e20aa22c0197c9a`, `pub struct Turn` (`codex-rs/app-server-protocol/src/protocol/v2/thread_data.rs:366`) has only `id`, `items`, `items_view`, `status`, `error`, `started_at`, `completed_at` and `duration_ms`, and no `rateLimits` field. A case-insensitive `git grep` for `usingOverage` or `using_overage` at that commit finds no occurrence in `codex-rs/app-server-protocol`, nor in `codex-rs/app-server` or anywhere under `codex-rs`; `git grep` over the same commit and path does find `pub struct Turn {` and `rateLimits` in the generated schemas, so the tree was searchable. Constructicon's `_rate_limit` reads `value.get("usingOverage")` (`src/constructicon/substrate/executors/codex_protocol.py:932`) from `turn.get("rateLimits")` on `turn/completed` (`codex_protocol.py:1030`). Against the pin that argument is always absent, so `_rate_limit` returns `None`, the observation publishes no `RateLimitInfo`, and `is_using_overage` is always `None`. That is truthful under I4, since an unemitted fact stays `None`. It is not overage evidence: **overage evidence for N3c/N5 must come from the `account/rateLimits/read` request, not from the turn.** The adapter's field name matches Claude Code's `isUsingOverage` (see 2c), not Codex's.
+- **The turn carries no overage fact at the pin.** This rests on two facts, verified separately:
+  - *Pinned vendor source (the premise).* At openai/codex `3d2ee51ca2d5db578f328aa75e20aa22c0197c9a`, `pub struct Turn` (`codex-rs/app-server-protocol/src/protocol/v2/thread_data.rs:366`) has only `id`, `items`, `items_view`, `status`, `error`, `started_at`, `completed_at` and `duration_ms`, and no `rateLimits` field. The orchestrator re-verified this against that commit's `thread_data.rs:366`. This report's reader also found, by case-insensitive `git grep` at that commit, no occurrence of `usingOverage` or `using_overage` anywhere under `codex-rs`, while the same search did find `pub struct Turn {` and `rateLimits` in the generated schemas, so the tree was searchable.
+  - *Repository side.* `codex_protocol.py:1030` passes `turn.get("rateLimits")` to `_rate_limit` on `turn/completed`. `_rate_limit` returns `None` at `codex_protocol.py:930-931` whenever its argument is not a mapping, before it reads `usingOverage` at `:932`; only a mapping reaches the `RateLimitInfo` construction at `:939-942`. Against the pin the argument is always absent, so the published observation has `rate_limit=None`. No `RateLimitInfo` is built, so no `is_using_overage=None` is emitted either: the field is absent with its parent, not reported as `None`.
+
+  That is truthful under I4, since an unemitted fact stays absent. It is not overage evidence: **overage evidence for N3c/N5 must come from the `account/rateLimits/read` request, not from the turn.** The adapter's field name `is_using_overage` matches Claude Code's `isUsingOverage` (see 2c); Codex's pinned source has no such name.
 - The one in-band Codex spend signal is `account/rateLimits/updated`. The adapter refuses every `account/` notification as a namespace (`codex_protocol.py:536-544`). `docs/plans/handoffs/M8-implementation-record.md:937-945` already names this cost ("a rate-limit update, say"). Under N5 it means a live turn that gets a rate-limit update is refused. So "Subscription limits … remain truthful" (#78 acceptance criterion) needs either the notification or a pre-turn and post-turn `account/rateLimits/read`.
 - The `_rate_limit` docstring says "We hold no schema for this payload" (`codex_protocol.py:918`). The pin ships generated schemas, for example `codex-rs/app-server-protocol/schema/json/v2/GetAccountRateLimitsResponse.json` and `.../AccountRateLimitsUpdatedNotification.json`.
 - A test uses the name `account/rateLimits/changed` (`tests/substrate/test_codex_adapter.py:840`). Its docstring shows the name is deliberately hypothetical. The pinned name is `account/rateLimits/updated`.
@@ -180,36 +192,53 @@ reloads only. Any bound comes from account state: no purchased credits and
 automatic reload off. Nothing in the vendor configuration locks that state,
 and even with it, the vendor documents in-turn continuation past the limit
 and negative balances. Under ADR 0021, a `forbidden` profile has **no vendor
-proof of mechanical refusal** here. It could be recorded only as "forbidden,
-enforced by zero balance and reload off at time T". That is observed state,
-not an enforced control, and it is weaker than what ADR 0021:245-248
-requires. **Recommendation: stop for an operator decision** (issue #78's
-branch). Either accept that weaker record explicitly, or choose a Business
-workspace.
+proof of mechanical refusal** here. An observation such as "zero balance and
+reload off at time T" is state, not an enforced control, and **state-only
+observations never create a `forbidden` profile**
+(`docs/adr/0021-subscription-executors-bind-operator-stores.md:247-248`).
+**Recommendation: stop for an operator decision** (issue #78's branch). The
+profile stays unavailable, or the operator explicitly approves
+`operator_authorized` overage and its bounds (`0021:249-250`). Choosing a
+Business or Enterprise workspace instead gives only the candidate below, not a
+proof.
 
-**Codex / ChatGPT Business or Enterprise.** A vendor-side control exists and
-is a positive fact. Business has per-seat and per-user monthly credit usage
-limits, plus "If no credits are available in the workspace pool, the feature
-is blocked". Enterprise has an overage limit of 0, which "blocks new
-requests". Both admit in-flight overshoot, so the bound holds at request
-admission, not to the cent. The client can read it back:
-`account/rateLimits/read` shows `individualLimit` and `spendControlReached`.
-Whether Business accepts a per-user limit of 0 is not stated.
+**Codex / ChatGPT Business or Enterprise.** A vendor-side control is
+documented. Business has per-seat and per-user monthly credit usage limits,
+plus "If no credits are available in the workspace pool, the feature is
+blocked". Enterprise has an overage limit of 0, which "blocks new requests".
+These are **candidates for request-admission refusal**, not proofs of it: the
+actual refusal behaviour for the bound workspace still needs separately
+authorized N5 proof. Both admit in-flight overshoot, so even a proved control
+refuses at request admission and is **not a hard monetary bound**. The client
+can read the settings back: `account/rateLimits/read` shows `individualLimit`
+and `spendControlReached`. Whether Business accepts a per-user limit of 0 is
+not stated.
 
-**Claude Code / Pro or Max.** A vendor-side positive fact exists: usage
+**Claude Code / Pro or Max.** A vendor-side control is documented: usage
 credits can be disabled, and "Once disabled, you'll only have access to your
-plan's included usage." Two conditions must also hold. The CLI must have no
-`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `apiKeyHelper`, and must be
-pinned to claude.ai login. The in-CLI prompt to raise the limit applies only
-while credits are on.
+plan's included usage." It is likewise a candidate whose actual refusal at the
+included limit needs separately authorized N5 proof. Two conditions must also
+hold. The CLI must have no `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or
+`apiKeyHelper`, and must be pinned to claude.ai login. The in-CLI prompt to
+raise the limit applies only while credits are on.
 
 **Claude Code / Team.** The Owner can disable usage credits, and the seat
-allowance is the documented default ceiling. Both are positive facts. Spend
-limits, when enabled, may be "slightly" exceeded.
+allowance is the documented default ceiling. Both are documented controls and
+candidates in the same sense, needing the same N5 proof. Spend limits, when
+enabled, may be "slightly" exceeded, so they are not hard monetary bounds.
+(The companion interface screen separately refuses Team and Enterprise for
+cloud-managed settings.)
 
-### Evidence that would let the operator record overage as "forbidden and enforced"
+### Evidence to gather toward a `forbidden` record
 
-Smallest sufficient set, written at authorization time into the N5 record:
+This set does **not** by itself meet ADR 0021. `forbidden` requires "proved
+mechanical refusal at the included limit" (`0021:247`); documents, settings
+views and readbacks show configuration and state, not refusal. The missing
+element is separately authorized N5 proof that the vendor actually refuses at
+the limit under this configuration. Without it the profile stays unavailable,
+or uses explicitly approved `operator_authorized` overage.
+
+Smallest documentary set, written at authorization time into the N5 record:
 1. The vendor rule quoted with URL and retrieval date. For Claude this is the
    "Once disabled…" sentence. For Codex Business/Enterprise it is "feature is
    blocked" or "limit to 0 blocks".
@@ -221,14 +250,16 @@ Smallest sufficient set, written at authorization time into the N5 record:
      per-user or seat credit limit, or the overage limit at 0, and automatic
      reload off or capped.
    - Codex Plus/Pro: Settings > Usage shows a credit balance of 0 and
-     automatic reload off. Record this as state, not a control.
+     automatic reload off. Record this as state, not a control; it can never
+     support a `forbidden` profile.
 3. A client-side readback in the same session as the run, before and after
    it, recorded as bounded non-secret values:
    - Codex: `account/rateLimits/read` showing `credits.hasCredits=false`
      (personal), or `individualLimit` present with `spendControlReached`
      (Business). This is an authenticated `account/` request, so the N5
      authorization must name it. The turn record cannot substitute: at the
-     pin it carries no overage field (1d).
+     pin the turn has no `rateLimits`, so the adapter publishes
+     `rate_limit=None` (1d).
    - Claude: an observed `rate_limit_event` whose `overage_status` is
      `rejected` with an `overage_disabled_reason`. If no event is emitted,
      record the readback as UNVERIFIED.
@@ -244,7 +275,12 @@ YAGNI. Considered and rejected as unnecessary:
 - automating the vendor settings capture.
 
 The pre-run and post-run readback plus the operator attestation is the
-smallest set that meets ADR 0021 and #78.
+smallest documentary set to bring to the N5 authorization. It meets neither
+ADR 0021 nor #78's hard-bound condition by itself: `forbidden` also needs the
+separately authorized N5 refusal proof above, and in-flight overshoot means even
+a proved control is request-admission refusal, not a hard spending bound. If
+the operator requests a hard bound, #78 says to stop for a different operator
+decision rather than promise one.
 
 ## Could not verify
 
