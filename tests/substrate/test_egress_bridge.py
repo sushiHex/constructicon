@@ -149,8 +149,13 @@ def test_a_client_half_close_still_carries_the_reply(upstream):
     client.sendall(b"request")
     client.shutdown(socket.SHUT_WR)
     assert read_to_eof(leaf) == (b"request", True), "client EOF did not reach the leaf"
-    leaf.sendall(b"reply after the client's EOF")
-    leaf.shutdown(socket.SHUT_WR)
+    try:
+        leaf.sendall(b"reply after the client's EOF")
+        leaf.shutdown(socket.SHUT_WR)
+    except OSError as exc:
+        # Linux reports a forwarder that closed both halves here, as ENOTCONN
+        # or a reset: the reply had nowhere to go (first Linux mutation run).
+        pytest.fail(f"the reply was not delivered after the client's half-close: {exc!r}")
     assert read_to_eof(client) == (b"reply after the client's EOF", True)
     assert finished(thread)
     for sock in (client, leaf):
