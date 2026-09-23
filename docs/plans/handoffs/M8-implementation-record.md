@@ -1776,9 +1776,12 @@ with grafts disabled. An unprivileged judge then proves four things:
 - every destination is absent;
 - every destination ancestor is a real directory that only root can write.
 
-Only after that does root run a fixed stock sequence: `install`, then
-`apparmor_parser --add`. An unprivileged verifier recomputes the installed
-state against git. `installed` defaults to false.
+Every root write comes after that proof, as a fixed stock sequence: `install`,
+then `apparmor_parser --add`. The one root command before the judge is a
+read-only `cat` of the kernel's profile list, which the judge needs as input.
+That command's custody is proved only afterwards, and the design document
+states the exception. An unprivileged verifier recomputes the installed state
+against git. `installed` defaults to false.
 
 **Measured.** The Linux `verify` job at the merged tree
 ([run 35818944312](https://github.com/sushiHex/constructicon/actions/runs/35818944312))

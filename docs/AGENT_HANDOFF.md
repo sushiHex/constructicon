@@ -71,8 +71,12 @@ The provider remains unavailable by default.
 
 **Root on the credential host executes no repository code.** Stock git, run as
 the operator, proves that commit C is on main. An unprivileged judge proves
-custody and absence. Only then does root run fixed stock commands. An
-unprivileged verifier checks the installed state against git.
+custody and absence. Every root write comes after that proof, as a fixed
+sequence of stock commands. One root command precedes the judge: a read-only
+`cat` of the kernel's profile list, whose output the judge needs. The judge
+proves that tool's custody only afterwards, and the design document states this
+exception (runbook R2/R4). An unprivileged verifier checks the installed state
+against git.
 
 **Corrections worth carrying.**
 
