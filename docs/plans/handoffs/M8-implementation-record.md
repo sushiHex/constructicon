@@ -1390,3 +1390,117 @@ Linux lane; their local skips are not executed proofs.
 Production availability remains refused. This work installs no vendor
 configuration, credentials or deployment, proves no live subscription turn,
 and does not complete N3b egress, N3c conformance or private-host qualification.
+
+## N3b — acquisition-scoped egress (#76)
+
+N3b is the egress slice of issue #76; it does not close the issue. The pre-code
+[state review](M8-N3b-state-review.md) was committed as `9058290`, reviewed
+independently by Codex (`gpt-5.6-terra`, job `job_7914037954a5`), and amended
+in `60c51a5` for one P1, seven P2 and the adopted P3 findings. The rejected
+findings and their reasons are recorded in that document. The amended text has
+not itself been re-reviewed.
+
+The slice adds one stdlib-only substrate module, `executors/egress.py`: a
+host-side CONNECT relay per native execution, reached from the native zone
+through one read-only socket leaf, `/vendor-egress.sock`, bound into the zone's
+existing `--unshare-net` namespace. A destination is a sealed `(host, port)`
+with one pinned literal address; nothing resolves a name, and the CONNECT host
+never reaches the dialler. The first ClientHello must be one complete record
+naming exactly the CONNECT host, with no ECH, no duplicate extension and one
+`host_name`. That rule binds the first hello only; the pinned address is the
+boundary. Every handler await is bounded by the acquisition deadline, and the
+relay rechecks its stop latch, the owner task's cancellation and the deadline
+synchronously after every resumed read, before any dial and before any
+forward. `NativeStoreMount` carries the leaf, so no worker launch can; `argv`
+re-identifies the bound socket (`S_ISSOCK`, owner, `(dev, ino)`) before mounting
+it. The relay is entered inside the `self.active` task that `_cleanup_owned`
+already cancels and joins, so it is torn down before either guard is released.
+Allocation is an exclusive `mkdir` of the acquisition's own payload directory.
+The provider refuses an egress identity that differs from the sealed policy and
+an acquisition root too long for the socket path. The production runtime
+reserves the leaf as an immutable empty regular file, which changes the runtime
+digest. No L0 contract, journal record, supervisor or AppArmor change, and no
+new forced unavailability reason: the default reasons still publish the
+unqualified egress boundary, and a provider with no policy mounts no leaf.
+
+Denials are counted in `observed` as evidence and are never fatal to a turn.
+Every allocation, handler and teardown failure becomes one fixed-text
+`ContractViolation` inside the relay, because the original exception text
+carries private locators (review finding 1).
+
+### Local evidence
+
+Everything below was executed on Windows 11 with Python 3.11, with only the
+relay's two platform primitives substituted (a loopback TCP listener with a
+stand-in inode, and a plain `sock_recv`). It is portable evidence about the
+relay's rules, not physical evidence.
+
+- The portable suites (`test_egress.py`, `test_egress_launch.py`,
+  `test_codex_egress.py`) drive every relay rule in both directions: CONNECT
+  membership, IP literals and the head bound at its limit; a real stdlib
+  ClientHello against twelve refusals; pipelining, including the pinned
+  first-hello limit; the connection bound at its limit; the deadline on an
+  active stream and an idle handler; stop, control, control lost during the
+  dial, and ownership loss after the dial; exclusive allocation, a replaced
+  socket and exit failures; the launcher leaf; the provider's identity and path
+  budget; and the handle's allocation, close ordering and `network="none"`
+  refusal. A resolver recorder with a same-run control saw zero relay calls on
+  the accepting and refusing paths.
+- The field-walking surface test seeds the acquisition root, socket name, pinned
+  address and denial prefix on an accepted path, a refused path and four failure
+  paths (existing payload, a bind error naming the path, a substituted socket at
+  exit, an unclassified handler failure). None reaches any published field.
+- `scripts/check_m8_n3b_mutations.py`: 34 of 35 mutants killed by assertion. The
+  Linux-only ancillary mutant (29) reported NOT PROVEN, as expected on Windows;
+  it has no kill until the foundation lane runs it.
+- The retained inventories still kill every mutant by assertion against the
+  changed `_converse`, `argv` and provider: N3a 47/47, N2 82/82, N2 WRITE 49/49.
+- `uv run verify` on the complete tree passed: clean ruff, strict mypy over 102
+  source files, four import contracts kept, and 2,630 tests passed with 408
+  platform skips. The only change after that run was this record's own text and
+  its manifest line, rechecked with `sha256sum --check` and the plan-manifest
+  test.
+
+### Deviations from the amended design
+
+- The task body is a new `CodexOperatorHandle._exchange` method rather than
+  inline code in `_converse`, so the N2 mutation anchor
+  `guard_fds=(guard, held.lock_fd),` stays in `_converse` exactly once.
+- The deadline tests accept a peer EOF up to one monotonic clock tick before the
+  deadline. asyncio runs timers up to its clock resolution early; on Windows the
+  first run measured EOF 3 ms before the deadline, with a 15.6 ms resolution. The
+  state review's row now says so. The upper bound (deadline + 1 s) is unchanged.
+- The store-socket positive control binds through `/proc/self/fd/<dirfd>`,
+  because the store path is longer than `sun_path`. That mechanism is Linux
+  reasoning until the lane runs it.
+- Self-review after implementation found a second instance of review finding
+  2's class: `sock_sendall` completes a partial write from an I/O callback that
+  bypasses the pump's liveness check. At most the remainder of one 8 KiB chunk,
+  read before the stop, can still reach the peer. It is recorded as a limit in
+  the state review rather than fixed with a third substituted primitive, and the
+  stalled-controller test asserts that bound instead of zero bytes after resume.
+  No review has examined this finding yet.
+
+### Limits and unexecuted proofs
+
+The state review's limits apply unchanged: pinned addresses, the direct CONNECT
+client (the Codex `HTTPS_PROXY` path is N4), same-uid trust for pathname
+sockets in the store, the first-hello-only rule, ownership loss observed only at
+connect points, stalled-controller sockets, partial writes completing after a
+stop (at most one 8 KiB chunk read before it), the reference-count close of an
+accept completed during teardown, an orphaned payload after a teardown failure
+on a normally closed lease, and native TLS validation as an N4 assumption.
+
+These have **no execution** until Linux CI runs them, and Windows skips are not
+passes: the real `AF_UNIX` bind and identity, `recvmsg` ancillary refusal
+(mutant 29), `require_current` against a replaced real socket, the 107-byte
+`sun_path` budget, the leaf in the production runtime, `ssl` inside the runtime
+and `openssl` on the runner, the throwaway-CA TLS peers, the redirect, ECH, SNI
+and IP-literal refusals through the real zone, the in-zone errno assertions,
+the zone socket walk and its planted-socket control, the worker's empty leaf,
+cancel and deadline revocation, controller death with successor disposal, and
+the stalled-controller pin with its concurrent successor. They are
+`tests/substrate/test_native_egress_containment.py` in the foundation lane's
+"Prove N3b acquisition-scoped egress denial" step, with evidence in
+`n3b-*.json`. `vendor_conformance_qualified` stays false, and production
+availability remains refused.

@@ -477,7 +477,7 @@ defence, and its mutant would be equivalent. The load-bearing facts are that
 | A clean native exit means streams were revoked | The relay closes every upstream before `__aexit__` returns; the peer's own EOF observation is asserted after the join returns. That is the peer's observation, not the relay's |
 | A successful TLS handshake means the relay judged SNI | `observed["accepted"] == 1` is asserted beside the handshake, and each refusal pair drives the same code |
 | A handshake succeeded, so the hello was intact | Affirmative: a verified TLS 1.3 handshake fails on any transcript change. The portable test also asserts byte identity at a recording peer |
-| A stream ended, so the deadline ended it | `denied:deadline` is recorded, the client was sending continuously, and peer EOF falls between the deadline and deadline + 1 s |
+| A stream ended, so the deadline ended it | `denied:deadline` is recorded, the client was sending continuously, and peer EOF falls between one monotonic clock tick before the deadline (asyncio runs timers up to its clock resolution early) and deadline + 1 s |
 | No policy means egress is qualified or irrelevant | The egress reason stays by default; with no policy there is no mount; conformance is never minted |
 | `ssl` absent inside the runtime means skip | In the required lane the native client's `import ssl` failing is a test failure, not a skip. The same holds for `openssl` missing on the runner |
 | An empty `failures` list means a clean exit | `closed` is set as the last statement of a completed exit, never in `finally` |
@@ -606,7 +606,8 @@ test uses a short acquisition root under `/tmp`.
     native tree is reaped, and its `dispose_acquisition` removes the stale socket.
 - The stalled-controller limit is pinned: a child controller blocks its loop
   past the deadline with an upstream open. Its native process is reaped; no byte
-  reaches the peer after the stall began (after a settling interval); a
+  reaches the peer during the stall (after a settling interval), and at most one
+  partial pump write completes after it resumes (see Limits: partial writes); a
   successor `dispose_acquisition` started in the test process has not completed
   while the upstream is open; after the controller resumes, the peer sees EOF
   and only then does the successor complete. If a later change hosts the relay
@@ -718,6 +719,14 @@ Each limit is written down, and pinned by an assertion where a test can hold it.
   peer, for one limit whose exposure is an open socket that carries nothing.
   (The first draft's reason, that it "would change runtime content", was wrong:
   this design changes runtime content too, by reserving the leaf.)
+- **Partial writes.** Found in implementation self-review, after the review:
+  `sock_sendall` finishes a partial write from an I/O callback, which runs
+  before a timer expiring in the same iteration and never passes through the
+  relay's liveness check. So the unsent remainder of one chunk that was read and
+  checked before a stop or the deadline can still reach its peer after it: at
+  most one 8 KiB pump chunk per direction, and never a byte read after the stop.
+  Removing it would need a third substituted send primitive; it is recorded
+  instead, and the Linux stalled-controller test asserts the bound.
 - **An accept completed during teardown.** If the accept future completes in the
   same loop iteration that cancels the accept task, the accepted socket is
   reachable only through that future and closes when CPython frees it. The
