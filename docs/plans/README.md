@@ -87,6 +87,7 @@ the eventual code differs.
 | [M8 N2 WRITE state review](handoffs/M8-N2-WRITE-state-review.md) | Pre-code callback, contained-worker and async-resume design for the remaining N2 slice; evidence gates, not implementation or vendor qualification |
 | [M8 N3a state review](handoffs/M8-N3a-state-review.md) | Preserved pre-code lifecycle review and later correction ledger; final N3a results live in the [M8 implementation record](handoffs/M8-implementation-record.md#n3a-native-store-custody-merged); no vendor qualification |
 | [M8 N3b state review](handoffs/M8-N3b-state-review.md) | Pre-code async-resume review and egress design for the acquisition-scoped `native_vendor_session_only` relay, independently reviewed and amended before implementation; the implementation, its review and its limits are in the [M8 implementation record](handoffs/M8-implementation-record.md#n3b--acquisition-scoped-egress-76); no vendor traffic or qualification |
+| [M8-D2 host installation](handoffs/M8-D2-host-installation.md) | Design and bounded operator runbook for installing the reviewed qualification artifacts on the private host from git-proved merged source (#94); authorizes no host change, and #73 stays open until its evidence is recorded |
 
 ## Completeness and recovery notes
 
