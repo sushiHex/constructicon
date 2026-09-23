@@ -1644,3 +1644,81 @@ the new real-socket exit test
 (`test_a_replaced_real_socket_is_not_unlinked_and_exit_raises`), the two
 corrected containment tests, the deterministic unstarted-handler test on the
 selector loop, the pinned stand-in on the runner's filesystem, and mutant 29.
+
+### Codex review of `1ec4943`
+
+One independent Codex pass (job `job_b21d1b3a3fbb`, requested by the
+orchestrator) reviewed head `1ec4943`. It is the slice's only Codex round, so
+this is the independent-model review that the implementation review recorded
+as owed (its finding 10); its fixes have had no model review of their own. The
+state review's "Codex review of the implementation" table carries the
+classification and the rejected finding 1 with its reason. Every premise was
+reproduced first. A probe on the selector loop showed `EgressDestination`
+accepting `127.0.0.1`, `10.0.0.1`, `224.0.0.1`, `::1` and `fe80::1%eth0`, and
+`sock_connect` to `fe80::1%eth0` calling a recorded `loop.getaddrinfo` once
+(asyncio's `_ipaddr_info` returns `None` for any host containing `%`). The
+others are source facts: the pump called `_require_live` only, the zero
+linger was set only in `_abort` during cleanup, and the controller-death test
+started its successor after observing the peer's EOF.
+
+- **Destinations (findings 2 and 3).** A pinned address must be globally
+  routable unicast (`is_global`, not multicast, not reserved, not IPv6
+  site-local) and carry no zone id. The zone refusal is its own check. The
+  routability rule is a module predicate, `_routable`, which the suites replace
+  with one that admits exactly `127.0.0.1`, the controlled peers' address. That
+  is the smallest honest seam: the same kind of substitution the suites
+  already make for the socket primitives, visible at every use as the
+  `controlled_loopback` fixture (implied by `listeners`), an autouse fixture in
+  the containment module, and one line in `_egress_owner.py`. The policy tests
+  run the real predicate, and one test proves the seam admits nothing but
+  `127.0.0.1`. A policy flag or a test subclass was not taken, because
+  production code could select either. Policies that are never dialled now pin
+  a routable address. Fifteen refusals, two acceptances.
+- **Established streams (finding 4).** The pump now calls `_admit` (liveness,
+  then `check_control`, a raise latching stop) after every resumed read,
+  before its send. `test_ownership_loss_leaves_an_established_stream_until_the_relay_stops`,
+  which pinned the opposite, is replaced by
+  `test_control_lost_on_an_established_stream_forwards_nothing_more`: bytes
+  before the loss arrive, nothing read after it does, the stream is cut as
+  `denied:control`, and the next connect is refused as `stopped`. The cost, one
+  synchronous journal read per resumed read, is recorded as a limit. The "only
+  at connect points" limit in this section's earlier text is superseded.
+- **Queued bytes on controller death (finding 5).** Upstream sockets come from
+  `_upstream`, which sets zero linger before anything can queue; `_abort` is
+  gone and cleanup closes plainly. New Linux containment test
+  `test_controller_death_discards_the_upstream_queue`: a controller floods a
+  raw peer that never reads until `/proc/net/tcp` shows a non-empty send queue
+  toward it, is killed, and the test asserts the queue gone within 5 s and no
+  byte beyond what the peer held. The `sock_sendall` partial-write limit is
+  unchanged.
+- **Controller death (finding 6).** The claim is now supervisor-observed
+  physical quiescence before successor disposal, not an in-process join. The
+  death test starts `dispose_acquisition` at the kill and asserts that it
+  completes after the peer's EOF and that no process of this uid has the guard
+  open when it completes. A positive control first shows the scan finding the
+  live owner. Processes whose `/proc` entry this uid does not own are not
+  scanned; that is recorded in the helper.
+- **Mutants (finding 7).** Sixteen new mutants, 45-60: control in the pump, the
+  routability terms and the zone, and `parse_connect`'s token count, method,
+  version, port grammar, port bound, host grammar, unbracketed and bracketed
+  literals, and terminator. Pure parser cases assert each refusal's reason,
+  plus the accepting targets at ports 1 and 65535. Mutant 17 is retargeted at
+  `_admit` and mutant 40 at the creation-time linger. Two gates, the missing
+  separator and the non-ASCII refusal, have no meaningful mutant (state
+  review, Mutation inventory).
+
+**Verification of this round (Windows):** the three portable N3b files passed
+127 with 4 platform skips. The new address tests failed against the previous
+relay: 15 refusals were not raised. `scripts/check_m8_n3b_mutations.py` killed
+59 of 60 by assertion, and mutant 29 reported NOT PROVEN as expected.
+`uv run verify` on the complete tree: clean ruff, strict mypy over 102 source
+files, four import contracts kept, and 2,668 tests passed with 410 platform
+skips. Its one failure was again the plan-manifest test, run before the two
+documents' manifest lines were refreshed; after the refresh that test passed
+on its own, and `sha256sum --check` passed.
+
+**Unexecuted until the next Linux CI run:** the new queue-on-death proof, the
+reordered controller-death test with its guard scan, the flood client mode,
+the seam inside the owner subprocess, and every containment test under the
+routable-address rule. The partial-write limit on Linux keeps its existing
+stalled-controller assertion.

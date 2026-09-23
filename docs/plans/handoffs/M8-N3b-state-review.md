@@ -127,7 +127,16 @@ The module is stdlib only, in L1, and imports nothing from `linux.py`.
   hexadecimal IPv4 spelling (`127.1`, `0x7f.1`, `2130706433`) rather than
   relying on `ipaddress` failing to parse. `port` is an `int` in 1..65535.
   `address` is one literal IP in its canonical `ipaddress` spelling. There is
-  exactly one pinned address per destination.
+  exactly one pinned address per destination. It carries no zone id (asyncio
+  resolves any dial host containing `%` through `getaddrinfo`), and it is
+  globally routable unicast: `is_global`, not multicast, not reserved and not
+  IPv6 site-local, so no loopback, private, shared, link-local, documentation
+  or unspecified address can be pinned (ADR 0020:275 excludes any localhost
+  service inventory). Both were added after the Codex review of `1ec4943`. The
+  test suites' controlled peers live on host loopback, so they replace the
+  routability predicate `_routable` with one that also admits exactly
+  `127.0.0.1`, the way they replace the platform primitives; the zone refusal
+  sits outside the predicate and stays real, and nothing in `src` replaces it.
 - `EgressPolicy(destinations, connections)`, frozen. `destinations` must be a
   non-empty `tuple` of `EgressDestination`, and `connections` a positive `int`
   (not `bool`), checked before anything is digested, so no mutable container can
@@ -431,15 +440,15 @@ affirmatively.
 | Before dial (synchronous) | Latch set, owner cancelling, deadline passed, `check_control` raising | Check all of them. `check_control` may raise `_LocalClose`, a `CancelledError` subclass (`codex.py:177-179`); because the call is synchronous, the relay catches any exception from this call only as a control denial and sets `_stopping` | Close. Never mistake it for the handler's own cancellation |
 | Dial resumes | Stop latched, owner cancelling, deadline passed, control lost, dial failed | Check again after the await | Close the new upstream before any byte. `upstream_unreachable` is a denial |
 | Forward of buffered bytes resumes | Upstream closed | - | Close both |
-| Pump read resumes | Stop latched, owner cancelling, deadline passed (a queued wake-up runs before the expiring timer), peer EOF, client EOF, ancillary data mid-stream | Synchronous liveness check before the send, in both directions. Half-close on EOF | Close both halves; the upstream closes abortively (see Limits: queued bytes). The handler's `finally` closes sockets only and counts nothing |
+| Pump read resumes | Stop latched, owner cancelling, deadline passed (a queued wake-up runs before the expiring timer), control lost, peer EOF, client EOF, ancillary data mid-stream | Synchronous liveness check, then `check_control()` (a raise latches `_stopping`), before the send, in both directions. Half-close on EOF | Close both halves; the upstream closes abortively, having had zero linger since creation (see Limits: queued bytes). The handler's `finally` closes sockets only and counts nothing |
 | Handler finishes | A classified outcome is already counted, or an unclassified exception | The exit collects the terminal state of every handler task it created. Cancellation by teardown is not a failure | - |
 | `exchange` returns (native exited) | Handlers still open upstream; a failure is recorded | The relay exit must still revoke streams | - |
-| `__aexit__` | Body result, `ProcessExchangeError` or cancellation; open handlers; repeated `cleanup` cancellation | In order: (1) set `_stopping`; (2) cancel the accept task and every handler; (3) join them through `finish_owned`; (4) close the listener only after the accept task has finished, so its reader is removed before the descriptor can be reused; (5) unlink only if identity still matches, then remove the directory; (6) raise recorded failures as fixed text (grouped with a pending cancellation); (7) set `closed = True` last | Step (7) never runs in a `finally`. After a raise, nothing reports clean. A substituted socket is never unlinked, and its directory is left for the successor |
+| `__aexit__` | Body result, `ProcessExchangeError` or cancellation; open handlers; repeated `cleanup` cancellation | In order: (1) set `_stopping`; (2) cancel the accept task and every handler; (3) join them through `finish_owned`; (4) unlink only if identity still matches, then remove the directory, while the listener still holds the socket's inode (a released inode number can be reused at once; first Linux CI run); (5) close every accepted client, and the listener only after the accept task has finished, so its reader is removed before the descriptor can be reused; (6) raise recorded failures as fixed text (grouped with a pending cancellation); (7) set `closed = True` last | Step (7) never runs in a `finally`. After a raise, nothing reports clean. A substituted socket is never unlinked, and its directory is left for the successor |
 | `await self.active` in `_converse` | The outer execute cancelled | Cancelling the awaiting task cancels the inner task and waits for it to complete. `self.active = None` in `finally` runs only after the relay exit has finished (executed in the review's `outer_waits.py`) | - |
 | Decode (`codex.py:1514-1533`) | A result or `ProcessExchangeError` | Both reach `_converse` only through a completed `__aexit__` (see Relay exit) | Terminal binding checks as today |
 | `_cleanup_owned` | Materializing, executing or idle | Existing: publish closure, cancel and join `self.active`, then release guards | A relay failure during close surfaces as a cleanup error, as the gather split already handles (`codex.py:1646-1659`) |
-| Ownership loss | The heartbeat records `OwnershipLost` (`walker.py:429-435`); the walker re-raises without closing the acquisition (`walker.py:1689-1690`); the conversation never calls `check_control` after spawn | Checked only at the relay's connect points. An established stream is not cut by ownership loss alone; the first refused connect latches `_stopping`, which the pump check then enforces | A pinned limit (see below). The guards stay held, so a successor waits |
-| Controller death | Relay sockets exist only in the dead process | The kernel closes the listener, clients and upstreams. The supervisor's owner pipe kills the native tree, and its guard copies are held until quiescence | Stale `payload/egress.sock` and the directory are removed by the successor's `dispose_acquisition` after the guard is free |
+| Ownership loss | The heartbeat records `OwnershipLost` (`walker.py:429-435`); the walker re-raises without closing the acquisition (`walker.py:1689-1690`); the conversation never calls `check_control` after spawn | Checked at the relay's connect points and after every resumed pump read, before its send (since the Codex review of `1ec4943`; the first form checked connect points only). A raise latches `_stopping` | An established stream forwards nothing read after the loss; an idle one ends at its next read, the relay's stop or the deadline (see Limits). The guards stay held, so a successor waits |
+| Controller death | Relay sockets exist only in the dead process; no relay code runs, so nothing is joined in-process | The kernel closes the listener, clients and upstreams; each upstream has had zero linger since creation, so that close is a reset that discards its queue. The supervisor's owner pipe kills the native tree, and its guard copies are held until it has reaped it | Supervisor-observed physical quiescence before successor disposal, not an in-process join: the successor's `dispose_acquisition`, started at the kill, completes only once the guard is free, and then removes the stale `payload/egress.sock` and the directory |
 | Controller stalled past the deadline | The native process is reaped by the supervisor (`test_linux_containment.py:723`); upstream sockets are open in the stalled process | Checked in the Linux lane: a successor `dispose_acquisition` started while the upstream is open has not completed, and completes only after the peer sees EOF | A pinned limit (see below) |
 | Successor recovery | The old handle is alive or dead | The walker's recovery commits closure, then waits on the old acquisition guard, which the old handle holds until its relay has been joined | A new store-lock wait also excludes overlapping sessions |
 
@@ -450,7 +459,8 @@ counter. Nothing refunds the allowance for a refused or incomplete connection.
 **The durable fence per connection** is deliberately not re-read, because a Git
 read per connect adds nothing the structure lacks. Local close cancels the
 relay directly. Ownership loss and cancellation reach `check_control` (the
-walker's `_check_run_control`) at connect time, with its existing latency.
+walker's `_check_run_control`) at connect time and after every resumed pump
+read, with its existing latency.
 Successor work waits on the guard that the relay's joining owner holds.
 
 ### Relay exit is structural
@@ -530,9 +540,21 @@ TCP listener plus a stand-in file whose inode is the identity) and `_receive`
   never opened. A `_LocalClose` from control is not treated as the handler's own
   cancellation. Control lost while the dial is pending closes the new upstream
   before any byte (the killer for the post-dial recheck).
-- Ownership loss after the dial: the established stream keeps forwarding (the
-  limit, pinned); the next connect is denied `control`; after that, the
-  established stream forwards nothing more.
+- Control lost on an established stream: bytes before the loss reach the peer,
+  nothing read after it does, the stream is cut with `denied:control`, and the
+  latched stop refuses the next connect as `stopped`. (The first form pinned
+  the opposite, an established stream forwarding after ownership loss, as a
+  limit; the Codex review of `1ec4943` rejected that limit.)
+- A destination address that is loopback, private, shared, link-local,
+  documentation, unspecified, multicast, reserved or site-local, or that
+  carries a zone id, is refused by the real predicate; globally routable IPv4
+  and IPv6 addresses are accepted, and the controlled-peer seam admits exactly
+  `127.0.0.1` and nothing else.
+- `parse_connect`'s own gates, as pure parser cases with their reason: an
+  unterminated or non-ASCII head, an extra request-line token, another method
+  or version, a zero-padded, signed, missing or over-bound port, userinfo and
+  numeric hosts, and IP and bracketed literals; the exact target at port 1 and
+  65535.
 - An unclassified handler exception makes the exit raise a fixed-text refusal
   and the outcome `unavailable`. With no failure, the exit is clean and `closed`
   is true. A body exception always propagates through the exit.
@@ -606,8 +628,16 @@ test uses a short acquisition root under `/tmp`.
     2 s).
   - Deadline: an actively streaming client is cut at the deadline.
   - Controller death: a child controller running relay plus exchange is killed
-    with SIGKILL; the peer sees EOF, a successor acquires the guard once the
-    native tree is reaped, and its `dispose_acquisition` removes the stale socket.
+    with SIGKILL. A successor `dispose_acquisition` is started at the kill; it
+    completes only after the peer's EOF, and when it completes no process of
+    this uid still has the guard open (the same scan saw the live owner holding
+    it before the kill). It removes the stale socket. That is
+    supervisor-observed physical quiescence, not an in-process join.
+  - Controller death with a queue: a child controller floods a peer that never
+    reads, so the host send queue toward the peer is non-empty
+    (`/proc/net/tcp`) when it is killed. No cleanup runs, yet the queue is gone
+    at once and nothing beyond what the peer already held reaches it: only zero
+    linger set at the upstream's creation can do that.
 - The stalled-controller limit is pinned: a child controller blocks its loop
   past the deadline with an upstream open. Its native process is reaped; no byte
   reaches the peer during the stall (after a settling interval), and at most one
@@ -651,7 +681,7 @@ which is expected; it is measured in the foundation lane. Test files: `E` is
 | 14 | The accept-path liveness check becomes `False` | `E::test_an_accept_after_stop_is_closed_unread` |
 | 15 | The pre-dial control check is removed | `E::test_a_control_raise_before_the_dial_is_a_denial_and_stops_the_relay` |
 | 16 | The post-dial recheck is removed | `E::test_control_lost_during_the_dial_closes_the_upstream_before_any_byte` |
-| 17 | The pump's liveness recheck is removed | `E::test_ownership_loss_leaves_an_established_stream_until_the_relay_stops` |
+| 17 | The pump's liveness and control recheck is removed | `E::test_control_lost_on_an_established_stream_forwards_nothing_more` |
 | 18 | Teardown skips cancelling handlers | `E::test_teardown_delivers_peer_eof_once_exit_returns` |
 | 19 | The connection bound is off by one | `E::test_the_connection_bound_binds_at_its_limit` |
 | 20 | `__aexit__` stops raising recorded failures | `E::test_an_unclassified_handler_failure_is_fatal_at_exit` |
@@ -674,14 +704,36 @@ which is expected; it is measured in the foundation lane. Test files: `E` is
 | 37 | The synchronous deadline term becomes `if False:` | `E::test_a_read_resumed_past_the_deadline_forwards_nothing` |
 | 38 | The handle gives the relay a no-op control check | `C::test_control_lost_during_the_exchange_denies_the_connect` |
 | 39 | The handle gives the relay `deadline + 3600` | `C::test_the_relay_is_listening_during_the_exchange_and_gone_afterwards` |
-| 40 | The handler closes its upstream gracefully | `E::test_nothing_queued_before_the_deadline_reaches_the_peer_after_exit` |
+| 40 | An upstream is created without zero linger, so its close is graceful | `E::test_nothing_queued_before_the_deadline_reaches_the_peer_after_exit` |
 | 41 | Every stream `TimeoutError` counts as `denied:deadline` | `E::test_a_stream_timeout_before_the_deadline_is_a_reset` |
 | 42 | The hello record bound is off by one | `E::test_the_hello_record_bound_binds_at_its_limit` |
 | 43 | Teardown no longer closes the accepted clients | `E::test_teardown_closes_a_client_whose_handler_never_ran` |
 | 44 | Exit closes the listener before releasing the socket path | `E::test_the_socket_is_released_while_the_listener_still_holds_its_inode` |
+| 45 | The pump checks liveness only, not control | `E::test_control_lost_on_an_established_stream_forwards_nothing_more` |
+| 46 | The routability check is removed | `E::test_a_host_local_or_zoned_address_is_never_admissible[loopback]` |
+| 47 | The zone refusal is removed | `E::test_a_host_local_or_zoned_address_is_never_admissible[zone]` |
+| 48 | `is_global` is dropped from the predicate | `E::test_a_host_local_or_zoned_address_is_never_admissible[private]` |
+| 49 | The multicast term is dropped | `E::test_a_host_local_or_zoned_address_is_never_admissible[multicast]` |
+| 50 | The reserved term is dropped | `E::test_a_host_local_or_zoned_address_is_never_admissible[reserved-v6]` |
+| 51 | The IPv6 site-local term is dropped | `E::test_a_host_local_or_zoned_address_is_never_admissible[site-local]` |
+| 52 | The request-line token count is dropped | `E::test_connect_parser_refusals[extra-token]` |
+| 53 | The method gate is dropped | `E::test_connect_parser_refusals[method]` |
+| 54 | The version gate is dropped | `E::test_connect_parser_refusals[version]` |
+| 55 | The port grammar is dropped | `E::test_connect_parser_refusals[zero-padded-port]` |
+| 56 | The port bound is dropped | `E::test_connect_parser_refusals[port-over-bound]` |
+| 57 | The host grammar is dropped | `E::test_connect_parser_refusals[userinfo]` |
+| 58 | An unbracketed IP literal is no longer its own denial | `E::test_connect_parser_refusals[literal]` |
+| 59 | A bracketed literal is no longer its own denial | `E::test_connect_parser_refusals[bracketed]` |
+| 60 | The head terminator gate is dropped | `E::test_connect_parser_refusals[unterminated]` |
 
-Mutants 36-43 were added by the implementation review, and mutant 44 after the
-first Linux CI run (see the implementation record's N3b section).
+Mutants 36-43 were added by the implementation review, mutant 44 after the
+first Linux CI run, and mutants 45-60 (with 17 and 40 retargeted) after the
+Codex review of `1ec4943` (see the implementation record's N3b section).
+`parse_connect`'s missing-separator gate has no mutant: without a `:` the
+whole target is the port, which the port grammar or the host grammar then
+refuses, so removing it is equivalent. The non-ASCII refusal has no mutant
+either: removing its `try` turns the refusal into an unclassified error, not a
+different verdict.
 
 The existing N3a mutants for `--unshare-net` and store/workspace exclusion are
 retained unchanged.
@@ -707,7 +759,16 @@ Each limit is written down, and pinned by an assertion where a test can hold it.
   allocation, with no runtime DNS or re-resolution. A moved vendor address
   produces failed connections, never a wider destination. Restoring service needs
   a new sealed policy, which changes the identity and so needs requalification.
-  Whether real vendor CDNs make pinning impractical is an N4 finding.
+  Whether real vendor CDNs make pinning impractical is an N4 finding. The
+  routability rule is `ipaddress`'s own classification in the running Python,
+  which has changed between patch releases; its edge cases are pinned by the
+  address tests on the CI interpreter only. An IPv4-mapped IPv6 spelling of a
+  global address is admissible and reaches that IPv4 address.
+- **The controlled-peer seam.** The suites replace `_routable` to admit
+  `127.0.0.1`. A replaced predicate leaves the egress identity unchanged,
+  because `enforcement_build_digest` hashes the module source, exactly as for
+  the substituted platform primitives. No production path replaces it, and
+  none can without replacing a module attribute.
 - **Direct CONNECT client.** The proof client speaks CONNECT to the socket
   itself. The Codex `HTTPS_PROXY` path, and any in-namespace TCP bridge, are an N4
   client-compatibility shim, not part of this boundary. Whether the pinned
@@ -720,12 +781,16 @@ Each limit is written down, and pinned by an assertion where a test can hold it.
   of each connection. A HelloRetryRequest, a pipelined second hello or a TLS 1.2
   renegotiation is not judged; it reaches only the same pinned peer. Pinned by a
   portable test that forwards a second hello naming another host.
-- **Ownership loss.** The relay observes control only at its connect points.
-  Established streams survive ownership loss until the relay stops (the next
-  refused connect, local close, cancellation or the deadline), which ADR
-  0020:291-295 permits: the successor waits for physical quiescence, and the
-  maximum connection lifetime is the remaining deadline. Pinned by a portable
-  test.
+- **Ownership loss.** The relay observes control at its connect points and
+  after every resumed pump read, before that read's send, so nothing read after
+  the loss is forwarded. It is still not continuous: an idle established stream
+  stays open until its next read in either direction, the relay's stop or the
+  deadline, and the guards stay held meanwhile. `check_control` is the walker's
+  synchronous journal read (`cancel_requested`), so an active stream now costs
+  one journal read per resumed read (up to one per 8 KiB chunk) in the
+  controller's loop; that cost is accepted, not measured. (The first form
+  observed control at connect points only and pinned an established stream
+  forwarding after the loss; the Codex review of `1ec4943` rejected that.)
 - **Stalled-controller sockets.** If the controller's event loop is blocked past
   the deadline, its upstream sockets stay open until it resumes, and the guards
   stay held. The relay reads and forwards nothing during the stall, but the
@@ -746,7 +811,12 @@ Each limit is written down, and pinned by an assertion where a test can hold it.
   released: a review probe measured 599,538 bytes reaching a peer that read
   only after exit (Windows; Linux send-buffer autotuning allows more). Every
   upstream close is now abortive (`SO_LINGER` zero): the peer gets a reset and
-  the kernel discards the queue. That includes a stream that ended cleanly in
+  the kernel discards the queue. The linger is set when the upstream socket is
+  created, before any byte can queue, so the close the kernel performs for a
+  killed controller, where no cleanup runs, is abortive too (the Codex review
+  of `1ec4943`: the first form set it only in cleanup). A Linux containment
+  test kills a controller with a non-empty queue toward a non-reading peer and
+  asserts the queue gone and nothing beyond what the peer held. That includes a stream that ended cleanly in
   both directions, because a graceful close would keep sending after exit too;
   the cost is that a peer that half-closed and then reads slowly can lose the
   tail of what the client sent. What can still reach the peer after a stop or
@@ -891,3 +961,30 @@ design had not considered) were answered by findings 1-14 above. These
 amendments address its blocking findings. The amended text itself has not been
 re-reviewed; a narrow follow-up review of these amendments and of the
 implementation is still owed.
+
+### Codex review of the implementation (`1ec4943`)
+
+One independent Codex pass (job `job_b21d1b3a3fbb`) reviewed head `1ec4943`.
+It is the only Codex round on this slice; its fixes are verified by tests,
+mutants and self-review, not by another model pass. Each premise was
+reproduced against source before acting; for findings 2 and 3 a probe on the
+selector loop showed `EgressDestination` accepting `127.0.0.1`, `10.0.0.1`,
+`224.0.0.1`, `::1` and `fe80::1%eth0`, and `sock_connect` to `fe80::1%eth0`
+calling a recorded `loop.getaddrinfo` once. Details and verification are in the
+implementation record.
+
+| # | Finding | Class | Disposition |
+| --- | --- | --- | --- |
+| 1 | The writable `/vendor-store` bind can hold a pathname socket planted by a same-uid host process | pre-existing design choice | Rejected, see below |
+| 2, 3 | A destination may pin loopback, private, link-local or multicast addresses, and a scoped IPv6 address sends the dial through `getaddrinfo` | introduced | Fixed. Globally routable unicast only, and no zone id. The controlled peers use a test-only predicate seam that admits exactly `127.0.0.1`. Mutants 46-51 |
+| 4 | An established stream never re-checks control, and a test pinned bytes reaching the peer after ownership loss | introduced | Fixed. The pump runs liveness and `check_control` after every resumed read, before its send, latching stop. The pinning test is replaced by one proving nothing read after the loss is forwarded. Mutants 17 (retargeted) and 45 |
+| 5 | Zero linger is set only in cleanup, so a killed controller's upstream drains its queue | introduced | Fixed. Linger is set at creation (`_upstream`). A Linux containment test kills a controller with a non-empty queue. Mutant 40 retargeted. The `sock_sendall` partial-write limit stays recorded: a checked send loop would be a third substituted primitive for a window of one chunk |
+| 6 | The controller-death claim implied a join the killed controller cannot perform | introduced overclaim | Narrowed to supervisor-observed physical quiescence before successor disposal; the test now starts the successor at the kill and asserts the ordering and an empty guard-holder scan with its positive control |
+| 7 | `parse_connect`'s gates and the new checks had no mutants | introduced | Adopted. Mutants 52-60 with pure parser cases and their reasons; two gates recorded as having no meaningful mutant (see Mutation inventory) |
+
+**Rejected: finding 1.** The store bind and the pathname sockets that a same-uid
+host process can create in it are N3a's accepted design. Same-uid host
+processes are trusted store custody, and maintenance is excluded by the store
+lock. The in-zone socket walk with its planted-store control proves the
+current state affirmatively (see Limits: pathname sockets in the store). This
+is not a new N3b hole; an OS-enforced socket-free store is out of scope.
