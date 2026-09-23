@@ -103,10 +103,16 @@ spend-bound research.
 
 **Findings that change later decisions.**
 
-- **Claude is blocked on every plan by `EndConversation`.** It cannot be
-  removed, and it is neither an admitted callback nor unreachable. Only Pro and
-  Max are candidates for R8. Team and Enterprise fail it because server-managed
-  settings can inject hooks.
+- **~~Claude is blocked on every plan by `EndConversation`.~~ Superseded by
+  #102:** under the fixed headless launch, the tool's `isEnabled()` gate keeps
+  it out of the active tool pool. The gate needs a vendor flag, which stays
+  false while nonessential traffic is off, plus the `cli` entrypoint, and `-p`
+  forces `sdk-cli`. R9 is **conditionally resolved**; N6 must prove the six
+  conditions listed in the screen's "EndConversation reachability" section, not
+  an ADR amendment. Deny-style mechanisms (`--disallowedTools`,
+  `permissions.deny`, hooks, `canUseTool`) do not work on this tool. Only Pro
+  and Max are candidates for R8. Team and Enterprise fail it because
+  server-managed settings can inject hooks.
 - **Codex on ChatGPT Plus or Pro cannot qualify `forbidden` overage.** No
   vendor setting forbids it; only automatic reload has a cap.
 - **An observed zero balance never proves `forbidden`.** Vendor controls are
@@ -114,7 +120,10 @@ spend-bound research.
 - **The pinned Codex `Turn` has no rate-limit field.** Overage evidence must
   come from `account/rateLimits/read`.
 
-The owner decisions are drafted on #77 and #78.
+The owner decisions were drafted on #77 and #78 and then made on 2026-09-23. N4
+is authorized in advance on #77, with Codex on the owner's ChatGPT Pro 20x.
+Under Pro, N5 needs `operator_authorized` overage with bounds the owner has not
+yet given (#78).
 
 **Corrections worth carrying.** Business in-flight overshoot is unverified,
 not documented. Only the Enterprise source documents it, and the absence of a

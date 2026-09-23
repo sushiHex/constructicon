@@ -45,7 +45,25 @@ therefore stays unavailable until there is either evidence that
 `EndConversation` is unreachable under the fixed launch, or an ADR-backed
 treatment of it. This blocker is independent of the plan.
 
-Nothing here was executed.
+> **Revised 2026-09-23.** A later source reading found that the premise does not
+> hold for the fixed `-p` launch. There, `EndConversation` is in the base tool
+> collection but is excluded from the active session tool pool by its
+> `isEnabled()` gate. That gate needs two things the fixed launch denies:
+>
+> - a vendor flag, which reads its compiled default `false` while
+>   `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` keeps feature-flag fetching off;
+> - an entrypoint, which `-p` excludes.
+>
+> The blocker is **CONDITIONALLY RESOLVED**, pending N6 proof that those
+> conditions hold for the whole session. In particular, settings-sourced `env`
+> must not be able to reach the process environment, because
+> `--setting-sources=` alone does not fence it. An account-empty Windows-build
+> observation of 2.1.267 agrees under those conditions: its session pool held
+> one MCP callback and no built-in tool. See
+> [EndConversation reachability (2026-09-23)](#endconversation-reachability-2026-09-23).
+
+Nothing here was executed, apart from the bounded executions recorded in that
+section.
 
 The decisive plan-scoping finding is **server-managed settings**. For a Team or Enterprise
 login, Anthropic's servers deliver settings at startup and hourly during the
@@ -118,7 +136,8 @@ matching the import list against a chunk whose export list contains the same
 names. Chunk file names were not mapped to offsets directly, so each such
 resolution is an export-set match, not a proven link.
 
-**Nothing was executed.** No Claude binary ran, not even `--version`: the
+**Nothing was executed** in the original screen; the 2026-09-23 section
+records one later bounded execution. No Claude binary ran, not even `--version`: the
 pinned artifact is the Linux build and this host is Windows, and running the
 Windows build would not pin the Linux one. No login, account, credential file,
 keychain, model call or vendor request was involved.
@@ -140,7 +159,7 @@ the current product, not this pin. Where the two disagree, the binary governs.
 | R6 | Surface overage facts; `forbidden` needs proved mechanical refusal | `0021:242-254` | Surfacing: **interface affordance found**, requirement **UNKNOWN** until the adapter emits it; `forbidden` **UNKNOWN** |
 | R7 | Bounded startup: no model request or account-dependent code before the gate; protocol enforces the phase | `0021:258-265` | **UNKNOWN**: one pre-turn model path found and guarded |
 | R8 | Account and cloud-managed inputs excluded, fixed or constrained; vendor-side change cannot widen | `0021:267-275` | **NOT SATISFIED** (Team/Enterprise); **UNKNOWN** (Pro/Max) |
-| R9 | Every model-selectable operation is an admitted callback or unreachable | `0021:103-116` | **UNKNOWN**, and an **open blocker for every plan**: interface fits, but `EndConversation` is neither admitted nor unreachable |
+| R9 | Every model-selectable operation is an admitted callback or unreachable | `0021:103-116` | **UNKNOWN**, and an **open blocker for every plan**: interface fits, but `EndConversation` is neither admitted nor unreachable. *2026-09-23: blocker CONDITIONALLY RESOLVED, because the tool is excluded from the active pool under named, fixed conditions that N6 must prove; R9 stays UNKNOWN ([section](#endconversation-reachability-2026-09-23))* |
 | R10 | Fixed qualified vendor destinations; no arbitrary proxy/DNS/URL; startup and redirects proved | `0021:277-288` | **UNKNOWN** |
 
 The "SATISFIED" verdicts are interface verdicts in the Codex screen's sense.
@@ -583,6 +602,23 @@ nothing (`0021:108`), so this must be observed, not inferred. If
 `EndConversation` is listed, the observation confirms the blocker rather than
 resolving it; the remaining route is an ADR-backed treatment.
 
+**2026-09-23 correction.** "Cannot be removed while any other tool remains" is
+the documented rule for a session whose active tool pool contains the tool.
+
+Under the fixed `-p` launch, `EndConversation` stays in the base collection,
+but its `isEnabled()` gate keeps it out of the active pool. The gate needs two
+things:
+
+- the vendor flag `tengu_umber_kestrel`, which reads its compiled default
+  `false` while `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` keeps feature-flag
+  fetching off;
+- an entrypoint matching `^cli$`, whereas `-p` forces `sdk-cli`.
+
+The blocker is therefore **CONDITIONALLY RESOLVED**. The conditions have to
+hold for the whole session and must be proved in N6. The observation above
+must now list **no** `EndConversation`. See
+[EndConversation reachability (2026-09-23)](#endconversation-reachability-2026-09-23).
+
 ### R10: destinations are few and documented; nothing is proved
 
 The documented hosts that matter here
@@ -632,7 +668,12 @@ ADR amendment is needed.** Two consequences need the owner before N6 proceeds:
   mechanically unreachable. Every plan stays unavailable until evidence shows it
   unreachable under the fixed launch, or an ADR-backed treatment of it is
   decided. Whether that treatment fits inside ADR 0021 or needs an amendment is
-  an owner decision this screen does not make.
+  an owner decision this screen does not make. *(2026-09-23: this is now
+  conditionally resolved. The tool is excluded from the active pool under
+  named, fixed conditions that N6 must prove. No ADR decision is needed unless
+  those conditions cannot be held or the Linux catalog observation contradicts
+  the reading; see
+  [EndConversation reachability (2026-09-23)](#endconversation-reachability-2026-09-23).)*
 - **R8, plan scope:** of the four plans evaluated, **individual Pro and Max
   are the only R8 candidates**. Team and Enterprise are refused by the gate,
   because their cloud-managed settings cannot be excluded. Free and unmapped
@@ -774,6 +815,566 @@ as wording and verdict changes, with no new research:
 - **Plan scope.** The draft refused "every other plan" as if shown
   unqualifiable. Only Pro, Max, Team and Enterprise were evaluated; Free and
   unmapped plans are refused by adapter policy.
+
+## EndConversation reachability (2026-09-23)
+
+This section revisits R9's `EndConversation` blocker. It is a source reading of
+the same pinned Linux binary, plus bounded, credential-free executions of the
+Windows build of the same version. It changes R9's blocker verdict. It does not
+change the other requirements.
+
+**Verdict: CONDITIONALLY RESOLVED.** Under a named, fixed configuration,
+`EndConversation` is in the base tool collection but excluded from the active
+session tool pool, and so from the model's tool list. It is not "present but
+unremovable", and not merely refused. This holds only while the
+[conditions below](#conditions-that-must-hold-and-be-proved) hold for the whole
+session, and N6 must prove them. It is not an unconditional source-level
+resolution. An account-empty Windows-build observation under those conditions
+agrees: a session pool of exactly one MCP callback and no built-in tool.
+
+The tool's `isEnabled()` gate requires two things, and the fixed configuration
+denies both:
+
+- **A vendor feature flag reading enabled.** While
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is non-empty in the process
+  environment, the flag client is off and the flag returns its compiled
+  default, `false`.
+- **An entrypoint matching a pattern whose default is `^cli$`.** `-p` forces
+  the entrypoint to `sdk-cli`.
+
+The earlier verdict came from the documentation's removal rules. Those rules
+apply only to a session whose active pool contains the tool. R9 as a requirement
+stays **UNKNOWN**, as before. ADR 0021 says "a denylist or claimed empty
+inventory alone proves neither property" (`0021:107-108`). Absence was
+therefore observed here on the Windows build, and must still be observed on the
+qualified Linux pin in the catalog test R9 already owes. That test must now
+show **no** `EndConversation`, not "at most `EndConversation`". If it does show
+the tool, this reading is wrong and the blocker returns (see
+[Fallback](#fallback-if-the-observation-contradicts-this-reading)).
+
+Evidence base:
+
+- Tarball integrity was re-verified against `npm view … dist.integrity` for the
+  wrapper, `linux-x64` and the SDK, identical to the table under
+  [Pins](#pins-and-evidence-boundary).
+- The Linux binary SHA-256 is `0399c793…403c0`, unchanged.
+- `@anthropic-ai/claude-code-win32-x64@2.1.267` has integrity
+  `sha512-NQPJdlwcfPLVapMQE/C3SzgNX29qRuQPKy7hVwgrDCOr4Wfd3IlYVibk+VCeLbInUNSQJ4GpE9niSp9YeSRf6w==`,
+  reproduced locally. Its `claude.exe` SHA-256 is
+  `23dde2a47cf1d7d9c4a2d96d21fa80ea9bfc872dfde0ee06e9982d2908603350`, which
+  equals the SDK `manifest.json` `win32-x64` checksum.
+- Documentation was re-fetched with `curl` as raw Markdown at 2026-09-23T06:39Z.
+  `tools-reference.md` is byte-identical to the 2026-09-22 copy.
+
+B@offsets are into the Linux binary. Cross-chunk names were resolved by
+export-set match as before; every match below was unique.
+
+### What admits the tool to the active pool
+
+1. **The pool filter.** The base tool collection `hx()` always includes
+   `EndConversationTool` (B@187738313, B@187740245), so the tool is
+   constructed in every session. The main pool builder removes every tool whose
+   `isEnabled()` is false, after the permission-rule filter:
+   `let k=d.map((P)=>P.isEnabled()),v=d.filter((P,O)=>k[O]);` (B@187741327,
+   inside `ZA` at B@187740597). The tool's own
+   `isEnabled(){let e=_2e();return e!==void 0&&G1t(e)}` is at B@198610257.
+2. **The predicate** `G1t` (B@197445986) is exported as
+   `isEndConversationToolEnabled`:
+
+   ```js
+   function G1t(e){let t=UL();if(t===void 0)return!1;if(!r(e))return!1;
+     let{enabled:o,allowedEntrypoints:s}=l(I(qIn,!1));if(JEt())return!1;
+     return o&&s.test(t)}
+   ```
+
+   - `qIn="tengu_umber_kestrel"` (B@182736125) is the flag.
+   - `I(e,n)` reads the GrowthBook value with default `n=false` (B@181715833).
+   - `l()` maps `true` to `{enabled, allowedEntrypoints:/^cli$/i}`, an object
+     to a pattern built from its `scope`, and anything else to
+     `enabled:false` (B@197445632 onward).
+   - `r(e)` is a model-family floor, `opus ≥ 4.8`, `sonnet ≥ 5`, `fable ≥ 5`,
+     `mythos ≥ 5` (B@197445539), through `Tje` (B@182193800).
+   - `JEt()` is `return!1` (B@183734126).
+3. **The entrypoint.** `UL()` returns the session entrypoint (B@179453300). At
+   startup, `si()` passes `O = non-interactive` into `abr(O)`, which calls the
+   setter `S(e)` (B@193298630). `O` is true for `-p`/`--print` and for any
+   non-TTY stdout (`zmr`, B@180762971). `S(e)` does two things:
+   - if `CLAUDE_CODE_ENTRYPOINT` is unset, it sets it to
+     `e?"sdk-cli":"cli"` (B@179454629);
+   - if the variable is `"cli"` in a non-interactive run, it rewrites it to
+     `"sdk-cli"` (B@179454324).
+
+   A `-p` session therefore never has entrypoint `cli`. The default pattern
+   `^cli$` rejects it, **even when the flag is simply `true`**. Only a flag
+   *object* whose `scope` matches `sdk-cli`, or an entrypoint variable the
+   allowlist would have to supply, gets past this gate.
+4. **The flag under the fixed environment.** Three facts decide it:
+   - `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` makes the privacy level
+     `"essential-traffic"` (B@179247012). That makes `iU()` true
+     (B@179247277), `Fg()` true (B@181197148), `wM()` false (B@181708708)
+     and the GrowthBook `isEnabled` `j4()` false (B@181714139; wired at
+     B@181713148).
+   - `getFeatureValueWithSource` checks environment overrides first. They
+     are `getEnvironmentOverrides(){return null}` (B@181173409). Config
+     overrides are next, and they are `readConfigOverrides(){return}`
+     (B@181173836). Then it returns `{value:n,source:"disabled"}`
+     **before** reading any fetched payload or disk cache (B@181181177).
+   - The only way back to the disk cache is
+     `CLAUDE_CODE_GB_DISK_CACHE_WHEN_TELEMETRY_OFF` (B@181714187), a
+     variable the allowlist does not supply.
+
+   So, while the variable is present, the flag reads `false`, `l(false)` is
+   `enabled:false`, and the tool is not in the active pool. The model-family
+   floor does not help, because the models the adapter would pin all pass it.
+   Both the GrowthBook `isEnabled` check and the pool filter read the
+   environment each time they run, not once at startup. The session tool
+   function additionally caches its result for up to 30 s (`Lp=30000`,
+   B@201058846). If the variable were lost mid-session, a later read would no
+   longer be forced to the default. Whether and when a fetch would then run
+   was not traced. That is why the conditions below must hold for the whole
+   session.
+5. **No fallback dispatch.** A call naming a tool that is not in the session
+   pool is looked up in the full base list only when the name is an **alias**
+   of a base tool: `if(!y){let be=cr(hx(),p);if(be&&be.aliases?.includes(p))y=be}`
+   (B@187786933). `EndConversation` declares no aliases. Its definition is at
+   B@198609929, and the builder defaults are at B@182160149. An invented call
+   therefore takes the `unknown_tool` / "No such tool available" path
+   (B@187777272).
+
+The Windows build carries the same predicate under different minified names:
+`let{enabled:o,allowedEntrypoints:s}=l(P(XPn,!1))` (W@201654952) and
+`="EndConversation",XPn="tengu_umber_kestrel"` (W@186847300). W@ offsets are
+into the Windows `claude.exe`. It also carries byte-identical
+text for the entrypoint setter, the privacy level, the null overrides and the
+`"disabled"` branch. That is a textual comparison, not a proof that the builds
+behave the same.
+
+The documentation agrees at the surface level. The tool "appears only when all
+of the following are true", including "**Surface**: an interactive terminal
+session". It lists "non-interactive `-p` runs" and "sessions through the Agent
+SDK TypeScript and Python packages" among surfaces that "don't include the
+tool"
+([tools reference](https://code.claude.com/docs/en/tools-reference),
+`tools-reference.md:248-254`). The source adds what the documentation leaves
+out: that exclusion is the **default scope of a vendor-served flag**, and the
+vendor could widen it. The same page says flag fetching is off under
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, which "Also disables feature-flag
+fetching" ([environment variables](https://code.claude.com/docs/en/env-vars)).
+The listing of variables that skip the fetch covers "`DISABLE_GROWTHBOOK`,
+`DISABLE_TELEMETRY`, `DO_NOT_TRACK`, or `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`".
+The flag is a cloud-managed input in `0021:267-275`'s sense. The requirement
+that "a vendor-side account/scope or configuration change cannot enable
+additional native tools" (`0021:270-272`) is therefore met only while the
+environment variable that pins the flag to its compiled default is itself
+fenced from every settings input. The next subsection shows that
+`--setting-sources=` alone does not fence it.
+
+### Conditions that must hold and be proved
+
+**Settings reach the process environment by a path `--setting-sources=` does
+not close.**
+
+- `applyConfigEnvironmentVariables` assigns the global configuration's `env`,
+  from `.claude.json` via `ne().env`, into `process.env`. It then does the
+  same for every *enabled* settings source (B@181944710):
+
+  ```js
+  this.appliedGlobalConfigEnv=this.filterSettingsEnv(ne().env,"globalConfig"),
+  Object.assign(process.env,this.appliedGlobalConfigEnv);
+  for(let A of Wo())Object.assign(process.env,this.filterSettingsEnv(ye(A)?.env,A));
+  ```
+
+- `Wo()` always adds `flagSettings` and `policySettings` to the sources that
+  `--setting-sources` allows (B@179746499).
+- The environment filter `filterSettingsEnv` (B@181940296) contains no rule
+  naming `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`: a targeted search of its
+  chunk found no such literal. Its six generic stages were not traced, so it
+  may or may not drop such a value.
+- The remote-settings refresh re-applies the environment after a policy change
+  (B@192064048).
+
+Unless one of those stages removes it, a settings `env` entry could set the
+variable to an empty string, which the privacy-level test
+`if(process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC)` (B@179247012) reads
+as unset. That would re-enable GrowthBook and hand the
+flag, and with it the entrypoint `scope`, back to the vendor.
+
+The verdict holds only under all of the following. N6 must prove each for the
+qualified Linux pin, for the whole session:
+
+1. **Process environment.** The allowlist supplies a non-empty
+   `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` and never supplies
+   `CLAUDE_CODE_GB_DISK_CACHE_WHEN_TELEMETRY_OFF` or `CLAUDE_CODE_ENTRYPOINT`.
+   The launch is `-p`.
+2. **Global configuration.** `.claude.json` in the disposable configuration
+   directory starts fresh and has no `env` key. Its `env` is applied
+   regardless of `--setting-sources`. This joins R2's open question about a
+   fresh `.claude.json`.
+3. **`flagSettings`.** There is no `--settings` argument. The host never sends
+   the settings-changing control requests, `apply_flag_settings` or
+   `update_settings` (`sdk.d.ts`, `SDKControlRequestInner`). Like the other
+   host requests, they are never model-selectable.
+4. **`policySettings`, local.** There is no managed-settings file or
+   endpoint-managed policy in the native zone, whose `/etc` and home are
+   adapter-constructed. This is an existing N3 layout obligation.
+5. **`policySettings`, server-managed.** No server-managed settings are
+   delivered. At this pin a Pro or Max OAuth login without an API key is
+   ineligible for the fetch (`unsupported_subscription`, see R8, B@181929706).
+   That is source-level only: **whether a Pro/Max binding ever receives
+   server-managed settings at this pin is UNKNOWN until N4 observes no fetch
+   for the provisioned binding.** Team and Enterprise are already refused by R8.
+6. **Same binary.** The flag name, its default scope, the entrypoint rewrite and
+   the settings-to-environment path are all facts of this pin.
+
+If any condition cannot be held and proved, the blocker returns (see
+[Fallback](#fallback-if-the-observation-contradicts-this-reading)).
+
+### Per mechanism
+
+| Mechanism | Verdict | Evidence |
+| --- | --- | --- |
+| `isEnabled()` gate: `-p` entrypoint plus `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | **(a) Excluded from the active pool, conditionally.** Either condition alone keeps the tool out at the defaults. The environment condition is the one a vendor flag change cannot reverse, but only while the environment is fenced from settings (conditions 1–6) | Items 1–5 and the conditions above |
+| `DISABLE_GROWTHBOOK=1` | **(a)**, redundant: it also makes `j4()` false (B@181714139). Optional; not needed at this pin | Source; `env-vars.md:425` |
+| `--tools ""` or a `--tools` list | **Not a removal mechanism** for this tool while any other tool remains. Moot under the fixed configuration, where `isEnabled()` excludes the tool from the active pool | "neither `--disallowedTools` nor a `--tools` list can remove it" (`tools-reference.md:244`) |
+| `--disallowedTools EndConversation` | **Ineffective while other tools remain.** Deny lookups skip the tool: `ip=new Set([…END_CONVERSATION_TOOL_NAME])` (B@182515712), `Get(e)` (B@182515807), `hi()` returns `null` for it (B@182517379), and ask rules do the same (`Pm`, B@182518021). Removal happens only when everything else is gone too (`zcr`, B@182517535) | `cli-reference.md:84`; `permissions.md:58` |
+| settings `permissions.deny` | **Ineffective**, the same code path | `settings-reference.md:1521` |
+| PreToolUse hook that denies | **Ineffective.** "PreToolUse also doesn't fire for `EndConversation`" | `hooks.md:1594`, `hooks.md:23`, `hooks.md:1908` |
+| `--permission-prompt-tool` / SDK `canUseTool` | **Ineffective.** The tool "never prompts for permission". It inherits the builder's default `checkPermissions` result, `{behavior:"allow"}` (B@182160149), so no prompt handler is consulted | `tools-reference.md:244`; `hooks.md:1908` |
+| MCP-only catalog (`--tools ""` plus SDK MCP callbacks) | **Not a removal mechanism.** The callbacks are "other tools", which is the condition under which deny rules leave the tool alone | `tools-reference.md:244` |
+| `--bare` / `CLAUDE_CODE_SIMPLE` | **(a) Absent**, since the simple-mode branch returns a fixed list (B@187740597). **Unusable**: bare mode does not read OAuth (see Considered and rejected) | `tools-reference.md:257` |
+| Model choice below the family floor | **(a) Absent**, but it would constrain the model inventory to older models. Rejected | B@197445539 |
+
+**(b), "present but every invocation refused", has no instance for this tool.**
+Every refusal mechanism above is documented, and for deny rules also
+source-shown, to skip it. The question is still recorded, since it recurs for
+other built-ins. ADR 0021 says: "Every model-selectable operation must be an
+admitted callback or mechanically unreachable. … a denylist or claimed empty
+inventory alone proves neither property" (`0021:103-108`).
+
+- *For* treating a refused tool as unreachable: the ADR speaks of
+  *operations*. If every path from selection to effect is cut before any
+  effect, the operation cannot be reached, even though its name is visible.
+- *Against*: a per-call refusal is a denylist evaluated by vendor code, which
+  is the case `0021:107-108` names. The model can still *select* the tool, so
+  it is model-selectable. Proposed ADR 0020, which is not accepted and is
+  cited here only for its wording of the same law, requires the catalog to
+  contain "exactly the admitted callback tool set", with everything else
+  "absent or mechanically unreachable", and says "A configuration flag or empty
+  list alone is not that proof" (`0020:104-111`).
+
+**This is an open owner/ADR interpretation, not a finding.** This section's
+reading is that a present-but-refused built-in is not "mechanically
+unreachable" in ADR 0021's sense unless the refusal is itself a qualified,
+uniform mechanism proved by fixture, and that a permission rule or hook does
+not qualify. ADR 0021 does not settle the general proposition: `0021:107-108`
+says only that a denylist or claimed empty inventory *alone* proves neither
+property, and ADR 0020's wording is from a proposal that was not accepted.
+
+The verdict above does **not** rest on this reading. It rests on case (a),
+exclusion from the active pool, under the stated conditions. If a future pin or
+tool depends on case (b), the owner decides the interpretation.
+
+### What the tool does
+
+From its definition (B@198609929 to B@198611356):
+
+- **In a fork or subagent:** it returns a "does nothing here" message
+  (B@198610631).
+- **First call:** unless the previous assistant turn already called it, it
+  returns a "re-read the guidance … call again" message with no effect
+  (B@198610774).
+- **Second consecutive call:**
+  - it logs the analytics event `tengu_end_conversation_tool_call`;
+  - it appends an `{type:"ended-by-model"}` marker to the session transcript
+    through `cEn` (B@189518602). `cEn` returns early when session persistence
+    is disabled, because `kl()` (B@189432243) includes `XL()`,
+    `sessionPersistenceDisabled` (B@179002408);
+  - it calls `endTurn("end_conversation")` (B@198611105). That is the turn
+    context's `endTurn:(o)=>e.abortController.abort(o)` (B@182158793), so it
+    **aborts the in-flight turn** with reason `end_conversation`;
+  - in a non-interactive session it calls `gracefulShutdown(1,"other",…)`
+    (B@198611219). The shutdown path (B@189595800 onward) does all of the
+    following:
+    - sets `process.exitCode=1` and arms a failsafe timer;
+    - prints a resume hint;
+    - runs several internal cleanup steps, not individually traced;
+    - **executes any configured SessionEnd hooks**, with a timeout;
+    - emits `session_end`;
+    - **waits for any in-flight OAuth refresh to finish**;
+    - writes the final message to stderr and drains stdout;
+    - **forces process exit**.
+
+So its effect is **self-termination of the session and process**, not only an
+exit code. That covers:
+
+- the abort of the running turn;
+- the shutdown sequence above, including whatever cleanup and SessionEnd hooks
+  are configured;
+- a transcript append inside the disposable configuration directory, unless
+  persistence is disabled;
+- an analytics event.
+
+Under the fixed configuration no hooks are configured: settings sources are
+emptied, and `initialize` carries none. The shutdown's wait for a held OAuth
+refresh is store custody that R2 and N3 already own. No workspace or credential
+authority was found in this path. The shutdown's untraced cleanup steps bound
+that claim.
+
+The documentation says it "does nothing except end the conversation, never
+reading or modifying files or data" (`tools-reference.md:244`). The source shows
+that "end the conversation" includes a full process shutdown. It is still a
+model-selectable *operation* in ADR 0021's list-based sense: it changes session
+state and process lifecycle, and the ADR has no harmlessness exception. Its effect is a subset of what the
+adapter must already treat as failure (`0021:124-125`: nothing "may become
+success because the CLI said so"), which is why an ADR-backed treatment would be
+narrow if one were ever needed.
+
+### What was executed
+
+The pinned version's Windows build was run three times, each time with a new
+fresh scratch root. The second and third runs were separately approved by the
+lead. Every run had the same conditions:
+
+- a fresh empty scratch root, with `HOME`, `USERPROFILE`,
+  `CLAUDE_CONFIG_DIR`, `APPDATA`, `LOCALAPPDATA`, `TEMP` and `TMP` pointing
+  into it;
+- an environment built from scratch with only those variables plus
+  `SYSTEMROOT`, `WINDIR`, `PATH=%SYSTEMROOT%\System32`,
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`,
+  `ENABLE_CLAUDEAI_MCP_SERVERS=false` and `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`;
+- no `ANTHROPIC_*` variables, in the child or in the parent shell.
+
+The Windows Credential Manager store is consulted only under
+`CLAUDE_CODE_FORCE_WINDOWS_CREDMAN=1` or a cached flag in a config file. Both
+are absent from a fresh directory; see the Windows build's
+`cachedGrowthBookFeatures?.tengu_windows_credman===!0` reader (W@184974356).
+
+Common arguments:
+`-p --input-format stream-json --output-format stream-json --verbose --tools ""
+--strict-mcp-config --setting-sources= --disable-slash-commands
+--no-session-persistence --mcp-config <file>`.
+
+**Run 1: `initialize` only, with no MCP server.** The configuration was
+`--mcp-config {"mcpServers": {}}`. The only input was
+`{"type":"control_request","request_id":"init-1","request":{"subtype":"initialize"}}`.
+Fifteen seconds later the process was still running (`poll()` = `None`) and was
+killed. It printed exactly one line, the `initialize` success response, which
+included:
+
+```json
+"account":{"tokenSource":"none","apiProvider":"firstParty"}, …
+"analytics_disabled":true, … "session_state":"idle"
+```
+
+It also carried `commands:[]`, the built-in agents, output styles and models.
+It carried **no tool list**: `SDKControlInitializeResponse` has no tools field
+(`sdk.d.ts:4052-4062`), and `system/init`, which carries `tools`
+(B@192873678), is emitted "at the start of each turn" (`sdk.d.ts:5172-5173`). A
+turn needs a user message, which these bounds forbid.
+
+**Run 1 therefore did not observe the catalog.**
+
+**Runs 2 and 3: one SDK MCP server and one `get_context_usage`.** The
+configuration file was `{"mcpServers": {"cb": {"type": "sdk", "name": "cb"}}}`.
+The first input was:
+
+```json
+{"type":"control_request","request_id":"init-1","request":{"subtype":"initialize","sdkMcpServers":["cb"]}}
+```
+
+The CLI then sent three `mcp_message` control requests, and the harness
+answered each:
+
+1. `initialize`, with protocol `2025-11-25` and client `claude-code` version
+   `2.1.267`, answered with a `tools` capability;
+2. `notifications/initialized`, answered with an empty success;
+3. `tools/list`, answered with one inert tool:
+   `probe_callback`, with the empty object schema.
+
+**No `tools/call` arrived.** Fifteen seconds after `initialize` the harness sent
+exactly one
+`{"type":"control_request","request_id":"ctx-1","request":{"subtype":"get_context_usage","detail":"summary"}}`,
+waited fifteen seconds and killed the process, which was still running. Stderr
+was empty. No output mentioned an API call, login, authentication or fetch.
+
+**Run 2 is discarded.** The harness truncated each stdout line at 4000
+characters, which cut the response before its tool fields. Run 3 repeated it
+exactly, capturing every line in full. The run 3 `ctx-1` response, verbatim
+except that the `gridRows` display array is omitted:
+
+```json
+{"categories":[{"name":"System prompt","tokens":2422,"color":"promptBorder"},
+ {"name":"MCP tools","tokens":74,"color":"cyan_FOR_SUBAGENTS_ONLY"},
+ {"name":"Autocompact buffer","tokens":33000,"color":"inactive"},
+ {"name":"Free space","tokens":964504,"color":"promptBorder"}],
+ "totalTokens":2496,"maxTokens":1000000,"rawMaxTokens":1000000,
+ "autocompactSource":"model-default","percentage":0,"model":"claude-opus-5[1m]",
+ "memoryFiles":[],
+ "mcpTools":[{"name":"mcp__cb__probe_callback","serverName":"cb","tokens":74,"isLoaded":false}],
+ "agents":[],"autoCompactThreshold":967000,"isAutoCompactEnabled":true,
+ "messageBreakdown":{"toolCallTokens":0,"toolResultTokens":0,"attachmentTokens":0,
+  "assistantMessageTokens":0,"userMessageTokens":0,"redirectedContextTokens":0,
+  "unattributedTokens":0,"toolCallsByType":[],"attachmentsByType":[]},
+ "apiUsage":null}
+```
+
+The observed tool list is exactly **`mcpTools = [mcp__cb__probe_callback]`**.
+The keys `systemTools` and `deferredBuiltinTools` are absent, not empty. At
+this pin the builder hard-codes both to `void 0`
+(`deferredBuiltinTools:void 0,systemTools:void 0`, B@187762178), so built-in
+tools appear only as aggregate categories:
+
+- `"System tools"`, pushed when the non-deferred built-in token count is
+  positive (B@187759148);
+- `"System tools (deferred)"`, pushed when the deferred built-in token count is
+  positive (B@187759148).
+
+Those counts come from `eas`, which returns zero for both when the pool holds
+no non-MCP tool (B@187750960). **Neither category is present, so the session
+pool holds no built-in tool, deferred or not.** That includes `EndConversation`,
+which is a deferred tool (`shouldDefer:!0`, B@198609929). Its description, a
+multi-paragraph guidance text, would have produced a non-zero category.
+The pool counted is the stream-json session's own tool function `_i`
+(B@201122297), which builds through `nD`, and so through `ZA` (B@201058846).
+
+**What the observation covers:**
+
+- the Windows build of 2.1.267, not the Linux pin;
+- `-p` with the `sdk-cli` entrypoint;
+- `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, so GrowthBook is off and the
+  flag reads its default;
+- no credentials;
+- default model `claude-opus-5[1m]`, which by the source reading passes the
+  model-family floor;
+- `--tools ""` and one SDK MCP callback.
+
+**What it does not cover:**
+
+- a GrowthBook-enabled session, where the vendor flag value could arrive;
+- a session with the `cli` entrypoint, meaning interactive or with that
+  variable set;
+- an authenticated session;
+- a later turn;
+- the Linux binary.
+
+It also cannot say *which* failed condition removed the tool. That attribution
+rests on the source reading above.
+
+One incidental observation for the N2 analogue: the callback is reported
+`isLoaded:false`, although no built-in `ToolSearch` is in the pool. How a
+deferred MCP callback is presented to the model on the first turn is not
+established here.
+
+After each run the fresh configuration directory held `.claude.json`, one
+backup of it, `.last-cleanup`, and `sessions/<pid>.json` with a `.key` file.
+That is a live-session registry, not a transcript. No login, credential, model
+call or user message was involved in any run.
+
+### Resulting R9 status
+
+- **EndConversation: CONDITIONALLY RESOLVED, pending N6 proof of conditions
+  1–6.** Under that fixed configuration the tool is excluded from the active
+  session tool pool by its `isEnabled()` gate, which is case (a). The gate
+  needs a vendor flag, held at its compiled default `false` while
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is in the environment, and an
+  interactive entrypoint, which `-p` excludes. The account-empty Windows-build
+  observation (run 3) agrees for that configuration: a pool of exactly one MCP
+  callback, and no built-in tool, deferred or not.
+  - No ADR amendment is needed **if** the conditions are proved.
+  - The owner question the screen raised returns if any condition cannot be
+    held, notably if a Pro/Max binding receives server-managed settings
+    (condition 5), or if the Linux observation contradicts this reading.
+- **R9 overall: UNKNOWN, unchanged.** The full catalog requirement is still
+  owed on the qualified Linux pin: an account-empty launch with the fixed flags
+  and the adapter's real callback server must list exactly the callbacks and
+  **no** `EndConversation`. That observation can be read with
+  `get_context_usage` (`detail:"summary"`, which "answers from the last
+  response's usage and local estimates without the per-category token-count
+  calls", `sdk.d.ts:3630-3636`) exactly as in run 3. The adapter's first-turn
+  `system/init` `tools` list corroborates it. The rest of R9 is untouched by
+  this section.
+
+Obligations this adds to the N2 analogue:
+
+- `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is now **load-bearing for R9**, not
+  only for egress. The environment fixture must prove conditions 1–3:
+  - the variable is present and non-empty;
+  - `CLAUDE_CODE_GB_DISK_CACHE_WHEN_TELEMETRY_OFF` and
+    `CLAUDE_CODE_ENTRYPOINT` are absent;
+  - `.claude.json` carries no `env`;
+  - there is no `--settings` argument, and no `apply_flag_settings` or
+    `update_settings` control request is ever sent.
+- N3 owns condition 4, keeping managed-settings paths out of the native zone,
+  and N4 owns condition 5, observing no settings fetch for the Pro/Max binding.
+- The catalog test asserts the exact callback set, with `EndConversation`
+  absent.
+- The fail-closed mapping of an `end_conversation` stop or exit code 1 to a
+  terminal non-success stays, as general failure mapping. It no longer stands
+  in for R9.
+- A changed binary re-reads this predicate and the settings-to-environment
+  path. The flag name, default scope and entrypoint rewrite are all
+  pinned-version facts.
+
+### Fallback if the observation contradicts this reading
+
+The blocker returns as **NEEDS OWNER/ADR DECISION** in either of two cases:
+
+- the Linux catalog observation lists `EndConversation`;
+- a condition in [Conditions that must hold and be proved](#conditions-that-must-hold-and-be-proved)
+  cannot be held and proved.
+
+The question for the owner: may a vendor safeguard tool whose effect is
+terminating its own turn and process, mapped to a terminal non-success, be
+admitted under ADR 0021 as a third disposition beside "admitted callback" and
+"mechanically unreachable"? The options:
+
+1. Amend ADR 0021 narrowly for self-terminating built-ins with no workspace,
+   store, network or persistent authority, proved per pin. That proof includes
+   the shutdown path's cleanup, SessionEnd hooks and OAuth-refresh wait.
+2. Keep Claude Code unavailable under v3.
+3. Wait for a pin whose active-pool exclusion can be shown without these
+   conditions.
+
+### Limits of this section
+
+- The source reading is of a minified bundle. The claim that no other path
+  registers or dispatches the tool rests on targeted searches:
+  - every chunk importing the name constant (six) was read at its use sites;
+  - the re-exported name is used at four sites (the deny set, the abort
+    classifier, the deferred-tool hint and the renderer table);
+  - every call site of the base list `hx()` in its chunk was read:
+    - the `--tools` narrowing and permission-map builders;
+    - the enabled-name and code-execution sets;
+    - the pool builder `ZA`;
+    - two unknown-tool message builders;
+    - the alias fallback, which is the only one that dispatches.
+
+    Two other chunks import `hx`. One resolves a teammate's inbox permission
+    request by name (B@204694478). The other is a UI confirmation preview
+    (B@204883652). Neither dispatches a tool call.
+
+  That is not an exhaustive proof.
+- Environment mutation is bounded by what was found: the
+  settings-to-environment path (B@181944710) and the entrypoint setter. The
+  first draft of this section said no runtime write to
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` was found. That was wrong: a
+  literal search misses the generic `Object.assign(process.env, …)`. Another
+  generic path may exist, which is why conditions 1–6 must be proved by
+  fixture rather than inferred.
+- The shutdown path's internal cleanup steps (B@189595800 onward) were not
+  individually traced.
+- The execution used the Windows build, not the Linux pin. It covers only the
+  configuration listed under [What was executed](#what-was-executed).
+- **Review.** One Codex pass (job `job_92d8fbf9d224`) attacked the first draft.
+  Its findings were reproduced against the binary and accepted:
+  - "RESOLVED" was overclaimed, given the settings-to-environment path;
+  - the effect inventory was incomplete: turn abort and full shutdown;
+  - "never registered" was inexact, since the tool is present in the base
+    collection and excluded from the active pool;
+  - the case (b) reading is an interpretation, not support for the verdict.
+
+  Its supporting claim that ToolSearch draws on the gated pool (B@186426900)
+  could not be confirmed at that offset and is not relied on.
 
 ## Reproducing this screen
 
