@@ -1694,10 +1694,16 @@ started its successor after observing the peer's EOF.
 - **Controller death (finding 6).** The claim is now supervisor-observed
   physical quiescence before successor disposal, not an in-process join. The
   death test starts `dispose_acquisition` at the kill and asserts that it
-  completes after the peer's EOF and that no process of this uid has the guard
-  open when it completes. A positive control first shows the scan finding the
-  live owner. Processes whose `/proc` entry this uid does not own are not
-  scanned; that is recorded in the helper.
+  completes after the peer's EOF and that, when it completes, neither the
+  controller nor the supervisor it launched still has the guard open. Those are
+  the only processes the guard is passed to: the supervisor launches
+  bubblewrap with `close_fds`. A positive control first shows the scan finding
+  both holding it. A candidate whose descriptors cannot be read fails the
+  test. The first form of this scan walked every process of the uid and hit
+  `EACCES` on `/proc/<pid>/fd` in the foundation lane (a same-uid process it
+  could not read, for example the non-dumpable namespace init); skipping those
+  would have read "could not see" as "no holder", so the scan is limited to
+  the known candidates instead.
 - **Mutants (finding 7).** Sixteen new mutants, 45-60: control in the pump, the
   routability terms and the zone, and `parse_connect`'s token count, method,
   version, port grammar, port bound, host grammar, unbracketed and bracketed

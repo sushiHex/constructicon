@@ -629,9 +629,11 @@ test uses a short acquisition root under `/tmp`.
   - Deadline: an actively streaming client is cut at the deadline.
   - Controller death: a child controller running relay plus exchange is killed
     with SIGKILL. A successor `dispose_acquisition` is started at the kill; it
-    completes only after the peer's EOF, and when it completes no process of
-    this uid still has the guard open (the same scan saw the live owner holding
-    it before the kill). It removes the stale socket. That is
+    completes only after the peer's EOF, and when it completes neither the
+    controller nor the supervisor it launched (the only processes the guard
+    is passed to) still has the guard open. Before the kill the same scan saw
+    both holding it, and an unreadable candidate fails the test. It removes
+    the stale socket. That is
     supervisor-observed physical quiescence, not an in-process join.
   - Controller death with a queue: a child controller floods a peer that never
     reads, so the host send queue toward the peer is non-empty

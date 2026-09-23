@@ -1221,7 +1221,9 @@ def test_require_current_refuses_a_replaced_socket(tmp_path):
 
 
 @LINUX
-async def test_a_replaced_real_socket_is_not_unlinked_and_exit_raises(tmp_path):
+async def test_a_replaced_real_socket_is_not_unlinked_and_exit_raises(
+    tmp_path, controlled_loopback,
+):
     relay = relay_for(tmp_path, 443)
     replacement: list = []
 
