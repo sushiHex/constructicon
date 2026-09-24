@@ -528,9 +528,12 @@ def test_no_evidence_file_contains_key_material():
         pytest.skip("N4 bridge evidence is written only by the provisioned Linux lane")
     files = sorted(Path(directory).glob("n4-*.json"))
     if os.environ.get("M8_BRIDGE_REQUIRED"):
+        # The root lane's inherited-custody proof runs earlier in the same
+        # foundation lane and writes into the same evidence directory, so its
+        # file is present too and is scanned with the bridge's own.
         assert [path.name for path in files] == [
-            "n4-bridge.json", "n4-lane-login.json", "n4-lane-startup.json",
-            "n4-pinned-client.json",
+            "n4-bridge.json", "n4-inherited-maintenance.json",
+            "n4-lane-login.json", "n4-lane-startup.json", "n4-pinned-client.json",
         ]
     for path in files:
         text = path.read_text()
