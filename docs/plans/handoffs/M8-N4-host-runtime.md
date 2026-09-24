@@ -580,6 +580,191 @@ GitHub comment, and the PR should link them.
    vendor file, and `L/native-codex` and `L/codex-models.json` hold the pinned
    inputs as CI lays them out.
 
+## Addendum: the controller environment (owner decision 2)
+
+Status: design for the follow-on slice. Base: `e26f438` (#105 merged). The
+same authority and ruling apply. Root runs one stock command, and the
+reviewed script stages, judges and verifies unprivileged.
+
+**What it is.** One tree, `/opt/constructicon-m8-controller` (`K` below),
+which is the service user's single `sys.path` entry. It holds the
+`constructicon` package from `C`'s tree and its runtime dependency closure
+from `uv.lock` at `C`, unpacked flat, as `pip --target` would lay it out, with
+no virtual environment, launcher script or absolute path inside. Owned by
+root; directories `0555`, files `0555` if the source is executable and `0444`
+otherwise (the runtime closure's rule). The ancestors `/opt` and `/` are
+root-only (the qualification set already proves `/opt`).
+
+**No installer tool on the host.** A wheel is a zip archive in a fixed layout
+(PEP 427). Once its digest is pinned, installing it `--target` style means
+unpacking it. So the reviewed script unpacks it with stdlib `zipfile`, and no
+`pip` or `uv` has to be obtained, pinned or custody-checked on the host.
+Considered and rejected:
+- the distribution's `python3-pip`, which is one more package to require and
+  a far larger unpacker than needed;
+- a pinned `uv` binary, one more vendor artifact under the tarball discipline
+  for a job `zipfile` does.
+
+The unpack rules, each refusing:
+- a member that is not a regular file or a directory (a zip symlink is
+  `external_attr >> 16` of type `S_IFLNK`);
+- a name that is not plain and relative (the vendor plan's pattern, no `..`);
+- a duplicate name inside the wheel, or across wheels and the package;
+- any `*.data/` directory (scripts, headers, data; none exists in today's
+  closure, so none is mapped);
+- a wheel whose members differ from its own `RECORD`, in set or in any
+  file's `sha256`. `RECORD` itself is the one unhashed entry.
+
+**Selection from `uv.lock` at `C`** (stdlib `tomllib`, Python 3.11+):
+- **Closure.** It starts at the package named `constructicon` with
+  `source = { editable = "." }` and follows only `dependencies`: no
+  `optional-dependencies` (the `mcp` extra) and no `dev-dependencies`. Today
+  that is `pydantic`, `pydantic-core`, `annotated-types`, `typing-extensions`
+  and `typing-inspection`.
+- **Fail-closed rules.** A dependency entry with a `marker`, `version` or
+  `source` qualifier refuses, and so does a name listed more than once in the
+  lock. None occurs in today's closure, so no PEP 508 evaluator is written;
+  the first conditional dependency makes the build refuse until one is
+  reviewed.
+- **Wheels.** Each package's `wheels` entries are parsed by filename (PEP 427,
+  compressed tag sets). The compatible tags are fixed constants:
+  - interpreter `py3`, `py312`, `cp312`, or `cp3X` with abi `abi3` for
+    X ≤ 12;
+  - abi `none`, `cp312` or `abi3`;
+  - platform `any`, `manylinux1/2010/2014_x86_64`, or
+    `manylinux_2_Y_x86_64` with Y ≤ the host's glibc minor.
+- **The glibc minor is observed** (`os.confstr("CS_GNU_LIBC_VERSION")`,
+  2.39 on Ubuntu 24.04) and recorded, and the major must be 2.
+- **Exactly one compatible wheel per package, or refuse.** Today
+  `pydantic-core` has exactly one, `cp312-cp312-manylinux_2_17_x86_64`, and
+  the other four are `py3-none-any`.
+- **Digest.** The wheel's `hash` in the lock (`sha256:…`) is the pin.
+- **Interpreter.** The script requires that it runs as CPython 3.12
+  (`sys.implementation.name`, `sys.version_info[:2]`), because it runs as the
+  same `/usr/bin/python3` that will run the controller. The cp312 tags are
+  therefore a statement about that interpreter, not a mirror of CI's 3.11.
+
+**The package from `C`.** Every blob under `src/constructicon/` at `C`
+(`git ls-tree -r`, mode `100644` only; any other mode refuses), extracted raw
+by `cat-file`, lands at `constructicon/…`. No `dist-info` is written for it,
+so `constructicon.__version__` reads `0+unknown` (`__init__.py:18-21`). Only
+the MCP server's version string uses it (`api/mcp/server.py:52`), and N4 does
+not.
+
+**Acquisition (operator, stock `curl`).** A read-only command,
+`controller-wheels C W`, prints one `sha256 url` line per selected wheel,
+taken from the lock at `C`. The operator fetches each URL into `$W/wheels/`
+with the same `curl -q --proto =https` as R11. The transport is untrusted; the
+lock's digest is the authority.
+
+**Commands** (the launch set's pattern, workspace `$HOME/m8-controller`):
+- `stage-controller C W` writes `$W/staging/controller` through
+  `materialize`.
+- `judge-controller C W` recomputes the plan and compares staging exactly
+  (names, modes, contents, owner = operator). It proves `cp`'s custody and
+  that `K` is absent with root-only ancestors.
+- `verify-controller C W` recomputes the plan from `C` and `$W/wheels/`,
+  never from staging, and compares the installed tree exactly (owner root).
+
+What they recompute is the lock at `C`, the package blobs at `C`, and each
+wheel file matched against its pin. The unpacked tree is a pure function of
+those three.
+
+**Root's sequence** is one command:
+`sudo /usr/bin/cp -R -P --preserve=mode --no-target-directory "$W/staging/controller" /opt/constructicon-m8-controller`.
+The `cp` argument is the launch set's (see "Privilege boundary").
+
+**How the service user runs it (the interface for N4).** One fixed command
+shape, a constant in the script and pinned by a test:
+
+```
+/usr/bin/python3 -I -S -B -c 'import sys; sys.path.insert(0, "/opt/constructicon-m8-controller"); import runpy; runpy.run_module(sys.argv[1], run_name="__main__", alter_sys=True)' <module> <arguments>
+```
+
+- `-I` drops the user site, `PYTHON*` and the script directory.
+- `-S` also drops the system `dist-packages`, so no distribution package can
+  shadow a pinned one.
+- `-B` stops the interpreter trying to write `__pycache__` into the
+  read-only tree.
+- `sys.argv[1]` names the module to run.
+
+The remaining `sys.path` is the interpreter's standard library and `K`.
+
+**Behavioural proof on the host.** After `verify-controller`, the runbook
+runs a fixed import check as `m8-service` (`sudo -u m8-service`, never root)
+with the shape above. The module is `constructicon.substrate.executors.linux`
+plus `pydantic_core`. The check prints each imported module's `__file__` and
+requires every one to be under `K` or the interpreter's standard library.
+
+**CI proof (verify lane, Linux, unprivileged).** A test gated on
+`M8_CONTROLLER_REQUIRED=1` does the following on `ubuntu-latest`, which has
+`/usr/bin/python3.12`:
+1. It selects the wheels from this checkout's `uv.lock` for 3.12 and the
+   runner's glibc, and downloads them with `urllib`. The download is test
+   code, not the script.
+2. It verifies them and materializes the plan through the script's writer,
+   then copies the tree with the real `cp` flags.
+3. It runs the fixed command shape under `/usr/bin/python3.12` to import
+   `constructicon.api`, `constructicon.substrate.executors.linux` and
+   `pydantic_core._pydantic_core`.
+4. It requires every module file to resolve under the copy or the standard
+   library.
+
+A new `verify.yml` step runs it after `uv run verify`, so it is the first
+execution of the tree under the host's interpreter version.
+
+**Failure and recovery.** Before the first vendor login:
+- the `pre-m8-controller` checkpoint; or
+- `sudo /usr/bin/rm -rf --one-file-system /opt/constructicon-m8-controller`,
+  then `verify-controller` itemizes it as absent.
+
+`K` holds no credential, so removing it later is not store maintenance.
+Replacing it for a new `C` is removal plus a fresh install under a new
+authorization, and it changes nothing in the launch set.
+
+**What this slice does not do.** It adds no runtime network: every file is
+local after R-acquisition. It builds no sdist, compiles nothing and runs no
+wheel's code. It writes no `.pth` or entry-point script. It pre-compiles no
+bytecode. And it does not decide N4's lane module, which is N4's
+(`codex_lane` in N4's design); the command shape takes the module as an
+argument.
+
+**Test plan.**
+- **Portable:**
+  - lock parsing and the closure: the exact set; the extra and dev excluded;
+    a marker, `version` or `source` qualifier refused; a duplicate name
+    refused;
+  - tag selection: each accepted tag, and a refusal for each of musllinux,
+    macOS, `cp311`, `cp313`, a glibc too new, two compatible wheels, and no
+    compatible wheel;
+  - a digest mismatch;
+  - the unpack rules, one test per refusal, and the `RECORD` set and digest;
+  - the package extraction's mode refusal;
+  - the command shape's constant;
+  - the runbook's root command and every `sudo`;
+  - the record's verdicts.
+- **Linux:** stage, judge, cp and verify accept; a staged or installed drift
+  is refused (a byte, a mode, an extra, a missing file); staging deleted
+  still verifies; refusal as root.
+- **Verify lane:** the import proof.
+
+**Mutants:**
+- the marker refusal, the duplicate-name refusal and the extra exclusion;
+- each tag rule and the glibc bound;
+- the one-compatible-wheel rule and the digest check;
+- the symlink, `.data`, duplicate and `RECORD` checks;
+- the source mode rule;
+- the judge's comparison and verify's recomputation (killed by the
+  staging-deleted control).
+
+**Limits.**
+- The closure is the lock's, as evaluated for 3.12 on x86_64 Linux. A lock
+  change is a new `C`.
+- `-S` is part of the interface: a controller that needed a system package
+  would fail closed, not fall back.
+- The glibc bound is observed, not pinned.
+- `constructicon.__version__` is `0+unknown` on the host.
+
 ## Review dispositions
 
 **Codex (`gpt-5.6-terra`, high, job `job_1e950b173db9`)**, one pass on the
