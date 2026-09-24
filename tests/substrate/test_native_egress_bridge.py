@@ -47,7 +47,11 @@ from tests.substrate.test_native_egress_containment import short_root as short_r
 from tests.substrate.test_operator_store_containment import binding as binding
 
 PROXY = f"http://127.0.0.1:{PROXY_PORT}"
-ZONE_ENVIRONMENT = {"HOME": "/tmp/home", "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "PWD": "/tmp"}
+ZONE_ENVIRONMENT = {
+    "HOME": "/tmp/home", "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "PWD": "/tmp",
+    # The N4 layout names the vendor home explicitly on every native launch.
+    "CODEX_HOME": "/tmp/home/.codex",
+}
 
 CLIENT = r"""
 import errno, json, os, socket, sys
@@ -297,7 +301,7 @@ async def test_the_pinned_client_reaches_a_controlled_peer_through_the_bridge(
         result, relay, _ = await run_native(
             bridge_launcher, binding, short_root, "n4-pinned-client", {},
             policy=policy_for(peer.port), command=("/usr/bin/python3", "-I", BOOTSTRAP),
-            conversation=conversation,
+            conversation=conversation, configuration=setup["config"].encode(),
         )
     finally:
         peer.close()

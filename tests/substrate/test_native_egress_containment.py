@@ -59,8 +59,8 @@ from tests.substrate.test_egress import (
 )
 from tests.substrate.test_linux_containment import launcher as launcher
 from tests.substrate.test_native_codex_mediation import write_evidence
+from tests.substrate.test_operator_store_containment import CONFIGURATION, hold, native_mount
 from tests.substrate.test_operator_store_containment import binding as binding
-from tests.substrate.test_operator_store_containment import hold, native_mount
 
 ALLOWED = "allowed.invalid"
 DECOY = "decoy.invalid"
@@ -467,7 +467,8 @@ def conversation_for(plan: dict, output: bytearray, streaming: asyncio.Event | N
 
 async def run_native(launcher, binding, root: Path, lease: str, plan: dict, *,
                      policy: EgressPolicy, seconds: float = 60.0, output=None, streaming=None,
-                     command=("/usr/bin/python3", "-I", "-c", CLIENT), conversation=None):
+                     command=("/usr/bin/python3", "-I", "-c", CLIENT), conversation=None,
+                     configuration: bytes = CONFIGURATION):
     """One contained native exchange inside its own relay; returns (result, relay)."""
     held = await hold(binding)
     paths = AcquisitionPaths(root, acquisition_id_for(lease, 1))
@@ -476,7 +477,9 @@ async def run_native(launcher, binding, root: Path, lease: str, plan: dict, *,
                         lambda: None)
     try:
         async with acquisition_guard(paths) as guard, relay as leaf:
-            with native_mount(binding, held, egress=leaf) as mount:
+            with native_mount(
+                binding, held, egress=leaf, configuration=configuration,
+            ) as mount:
                 result = await launcher.exchange(
                     command, workspace=None,
                     posture=Posture.READ, guard_fds=(guard, held.lock_fd), timeout_s=seconds,

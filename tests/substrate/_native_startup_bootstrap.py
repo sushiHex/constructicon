@@ -18,8 +18,15 @@ def prepare(setup=None):
     root = Path("/tmp/native-startup")
     root.mkdir()
     config = Path("/tmp/home/.codex")
-    config.mkdir()
-    (config / "config.toml").write_text(setup["config"])
+    config.mkdir(exist_ok=True)
+    sealed = config / "config.toml"
+    if sealed.exists():
+        # The N4 native layout already bound the sealed configuration read-only;
+        # the setup must name exactly those bytes, never replace them.
+        if sealed.read_text() != setup["config"]:
+            raise ValueError("the sealed configuration differs from the startup setup")
+    else:
+        sealed.write_text(setup["config"])
     for name, content in setup["files"].items():
         path = Path(name)
         if not path.is_absolute() or ".." in path.parts or not (

@@ -2571,3 +2571,19 @@ executed.**
 - The evidence files are `n3a-native-layout*.json`, not `n4-*`. The bridge
   lane asserts its exact `n4-*.json` set, and these proofs run in the N3a
   step.
+
+**Correction, found while building the N4 lane on top of this slice.** The
+first commit, `37db228`, broke the N4 bridge proof on Linux. The breakage
+was found by reading, not by execution. There were two causes:
+- **The startup bootstrap.** The bridge proof's bootstrap
+  (`_native_startup_bootstrap.py`) created `/tmp/home/.codex` and wrote
+  `config.toml` there. Under the layout, that directory already exists and
+  `config.toml` is a read-only bind, so both calls would have raised.
+  - The bootstrap now creates the directory with `exist_ok`.
+  - When the layout has bound a configuration, the bootstrap requires that
+    configuration to equal the setup's bytes and never writes it. When nothing
+    is bound (placement images), it writes the configuration as before.
+  - `run_native` gains a `configuration` argument, so the pinned-client
+    proof binds its telemetry configuration as the sealed one.
+- **The zone environment.** The bridge proofs' expected zone environment now
+  includes `CODEX_HOME`.
