@@ -248,9 +248,14 @@ def test_a_failed_leaf_dial_closes_the_client_with_no_byte(monkeypatch):
     monkeypatch.setattr(bridge, "_dial_leaf", refused)
     client, accepted = pair()
     thread = start(accepted)
-    client.sendall(b"CONNECT allowed.invalid:443 HTTP/1.1\r\n\r\n")
-    data, ended = read_to_eof(client)
+    # Joined before the client writes anything, and the client writes nothing.
+    # The forwarder dials before it reads, so a refused dial never depends on
+    # the vendor's bytes. A CONNECT sent after the forwarder closed drew an RST
+    # that discarded any reply still buffered, so a mutant that authored one
+    # passed or failed on thread timing (bridge mutant 5). With no write, the
+    # close is a plain FIN and an authored byte is always read.
     assert finished(thread)
+    data, ended = read_to_eof(client)
     assert ended, "the client stayed open after the leaf refused"
     assert data == b"", "the forwarder authored a reply"
     client.close()

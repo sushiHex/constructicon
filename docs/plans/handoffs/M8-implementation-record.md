@@ -2922,3 +2922,23 @@ Local evidence (Windows 11, Python 3.11):
   mount points, because a read-only root cannot gain one at launch.
 - `PYTHONIOENCODING=utf-8 uv run verify` on the rebased head: 3,353 tests
   passed and 648 were skipped for platform.
+
+**Bridge mutant 5 made deterministic (2026-09-24).** It had passed or failed
+depending on what ran before it, which is flakiness, not evidence.
+- **The shared cause was timing, not leftover state.** The killing test sent
+  the vendor's `CONNECT` and then read. When the forwarder thread finished
+  first, the `CONNECT` reached a closed socket. Its RST discarded the
+  client's receive buffer, so the mutant's authored `502` read as `b""` with
+  EOF. The mutant survived whenever the thread won the race.
+- **Reproduced on Windows with a scratch test:** the same mutant body loses
+  its reply to exactly that order, and keeps it when the client is already
+  reading.
+- **The fix.** The forwarder dials before it reads, so a refused dial never
+  depends on the client's bytes. The test therefore joins the forwarder
+  before the client does anything, and the client writes nothing. The close
+  is a plain FIN, and an authored byte is always read.
+- **Measured afterwards:**
+  - mutant 5 killed 15 of 15 times alone;
+  - mutant 6 killed 5 of 5 times;
+  - both killed in a run of the full bridge inventory directly after the
+    N3c inventory, the order that had failed.
