@@ -12,13 +12,13 @@ import json
 import os
 from collections import Counter
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import pytest
 
 from constructicon.core.errors import ContractViolation
 from constructicon.core.identity import digest
-from constructicon.substrate.executors import codex_lane
+from constructicon.substrate.executors import codex_lane, operator_store
 from constructicon.substrate.executors.codex_lane import (
     DENIAL_FAULT,
     EVIDENCE_DOMAIN,
@@ -319,34 +319,73 @@ def test_hold_must_lie_within_the_deadline():
         ])
 
 
-def test_the_binary_defaults_to_the_runtime_images_vendor_path(tmp_path, monkeypatch):
-    seen = {}
+class Recorded:
+    """A context manager that records entry and exit into a shared event list."""
+
+    def __init__(self, events: list, value: object) -> None:
+        self.events, self.value = events, value
+
+    def __enter__(self):
+        self.events.append("enter")
+        return self.value
+
+    def __exit__(self, *_):
+        self.events.append("exit")
+        return False
+
+
+def lane_under_inherited_custody(tmp_path, monkeypatch, *extra: str):
+    """Run the lane's ``main`` with only its custody and launch substituted."""
+
+    seen: dict[str, Any] = {"events": []}
 
     async def login(custody, launcher, policy, *, binary, **_):
         seen["binary"] = binary
         return {"faults": []}
 
-    class Withdrawn:
-        def __enter__(self):
-            return object()
-
-        def __exit__(self, *_):
-            return False
+    def inherited(root, key, lock_fd, **options):
+        seen["inherited"] = (root, key, lock_fd, options)
+        return Recorded(seen["events"], object())
 
     monkeypatch.setattr(codex_lane, "_launcher", lambda root: None)
     monkeypatch.setattr(codex_lane, "_policy", lambda path: None)
-    monkeypatch.setattr(codex_lane, "maintain_offline", lambda *a, **k: Withdrawn())
+    monkeypatch.setattr(codex_lane, "inherit_maintenance", inherited)
     monkeypatch.setattr(codex_lane, "maintenance_custody", lambda withdrawn: None)
     monkeypatch.setattr(codex_lane, "run_login", login)
     monkeypatch.setattr(codex_lane, "write_evidence", lambda path, evidence: "r")
     (tmp_path / "config.toml").write_text("", encoding="utf-8")
-    assert codex_lane.main([
+    seen["code"] = codex_lane.main([
         "login", "--store-root", "/s", "--key", "k", "--launch-root", "/r",
         "--configuration", str(tmp_path / "config.toml"), "--policy", "/p",
-        "--lane-dir", "/l", "--evidence", "/e",
-    ]) == 0
+        "--lane-dir", "/l", "--evidence", "/e", *extra,
+    ])
+    return seen
+
+
+def test_the_binary_defaults_to_the_runtime_images_vendor_path(tmp_path, monkeypatch):
+    seen = lane_under_inherited_custody(
+        tmp_path, monkeypatch, "--lock-fd", "7", "--floor", "3",
+    )
+    assert seen["code"] == 0
     assert seen["binary"] == codex_lane.RUNTIME_BINARY == "/opt/codex/bin/codex"
     assert codex_lane.RUNTIME_CATALOG == "/opt/codex-models.json"
+
+
+def test_a_maintenance_lane_proves_the_custody_its_parent_passed(tmp_path, monkeypatch):
+    seen = lane_under_inherited_custody(
+        tmp_path, monkeypatch, "--custody=maintenance", "--lock-fd=7", "--floor=3",
+    )
+    assert seen["inherited"] == (Path("/s"), "k", 7, {
+        "generation_floor": 3, "parent": os.getppid(),
+    })
+    assert seen["events"] == ["enter", "exit"]
+
+
+@pytest.mark.parametrize("extra", [(), ("--lock-fd", "7"), ("--floor", "3")],
+                         ids=["neither", "no-floor", "no-lock"])
+def test_a_maintenance_lane_never_starts_without_an_inherited_lock(tmp_path, monkeypatch, extra):
+    with pytest.raises(SystemExit):
+        lane_under_inherited_custody(tmp_path, monkeypatch, *extra)
 
 
 # --- custody -----------------------------------------------------------------
@@ -372,7 +411,7 @@ async def test_active_custody_is_the_providers_own_path_and_releases_its_lock(
 def test_maintenance_custody_carries_the_contexts_lock_check_and_floor(tmp_path, monkeypatch):
     world = StoreWorld(tmp_path)
     world.install(monkeypatch)
-    with codex_lane.maintain_offline(world.root, world.key, wait_s=0) as withdrawn:
+    with operator_store.maintain_offline(world.root, world.key, wait_s=0) as withdrawn:
         custody = codex_lane.maintenance_custody(withdrawn)
         assert custody.kind == "maintenance" and custody.lock_fd == withdrawn.lock_fd
         assert custody.detail == {"generation_floor": withdrawn.generation_floor}

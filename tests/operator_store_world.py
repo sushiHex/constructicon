@@ -187,6 +187,45 @@ class StoreWorld:
 
         monkeypatch.setattr(codex, "sealed_data_fd", sealed)
 
+    def fdinfo(self, *locks: str, ino: int | None = None) -> bytes:
+        """``/proc/self/fdinfo/<fd>`` as ``fs/proc/fd.c`` and ``fs/locks.c`` print it."""
+
+        ino = self.lock.ino if ino is None else ino
+        head = f"pos:\t0\nflags:\t02100002\nmnt_id:\t29\nino:\t{ino}\n"
+        return (head + "".join(f"lock:\t{n}: {lock}\n" for n, lock in enumerate(locks, 1))).encode()
+
+    def flock_line(
+        self, pid: int, *, ino: int | None = None, kind: str = "FLOCK  ADVISORY  WRITE",
+    ) -> str:
+        return f"{kind} {pid} 08:01:{self.lock.ino if ino is None else ino} 0 EOF"
+
+    def install_inheritance(self, monkeypatch, *, parent: int) -> int:
+        """One descriptor the root helper passed, holding the lock ``parent`` took.
+
+        Only the identity read and the fdinfo read are substituted; tests change
+        ``inherited`` and ``fdinfos`` to describe another descriptor.
+        """
+
+        fd = os.open(os.devnull, os.O_RDONLY)
+        self.inherited = {fd: self.lock}
+        self.fdinfos = {fd: self.fdinfo(self.flock_line(parent))}
+
+        def identity(descriptor: int) -> operator_store.FileHandleV1:
+            if descriptor not in self.inherited:
+                raise operator_store.ContractViolation(
+                    "native store physical identity is unavailable"
+                )
+            return self.inherited[descriptor]
+
+        def read_fdinfo(descriptor: int) -> bytes:
+            if descriptor not in self.fdinfos:
+                raise operator_store.ContractViolation("native store maintenance is unavailable")
+            return self.fdinfos[descriptor]
+
+        monkeypatch.setattr(operator_store, "_identity", identity)
+        monkeypatch.setattr(operator_store, "_read_fdinfo", read_fdinfo)
+        return fd
+
     def install_publisher(self, monkeypatch) -> list[int]:
         """Substitute only publication's provisioning primitives; returns fsyncs."""
 

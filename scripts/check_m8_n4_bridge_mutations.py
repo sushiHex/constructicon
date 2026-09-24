@@ -240,6 +240,21 @@ MUTANTS = (
         "before_spawn=lambda: None",
         T + "test_the_login_code_reaches_the_operator_and_never_the_evidence",
     ),
+    # --- the lane's side of an inherited maintenance (interface item 4) ---
+    (
+        "N4-L11 the lane proves its parent took the lock",
+        LANE + "main",
+        "parent=os.getppid()",
+        "parent=os.getpid()",
+        T + "test_a_maintenance_lane_proves_the_custody_its_parent_passed",
+    ),
+    (
+        "N4-L12 a maintenance lane requires an inherited lock and floor",
+        LANE + "main",
+        'if options.custody == "maintenance" and (options.lock_fd is None',
+        'if False and (options.lock_fd is None',
+        T + "test_a_maintenance_lane_never_starts_without_an_inherited_lock",
+    ),
 )
 
 

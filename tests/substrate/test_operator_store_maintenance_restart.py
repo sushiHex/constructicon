@@ -13,9 +13,11 @@ from __future__ import annotations
 import json
 import os
 import select
+import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -381,6 +383,116 @@ def test_a_reader_waiting_through_a_maintenance_cycle_refuses_after_it(protected
     write_evidence("n3c-waiting-reader.json", {
         "schema_version": 1, "reader_waited_through_cycle": True,
         "retired_selection_refused_after_wait": True, "new_generation_accepted": True,
+    })
+
+
+LANE_PROBE = r"""
+import fcntl, json, os, sys
+from pathlib import Path
+# First, before anything opens: what this process inherited (plus the listing's own).
+fds = sorted(int(name) for name in os.listdir('/proc/self/fd'))
+from constructicon.core.errors import ContractViolation
+from constructicon.substrate.executors import operator_store as stores
+report = Path(sys.argv[1])
+options = dict(argument[2:].split('=', 1) for argument in sys.argv[2:])
+root, key = Path(options['store-root']), options['key']
+lock_fd, floor = int(options['lock-fd']), int(options['floor'])
+status = dict(line.split(':', 1) for line in Path('/proc/self/status').read_text().splitlines())
+def verdict(fd, *, floor=floor, parent=os.getppid()):
+    try:
+        with stores.inherit_maintenance(
+            root, key, fd, generation_floor=floor, parent=parent,
+        ) as held:
+            os.close(held.open_credential())
+    except ContractViolation:
+        return 'refused'
+    return 'accepted'
+bundle = root / stores._bundle_token(key)
+stranger = os.open(bundle / 'retained.lock', os.O_RDWR | os.O_CLOEXEC)
+wrong = os.open(bundle / 'anchor.json', os.O_RDONLY | os.O_CLOEXEC)
+facts = {
+    'fds': fds, 'lock_fd': lock_fd, 'parent': os.getppid(),
+    'uid': status['Uid'].split(), 'gid': status['Gid'].split(), 'groups': status['Groups'].split(),
+    'caps': {name: status[name].strip() for name in ('CapInh', 'CapPrm', 'CapEff', 'CapAmb')},
+    'environment': dict(os.environ),
+    'stranger': verdict(stranger), 'wrong_identity': verdict(wrong),
+    'other_floor': verdict(lock_fd, floor=floor + 1),
+    'other_parent': verdict(lock_fd, parent=os.getpid()),
+    'inherited': verdict(lock_fd),
+}
+# Last: a description of its own. Held elsewhere is the same-run control that
+# the helper holds the lock; taken here, it must still refuse (pid is this one).
+own = os.open(bundle / 'retained.lock', os.O_RDWR | os.O_CLOEXEC)
+try:
+    fcntl.flock(own, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    facts['self_taken'] = 'held-elsewhere'
+else:
+    facts['self_taken'] = verdict(own)
+report.write_text(json.dumps(facts))
+"""
+
+
+def test_the_service_lane_inherits_only_the_held_lock_and_proves_it(protected_root):
+    """Host-runtime interface item 4: root withdraws; the service lane proves custody."""
+    root = protected_root
+    uid, gid = service_root(root)
+    first = publish(root, 1, runtime_uid=uid)
+    activate_fixture(root, 1)
+    credential = bundle_of(root) / "store" / "auth.json"
+    credential.write_bytes(b"harmless fixture\n")
+    os.chown(credential, uid, gid)
+    credential.chmod(0o600)
+    reports = Path(tempfile.mkdtemp(prefix="n4-lane-"))
+    os.chown(reports, uid, gid)
+    try:
+        inherited = reports / "inherited.json"
+        # The helper's own command line, as the operator runs it.
+        code = stores.main([
+            "maintain", f"--store-root={root}", f"--key={KEY}", "--",
+            sys.executable, "-c", LANE_PROBE, str(inherited),
+        ])
+        assert code == 0, "the lane probe failed before reporting"
+        seen = json.loads(inherited.read_text())
+        # The helper returned: the lock is free again, and the withdrawal stays.
+        with stores.maintain_offline(root, KEY, wait_s=0):
+            pass
+        assert fresh_read(root, first, as_service=True) == "refused"
+        alone = reports / "alone.json"
+        result = subprocess.run(
+            [sys.executable, "-c", LANE_PROBE, str(alone), f"--store-root={root}",
+             f"--key={KEY}", "--custody=maintenance", "--lock-fd=63", "--floor=1"],
+            user=uid, group=gid, extra_groups=[], env=dict(stores.LANE_ENVIRONMENT),
+            cwd="/", capture_output=True, text=True, timeout=60, check=False,
+        )
+        assert result.returncode == 0, result.stderr[-2000:]
+        unheld = json.loads(alone.read_text())
+    finally:
+        shutil.rmtree(reports)
+    assert seen["inherited"] == "accepted", "the real inherited custody was refused"
+    assert seen["self_taken"] == "held-elsewhere", "the helper did not hold the lock"
+    for control in ("stranger", "wrong_identity", "other_floor", "other_parent"):
+        assert seen[control] == "refused", control
+    assert seen["parent"] == os.getpid()
+    # Descriptors 0-2, the lock and the listing's own descriptor; nothing else.
+    others = [fd for fd in seen["fds"] if fd not in (0, 1, 2, seen["lock_fd"])]
+    assert seen["lock_fd"] in seen["fds"] and len(others) == 1, seen["fds"]
+    assert seen["uid"] == [str(uid)] * 4 and seen["gid"] == [str(gid)] * 4
+    assert seen["groups"] == []
+    assert set(seen["caps"].values()) == {"0000000000000000"}, seen["caps"]
+    assert seen["environment"] == stores.LANE_ENVIRONMENT
+    assert unheld["inherited"] == "refused", "a lane with no inherited lock was accepted"
+    assert unheld["self_taken"] == "refused", "a lock the lane took itself was accepted"
+    assert unheld["stranger"] == "refused"
+    write_evidence("n4-inherited-maintenance.json", {
+        "schema_version": 1, "credential_free_fixture": True,
+        "root_withdrew_and_held_the_lock": True, "lane_ran_as_service": True,
+        "supplementary_groups_cleared": True, "capabilities_cleared": True,
+        "fixed_environment": True, "only_the_lock_inherited": True,
+        "inherited_custody_accepted": True, "stranger_description_refused": True,
+        "wrong_identity_refused": True, "other_floor_refused": True,
+        "other_parent_refused": True, "no_inherited_lock_refused": True,
+        "self_taken_lock_refused": True, "withdrawal_outlives_the_helper": True,
     })
 
 

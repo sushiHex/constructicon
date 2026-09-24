@@ -658,6 +658,10 @@ composes existing parts only.
     `--hold` pauses after the readback is judged and before stdin closes. It
     is bounded by the lane deadline, and it exists only for control S6a.
 
+  `--custody maintenance` (the default) runs only under root's maintenance
+  helper, which sets `--lock-fd` and `--floor`; without them the lane
+  refuses to start (interface item 4). (Amended 2026-09-24.)
+
 `lane_dir` is a fresh `0700` directory under an operator-given root.
 - It holds only the relay's own directory, which the relay creates and removes
   (`egress.py:479-556`). The configuration is a memfd, not a file.
@@ -1166,17 +1170,24 @@ not retry. The only exception is an intended refusal in S6.
 - **S1. Pin.** Resolve `auth.openai.com` and `chatgpt.com` once on the host and
   write the pin record. Build the login policy (`auth.openai.com:443`) and the
   startup policy (both hosts).
-- **S2. First provisioning only.** Publish g1 (N3c procedure). Inside a
-  maintenance context, create an empty `auth.json` with
-  `install -m 0600 /dev/null <store>/auth.json`. A later re-login reuses the
-  existing file.
-- **S3. Login.** Inside `maintain_offline(...)`, run
-  `codex_lane login --policy login`. The owner opens the printed URL on their
-  own device and enters the one-time code. Record the evidence: exit status,
+- **S2. First provisioning only.** Publish g1 (N3c procedure). Before any
+  generation is active, so that no provider can accept, create an empty
+  `auth.json` owned by the store's owner:
+  `install -o m8-service -g m8-service -m 0600 /dev/null <store>/auth.json`.
+  (Amended 2026-09-24: the first draft omitted the owner, and
+  `check_credential` requires the store directory's owner.) A later re-login
+  reuses the existing file.
+- **S3. Login.** Root runs the maintenance helper, `operator_store maintain
+  --store-root R --key K -- <service interpreter> <lane entry> login --policy
+  login ...`. The helper starts the lane as `m8-service` holding only the
+  lock (interface item 4). The owner opens the printed URL on their own
+  device and enters the one-time code. Record the evidence: exit status,
   relay record, credential metadata.
-- **S4. Qualify, in the same context.** Run
-  `codex_lane startup --custody maintenance --expected pro`. It sends only the
-  four permitted methods. Record:
+- **S4. Qualify.** A second helper run, with the lane `startup --expected pro`.
+  Each helper run is its own maintenance context. No writer can run between
+  S3 and S4: publication and activation are the operator's, and the
+  withdrawal stays in place. (Amended 2026-09-24: the first draft said "in
+  the same context".) It sends only the four permitted methods. Record:
   - the gate verdict;
   - the seven readback fields;
   - the withheld notification names;
@@ -1190,7 +1201,8 @@ not retry. The only exception is an intended refusal in S6.
 - **S6. Controls.** Each one is an intended refusal, recorded as a pass only
   when it refuses.
   - **(a)** A startup lane holds the lock (`--hold` pauses before closing
-    stdin, within the deadline), and `maintain_offline(wait_s=0)` refuses.
+    stdin, within the deadline), and a second maintenance helper run with
+    `--wait 0` refuses.
   - **(b)** Startup with a policy that has no `chatgpt.com`: the readback
     fails, the run refuses before any thread, and
     `denied:destination` of at least 1 is recorded. This denial is declared
@@ -1208,8 +1220,8 @@ not retry. The only exception is an intended refusal in S6.
 - **S9. Restart.**
   1. Stop and start the VM.
   2. Every provider and helper refuses until maintenance runs (N3c decision 7).
-  3. `maintain_offline`, which re-anchors, then S4 qualification with no
-     login, then exit.
+  3. The maintenance helper (`maintain_offline` re-anchors) with the S4
+     qualification lane and no login.
   4. Publish g3 and activate g3.
   5. Active-path startup accepts, and g2 refuses.
   6. Record whether the S1 pins still served: the readback was judged through
@@ -1260,7 +1272,11 @@ Nothing else is assumed.
    The profiles must permit descriptor-sourced mounts.
 3. The `constructicon` package at commit C is importable by the service user's
    interpreter (never root), with the entry point
-   `python -I -m constructicon.substrate.executors.codex_lane`.
+   `python -I -m constructicon.substrate.executors.codex_lane`. That
+   interpreter and entry point form the lane command that root's maintenance
+   helper is given after `--` (item 4). The helper is part of the N3c
+   `operator_store` module that root runs from verified blobs, and it takes
+   the command as given.
 4. The operator-store bundle is provisioned as N3a/N3c specify. The N3c
    offline helpers (publish, maintain, activate) run as **root**, only from
    provenance-verified blobs of C via `/usr/bin/python3 -I`. That is the
@@ -1270,25 +1286,105 @@ Nothing else is assumed.
    first draft said the service user ran every offline helper, which
    contradicts that decision.)
 
-   **Consequence, open for decision.** Two facts together mean the lane
-   cannot enter `maintain_offline` itself:
+   **Inherited-lock custody (orchestrator decision, 2026-09-24).** Two facts
+   together mean the lane cannot enter `maintain_offline` itself:
    - N3c proves the service is refused at the withdrawal write
      (`test_the_service_holds_the_lock_but_cannot_withdraw`);
    - the launcher refuses to run as root.
 
-   A maintenance-held lane therefore has to *inherit* a root-held
-   maintenance context. The smallest form: the root helper, inside
-   `maintain_offline`, starts the lane as `m8-service` and passes it the
-   context's lock descriptor. The lane then:
-   - proves, by `fstat` identity, that the inherited descriptor is the
-     bundle's retained lock;
-   - re-checks this key's withdrawal and floor, as `StoreMaintenance.check()`
-     does;
-   - opens the credential relative to its own read of the store.
+   So a maintenance lane *inherits* a root-held maintenance context. The
+   constraints, as decided:
 
-   This is not built yet. Today `codex_lane --custody maintenance` enters
-   `maintain_offline` itself, which works only for a caller that may write
-   the bundle.
+   - **Root's side is part of the maintenance helper**
+     (`operator_store.run_under_maintenance`, command line
+     `operator_store maintain --store-root R --key K [--wait S]
+     [--service m8-service] -- LANE-COMMAND...`). Root therefore runs nothing
+     beyond the named exception.
+     - `maintain_offline` holds the lock and has made the withdrawal durable
+       before the lane starts.
+     - The lane starts as `m8-service`, with its supplementary groups cleared,
+       a fixed two-variable environment (`PATH`, `LANG`), `cwd` `/`, and no
+       capabilities.
+     - It inherits exactly the lock (`pass_fds`, `close_fds=True`), plus
+       descriptors 0-2, which are the operator's terminal where the login code
+       must appear. Every other descriptor is closed.
+     - The helper appends the store, the key, `--custody=maintenance`,
+       `--lock-fd` and `--floor` itself. It refuses a lane command that sets
+       any of them.
+     - It waits for the lane and only then leaves maintenance. Publication
+       and activation stay the operator's next steps. An interrupted helper
+       kills the lane before it leaves.
+   - **Privilege drop: `subprocess`'s own `user`/`group`/`extra_groups=[]`,
+     not `setpriv`.** It is the smaller option: no extra binary to pin, and
+     portable tests read the exact arguments. The drop is `setgroups([])`,
+     `setregid`, then `setreuid`, done in C between fork and exec with no
+     `preexec_fn`, so no other root work runs in the child. With every uid
+     non-zero, the kernel clears the permitted, effective and ambient
+     capability sets (capabilities(7)). The root-lane proof reads the child's
+     `/proc/self/status` to show it.
+   - **The lane proves custody before any credential access**
+     (`operator_store.inherit_maintenance`). In order:
+     1. `_identity(lock_fd)` equals the retained lock's identity from the
+        lane's own walk of the bundle. That is full `FileHandleV1`
+        equality, which is stricter than the across-boot stable fields,
+        because both observations are in one boot.
+     2. The inherited description *holds* the lock, and the lane's parent
+        took it (`_require_inherited_hold`). This reads
+        `/proc/self/fdinfo/<fd>`: it must contain exactly one `lock:` line,
+        an exclusive `FLOCK` on the lock's inode, whose pid is `getppid()`.
+     3. Under that lock: the anchor names this bundle, this key's withdrawal
+        is the current state, and its floor equals both `--floor` and the
+        highest generation present.
+
+     Then the lane opens the credential itself, `O_PATH` relative to its
+     own checked store descriptor (the existing path).
+   - **Why fdinfo and not a re-lock or `F_GETLK`.**
+     - `F_GETLK`/`F_OFD_GETLK` see POSIX and OFD locks, not the `flock`
+       lock the store uses.
+     - A non-blocking `flock` re-lock on the inherited descriptor succeeds
+       both when that description holds the lock and when the lock is free.
+       In the second case it succeeds by taking the lock, so it cannot tell
+       holding from taking.
+     - Linux lists a `flock` lock in a descriptor's fdinfo only when that
+       descriptor's own open file description owns it. `__show_fd_locks`
+       requires `filp == fl_file`, and `flock_make_lock` sets the owner to
+       `filp` (`fs/locks.c`, checked at v6.8). A stranger's descriptor of
+       the same file therefore lists nothing, even while the lock is held
+       elsewhere, and reading fdinfo never takes the lock.
+     - The recorded pid is the `tgid` that called `flock`. Requiring the
+       parent's pid also refuses a lock that the lane, or any service
+       process, took for itself.
+     - The residual: a service-user process could take the lock itself and
+       then start a lane. That gains nothing, because the service already
+       owns the store's contents (N3c's trusted-custody limit).
+   - **Tests, both directions.**
+     - Portable (`test_operator_store_inheritance.py`) refuses each of these
+       with the store unexposed:
+       - no inherited lock;
+       - a stranger description;
+       - a wrong identity;
+       - a lock the lane took itself;
+       - another inode;
+       - two locks;
+       - a shared or POSIX lock;
+       - an oversized report;
+       - an active selection;
+       - another key's withdrawal;
+       - a record, inventory or helper floor that differs;
+       - another anchor.
+     - It accepts the real inherited lock.
+     - Linux unit tests run the real kernel report, including a real
+       inherited description in a child process.
+     - Root lane (`test_operator_store_maintenance_restart.py`,
+       `n4-inherited-maintenance.json`): the helper's own command line starts
+       a probe as `m8-service`. The probe records its uid, gid, groups,
+       capability sets, environment and descriptors. It accepts the
+       inherited lock and refuses a stranger, a wrong identity, another
+       floor and another parent. A same-run control shows the helper holds
+       the lock. A probe started without the helper refuses both no lock
+       and a lock it took itself.
+     - Mutants N4-M5..M27 (`check_m8_n3c_mutations.py`) and N4-L11..L12
+       (`check_m8_n4_bridge_mutations.py`).
 5. A service-user-writable lane root that is short enough for the relay socket
    path, and a separate evidence directory.
 6. Host resolver access for S1, outside any zone.

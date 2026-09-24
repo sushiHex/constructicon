@@ -16,6 +16,11 @@ Two lanes, each one native launch in the real zone behind the relay:
   ``initialized``, ``account/read``, ``account/rateLimits/read``) under either
   maintenance (qualification) or the active selection.
 
+Maintenance is root's (host-runtime decision 1). Root's store helper withdraws
+and starts a maintenance lane as the service holding only the inherited lock
+(``operator_store.run_under_maintenance``). The lane proves that custody before
+anything else (``operator_store.inherit_maintenance``) and never runs as root.
+
 Evidence is a closed record written create-exclusive with ``completed`` last:
 a missing or incomplete file is a failed run. It never holds stdout, stderr
 text, an email, an account id, a token, credential bytes or a hostname outside
@@ -71,7 +76,7 @@ from constructicon.substrate.executors.operator_store import (
     BindingCheck,
     BindingStore,
     StoreMaintenance,
-    maintain_offline,
+    inherit_maintenance,
 )
 
 LANE_SCHEMA = 1
@@ -349,12 +354,14 @@ def _policy(path: Path) -> EgressPolicy:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="codex_lane")
+    parser = argparse.ArgumentParser(prog="codex_lane", allow_abbrev=False)
     parser.add_argument("lane", choices=("login", "startup"))
     parser.add_argument("--custody", choices=("maintenance", "active"), default="maintenance")
     parser.add_argument("--store-root", type=Path, required=True)
     parser.add_argument("--key", required=True)
     parser.add_argument("--sealed", type=Path, help="the active selection's store identity")
+    parser.add_argument("--lock-fd", type=int, help="the root helper's inherited lock")
+    parser.add_argument("--floor", type=int, help="the root helper's withdrawal floor")
     parser.add_argument("--launch-root", type=Path, required=True)
     parser.add_argument("--binary", default=RUNTIME_BINARY)
     parser.add_argument("--configuration", type=Path, required=True)
@@ -366,10 +373,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expect-denial", action="store_true")
     parser.add_argument("--hold", type=float, default=0.0)
     parser.add_argument("--deadline", type=float, default=120.0)
-    parser.add_argument("--wait", type=float, default=0.0)
     options = parser.parse_args(argv)
     if not 0 <= options.hold <= options.deadline:
         parser.error("--hold must lie within the deadline")
+    if options.custody == "active" and options.sealed is None:
+        parser.error("--custody active requires --sealed")
+    if options.custody == "maintenance" and (options.lock_fd is None or options.floor is None):
+        parser.error("a maintenance lane runs only under `operator_store maintain`")
     launcher = _launcher(options.launch_root)
     policy = _policy(options.policy)
     configuration = options.configuration.read_text(encoding="utf-8")
@@ -393,13 +403,11 @@ def main(argv: list[str] | None = None) -> int:
         await asyncio.sleep(options.hold)
         return evidence
 
-    if options.custody == "active" and options.sealed is None:
-        parser.error("--custody active requires --sealed")
-
     async def under_custody() -> dict[str, Any]:
         if options.custody == "maintenance":
-            with maintain_offline(
-                options.store_root, options.key, wait_s=options.wait,
+            with inherit_maintenance(
+                options.store_root, options.key, options.lock_fd,
+                generation_floor=options.floor, parent=os.getppid(),
             ) as withdrawn:
                 return await lane(maintenance_custody(withdrawn))
         sealed = NativeOperatorStoreIdentityV1.model_validate_json(

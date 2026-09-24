@@ -2759,3 +2759,57 @@ The state review's limits apply unchanged. In particular:
 - mid-turn spend fields are judged only through the post-turn readback;
 - `modelProvider/` recovery during an N5 turn now discards that turn, which
   is the new forward cost.
+
+### Inherited-lock custody (orchestrator decision, 2026-09-24)
+
+Host-runtime decision 1 runs the N3c helpers as root. The service is refused
+at the withdrawal write, and the launcher refuses root. So the lane's own
+`maintain_offline` call could not work on the host. The decided design and
+its reasons are in the state review ("Host-runtime interface required",
+item 4). What changed:
+
+- `operator_store.py`:
+  - `run_under_maintenance` and `main` (`maintain ... -- LANE-COMMAND`) are
+    root's side, inside the maintenance helper.
+    - The lane starts as the service by `subprocess`'s own
+      `user`/`group`/`extra_groups=[]`, not `setpriv`.
+    - Its environment is fixed, it inherits only the lock, the helper sets
+      the custody options itself, and the helper waits for the lane before
+      leaving maintenance.
+  - `inherit_maintenance` is the lane's side. It proves custody before
+    anything is exposed:
+    - the lock identity;
+    - that the description holds the lock, taken by the parent
+      (`/proc/self/fdinfo`);
+    - the anchor, the withdrawal, and a floor that matches the record, the
+      inventory and the helper.
+- `codex_lane.py`:
+  - `--custody maintenance` now takes `--lock-fd` and `--floor`, and uses
+    `inherit_maintenance` with `parent=os.getppid()`;
+  - without those options it refuses to start;
+  - `--wait` moved to the helper;
+  - `allow_abbrev=False`.
+- Runbook S2 to S4 are amended in the state review:
+  - the empty `auth.json` is created with the store owner's ownership before
+    any activation;
+  - login and qualification are separate helper runs.
+
+Local evidence (Windows 11, Python 3.11):
+
+- New `test_operator_store_inheritance.py`: 37 portable tests, plus one
+  Linux unit test of the real kernel report with a real inherited
+  description in a child.
+- The lane tests cover the new options.
+- Root lane: a new test in `test_operator_store_maintenance_restart.py` (the
+  N3c root step, so no workflow change), with evidence
+  `n4-inherited-maintenance.json`. **It has not executed.**
+- `check_m8_n3c_mutations.py` has 75 mutants: 23 new (N4-M5..M27) and 69
+  killed. The same 6 are Linux-only NOT PROVEN.
+- `check_m8_n4_bridge_mutations.py` has 25 mutants: 2 new (N4-L11, L12).
+  - Mutant 5 (a failed leaf dial authors no reply) was NOT PROVEN once, when
+    it ran directly after the N3c inventory. Rerun alone, it was killed. That
+    is the timing sensitivity recorded above; the bridge code is unchanged
+    here.
+  - The same 7 are Linux-only.
+- `PYTHONIOENCODING=utf-8 uv run verify` passed: 3,168 tests passed and 624
+  were skipped for platform.
