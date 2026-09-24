@@ -719,9 +719,15 @@ composes existing parts only.
 - `main(argv)` is a thin argument parser for the host operator. It does no
   interactive prompting of its own. It has two subcommands:
   - `login`;
-  - `startup --custody {maintenance,active} --expected PLAN [--hold SECONDS]`.
+  - `startup --custody {maintenance,active} [--expected PLAN] [--hold SECONDS]`.
     `--hold` pauses after the readback is judged and before stdin closes. It
     is bounded by the lane deadline, and it exists only for control S6a.
+    `--custody maintenance` (qualification) takes no `--expected`: the
+    parser refuses it, and the lane binds `QUALIFICATION_PLANS = (pro,
+    prolite)` itself (orchestrator decision 1). `--custody active` requires
+    `--expected PLAN`: the literal recorded at qualification, with no
+    alternatives. (Amended 2026-09-24, P1 review: an operator-supplied
+    `--alternative` could narrow or widen qualification by flag; it is gone.)
 
   `--custody maintenance` (the default) runs only under root's maintenance
   helper, which sets `--lock-fd` and `--floor`; without them the lane
@@ -1298,18 +1304,22 @@ not retry. The only exception is an intended refusal in S6.
   opens the printed URL on their own device and enters the one-time code.
   Record the evidence: exit status, relay record, credential metadata. A
   login that wrote no credential is a fault.
-- **S4. Qualify.** A second helper run, with the lane `startup --expected pro`.
-  Each helper run is its own maintenance context. No writer can run between
-  S3 and S4: publication and activation are the operator's, and the
-  withdrawal stays in place. (Amended 2026-09-24: the first draft said "in
-  the same context".) It sends only the four permitted methods. Record:
+- **S4. Qualify.** A second helper run, with the lane `startup`. Maintenance
+  custody takes no `--expected`: the parser refuses it, and the lane binds
+  `QUALIFICATION_PLANS = (pro, prolite)` itself, so the first authenticated
+  `account/read` must report one of them (orchestrator decision 1). Each
+  helper run is its own maintenance context. No writer can run between S3
+  and S4: publication and activation are the operator's, and the withdrawal
+  stays in place. (Amended 2026-09-24: the first draft said "in the same
+  context".) It sends only the four permitted methods. Record:
   - the gate verdict;
   - the seven readback fields;
   - the withheld notification names;
-  - the relay record.
+  - the relay record;
+  - the observed plan literal, which becomes the sealed expected plan for
+    S7's activation and every later `--expected` (decision 1).
 
-  If the plan refuses and names another literal (for example `'prolite'`),
-  stop for owner decision (open question 1).
+  If the plan refuses (neither `pro` nor `prolite`), stop for owner decision.
 - **S5. Exit, publish g2.** The qualification evidence digest becomes the two
   conformance revisions of the production launch identity (N3c decision 3:
   operator input, now content-addressed).
@@ -1329,9 +1339,9 @@ not retry. The only exception is an intended refusal in S6.
   (a) runs inside a fresh maintenance context. (b) and (c) run after S7 on the
   active path.
 - **S7. Activate g2** with the qualified identity.
-- **S8. Active-path startup.** Run `codex_lane startup --custody active` through
-  `BindingStore`. It must accept. Then `BindingStore` sealed at g1 refuses
-  (generation invalidation).
+- **S8. Active-path startup.** Run `codex_lane startup --custody active
+  --expected <the literal recorded at S4>` through `BindingStore`. It must
+  accept. Then `BindingStore` sealed at g1 refuses (generation invalidation).
 - **S9. Restart.**
   1. Stop and start the VM.
   2. Every provider and helper refuses until maintenance runs (N3c decision 7).
@@ -1612,9 +1622,15 @@ they supersede the design text above wherever the two differ.
    - If S4 refuses in the owner session: stop, report the observed literal to
      the orchestrator, and take no fallback.
 
-   The runbook's `--expected pro` becomes "the qualification run accepts
-   `{pro, prolite}` and records the literal; every later run expects that
-   recorded literal".
+   The runbook's S4 passes no `--expected` (maintenance custody refuses the
+   flag): qualification accepts `{pro, prolite}` and records the literal;
+   every later run's `--expected` must equal that recorded literal, one of
+   `{pro, prolite}`, with no alternatives. (Amended 2026-09-24, P1 review:
+   `--expected` previously defaulted to `pro` with an operator-supplied
+   `--alternative`, so an account reporting `prolite` at S4 refused and
+   stopped qualification before the owner could record a decision.
+   `codex_lane.py`'s `QUALIFICATION_PLANS` now names the pair, maintenance
+   custody binds both itself, and `--alternative` is gone.)
 2. **Section 7:** resolved. The path is traced and disabled at the source,
    and no denial is tolerated.
 3. **The layout move is a preparatory PR.** It covers the narrow

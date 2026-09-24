@@ -42,7 +42,7 @@ from constructicon.substrate.executors.operator_store import BindingCheck
 from tests.operator_store_world import StoreWorld
 from tests.substrate.test_codex_adapter import bare_launcher, clean_native
 from tests.substrate.test_codex_matrix import EIGHT
-from tests.substrate.test_codex_protocol import ACCOUNT_ID, EMAIL
+from tests.substrate.test_codex_protocol import ACCOUNT_ID, EMAIL, spend_result
 
 CONFIGURATION = 'model = "gpt-5.6-sol"\n'
 CODE = b"Enter this one-time code ABCD-1234 at https://auth.openai.com/codex/device\n"
@@ -419,6 +419,51 @@ async def test_an_undeclared_plan_is_a_fault_and_is_not_recorded_as_the_plan(tmp
     assert evidence["readback"] is None and evidence["methods_sent"] == FOUR[:3]
 
 
+# --- the qualification plan literal (P1: `QUALIFICATION_PLANS`) --------------
+
+
+def plan_native(plan: str):
+    """A clean native whose reported plan is ``plan`` in both the gate and the readback."""
+
+    return clean_native(
+        accounts=[{"result": {"account": {
+            "type": "chatgpt", "email": EMAIL, "planType": plan,
+        }, "requiresOpenaiAuth": True}}],
+        spends=[{"result": spend_result(planType=plan)}],
+    )
+
+
+def qualification_expected() -> ExpectedAccount:
+    """What ``main`` builds for maintenance-custody startup, regardless of ``--expected``."""
+
+    return ExpectedAccount(
+        plan_type=codex_lane.QUALIFICATION_PLANS[0],
+        alternatives=codex_lane.QUALIFICATION_PLANS[1:],
+    )
+
+
+@pytest.mark.parametrize("plan", ["pro", "prolite"])
+async def test_qualification_accepts_either_approved_plan_literal(tmp_path, plan):
+    _, evidence = await startup(tmp_path, plan_native(plan), expected=qualification_expected())
+    assert evidence["faults"] == [] and evidence["gate"] == {"completed": True, "plan": plan}
+
+
+async def test_qualification_refuses_a_plan_outside_the_approved_pair(tmp_path):
+    _, evidence = await startup(tmp_path, plan_native("plus"), expected=qualification_expected())
+    assert evidence["gate"] == {"completed": False, "plan": None} and evidence["faults"]
+
+
+async def test_active_custody_accepts_only_the_recorded_literal_with_no_alternatives(tmp_path):
+    """Decision 1: a later run expects exactly the literal sealed at qualification."""
+
+    recorded = ExpectedAccount(plan_type="prolite")
+    _, matched = await startup(tmp_path, plan_native("prolite"), expected=recorded)
+    assert matched["faults"] == [] and matched["gate"] == {"completed": True, "plan": "prolite"}
+
+    _, other = await startup(tmp_path, plan_native("pro"), expected=recorded)
+    assert other["gate"] == {"completed": False, "plan": None} and other["faults"]
+
+
 async def test_the_hold_runs_inside_the_live_exchange(tmp_path):
     """RL-3: the pause is the conversation's, before stdin closes."""
 
@@ -628,6 +673,36 @@ def test_the_command_line_never_runs_a_login_under_the_active_selection(tmp_path
         codex_lane.main(lane_command(tmp_path, "--custody", "active", "--sealed", "/x"))
     assert raised.type is SystemExit, raised.value
     assert seen["events"] == []
+
+
+def test_a_maintenance_lane_refuses_an_operator_supplied_expected(tmp_path, monkeypatch):
+    """P1 fix: qualification binds {pro, prolite} itself; no flag may narrow or widen it."""
+
+    seen = main_world(monkeypatch)
+    with pytest.raises(SystemExit):
+        codex_lane.main(lane_command(
+            tmp_path, "--lock-fd=7", "--floor=3", "--expected", "pro", lane="startup",
+        ))
+    assert seen["events"] == []
+
+
+def test_an_active_lane_requires_expected(tmp_path, monkeypatch):
+    seen = main_world(monkeypatch)
+    with pytest.raises(BaseException) as raised:
+        codex_lane.main(lane_command(
+            tmp_path, "--custody", "active", "--sealed", "/x", lane="startup",
+        ))
+    assert raised.type is SystemExit, raised.value
+    assert seen["events"] == []
+
+
+def test_a_maintenance_lane_binds_the_qualification_plans_itself(tmp_path, monkeypatch):
+    seen = main_world(monkeypatch)
+    assert codex_lane.main(lane_command(tmp_path, "--lock-fd=7", "--floor=3", lane="startup")) == 0
+    assert seen["options"]["expected"] == ExpectedAccount(
+        plan_type=codex_lane.QUALIFICATION_PLANS[0],
+        alternatives=codex_lane.QUALIFICATION_PLANS[1:],
+    )
 
 
 def test_the_login_deadline_covers_the_vendors_device_flow(tmp_path, monkeypatch):

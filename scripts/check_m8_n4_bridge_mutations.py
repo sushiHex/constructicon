@@ -526,6 +526,28 @@ MUTANTS = (
         "",
         T + "test_the_installed_launcher_binds_the_launch_sets_vendor",
     ),
+    # --- the qualification plan literal (P1 review, 2026-09-24) ---
+    (
+        "N4-L42 maintenance-custody startup refuses an operator-supplied --expected",
+        LANE + "main",
+        'if not login and options.custody == "maintenance" and options.expected is not None:',
+        "if False:",
+        T + "test_a_maintenance_lane_refuses_an_operator_supplied_expected",
+    ),
+    (
+        "N4-L43 active-custody startup requires --expected",
+        LANE + "main",
+        'if not login and options.custody == "active" and options.expected is None:',
+        "if False:",
+        T + "test_an_active_lane_requires_expected",
+    ),
+    (
+        "N4-L44 maintenance-custody startup binds QUALIFICATION_PLANS itself",
+        LANE + "main",
+        "alternatives=QUALIFICATION_PLANS[1:],",
+        "alternatives=(),",
+        T + "test_a_maintenance_lane_binds_the_qualification_plans_itself",
+    ),
 )
 
 

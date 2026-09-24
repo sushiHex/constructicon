@@ -98,6 +98,9 @@ LOGIN_ARGUMENTS = ("login", "--device-auth")
 STARTUP_ARGUMENTS = ("app-server", "--strict-config", "--stdio")
 STARTUP_METHODS = ("initialize", "initialized", "account/read", "account/rateLimits/read")
 """The owner's authorization for the startup lane, in order: nothing else is sent."""
+QUALIFICATION_PLANS = ("pro", "prolite")
+"""What the owner-attended S4 qualification may observe and seal (M8-N4-state-review.md,
+orchestrator decision 1); the operator cannot narrow or widen this with a flag."""
 RUNTIME_BINARY = VENDOR_MOUNT + "/bin/codex"
 RUNTIME_CATALOG = CATALOG_MOUNT
 """In-zone paths of the bound vendor tree's client and the bound model catalog."""
@@ -570,8 +573,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lane-dir", type=Path, required=True)
     parser.add_argument("--evidence", type=Path, required=True)
     parser.add_argument("--first-login", action="store_true")
-    parser.add_argument("--expected", default="pro")
-    parser.add_argument("--alternative", action="append", default=[])
+    parser.add_argument("--expected")
     parser.add_argument("--expect-denial", action="store_true")
     parser.add_argument("--hold", type=float, default=0.0)
     parser.add_argument("--deadline", type=float)
@@ -590,6 +592,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--custody active requires --sealed")
     if options.custody == "maintenance" and (options.lock_fd is None or options.floor is None):
         parser.error("a maintenance lane runs only under `operator_store maintain`")
+    if not login and options.custody == "maintenance" and options.expected is not None:
+        parser.error("maintenance-custody qualification binds {pro, prolite} itself; "
+                      "--expected is refused")
+    if not login and options.custody == "active" and options.expected is None:
+        parser.error("--custody active requires --expected")
     reservation = EvidenceFile(options.evidence)
     try:
         launcher = _launcher(options.launch_root)
@@ -605,12 +612,16 @@ def main(argv: list[str] | None = None) -> int:
                     deadline_s=deadline, out=sys.stdout.buffer,
                     first_login=options.first_login,
                 )
+            expected = (
+                ExpectedAccount(
+                    plan_type=QUALIFICATION_PLANS[0], alternatives=QUALIFICATION_PLANS[1:],
+                )
+                if options.custody == "maintenance"
+                else ExpectedAccount(plan_type=options.expected)
+            )
             return await run_startup(
                 custody, launcher, policy, executable=executable,
-                configuration=configuration,
-                expected=ExpectedAccount(
-                    plan_type=options.expected, alternatives=tuple(options.alternative),
-                ),
+                configuration=configuration, expected=expected,
                 lane_dir=options.lane_dir, deadline_s=deadline,
                 expect_denial=options.expect_denial, hold_s=options.hold,
             )
