@@ -28,6 +28,7 @@ from constructicon.core.grants import Posture
 from constructicon.core.identity import Digest, digest
 from constructicon.core.process import ProcessIO
 from constructicon.substrate._lifetime import finish_owned
+from constructicon.substrate.executors._egress_bridge import BRIDGE_SCRIPT
 from constructicon.substrate.executors._supervisor import NAMESPACE_SCRIPT
 from constructicon.substrate.executors.egress import ZONE_SOCKET, EgressSocket
 from constructicon.substrate.executors.operator_store import BindingCheck
@@ -342,6 +343,8 @@ class LinuxLauncher:
             if native_store.egress is not None:
                 native_store.egress.require_current()
                 args += ["--ro-bind", str(native_store.egress.path), ZONE_SOCKET]
+                # The proxy bridge travels only with the leaf (M8-N4-proxy-bridge.md).
+                command = ("/usr/bin/python3", "-I", BRIDGE_SCRIPT, *command)
         args += ["--chdir", "/workspace" if workspace is not None else "/tmp", "--", *command]
         return args
 

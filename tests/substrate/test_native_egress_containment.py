@@ -34,6 +34,7 @@ import pytest
 from constructicon.core.grants import Posture
 from constructicon.core.workspace import acquisition_id_for
 from constructicon.substrate.executors import egress
+from constructicon.substrate.executors._egress_bridge import PROXY_PORT
 from constructicon.substrate.executors.egress import (
     CHUNK_BYTES,
     EgressDestination,
@@ -167,6 +168,20 @@ def unix(path):
     finally:
         sock.close()
 
+def listening():
+    # Every listening TCP and bound UDP socket in the zone's own namespace.
+    found = []
+    for kind in ('tcp', 'tcp6', 'udp', 'udp6'):
+        for line in open('/proc/net/' + kind).read().splitlines()[1:]:
+            fields = line.split()
+            if kind.startswith('tcp') and fields[3] != '0A':
+                continue
+            address, port = fields[1].split(':')
+            raw = bytes.fromhex(address)
+            host = socket.inet_ntoa(raw[::-1]) if len(raw) == 4 else address
+            found.append([kind, host, int(port, 16)])
+    return sorted(found)
+
 def sockets():
     found = []
     for top, directories, files in os.walk('/'):
@@ -214,6 +229,8 @@ elif plan['mode'] == 'stream':
         results['stream_ended'] = type(exc).__name__
 else:
     allowed, decoy = plan['allowed_port'], plan['decoy_port']
+    # First, before this probe's own UDP socket is autobound by its sendto.
+    results['listening'] = listening()
     results['accepted'] = https(plan['allowed'], allowed, '/')
     redirect = https(plan['allowed'], allowed, '/redirect')
     results['redirect'] = redirect
@@ -446,7 +463,8 @@ def conversation_for(plan: dict, output: bytearray, streaming: asyncio.Event | N
 
 
 async def run_native(launcher, binding, root: Path, lease: str, plan: dict, *,
-                     policy: EgressPolicy, seconds: float = 60.0, output=None, streaming=None):
+                     policy: EgressPolicy, seconds: float = 60.0, output=None, streaming=None,
+                     command=("/usr/bin/python3", "-I", "-c", CLIENT), conversation=None):
     """One contained native exchange inside its own relay; returns (result, relay)."""
     held = await hold(binding)
     paths = AcquisitionPaths(root, acquisition_id_for(lease, 1))
@@ -456,9 +474,9 @@ async def run_native(launcher, binding, root: Path, lease: str, plan: dict, *,
     try:
         async with acquisition_guard(paths) as guard, relay as leaf:
             result = await launcher.exchange(
-                ("/usr/bin/python3", "-I", "-c", CLIENT), workspace=None,
+                command, workspace=None,
                 posture=Posture.READ, guard_fds=(guard, held.lock_fd), timeout_s=seconds,
-                conversation=conversation_for(plan, output, streaming),
+                conversation=conversation or conversation_for(plan, output, streaming),
                 native_store=NativeStoreMount(
                     path=held.store_path, lock_fd=held.lock_fd,
                     before_spawn=lambda: binding.check_held(held), egress=leaf,
@@ -472,7 +490,8 @@ async def run_native(launcher, binding, root: Path, lease: str, plan: dict, *,
 def facts_of(result, output: bytearray) -> dict:
     assert result.returncode == result.payload_returncode == 0, result
     facts = json.loads(bytes(output).strip().splitlines()[-1])
-    assert facts.get("ssl") is True, "ssl cannot import inside the production runtime"
+    assert "ssl" in facts, "the in-zone client's ssl fact is absent: it never reported it"
+    assert facts["ssl"] is True, "ssl cannot import inside the production runtime"
     return facts
 
 
@@ -534,7 +553,11 @@ async def test_the_zone_reaches_only_the_pinned_destination(
     assert facts["sni_mismatch"] == {"connect": "ok", "tls": "refused"}
     assert facts["ech"] == "refused"
     assert facts["tcp"] == errno.ENETUNREACH and facts["udp_dns"] == errno.ENETUNREACH
+    # The peer's port on the zone's own loopback refuses. The zone's only
+    # listener is the N4 proxy bridge's forwarder, on another, fixed port.
+    assert allowed.port != PROXY_PORT
     assert facts["loopback"] == errno.ECONNREFUSED
+    assert facts["listening"] == [["tcp", "127.0.0.1", PROXY_PORT]]
     assert facts["dns"] == "gaierror"
     assert facts["abstract"] == errno.ECONNREFUSED
     assert facts["unmounted"] == errno.ENOENT
@@ -566,7 +589,7 @@ async def test_the_zone_reaches_only_the_pinned_destination(
             "unmounted_socket_reachable_from_host": True,
         },
         "zone": {key: facts[key] for key in (
-            "tcp", "udp_dns", "loopback", "dns", "abstract", "unmounted", "sockets",
+            "tcp", "udp_dns", "loopback", "dns", "abstract", "unmounted", "sockets", "listening",
         )},
     })
 

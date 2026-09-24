@@ -11,6 +11,7 @@ from constructicon.core.errors import ContractViolation
 from constructicon.core.grants import Posture
 from constructicon.core.identity import digest
 from constructicon.substrate.executors import egress, linux
+from constructicon.substrate.executors._egress_bridge import BRIDGE_SCRIPT
 from constructicon.substrate.executors.egress import EgressSocket
 
 IDENTITY = (41, 97)
@@ -76,12 +77,26 @@ def test_a_current_egress_socket_gets_one_read_only_leaf(tmp_path):
     assert args.count("/vendor-egress.sock") == 1
     assert start < args.index("--")
     assert "--unshare-net" in args
+    # The proxy bridge travels only with the leaf, then the command unchanged.
+    assert args[args.index("--"):] == [
+        "--", "/usr/bin/python3", "-I", BRIDGE_SCRIPT, "/usr/bin/python3",
+    ]
 
 
 def test_no_egress_socket_means_no_leaf_and_the_namespace_stays_unshared(tmp_path):
     args = argv(tmp_path)
     assert "/vendor-egress.sock" not in args
     assert "--unshare-net" in args
+    assert args[args.index("--"):] == ["--", "/usr/bin/python3"], "a bridge without a leaf"
+    assert BRIDGE_SCRIPT not in args
+
+
+def test_a_worker_launch_never_gets_the_bridge(tmp_path):
+    args = launcher(tmp_path).argv(
+        ("/usr/bin/python3",), workspace=tmp_path / "workspace", posture=Posture.WRITE,
+    )
+    assert args[args.index("--"):] == ["--", "/usr/bin/python3"]
+    assert BRIDGE_SCRIPT not in args
 
 
 @pytest.mark.parametrize("case", ["identity", "regular-file", "foreign-owner", "missing"])

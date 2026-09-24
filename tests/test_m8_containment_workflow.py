@@ -27,6 +27,10 @@ PROOFS = {
         "foundation",
         "tests/substrate/test_native_egress_containment.py scripts/check_m8_n3b_mutations.py",
     ),
+    "Prove the N4 proxy bridge in the native zone": (
+        "foundation",
+        "tests/substrate/test_native_egress_bridge.py scripts/check_m8_n4_bridge_mutations.py",
+    ),
     "Prove bounded native startup without a provider route": (
         "lifecycle",
         "tests/substrate/test_native_startup.py scripts/check_m8_startup_mutations.py",
@@ -134,6 +138,9 @@ def test_lane_evidence_is_disjoint_and_bound_to_the_reviewed_head():
     assert "if-no-files-found: error" in text
     assert "n3a-*.json" in text
     assert "n3b-*.json" in text
+    assert "n4-*.json" in text
+    assert "M8_BRIDGE_REQUIRED=1" in text
+    assert "m8-bridge-runtime.json" in text
     assert "M8_EGRESS_REQUIRED=1" in text
     assert "codex-*.json" in text
     assert "duplex-*.json" in text
