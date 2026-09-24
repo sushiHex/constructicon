@@ -77,6 +77,99 @@ LAUNCH_PORTABLE = (
      "if True:", RUNTIME + "test_a_verifiers_own_observation_survives_its_failure"),
 )  # fmt: skip
 
+# The controller environment (the design's controller addendum).
+CONTROLLER = "tests/test_m8_controller_env.py::"
+CONTROLLER_PORTABLE = (
+    ("a qualified dependency refuses", MODULE + "controller_closure",
+     'set(dependency) == {"name"}', "True",
+     CONTROLLER + "test_a_qualified_dependency_refuses"),
+    ("a name locked twice refuses", MODULE + "controller_closure",
+     'package.get("name") not in packages', "True",
+     CONTROLLER + "test_a_name_locked_twice_refuses"),
+    ("the root must be the editable package", MODULE + "controller_closure",
+     'root is not None and root.get("source") == {"editable": "."}', "root is not None",
+     CONTROLLER + "test_the_closure_needs_its_editable_root_and_every_named_package"),
+    ("platform tags stop at the host glibc", MODULE + "platform_tags",
+     "range(5, glibc_minor + 1)", "range(5, glibc_minor + 2)",
+     CONTROLLER + "test_every_other_pairing_is_refused"),
+    ("legacy manylinux aliases obey the glibc bound", MODULE + "platform_tags",
+     " if minor <= glibc_minor}", "}", CONTROLLER + "test_every_other_pairing_is_refused"),
+    ("abi3 stops at cp312", MODULE + "accepted_triples", "range(2, 13)", "range(2, 14)",
+     CONTROLLER + "test_every_other_pairing_is_refused"),
+    ("tags are triples, not a product", MODULE + "accepted_triples",
+     'triples |= {(python, "none", "any") for python in ("cp312", "py312", "py3")}',
+     'triples |= {(python, abi, "any") for python in ("cp312", "py312", "py3")'
+     ' for abi in ("none", "cp312", "abi3")}',
+     CONTROLLER + "test_every_other_pairing_is_refused"),
+    ("exactly one compatible wheel", MODULE + "select_wheel", "len(found) == 1",
+     "len(found) >= 1", CONTROLLER + "test_the_selection_refuses_anything_but_one_pinned_wheel"),
+    ("a wheel's pin is a sha256", MODULE + "select_wheel",
+     're.fullmatch(r"sha256:[0-9a-f]{64}", digest) is not None', "True",
+     CONTROLLER + "test_the_selection_refuses_anything_but_one_pinned_wheel"),
+    ("the controller needs CPython 3.12", MODULE + "controller_selection",
+     'name == "cpython" and version == PYTHON_VERSION', "True",
+     CONTROLLER + "test_the_controller_needs_cpython_312"),
+    ("wheel members are regular files", MODULE + "wheel_entries",
+     "kind in (0, stat.S_IFREG)", "True", CONTROLLER + "test_an_unsafe_or_unrecorded_wheel_refuses"),
+    ("wheels carry no .data", MODULE + "wheel_entries",
+     'not name.split("/")[0].endswith(".data")', "True",
+     CONTROLLER + "test_an_unsafe_or_unrecorded_wheel_refuses"),
+    ("wheel member names are unique", MODULE + "wheel_entries",
+     "name not in entries and name not in files", "True",
+     CONTROLLER + "test_an_unsafe_or_unrecorded_wheel_refuses"),
+    ("wheel member names never climb", MODULE + "wheel_entries",
+     'and ".." not in PurePosixPath(name).parts', "and True",
+     CONTROLLER + "test_an_unsafe_or_unrecorded_wheel_refuses"),
+    ("wheel member names are bounded", MODULE + "wheel_entries",
+     "and len(name.encode()) <= WHEEL_NAME_BYTES", "and True",
+     CONTROLLER + "test_an_unsafe_or_unrecorded_wheel_refuses"),
+    ("members are exactly RECORD", MODULE + "wheel_entries", "listed == recorded", "True",
+     CONTROLLER + "test_an_unsafe_or_unrecorded_wheel_refuses"),
+    ("RECORD lists itself unhashed", MODULE + "wheel_entries",
+     'listed.pop(records[0], None) == ""', 'listed.pop(records[0], None) is not None',
+     CONTROLLER + "test_an_unsafe_or_unrecorded_wheel_refuses"),
+    ("wheel member count bounded", MODULE + "wheel_entries", "len(infos) <= WHEEL_MEMBERS",
+     "True", CONTROLLER + "test_every_extraction_bound_binds"),
+    ("wheel size bounded", MODULE + "wheel_entries",
+     "sum(i.file_size for i in infos) <= WHEEL_BYTES", "True",
+     CONTROLLER + "test_every_extraction_bound_binds"),
+    ("ZIP64 refused", MODULE + "wheel_entries", "require(not needs_zip64(info), ",
+     "require(True, ", CONTROLLER + "test_every_extraction_bound_binds"),
+    ("executable members keep one execute mode", MODULE + "wheel_entries",
+     "mode = 0o555 if (info.external_attr >> 16) & 0o111 else 0o444", "mode = 0o444",
+     CONTROLLER + "test_a_pinned_wheel_unpacks_as_pip_target_lays_it_out"),
+    ("package blobs are regular", MODULE + "package_blobs",
+     'entry[1] == b"100644" and entry[2] == b"blob"', "True",
+     CONTROLLER + "test_a_package_blob_that_is_not_mode_100644_refuses"),
+    ("no path installed twice", MODULE + "controller_entries",
+     '        require(name not in entries, f"{name} would be installed twice")', "        pass",
+     CONTROLLER + "test_the_tree_joins_the_package_and_every_wheel_once"),
+    # A plain function, not controller_plan: a decorated target cannot be swapped.
+    ("a wheel must match its lock digest", MODULE + "require_locked",
+     'hashlib.file_digest(stream, "sha256").hexdigest() == wheel["sha256"]', "True",
+     CONTROLLER + "test_a_wheel_must_be_the_one_the_lock_pins"),
+    ("the module name is popped", MODULE + "controller_command", "sys.argv.pop(1)",
+     "sys.argv[1]", CONTROLLER + "test_the_command_runs_a_module_as_python_m_would"),
+)  # fmt: skip
+
+CONTROLLER_LINUX = (
+    ("the check refuses outside modules", MODULE + "controller_check",
+     "outside = [f for f in files if not f.startswith(roots)]; ", "outside = []; ",
+     CONTROLLER + "test_the_check_refuses_a_module_loaded_from_outside_the_tree"),
+    ("the staged controller equals the plan", MODULE + "judge_controller",
+     'require(not differences, "the staged controller is not the reviewed plan")', "pass",
+     CONTROLLER + "test_staging_must_equal_the_recomputed_plan"),
+    ("cp is root's alone", MODULE + "judge_controller", "require_root_alone(root / CP)", "pass",
+     CONTROLLER + "test_each_controller_precondition_refuses_judgement"),
+    ("the controller is fresh-only", MODULE + "judge_controller", "absent(root / CONTROLLER)",
+     "True", CONTROLLER + "test_each_controller_precondition_refuses_judgement"),
+    ("verify recomputes, never reads staging", MODULE + "verify_controller",
+     'record["observed"] = observe_controller(root, listing, inventory)',
+     'record["observed"] = observe_controller(root, listing, '
+     "[e[:3] for e in tree_inventory(workspace / STAGING / CONTROLLER_STAGED)])",
+     CONTROLLER + "test_a_valid_controller_verifies_with_staging_deleted"),
+)  # fmt: skip
+
 # Linux-only: NOT PROVEN on other platforms is expected, never a kill.
 LAUNCH_LINUX = (
     ("staged trees equal the plan", MODULE + "judge_launch",
@@ -223,6 +316,7 @@ MUTANTS = (
         )
     ),
     *LAUNCH_PORTABLE,
+    *CONTROLLER_PORTABLE,
     # Linux-only below: NOT PROVEN on other platforms is expected, never a kill.
     (
         "never runs as root",
@@ -358,6 +452,7 @@ MUTANTS = (
         TESTS + "test_verify_refuses_drift_after_installation",
     ),
     *LAUNCH_LINUX,
+    *CONTROLLER_LINUX,
 )
 
 

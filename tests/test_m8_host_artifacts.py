@@ -191,14 +191,15 @@ def test_only_the_stager_writes() -> None:
         for n in ast.walk(node)
         if (n.attr if isinstance(n, ast.Attribute) else getattr(n, "id", None)) in writes
     }
-    assert writers == {"materialize", "stage_launch"}, writers
-    # The stager's only write is the call to the writer.
-    stager = {
-        n.attr if isinstance(n, ast.Attribute) else n.id
-        for n in ast.walk(functions["stage_launch"])
-        if isinstance(n, ast.Attribute | ast.Name)
-    }
-    assert stager & writes == {"materialize"}
+    assert writers == {"materialize", "stage_launch", "stage_controller"}, writers
+    # Each stager's only write is the call to the writer.
+    for name in ("stage_launch", "stage_controller"):
+        stager = {
+            n.attr if isinstance(n, ast.Attribute) else n.id
+            for n in ast.walk(functions[name])
+            if isinstance(n, ast.Attribute | ast.Name)
+        }
+        assert stager & writes == {"materialize"}, name
     writer = ast.unparse(functions["materialize"])
     assert "os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW" in writer
     # The builtin ``open`` is not used at all; every other ``os.open`` reads.
@@ -209,11 +210,13 @@ def test_only_the_stager_writes() -> None:
         for n in ast.walk(node)
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "open"
     ]
-    assert len(opens) == 4, opens
+    assert len(opens) == 6, opens
     for name, call in opens:
         assert (
             name == "materialize"
             or call.startswith("tarfile.open(fileobj=stream, mode='r:gz')")
+            # ZipFile.open reads unless given a mode, and none is given.
+            or call in ("archive.open(info)", "archives[wheel].open(member)")
             or ("os.O_RDONLY" in call and "O_WR" not in call and "O_CREAT" not in call)
         ), (name, call)
 
