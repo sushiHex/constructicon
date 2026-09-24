@@ -667,6 +667,33 @@ def test_the_first_login_flag_reaches_the_login_lane(tmp_path, monkeypatch):
     assert seen["options"]["first_login"] is True
 
 
+def test_the_lane_entry_point_runs_isolated_with_explicit_paths_only():
+    """The controller invocation's shape: ``-I -S -B -c``, no site, no ``.pth``.
+
+    The verify lane's import proof runs the real flat tree; this is the
+    portable half, with this checkout's ``src`` and dependencies named
+    explicitly instead of through site processing.
+    """
+
+    import subprocess
+    import sys
+    import sysconfig
+
+    source = Path(codex_lane.__file__).parents[3]
+    entry = (
+        "import sys; sys.path[:0] = sys.argv[1:3]; del sys.argv[1:3]; "
+        "from constructicon.substrate.executors.codex_lane import main; "
+        "raise SystemExit(main())"
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", "-B", "-c", entry, str(source),
+         sysconfig.get_paths()["purelib"], "--help"],
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert "--first-login" in result.stdout and "--binary" not in result.stdout
+
+
 # --- the bound vendor client (CC-3) ---------------------------------------------
 
 

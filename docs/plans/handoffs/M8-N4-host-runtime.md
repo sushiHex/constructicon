@@ -750,12 +750,12 @@ requires every one to be under `K` or the interpreter's standard library.
 2. It verifies them and materializes the plan through the script's writer,
    then copies the tree with the real `cp` flags.
 3. It runs the fixed command shape under `/usr/bin/python3.12` to import
-   every module in the script's `PROOF_MODULES`. Today these are
+   every module in the script's `PROOF_MODULES`. These are
    `constructicon.api`, `constructicon.substrate.executors.linux`,
-   `constructicon.substrate.executors.codex` (the production adapter) and
-   `pydantic_core._pydantic_core`. When N4 lands its lane module, the same
-   change adds it to `PROOF_MODULES`, so this proof and the host check run
-   the exact module N4 runs. A lane that needed a dependency outside the
+   `constructicon.substrate.executors.codex` (the production adapter),
+   `constructicon.substrate.executors.codex_lane` (N4's lane, added by the
+   change that lands it) and `pydantic_core._pydantic_core`. So this proof
+   and the host check run the exact module N4 runs. A lane that needed a dependency outside the
    closure (the `mcp` extra, for example) would then fail here, closed.
 4. It requires every module file to resolve under the copy or the standard
    library.
@@ -1227,7 +1227,7 @@ exit 0 with `"installed": true` and `"different": 0`.
 ```bash
 cd / && sudo -u m8-service env -i PATH=/usr/bin:/bin HOME=/home/m8-service LANG=C.UTF-8 \
   /usr/bin/python3 -I -S -B -c 'import importlib, json, sys, sysconfig; sys.path.insert(0, "/opt/constructicon-m8-controller"); [importlib.import_module(m) for m in sys.argv[1:]]; roots = ("/opt/constructicon-m8-controller/", sysconfig.get_paths()["stdlib"] + "/", sysconfig.get_paths()["platstdlib"] + "/"); files = sorted({f for f in (getattr(m, "__file__", None) for m in list(sys.modules.values())) if f}); outside = [f for f in files if not f.startswith(roots)]; print(json.dumps({"files": len(files), "outside": outside, "passed": not outside})); raise SystemExit(1 if outside else 0)' \
-  constructicon.api constructicon.substrate.executors.linux constructicon.substrate.executors.codex pydantic_core._pydantic_core \
+  constructicon.api constructicon.substrate.executors.linux constructicon.substrate.executors.codex constructicon.substrate.executors.codex_lane pydantic_core._pydantic_core \
   > "$W/check.json"
 echo "check exit $?"; cat "$W/check.json"
 ```

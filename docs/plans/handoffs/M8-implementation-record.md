@@ -2907,3 +2907,18 @@ Local evidence (Windows 11, Python 3.11):
   schema block to the code.
 - `PYTHONIOENCODING=utf-8 uv run verify` passed before the rebase: 3,284
   tests passed and 625 were skipped for platform.
+
+**After the rebase onto `88c033d` (#107, the controller environment).**
+- `PROOF_MODULES` gains `constructicon.substrate.executors.codex_lane`.
+  R19's module list in `M8-N4-host-runtime.md` is updated to match, and a
+  test holds the two equal. So the verify lane's import proof and the host
+  check load exactly the module N4 runs, under `python3 -I -S -B` from the
+  flat tree.
+- A portable test runs the lane's entry point as `-I -S -B -c`, with only
+  explicit `sys.path` entries. That rules out any reliance on site
+  processing, `.pth` files or a writable cache.
+- One conflict, in `runtime_plan`'s docstring: #107 already records the
+  bound-not-baked decision. The resolution keeps its words and adds the two
+  mount points, because a read-only root cannot gain one at launch.
+- `PYTHONIOENCODING=utf-8 uv run verify` on the rebased head: 3,353 tests
+  passed and 648 were skipped for platform.

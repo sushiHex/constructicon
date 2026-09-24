@@ -154,11 +154,12 @@ WHEEL_MEMBERS = 4096
 WHEEL_NAME_BYTES = 255
 WHEEL_BYTES = 64 << 20
 LEGACY_MANYLINUX = {"manylinux1": 5, "manylinux2010": 12, "manylinux2014": 17}
-# Every module the proofs import; N4 adds its lane module in the change that lands it.
+# Every module the proofs import, including N4's lane module, which the service runs.
 PROOF_MODULES = (
     "constructicon.api",
     "constructicon.substrate.executors.linux",
     "constructicon.substrate.executors.codex",
+    "constructicon.substrate.executors.codex_lane",
     "pydantic_core._pydantic_core",
 )
 VERDICTS = {
