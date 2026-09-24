@@ -606,8 +606,13 @@ Considered and rejected:
   for a job `zipfile` does.
 
 The unpack rules, each refusing:
-- a member that is not a regular file or a directory (a zip symlink is
-  `external_attr >> 16` of type `S_IFLNK`);
+- a member that is not a regular file or a directory. A zip symlink is
+  `external_attr >> 16` of type `S_IFLNK`. A member with no type bits is a
+  regular file, because some writers store only permission bits.
+- more than 4,096 members; a member name over 255 bytes; a declared
+  uncompressed total over 64 MiB, which is checked from the central
+  directory before any byte is extracted and again while streaming; or a
+  ZIP64 archive. None of the five wheels uses ZIP64.
 - a name that is not plain and relative (the vendor plan's pattern, no `..`);
 - a duplicate name inside the wheel, or across wheels and the package;
 - any `*.data/` directory (scripts, headers, data; none exists in today's
@@ -626,13 +631,21 @@ The unpack rules, each refusing:
   lock. None occurs in today's closure, so no PEP 508 evaluator is written;
   the first conditional dependency makes the build refuse until one is
   reviewed.
-- **Wheels.** Each package's `wheels` entries are parsed by filename (PEP 427,
-  compressed tag sets). The compatible tags are fixed constants:
-  - interpreter `py3`, `py312`, `cp312`, or `cp3X` with abi `abi3` for
-    X ≤ 12;
-  - abi `none`, `cp312` or `abi3`;
-  - platform `any`, `manylinux1/2010/2014_x86_64`, or
-    `manylinux_2_Y_x86_64` with Y ≤ the host's glibc minor.
+- **Wheels.** Each package's `wheels` entries are parsed by filename (PEP 427).
+  A compressed tag set expands to every (interpreter, abi, platform) triple,
+  and a wheel is compatible if any expanded triple is. The accepted triples
+  are an explicit subset of CPython 3.12's `sys_tags()` on this platform,
+  never a product of independent lists:
+  - `cp312-cp312-P`, `cp312-abi3-P`, and `cp3X-abi3-P` for 2 ≤ X ≤ 11, with P a
+    platform tag below;
+  - `cp312-none-P`, `py312-none-P` and `py3-none-P` for the platform tags;
+  - `cp312-none-any`, `py312-none-any` and `py3-none-any`.
+
+  The platform tags P are `manylinux_2_Y_x86_64` for 5 ≤ Y ≤ the host's glibc
+  minor, plus the legacy aliases `manylinux1_x86_64` (2_5),
+  `manylinux2010_x86_64` (2_12) and `manylinux2014_x86_64` (2_17), each
+  admitted only when its glibc is within that bound. Anything else refuses,
+  for example `py3-cp312-any`, `cp311-cp311-…`, `musllinux` and macOS.
 - **The glibc minor is observed** (`os.confstr("CS_GNU_LIBC_VERSION")`,
   2.39 on Ubuntu 24.04) and recorded, and the major must be 2.
 - **Exactly one compatible wheel per package, or refuse.** Today
@@ -705,8 +718,13 @@ requires every one to be under `K` or the interpreter's standard library.
 2. It verifies them and materializes the plan through the script's writer,
    then copies the tree with the real `cp` flags.
 3. It runs the fixed command shape under `/usr/bin/python3.12` to import
-   `constructicon.api`, `constructicon.substrate.executors.linux` and
-   `pydantic_core._pydantic_core`.
+   every module in the script's `PROOF_MODULES`. Today these are
+   `constructicon.api`, `constructicon.substrate.executors.linux`,
+   `constructicon.substrate.executors.codex` (the production adapter) and
+   `pydantic_core._pydantic_core`. When N4 lands its lane module, the same
+   change adds it to `PROOF_MODULES`, so this proof and the host check run
+   the exact module N4 runs. A lane that needed a dependency outside the
+   closure (the `mcp` extra, for example) would then fail here, closed.
 4. It requires every module file to resolve under the copy or the standard
    library.
 
@@ -764,6 +782,46 @@ argument.
   would fail closed, not fall back.
 - The glibc bound is observed, not pinned.
 - `constructicon.__version__` is `0+unknown` on the host.
+
+**The five wheels, as measured.** Measured on 2026-09-24 from the lock's URLs;
+each file hashed to its lock digest:
+- no `.data` directory, symlink, ZIP64, `.pth` file, directory entry or
+  duplicate name;
+- each `RECORD` lists exactly the other members;
+- every member is `0644` except the `pydantic_core` extension module, which
+  is `0755`;
+- some members carry permission bits with no file type.
+
+This is why the rules above refuse `.data` rather than map it, and why they
+create parent directories implicitly.
+
+**Design review (Codex, `gpt-5.6-terra`, high, job `job_c753c483b3f6`, the one
+pass).** Each premise was reproduced before disposition.
+- **Adopted.**
+  (P2) The tag rule read as independent interpreter, abi and platform lists,
+  so `py3-cp312-any` would have passed. It is now an explicit triple set,
+  with compressed tags expanded.
+  (P2) Extraction had no bounds. It now has member-count, name-length and
+  64 MiB uncompressed caps from the central directory, streaming
+  enforcement, and ZIP64 refusal.
+  (P2) The import proof named modules other than the one N4 will run. It now
+  imports `PROOF_MODULES`, which N4 extends with its lane module in the same
+  change that adds it; the production adapter is imported already.
+- **Rejected, with reasons.**
+  (P1) "The commands and the CI proof do not exist at this commit." The
+  commit was design-only, so this is the next step, not a defect in the
+  design.
+  (P1) "`cp --preserve=mode` can carry an ACL that grants `m8-service` write
+  while the mode still reads `0555`." The premise is false for POSIX ACLs.
+  Named-user and named-group entries are effective only up to the mask, and
+  when a mask exists `st_mode`'s group bits are the mask (acl(5)). A `0555`
+  mode therefore means no named entry can write, and the exact-mode check
+  refuses anything wider. This is M8-D2's recorded ACL argument, which the
+  launch set inherits unchanged. A default ACL on an installed directory
+  affects only entries created in it later, and only root can create them.
+- **Not verified by the review** and measured here instead: the wheels'
+  contents (above). The host's ACL state, glibc and interpreter are observed
+  by R-steps.
 
 ## Review dispositions
 
