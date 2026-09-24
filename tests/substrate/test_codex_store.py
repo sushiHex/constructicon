@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import stat
 import sys
 import threading
 from contextlib import asynccontextmanager
@@ -27,6 +28,7 @@ from constructicon.substrate.git.authority import GitAuthority
 from tests.gitworld import seed_authority
 from tests.operator_store_world import StoreWorld
 from tests.substrate.test_codex_adapter import (
+    CONFIGURATION,
     GRANTS,
     ScriptedLauncher,
     bare_launcher,
@@ -254,8 +256,16 @@ async def test_materialization_retains_one_store_lock_and_records_three_checks(
     assert world.lock_attempts == 1, "execute reacquired rather than retaining the same OFD"
     call = launcher.calls[0]
     assert call["guard_fds"] == (guard_fds[0], held.lock_fd)
-    assert call["native_store"].lock_fd == held.lock_fd
-    assert call["native_store"].path == held.store_path
+    mount = call["native_store"]
+    assert mount.lock_fd == held.lock_fd
+    # The zone receives exactly the credential descriptor opened relative to the
+    # held store, and the configuration as this provider's own sealed bytes.
+    assert world.credential_opens == [mount.credential_fd]
+    assert world.configurations == [provider.configuration.encode("utf-8")]
+    assert provider.configuration == CONFIGURATION
+    for descriptor in mount.mount_fds:
+        with pytest.raises(OSError):
+            os.fstat(descriptor)  # released once the launcher returned
     expected = BindingCheck(world.sealed.operator_binding_digest)
     assert (handle.initial_check, handle.launch_check, handle.terminal_check) == (
         expected, expected, expected,
@@ -473,3 +483,127 @@ async def test_reconcile_validates_the_complete_batch_before_any_closure(
     with pytest.raises(ContractViolation, match="stale invocation"):
         await provider.reconcile(current, (good, bad))
     assert disposed == []
+
+
+# --- the narrow layout's two descriptors (M8-N4-state-review.md, section 1) ---
+
+CREDENTIAL_SHAPES = {
+    "absent": None,
+    "world-readable": (stat.S_IFREG | 0o644, 1, 1000),
+    "second-name": (stat.S_IFREG | 0o600, 2, 1000),
+    "other-owner": (stat.S_IFREG | 0o600, 1, 1001),
+    "directory": (stat.S_IFDIR | 0o600, 1, 1000),
+    "symlink": (stat.S_IFLNK | 0o600, 1, 1000),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(CREDENTIAL_SHAPES))
+async def test_an_unqualified_credential_file_refuses_before_any_launch(
+    tmp_path, store_lifecycle, shape,
+):
+    world = store_lifecycle[0]
+    world.credential = CREDENTIAL_SHAPES[shape]
+    launcher = bare_launcher(clean_native())
+    provider = available_provider(tmp_path, store_lifecycle, launcher)
+    acquired = await provider.acquire(context())
+    await acquired.materialize()
+    outcome = await acquired.resource.execute(
+        TaskSpec(instruction="x"), workspace=None, grants=GRANTS,
+    )
+    assert outcome.status == "failure" and outcome.error.kind == "unavailable"
+    assert outcome.error.detail == operator_store.CREDENTIAL_UNAVAILABLE
+    assert launcher.calls == [] and world.configurations == []
+    # A descriptor that was opened and refused is closed, never leaked.
+    for descriptor in world.credential_opens:
+        with pytest.raises(OSError):
+            os.fstat(descriptor)  # closed in fact; numbers are reused
+    await provider.close(acquired, "discard")
+
+
+async def test_a_qualified_credential_file_is_the_accepting_twin(tmp_path, store_lifecycle):
+    world = store_lifecycle[0]
+    launcher = bare_launcher(clean_native())
+    provider = available_provider(tmp_path, store_lifecycle, launcher)
+    acquired = await provider.acquire(context())
+    await acquired.materialize()
+    outcome = await acquired.resource.execute(
+        TaskSpec(instruction="x"), workspace=None, grants=GRANTS,
+    )
+    assert outcome.status == "success"
+    assert len(launcher.calls) == 1 and len(world.credential_opens) == 1
+    await provider.close(acquired, "release")
+
+
+async def test_a_failed_seal_closes_the_credential_and_never_launches(
+    tmp_path, store_lifecycle, monkeypatch,
+):
+    world = store_lifecycle[0]
+
+    def refuse(data):
+        raise ContractViolation("the sealed native data differs from what was written")
+
+    monkeypatch.setattr(codex, "sealed_data_fd", refuse)
+    launcher = bare_launcher(clean_native())
+    provider = available_provider(tmp_path, store_lifecycle, launcher)
+    acquired = await provider.acquire(context())
+    await acquired.materialize()
+    outcome = await acquired.resource.execute(
+        TaskSpec(instruction="x"), workspace=None, grants=GRANTS,
+    )
+    assert outcome.status == "failure" and "sealed native data" in outcome.error.detail
+    assert launcher.calls == []
+    (credential,) = world.credential_opens
+    with pytest.raises(OSError):
+        os.fstat(credential)
+    await provider.close(acquired, "discard")
+
+
+async def test_a_cancelled_callers_mount_descriptors_close_only_after_its_exchange(
+    tmp_path, store_lifecycle,
+):
+    """A number freed while the exchange still runs could be reused by a spawn."""
+
+    release = asyncio.Event()
+    entered = asyncio.Event()
+    seen: dict[str, tuple[int, int]] = {}
+
+    @dataclass(frozen=True, kw_only=True)
+    class Holding(ScriptedLauncher):
+        async def exchange(self, *args, native_store=None, **kwargs):
+            seen["fds"] = native_store.mount_fds
+            entered.set()
+            try:
+                await asyncio.shield(release.wait())
+            except asyncio.CancelledError:
+                for descriptor in native_store.mount_fds:
+                    os.fstat(descriptor)  # still ours while the exchange runs
+                await release.wait()
+                raise
+            return self.result
+
+    base = bare_launcher(clean_native())
+    launcher = Holding(
+        runtime_root=base.runtime_root, expected_runtime=base.expected_runtime,
+        bubblewrap=base.bubblewrap, policy=base.policy,
+        expected_policy_sha256=base.expected_policy_sha256,
+        native=base.native, result=base.result,
+    )
+    provider = available_provider(tmp_path, store_lifecycle, launcher)
+    acquired = await provider.acquire(context())
+    await acquired.materialize()
+    caller = asyncio.create_task(acquired.resource.execute(
+        TaskSpec(instruction="x"), workspace=None, grants=GRANTS,
+    ))
+    await entered.wait()
+    caller.cancel()
+    await asyncio.sleep(0.05)
+    assert not caller.done(), "the cancelled caller returned before its exchange ended"
+    for descriptor in seen["fds"]:
+        os.fstat(descriptor)  # the exchange still runs, so both are still ours
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    for descriptor in seen["fds"]:
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
+    await provider.close(acquired, "discard")

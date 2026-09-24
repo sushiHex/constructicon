@@ -1,10 +1,11 @@
 """Credential-free Linux proofs; portable doubles earn no physical credit."""
 
 import asyncio
+import errno
 import json
 import os
 import sys
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 import pytest
@@ -12,13 +13,16 @@ import pytest
 from constructicon.core.grants import Posture
 from constructicon.core.native_operator import NativeOperatorStoreIdentityV1
 from constructicon.core.workspace import acquisition_id_for
-from constructicon.substrate.executors.linux import NativeStoreMount
+from constructicon.substrate.executors.linux import NativeStoreMount, sealed_data_fd
 from constructicon.substrate.executors.operator_store import BindingStore
 from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisition_guard
 from tests.substrate.test_linux_containment import launcher as launcher
 from tests.substrate.test_native_codex_mediation import write_evidence
 
 KEY = "n3a-fixture"
+CREDENTIAL = b"harmless fixture\n"
+"""The CI fixture's bytes at the store's one file (``build_m8_store_fixture.py``)."""
+CONFIGURATION = b'model = "fixture-only"\n'
 
 
 @pytest.fixture
@@ -45,41 +49,78 @@ async def hold(binding):
     )
 
 
+@contextmanager
+def native_mount(binding, held, *, before_spawn=None, egress=None, configuration=CONFIGURATION):
+    """The production layout's two descriptors for one launch, then closed.
+
+    The same calls the Codex handle makes: the credential opened relative to
+    the held store and checked, the configuration as a sealed memfd.
+    """
+
+    credential = binding.open_credential(held)
+    try:
+        sealed = sealed_data_fd(configuration)
+    except BaseException:
+        os.close(credential)
+        raise
+    try:
+        yield NativeStoreMount(
+            lock_fd=held.lock_fd, configuration_fd=sealed, credential_fd=credential,
+            before_spawn=before_spawn or (lambda: binding.check_held(held)), egress=egress,
+        )
+    finally:
+        os.close(credential)
+        os.close(sealed)
+
+
+def normalized(argv):
+    """A launch's arguments with only the two per-launch descriptor numbers erased."""
+
+    values = list(argv)
+    for flag in ("--ro-bind-data", "--bind-fd"):
+        values[values.index(flag) + 1] = "<fd>"
+    return tuple(values)
+
+
 async def collect(io):
     await io.close_stdin()
     while await io.read():
         pass
 
 
-async def test_only_native_can_read_and_write_the_store_with_no_private_fds(
-    binding, launcher, tmp_path,
-):
-    held = await hold(binding)
-    paths = AcquisitionPaths(tmp_path, acquisition_id_for("n3a-mount-proof", 1))
-    source = """
-import json, os
+LAYOUT = r"""
+import errno, json, os
 from pathlib import Path
-root = Path('/vendor-store')
-marker = root / 'fixture-marker'
-facts = {'read': marker.read_text() == 'harmless fixture\\n'}
-(root / 'write-probe').write_text('harmless native write')
-facts['write'] = (root / 'write-probe').read_text() == 'harmless native write'
-(root / 'write-probe').unlink()
-# Vendor state may grow directories as well as files. The physical root stays
-# the same; its changing link count is not a binding-generation change.
-(root / 'session-fixture').mkdir()
-(root / 'session-fixture' / 'state').write_text('harmless session')
-facts['subdirectory_write'] = (root / 'session-fixture' / 'state').is_file()
-facts['metadata_absent'] = not (root / 'anchor.json').exists()
-facts['lock_absent'] = not (root / 'retained.lock').exists()
+home = Path('/tmp/home/.codex')
+credential, config = home / 'auth.json', home / 'config.toml'
+
+def errno_of(action):
+    try:
+        action()
+    except OSError as exc:
+        return exc.errno
+    return 0
+
+facts = {'read': credential.read_bytes() == CREDENTIAL}
+# The pinned client's own save pattern: truncate and rewrite the same inode.
+with open(credential, 'r+b') as stream:
+    stream.truncate(0)
+    stream.write(b'native rewrite\n')
+    stream.flush()
+    os.fsync(stream.fileno())
+facts['write'] = credential.read_bytes() == b'native rewrite\n'
+staged = home / 'auth.json.pending'
+staged.write_bytes(b'replacement\n')
+facts['rename_errno'] = errno_of(lambda: os.replace(staged, credential))
+facts['unlink_errno'] = errno_of(lambda: credential.unlink())
+staged.unlink()
+facts['config'] = config.read_bytes() == CONFIGURATION
+facts['config_write_errno'] = errno_of(lambda: config.write_bytes(b'model = "decoy"\n'))
+facts['home_entries'] = sorted(os.listdir(home))
+facts['codex_home'] = os.environ.get('CODEX_HOME')
+facts['home'] = os.environ.get('HOME')
+facts['store_absent'] = not Path('/vendor-store').exists()
 facts['private_parent_absent'] = not Path(PRIVATE_PARENT).exists()
-try:
-    os.rename(root, '/tmp/rebound-store')
-except OSError:
-    facts['root_cannot_be_replaced'] = True
-else:
-    facts['root_cannot_be_replaced'] = False
-facts['home_disposable'] = os.environ['HOME'] == '/tmp/home'
 facts['workspace_absent'] = not any(Path('/workspace').iterdir())
 private_fds = []
 for fd in Path('/proc/self/fd').iterdir():
@@ -87,53 +128,112 @@ for fd in Path('/proc/self/fd').iterdir():
         target = os.readlink(fd)
     except FileNotFoundError:
         continue
-    if 'retained.lock' in target or '/guards/' in target or 'anchor.json' in target:
+    if any(name in target for name in (
+        'retained.lock', '/guards/', 'anchor.json', 'auth.json', 'memfd:',
+    )):
         private_fds.append(fd.name)
-facts['private_fds_absent'] = not private_fds
+facts['private_fds'] = private_fds
 print(json.dumps(facts), flush=True)
 """
-    source = source.replace("PRIVATE_PARENT", repr(str(held.store_path.parent)))
+
+
+async def test_the_native_layout_binds_only_the_credential_and_the_sealed_configuration(
+    binding, launcher, tmp_path,
+):
+    """L1 (M8-N4-state-review.md): two host objects in a disposable home."""
+
+    held = await hold(binding)
+    paths = AcquisitionPaths(tmp_path, acquisition_id_for("n4-layout-proof", 1))
+    source = (
+        LAYOUT.replace("PRIVATE_PARENT", repr(str(held.store_path.parent)))
+        .replace("CREDENTIAL", repr(CREDENTIAL)).replace("CONFIGURATION", repr(CONFIGURATION))
+    )
+    host_credential = held.store_path / "auth.json"
+    inode = host_credential.stat().st_ino
     try:
         async with acquisition_guard(paths) as guard:
-            result = await launcher.exchange(
-                ("/usr/bin/python3", "-I", "-c", source), workspace=None,
-                posture=Posture.READ, guard_fds=(guard, held.lock_fd), timeout_s=10,
-                conversation=collect,
-                native_store=NativeStoreMount(
-                    path=held.store_path, lock_fd=held.lock_fd,
-                    before_spawn=lambda: binding.check_held(held),
-                ),
-            )
+            with native_mount(binding, held) as mount:
+                result = await launcher.exchange(
+                    ("/usr/bin/python3", "-I", "-c", source), workspace=None,
+                    posture=Posture.READ, guard_fds=(guard, held.lock_fd), timeout_s=10,
+                    conversation=collect, native_store=mount,
+                )
             assert result.returncode == result.payload_returncode == 0, result
             facts = json.loads(result.stdout)
-            assert set(facts) == {
-                'read', 'write', 'subdirectory_write', 'metadata_absent', 'lock_absent',
-                'private_parent_absent', 'root_cannot_be_replaced',
-                'home_disposable', 'workspace_absent', 'private_fds_absent',
-            }, facts
-            assert all(value is True for value in facts.values()), facts
+            denied = {errno.EROFS, errno.EACCES, errno.EPERM}
+            assert facts["read"] is True and facts["write"] is True, facts
+            assert facts["rename_errno"] == errno.EBUSY, facts
+            assert facts["unlink_errno"] == errno.EBUSY, facts
+            assert facts["config"] is True and facts["config_write_errno"] in denied, facts
+            assert facts["home_entries"] == ["auth.json", "config.toml"], facts
+            assert facts["codex_home"] == "/tmp/home/.codex" and facts["home"] == "/tmp/home"
+            assert facts["store_absent"] and facts["private_parent_absent"], facts
+            assert facts["workspace_absent"] and facts["private_fds"] == [], facts
+            # The zone's write reached the store's own inode, through the bind.
+            assert host_credential.read_bytes() == b"native rewrite\n"
+            assert host_credential.stat().st_ino == inode
+            assert sorted(os.listdir(held.store_path)) == ["auth.json"]
             assert binding.check_held(held).binding_digest == binding.sealed.operator_binding_digest
             worker = await launcher.run(
                 ("/usr/bin/python3", "-I", "-c",
-                 "from pathlib import Path; print(not any(Path('/vendor-store').iterdir()))"),
+                 "from pathlib import Path; print(not Path('/vendor-store').exists() "
+                 "and not Path('/tmp/home/.codex').exists())"),
                 workspace=None, posture=Posture.READ, guard_fds=(guard,), timeout_s=10,
             )
             assert worker.returncode == worker.payload_returncode == 0, worker
             assert worker.stdout.strip() == b"True"
-            write_evidence("n3a-native-store.json", {
+            write_evidence("n3a-native-layout.json", {
                 "schema_version": 1, "credential_free_fixture": True,
                 "vendor_conformance_qualified": False,
                 "launch_revision": str(launcher.revision),
                 "binding_digest": str(binding.sealed.operator_binding_digest),
-                "native_facts": facts, "ordinary_worker_store_absent": True,
-                "terminal_binding_check_completed": True,
+                "native_facts": facts, "in_place_write_kept_the_store_inode": True,
+                "ordinary_worker_layout_absent": True,
             })
     finally:
-        # Fixture data only; retain the directory through the terminal check.
-        child = held.store_path / 'session-fixture'
-        if child.is_dir():
-            (child / 'state').unlink(missing_ok=True)
-            child.rmdir()
+        host_credential.write_bytes(CREDENTIAL)
+        binding.close_held(held)
+
+
+async def test_the_zone_receives_the_checked_object_not_whatever_the_path_names(
+    binding, launcher, tmp_path,
+):
+    """Descriptor binding: a path swapped after the check never reaches the zone."""
+
+    held = await hold(binding)
+    paths = AcquisitionPaths(tmp_path, acquisition_id_for("n4-layout-swap", 1))
+    store = held.store_path
+    original, substitute = store / "auth.json.checked", store / "auth.json.substitute"
+    swapped: list[bool] = []
+
+    def swap_then_check():
+        substitute.write_bytes(b"substituted\n")
+        substitute.chmod(0o600)
+        os.rename(store / "auth.json", original)
+        os.rename(substitute, store / "auth.json")
+        swapped.append(True)
+        return binding.check_held(held)
+
+    try:
+        async with acquisition_guard(paths) as guard:
+            with native_mount(binding, held, before_spawn=swap_then_check) as mount:
+                result = await launcher.exchange(
+                    ("/usr/bin/python3", "-I", "-c",
+                     "print(open('/tmp/home/.codex/auth.json', 'rb').read().decode(), end='')"),
+                    workspace=None, posture=Posture.READ, guard_fds=(guard, held.lock_fd),
+                    timeout_s=10, conversation=collect, native_store=mount,
+                )
+        assert swapped == [True]
+        assert result.returncode == result.payload_returncode == 0, result
+        assert result.stdout == CREDENTIAL, "the zone saw the path's object, not the checked one"
+        write_evidence("n3a-native-layout-descriptor.json", {
+            "schema_version": 1, "path_swapped_after_check": True,
+            "zone_saw_the_checked_object": True,
+        })
+    finally:
+        if original.exists():
+            os.replace(original, store / "auth.json")
+        substitute.unlink(missing_ok=True)
         binding.close_held(held)
 
 

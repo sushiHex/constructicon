@@ -18,6 +18,8 @@ SELECTION_TEST = "tests/substrate/test_operator_store_selection.py::"
 PUBLICATION_TEST = "tests/substrate/test_operator_store_publication.py::"
 PUBLISH_FAULT_TEST = "tests/substrate/test_operator_store_publish_faults.py::"
 METADATA_TEST = "tests/substrate/test_operator_store_metadata.py::"
+CREDENTIAL_TEST = "tests/substrate/test_operator_store_credential.py::"
+LAYOUT_TEST = TEST + "test_the_native_layout_binds_two_descriptors_into_a_disposable_codex_home"
 
 MUTANTS = (
     (
@@ -53,39 +55,39 @@ MUTANTS = (
         TEST + "test_native_store_and_worker_workspace_are_mutually_exclusive",
     ),
     (
-        "native store mount is present",
+        "native store layout is present",
         LAUNCHER + "LinuxLauncher.argv",
         "if native_store is not None:",
         "if False:",
-        TEST + "test_native_store_has_one_fixed_destination_and_keeps_home_disposable",
+        TEST + "test_the_native_layout_binds_two_descriptors_into_a_disposable_codex_home",
     ),
     (
-        "native store destination is fixed",
+        "the credential is bound by its descriptor, never a path",
         LAUNCHER + "LinuxLauncher.argv",
-        '"/vendor-store"',
-        '"/changed-store"',
-        TEST + "test_native_store_has_one_fixed_destination_and_keeps_home_disposable",
+        '"--bind-fd", str(native_store.credential_fd)',
+        '"--bind", str(native_store.credential_fd)',
+        TEST + "test_the_native_layout_binds_two_descriptors_into_a_disposable_codex_home",
     ),
     (
         "native store does not replace disposable HOME",
         LAUNCHER + "LinuxLauncher.argv",
         '"--setenv", "HOME", "/tmp/home"',
-        '"--setenv", "HOME", "/vendor-store"',
-        TEST + "test_native_store_has_one_fixed_destination_and_keeps_home_disposable",
+        '"--setenv", "HOME", "/tmp/home/.codex"',
+        TEST + "test_the_native_layout_binds_two_descriptors_into_a_disposable_codex_home",
     ),
     (
         "native store launch keeps networking unshared",
         LAUNCHER + "LinuxLauncher.argv",
         '"--unshare-net"',
         '"--share-net"',
-        TEST + "test_native_store_has_one_fixed_destination_and_keeps_home_disposable",
+        TEST + "test_the_native_layout_binds_two_descriptors_into_a_disposable_codex_home",
     ),
     (
-        "native store locator is absolute",
+        "native layout descriptors are distinct",
         LAUNCHER + "NativeStoreMount.__post_init__",
-        "if not self.path.is_absolute():",
-        "if False:",
-        TEST + "test_native_store_requires_an_absolute_private_locator",
+        "or len(set(fds)) != len(fds)",
+        "or False",
+        TEST + "test_the_native_layout_requires_three_distinct_descriptors",
     ),
     (
         "absent native store cannot be made available by empty reasons",
@@ -364,6 +366,150 @@ MUTANTS = (
         'raise OSError("short write while publishing native store metadata")',
         "count = 1",
         PUBLICATION_TEST + "test_short_metadata_write_refuses_and_removes_its_private_temporary",
+    ),
+    # --- the N4 narrow layout (M8-N4-state-review.md, section 1) ---
+    (
+        "L1 the credential must be a regular file",
+        STORE + "check_credential",
+        "not stat.S_ISREG(mode) or ",
+        "",
+        CREDENTIAL_TEST + "test_an_unqualified_credential_refuses_and_closes_what_it_opened",
+    ),
+    (
+        "L2 the credential has exactly one name",
+        STORE + "check_credential",
+        "links != 1 or ",
+        "",
+        CREDENTIAL_TEST
+        + "test_an_unqualified_credential_refuses_and_closes_what_it_opened[second-name]",
+    ),
+    (
+        "L3 the credential belongs to the store owner",
+        STORE + "check_credential",
+        "uid != owner_uid",
+        "False",
+        CREDENTIAL_TEST
+        + "test_an_unqualified_credential_refuses_and_closes_what_it_opened[other-owner]",
+    ),
+    (
+        "L4 the credential mode is exactly 0600",
+        STORE + "check_credential",
+        "or stat.S_IMODE(mode) != _CREDENTIAL_MODE",
+        "or False",
+        CREDENTIAL_TEST + "test_only_mode_0600_passes",
+    ),
+    (
+        "L5 the owner compared is the store directory's",
+        STORE + "open_credential",
+        "check_credential(fd, opened.store_identity.uid)",
+        "check_credential(fd, 1000)",
+        CREDENTIAL_TEST + "test_the_owner_is_the_store_directorys_not_a_process_uid",
+    ),
+    (
+        "L6 a refused credential descriptor is closed",
+        STORE + "open_credential",
+        "        _close(fd)\n        raise",
+        "        raise",
+        CREDENTIAL_TEST
+        + "test_an_unqualified_credential_refuses_and_closes_what_it_opened[group-readable]",
+    ),
+    (
+        "L7 the credential is opened without following a link",
+        STORE + "_open_credential_fd",
+        "_O_PATH | _O_NOFOLLOW | _O_CLOEXEC",
+        "_O_PATH | _O_CLOEXEC",
+        CREDENTIAL_TEST + "test_the_real_open_is_path_only_no_follow_and_relative_to_the_store",
+    ),
+    (
+        "L8 the credential is opened path-only, so it can never be read",
+        STORE + "_open_credential_fd",
+        "_O_PATH | _O_NOFOLLOW | _O_CLOEXEC",
+        "_O_NOFOLLOW | _O_CLOEXEC",
+        CREDENTIAL_TEST + "test_the_real_open_is_path_only_no_follow_and_relative_to_the_store",
+    ),
+    (
+        "L9 the credential is opened relative to the checked store descriptor",
+        STORE + "_open_credential_fd",
+        "dir_fd=store_fd",
+        "dir_fd=None",
+        CREDENTIAL_TEST + "test_the_real_open_is_path_only_no_follow_and_relative_to_the_store",
+    ),
+    (
+        "L10 a closed hold opens no credential",
+        STORE + "BindingStore.open_credential",
+        "if held.closed or held._opened.closed:",
+        "if False:",
+        CREDENTIAL_TEST + "test_a_closed_hold_opens_nothing",
+    ),
+    (
+        "L11 the configuration is bound read-only",
+        LAUNCHER + "LinuxLauncher.argv",
+        '"--ro-bind-data", str(native_store.configuration_fd)',
+        '"--bind-data", str(native_store.configuration_fd)',
+        LAYOUT_TEST,
+    ),
+    (
+        "L12 the vendor home is named explicitly",
+        LAUNCHER + "LinuxLauncher.argv",
+        '"--setenv", "CODEX_HOME", NATIVE_HOME,',
+        "",
+        LAYOUT_TEST,
+    ),
+    (
+        "L13 a mount descriptor can never double as a guard",
+        LAUNCHER + "LinuxLauncher._run",
+        "if set(native_store.mount_fds) & set(guard_fds):",
+        "if False:",
+        TEST + "test_a_mount_descriptor_that_is_also_a_guard_never_reaches_the_check",
+    ),
+    (
+        "L14 the supervisor is told which descriptors bwrap receives",
+        LAUNCHER + "LinuxLauncher._run",
+        "*mount_argument, *args,",
+        "*args,",
+        TEST + "test_the_supervisor_alone_is_told_which_descriptors_bwrap_receives",
+    ),
+    (
+        "L15 the supervisor inherits the mount descriptors",
+        LAUNCHER + "LinuxLauncher._run",
+        "*guard_fds, *mount_fds),",
+        "*guard_fds),",
+        TEST + "test_the_supervisor_alone_is_told_which_descriptors_bwrap_receives",
+    ),
+    (
+        "L16 the handle releases both mount descriptors after the exchange",
+        CODEX + "CodexOperatorHandle._converse",
+        "os.close(fd)",
+        "pass",
+        CODEX_STORE_TEST + "test_materialization_retains_one_store_lock_and_records_three_checks",
+    ),
+    (
+        "L17 the handle refuses an unqualified credential before any launch",
+        CODEX + "CodexOperatorHandle._converse",
+        "mount_fds.append(store.open_credential(held))",
+        "mount_fds.append(os.open(os.devnull, os.O_RDONLY))",
+        CODEX_STORE_TEST + "test_an_unqualified_credential_file_refuses_before_any_launch",
+    ),
+    (
+        "L18 the zone receives this provider's own configuration bytes",
+        CODEX + "CodexOperatorHandle._converse",
+        'sealed_data_fd(provider.configuration.encode("utf-8"))',
+        'sealed_data_fd(b"")',
+        CODEX_STORE_TEST + "test_materialization_retains_one_store_lock_and_records_three_checks",
+    ),
+    (
+        "L19 the sealed configuration is rewound for bwrap's read (Linux)",
+        LAUNCHER + "sealed_data_fd",
+        "os.lseek(fd, 0, os.SEEK_SET)",
+        "pass",
+        CREDENTIAL_TEST + "test_the_sealed_configuration_is_immutable_and_positioned_for_bwrap",
+    ),
+    (
+        "L20 the sealed configuration refuses later writes (Linux)",
+        LAUNCHER + "sealed_data_fd",
+        "fcntl.F_SEAL_WRITE | ",
+        "",
+        CREDENTIAL_TEST + "test_the_sealed_configuration_is_immutable_and_positioned_for_bwrap",
     ),
 )
 

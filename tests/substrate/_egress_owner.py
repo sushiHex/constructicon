@@ -19,12 +19,12 @@ from constructicon.substrate.executors.egress import (
     EgressPolicy,
     EgressRelay,
 )
-from constructicon.substrate.executors.linux import NativeStoreMount, ProcessExchangeError
+from constructicon.substrate.executors.linux import ProcessExchangeError
 from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisition_guard
 from tests.substrate.test_egress import CONTROLLED, controlled
 from tests.substrate.test_linux_containment import launcher
 from tests.substrate.test_native_egress_containment import ALLOWED, CLIENT
-from tests.substrate.test_operator_store_containment import binding, hold
+from tests.substrate.test_operator_store_containment import binding, hold, native_mount
 
 # The peers are controlled loopback servers, as in the test process.
 egress._routable = controlled(egress._routable)
@@ -59,18 +59,15 @@ async def main():
     relay = EgressRelay(policy, paths.payload, deadline, lambda: None)
     try:
         async with acquisition_guard(paths) as guard, relay as leaf:
-            try:
-                result = await boundary.exchange(
-                    ("/usr/bin/python3", "-I", "-c", CLIENT), workspace=None,
-                    posture=Posture.READ, guard_fds=(guard, held.lock_fd),
-                    timeout_s=seconds, conversation=conversation,
-                    native_store=NativeStoreMount(
-                        path=held.store_path, lock_fd=held.lock_fd,
-                        before_spawn=lambda: store.check_held(held), egress=leaf,
-                    ),
-                )
-            except ProcessExchangeError as exc:
-                result = exc.result
+            with native_mount(store, held, egress=leaf) as mount:
+                try:
+                    result = await boundary.exchange(
+                        ("/usr/bin/python3", "-I", "-c", CLIENT), workspace=None,
+                        posture=Posture.READ, guard_fds=(guard, held.lock_fd),
+                        timeout_s=seconds, conversation=conversation, native_store=mount,
+                    )
+                except ProcessExchangeError as exc:
+                    result = exc.result
     finally:
         store.close_held(held)
     print(json.dumps({

@@ -183,6 +183,7 @@ def _terminate_owned_children() -> None:
 
 def supervise(
     owner_fd: int, deadline: float, argv: list[str], *, report_fd: int | None = None,
+    mount_fds: tuple[int, ...] = (),
 ) -> int:
     if sys.platform != "linux":
         raise OSError("child supervision requires Linux")
@@ -258,8 +259,10 @@ def supervise(
         ]
         if shutdown.requested or _owner_closed(poller.poll(0)):
             return 125
+        # Mount descriptors go to bubblewrap alone, which binds them before
+        # it execs trusted init; guards and the owner pipe never do.
         child = subprocess.Popen(
-            command, close_fds=True, pass_fds=(namespace_fd,), env=dict(os.environ),
+            command, close_fds=True, pass_fds=(namespace_fd, *mount_fds), env=dict(os.environ),
         )
         namespace.close()
         result = _reap(child, owner_fd, shutdown, begin_term, _terminate_owned_children)
@@ -288,12 +291,19 @@ def main() -> int:
     for guard in guards:
         os.fstat(guard)
     report_fd = None
+    mount_fds: tuple[int, ...] = ()
     arguments = sys.argv[4:]
     if arguments and arguments[0].startswith("--report-fd="):
         report_fd = int(arguments.pop(0).split("=", 1)[1])
         os.fstat(report_fd)
+    if arguments and arguments[0].startswith("--mount-fds="):
+        mount_fds = tuple(int(value) for value in arguments.pop(0).split("=", 1)[1].split(","))
+        for mount_fd in mount_fds:
+            os.fstat(mount_fd)
     try:
-        return supervise(owner_fd, deadline, arguments, report_fd=report_fd)
+        return supervise(
+            owner_fd, deadline, arguments, report_fd=report_fd, mount_fds=mount_fds,
+        )
     except OSError as exc:
         print(f"constructicon supervisor refused: errno={exc.errno or errno.EIO}", file=sys.stderr)
         return 125
@@ -301,6 +311,8 @@ def main() -> int:
         os.close(owner_fd)
         for guard in guards:
             os.close(guard)
+        for mount_fd in mount_fds:
+            os.close(mount_fd)
         if report_fd is not None:
             os.close(report_fd)
 

@@ -49,6 +49,12 @@ _O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 _O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
+_O_PATH = getattr(os, "O_PATH", 0)
+CREDENTIAL_FILE = "auth.json"
+"""The one store file the native zone receives: the pinned client's file backend
+reads and saves exactly ``$CODEX_HOME/auth.json`` in place (M8-N4-state-review.md)."""
+_CREDENTIAL_MODE = 0o600
+CREDENTIAL_UNAVAILABLE = "the operator store has no qualified credential file"
 
 
 @dataclass(frozen=True)
@@ -924,6 +930,54 @@ def _check_descriptor(
             raise ContractViolation("native store instance history is unavailable")
 
 
+def _open_credential_fd(store_fd: int) -> int:
+    """Open, never read: ``O_PATH`` cannot read, ``O_NOFOLLOW`` yields a link as itself."""
+
+    if sys.platform != "linux":
+        raise ContractViolation("native store custody requires Linux")
+    return os.open(CREDENTIAL_FILE, _O_PATH | _O_NOFOLLOW | _O_CLOEXEC, dir_fd=store_fd)
+
+
+def _credential_facts(fd: int) -> tuple[int, int, int]:
+    """The descriptor's mode, link count and owner; metadata only."""
+
+    info = os.fstat(fd)
+    return info.st_mode, info.st_nlink, info.st_uid
+
+
+def check_credential(fd: int, owner_uid: int) -> None:
+    """A regular file, one name, the store owner's, exactly ``0600``.
+
+    The owner is the store directory's own (``_open_bundle`` requires the lock
+    to share it), so no process uid is assumed.
+    """
+
+    try:
+        mode, links, uid = _credential_facts(fd)
+    except OSError as exc:
+        raise ContractViolation(CREDENTIAL_UNAVAILABLE) from exc
+    if (
+        not stat.S_ISREG(mode) or links != 1 or uid != owner_uid
+        or stat.S_IMODE(mode) != _CREDENTIAL_MODE
+    ):
+        raise ContractViolation(CREDENTIAL_UNAVAILABLE)
+
+
+def open_credential(opened: OpenedBundle) -> int:
+    """The checked credential descriptor; the caller owns and closes it."""
+
+    try:
+        fd = _open_credential_fd(opened.store_fd)
+    except OSError as exc:
+        raise ContractViolation(CREDENTIAL_UNAVAILABLE) from exc
+    try:
+        check_credential(fd, opened.store_identity.uid)
+    except BaseException:
+        _close(fd)
+        raise
+    return fd
+
+
 class BindingStore:
     """One statically provisioned, active operator-store selection."""
 
@@ -1020,6 +1074,17 @@ class BindingStore:
         finally:
             if "current" in locals():
                 _close_opened(current)
+
+    def open_credential(self, held: HeldStoreLock) -> int:
+        """The held store's credential file as a descriptor that is then bound.
+
+        ``O_PATH`` relative to the store descriptor already identity-checked, so
+        the object mounted is the object checked and no content is ever read.
+        """
+
+        if held.closed or held._opened.closed:
+            raise ContractViolation("native store lock is unavailable")
+        return open_credential(held._opened)
 
     def close_candidate(self, candidate: OpenedBundle) -> None:
         _close_opened(candidate)

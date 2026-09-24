@@ -6,10 +6,9 @@ from pathlib import Path
 
 from constructicon.core.grants import Posture
 from constructicon.core.workspace import acquisition_id_for
-from constructicon.substrate.executors.linux import NativeStoreMount
 from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisition_guard
 from tests.substrate.test_linux_containment import launcher
-from tests.substrate.test_operator_store_containment import binding, hold
+from tests.substrate.test_operator_store_containment import binding, hold, native_mount
 
 
 async def main():
@@ -32,17 +31,14 @@ async def main():
 
     try:
         async with acquisition_guard(paths) as guard:
-            await boundary.exchange(
-                ("/usr/bin/python3", "-I", "-c",
-                 "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-                 "print('ready', flush=True); time.sleep(30)"),
-                workspace=None, posture=Posture.READ, guard_fds=(guard, held.lock_fd),
-                conversation=conversation, timeout_s=20,
-                native_store=NativeStoreMount(
-                    path=held.store_path, lock_fd=held.lock_fd,
-                    before_spawn=lambda: store.check_held(held),
-                ),
-            )
+            with native_mount(store, held) as mount:
+                await boundary.exchange(
+                    ("/usr/bin/python3", "-I", "-c",
+                     "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                     "print('ready', flush=True); time.sleep(30)"),
+                    workspace=None, posture=Posture.READ, guard_fds=(guard, held.lock_fd),
+                    conversation=conversation, timeout_s=20, native_store=mount,
+                )
     finally:
         store.close_held(held)
 

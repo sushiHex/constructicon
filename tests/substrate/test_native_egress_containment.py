@@ -42,7 +42,6 @@ from constructicon.substrate.executors.egress import (
     EgressRelay,
     identity_digests,
 )
-from constructicon.substrate.executors.linux import NativeStoreMount
 from constructicon.substrate.git.acquisition import (
     AcquisitionClosure,
     AcquisitionPaths,
@@ -61,7 +60,7 @@ from tests.substrate.test_egress import (
 from tests.substrate.test_linux_containment import launcher as launcher
 from tests.substrate.test_native_codex_mediation import write_evidence
 from tests.substrate.test_operator_store_containment import binding as binding
-from tests.substrate.test_operator_store_containment import hold
+from tests.substrate.test_operator_store_containment import hold, native_mount
 
 ALLOWED = "allowed.invalid"
 DECOY = "decoy.invalid"
@@ -198,6 +197,10 @@ def sockets():
 
 results = {'ssl': True}
 if plan['mode'] == 'walk':
+    planted = None
+    if plan.get('plant'):
+        planted = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        planted.bind(plan['plant'])
     results['sockets'] = sockets()
 elif plan['mode'] == 'flood':
     # One genuine hello for the relay to judge, then raw bytes for as long as
@@ -473,15 +476,13 @@ async def run_native(launcher, binding, root: Path, lease: str, plan: dict, *,
                         lambda: None)
     try:
         async with acquisition_guard(paths) as guard, relay as leaf:
-            result = await launcher.exchange(
-                command, workspace=None,
-                posture=Posture.READ, guard_fds=(guard, held.lock_fd), timeout_s=seconds,
-                conversation=conversation or conversation_for(plan, output, streaming),
-                native_store=NativeStoreMount(
-                    path=held.store_path, lock_fd=held.lock_fd,
-                    before_spawn=lambda: binding.check_held(held), egress=leaf,
-                ),
-            )
+            with native_mount(binding, held, egress=leaf) as mount:
+                result = await launcher.exchange(
+                    command, workspace=None,
+                    posture=Posture.READ, guard_fds=(guard, held.lock_fd), timeout_s=seconds,
+                    conversation=conversation or conversation_for(plan, output, streaming),
+                    native_store=mount,
+                )
     finally:
         binding.close_held(held)
     return result, relay, output
@@ -594,33 +595,28 @@ async def test_the_zone_reaches_only_the_pinned_destination(
     })
 
 
-async def test_the_zone_walk_finds_a_socket_planted_in_the_store(
+async def test_the_zone_walk_finds_a_socket_planted_in_the_zone(
     binding, launcher, pki, short_root,
 ):
-    """The positive control for the socket walk: the store is a pathname route."""
+    """The positive control for the socket walk.
+
+    Under the N4 layout no store directory is mounted, so the store is no
+    longer a pathname route; the control plants a socket in the zone's own
+    disposable home instead, which the walk must find beside the leaf.
+    """
     allowed = TlsPeer(pki.server("allowed"))
-    probe = await hold(binding)
-    planted_path = probe.store_path / "planted.sock"
-    # The store path is longer than sun_path; bind through a short dirfd path.
-    directory = os.open(probe.store_path, os.O_RDONLY | os.O_DIRECTORY)
-    binding.close_held(probe)
-    try:
-        planted = unix_listener(f"/proc/self/fd/{directory}/planted.sock")
-    finally:
-        os.close(directory)
     try:
         result, _, output = await run_native(
             launcher, binding, short_root, "n3b-walk-control",
-            plan_for(pki, allowed, mode="walk"), policy=policy_for(allowed.port),
+            plan_for(pki, allowed, mode="walk", plant="/tmp/home/.codex/planted.sock"),
+            policy=policy_for(allowed.port),
         )
         facts = facts_of(result, output)
     finally:
-        planted.close()
-        planted_path.unlink(missing_ok=True)
         allowed.close()
-    assert facts["sockets"] == ["/vendor-egress.sock", "/vendor-store/planted.sock"]
+    assert facts["sockets"] == ["/tmp/home/.codex/planted.sock", "/vendor-egress.sock"]
     write_evidence("n3b-zone-sockets.json", {
-        "schema_version": 1, "planted_store_socket_found": True,
+        "schema_version": 1, "planted_zone_socket_found": True,
         "sockets": facts["sockets"],
     })
 

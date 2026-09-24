@@ -8,6 +8,7 @@ check behaviour remains the production ``BindingStore`` implementation.
 from __future__ import annotations
 
 import os
+import stat
 from dataclasses import replace
 from pathlib import Path
 
@@ -47,6 +48,11 @@ class StoreWorld:
         self.exclusive = False
         self.holder: int | None = None
         self.closed: list[int] = []
+        # The credential file's metadata as the substituted fstat reports it.
+        self.credential: tuple[int, int, int] | None = (stat.S_IFREG | 0o600, 1, 1000)
+        self.credential_opens: list[int] = []
+        # Bytes each substituted sealed configuration descriptor carried.
+        self.configurations: list[bytes] = []
         # What the offline helpers did, in order; nothing here infers it.
         self.events: list[str] = []
         self._write_anchor()
@@ -146,6 +152,40 @@ class StoreWorld:
             self.metadata[name] = raw
 
         monkeypatch.setattr(operator_store, "_replace_metadata", replace_metadata)
+        self.install_mounts(monkeypatch)
+
+    def install_mounts(self, monkeypatch) -> None:
+        """The two descriptors a native launch binds, with only syscalls replaced.
+
+        ``check_credential``'s rule and the handle's ownership of both
+        descriptors stay real. The sealed configuration becomes an ordinary
+        readable descriptor holding the same bytes, so a test can read what the
+        zone would receive.
+        """
+
+        def open_credential_fd(store_fd: int) -> int:
+            if self.credential is None:
+                raise FileNotFoundError(2, "No such file or directory", "auth.json")
+            fd = os.open(os.devnull, os.O_RDONLY)
+            self.credential_opens.append(fd)
+            return fd
+
+        def credential_facts(fd: int) -> tuple[int, int, int]:
+            assert self.credential is not None
+            return self.credential
+
+        monkeypatch.setattr(operator_store, "_open_credential_fd", open_credential_fd)
+        monkeypatch.setattr(operator_store, "_credential_facts", credential_facts)
+
+        from constructicon.substrate.executors import codex
+
+        def sealed(data: bytes) -> int:
+            self.configurations.append(data)
+            path = self.root / f"sealed-{len(self.configurations)}"
+            path.write_bytes(data)
+            return os.open(path, os.O_RDONLY)
+
+        monkeypatch.setattr(codex, "sealed_data_fd", sealed)
 
     def install_publisher(self, monkeypatch) -> list[int]:
         """Substitute only publication's provisioning primitives; returns fsyncs."""

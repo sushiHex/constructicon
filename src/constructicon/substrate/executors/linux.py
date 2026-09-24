@@ -31,7 +31,7 @@ from constructicon.substrate._lifetime import finish_owned
 from constructicon.substrate.executors._egress_bridge import BRIDGE_SCRIPT
 from constructicon.substrate.executors._supervisor import NAMESPACE_SCRIPT
 from constructicon.substrate.executors.egress import ZONE_SOCKET, EgressSocket
-from constructicon.substrate.executors.operator_store import BindingCheck
+from constructicon.substrate.executors.operator_store import CREDENTIAL_FILE, BindingCheck
 
 SUPERVISOR_PATH = Path(NAMESPACE_SCRIPT.removeprefix("/"))
 BWRAP_SHA256 = "e318903862396f96de3df57264e0158682b952fd3fb53ac23d876413e7b30f71"
@@ -138,24 +138,69 @@ DEFAULT_PROCESS_LIMITS = ProcessLimits()
 Conversation = Callable[[ProcessIO], Awaitable[None]]
 
 
+NATIVE_HOME = "/tmp/home/.codex"
+"""The native zone's vendor home: a fresh tmpfs directory, disposable with it."""
+
+
 @dataclass(frozen=True)
 class NativeStoreMount:
-    """One trusted native-only mount, never a caller-selected mount catalogue.
+    """One trusted native-only layout, never a caller-selected mount catalogue.
 
-    The binding owns its retained lock and protected parent. The launcher
-    rechecks it after its asynchronous probe; this object does not grant
-    authority merely by containing a path. The egress leaf travels only with
-    the native store, so no worker launch can carry it.
+    Exactly two host objects reach the zone, both by descriptor so the object
+    mounted is the object checked (M8-N4-state-review.md, section 1): the sealed
+    configuration, read-only, and the store's one credential file, read/write
+    for the vendor's in-place refresh. The binding owns its retained lock; the
+    launcher rechecks it after its asynchronous probe. The egress leaf travels
+    only with the native store, so no worker launch can carry it.
     """
 
-    path: Path
     lock_fd: int
+    configuration_fd: int
+    credential_fd: int
     before_spawn: Callable[[], BindingCheck]
     egress: EgressSocket | None = None
 
     def __post_init__(self) -> None:
-        if not self.path.is_absolute():
-            raise ContractViolation("the native store requires an absolute private locator")
+        fds = (self.lock_fd, self.configuration_fd, self.credential_fd)
+        if any(type(fd) is not int or fd < 0 for fd in fds) or len(set(fds)) != len(fds):
+            raise ContractViolation("the native store requires three distinct descriptors")
+
+    @property
+    def mount_fds(self) -> tuple[int, int]:
+        """The descriptors bubblewrap itself must receive, in argv order."""
+
+        return (self.configuration_fd, self.credential_fd)
+
+
+def sealed_data_fd(data: bytes) -> int:
+    """A sealed memfd holding exactly ``data``, positioned for bubblewrap's read.
+
+    Sealing makes the content immutable before anything checks it, so the bytes
+    verified here are the bytes ``--ro-bind-data`` copies into the zone.
+    """
+
+    if sys.platform != "linux":
+        raise ContractViolation("sealed native configuration requires Linux")
+    import fcntl
+
+    fd = os.memfd_create("constructicon-native-data", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+    try:
+        view = memoryview(data)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise ContractViolation("the sealed native data was not written")
+            view = view[written:]
+        fcntl.fcntl(fd, fcntl.F_ADD_SEALS, (
+            fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL
+        ))
+        if os.pread(fd, len(data) + 1, 0) != data:
+            raise ContractViolation("the sealed native data differs from what was written")
+        os.lseek(fd, 0, os.SEEK_SET)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
 
 
 class ProcessExchangeError(Exception):
@@ -339,7 +384,12 @@ class LinuxLauncher:
                 str(workspace), "/workspace",
             ]
         if native_store is not None:
-            args += ["--bind", str(native_store.path), "/vendor-store"]
+            args += [
+                "--dir", NATIVE_HOME,
+                "--ro-bind-data", str(native_store.configuration_fd), f"{NATIVE_HOME}/config.toml",
+                "--bind-fd", str(native_store.credential_fd), f"{NATIVE_HOME}/{CREDENTIAL_FILE}",
+                "--setenv", "CODEX_HOME", NATIVE_HOME,
+            ]
             if native_store.egress is not None:
                 native_store.egress.require_current()
                 args += ["--ro-bind", str(native_store.egress.path), ZONE_SOCKET]
@@ -469,9 +519,16 @@ class LinuxLauncher:
         if native_store is not None:
             if native_store.lock_fd not in guard_fds:
                 raise ContractViolation("the native store requires its retained supervisor guard")
+            if set(native_store.mount_fds) & set(guard_fds):
+                raise ContractViolation("a native mount descriptor cannot also be a guard")
             checked = native_store.before_spawn()
             if not isinstance(checked, BindingCheck):
                 raise ContractViolation("the native store did not complete its binding check")
+        # Only bubblewrap consumes these; the supervisor passes them through.
+        mount_fds = native_store.mount_fds if native_store is not None else ()
+        mount_argument = (
+            (f"--mount-fds={','.join(str(fd) for fd in mount_fds)}",) if mount_fds else ()
+        )
         # asyncio may use another clock origin; the child needs Linux's shared
         # monotonic clock, with only the already-remaining budget transferred.
         child_deadline = time.monotonic() + (deadline - asyncio.get_running_loop().time())
@@ -611,10 +668,11 @@ class LinuxLauncher:
                 f"{self.root}/lib/x86_64-linux-gnu:{self.root}/usr/lib/x86_64-linux-gnu",
                 str(self.root / "usr/bin/python3.12"), "-I", str(self.root / SUPERVISOR_PATH),
                 str(owner_read), ",".join(str(fd) for fd in guard_fds),
-                str(child_deadline), f"--report-fd={report_write}", *args,
+                str(child_deadline), f"--report-fd={report_write}", *mount_argument, *args,
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE, close_fds=True,
-                pass_fds=(owner_read, report_write, *guard_fds), env={"LANG": "C.UTF-8"},
+                pass_fds=(owner_read, report_write, *guard_fds, *mount_fds),
+                env={"LANG": "C.UTF-8"},
             ))
             try:
                 async with asyncio.timeout_at(deadline):
