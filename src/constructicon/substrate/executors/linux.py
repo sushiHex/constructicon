@@ -172,18 +172,64 @@ class NativeStoreMount:
         return (self.configuration_fd, self.credential_fd)
 
 
+_F_LINUX_SPECIFIC_BASE = 1024
+_UAPI_SEALS = {
+    # Linux UAPI include/uapi/linux/fcntl.h: F_ADD_SEALS and F_GET_SEALS are
+    # F_LINUX_SPECIFIC_BASE + 9 and + 10; the seal bits are 1, 2, 4 and 8.
+    "F_ADD_SEALS": _F_LINUX_SPECIFIC_BASE + 9,
+    "F_GET_SEALS": _F_LINUX_SPECIFIC_BASE + 10,
+    "F_SEAL_SEAL": 0x0001,
+    "F_SEAL_SHRINK": 0x0002,
+    "F_SEAL_GROW": 0x0004,
+    "F_SEAL_WRITE": 0x0008,
+}
+_UAPI_MEMFD = {
+    # Linux UAPI include/uapi/linux/memfd.h.
+    "MFD_CLOEXEC": 0x0001,
+    "MFD_ALLOW_SEALING": 0x0002,
+}
+
+
+def seal_constants(fcntl_module: object) -> tuple[int, int, int]:
+    """``(F_ADD_SEALS, F_GET_SEALS, the four seals)``: the module's, else the UAPI's.
+
+    Some CPython builds, including CI's uv-managed 3.11, omit the seal names. A
+    wrong fallback cannot pass silently: :func:`sealed_data_fd` reads the seals
+    back and refuses anything but exactly the four it applied.
+    """
+
+    value = {name: getattr(fcntl_module, name, uapi) for name, uapi in _UAPI_SEALS.items()}
+    return value["F_ADD_SEALS"], value["F_GET_SEALS"], (
+        value["F_SEAL_WRITE"] | value["F_SEAL_GROW"] | value["F_SEAL_SHRINK"]
+        | value["F_SEAL_SEAL"]
+    )
+
+
+def memfd_flags(os_module: object) -> int:
+    """``MFD_CLOEXEC | MFD_ALLOW_SEALING``: the module's, else the UAPI's."""
+
+    return int(getattr(os_module, "MFD_CLOEXEC", _UAPI_MEMFD["MFD_CLOEXEC"])) | int(
+        getattr(os_module, "MFD_ALLOW_SEALING", _UAPI_MEMFD["MFD_ALLOW_SEALING"]),
+    )
+
+
 def sealed_data_fd(data: bytes) -> int:
     """A sealed memfd holding exactly ``data``, positioned for bubblewrap's read.
 
     Sealing makes the content immutable before anything checks it, so the bytes
-    verified here are the bytes ``--ro-bind-data`` copies into the zone.
+    verified here are the bytes ``--ro-bind-data`` copies into the zone. The
+    seals are read back and must be exactly the four applied: an affirmative
+    fact, never an assumption about which constants this build exposes.
     """
 
     if sys.platform != "linux":
         raise ContractViolation("sealed native configuration requires Linux")
     import fcntl
 
-    fd = os.memfd_create("constructicon-native-data", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+    if not hasattr(os, "memfd_create"):
+        raise ContractViolation("this Python cannot create a memfd")
+    add_seals, get_seals, seals = seal_constants(fcntl)
+    fd = os.memfd_create("constructicon-native-data", memfd_flags(os))
     try:
         view = memoryview(data)
         while view:
@@ -191,9 +237,9 @@ def sealed_data_fd(data: bytes) -> int:
             if written <= 0:
                 raise ContractViolation("the sealed native data was not written")
             view = view[written:]
-        fcntl.fcntl(fd, fcntl.F_ADD_SEALS, (
-            fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL
-        ))
+        fcntl.fcntl(fd, add_seals, seals)
+        if fcntl.fcntl(fd, get_seals) != seals:
+            raise ContractViolation("the native data is not sealed exactly as applied")
         if os.pread(fd, len(data) + 1, 0) != data:
             raise ContractViolation("the sealed native data differs from what was written")
         os.lseek(fd, 0, os.SEEK_SET)

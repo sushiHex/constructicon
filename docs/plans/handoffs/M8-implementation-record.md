@@ -2587,3 +2587,22 @@ was found by reading, not by execution. There were two causes:
     proof binds its telemetry configuration as the sealed one.
 - **The zone environment.** The bridge proofs' expected zone environment now
   includes `CODEX_HOME`.
+
+**First Linux CI run of PR #106** (run 35967705858, at `37db228`). CI's
+uv-managed CPython 3.11 has no `fcntl.F_ADD_SEALS`. That failed:
+- the memfd test in `verify`;
+- both layout proofs;
+- the owner-death proof. Its owner process builds the same mount, so it
+  never printed `ready`.
+
+N3a's 20 root-lane proofs passed.
+
+The fix:
+- `seal_constants` and `memfd_flags` take the module's names when they
+  exist, and otherwise the Linux UAPI values
+  (`include/uapi/linux/fcntl.h`: `F_ADD_SEALS` 1033, `F_GET_SEALS` 1034, seal
+  bits 1/2/4/8; `include/uapi/linux/memfd.h`: 1 and 2).
+- `sealed_data_fd` now reads the seals back and refuses anything but exactly
+  the four it applied, so a wrong constant fails loudly.
+- Portable tests cover both selections, as mutants L20-L23. The read-back
+  check itself has no mutant: only a wrong constant on Linux reaches it.

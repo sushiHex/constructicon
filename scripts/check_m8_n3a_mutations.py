@@ -505,11 +505,32 @@ MUTANTS = (
         CREDENTIAL_TEST + "test_the_sealed_configuration_is_immutable_and_positioned_for_bwrap",
     ),
     (
-        "L20 the sealed configuration refuses later writes (Linux)",
-        LAUNCHER + "sealed_data_fd",
-        "fcntl.F_SEAL_WRITE | ",
+        "L20 the sealed configuration refuses later writes",
+        LAUNCHER + "seal_constants",
+        'value["F_SEAL_WRITE"] | ',
         "",
-        CREDENTIAL_TEST + "test_the_sealed_configuration_is_immutable_and_positioned_for_bwrap",
+        CREDENTIAL_TEST + "test_absent_seal_names_fall_back_to_the_linux_uapi_values",
+    ),
+    (
+        "L21 an absent seal name falls back to the UAPI value",
+        LAUNCHER + "seal_constants",
+        "getattr(fcntl_module, name, uapi)",
+        "getattr(fcntl_module, name, 0)",
+        CREDENTIAL_TEST + "test_absent_seal_names_fall_back_to_the_linux_uapi_values",
+    ),
+    (
+        "L22 a present seal name is the one used",
+        LAUNCHER + "seal_constants",
+        "getattr(fcntl_module, name, uapi)",
+        "uapi",
+        CREDENTIAL_TEST + "test_present_seal_names_are_the_ones_used",
+    ),
+    (
+        "L23 memfd flags fall back to the UAPI values",
+        LAUNCHER + "memfd_flags",
+        '_UAPI_MEMFD["MFD_ALLOW_SEALING"]',
+        "0",
+        CREDENTIAL_TEST + "test_absent_seal_names_fall_back_to_the_linux_uapi_values",
     ),
 )
 

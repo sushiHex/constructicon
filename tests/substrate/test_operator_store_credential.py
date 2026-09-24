@@ -153,9 +153,8 @@ def test_the_sealed_configuration_is_immutable_and_positioned_for_bwrap():
     try:
         # --ro-bind-data reads from the current offset, so it must be zero.
         assert os.read(fd, len(data) + 1) == data
-        seals = fcntl.fcntl(fd, fcntl.F_GET_SEALS)
-        required = fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL
-        assert seals & required == required
+        _, get_seals, required = linux.seal_constants(fcntl)
+        assert fcntl.fcntl(fd, get_seals) == required
         with pytest.raises(PermissionError):
             os.pwrite(fd, b"x", 0)
         with pytest.raises(PermissionError):
@@ -172,3 +171,20 @@ def test_an_unstatable_descriptor_is_unavailable_not_an_escape(monkeypatch):
     monkeypatch.setattr(operator_store, "_credential_facts", failing)
     with pytest.raises(ContractViolation, match="no qualified credential file"):
         operator_store.check_credential(3, 5)
+
+
+# --- seal constants: this build's, else the Linux UAPI's (CI lacked the names) ---
+
+
+def test_absent_seal_names_fall_back_to_the_linux_uapi_values():
+    assert linux.seal_constants(SimpleNamespace()) == (1033, 1034, 1 | 2 | 4 | 8)
+    assert linux.memfd_flags(SimpleNamespace()) == 1 | 2
+
+
+def test_present_seal_names_are_the_ones_used():
+    module = SimpleNamespace(
+        F_ADD_SEALS=7, F_GET_SEALS=9, F_SEAL_SEAL=16, F_SEAL_SHRINK=32,
+        F_SEAL_GROW=64, F_SEAL_WRITE=128,
+    )
+    assert linux.seal_constants(module) == (7, 9, 16 | 32 | 64 | 128)
+    assert linux.memfd_flags(SimpleNamespace(MFD_CLOEXEC=4, MFD_ALLOW_SEALING=8)) == 12
