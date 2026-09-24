@@ -34,7 +34,10 @@ from constructicon.substrate.executors.codex_lane import (
     run_startup,
     vendor_executable,
 )
-from constructicon.substrate.executors.codex_protocol import ExpectedAccount
+from constructicon.substrate.executors.codex_protocol import (
+    NO_RESULT_FAULT,
+    ExpectedAccount,
+)
 from constructicon.substrate.executors.egress import identity_digests
 from constructicon.substrate.executors.linux import NativeVendor
 from tests.native_startup import (
@@ -364,23 +367,6 @@ def test_the_bridge_client_reports_the_ssl_fact():
     assert "'ssl': True" in CLIENT.split("results = {", 1)[1]
 
 
-def test_no_evidence_file_contains_key_material():
-    directory = os.environ.get("M8_EVIDENCE_DIRECTORY")
-    if not directory:
-        if os.environ.get("M8_BRIDGE_REQUIRED"):
-            pytest.fail("the required N4 bridge lane has no evidence directory")
-        pytest.skip("N4 bridge evidence is written only by the provisioned Linux lane")
-    files = sorted(Path(directory).glob("n4-*.json"))
-    if os.environ.get("M8_BRIDGE_REQUIRED"):
-        assert [path.name for path in files] == [
-            "n4-bridge.json", "n4-lane-login.json", "n4-lane-startup.json",
-            "n4-pinned-client.json",
-        ]
-    for path in files:
-        text = path.read_text()
-        assert "-----BEGIN" not in text and "PRIVATE KEY" not in text, path.name
-
-
 # --- N4 lanes with the pinned binary (M8-N4-state-review.md, L2 and L3) --------
 
 EMPTY_AUTH = b"{}\n"
@@ -419,6 +405,23 @@ def decoy_policy() -> egress.EgressPolicy:
     return egress.EgressPolicy((egress.EgressDestination(DECOY, 443, "8.8.8.8"),), 8)
 
 
+NO_LOGIN = frozenset({
+    # An empty ``auth.json`` makes ``account/read`` the pinned client's error
+    # reply, so ``account_faults`` (codex_protocol.py) sees no result object
+    # and returns only this one fault before any other check can run.
+    NO_RESULT_FAULT,
+    # No module constant names these three: they are the ``checks`` tuple
+    # inline in ``codex_lane.run_startup`` (codex_lane.py lines 411-414),
+    # copied verbatim from there rather than retyped from memory. With the
+    # gate refused at ``account/read``, the gate never completes, the fourth
+    # method (``rate_limits/read``) is never sent, and no readback is judged.
+    "the startup gate did not complete",
+    "the startup did not send exactly the four authorized methods",
+    "no spend readback was judged",
+})
+"""The verdict's exact fault set with no login (state review, section 2)."""
+
+
 @pytest.fixture
 def empty_auth(binding):
     store = Path(binding.root) / operator_store._bundle_token("n3a-fixture") / "store"
@@ -453,11 +456,24 @@ async def test_the_production_configuration_makes_no_startup_connection_at_all(
             )
         runs[plugins]["heads"] = [head.split(b"\r\n", 1)[0].decode() for head in heads]
     clean, control = runs[False], runs[True]
-    assert clean["methods_sent"] == ["'initialize'", "'initialized'", "'account/read'"]
-    assert any("no usable account" in fault for fault in clean["faults"]), clean["faults"]
+    # The fact this test exists for, independent of the verdict: the production
+    # configuration made no connection at all. The bridge records every CONNECT
+    # head and the relay every accepted or denied connection, whatever the
+    # conversation concluded, so a refusal cannot hide one.
     assert clean["relay"] == {"destinations": {}, "denied": {}, "closed": True}, clean["relay"]
-    assert clean["heads"] == [] and clean["readback"] is None
+    assert clean["heads"] == [], clean["heads"]
+    # With no login the verdict refuses, affirmatively and for exactly these
+    # reasons: the account reading is the pinned client's error reply, so the
+    # gate, the fourth method and the readback are each reported missing. No
+    # launch fact failed (clean exit, closed relay, bound 0600 credential).
+    assert set(clean["faults"]) == NO_LOGIN, clean["faults"]
+    assert clean["methods_sent"] == ["'initialize'", "'initialized'", "'account/read'"]
+    assert clean["readback"] is None and clean["gate"]["completed"] is False
     assert clean["executable"]["path"] == "/opt/codex/bin/codex"
+    # The same-run positive control: the same refusal at the same point, so the
+    # same zone lifetime, and yet the plugin sync's CONNECT was seen and denied.
+    assert control["methods_sent"] == clean["methods_sent"]
+    assert set(control["faults"]) == NO_LOGIN, control["faults"]
     assert control["relay"]["denied"].get("denied:destination", 0) >= 1, control["relay"]
     assert control["heads"], "the control's plugin sync never reached the relay"
     assert empty_auth.read_bytes() == EMPTY_AUTH
@@ -502,3 +518,20 @@ async def test_the_pinned_device_login_reaches_only_the_relay_and_keeps_nothing(
         "relay": evidence["relay"], "process": evidence["process"],
         "credential_still_bound_file": True,
     })
+
+
+def test_no_evidence_file_contains_key_material():
+    directory = os.environ.get("M8_EVIDENCE_DIRECTORY")
+    if not directory:
+        if os.environ.get("M8_BRIDGE_REQUIRED"):
+            pytest.fail("the required N4 bridge lane has no evidence directory")
+        pytest.skip("N4 bridge evidence is written only by the provisioned Linux lane")
+    files = sorted(Path(directory).glob("n4-*.json"))
+    if os.environ.get("M8_BRIDGE_REQUIRED"):
+        assert [path.name for path in files] == [
+            "n4-bridge.json", "n4-lane-login.json", "n4-lane-startup.json",
+            "n4-pinned-client.json",
+        ]
+    for path in files:
+        text = path.read_text()
+        assert "-----BEGIN" not in text and "PRIVATE KEY" not in text, path.name

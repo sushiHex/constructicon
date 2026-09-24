@@ -2728,8 +2728,10 @@ workflow change is needed. **Neither has executed.**
 - **L2:** the pinned `app-server` with the production-shaped sealed
   configuration and no login (the fixture's `auth.json` is set to `{}` for
   the test, then restored).
-  - It must send three methods, refuse on "no usable account", and show a
-    relay with no destinations, no denials and no CONNECT heads.
+  - It must send three methods and refuse with exactly the fault set an
+    `account/read` error reply produces: no result object, so the gate never
+    completes, the fourth method is never sent and no readback is judged. It
+    must show a relay with no destinations, no denials and no CONNECT heads.
   - Same-step control: the same configuration with plugins on must produce a
     counted destination denial and a recorded head.
 - **L3:** the pinned `codex login --device-auth` against a policy that names
