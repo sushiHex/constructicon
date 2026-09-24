@@ -140,6 +140,7 @@ from constructicon.substrate.executors.linux import (
     ProcessExchangeError,
     ProcessLimits,
     ProcessResult,
+    sealed_data_fd,
 )
 from constructicon.substrate.executors.operator_store import (
     BindingCheck,
@@ -1499,33 +1500,51 @@ class CodexOperatorHandle:
             self.launch_check = check
             return check
 
-        native_store = NativeStoreMount(
-            path=held.store_path,
-            lock_fd=held.lock_fd,
-            before_spawn=before_spawn,
-        )
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
             return _unavailable("the native operator deadline expired before launch", grants)
-        self.active = asyncio.create_task(self._exchange(
-            (provider.binary, *APP_SERVER_ARGUMENTS),
-            posture=grants.posture, guard_fds=(guard, held.lock_fd),
-            conversation=conversation, timeout_s=remaining, native_store=native_store,
-            deadline=deadline,
-        ))
+        # The two host objects the zone receives, each bound by the descriptor
+        # checked here: the credential relative to the held store, the
+        # configuration as the sealed bytes this provider's identity digests.
+        mount_fds: list[int] = []
         try:
-            result = await self.active
-        except ProcessExchangeError as exc:
-            # Something escaped the callback; the evidence survives.
-            result = exc.result
-        except (OSError, ContractViolation) as exc:
-            return _unavailable(str(exc), grants)
-        except BaseExceptionGroup as group:
-            if group.subgroup(asyncio.CancelledError) is not None:
-                raise
-            return _unavailable(repr(group), grants)
+            try:
+                mount_fds.append(store.open_credential(held))
+                mount_fds.append(sealed_data_fd(provider.configuration.encode("utf-8")))
+            except (OSError, ContractViolation) as exc:
+                return _unavailable(str(exc), grants)
+            native_store = NativeStoreMount(
+                lock_fd=held.lock_fd,
+                configuration_fd=mount_fds[1],
+                credential_fd=mount_fds[0],
+                before_spawn=before_spawn,
+            )
+            self.active = asyncio.create_task(self._exchange(
+                (provider.binary, *APP_SERVER_ARGUMENTS),
+                posture=grants.posture, guard_fds=(guard, held.lock_fd),
+                conversation=conversation, timeout_s=remaining, native_store=native_store,
+                deadline=deadline,
+            ))
+            try:
+                result = await self.active
+            except ProcessExchangeError as exc:
+                # Something escaped the callback; the evidence survives.
+                result = exc.result
+            except (OSError, ContractViolation) as exc:
+                return _unavailable(str(exc), grants)
+            except BaseExceptionGroup as group:
+                if group.subgroup(asyncio.CancelledError) is not None:
+                    raise
+                return _unavailable(repr(group), grants)
+            finally:
+                self.active = None
         finally:
-            self.active = None
+            # Released only after the exchange task has ended: awaiting a task
+            # returns, even on this caller's cancellation, only once it is done,
+            # so no spawn can still receive either number.
+            for fd in mount_fds:
+                with suppress(OSError):
+                    os.close(fd)
         requested = grants.model_selection.model
         try:
             self._check_control()
@@ -1848,6 +1867,9 @@ class CodexOperatorProvider:
                 raise ContractViolation(
                     "the acquisition root is too long for the native egress socket"
                 )
+        # Retained as the exact bytes the published configuration digest names
+        # (the drift check above); the zone receives these and nothing else.
+        self.configuration = configuration
         self.configured_model = configured_model(configuration)
         if self.configured_model not in profile.grant_policy.model_ids:
             raise ContractViolation(

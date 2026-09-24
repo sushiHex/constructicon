@@ -143,8 +143,8 @@ MUTANTS = (
     (
         "18 the launcher adds the bridge only with a leaf",
         LAUNCHER + "LinuxLauncher.argv",
-        'args += ["--bind", str(native_store.path), "/vendor-store"]',
-        'args += ["--bind", str(native_store.path), "/vendor-store"]\n'
+        '"--setenv", "CODEX_HOME", NATIVE_HOME,\n        ]',
+        '"--setenv", "CODEX_HOME", NATIVE_HOME,\n        ]\n'
         '        command = ("/usr/bin/python3", "-I", BRIDGE_SCRIPT, *command)',
         L + "test_no_egress_socket_means_no_leaf_and_the_namespace_stays_unshared",
     ),

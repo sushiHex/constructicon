@@ -57,7 +57,8 @@ def launcher(tmp_path):
 
 def mount(tmp_path, socket=None):
     return linux.NativeStoreMount(
-        path=tmp_path / "store", lock_fd=731, before_spawn=lambda: None, egress=socket,
+        lock_fd=731, configuration_fd=741, credential_fd=742, before_spawn=lambda: None,
+        egress=socket,
     )
 
 

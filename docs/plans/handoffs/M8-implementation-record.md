@@ -2391,3 +2391,218 @@ stand:
 - containment is the relay's claim alone;
 - the unsolicited startup `CONNECT chatgpt.com:443` has not been traced to its
   code path, and belongs to N4's startup-traffic work.
+
+## N4 preparation: narrow native layout
+
+This is a preparatory slice for N4 (#77), on branch `m8/n4-layout` off `9006f93`. It
+implements section 1 of the N4 state review, as the orchestrator decided
+(question 2: a separate PR, limited to the layout). The N4 lane stacks on it.
+That review, `M8-N4-state-review.md`, travels with the lane on
+`m8/n4-startup`. It found one gap and closes it: **in production, nothing
+delivered the sealed configuration to the client, and nothing routed the
+store's credential to it.**
+- The provider only digested `configuration` (`codex.py:1797, 1851`).
+- The store was bound at `/vendor-store`, which is not `CODEX_HOME`.
+
+A real login would never have been found, and the client would have run on
+built-in defaults.
+
+**What changed in `src/`:**
+
+- `linux.py`:
+  - `NativeStoreMount` drops `path` and carries three distinct descriptors:
+    `lock_fd`, `configuration_fd` and `credential_fd`.
+  - `argv` replaces `--bind <store> /vendor-store` with a fresh
+    `/tmp/home/.codex` inside the existing tmpfs. The sealed configuration is
+    bound there with `--ro-bind-data <fd>`, the store's `auth.json` with
+    `--bind-fd <fd>`, and `CODEX_HOME` is set explicitly.
+  - `_run` refuses a mount descriptor that is also a guard. It passes both
+    mount descriptors to the supervisor, with `--mount-fds=a,b`.
+  - `sealed_data_fd(data)` writes a memfd, seals it (`WRITE|GROW|SHRINK|SEAL`),
+    re-reads it and rewinds it.
+- `_supervisor.py`: it takes `--mount-fds`, `fstat`s each descriptor, passes
+  them only to bubblewrap's `pass_fds` (never to the payload, since trusted
+  PID 1 launches with `close_fds`), and closes them at exit.
+- `operator_store.py`:
+  - `CREDENTIAL_FILE = "auth.json"`;
+  - `open_credential(opened)`, which is `O_PATH|O_NOFOLLOW|O_CLOEXEC`
+    relative to the identity-checked store descriptor, so the file is never
+    read;
+  - `check_credential(fd, owner_uid)`: a regular file, one link, the store
+    directory's owner, mode exactly `0600`;
+  - `BindingStore.open_credential(held)`.
+
+  The layout and mount-lock laws move, because they digest this module.
+- `codex.py`:
+  - The provider retains `configuration`, which its existing drift check has
+    already bound to the published digest.
+  - `_converse` opens the credential from the held store. On refusal it
+    publishes `unavailable` before any launch. It then seals the
+    configuration and closes both descriptors in a `finally`. That runs only
+    after the exchange task has ended, because awaiting a task returns, even
+    for a cancelled caller, only once the task is done.
+
+`scripts/ci/build_m8_runtime.py` no longer creates a `vendor-store` mount
+point. `scripts/ci/build_m8_store_fixture.py` now writes harmless
+`auth.json` bytes (mode `0600`, owned by the service) in place of
+`fixture-marker`. No L0 field, journal record, walker change or availability
+change is made. `LinuxLauncher.revision`, `runtime_digest`, `ADAPTER_REVISION`
+and both store laws all move, so every launch identity and descriptor has to be
+re-derived. The CI fixtures re-derive them on every run.
+
+### Local evidence (Windows 11, Python 3.11)
+
+- New `tests/substrate/test_operator_store_credential.py`: 19 passed and 1
+  skipped (the memfd seal test, which is Linux-only).
+  - Accepting cases: the checked descriptor is handed over, and the owner
+    compared is the store directory's.
+  - Refusals, each confirmed closed with `fstat`: group-readable, read-only,
+    a second name, another owner, a directory, a symlink and an absent file.
+  - The real open is `O_PATH|O_NOFOLLOW|O_CLOEXEC` relative to the store
+    descriptor, and never reads.
+  - Only mode `0600` passes.
+- `test_native_store_launch.py` (17 passed):
+  - the exact eleven-argument layout, with no `--bind` and no `/vendor-store`;
+  - a worker launch gets no codex home;
+  - the three descriptors must be distinct;
+  - a mount descriptor that is also a guard never reaches the binding check;
+  - the supervisor alone receives `--mount-fds` right after `--report-fd` and
+    inherits both descriptors, and a worker launch gets neither;
+  - `sealed_data_fd` refuses off Linux.
+- `test_codex_store.py`:
+  - the three-checks test now asserts that the zone received the very
+    credential descriptor that was opened, and the provider's own
+    configuration bytes, and that both are closed after the exchange;
+  - six credential shapes refuse before any launch, with an accepting twin;
+  - a failed seal closes the credential without launching;
+  - a cancelled caller's descriptors close only after its exchange ends.
+- `tests/operator_store_world.py`: `StoreWorld.install` now also substitutes
+  the credential open and `fstat` primitives, and the sealed memfd. The
+  memfd substitute is an ordinary descriptor holding the same bytes. The rule
+  itself, and descriptor ownership, stay production code.
+- Mutation inventories:
+  - `scripts/check_m8_n3a_mutations.py` gains L1-L20 and retargets five N3a
+    mutants onto the layout (bound by descriptor, `HOME`, `--unshare-net`,
+    distinct descriptors). **65 killed by assertion.** L19 and L20, the memfd
+    rewind and seal, are NOT PROVEN on Windows as expected, because their
+    test is Linux-only.
+  - The first run found one weak test. L6 (a refused descriptor is closed)
+    survived, because the test compared descriptor *numbers* with a list of
+    closed ones, and the number had been reused. The test now proves the
+    closure with `fstat`, and L6 is killed.
+  - Two proposed mutants were dropped as unkillable by this runner, and each
+    is instead proved positively on Linux:
+    - the supervisor's `pass_fds` runs in a separate interpreter from the
+      installed runtime (proved by the layout proof launching at all);
+    - a path-bind variant has no path to name (proved by the descriptor-swap
+      proof).
+  - The other inventories: N2 83/83, N2 WRITE 49/49, N3b 59/60, N3c 48/54, the
+    bridge 13/20, containment 16/42 and duplex 13/19. Every NOT PROVEN is
+    Linux-only, and each count matches its earlier record.
+- `PYTHONIOENCODING=utf-8 uv run --python 3.11 verify` on this tree:
+  - clean ruff;
+  - strict mypy over 103 source files;
+  - four import contracts kept;
+  - 2,940 tests passed and 558 skipped for platform.
+
+  The one failure was `test_docs_validation_accepts_the_actual_repository`.
+  This entry was edited during the run, before its manifest line was
+  refreshed. After the refresh, that test and `sha256sum --check` passed.
+
+### Linux proofs rewritten, not yet executed
+
+These run only in the provisioned foundation lane. **Nothing below has
+executed.**
+
+- `test_operator_store_containment.py`. It gains a shared `native_mount`
+  helper (the same two calls the handle makes), which every Linux store
+  launch now uses. Two proofs:
+  - **Layout proof** (evidence `n3a-native-layout.json`):
+    - in the zone, `auth.json` reads the fixture bytes, is rewritten in place,
+      and its bytes reach the store's same inode;
+    - `rename` and `unlink` over it fail with `EBUSY`;
+    - `config.toml` holds exactly the sealed bytes and is read-only;
+    - the home lists exactly `auth.json` and `config.toml`;
+    - `CODEX_HOME` and `HOME` are exact;
+    - `/vendor-store` is absent;
+    - no descriptor names `auth.json`, a memfd, the lock, a guard or the
+      anchor;
+    - the store directory still holds only `auth.json`;
+    - an ordinary worker sees neither `/vendor-store` nor the codex home.
+  - **Descriptor proof** (`n3a-native-layout-descriptor.json`): `before_spawn`
+    swaps the store path to a different `0600` file after the descriptor was
+    opened, and the zone still reads the checked object's bytes.
+- `test_operator_store_persistence.py`:
+  - **Refresh:** an in-place rewrite of the bound file keeps the inode, and
+    `os.replace` over it fails with `EBUSY`. Both checks accept, and the bytes
+    survive close.
+  - **Persistence:** planted `hooks.json` and `helper` in the zone's home
+    survive into neither the next launch's arguments (compared with the two
+    per-launch descriptor numbers erased) nor its home. A write to
+    `config.toml` is denied. The sealed configuration is unchanged. The store
+    directory is unchanged. The same probe runs inline and shows the zone's
+    reach unchanged, with a same-run relay control.
+- `test_native_egress_containment.py`: the socket walk's positive control
+  plants its socket in the zone's own home. The store is no longer a pathname
+  route.
+- `_operator_store_owner.py` and `_egress_owner.py` use `native_mount`, and so
+  does every N3b launch.
+- `test_operator_store_credential.py`'s memfd seal test runs in the
+  unprivileged Linux `verify` job.
+
+**What is unproved until the lane runs:**
+- that bubblewrap `0.9.0-1ubuntu0.3` accepts `--bind-fd` and `--ro-bind-data`
+  from inherited descriptors under the AppArmor launch profile (the
+  orchestrator found both flags in the pinned binary's strings; behaviour is
+  CI's to show);
+- `EBUSY` for `rename` and `unlink` over a file bind;
+- the zone's descriptor inventory.
+
+### Deviations from the design
+
+- The design's `before_spawn` opened the credential. Here the handle opens it
+  just before the launch instead: `argv` needs the descriptor number before
+  `before_spawn` runs. The object bound is still the object checked, because
+  the check is on the descriptor.
+- The design put a cancellation hand-off (a done-callback) on the mount
+  descriptors. A test showed it unreachable: a caller awaiting the exchange
+  task returns only once that task is done. The code closes in the `finally`,
+  and the test pins the ordering.
+- The evidence files are `n3a-native-layout*.json`, not `n4-*`. The bridge
+  lane asserts its exact `n4-*.json` set, and these proofs run in the N3a
+  step.
+
+**Correction, found while building the N4 lane on top of this slice.** The
+first commit, `37db228`, broke the N4 bridge proof on Linux. The breakage
+was found by reading, not by execution. There were two causes:
+- **The startup bootstrap.** The bridge proof's bootstrap
+  (`_native_startup_bootstrap.py`) created `/tmp/home/.codex` and wrote
+  `config.toml` there. Under the layout, that directory already exists and
+  `config.toml` is a read-only bind, so both calls would have raised.
+  - The bootstrap now creates the directory with `exist_ok`.
+  - When the layout has bound a configuration, the bootstrap requires that
+    configuration to equal the setup's bytes and never writes it. When nothing
+    is bound (placement images), it writes the configuration as before.
+  - `run_native` gains a `configuration` argument, so the pinned-client
+    proof binds its telemetry configuration as the sealed one.
+- **The zone environment.** The bridge proofs' expected zone environment now
+  includes `CODEX_HOME`.
+
+**First Linux CI run of PR #106** (run 35967705858, at `37db228`). CI's
+uv-managed CPython 3.11 has no `fcntl.F_ADD_SEALS`. That failed:
+- the memfd test in `verify`;
+- both layout proofs;
+- the owner-death proof. Its owner process builds the same mount, so it
+  never printed `ready`.
+
+N3a's 20 root-lane proofs passed.
+
+The fix:
+- `seal_constants` and `memfd_flags` take the module's names when they
+  exist, and otherwise the Linux UAPI values
+  (`include/uapi/linux/fcntl.h`: `F_ADD_SEALS` 1033, `F_GET_SEALS` 1034, seal
+  bits 1/2/4/8; `include/uapi/linux/memfd.h`: 1 and 2).
+- `sealed_data_fd` now reads the seals back and refuses anything but exactly
+  the four it applied, so a wrong constant fails loudly.
+- Portable tests cover both selections, as mutants L20-L23. The read-back
+  check itself has no mutant: only a wrong constant on Linux reaches it.

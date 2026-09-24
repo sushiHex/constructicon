@@ -112,7 +112,8 @@ async def test_callback_change_is_captured_and_the_exact_candidate_is_gated(
 ):
     program = (
         "from pathlib import Path\n"
-        "assert not any(Path('/vendor-store').iterdir())\n"
+        "assert not Path('/vendor-store').exists()\n"
+        "assert not Path('/tmp/home/.codex').exists()\n"
         "assert Path('/proc/net/route').read_text().splitlines()[1:] == []\n"
         "Path('callback.txt').write_text('one callback')\n"
     )

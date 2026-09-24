@@ -118,7 +118,9 @@ PYTHON = "usr/bin/python3.12"
 GIT_BINARY = "usr/bin/git"
 LIBRARY = "usr/lib/python3.12"
 IGNORED = frozenset({"__pycache__", "test", "tests", "ensurepip", "idlelib"})
-RUNTIME_DIRECTORIES = ("proc", "dev", "tmp", "workspace", "vendor-store")
+RUNTIME_DIRECTORIES = ("proc", "dev", "tmp", "workspace")
+"""No store mount point: the N4 layout binds the credential file into the
+zone's own tmpfs home by descriptor (M8-N4-state-review.md, section 1)."""
 EGRESS_LEAF = "vendor-egress.sock"
 # Inside the operator's workspace: the pinned vendor inputs, and the staged set.
 TARBALL = "codex.tar.gz"

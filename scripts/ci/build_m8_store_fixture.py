@@ -19,7 +19,8 @@ RUNNER_ROOT = Path("/var/lib/constructicon-m8-launch")
 STORE_ROOT = RUNNER_ROOT / "operator-stores"
 STORE_KEY = "n3a-fixture"
 GENERATION = 1
-MARKER_NAME = "fixture-marker"
+CREDENTIAL_CONTENT = b"harmless fixture\n"
+"""Not a credential: harmless bytes at the one store file the native layout binds."""
 
 
 def _write_exclusive(path: Path, content: bytes, *, mode: int) -> None:
@@ -125,14 +126,10 @@ def main() -> None:
     bundle = STORE_ROOT / operator_store._bundle_token(STORE_KEY)
     store = bundle / "store"
     lock = bundle / "retained.lock"
-    marker = store / MARKER_NAME
-    _write_exclusive(
-        marker,
-        b"harmless fixture\n",
-        mode=0o600,
-    )
-    os.chown(marker, service_uid, service_gid)
-    os.chmod(marker, 0o600)
+    credential = store / operator_store.CREDENTIAL_FILE
+    _write_exclusive(credential, CREDENTIAL_CONTENT, mode=0o600)
+    os.chown(credential, service_uid, service_gid)
+    os.chmod(credential, 0o600)
     os.chown(store, -1, service_gid)
     os.chown(lock, -1, service_gid)
 
