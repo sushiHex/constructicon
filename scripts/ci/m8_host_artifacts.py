@@ -11,8 +11,10 @@ import, no network, no marker file, and children get a fixed environment. The
 production root and every destination are fixed; the command line names only
 the commit and the operator's private workspace.
 
-Only ``stage-launch`` writes, and only through ``materialize`` into a fresh
-staging directory in the workspace. Every judge proves each precondition of
+A third set (``controller-wheels``, ``stage-controller``, ``judge-controller``,
+``verify-controller``) is the service user's controller environment, in the
+same document's addendum. Only the two stagers write, and only through
+``materialize`` into a fresh staging directory in the workspace. Every judge proves each precondition of
 root's sequence. Every verifier recomputes from scratch against the blobs at
 the commit, the digests they pin and root-owned host files, never against the
 staged copies. They read the kernel's loaded-profile list from standard input,
@@ -33,8 +35,11 @@ import stat
 import subprocess
 import sys
 import tarfile
+import tomllib
+import zipfile
+from base64 import urlsafe_b64encode
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path, PurePosixPath
 from typing import IO
 
@@ -130,9 +135,31 @@ ALIASES = (("/usr/lib64/", "/lib64/"), ("/usr/lib/", "/lib/"), ("/usr/sbin/", "/
            ("/usr/bin/", "/bin/"))  # fmt: skip
 TREE_SUMMARY = 32
 UNATTRIBUTED_LIMIT = 64
+# The controller environment (owner decision 2): C's package and its runtime
+# closure from C's uv.lock, unpacked flat; the service user's one sys.path entry.
+CONTROLLER = "opt/constructicon-m8-controller"
+LOCK = "uv.lock"
+PACKAGE = "constructicon"
+PACKAGE_SOURCE = "src/constructicon"
+CONTROLLER_BLOBS = (SCRIPT, LOCK)
+WHEELS = "wheels"
+CONTROLLER_STAGED = "controller"
+PYTHON_VERSION = (3, 12)
+WHEEL_MEMBERS = 4096
+WHEEL_NAME_BYTES = 255
+WHEEL_BYTES = 64 << 20
+LEGACY_MANYLINUX = {"manylinux1": 5, "manylinux2010": 12, "manylinux2014": 17}
+# Every module the proofs import; N4 adds its lane module in the change that lands it.
+PROOF_MODULES = (
+    "constructicon.api",
+    "constructicon.substrate.executors.linux",
+    "constructicon.substrate.executors.codex",
+    "pydantic_core._pydantic_core",
+)
 VERDICTS = {
     "judge": "ready", "verify": "installed", "stage-launch": "staged",
-    "judge-launch": "ready", "verify-launch": "installed",
+    "judge-launch": "ready", "verify-launch": "installed", "controller-wheels": "listed",
+    "stage-controller": "staged", "judge-controller": "ready", "verify-controller": "installed",
 }  # fmt: skip
 # (name, kind, final mode, source); ``.`` is the tree's own root. A file's
 # source is ("host", real path), ("bytes", data) or ("tar", member name); a
@@ -1028,6 +1055,372 @@ def verify_launch(commit: str, root: Path, workspace: Path, listing: str, record
     record["installed"] = True
 
 
+# --- the controller environment -------------------------------------------
+
+
+def controller_command(path: str = "/" + CONTROLLER) -> tuple[str, ...]:
+    """How the service user runs a module from the tree: its one ``sys.path`` entry.
+
+    ``-S`` also drops the distribution's ``dist-packages``; ``-B`` keeps the
+    interpreter from writing into the read-only tree. The module name is
+    popped, so the module sees ``argv`` as ``python -m`` would give it.
+    """
+
+    return (
+        "/usr/bin/python3", "-I", "-S", "-B", "-c",
+        f'import sys; sys.path.insert(0, "{path}"); import runpy; '
+        'runpy.run_module(sys.argv.pop(1), run_name="__main__", alter_sys=True)',
+    )  # fmt: skip
+
+
+def controller_check(path: str = "/" + CONTROLLER) -> str:
+    """The import check the service user runs (runbook R19) and CI runs on a copy.
+
+    It imports the modules named as arguments and passes only if every loaded
+    module's file lies in the tree or the interpreter's standard library.
+    """
+
+    return (
+        "import importlib, json, sys, sysconfig; "
+        f'sys.path.insert(0, "{path}"); '
+        "[importlib.import_module(m) for m in sys.argv[1:]]; "
+        f'roots = ("{path}/", sysconfig.get_paths()["stdlib"] + "/", '
+        'sysconfig.get_paths()["platstdlib"] + "/"); '
+        'files = sorted({f for f in (getattr(m, "__file__", None) '
+        "for m in list(sys.modules.values())) if f}); "
+        "outside = [f for f in files if not f.startswith(roots)]; "
+        'print(json.dumps({"files": len(files), "outside": outside, "passed": not outside})); '
+        "raise SystemExit(1 if outside else 0)"
+    )
+
+
+def controller_closure(lock: bytes) -> list[dict]:
+    """The runtime closure of the editable package in the lock: dependencies only.
+
+    No extra, no dev group. A qualified dependency (marker, version, source)
+    or a name the lock lists twice refuses: no marker evaluator exists yet.
+    """
+
+    packages: dict[str, dict] = {}
+    for package in tomllib.loads(lock.decode("utf-8")).get("package", []):
+        require(package.get("name") not in packages, f"{package.get('name')} is locked twice")
+        packages[package["name"]] = package
+    root = packages.get(PACKAGE)
+    require(
+        root is not None and root.get("source") == {"editable": "."},
+        f"the lock has no editable {PACKAGE}",
+    )
+    assert root is not None
+    closure: dict[str, dict] = {}
+    pending = [root]
+    while pending:
+        for dependency in pending.pop().get("dependencies", []):
+            require(set(dependency) == {"name"}, f"{dependency} is a qualified dependency")
+            name = dependency["name"]
+            require(name in packages, f"{name} is not in the lock")
+            if name not in closure:
+                closure[name] = packages[name]
+                pending.append(packages[name])
+    return [closure[name] for name in sorted(closure)]
+
+
+def platform_tags(glibc_minor: int) -> set[str]:
+    tags = {f"manylinux_2_{minor}_x86_64" for minor in range(5, glibc_minor + 1)}
+    tags |= {f"{name}_x86_64" for name, minor in LEGACY_MANYLINUX.items() if minor <= glibc_minor}
+    return tags
+
+
+def accepted_triples(glibc_minor: int) -> set[tuple[str, str, str]]:
+    """An explicit subset of CPython 3.12's ``sys_tags()`` on x86_64 Linux."""
+
+    triples: set[tuple[str, str, str]] = set()
+    for platform in platform_tags(glibc_minor):
+        triples.add(("cp312", "cp312", platform))
+        triples |= {(f"cp3{minor}", "abi3", platform) for minor in range(2, 13)}
+        triples |= {(python, "none", platform) for python in ("cp312", "py312", "py3")}
+    triples |= {(python, "none", "any") for python in ("cp312", "py312", "py3")}
+    return triples
+
+
+def wheel_triples(filename: str) -> set[tuple[str, str, str]]:
+    """PEP 427: the last three dash-separated fields, each a dotted tag set."""
+
+    require(filename.endswith(".whl"), f"{filename} is not a wheel")
+    fields = filename.removesuffix(".whl").split("-")
+    require(len(fields) in (5, 6), f"{filename} is not a wheel name")
+    pythons, abis, platforms = (field.split(".") for field in fields[-3:])
+    return {(p, a, s) for p in pythons for a in abis for s in platforms}
+
+
+def select_wheel(package: dict, glibc_minor: int) -> dict[str, str]:
+    """Exactly one wheel whose expanded tags meet the accepted triples, or refuse."""
+
+    accepted = accepted_triples(glibc_minor)
+    found = []
+    for wheel in package.get("wheels", []):
+        filename = wheel["url"].rsplit("/", 1)[-1]
+        if wheel_triples(filename) & accepted:
+            found.append(wheel)
+    name = package["name"]
+    require(len(found) == 1, f"{name} has {len(found)} compatible wheels, not one")
+    (wheel,) = found
+    digest = wheel.get("hash", "")
+    require(re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is not None, f"{name} has no sha256")
+    filename = wheel["url"].rsplit("/", 1)[-1]
+    require(re.fullmatch(r"[\w.+-]+\.whl", filename) is not None, f"{filename} is not plain")
+    return {"name": name, "file": filename, "url": wheel["url"], "sha256": digest[7:]}
+
+
+def needs_zip64(info: zipfile.ZipInfo) -> bool:
+    return max(info.file_size, info.compress_size, info.header_offset) >= 0xFFFFFFFF
+
+
+def wheel_entries(archive: zipfile.ZipFile, wheel: str) -> tuple[list[Entry], dict[str, str]]:
+    """One pinned wheel as ``pip --target`` lays it out; every refusal before any write.
+
+    Only regular files and directories, plain unique names, no ``.data``,
+    bounded counts and sizes, no ZIP64, and members exactly as ``RECORD``
+    lists them. A member with no type bits is a regular file.
+    """
+
+    infos = archive.infolist()
+    require(len(infos) <= WHEEL_MEMBERS, f"{wheel} has too many members")
+    require(sum(i.file_size for i in infos) <= WHEEL_BYTES, f"{wheel} unpacks too large")
+    entries: dict[str, Entry] = {}
+    files: dict[str, zipfile.ZipInfo] = {}
+    for info in infos:
+        name = info.filename.rstrip("/") if info.is_dir() else info.filename
+        require(
+            re.fullmatch(r"[\w.+-]+(/[\w.+-]+)*", name) is not None
+            and ".." not in PurePosixPath(name).parts
+            and len(name.encode()) <= WHEEL_NAME_BYTES,
+            f"{wheel} member {name!r} is not a plain relative path",
+        )
+        require(not needs_zip64(info), f"{wheel} needs ZIP64")
+        require(not name.split("/")[0].endswith(".data"), f"{wheel} has a .data directory")
+        require(name not in entries and name not in files, f"{wheel} repeats {name}")
+        kind = stat.S_IFMT(info.external_attr >> 16)
+        if info.is_dir():
+            entries[name] = (name, "directory", 0o555, None)
+            continue
+        require(kind in (0, stat.S_IFREG), f"{wheel} member {name} is not a regular file")
+        files[name] = info
+    digests: dict[str, str] = {}
+    recorded: dict[str, str] = {}
+    for name, info in files.items():
+        with archive.open(info) as stream:
+            digest = hashlib.file_digest(stream, "sha256")
+        digests[name] = digest.hexdigest()
+        encoded = urlsafe_b64encode(digest.digest()).rstrip(b"=").decode()
+        recorded[name] = f"sha256={encoded}"
+        parts = PurePosixPath(name).parts
+        for index in range(1, len(parts)):
+            parent = "/".join(parts[:index])
+            entries.setdefault(parent, (parent, "directory", 0o555, None))
+        mode = 0o555 if (info.external_attr >> 16) & 0o111 else 0o444
+        entries[name] = (name, "file", mode, ("zip", wheel, name))
+    records = [name for name in files if re.fullmatch(r"[^/]+\.dist-info/RECORD", name)]
+    require(len(records) == 1, f"{wheel} has no single RECORD")
+    listed: dict[str, str] = {}
+    for line in archive.read(records[0]).decode("utf-8").splitlines():
+        path, digest, _ = line.rsplit(",", 2)
+        listed[path] = digest
+    require(listed.pop(records[0], None) == "", f"{wheel} RECORD does not list itself unhashed")
+    del recorded[records[0]]
+    require(listed == recorded, f"{wheel} members are not its RECORD")
+    return list(entries.values()), digests
+
+
+def package_blobs(commit: str, repository: Path) -> dict[str, bytes]:
+    """Every blob under ``src/constructicon`` at the commit, raw; mode 100644 only."""
+
+    listing = git(repository, "ls-tree", "-r", "-z", "--full-tree", commit, "--", PACKAGE_SOURCE)
+    require(listing.returncode == 0, f"{PACKAGE_SOURCE} is unreadable at commit")
+    blobs: dict[str, bytes] = {}
+    for line in listing.stdout.split(b"\x00")[:-1]:
+        entry = re.fullmatch(rb"(\d{6}) (\w+) ([0-9a-f]{40})\t(.+)", line)
+        require(entry is not None, f"unexpected tree entry {line[:128]!r}")
+        assert entry is not None
+        path = entry[4].decode()
+        require(entry[1] == b"100644" and entry[2] == b"blob", f"{path} is not a regular blob")
+        blob = git(repository, "cat-file", "blob", entry[3].decode())
+        require(blob.returncode == 0, f"{path} blob is unreadable")
+        blobs[path] = blob.stdout
+    require(PACKAGE_SOURCE + "/__init__.py" in blobs, f"{PACKAGE_SOURCE} is not a package")
+    return blobs
+
+
+def controller_entries(
+    blobs: dict[str, bytes], wheels: list[tuple[list[Entry], dict[str, str]]]
+) -> tuple[list[Entry], dict[str, str]]:
+    """The package's files and every wheel's, in one tree; a path twice refuses."""
+
+    entries: dict[str, Entry] = {".": (".", "directory", 0o555, None)}
+    digests: dict[str, str] = {}
+
+    def add(entry: Entry) -> None:
+        name = entry[0]
+        if entry[1] == "directory" and entries.get(name, entry) == entry:
+            entries[name] = entry
+            return
+        require(name not in entries, f"{name} would be installed twice")
+        entries[name] = entry
+
+    for path, data in sorted(blobs.items()):
+        name = PACKAGE + path.removeprefix(PACKAGE_SOURCE)
+        parts = PurePosixPath(name).parts
+        for index in range(1, len(parts)):
+            add(("/".join(parts[:index]), "directory", 0o555, None))
+        add((name, "file", 0o444, ("bytes", data)))
+        digests[name] = sha256(data)
+    for members, sums in wheels:
+        for entry in members:
+            add(entry)
+        digests.update(sums)
+    return sorted(entries.values(), key=lambda e: PurePosixPath(e[0]).parts), digests
+
+
+def interpreter() -> tuple[str, tuple[int, int]]:
+    """Platform primitive: the interpreter this script runs as, which runs the controller."""
+
+    return sys.implementation.name, (sys.version_info[0], sys.version_info[1])
+
+
+def host_glibc() -> int:
+    """Platform primitive: the host's glibc minor version; major 2 or refuse."""
+
+    reported = os.confstr("CS_GNU_LIBC_VERSION") or ""
+    found = re.fullmatch(r"glibc 2\.(\d+)", reported)
+    require(found is not None, f"unexpected libc {reported!r}")
+    assert found is not None
+    return int(found[1])
+
+
+def controller_selection(commit: str, workspace: Path, record: dict) -> tuple[dict, list[dict]]:
+    """Custody, provenance and the pinned wheel list: every command's first steps."""
+
+    require_unprivileged()
+    require_custody(workspace)
+    blobs = prove(commit, workspace / REPOSITORY, record, CONTROLLER_BLOBS)
+    name, version = interpreter()
+    record["interpreter"] = f"{name} {version[0]}.{version[1]}"
+    require(name == "cpython" and version == PYTHON_VERSION, "the controller needs CPython 3.12")
+    glibc = host_glibc()
+    record["glibc_minor"] = glibc
+    selected = [select_wheel(package, glibc) for package in controller_closure(blobs[LOCK])]
+    record["wheels"] = selected
+    return blobs, selected
+
+
+@contextmanager
+def controller_plan(
+    commit: str, workspace: Path, record: dict
+) -> Iterator[tuple[list[Entry], Inventory, dict[str, zipfile.ZipFile]]]:
+    """The whole tree from the commit and the pinned wheels; archives stay open for staging."""
+
+    _, selected = controller_selection(commit, workspace, record)
+    with ExitStack() as stack:
+        archives: dict[str, zipfile.ZipFile] = {}
+        planned = []
+        for wheel in selected:
+            stream = stack.enter_context(open_regular(workspace / WHEELS / wheel["file"]))
+            require(
+                hashlib.file_digest(stream, "sha256").hexdigest() == wheel["sha256"],
+                f"{wheel['file']} is not the locked wheel",
+            )
+            stream.seek(0)
+            try:
+                archive = stack.enter_context(zipfile.ZipFile(stream))
+                planned.append(wheel_entries(archive, wheel["file"]))
+            except zipfile.BadZipFile as exc:
+                raise ValueError(f"{wheel['file']} is not a readable wheel") from exc
+            archives[wheel["file"]] = archive
+        blobs = package_blobs(commit, workspace / REPOSITORY)
+        entries, digests = controller_entries(blobs, planned)
+        inventory = expected_inventory(entries, lambda entry: digests[entry[0]])
+        record["controller_entries"] = len(inventory)
+        yield entries, inventory, archives
+
+
+def controller_contents(archives: dict[str, zipfile.ZipFile]) -> Callable[[object], IO[bytes]]:
+    def opened(source: object) -> IO[bytes]:
+        if source[0] == "zip":  # type: ignore[index]
+            _, wheel, member = source  # type: ignore[misc]
+            return archives[wheel].open(member)
+        return contents()(source)
+
+    return opened
+
+
+def controller_wheels(commit: str, root: Path, workspace: Path, listing: str, record: dict) -> None:
+    """Read-only: the locked wheels for this interpreter and glibc, for the operator's curl."""
+
+    controller_selection(commit, workspace, record)
+    record["listed"] = True
+
+
+def stage_controller(commit: str, root: Path, workspace: Path, listing: str, record: dict) -> None:
+    with controller_plan(commit, workspace, record) as (entries, _, archives):
+        plan: list[Entry] = [(".", "directory", 0o700, None)] + [
+            (CONTROLLER_STAGED if name == "." else f"{CONTROLLER_STAGED}/{name}", kind, mode, src)
+            for name, kind, mode, src in entries
+        ]
+        materialize(plan, workspace / STAGING, controller_contents(archives))
+    record["staged"] = True
+
+
+def judge_controller(commit: str, root: Path, workspace: Path, listing: str, record: dict) -> None:
+    """Every precondition of root's one ``cp``, before it runs."""
+
+    with controller_plan(commit, workspace, record) as (_, inventory, _):
+        pass
+    staging = workspace / STAGING
+    require(stat.S_ISDIR(os.lstat(staging).st_mode), f"{staging} must be a real directory")
+    require(os.listdir(staging) == [CONTROLLER_STAGED], "staging must hold exactly the controller")
+    differences = compare(tree_inventory(staging / CONTROLLER_STAGED), inventory, os.geteuid())
+    record["staged_differences"] = differences[:TREE_SUMMARY]
+    require(not differences, "the staged controller is not the reviewed plan")
+    require_root_alone(root / CP)
+    require(absent(root / CONTROLLER), f"/{CONTROLLER} already exists; installation is fresh-only")
+    require_ancestors(root / CONTROLLER, (ROOT_UID,), "root")
+    record["ready"] = True
+
+
+def observe_controller(
+    root: Path, listing: str, inventory: Inventory | None = None
+) -> dict[str, object]:
+    path = root / CONTROLLER
+    try:
+        info = os.lstat(path)
+        entry: dict[str, object] = {"uid": info.st_uid, "mode": oct(stat.S_IMODE(info.st_mode))}
+        if stat.S_ISDIR(info.st_mode) and inventory is not None:
+            differences = compare(tree_inventory(path), inventory, ROOT_UID)
+            entry.update(state="tree", different=len(differences))
+            entry["differences"] = differences[:TREE_SUMMARY]
+        else:
+            entry["state"] = "directory" if stat.S_ISDIR(info.st_mode) else "other"
+    except FileNotFoundError:
+        entry = {"state": "absent"}
+    except (OSError, ValueError) as exc:
+        entry = {"state": f"unobservable: {type(exc).__name__}"}
+    return {"/" + CONTROLLER: entry}
+
+
+def verify_controller(commit: str, root: Path, workspace: Path, listing: str, record: dict) -> None:
+    """Recomputes the tree from the commit and the pinned wheels; staging is never read."""
+
+    with controller_plan(commit, workspace, record) as (_, inventory, _):
+        pass
+    record["observed"] = observe_controller(root, listing, inventory)
+    entry = record["observed"]["/" + CONTROLLER]
+    require(
+        entry.get("state") == "tree" and entry.get("different") == 0,
+        f"/{CONTROLLER} is not the reviewed tree",
+    )
+    require_ancestors(root / CONTROLLER, (ROOT_UID,), "root")
+    record["installed"] = True
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=tuple(VERDICTS))
@@ -1050,11 +1443,17 @@ def main(argv: list[str] | None = None) -> int:
         commands = {
             "judge": judge, "verify": verify, "stage-launch": stage_launch,
             "judge-launch": judge_launch, "verify-launch": verify_launch,
+            "controller-wheels": controller_wheels, "stage-controller": stage_controller,
+            "judge-controller": judge_controller, "verify-controller": verify_controller,
         }  # fmt: skip
         commands[args.command](args.commit, ROOT, args.workspace, listing, record)
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         record["failure"] = f"{type(exc).__name__}: {exc}"[:2048]
-        observer = observe_launch if args.command.endswith("-launch") else observe
+        observer = (
+            observe_launch if args.command.endswith("-launch")
+            else observe_controller if "controller" in args.command
+            else observe
+        )  # fmt: skip
         # A verifier that already observed keeps that record, with its tree differences.
         if "observed" not in record:
             record["observed"] = observer(ROOT, listing)

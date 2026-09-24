@@ -691,8 +691,12 @@ The `cp` argument is the launch set's (see "Privilege boundary").
 shape, a constant in the script and pinned by a test:
 
 ```
-/usr/bin/python3 -I -S -B -c 'import sys; sys.path.insert(0, "/opt/constructicon-m8-controller"); import runpy; runpy.run_module(sys.argv[1], run_name="__main__", alter_sys=True)' <module> <arguments>
+/usr/bin/python3 -I -S -B -c 'import sys; sys.path.insert(0, "/opt/constructicon-m8-controller"); import runpy; runpy.run_module(sys.argv.pop(1), run_name="__main__", alter_sys=True)' <module> <arguments>
 ```
+
+`sys.argv.pop(1)` removes the module name, so the module sees
+`[its file, <arguments>]`, as `python -m` gives it. With `sys.argv[1]`
+instead, the module name would stay in its arguments.
 
 - `-I` drops the user site, `PYTHON*` and the script directory.
 - `-S` also drops the system `dist-packages`, so no distribution package can
@@ -782,6 +786,26 @@ argument.
   would fail closed, not fall back.
 - The glibc bound is observed, not pinned.
 - `constructicon.__version__` is `0+unknown` on the host.
+
+**As implemented.**
+- The code is in `scripts/ci/m8_host_artifacts.py`: `controller_closure`,
+  `accepted_triples`, `select_wheel`, `wheel_entries`, `package_blobs`,
+  `controller_entries`, and the four commands.
+- The tests are `tests/test_m8_controller_env.py`, with 66 portable and 23
+  Linux-only.
+- `scripts/check_m8_host_artifact_mutations.py` gains 24 portable mutants,
+  all killed locally by assertion, and 6 Linux-only mutants, which are NOT
+  PROVEN locally.
+- The verify-lane proof is `verify.yml`'s
+  `M8_CONTROLLER_REQUIRED=1 … ::test_the_staged_controller_imports_under_isolated_python`.
+
+**Unexecuted until Linux CI runs:** the Linux-only tests, the 6 mutants and
+the import proof. Locally on Windows they are skips, which is not evidence.
+Two things differ from the text above:
+- the command pops the module name (`sys.argv.pop(1)`), so the module sees
+  `python -m`'s `argv`, and a portable test runs it;
+- the host check is one constant, `controller_check()`. The runbook's R19
+  shows it verbatim, and a test holds the two equal.
 
 **The five wheels, as measured.** Measured on 2026-09-24 from the lock's URLs;
 each file hashed to its lock digest:
@@ -1079,3 +1103,130 @@ Posted on #77, all of it:
    `constructicon-m8-launch//&constructicon-m8-workload (enforce)`.
 
 A CI run for `C` is context only. It never qualifies this host's runtime.
+
+---
+
+# Controller runbook (R15-R20)
+
+This installs the controller environment (the addendum above). The launch set
+does not need to be installed first, and this runbook changes nothing of it.
+Run only under R15's authorization, in order, in one bash shell as the
+operator, unless marked PowerShell. On any unexpected output, stop, do not
+retry, post the output to #77, then recover.
+
+## R15 — Separate authorization (required)
+
+A written authorization on #77 must name:
+- the VM, `C`, its PR, and that PR's green checks, including the verify
+  lane's controller proof;
+- `git diff --exit-code <headRefOid> <C>` over the entire tree, empty (as
+  R8);
+- the permitted actions: `Start-VM`, `Stop-VM`; one checkpoint
+  `pre-m8-controller`; the operator's anonymous fetches from github.com and
+  files.pythonhosted.org; R17 to R19 exactly as written, including their one
+  root command and the check as `m8-service`; and the recovery below;
+- what stays forbidden: everything R8 forbids, and running any controller
+  module other than R19's check.
+
+## R16 — Checkpoint, then start (PowerShell)
+
+```powershell
+Get-VM constructicon-m8 | Select-Object Name, State            # Off
+Checkpoint-VM -Name constructicon-m8 -SnapshotName pre-m8-controller
+Start-VM constructicon-m8
+```
+
+Permitted only before the first vendor login (H2), and deleted before it
+under a separate authorization.
+
+## R17 — Provenance and the locked wheels (operator, stock tools only, no sudo)
+
+```bash
+umask 077
+C=<40-hex merge commit named in R15>
+W="$HOME/m8-controller"
+U=https://github.com/sushiHex/constructicon.git
+E=(/usr/bin/env -i PATH=/usr/bin:/bin HOME=/nonexistent LANG=C.UTF-8 GIT_CONFIG_NOSYSTEM=1 GIT_GRAFT_FILE=/nonexistent)
+G=("${E[@]}" /usr/bin/git --no-replace-objects "--git-dir=$W/source.git")
+K=("${E[@]}" /usr/bin/curl -q --fail --location --proto =https --silent --show-error)
+J=(/usr/bin/python3 -I "$W/m8_host_artifacts.py")
+test "${#C}" -eq 40 && test ! -e /opt/constructicon-m8-controller \
+  && /usr/bin/mkdir "$W" "$W/wheels" \
+  && "${E[@]}" /usr/bin/git init -q --bare "$W/source.git" \
+  && "${G[@]}" fetch -q --no-tags "$U" +refs/heads/main:refs/heads/main \
+  && "${G[@]}" rev-parse refs/heads/main && "${E[@]}" /usr/bin/git ls-remote "$U" refs/heads/main \
+  && "${G[@]}" rev-list --first-parent refs/heads/main | grep -qxF "$C" && echo first-parent \
+  && "${G[@]}" ls-tree "$C" -- scripts/ci/m8_host_artifacts.py uv.lock \
+  && "${G[@]}" cat-file blob "$C:scripts/ci/m8_host_artifacts.py" > "$W/m8_host_artifacts.py" \
+  && "${J[@]}" controller-wheels "$C" "$W" < /dev/null > "$W/wheels.json" \
+  && /usr/bin/grep -o '"url": "https://files.pythonhosted.org/[^"]*"' "$W/wheels.json" \
+       | /usr/bin/cut -d'"' -f4 > "$W/wheels.txt" \
+  && test -s "$W/wheels.txt" \
+  && ( set -e; while read -r u; do "${K[@]}" --output "$W/wheels/${u##*/}" "$u"; done < "$W/wheels.txt" ) \
+  && sha256sum "$W/m8_host_artifacts.py" "$W"/wheels/*.whl && echo "R17 complete"
+cat "$W/wheels.json"
+```
+
+The `rev-parse` and `ls-remote` SHAs must be equal. Both `ls-tree` lines
+must read `100644 blob`. `wheels.json` must show `"listed": true`,
+`"interpreter": "cpython 3.12"`, the observed `glibc_minor`, and one wheel per
+package. Each downloaded wheel's sha256 must equal its `sha256` there. The
+stager checks the same digests again, and the transport is never trusted.
+
+## R18 — Stage, judge, install as root, verify
+
+```bash
+test "${#C}" -eq 40 \
+  && "${J[@]}" stage-controller "$C" "$W" < /dev/null > "$W/stage.json" \
+  && "${J[@]}" judge-controller "$C" "$W" < /dev/null > "$W/judge.json" \
+  && sudo /usr/bin/cp -R -P --preserve=mode --no-target-directory "$W/staging/controller" /opt/constructicon-m8-controller \
+  && echo "R18 installed"
+echo "exit $?"; cat "$W/stage.json" "$W/judge.json"
+"${J[@]}" verify-controller "$C" "$W" < /dev/null > "$W/verify.json"
+echo "verify exit $?"; cat "$W/verify.json"
+```
+
+The stage must report `"staged": true` and the judge `"ready": true` with
+`"first_parent": true`. The chain must print `R18 installed`. `verify` must
+exit 0 with `"installed": true` and `"different": 0`.
+
+## R19 — Import check as `m8-service`
+
+```bash
+cd / && sudo -u m8-service env -i PATH=/usr/bin:/bin HOME=/home/m8-service LANG=C.UTF-8 \
+  /usr/bin/python3 -I -S -B -c 'import importlib, json, sys, sysconfig; sys.path.insert(0, "/opt/constructicon-m8-controller"); [importlib.import_module(m) for m in sys.argv[1:]]; roots = ("/opt/constructicon-m8-controller/", sysconfig.get_paths()["stdlib"] + "/", sysconfig.get_paths()["platstdlib"] + "/"); files = sorted({f for f in (getattr(m, "__file__", None) for m in list(sys.modules.values())) if f}); outside = [f for f in files if not f.startswith(roots)]; print(json.dumps({"files": len(files), "outside": outside, "passed": not outside})); raise SystemExit(1 if outside else 0)' \
+  constructicon.api constructicon.substrate.executors.linux constructicon.substrate.executors.codex pydantic_core._pydantic_core \
+  > "$W/check.json"
+echo "check exit $?"; cat "$W/check.json"
+```
+
+It must exit 0 with `"passed": true` and `"outside": []`. It runs as the
+service user, never root. The module list is the script's `PROOF_MODULES` at
+`C`; a test holds this command equal to the script's.
+
+## R20 — Stop (PowerShell)
+
+```powershell
+Stop-VM constructicon-m8     # clean shutdown; never Save-VM (H1)
+```
+
+## On failure (controller)
+
+Stop and do not retry. Post the output to #77.
+- If R17, the stage or the judge failed, root wrote nothing: run
+  `/usr/bin/chmod -R u+w "$W" && /usr/bin/rm -rf "$W"` as the operator.
+- Otherwise do one of:
+  - `Restore-VMCheckpoint -VMName constructicon-m8 -Name pre-m8-controller -Confirm:$false`
+    after `Stop-VM`;
+  - or `sudo /usr/bin/rm -rf --one-file-system /opt/constructicon-m8-controller`,
+    then rerun `verify-controller`. It must exit 1 and show
+    `{"state": "absent"}`. Then remove `$W` as above.
+
+## Evidence that completes the controller environment
+
+Posted on #77:
+1. The R15 authorization link.
+2. The R17 output ending `R17 complete`, and `wheels.json`.
+3. `stage.json`, `judge.json`, the `R18 installed` line, and `verify.json`
+   (`installed: true`).
+4. `check.json` (`passed: true`).

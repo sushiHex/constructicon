@@ -16,3 +16,6 @@ jobs:
       - run: uv sync --dev
       - run: uv run verify
       - run: uv run python scripts/check_m8_host_artifact_mutations.py
+      # The controller tree from the locked wheels, imported under the host's
+      # interpreter version (M8-N4-host-runtime.md, controller addendum).
+      - run: M8_CONTROLLER_REQUIRED=1 uv run python -m pytest tests/test_m8_controller_env.py::test_the_staged_controller_imports_under_isolated_python -v -p no:cacheprovider

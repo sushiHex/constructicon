@@ -679,7 +679,8 @@ def launch_sequence() -> list[list[str]]:
 def runbook() -> str:
     text = DESIGN.read_text(encoding="utf-8")
     assert text.count("\n# Operator runbook (R8-R14)\n") == 1
-    return text.split("\n# Operator runbook (R8-R14)\n", 1)[1]
+    launch = text.split("\n# Operator runbook (R8-R14)\n", 1)[1]
+    return launch.split("\n# Controller runbook (R15-R20)\n", 1)[0]
 
 
 def test_the_runbook_root_sequence_is_the_launch_inventory() -> None:
