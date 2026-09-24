@@ -175,14 +175,14 @@ MUTANTS = (
     ),
     (
         "active generation remains bound to the sealed generation",
-        STORE + "BindingStore._check_selection",
-        "or descriptor.binding_digest != self.sealed.operator_binding_digest",
+        STORE + "_check_descriptor",
+        "or descriptor.binding_digest != sealed.operator_binding_digest",
         "or False",
         STORE_TEST + "test_active_generation_never_falls_back_to_an_old_matching_descriptor",
     ),
     (
         "same-instance historical root or lock remap is refused",
-        STORE + "BindingStore._check_selection",
+        STORE + "_check_descriptor",
         "not _same_store_identity(old.store, descriptor.store)",
         "False",
         STORE_TEST + "test_same_instance_historical_root_or_lock_remap_refuses",
@@ -197,8 +197,8 @@ MUTANTS = (
     (
         "active descriptor digest matches its descriptor",
         STORE + "BindingStore._check_selection",
-        "or descriptor.descriptor_digest != active.descriptor_digest",
-        "or False",
+        "descriptor.descriptor_digest != active.descriptor_digest",
+        "False",
         SELECTION_TEST
         + "test_active_digests_must_match_the_selected_descriptor[descriptor_digest]",
     ),
@@ -212,22 +212,22 @@ MUTANTS = (
     ),
     (
         "descriptor generation matches the active generation",
-        STORE + "BindingStore._check_selection",
-        "descriptor.generation != active.generation",
+        STORE + "_check_descriptor",
+        "descriptor.generation != generation",
         "False",
         SELECTION_TEST
         + "test_selected_descriptor_generation_must_match_active_generation",
     ),
     (
         "historical lock identity cannot be remapped",
-        STORE + "BindingStore._check_selection",
+        STORE + "_check_descriptor",
         "or old.lock != descriptor.lock",
         "or False",
         SELECTION_TEST + "test_historical_same_instance_lock_remap_is_refused",
     ),
     (
         "binding digest is derived from key generation and store instance",
-        STORE + "BindingStore._check_selection",
+        STORE + "_check_descriptor",
         "descriptor.binding_digest != expected_binding",
         "False",
         SELECTION_TEST
@@ -235,7 +235,7 @@ MUTANTS = (
     ),
     (
         "current layout law is independently enforced",
-        STORE + "BindingStore._check_selection",
+        STORE + "_check_descriptor",
         "or descriptor.layout_law_digest != BINDING_LAYOUT_LAW",
         "or False",
         STORE_TEST + "test_selection_requires_the_current_runtime_law_not_only_matching_"
@@ -243,7 +243,7 @@ MUTANTS = (
     ),
     (
         "current mount-lock law is independently enforced",
-        STORE + "BindingStore._check_selection",
+        STORE + "_check_descriptor",
         "or descriptor.mount_lock_law_digest != BINDING_MOUNT_LOCK_LAW",
         "or False",
         STORE_TEST + "test_selection_requires_the_current_runtime_law_not_only_matching_"
@@ -251,7 +251,7 @@ MUTANTS = (
     ),
     (
         "publisher instance is rederived from the opened physical store",
-        STORE + "BindingStore._check_selection",
+        STORE + "_check_descriptor",
         "or descriptor.store_instance_id != _identity_instance(opened.store_identity)",
         "or False",
         STORE_TEST + "test_selection_rederives_the_publisher_instance_from_the_live_store",

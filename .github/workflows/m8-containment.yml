@@ -155,6 +155,27 @@ jobs:
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_native_egress_containment.py \
               -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           uv run python scripts/check_m8_n3b_mutations.py
+      - name: Prove N3c maintenance, refresh and non-widening
+        if: matrix.lane == 'foundation'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Fresh protected roots as the provisioning principal (withdrawal,
+          # activation, SIGKILL crash points, bind mounts), then the service
+          # over the N3a fixture through the N3b relay. No credential.
+          sudo env RUNNER_ENVIRONMENT=github-hosted M8_STORE_PROVISION_REQUIRED=1 \
+            M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
+            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_operator_store_maintenance_restart.py \
+              -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
+          sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
+            M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
+            M8_OPERATOR_STORE_REQUIRED=1 \
+            M8_OPERATOR_STORE_ROOT=/var/lib/constructicon-m8-launch/operator-stores \
+            M8_EGRESS_REQUIRED=1 \
+            M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
+            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_operator_store_persistence.py \
+              -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
+          uv run python scripts/check_m8_n3c_mutations.py
       - name: Acquire the pinned native investigation artifact (no account)
         shell: bash
         run: |
@@ -351,6 +372,7 @@ jobs:
             ${{ env.M8_EVIDENCE }}/duplex-*.json
             ${{ env.M8_EVIDENCE }}/n3a-*.json
             ${{ env.M8_EVIDENCE }}/n3b-*.json
+            ${{ env.M8_EVIDENCE }}/n3c-*.json
             ${{ env.M8_EVIDENCE }}/n4-*.json
           if-no-files-found: error
           retention-days: 7

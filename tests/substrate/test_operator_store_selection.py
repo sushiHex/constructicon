@@ -51,9 +51,16 @@ def test_selected_descriptor_generation_must_match_active_generation(tmp_path, m
         world.binding().open_candidate()
 
 
-def test_historical_same_instance_lock_remap_is_refused(tmp_path, monkeypatch):
+@pytest.mark.parametrize("remap", ["other-object", "same-object-other-owner"])
+def test_historical_same_instance_lock_remap_is_refused(tmp_path, monkeypatch, remap):
     world = StoreWorld(tmp_path)
-    world.write_descriptor(2, lock=_identity("old-lock"))
+    # The second case differs only where the boot-independent rule (N3c)
+    # does not look, so the same-instance rule alone must refuse it.
+    lock = (
+        _identity("old-lock") if remap == "other-object"
+        else replace(world.lock, uid=world.lock.uid + 1)
+    )
+    world.write_descriptor(2, lock=lock)
     world.install(monkeypatch)
 
     with pytest.raises(ContractViolation, match="instance history"):

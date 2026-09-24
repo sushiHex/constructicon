@@ -16,7 +16,9 @@ from tests.substrate.test_codex_store import (
 )
 
 
-@pytest.mark.parametrize("state", ["active", "withdrawn", "deep-malformed"])
+@pytest.mark.parametrize(
+    "state", ["active", "withdrawn", "withdrawal-record", "deep-malformed"],
+)
 async def test_whole_public_surface_excludes_binding_metadata_on_acceptance_and_refusal(
     tmp_path, store_lifecycle, state,
 ):
@@ -25,6 +27,9 @@ async def test_whole_public_surface_excludes_binding_metadata_on_acceptance_and_
     def terminal_state():
         if state == "withdrawn":
             del world.metadata["active.json"]
+        elif state == "withdrawal-record":
+            # N3c's third state: a maintenance began after the turn started.
+            world.withdraw(1)
         elif state == "deep-malformed":
             world.metadata["active.json"] = ("[" * 1000 + "0" + "]" * 1000).encode()
 

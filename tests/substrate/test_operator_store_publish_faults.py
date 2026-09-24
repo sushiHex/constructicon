@@ -18,6 +18,8 @@ def test_existing_descriptor_name_refuses_and_cleans_its_private_temporary(monke
     monkeypatch.setattr(operator_store.os, "write", lambda fd, raw: len(raw))
     monkeypatch.setattr(operator_store.os, "fsync", lambda fd: None)
     monkeypatch.setattr(operator_store.os, "close", closed.append)
+    # The ownership law has its own Linux unit proof (test_operator_store_replace).
+    monkeypatch.setattr(operator_store, "_seal_metadata_fd", lambda fd, directory_fd: None)
 
     def link(source, name, **kwargs):
         assert source == ".pending-" + "b" * 32
