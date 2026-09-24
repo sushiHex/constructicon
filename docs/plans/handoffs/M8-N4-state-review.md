@@ -1324,27 +1324,46 @@ Nothing else is assumed.
 - **Reading `auth.json` to detect login or refresh.** ADR 0021 forbids it.
   Metadata and relay facts are enough.
 
-## Open questions for the orchestrator
+## Orchestrator decisions (2026-09-24, before implementation)
 
-1. **Expected plan literal.** Is it `pro`? The pin has both `pro` and
-   `prolite`. If S4 refuses naming `prolite`, may the owner re-declare the
-   binding's expected plan and repeat S4 as a new maintenance, or does that
-   need a fresh decision?
-2. **Section 7:** resolved. The path is traced and disabled at the source, and
-   no denial is tolerated.
-3. **L1's ripple.** Moving the N3a and N3c zone proofs from `/vendor-store` to
-   the bound file changes Linux-only tests in five files. Is that acceptable
-   in the N4 PR, or should it be a preparatory PR?
-4. **S10's timing.** Refresh may not occur within 24 hours. Should the profile
-   stay unqualified until it is measured (this design), or should the owner
-   accept an explicitly unmeasured refresh row?
-5. **Activation verifying qualification.** Should `activate_offline` verify
-   the evidence digest? That would need a durable `active.json` field, which
-   is a store-law change beyond N4's minimum. Or does it stay N3c decision 3's
-   limit?
-6. **Bubblewrap flags.** If the pinned package lacks `--bind-fd` or
-   `--ro-bind-data`, the design stops for review. Path binding is not a
-   fallback.
+The questions below are kept as they were asked. These are the decisions, and
+they supersede the design text above wherever the two differ.
+
+1. **Expected plan literal: bound at qualification, never guessed.** The
+   pinned `PlanType` has both `pro` and `prolite`, and nothing proves which
+   one "ChatGPT Pro 20x" reports.
+   - The first authenticated `account/read` in the owner-attended maintenance
+     session (runbook S4) must report a plan in `{pro, prolite}`. Anything
+     else stops the session.
+   - The observed literal is recorded in the qualification evidence and
+     becomes the sealed expected plan for that generation.
+   - Any later run that observes a different plan refuses. A plan change is a
+     mode change and requires new maintenance.
+   - If S4 refuses in the owner session: stop, report the observed literal to
+     the orchestrator, and take no fallback.
+
+   The runbook's `--expected pro` becomes "the qualification run accepts
+   `{pro, prolite}` and records the literal; every later run expects that
+   recorded literal".
+2. **Section 7:** resolved. The path is traced and disabled at the source,
+   and no denial is tolerated.
+3. **The layout move is a preparatory PR.** It covers the narrow
+   `CODEX_HOME` layout (tmpfs home, sealed memfd configuration, fd-bound
+   `auth.json`, `/vendor-store` removed) and moves the N3a/N3c zone proofs
+   onto it, with its own CI evidence. It stays strictly to the layout, on
+   `m8/n4-layout`, and this lane stacks on it. It is implemented as `37db228`;
+   see the implementation record's "N4 preparation: narrow native layout".
+4. **S10 refresh.** If refresh cannot be measured, the profile stays
+   unqualified (`vendor_conformance_qualified` false) and S10 is recorded as
+   open. That does not block merging N4's evidence.
+5. **No new durable field** (YAGNI). The lane's evidence digest is passed
+   inside the conformance revision string already given to
+   `activate_offline`. The limit is recorded: activation does not itself
+   verify it.
+6. **Bubblewrap flags: resolved.** The pinned bubblewrap (SHA-256
+   `e3189038…`, `0.9.0-1ubuntu0.3`) contains `--bind-fd`, `--ro-bind-fd`,
+   `--bind-data` and `--ro-bind-data` (from the strings of the pinned binary).
+   Linux CI still has to prove the behaviour.
 
 ## Review disposition
 
