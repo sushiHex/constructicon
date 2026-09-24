@@ -74,7 +74,9 @@ PROOFS = {
         "tests/substrate/test_git_process.py tests/substrate/test_git_executable.py "
         "tests/runtime/test_async_workspace.py tests/api/test_capture_assembly.py "
         "tests/substrate/test_contained_gates.py tests/substrate/test_gate_lifecycle.py "
-        "tests/runtime/test_async_gates.py",
+        "tests/runtime/test_async_gates.py "
+        # Two named parity tests from one file: the host writer and the loader.
+        "tests/test_m8_host_runtime.py tests/test_m8_host_runtime.py",
     ),
     "Kill the native review-regression mutants": (
         "foundation",

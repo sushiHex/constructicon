@@ -12,6 +12,103 @@ from _mutations import run
 
 MODULE = "scripts.ci.m8_host_artifacts:"
 TESTS = "tests/test_m8_host_artifacts.py::"
+RUNTIME = "tests/test_m8_host_runtime.py::"
+
+# The launch set (M8-N4-host-runtime.md). Each fact has one check, so no mutant
+# here is masked by an earlier guard. The launch destinations' ancestor checks
+# are not mutated: on this layout the host sources' custody walks the same
+# ancestors first, so their removal is unobservable (recorded in the design).
+LAUNCH_PORTABLE = (
+    ("derived value named exactly once", MODULE + "derive", "len(found) == 1", "len(found) >= 1",
+     RUNTIME + "test_a_value_named_zero_or_two_times_refuses"),
+    ("service account unprivileged and alone", MODULE + "service_account",
+     "uid != 0 and gid != 0 and group == SERVICE and not others", "True",
+     RUNTIME + "test_the_service_account_is_unprivileged_and_alone"),
+    ("archive members are files or directories", MODULE + "vendor_plan",
+     "member.isdir() or member.isreg()", "True",
+     RUNTIME + "test_an_unsafe_archive_member_refuses"),
+    ("archive members carry no special bit", MODULE + "vendor_plan",
+     "not member.mode & 0o7000", "True", RUNTIME + "test_an_unsafe_archive_member_refuses"),
+    ("archive members are unique", MODULE + "vendor_plan", "name not in entries", "True",
+     RUNTIME + "test_an_unsafe_archive_member_refuses"),
+    ("archive member names are plain", MODULE + "vendor_plan",
+     're.fullmatch(r"[\\w.+-]+(/[\\w.+-]+)*", name) is not None', "True",
+     RUNTIME + "test_an_unsafe_archive_member_refuses"),
+    ("archive member names never climb", MODULE + "vendor_plan",
+     'and ".." not in PurePosixPath(name).parts', "and True",
+     RUNTIME + "test_an_unsafe_archive_member_refuses"),
+    ("group and other write cleared as CI clears them", MODULE + "vendor_plan",
+     "mode = member.mode & 0o755", "mode = member.mode",
+     RUNTIME + "test_the_pinned_package_is_planned_as_ci_extracts_it"),
+    ("an unresolved dependency refuses", MODULE + "resolve", '"not found" not in output', "True",
+     RUNTIME + "test_the_loader_trace_refuses_an_unresolved_dependency"),
+    ("extensions enumerated over the unfiltered tree", MODULE + "runtime_plan",
+     'sorted(library.rglob("*.so"))',
+     'sorted(p for p in library.rglob("*.so") if not IGNORED & set(p.parts))',
+     RUNTIME + "test_the_closure_plan_is_the_ci_rule"),
+    ("excluded library names are not copied", MODULE + "runtime_plan",
+     "if child.name in IGNORED:", "if False:", RUNTIME + "test_the_closure_plan_is_the_ci_rule"),
+    ("a package's digest must match", MODULE + "attribution",
+     "require(not candidates or actual in candidates,", "require(True,",
+     RUNTIME + "test_a_file_that_differs_from_its_packages_digest_refuses"),
+    ("merged-usr spellings are matched", MODULE + "attribution",
+     "wanted[new + host.removeprefix(old)] = host", "pass",
+     RUNTIME + "test_attribution_names_each_package_and_lists_the_unattributed"),
+    ("the unattributed list is bounded", MODULE + "attribution",
+     '"unattributed": unattributed[:UNATTRIBUTED_LIMIT],', '"unattributed": unattributed,',
+     RUNTIME + "test_the_unattributed_list_is_bounded"),
+    ("tree owner compared", MODULE + "compare", " or found[2] != owner", "",
+     RUNTIME + "test_every_difference_in_a_tree_is_reported"),
+    ("tree mode compared", MODULE + "compare", "found[:2] != reviewed",
+     "found[1] != reviewed[1]", RUNTIME + "test_every_difference_in_a_tree_is_reported"),
+    ("installed trees equal the plan", MODULE + "assess_launch",
+     'entry.get("state") == "tree" and entry.get("different") == 0', "True",
+     RUNTIME + "test_each_launch_fact_is_required"),
+    ("operator-stores group", MODULE + "assess_launch", 'entry.get("gid") == content', "True",
+     RUNTIME + "test_each_launch_fact_is_required"),
+    ("launch destination owner", MODULE + "assess_launch", 'entry.get("uid") == ROOT_UID', "True",
+     RUNTIME + "test_each_launch_fact_is_required"),
+    ("both launch profiles in enforce mode", MODULE + "assess_launch",
+     'all(f"{name} (enforce)" in profiles for name in LAUNCH_PROFILE_NAMES)', "True",
+     RUNTIME + "test_both_launch_profiles_must_be_loaded_in_enforce_mode"),
+    ("identity law separators", MODULE + "identity_digest", 'separators=(",", ":"), ', "",
+     RUNTIME + "test_the_stdlib_identity_digest_is_constructicons"),
+    ("a verifier's own observation survives", MODULE + "main", 'if "observed" not in record:',
+     "if True:", RUNTIME + "test_a_verifiers_own_observation_survives_its_failure"),
+)  # fmt: skip
+
+# Linux-only: NOT PROVEN on other platforms is expected, never a kill.
+LAUNCH_LINUX = (
+    ("staged trees equal the plan", MODULE + "judge_launch",
+     'require(not differences, f"the staged {tree} is not the reviewed plan")', "pass",
+     RUNTIME + "test_staging_must_equal_the_recomputed_plan"),
+    ("cp is a checked root tool", MODULE + "judge_launch", "(BWRAP_SOURCE, *LAUNCH_ROOT_TOOLS)",
+     "(BWRAP_SOURCE, INSTALL, CAT, PARSER)",
+     RUNTIME + "test_each_launch_precondition_refuses_judgement"),
+    ("launch destinations are fresh", MODULE + "judge_launch", "absent(root / destination)", "True",
+     RUNTIME + "test_each_launch_precondition_refuses_judgement"),
+    ("no launch profile already loaded", MODULE + "judge_launch",
+     "not loaded_among(listing, LAUNCH_PROFILE_NAMES)", "True",
+     RUNTIME + "test_each_launch_precondition_refuses_judgement"),
+    ("host sources are root's alone", MODULE + "launch_expectation",
+     "        require_root_alone(source)", "        pass",
+     RUNTIME + "test_each_launch_precondition_refuses_judgement"),
+    ("the loader is root's alone", MODULE + "launch_expectation",
+     "for path in (loader, root / LOADER_CACHE, root / ABI):",
+     "for path in (root / LOADER_CACHE, root / ABI):",
+     RUNTIME + "test_each_launch_precondition_refuses_judgement"),
+    ("the writer never overwrites", MODULE + "materialize", "os.O_CREAT | os.O_EXCL | ",
+     "os.O_CREAT | os.O_TRUNC | ", RUNTIME + "test_the_writer_never_overwrites"),
+    ("verify recomputes, never reads staging", MODULE + "verify_launch",
+     'record["observed"] = observe_launch(root, listing, expected)',
+     'record["observed"] = observe_launch(root, listing, {'
+     '"runtime": [e[:3] for e in tree_inventory(workspace / STAGING / "runtime")], '
+     '"vendor": [e[:3] for e in tree_inventory(workspace / STAGING / "native-codex")]})',
+     RUNTIME + "test_a_valid_installation_verifies_with_staging_deleted"),
+    ("tree summaries are bounded", MODULE + "observe_launch",
+     'entry["differences"] = differences[:TREE_SUMMARY]', 'entry["differences"] = differences',
+     RUNTIME + "test_a_tree_summary_is_bounded"),
+)  # fmt: skip
 
 MUTANTS = (
     *(
@@ -107,7 +204,7 @@ MUTANTS = (
             ),
             (
                 "each command reports its own verdict",
-                '"ready" if args.command == "judge" else "installed"',
+                "VERDICTS[args.command]",
                 '"installed"',
                 "test_the_exit_status_follows_the_verdict",
             ),
@@ -119,12 +216,13 @@ MUTANTS = (
             ),
             (
                 "failure itemizes fresh residue",
-                'record["observed"] = observe(ROOT, listing)',
+                'record["observed"] = observer(ROOT, listing)',
                 "pass",
                 "test_the_exit_status_follows_the_verdict",
             ),
         )
     ),
+    *LAUNCH_PORTABLE,
     # Linux-only below: NOT PROVEN on other platforms is expected, never a kill.
     (
         "never runs as root",
@@ -239,10 +337,16 @@ MUTANTS = (
                 "test_what_root_copies_or_runs_is_roots_alone",
             ),
             (
-                "no profile already loaded",
-                "not loaded_profiles(listing)",
+                "no qualification profile already loaded",
+                "not loaded_among(listing, PROFILE_NAMES)",
                 "True",
                 "test_an_already_loaded_profile_refuses_judgement",
+            ),
+            (
+                "only the qualification profiles block the qualification judge",
+                "not loaded_among(listing, PROFILE_NAMES)",
+                "not loaded_profiles(listing)",
+                "test_loaded_launch_profiles_do_not_block_the_qualification_judge",
             ),
         )
     ),
@@ -253,6 +357,7 @@ MUTANTS = (
         "        pass",
         TESTS + "test_verify_refuses_drift_after_installation",
     ),
+    *LAUNCH_LINUX,
 )
 
 
