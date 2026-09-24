@@ -772,7 +772,10 @@ def launch_expectation(
         require_root_alone(source)
 
     def custodial(path: Path) -> bytes:
-        require_root_alone(path)
+        # dpkg's database is read under custody; the sources' was proven above,
+        # once, so that check alone decides it.
+        if path.is_relative_to(root / DPKG):
+            require_root_alone(path)
         return read_regular(path)
 
     record.update(attribution(root, sources, custodial))

@@ -464,6 +464,13 @@ instead of `O_EXCL`; verify reading staging instead of recomputing (killed by
 the staging-deleted accepting control); tree summaries unbounded; and M8-D2's
 judge refusing every `constructicon-m8-*` again.
 
+**One check per custody fact.** The first Linux run found the host-source and
+loader custody mutants alive. The attribution's reads re-proved every source's
+custody, the loader among them, so either check could be removed unobserved.
+The attribution now proves custody only of dpkg's database. The loader test
+also asserts that the loader never ran, because its custody must be proved
+before it executes, not merely before the judge answers.
+
 **Not mutated, with the reason.** There is no separate `runtime_digest` check,
 because exact `runtime.json` bytes and the exact tree imply it. The launch
 destinations' ancestor checks in `judge-launch` and `verify-launch` are kept,

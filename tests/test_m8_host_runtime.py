@@ -731,8 +731,10 @@ def test_the_runbook_proves_every_launch_blob_with_stock_git() -> None:
 
 # --- stage, judge, root's stock tools, verify on a temporary host (Linux) -----
 
+# Every run leaves one line in TRACED, so a test can show the loader never ran.
 FAKE_LOADER = (
     "#!/bin/sh\n"
+    "printf '%s\\n' \"$2\" >> 'TRACED'\n"
     "printf '\\tlinux-vdso.so.1 (0x0)\\n'\n"
     "printf '\\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x0)\\n'\n"
     "printf '\\t/lib64/ld-linux-x86-64.so.2 (0x0)\\n'\n"
@@ -765,6 +767,7 @@ class LaunchHost:
         self.kernel = tmp_path / "kernel-profiles"
         self.kernel.write_text(KERNEL_LIST, encoding="utf-8")
         self.log = tmp_path / "parser.log"
+        self.traced = tmp_path / "loader.log"
         for directory in (
             "",
             "etc",
@@ -780,7 +783,9 @@ class LaunchHost:
             (self.root / directory).mkdir(mode=0o755, exist_ok=True)
             (self.root / directory).chmod(0o755)
         closure_host(self.root)
-        (self.root / artifacts.LOADER).write_text(FAKE_LOADER, encoding="utf-8")
+        (self.root / artifacts.LOADER).write_text(
+            FAKE_LOADER.replace("TRACED", str(self.traced)), encoding="utf-8"
+        )
         (self.root / artifacts.LOADER).chmod(0o755)
         (self.root / artifacts.LOADER_CACHE).write_bytes(b"ld.so cache")
         (self.root / artifacts.ABI).write_bytes(b"abi 4.0\n")
@@ -1118,6 +1123,8 @@ def test_each_launch_precondition_refuses_judgement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     staged(launch_host, capsys)
+    assert launch_host.traced.exists(), "staging traced nothing, so the log proves nothing"
+    launch_host.traced.unlink()
     root = launch_host.root
     if fault == "tarball":
         (launch_host.workspace / artifacts.TARBALL).write_bytes(launch_host.archive + b"\0")
@@ -1157,6 +1164,9 @@ def test_each_launch_precondition_refuses_judgement(
     assert status == 1 and record["ready"] is False
     assert message in record["failure"], record["failure"]
     assert not launch_host.log.exists()
+    if fault in ("loader", "loader cache"):
+        # Custody is proved before the loader runs, never after.
+        assert not launch_host.traced.exists(), "the judge ran an unproven loader"
 
 
 @LINUX
