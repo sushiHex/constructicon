@@ -548,7 +548,12 @@ GitHub comment, and the PR should link them.
    host, and the wheels must match the host's Python 3.12 while CI uses 3.11.
    Its interface to this set is the same: a destination under root-only
    ancestors, a staged tree the judge compares, and a verifier that
-   recomputes.
+   recomputes. **Preferred shape for that slice (orchestrator, 2026-09-24):** a
+   flat, hash-pinned `--target` layout rather than a virtual environment, so
+   no absolute path has to be relocated. The service user's interpreter runs
+   it as `python3 -I` with one explicit `sys.path` entry. The host's pins for
+   Python 3.12 are derived from `uv.lock` at `C`, not mirrored from CI's 3.11
+   environment.
 3. **The launch profile's header** is updated in this change. It no longer
    says "Provisioned only on the disposable Linux proof runner … No host-wide
    change"; it names this document. Nothing in the qualification or
