@@ -28,15 +28,17 @@ from constructicon.core.identity import Digest
 from constructicon.substrate.executors import egress, operator_store
 from constructicon.substrate.executors._egress_bridge import PROXY_PORT
 from constructicon.substrate.executors.codex_lane import (
+    RUNTIME_CATALOG,
     active_custody,
     run_login,
     run_startup,
+    vendor_executable,
 )
 from constructicon.substrate.executors.codex_protocol import ExpectedAccount
 from constructicon.substrate.executors.egress import identity_digests
+from constructicon.substrate.executors.linux import NativeVendor
 from tests.native_startup import (
     BOOTSTRAP,
-    CATALOG,
     MODELS,
     DuplexWire,
     configuration,
@@ -381,16 +383,27 @@ def test_no_evidence_file_contains_key_material():
 
 # --- N4 lanes with the pinned binary (M8-N4-state-review.md, L2 and L3) --------
 
-PINNED = "/opt/native-startup/native/bin/codex"
 EMPTY_AUTH = b"{}\n"
 """An ``AuthDotJson`` with every field absent: no login, parsed rather than
 malformed, so the pinned client reports no account."""
 
 
+@pytest.fixture
+def vendor_launcher(bridge_launcher):
+    """The launch set's own vendor tree and catalog, bound as production binds them."""
+    launch = Path(os.environ.get("M8_LINUX_ROOT", "/var/lib/constructicon-m8-launch"))
+    return replace(bridge_launcher, vendor=NativeVendor(
+        launch / "native-codex", launch / "codex-models.json",
+    ))
+
+
 def sealed_configuration(*, plugins: bool) -> str:
-    """The production sealed configuration's shape (state review, section 1)."""
+    """The production sealed configuration's shape (state review, section 1).
+
+    It names the bound catalog, so the client reading it proves the bind.
+    """
     return (
-        f'model = "{MODELS[0]}"\nmodel_catalog_json = "{CATALOG}"\n'
+        f'model = "{MODELS[0]}"\nmodel_catalog_json = "{RUNTIME_CATALOG}"\n'
         'cli_auth_credentials_store = "file"\nforced_login_method = "chatgpt"\n'
         'check_for_update_on_startup = false\nweb_search = "disabled"\n'
         "[analytics]\nenabled = false\n[features]\n"
@@ -419,15 +432,20 @@ def empty_auth(binding):
 
 
 async def test_the_production_configuration_makes_no_startup_connection_at_all(
-    binding, bridge_launcher, short_root, heads, empty_auth,
+    binding, vendor_launcher, short_root, heads, empty_auth,
 ):
-    """L2: zero denials with plugins off, beside a same-step control that counts."""
+    """L2: zero denials with plugins off, beside a same-step control that counts.
+
+    The client runs from the launch set's bound vendor tree and reads the bound
+    catalog, so this also proves the bind (host-runtime interface item 1).
+    """
     runs = {}
+    executable = vendor_executable(vendor_launcher)
     for plugins in (False, True):
         heads.clear()
         async with active_custody(binding) as custody:
             runs[plugins] = await run_startup(
-                custody, bridge_launcher, decoy_policy(), binary=PINNED,
+                custody, vendor_launcher, decoy_policy(), executable=executable,
                 configuration=sealed_configuration(plugins=plugins),
                 expected=ExpectedAccount(plan_type="pro", alternatives=("prolite",)),
                 lane_dir=short_root / f"lane-{int(plugins)}", deadline_s=30,
@@ -437,27 +455,36 @@ async def test_the_production_configuration_makes_no_startup_connection_at_all(
     clean, control = runs[False], runs[True]
     assert clean["methods_sent"] == ["'initialize'", "'initialized'", "'account/read'"]
     assert any("no usable account" in fault for fault in clean["faults"]), clean["faults"]
-    assert clean["relay"] == {"destinations": {}, "denied": {}}, clean["relay"]
+    assert clean["relay"] == {"destinations": {}, "denied": {}, "closed": True}, clean["relay"]
     assert clean["heads"] == [] and clean["readback"] is None
+    assert clean["executable"]["path"] == "/opt/codex/bin/codex"
     assert control["relay"]["denied"].get("denied:destination", 0) >= 1, control["relay"]
     assert control["heads"], "the control's plugin sync never reached the relay"
     assert empty_auth.read_bytes() == EMPTY_AUTH
     write_evidence("n4-lane-startup.json", {
         "schema_version": 1, "credential_free_fixture": True, "model_requests": 0,
-        "vendor_conformance_qualified": False,
+        "vendor_conformance_qualified": False, "vendor_bound": True,
+        "executable": clean["executable"],
         "clean": {key: clean[key] for key in ("methods_sent", "relay", "heads", "faults")},
         "control": {key: control[key] for key in ("relay", "heads")},
     })
 
 
 async def test_the_pinned_device_login_reaches_only_the_relay_and_keeps_nothing(
-    binding, bridge_launcher, short_root, heads, empty_auth,
+    binding, vendor_launcher, short_root, heads, empty_auth,
 ):
-    """L3: the login's CONNECT is denied, its output is never evidence."""
+    """L3: the login's CONNECT is denied, its output is never evidence.
+
+    A login runs only in maintenance (CC-1). The service cannot enter one on
+    this fixture, so the test relabels the fixture's held custody as a
+    maintenance custody; nothing in production can build one this way.
+    """
     out = io.BytesIO()
-    async with active_custody(binding) as custody:
+    async with active_custody(binding) as held:
+        custody = replace(held, kind="maintenance", detail={"test_only": True})
         evidence = await run_login(
-            custody, bridge_launcher, decoy_policy(), binary=PINNED,
+            custody, vendor_launcher, decoy_policy(),
+            executable=vendor_executable(vendor_launcher),
             configuration=sealed_configuration(plugins=False),
             lane_dir=short_root / "lane-login", deadline_s=60, out=out,
         )

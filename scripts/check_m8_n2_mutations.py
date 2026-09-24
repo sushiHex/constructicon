@@ -68,6 +68,10 @@ ONCE = "constructicon.substrate.executors.codex:CodexConversation._once"
 AUDIT = "constructicon.substrate.executors.codex:CodexConversation._audit"
 OWNED = "constructicon.substrate.executors.codex:CodexConversation._owned"
 JUDGE = "constructicon.substrate.executors.codex:CodexConversation._judge_identified"
+NOTICES = "constructicon.substrate.executors.codex:CodexConversation._notice_faults"
+SETTINGS = "constructicon.substrate.executors.codex_protocol:settings_notice_faults"
+NO_SPEND = "constructicon.substrate.executors.codex_protocol:_no_spend"
+CONFIGURED_PROVIDER = "constructicon.substrate.executors.codex:configured_provider"
 TURN_OF = "constructicon.substrate.executors.codex_protocol:_turn_of"
 CONFIGURED = "constructicon.substrate.executors.codex:configured_model"
 USAGE = "constructicon.substrate.executors.codex_protocol:_usage"
@@ -825,6 +829,115 @@ MUTANTS = (
         "    self.observed_plan = account_plan(before)\n"
         "    faults = account_faults(before, self._expected)\n    if faults:",
         STARTUP_TEST + "test_qualification_refuses_an_undeclared_plan_and_records_none",
+    ),
+    # --- the lane review's notice and plan findings (2026-09-24) ---
+    (
+        "N4-22 the drain to EOF judges id-less records (NOTICE-1, RL-5)",
+        AUDIT,
+        "self.faults += self._notice_faults(record)",
+        "pass",
+        STARTUP_TEST + "test_a_refused_notice_after_the_last_reply_is_audited_not_dropped"
+        "[account-updated]",
+    ),
+    (
+        "N4-23 a settings update is judged at every site (NOTICE-4)",
+        NOTICES,
+        "or settings_notice_faults(",
+        "or (lambda *args, **kwargs: ())(",
+        STARTUP_TEST + "test_a_refused_notice_before_the_readback_refuses_too[settings]",
+    ),
+    (
+        "N4-24 a settings update names the sealed model",
+        SETTINGS,
+        'and values.get("model") == model and type(values.get("model")) is str',
+        "",
+        SPEND_TEST + "test_a_settings_update_changing_or_hiding_model_or_provider_refuses[model]",
+    ),
+    (
+        "N4-25 a settings update names the sealed provider",
+        SETTINGS,
+        'and values.get("modelProvider") == provider',
+        "",
+        SPEND_TEST + "test_a_settings_update_changing_or_hiding_model_or_provider_refuses"
+        "[provider]",
+    ),
+    (
+        "N4-26 a rate-limit update's spend is judged (SPEND-3)",
+        ACCOUNT_RECORD,
+        "and _no_spend(snapshot)",
+        "",
+        SPEND_TEST + "test_a_rate_limit_update_showing_spend_refuses[purchased]",
+    ),
+    (
+        "N4-27 a notice's credits must prove zero purchased",
+        NO_SPEND,
+        'credits.get("hasCredits") is False and ',
+        "",
+        SPEND_TEST + "test_a_rate_limit_update_showing_spend_refuses[no-has-credits]",
+    ),
+    (
+        "N4-28 a notice reporting spend control refuses",
+        NO_SPEND,
+        'return snapshot.get("spendControlReached") is not True',
+        "return True",
+        SPEND_TEST + "test_a_rate_limit_update_showing_spend_refuses[spend-control]",
+    ),
+    (
+        "N4-29 one run binds one plan literal (SPEND-2, NOTICE-3)",
+        CONVERSE,
+        "    if self.observed_plan is not None:",
+        "    if False:",
+        STARTUP_TEST + "test_one_run_binds_one_plan_literal_for_every_later_observation",
+    ),
+    (
+        "N4-30 an id-bearing account record refuses at every site (NOTICE-2)",
+        JUDGE,
+        "refused = account_request_faults(record)",
+        "refused = ()",
+        STARTUP_TEST + "test_an_account_request_refuses_wherever_the_chunk_falls",
+    ),
+    (
+        "N4-31 the startup phase refuses any other unowned request",
+        JUDGE,
+        "if self._startup_only:",
+        "if False:",
+        STARTUP_TEST + "test_the_startup_phase_refuses_any_other_unowned_request",
+    ),
+    (
+        "N4-32 the startup pause runs before stdin closes (RL-3)",
+        CONVERSE,
+        "await self._pause()",
+        "pass",
+        STARTUP_TEST + "test_the_startup_pause_runs_while_the_zone_is_live",
+    ),
+    (
+        "N4-33 only a startup conversation pauses",
+        CONVERSATION,
+        "if pause is not None and not startup_only:",
+        "if False:",
+        STARTUP_TEST + "test_only_a_startup_conversation_pauses",
+    ),
+    (
+        "N4-34 the handle hands the conversation its sealed provider",
+        BINDING,
+        "provider=configured_provider(provider.configuration),",
+        "",
+        STARTUP_TEST + "test_the_handle_never_runs_the_startup_phase",
+    ),
+    (
+        "N4-35 an absent provider is the pinned default",
+        CONFIGURED_PROVIDER,
+        '.get("model_provider", OPENAI_PROVIDER)',
+        '.get("model_provider", "elsewhere")',
+        STARTUP_TEST + "test_the_sealed_provider_is_the_configurations_or_the_pinned_default",
+    ),
+    (
+        "N4-36 the notice fault names no turn (NOTICE-5)",
+        ACCOUNT_RECORD,
+        "refused = (ACCOUNT_NOTICE_FAULT.format(method=named_method(method)),)",
+        'refused = (ACCOUNT_NOTICE_FAULT.format(method=named_method(method)) + " during'
+        ' the turn",)',
+        SPEND_TEST + "test_the_notice_fault_claims_no_turn",
     ),
 )
 

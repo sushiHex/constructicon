@@ -521,8 +521,9 @@ unknown (`codex_protocol.py:536-544`). The decision:
 - An admitted notice is neither transcribed nor treated as damage. It is
   counted as withheld, like any record outside the turn-evidence allowlist, so
   the transcript marker still reports it.
-- Its spend fields are not judged mid-turn. The post-turn readback judges the
-  same state affirmatively.
+- ~~Its spend fields are not judged mid-turn.~~ Superseded: they are judged
+  (SPEND-3, below), and the post-turn readback still judges the same state
+  affirmatively.
 
 **Why `planType` and not only the method.**
 - The snapshot is documented as sparse: "Nullable account metadata … does not
@@ -545,6 +546,39 @@ unknown (`codex_protocol.py:536-544`). The decision:
 
 The cost is recorded as the next forward cost: a legitimate refresh after a
 401 during an N5 turn discards that turn.
+
+**Amended after the lane review (2026-09-24).** Each change below applies to
+the task conversation and to the startup phase alike:
+- **Every site judges (N4-NOTICE-1, RL-5).** The drain to EOF now sends every
+  id-less record through the same rules. A refused notice that arrives after
+  the last reply is a fault, where before it was dropped. In the startup phase
+  that drain is the whole window after the readback.
+- **Id-bearing account records (N4-NOTICE-2).** An unowned record with an id
+  and a method in either refused namespace refuses at every site
+  (`account_request_faults`). That covers the pinned
+  `account/chatgptAuthTokens/refresh` server request and an `account/updated`
+  sent with `"id": null`. In the startup phase any other unowned native
+  request also refuses, because no turn exists to demote. In a task turn it
+  stays damage, as before.
+- **Spend in a rate-limit update (SPEND-3).** The pinned client builds
+  `account/rateLimits/updated` from the model call's own response headers
+  (`rate_limits.rs:218`), so it is the one in-band spend record inside the
+  bracketed window. It is now judged, not only its plan: a present `credits`
+  object must meet the readback's zero rule, and `spendControlReached` must
+  not be true. Absent or null values stay admissible, as the sparse update
+  requires.
+- **One plan literal per run (SPEND-2, N4-NOTICE-3).** Once `account/read`
+  clears, the run's expected account narrows to the literal it reported, with
+  no alternatives. A readback or notice naming the other declared literal is
+  then a plan change and refuses, as decision 1 intends.
+- **`thread/settings/updated` (N4-NOTICE-4, adopted although disputed).** It
+  is experimental (`common.rs:1865`) and outside both namespaces, but it
+  carries `threadSettings.model` and `.modelProvider`. It refuses unless both
+  are strings equal to the sealed model and the sealed provider
+  (`configured_provider`: the configuration's `model_provider`, else the
+  pinned default `openai`, `model-provider-info/src/lib.rs:39`).
+- **Wording (N4-NOTICE-5).** The fault text is now "the session reported
+  {method}". It names no turn, since the startup phase has none.
 
 ### 4. Per-destination relay evidence (`egress.py`)
 
@@ -598,9 +632,11 @@ of the pieces below (Inputs 12). Maintenance just doesn't expose them.
 That digest is a positive in-memory check of the maintenance selection. It can
 never equal a provider's binding digest, because the domain differs.
 
-**Qualification runs inside the same maintenance context, straight after the
-login**, and before the next generation is published. There is no
-`qualify_offline` helper.
+**Qualification runs in maintenance, straight after the login**, and before the
+next generation is published. There is no `qualify_offline` helper. (Amended
+2026-09-24: with root-held maintenance, each lane is its own helper run and so
+its own maintenance context. Nothing writes the store between the two, since
+the withdrawal stays and publication and activation are the operator's.)
 - **What the floor proves.** Every descriptor is published after the
   withdrawal: publication takes the lock, and the floor is the highest
   descriptor at maintenance time. A later maintenance, and therefore any
@@ -647,6 +683,35 @@ composes existing parts only.
   maintenance context (qualification) or a `HeldStoreLock` from
   `BindingStore` (the active path, runbook S8). Both supply a store path, a
   lock descriptor and a `BindingCheck`.
+
+**Amended after the lane review (2026-09-24).**
+- **Login is maintenance-only (CC-1).** `run_login` raises unless the custody
+  is maintenance, and `main` refuses `login --custody active`. A login
+  rewrites the credential in place, and ADR 0021:186-197 allows that only
+  after a durable withdrawal, a new generation and invalidated conformance.
+  L3 now runs under a test-only maintenance relabelling of the fixture's held
+  custody, so CI no longer exercises the forbidden path.
+- **`--first-login`** makes the login lane create the empty credential file
+  itself, before the launch, under the same custody
+  (`StoreMaintenance.create_credential`). The file is create-exclusive
+  (`O_EXCL|O_NOFOLLOW`, relative to the checked store descriptor) and `0600`.
+  It is owned by the store's owner because the lane runs as that owner, and
+  it never replaces an existing file (runbook S2, CC-4).
+- **The client is fixed and recorded (CC-3).** `--binary` is gone. Both lanes
+  run `RUNTIME_BINARY` from the bound vendor tree, and the evidence records
+  its path and a SHA-256 hashed from the launch set's copy.
+- **Measured, not assumed (CC-2, RL-4).** After the exchange the lane reads
+  the bound credential's own metadata (`present`, `regular_0600`,
+  `mtime_changed`) and runs the terminal custody check (`checked`).
+- **`--hold` runs inside the live exchange (RL-3).** It is the conversation's
+  `pause`: after the gate, before stdin closes, while the zone and the relay
+  are live. It must lie strictly inside the deadline, and the launcher's
+  timeout still bounds the whole run. Control S6a therefore shows a *running*
+  startup lane holding the lock.
+- **Deadlines (RL-7).** Login defaults to 960 s: the pinned device flow polls
+  for up to 900 s (`login/src/device_code_auth.rs:108`), plus 60 s for the
+  launcher's probe, the relay and the client's start. Startup keeps 120 s.
+  `--deadline` overrides either.
 - `LaneEvidence` is a closed, bounded record (listed below). It is written to
   its file only by `write_evidence`, which sets `completed: true` as the last
   field and writes with create-exclusive. A missing or incomplete file is a
@@ -680,20 +745,44 @@ composes existing parts only.
   after login is a fault.
 - The lane never retries. The operator procedure stops on any fault.
 
-**Evidence (closed schema).**
+**Evidence (closed schema, as built).** Amended 2026-09-24 (review F1): this
+block is the emitted record. `test_the_design_documents_the_emitted_schema`
+compares these two lists with `codex_lane.LOGIN_FIELDS` and `STARTUP_FIELDS`,
+and `test_each_lane_emits_exactly_its_closed_schema` compares them with what
+each lane writes. `completed` is added last on publication.
+
+<!-- lane-evidence-schema -->
+- login: `schema_version`, `lane`, `custody`, `adapter_revision`, `protocol_revision`, `launch_revision`, `runtime_digest`, `executable`, `configuration_digest`, `egress`, `relay`, `credential`, `process`, `vendor_identity`, `vendor_conformance_qualified`, `faults`
+- startup adds: `methods_sent`, `withheld_methods`, `gate`, `readback`, `observation`, `refresh`, `hold_s`
+<!-- lane-evidence-schema -->
+
+The nested shapes:
 
 ```text
-schema_version, lane ("login" | "startup"), custody ("maintenance" | "active"),
-commit, executable_digest, runtime_digest, configuration_digest, egress digests (5),
-generation_floor | binding_digest,
-methods_sent[], withheld_methods[<=16], faults[] (bounded),
-gate {account_type_ok, plan_ok, requires_openai_auth},
-readback {before.*} (startup) — the seven SpendReading fields, plan as plan_ok only,
-relay {accepted:{sealed h:p: n}, relayed:{sealed h:p: n}, denied:{reason: n}},
-credential {present, regular_0600, mtime_changed},
-process {returncode, payload_returncode, timed_out, elapsed_s, stderr_bytes},
-completed
+custody     {kind: "maintenance" | "active", generation_floor | binding_digest}
+executable  {path: "/opt/codex/bin/codex", sha256}    # the client given the credential
+egress      the five sealed-policy identity digests
+relay       {destinations: {accepted:h:p | relayed:h:p: n}, denied: {denied:reason: n}, closed}
+credential  {present, regular_0600, mtime_changed, checked}   # measured after the run
+process     {returncode, payload_returncode, timed_out, bound_exceeded, exchange_failed,
+             elapsed_s, stderr_bytes}
+gate        {completed, plan}                          # plan only once accepted
+readback    the seven SpendReading flags and numbers; the plan is compared, never kept
+observation {malformed_records, first_error: bool}
+refresh     "measured" | "unmeasured";  hold_s: the startup pause, seconds
 ```
+
+Changes from the first draft, each deliberate:
+- `commit` became `adapter_revision` and `protocol_revision`, the source digests
+  of the code that judged the run. A package commit is not observable from
+  inside the lane.
+- `executable_digest` became `executable {path, sha256}`. The sha256 is hashed
+  from the launch set's bound copy of the client (review CC-3).
+- `gate {account_type_ok, plan_ok, requires_openai_auth}` became `gate
+  {completed, plan}`. The three checks are faults when they fail, so a pass
+  already implies all three.
+- The relay's `accepted` and `relayed` counts share one `destinations`
+  counter, and `closed` records that the relay exited cleanly.
 
 It never holds stdout, stderr text, an email, account ID, token, device code,
 file content, content hash, or a hostname outside the sealed policy.
@@ -702,9 +791,30 @@ file content, content hash, or a hostname outside the sealed policy.
 - **Plan literals (amended, P2 contradiction).** A plan string appears in
   evidence only where the adapter's public fault text already names it: a
   short literal from the closed alphabet `named_value` admits
-  (`codex_protocol.py:634-658`), such as `'prolite'`. The schema carries no
-  other plan string, and `readback` carries `plan_ok` only. The runbook's
-  retention line says the same.
+  (`codex_protocol.py:634-658`), such as `'prolite'`, and in `gate.plan`,
+  which holds only an accepted, operator-declared literal. The readback's
+  plan is compared and never kept. The runbook's retention line says the same.
+
+**A pass is affirmative (amended 2026-09-24, review SPEND-1/RL-1).** An empty
+fault list is never read as a pass. Each fact below is checked, and a missing
+one is a fault that names it:
+- the gate completed;
+- exactly the four authorized methods were sent, in order;
+- a spend readback was judged;
+- the session emitted no damaged or unattributed record;
+- the exchange did not raise, the launch did not time out or exceed a bound,
+  and the client and its trusted reaper both report exit 0;
+- the relay closed cleanly;
+- after the run, the terminal custody check passes and the credential is
+  still one regular `0600` file;
+- for a login, the credential was written.
+
+**Where the evidence goes (amended, RL-2 and RL-6).** The lane reserves its
+evidence path before any custody or launch. It creates a create-exclusive
+temporary beside the final name and refuses a path that already exists. It
+publishes by writing, syncing, then linking the temporary to the final name,
+which never replaces a file. Any failure removes both, so a failed run leaves
+no file at the final name.
 
 ### 6. Destination inventory and pinning
 
@@ -1170,19 +1280,24 @@ not retry. The only exception is an intended refusal in S6.
 - **S1. Pin.** Resolve `auth.openai.com` and `chatgpt.com` once on the host and
   write the pin record. Build the login policy (`auth.openai.com:443`) and the
   startup policy (both hosts).
-- **S2. First provisioning only.** Publish g1 (N3c procedure). Before any
-  generation is active, so that no provider can accept, create an empty
-  `auth.json` owned by the store's owner:
-  `install -o m8-service -g m8-service -m 0600 /dev/null <store>/auth.json`.
-  (Amended 2026-09-24: the first draft omitted the owner, and
-  `check_credential` requires the store directory's owner.) A later re-login
-  reuses the existing file.
+- **S2. First provisioning only.** Publish g1 (N3c procedure). The first
+  login creates its own empty `auth.json`: S3 passes `--first-login`, and the
+  lane creates the file inside the root-held maintenance, before the launch.
+  It is create-exclusive (`O_EXCL|O_NOFOLLOW`, relative to the checked store
+  descriptor) and `0600`, and it is owned by the store's owner because the lane
+  runs as `m8-service`. It never replaces a file, so a later re-login, which
+  reuses the existing file, omits the flag. (Amended 2026-09-24, review CC-4.
+  The first draft had a shell step "inside a maintenance context", which
+  nothing could run, and it created a root-owned file that
+  `check_credential` refuses.)
 - **S3. Login.** Root runs the maintenance helper, `operator_store maintain
   --store-root R --key K -- <service interpreter> <lane entry> login --policy
-  login ...`. The helper starts the lane as `m8-service` holding only the
-  lock (interface item 4). The owner opens the printed URL on their own
-  device and enters the one-time code. Record the evidence: exit status,
-  relay record, credential metadata.
+  login ... [--first-login]`. The helper starts the lane as `m8-service`
+  holding only the lock (interface item 4). The login's deadline defaults to
+  960 s, which covers the vendor's 15-minute device-code window. The owner
+  opens the printed URL on their own device and enters the one-time code.
+  Record the evidence: exit status, relay record, credential metadata. A
+  login that wrote no credential is a fault.
 - **S4. Qualify.** A second helper run, with the lane `startup --expected pro`.
   Each helper run is its own maintenance context. No writer can run between
   S3 and S4: publication and activation are the operator's, and the
@@ -1248,24 +1363,40 @@ This is what this design needs from the parallel host-runtime installation.
 Nothing else is assumed.
 
 1. The immutable runtime root (`LinuxLauncher.root`, digest-verified) contains:
-   - the pinned vendor package tree, exactly as `vendor_plan` extracts it
-     into the launch root's `native-codex`, at **`opt/codex/`**. The in-zone
-     binary is therefore **`/opt/codex/bin/codex`**
-     (`codex_lane.RUNTIME_BINARY`; SHA-256 `56ef98ab…62da`);
-   - the pinned model catalog (`codex-models.json`, checked against
-     `catalog_sha256`) at **`opt/codex-models.json`**, so in-zone it is
-     **`/opt/codex-models.json`** (`codex_lane.RUNTIME_CATALOG`). The sealed
-     configuration names exactly that path in `model_catalog_json`;
+   - two empty mount points, `opt/codex/` (a directory) and
+     `opt/codex-models.json` (an empty file), and nothing of the vendor;
    - `/usr/libexec/constructicon-egress-bridge.py`;
    - the supervisor, at the N4 revision (`--mount-fds`);
    - `/usr/bin/python3`.
 
-   These entries fill `runtime_plan`'s marked slot in
-   `scripts/ci/m8_host_artifacts.py` ("N4's in-zone vendor image, once its
-   paths are fixed, is added here and nowhere else"). It has no
-   `vendor-store` mount point, since the layout slice removed it from
-   `RUNTIME_DIRECTORIES`. It must **not** contain `/etc/codex`. (Amended
-   2026-09-24 for the host-runtime slice.)
+   It has no `vendor-store` mount point, since the layout slice removed it
+   from `RUNTIME_DIRECTORIES`. It must **not** contain `/etc/codex`.
+
+   **The vendor is bound, not baked (orchestrator decision, 2026-09-24).** The
+   ~340 MB vendor tree must not live in the runtime image: every launch's
+   `check_artifacts` re-hashes the runtime through `runtime_digest`, which
+   would cost about 0.3-0.7 s on every launch, containment test and mutant.
+   Instead a native launch binds the launch set's own copies read-only:
+   - `L/native-codex` onto **`/opt/codex`**, so the client is
+     **`/opt/codex/bin/codex`** (`codex_lane.RUNTIME_BINARY`, SHA-256
+     `56ef98ab…62da`);
+   - `L/codex-models.json` onto **`/opt/codex-models.json`**
+     (`codex_lane.RUNTIME_CATALOG`), which the sealed configuration names in
+     `model_catalog_json`.
+
+   Each copy is verified against its pinned digest by verify-launch, at
+   installation and requalification. Each launch checks only their custody,
+   in `LinuxLauncher.check_artifacts` through `NativeVendor.check`:
+   - every entry is a real directory or regular file, never a link or device;
+   - every entry is root-owned, with no set-id bit and no group or other write;
+   - every ancestor is root-owned and not group- or other-writable.
+
+   So only root can change what the zone receives between that check and the
+   mount. The launch revision names both bound paths, and each lane's evidence
+   records the client's SHA-256. The in-zone paths are unchanged from the
+   earlier amendment; only their source moved, from runtime entries to binds.
+   `runtime_plan` holds the two mount points (`VENDOR_MOUNT`, `CATALOG_MOUNT`)
+   in place of the vendor slot.
 2. The M8-D2 AppArmor profiles are loaded, and bubblewrap is
    `0.9.0-1ubuntu0.3`. That package must provide `--bind-fd` and
    `--ro-bind-data`; this is to be confirmed before implementation (section 1).

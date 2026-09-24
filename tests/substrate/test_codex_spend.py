@@ -23,6 +23,7 @@ from constructicon.substrate.executors.codex_protocol import (
     encode_record,
     rate_limit_of,
     rate_limits_read_request,
+    settings_notice_faults,
     spend_change_faults,
     spend_faults,
     spend_reading,
@@ -227,6 +228,77 @@ def test_every_other_account_or_provider_notice_refuses_naming_only_the_method(m
 @pytest.mark.parametrize("method", ["warning", "item/started", "turn/started", "model/rerouted"])
 def test_an_unrelated_notification_is_not_a_refusal(method):
     assert account_notice_faults(notice(method, {"message": EMAIL}), EXPECTED) == ()
+
+
+def test_the_notice_fault_claims_no_turn():
+    """N4-NOTICE-5: the startup phase has no turn, so the text names none."""
+
+    faults = account_notice_faults(notice("account/updated", {}), EXPECTED)
+    assert faults == ("the session reported 'account/updated'",)
+    assert "turn" not in ACCOUNT_NOTICE_FAULT
+
+
+@pytest.mark.parametrize("changes", [
+    {"credits": {"hasCredits": True, "unlimited": False, "balance": "25.00"}},
+    {"credits": {"hasCredits": False, "unlimited": True, "balance": None}},
+    {"credits": {"hasCredits": False, "unlimited": False, "balance": "0.01"}},
+    {"credits": {"unlimited": False, "balance": None}},
+    {"credits": "none"},
+    {"spendControlReached": True},
+], ids=["purchased", "unlimited", "balance", "no-has-credits", "non-object", "spend-control"])
+def test_a_rate_limit_update_showing_spend_refuses(changes):
+    """SPEND-3: the one in-band spend record inside the bracketed window."""
+
+    faults = account_notice_faults(
+        notice("account/rateLimits/updated", {"rateLimits": codex_bucket(**changes)}), EXPECTED,
+    )
+    assert faults == (ACCOUNT_NOTICE_FAULT.format(method="'account/rateLimits/updated'"),)
+
+
+@pytest.mark.parametrize("changes", [
+    {"credits": None}, {"credits": {"hasCredits": False, "unlimited": False, "balance": "0"}},
+    {"spendControlReached": False}, {"spendControlReached": None},
+], ids=["null-credits", "zero-credits", "spend-control-false", "spend-control-null"])
+def test_a_sparse_or_zero_spend_update_passes(changes):
+    snapshot = codex_bucket(**changes)
+    assert account_notice_faults(
+        notice("account/rateLimits/updated", {"rateLimits": snapshot}), EXPECTED,
+    ) == ()
+    del snapshot["credits"], snapshot["spendControlReached"]
+    assert account_notice_faults(
+        notice("account/rateLimits/updated", {"rateLimits": snapshot}), EXPECTED,
+    ) == ()
+
+
+def settings(**changes):
+    thread_settings = {"model": "gpt-5.6-sol", "modelProvider": "openai", **changes}
+    return notice("thread/settings/updated", {
+        "threadId": "thread-1", "threadSettings": thread_settings,
+    })
+
+
+def test_a_settings_update_naming_the_sealed_model_and_provider_passes():
+    assert settings_notice_faults(settings(), model="gpt-5.6-sol", provider="openai") == ()
+
+
+@pytest.mark.parametrize("record", [
+    settings(model="gpt-4.1"), settings(modelProvider="amazon-bedrock"),
+    settings(model=None), settings(modelProvider=7),
+    notice("thread/settings/updated", {"threadId": "thread-1"}),
+    notice("thread/settings/updated", None),
+], ids=["model", "provider", "no-model", "non-string-provider", "no-settings", "no-params"])
+def test_a_settings_update_changing_or_hiding_model_or_provider_refuses(record):
+    """N4-NOTICE-4: a provider change is refused, never silently withheld."""
+
+    faults = settings_notice_faults(record, model="gpt-5.6-sol", provider="openai")
+    assert faults == (ACCOUNT_NOTICE_FAULT.format(method="'thread/settings/updated'"),)
+    assert "bedrock" not in faults[0]
+
+
+def test_other_notifications_are_not_settings_updates():
+    assert settings_notice_faults(
+        notice("turn/started", {"model": "x"}), model="gpt-5.6-sol", provider="openai",
+    ) == ()
 
 
 # --- the qualification plan set (orchestrator decision 1) --------------------

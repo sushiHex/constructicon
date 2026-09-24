@@ -7,10 +7,14 @@ the lane's composition, its evidence and its stop rules are production code
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
+import re
+import stat
 from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -18,18 +22,22 @@ import pytest
 
 from constructicon.core.errors import ContractViolation
 from constructicon.core.identity import digest
-from constructicon.substrate.executors import codex_lane, operator_store
+from constructicon.substrate.executors import codex_lane, linux, operator_store
 from constructicon.substrate.executors.codex_lane import (
     DENIAL_FAULT,
     EVIDENCE_DOMAIN,
+    LOGIN_FIELDS,
+    STARTUP_FIELDS,
     Custody,
+    EvidenceFile,
+    Executable,
     run_login,
     run_startup,
     write_evidence,
 )
 from constructicon.substrate.executors.codex_protocol import ExpectedAccount
 from constructicon.substrate.executors.egress import EgressDestination, EgressPolicy
-from constructicon.substrate.executors.linux import ProcessResult
+from constructicon.substrate.executors.linux import ProcessExchangeError, ProcessResult
 from constructicon.substrate.executors.operator_store import BindingCheck
 from tests.operator_store_world import StoreWorld
 from tests.substrate.test_codex_adapter import bare_launcher, clean_native
@@ -43,17 +51,22 @@ POLICY = EgressPolicy((
     EgressDestination("auth.openai.com", 443, "8.8.8.8"),
     EgressDestination("chatgpt.com", 443, "8.8.4.4"),
 ), 8)
+EXECUTABLE = Executable("/opt/codex/bin/codex", "a" * 64)
+REGULAR = (stat.S_IFREG | 0o600, 1, 1000)
+FOUR = [f"'{method}'" for method in EIGHT[:4]]
 
 
 class FakeRelay:
-    """Stands in for the relay; the lane reads its two counters only."""
+    """Stands in for the relay; the lane reads its counters and its closure."""
 
     instances: ClassVar[list[FakeRelay]] = []
+    closes = True
 
     def __init__(self, policy, directory, deadline, check):
         self.directory = directory
         self.observed: Counter[str] = Counter()
         self.destinations: Counter[str] = Counter()
+        self.closed = False
         FakeRelay.instances.append(self)
 
     async def __aenter__(self):
@@ -62,22 +75,33 @@ class FakeRelay:
 
     async def __aexit__(self, *exc):
         self.directory.rmdir()
+        self.closed = FakeRelay.closes
         return None
 
 
 class Lane:
     """A scripted exchange and the custody the lane's launch consumes."""
 
-    def __init__(self, tmp_path: Path, native=None, *, result=FINISHED, during=None):
+    def __init__(self, tmp_path: Path, native=None, *, result=FINISHED, during=None,
+                 kind="maintenance", writes=None):
         self.native = native
         self.result = result
         self.during = during
+        self.kind = kind
         self.credential = tmp_path / "credential"
         self.credential.write_bytes(b"harmless")
         self.opened: list[int] = []
         self.mounts: list = []
         self.lock = os.open(os.devnull, os.O_RDONLY)
         self.checks = 0
+        self.check_fails_after = None
+        self.facts = REGULAR
+        self.created = 0
+        self.raises: BaseException | None = None
+        # A login (a printing peer, not a scripted app-server) writes the
+        # credential it was given; a startup does not unless a test says so.
+        printing = native is not None and not hasattr(native, "received")
+        self.writes = printing if writes is None else writes
 
     def open_credential(self) -> int:
         fd = os.open(self.credential, os.O_RDONLY)
@@ -86,11 +110,17 @@ class Lane:
 
     def check(self) -> BindingCheck:
         self.checks += 1
+        if self.check_fails_after is not None and self.checks > self.check_fails_after:
+            raise ContractViolation("native store maintenance is unavailable")
         return BindingCheck(digest("native-operator-maintenance", 1, {"k": 1}))
 
+    def create(self) -> None:
+        self.created += 1
+
     def custody(self) -> Custody:
-        return Custody("maintenance", self.lock, self.open_credential, self.check,
-                       {"generation_floor": 1})
+        return Custody(self.kind, self.lock, self.open_credential, self.check,
+                       {"generation_floor": 1}, facts=lambda fd: self.facts,
+                       create_credential=self.create if self.kind == "maintenance" else None)
 
     def launcher(self):
         lane = self
@@ -100,9 +130,15 @@ class Lane:
                            timeout_s, native_store=None):
             lane.mounts.append((command, guard_fds, native_store))
             native_store.before_spawn()
-            await conversation(base.native)
+            if lane.result.returncode != 125:  # 125: the probe expired, nothing conversed
+                await conversation(base.native)
+            if lane.writes:
+                info = lane.credential.stat()
+                os.utime(lane.credential, ns=(info.st_atime_ns, info.st_mtime_ns + 10**9))
             if lane.during is not None:
                 lane.during(lane)
+            if lane.raises is not None:
+                raise lane.raises
             return lane.result
 
         object.__setattr__(base, "exchange", exchange)
@@ -112,6 +148,7 @@ class Lane:
 @pytest.fixture(autouse=True)
 def substituted(monkeypatch, tmp_path):
     FakeRelay.instances = []
+    FakeRelay.closes = True
     monkeypatch.setattr(codex_lane, "EgressRelay", FakeRelay)
 
     def sealed(data):
@@ -151,23 +188,40 @@ class Printing:
         self.stdin_closed = True
 
 
+async def login(lane: Lane, tmp_path: Path, **kwargs):
+    return await run_login(
+        lane.custody(), lane.launcher(), POLICY, executable=EXECUTABLE,
+        configuration=CONFIGURATION, lane_dir=tmp_path / "lane", deadline_s=30,
+        out=kwargs.pop("out", io.BytesIO()), **kwargs,
+    )
+
+
 async def test_the_login_code_reaches_the_operator_and_never_the_evidence(tmp_path):
     lane = Lane(tmp_path, Printing())
     out = io.BytesIO()
-    evidence = await run_login(
-        lane.custody(), lane.launcher(), POLICY, binary="/usr/bin/codex",
-        configuration=CONFIGURATION, lane_dir=tmp_path / "lane", deadline_s=30, out=out,
-    )
+    evidence = await login(lane, tmp_path, out=out)
     assert out.getvalue() == CODE
     text = json.dumps(evidence)
     assert b"ABCD-1234".decode() not in text and "auth.openai.com/codex" not in text
     assert evidence["faults"] == [] and evidence["lane"] == "login"
+    assert evidence["credential"] == {
+        "present": True, "regular_0600": True, "mtime_changed": True, "checked": True,
+    }
     (command, guards, mount), = lane.mounts
-    assert command == ("/usr/bin/codex", "login", "--device-auth")
+    assert command == ("/opt/codex/bin/codex", "login", "--device-auth")
     assert guards == (lane.lock,) and mount.lock_fd == lane.lock
-    assert mount.credential_fd == lane.opened[0] and lane.checks == 1
+    assert mount.credential_fd == lane.opened[0] and lane.checks == 2
     assert all(closed(fd) for fd in mount.mount_fds)
     assert not (tmp_path / "lane").exists()
+
+
+async def test_a_login_never_runs_under_the_active_selection(tmp_path):
+    """CC-1: a login rewrites the credential; only maintenance may allow that."""
+
+    lane = Lane(tmp_path, Printing(), kind="active")
+    with pytest.raises(ContractViolation, match="only inside maintenance"):
+        await login(lane, tmp_path)
+    assert lane.opened == [] and lane.mounts == []
 
 
 async def test_a_failed_or_denied_login_is_a_fault(tmp_path):
@@ -177,35 +231,53 @@ async def test_a_failed_or_denied_login_is_a_fault(tmp_path):
     lane = Lane(tmp_path, Printing(), result=ProcessResult(
         1, b"", b"", 1.0, payload_returncode=1,
     ), during=deny)
-    evidence = await run_login(
-        lane.custody(), lane.launcher(), POLICY, binary="/usr/bin/codex",
-        configuration=CONFIGURATION, lane_dir=tmp_path / "lane", deadline_s=30,
-        out=io.BytesIO(),
-    )
+    evidence = await login(lane, tmp_path)
     assert DENIAL_FAULT in evidence["faults"]
-    assert "the device login did not exit cleanly" in evidence["faults"]
+    assert "the native client did not exit cleanly" in evidence["faults"]
     assert evidence["relay"]["denied"] == {"denied:destination": 1}
+
+
+async def test_a_login_that_wrote_nothing_is_a_fault(tmp_path):
+    """CC-2: exit 0 alone is not a login."""
+
+    evidence = await login(Lane(tmp_path, Printing(), writes=False), tmp_path)
+    assert evidence["faults"] == ["the device login wrote no credential"]
+    assert evidence["credential"]["mtime_changed"] is False
+
+
+async def test_the_first_login_creates_the_empty_credential_under_the_same_custody(tmp_path):
+    lane = Lane(tmp_path, Printing())
+    evidence = await login(lane, tmp_path, first_login=True)
+    assert lane.created == 1 and evidence["faults"] == []
+
+
+async def test_only_a_custody_that_can_create_one_makes_a_first_credential(tmp_path):
+    lane = Lane(tmp_path, Printing())
+    custody = replace(lane.custody(), create_credential=None)
+    with pytest.raises(ContractViolation, match="first credential"):
+        await run_login(
+            custody, lane.launcher(), POLICY, executable=EXECUTABLE,
+            configuration=CONFIGURATION, lane_dir=tmp_path / "lane", deadline_s=30,
+            out=io.BytesIO(), first_login=True,
+        )
+    assert lane.mounts == []
 
 
 async def test_an_existing_lane_directory_refuses_before_anything_opens(tmp_path):
     lane = Lane(tmp_path, Printing())
     (tmp_path / "lane").mkdir()
     with pytest.raises(FileExistsError):
-        await run_login(
-            lane.custody(), lane.launcher(), POLICY, binary="/usr/bin/codex",
-            configuration=CONFIGURATION, lane_dir=tmp_path / "lane", deadline_s=30,
-            out=io.BytesIO(),
-        )
+        await login(lane, tmp_path)
     assert lane.opened == [] and lane.mounts == []
 
 
 # --- startup -----------------------------------------------------------------
 
 
-async def startup(tmp_path, native=None, **kwargs):
-    lane = Lane(tmp_path, native, during=kwargs.pop("during", None))
+async def startup(tmp_path, native=None, *, lane=None, **kwargs):
+    lane = lane or Lane(tmp_path, native, during=kwargs.pop("during", None))
     evidence = await run_startup(
-        lane.custody(), lane.launcher(), POLICY, binary="/usr/bin/codex",
+        lane.custody(), lane.launcher(), POLICY, executable=EXECUTABLE,
         configuration=CONFIGURATION, expected=kwargs.pop("expected", ExpectedAccount(
             plan_type="pro", alternatives=("prolite",),
         )), lane_dir=tmp_path / "lane", deadline_s=30, **kwargs,
@@ -213,19 +285,88 @@ async def startup(tmp_path, native=None, **kwargs):
     return lane, evidence
 
 
+def startup_native(**overrides):
+    return clean_native(accounts=[{"result": {"account": {
+        "type": "chatgpt", "email": EMAIL, "planType": "pro",
+    }, "requiresOpenaiAuth": True}}], **overrides)
+
+
 async def test_a_clean_startup_records_the_four_methods_and_nothing_identifying(tmp_path):
-    lane, evidence = await startup(tmp_path)
-    assert evidence["methods_sent"] == [f"'{method}'" for method in EIGHT[:4]]
+    lane, evidence = await startup(tmp_path, startup_native())
+    assert evidence["methods_sent"] == FOUR
     assert evidence["gate"] == {"completed": True, "plan": "pro"}
     assert evidence["readback"]["has_credits"] is False
     assert evidence["faults"] == [] and evidence["refresh"] == "unmeasured"
     assert evidence["vendor_identity"] == "unverified"
     assert evidence["vendor_conformance_qualified"] is False
+    assert evidence["executable"] == {"path": EXECUTABLE.path, "sha256": EXECUTABLE.sha256}
     (command, _, _), = lane.mounts
-    assert command == ("/usr/bin/codex", "app-server", "--strict-config", "--stdio")
+    assert command == ("/opt/codex/bin/codex", "app-server", "--strict-config", "--stdio")
     text = json.dumps(evidence)
     for planted in (EMAIL, ACCOUNT_ID, "Codex "):
         assert planted not in text
+
+
+def outcome(returncode=0, payload=0, **changes):
+    return ProcessResult(returncode, b"", b"", 1.0, payload_returncode=payload, **changes)
+
+
+AFFIRMATIVE = {
+    # The launcher returned before any conversation: nothing may read as a pass.
+    "never-conversed": (lambda lane: setattr(lane, "result", outcome(125, None, timed_out=True)),
+                        {"the startup gate did not complete", "no spend readback was judged",
+                         "the startup did not send exactly the four authorized methods",
+                         "the launch timed out", "the native client did not exit cleanly"}),
+    "killed": (lambda lane: setattr(lane, "result", outcome(137, 137)),
+               {"the native client did not exit cleanly"}),
+    "no-payload-status": (lambda lane: setattr(lane, "result", outcome(0, None)),
+                          {"the native client did not exit cleanly"}),
+    "timed-out": (lambda lane: setattr(lane, "result", outcome(timed_out=True)),
+                  {"the launch timed out"}),
+    "bound": (lambda lane: setattr(lane, "result", outcome(bound_exceeded="stdout")),
+              {"a launch bound was exceeded"}),
+    "exchange-raised": (
+        lambda lane: setattr(lane, "raises", ProcessExchangeError(outcome(1, 1))),
+        {"the exchange raised after the launch", "the native client did not exit cleanly"},
+    ),
+    "relay-unclosed": (lambda lane: setattr(FakeRelay, "closes", False),
+                       {"the relay did not close cleanly"}),
+    "terminal-check": (lambda lane: setattr(lane, "check_fails_after", 1),
+                       {"the terminal custody check failed"}),
+    "credential-mode": (lambda lane: setattr(lane, "facts", (stat.S_IFREG | 0o644, 1, 1000)),
+                        {"the credential is not one regular 0600 file after the run"}),
+    "credential-unlinked": (lambda lane: setattr(lane, "facts", (stat.S_IFREG | 0o600, 0, 1000)),
+                            {"the credential is not one regular 0600 file after the run"}),
+}
+
+
+@pytest.mark.parametrize("change", AFFIRMATIVE)
+async def test_a_startup_passes_only_on_affirmative_facts(tmp_path, change):
+    """SPEND-1 / RL-1: a missing fact is a fault that names it, never silence."""
+
+    alter, expected = AFFIRMATIVE[change]
+    lane = Lane(tmp_path, startup_native())
+    alter(lane)
+    _, evidence = await startup(tmp_path, lane=lane)
+    assert set(evidence["faults"]) == expected, evidence["faults"]
+
+
+async def test_the_four_methods_are_compared_not_assumed(tmp_path, monkeypatch):
+    monkeypatch.setattr(codex_lane, "STARTUP_METHODS", ("initialize", "initialized"))
+    _, evidence = await startup(tmp_path, startup_native())
+    assert evidence["faults"] == ["the startup did not send exactly the four authorized methods"]
+
+
+async def test_session_damage_is_a_startup_fault(tmp_path, monkeypatch):
+    class Damaged(codex_lane.CodexConversation):
+        async def __call__(self, io):
+            await super().__call__(io)
+            self.observation = replace(self.observation, malformed_records=1)
+
+    monkeypatch.setattr(codex_lane, "CodexConversation", Damaged)
+    _, evidence = await startup(tmp_path, startup_native())
+    assert evidence["faults"] == ["the session emitted damaged or unattributed records"]
+    assert evidence["observation"] == {"malformed_records": 1, "first_error": False}
 
 
 async def test_refresh_is_measured_only_with_a_connection_a_write_and_a_clean_readback(
@@ -233,10 +374,9 @@ async def test_refresh_is_measured_only_with_a_connection_a_write_and_a_clean_re
 ):
     def refresh(lane):
         FakeRelay.instances[-1].destinations["accepted:auth.openai.com:443"] += 1
-        stat = lane.credential.stat()
-        os.utime(lane.credential, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10**9))
 
-    _, evidence = await startup(tmp_path, during=refresh)
+    lane = Lane(tmp_path, startup_native(), during=refresh, writes=True)
+    _, evidence = await startup(tmp_path, lane=lane)
     assert evidence["refresh"] == "measured"
     assert evidence["credential"]["mtime_changed"] is True
 
@@ -245,7 +385,7 @@ async def test_a_connection_without_a_write_is_not_a_measured_refresh(tmp_path):
     def connect(lane):
         FakeRelay.instances[-1].destinations["accepted:auth.openai.com:443"] += 1
 
-    _, evidence = await startup(tmp_path, during=connect)
+    _, evidence = await startup(tmp_path, startup_native(), during=connect)
     assert evidence["refresh"] == "unmeasured"
 
 
@@ -253,7 +393,7 @@ async def test_any_denial_in_a_clean_startup_is_a_fault(tmp_path):
     def deny(lane):
         FakeRelay.instances[-1].observed["denied:destination"] += 1
 
-    _, evidence = await startup(tmp_path, during=deny)
+    _, evidence = await startup(tmp_path, startup_native(), during=deny)
     assert DENIAL_FAULT in evidence["faults"]
 
 
@@ -263,7 +403,7 @@ async def test_a_declared_control_denial_must_occur(tmp_path, denied):
         if denied:
             FakeRelay.instances[-1].observed["denied:destination"] += 1
 
-    _, evidence = await startup(tmp_path, during=deny, expect_denial=True)
+    _, evidence = await startup(tmp_path, startup_native(), during=deny, expect_denial=True)
     if denied:
         assert DENIAL_FAULT not in evidence["faults"]
     else:
@@ -276,9 +416,50 @@ async def test_an_undeclared_plan_is_a_fault_and_is_not_recorded_as_the_plan(tmp
     }, "requiresOpenaiAuth": True}}])
     _, evidence = await startup(tmp_path, native)
     assert evidence["faults"] and evidence["gate"] == {"completed": False, "plan": None}
-    assert evidence["readback"] is None and evidence["methods_sent"] == [
-        f"'{method}'" for method in EIGHT[:3]
-    ]
+    assert evidence["readback"] is None and evidence["methods_sent"] == FOUR[:3]
+
+
+async def test_the_hold_runs_inside_the_live_exchange(tmp_path):
+    """RL-3: the pause is the conversation's, before stdin closes."""
+
+    native = startup_native()
+    _, evidence = await startup(tmp_path, native, hold_s=0.01)
+    assert evidence["hold_s"] == 0.01 and evidence["faults"] == []
+    assert native.stdin_closed
+
+
+@pytest.mark.parametrize("hold", [-1.0, 30.0, 31.0])
+async def test_a_hold_outside_the_deadline_refuses_before_launch(tmp_path, hold):
+    lane = Lane(tmp_path, startup_native())
+    with pytest.raises(ContractViolation, match="hold"):
+        await startup(tmp_path, lane=lane, hold_s=hold)
+    assert lane.mounts == []
+
+
+# --- the closed schema (F1) ----------------------------------------------------
+
+
+async def test_each_lane_emits_exactly_its_closed_schema(tmp_path):
+    _, started = await startup(tmp_path, startup_native())
+    assert set(started) == STARTUP_FIELDS
+    logged = await login(Lane(tmp_path, Printing()), tmp_path)
+    assert set(logged) == LOGIN_FIELDS
+
+
+def test_the_design_documents_the_emitted_schema():
+    review = (Path(__file__).parents[2] / "docs" / "plans" / "handoffs"
+              / "M8-N4-state-review.md").read_text(encoding="utf-8")
+    block = review.split("<!-- lane-evidence-schema -->", 2)[1]
+    documented = {
+        lane: set(re.findall(r"`([a-z_0-9]+)`", line.split(":", 1)[1]))
+        for lane, line in (
+            ("login", next(item for item in block.splitlines() if item.startswith("- login:"))),
+            ("startup",
+             next(item for item in block.splitlines() if item.startswith("- startup adds:"))),
+        )
+    }
+    assert documented["login"] == LOGIN_FIELDS
+    assert documented["login"] | documented["startup"] == STARTUP_FIELDS
 
 
 # --- evidence ----------------------------------------------------------------
@@ -292,31 +473,56 @@ def test_evidence_is_create_exclusive_completed_last_and_content_addressed(tmp_p
     assert revision == digest(EVIDENCE_DOMAIN, 1, written)
     with pytest.raises(FileExistsError):
         write_evidence(path, {"schema_version": 1, "faults": []})
+    assert os.listdir(tmp_path) == ["evidence.json"]
 
 
 def test_evidence_never_marks_itself_completed_early(tmp_path):
     with pytest.raises(ContractViolation, match="last act"):
         write_evidence(tmp_path / "evidence.json", {"completed": True})
-    assert not (tmp_path / "evidence.json").exists()
+    assert os.listdir(tmp_path) == []
 
 
-def test_a_failed_evidence_write_leaves_no_completed_file(tmp_path, monkeypatch):
-    def failing(fd, data):
-        raise OSError("disk full")
+@pytest.mark.parametrize("failing", ["write", "fsync", "link"])
+def test_a_failed_evidence_write_leaves_no_file_at_all(tmp_path, monkeypatch, failing):
+    """RL-6: the final name appears only for a complete, synced record."""
 
-    monkeypatch.setattr(codex_lane.os, "write", failing)
+    def fail(*args, **kwargs):
+        raise OSError(5, "injected")
+
+    monkeypatch.setattr(codex_lane.os, failing, fail)
     with pytest.raises(OSError):
         write_evidence(tmp_path / "evidence.json", {"faults": []})
-    assert "completed" not in (tmp_path / "evidence.json").read_text()
+    assert os.listdir(tmp_path) == []
 
 
-def test_hold_must_lie_within_the_deadline():
-    with pytest.raises(SystemExit):
-        codex_lane.main([
-            "startup", "--store-root", "/s", "--key", "k", "--launch-root", "/r",
-            "--binary", "/b", "--configuration", "/c", "--policy", "/p",
-            "--lane-dir", "/l", "--evidence", "/e", "--hold", "200", "--deadline", "100",
-        ])
+def test_a_failure_after_the_link_removes_the_published_name_too(tmp_path, monkeypatch):
+    def fail(path):
+        raise OSError(5, "injected")
+
+    monkeypatch.setattr(codex_lane, "_fsync_directory", fail)
+    with pytest.raises(OSError):
+        write_evidence(tmp_path / "evidence.json", {"faults": []})
+    assert os.listdir(tmp_path) == []
+
+
+def test_a_reservation_never_replaces_an_existing_file(tmp_path):
+    path = tmp_path / "evidence.json"
+    reservation = EvidenceFile(path)
+    path.write_text("someone else's")
+    with pytest.raises(OSError) as raised:
+        reservation.publish({"faults": []})
+    assert raised.type is FileExistsError, raised.value
+    assert path.read_text() == "someone else's"
+    assert os.listdir(tmp_path) == ["evidence.json"]
+
+
+def lane_command(tmp_path, *extra: str, evidence: Path | None = None, lane: str = "login"):
+    (tmp_path / "config.toml").write_text(CONFIGURATION, encoding="utf-8")
+    return [
+        lane, "--store-root", "/s", "--key", "k", "--launch-root", "/r",
+        "--configuration", str(tmp_path / "config.toml"), "--policy", "/p",
+        "--lane-dir", "/l", "--evidence", str(evidence or tmp_path / "evidence.json"), *extra,
+    ]
 
 
 class Recorded:
@@ -334,58 +540,165 @@ class Recorded:
         return False
 
 
-def lane_under_inherited_custody(tmp_path, monkeypatch, *extra: str):
-    """Run the lane's ``main`` with only its custody and launch substituted."""
+def main_world(monkeypatch) -> dict[str, Any]:
+    """``main`` with only its custody and launch substituted; the rest is real."""
 
     seen: dict[str, Any] = {"events": []}
 
-    async def login(custody, launcher, policy, *, binary, **_):
-        seen["binary"] = binary
+    async def lane(custody, launcher, policy, *, executable, deadline_s, **options):
+        seen["events"].append("lane")
+        seen["executable"], seen["deadline"] = executable, deadline_s
+        seen["options"] = options
         return {"faults": []}
 
     def inherited(root, key, lock_fd, **options):
         seen["inherited"] = (root, key, lock_fd, options)
         return Recorded(seen["events"], object())
 
-    monkeypatch.setattr(codex_lane, "_launcher", lambda root: None)
+    def launcher(root):
+        seen["events"].append("launcher")
+        return None
+
+    monkeypatch.setattr(codex_lane, "_launcher", launcher)
+    monkeypatch.setattr(codex_lane, "vendor_executable", lambda launcher: EXECUTABLE)
     monkeypatch.setattr(codex_lane, "_policy", lambda path: None)
     monkeypatch.setattr(codex_lane, "inherit_maintenance", inherited)
     monkeypatch.setattr(codex_lane, "maintenance_custody", lambda withdrawn: None)
-    monkeypatch.setattr(codex_lane, "run_login", login)
-    monkeypatch.setattr(codex_lane, "write_evidence", lambda path, evidence: "r")
-    (tmp_path / "config.toml").write_text("", encoding="utf-8")
-    seen["code"] = codex_lane.main([
-        "login", "--store-root", "/s", "--key", "k", "--launch-root", "/r",
-        "--configuration", str(tmp_path / "config.toml"), "--policy", "/p",
-        "--lane-dir", "/l", "--evidence", "/e", *extra,
-    ])
+    monkeypatch.setattr(codex_lane, "run_login", lane)
+    monkeypatch.setattr(codex_lane, "run_startup", lane)
     return seen
 
 
-def test_the_binary_defaults_to_the_runtime_images_vendor_path(tmp_path, monkeypatch):
-    seen = lane_under_inherited_custody(
-        tmp_path, monkeypatch, "--lock-fd", "7", "--floor", "3",
-    )
-    assert seen["code"] == 0
-    assert seen["binary"] == codex_lane.RUNTIME_BINARY == "/opt/codex/bin/codex"
-    assert codex_lane.RUNTIME_CATALOG == "/opt/codex-models.json"
-
-
 def test_a_maintenance_lane_proves_the_custody_its_parent_passed(tmp_path, monkeypatch):
-    seen = lane_under_inherited_custody(
-        tmp_path, monkeypatch, "--custody=maintenance", "--lock-fd=7", "--floor=3",
-    )
+    seen = main_world(monkeypatch)
+    assert codex_lane.main(lane_command(
+        tmp_path, "--custody=maintenance", "--lock-fd=7", "--floor=3",
+    )) == 0
     assert seen["inherited"] == (Path("/s"), "k", 7, {
         "generation_floor": 3, "parent": os.getppid(),
     })
-    assert seen["events"] == ["enter", "exit"]
+    assert seen["events"] == ["launcher", "enter", "lane", "exit"]
+    assert seen["executable"] == EXECUTABLE
+    assert json.loads((tmp_path / "evidence.json").read_text())["completed"] is True
 
 
 @pytest.mark.parametrize("extra", [(), ("--lock-fd", "7"), ("--floor", "3")],
                          ids=["neither", "no-floor", "no-lock"])
 def test_a_maintenance_lane_never_starts_without_an_inherited_lock(tmp_path, monkeypatch, extra):
+    seen = main_world(monkeypatch)
     with pytest.raises(SystemExit):
-        lane_under_inherited_custody(tmp_path, monkeypatch, *extra)
+        codex_lane.main(lane_command(tmp_path, *extra))
+    assert seen["events"] == []
+
+
+def test_the_command_line_never_runs_a_login_under_the_active_selection(tmp_path, monkeypatch):
+    """CC-1, at the second of its two places."""
+
+    seen = main_world(monkeypatch)
+    with pytest.raises(BaseException) as raised:
+        codex_lane.main(lane_command(tmp_path, "--custody", "active", "--sealed", "/x"))
+    assert raised.type is SystemExit, raised.value
+    assert seen["events"] == []
+
+
+def test_the_login_deadline_covers_the_vendors_device_flow(tmp_path, monkeypatch):
+    """RL-7: 900 s of vendor polling plus a margin, unless the operator states one."""
+
+    seen = main_world(monkeypatch)
+    codex_lane.main(lane_command(tmp_path, "--lock-fd=7", "--floor=3"))
+    assert seen["deadline"] == codex_lane.LOGIN_DEADLINE_S == 960.0
+    seen = main_world(monkeypatch)
+    codex_lane.main(lane_command(
+        tmp_path, "--lock-fd=7", "--floor=3", evidence=tmp_path / "startup.json",
+        lane="startup",
+    ))
+    assert seen["deadline"] == codex_lane.STARTUP_DEADLINE_S
+
+
+@pytest.mark.parametrize("extra", [
+    ("--hold", "120"), ("--hold", "-1"), ("--first-login",),
+], ids=["hold-at-deadline", "negative-hold", "first-login-for-startup"])
+def test_startup_options_are_bounded_and_lane_specific(tmp_path, monkeypatch, extra):
+    seen = main_world(monkeypatch)
+    with pytest.raises(SystemExit):
+        codex_lane.main(lane_command(tmp_path, "--lock-fd=7", "--floor=3", *extra,
+                                     lane="startup"))
+    assert seen["events"] == []
+
+
+def test_a_login_takes_no_hold(tmp_path, monkeypatch):
+    seen = main_world(monkeypatch)
+    with pytest.raises(SystemExit):
+        codex_lane.main(lane_command(tmp_path, "--lock-fd=7", "--floor=3", "--hold", "1"))
+    assert seen["events"] == []
+
+
+def test_an_unusable_evidence_path_refuses_before_any_launch(tmp_path, monkeypatch):
+    """RL-2: a duplicate or missing-parent path is found first, not last."""
+
+    seen = main_world(monkeypatch)
+    (tmp_path / "evidence.json").write_text("an earlier run")
+    with pytest.raises(FileExistsError):
+        codex_lane.main(lane_command(tmp_path, "--lock-fd=7", "--floor=3"))
+    with pytest.raises(FileNotFoundError):
+        codex_lane.main(lane_command(
+            tmp_path, "--lock-fd=7", "--floor=3", evidence=tmp_path / "absent" / "e.json",
+        ))
+    assert seen["events"] == []
+    assert (tmp_path / "evidence.json").read_text() == "an earlier run"
+
+
+def test_a_failed_run_leaves_no_evidence_and_no_reservation(tmp_path, monkeypatch):
+    seen = main_world(monkeypatch)
+
+    async def crash(*args, **kwargs):
+        raise RuntimeError("the lane failed")
+
+    monkeypatch.setattr(codex_lane, "run_login", crash)
+    with pytest.raises(RuntimeError):
+        codex_lane.main(lane_command(tmp_path, "--lock-fd=7", "--floor=3"))
+    assert seen["events"] == ["launcher", "enter", "exit"]
+    assert sorted(os.listdir(tmp_path)) == ["config.toml"]
+
+
+def test_the_first_login_flag_reaches_the_login_lane(tmp_path, monkeypatch):
+    seen = main_world(monkeypatch)
+    codex_lane.main(lane_command(tmp_path, "--lock-fd=7", "--floor=3", "--first-login"))
+    assert seen["options"]["first_login"] is True
+
+
+# --- the bound vendor client (CC-3) ---------------------------------------------
+
+
+def test_the_executable_is_the_bound_vendor_client_hashed_from_its_source(tmp_path):
+    tree = tmp_path / "native-codex"
+    (tree / "bin").mkdir(parents=True)
+    (tree / "bin" / "codex").write_bytes(b"pinned client")
+    launcher = replace(bare_launcher(clean_native()), vendor=linux.NativeVendor(
+        tree, tmp_path / "codex-models.json",
+    ))
+    assert codex_lane.vendor_executable(launcher) == Executable(
+        "/opt/codex/bin/codex", hashlib.sha256(b"pinned client").hexdigest(),
+    )
+    assert codex_lane.RUNTIME_BINARY == linux.VENDOR_MOUNT + "/bin/codex"
+    assert codex_lane.RUNTIME_CATALOG == linux.CATALOG_MOUNT == "/opt/codex-models.json"
+
+
+def test_a_launcher_without_the_bound_vendor_runs_no_lane():
+    with pytest.raises(Exception) as raised:
+        codex_lane.vendor_executable(bare_launcher(clean_native()))
+    assert raised.type is ContractViolation and "bound vendor" in str(raised.value)
+
+
+def test_the_installed_launcher_binds_the_launch_sets_vendor(tmp_path):
+    (tmp_path / "runtime.json").write_text(json.dumps({
+        "runtime_digest": str(digest("runtime", 1, "x")), "policy": "/p",
+        "policy_sha256": "0" * 64,
+    }))
+    launcher = codex_lane._launcher(tmp_path)
+    assert launcher.vendor == linux.NativeVendor(
+        tmp_path / "native-codex", tmp_path / "codex-models.json",
+    )
 
 
 # --- custody -----------------------------------------------------------------
@@ -398,12 +711,13 @@ async def test_active_custody_is_the_providers_own_path_and_releases_its_lock(
     world.install(monkeypatch)
     world.exclusive = True
     async with codex_lane.active_custody(world.binding()) as custody:
-        assert custody.kind == "active"
+        assert custody.kind == "active" and custody.create_credential is None
         assert custody.detail == {"binding_digest": str(world.sealed.operator_binding_digest)}
         assert custody.check() == BindingCheck(world.sealed.operator_binding_digest)
         assert world.holder == custody.lock_fd
         fd = custody.open_credential()
         assert world.credential_opens == [fd]
+        assert custody.facts(fd) == world.credential
         os.close(fd)
     assert world.holder is None, "leaving custody released the retained lock"
 
@@ -416,3 +730,4 @@ def test_maintenance_custody_carries_the_contexts_lock_check_and_floor(tmp_path,
         assert custody.kind == "maintenance" and custody.lock_fd == withdrawn.lock_fd
         assert custody.detail == {"generation_floor": withdrawn.generation_floor}
         assert custody.check() == withdrawn.check()
+        assert custody.create_credential == withdrawn.create_credential

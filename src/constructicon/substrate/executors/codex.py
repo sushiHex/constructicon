@@ -118,6 +118,7 @@ from constructicon.substrate.executors.codex_protocol import (
     account_notice_faults,
     account_plan,
     account_read_request,
+    account_request_faults,
     bounded_detail,
     decode_turn,
     encode_record,
@@ -130,6 +131,7 @@ from constructicon.substrate.executors.codex_protocol import (
     parse_tool_call,
     rate_limit_of,
     rate_limits_read_request,
+    settings_notice_faults,
     spend_change_faults,
     spend_faults,
     spend_reading,
@@ -210,6 +212,22 @@ PROTOCOL_REVISION = digest("codex-operator-protocol", 1, inspect.getsource(codex
 
 def configuration_digest(configuration: str) -> Digest:
     return digest("codex-operator-configuration", 1, configuration)
+
+
+OPENAI_PROVIDER = "openai"
+"""The pinned client's default provider id (``model-provider-info/src/lib.rs:39``)."""
+
+
+def configured_provider(configuration: str) -> str:
+    """The provider the sealed configuration selects: ``model_provider``, else the default."""
+
+    try:
+        provider = tomllib.loads(configuration).get("model_provider", OPENAI_PROVIDER)
+    except (RecursionError, tomllib.TOMLDecodeError, ValueError) as exc:
+        raise ContractViolation("the sealed configuration is not valid TOML") from exc
+    if not isinstance(provider, str) or not provider.strip():
+        raise ContractViolation("the sealed configuration names no usable model provider")
+    return provider
 
 
 def configured_model(configuration: str) -> str:
@@ -310,11 +328,16 @@ class CodexConversation:
         input_limit: int, preamble: int = 0, catalog: Sequence[str] = (),
         worker: Callable[[str], Awaitable[str]] | None = None,
         deadline: float | None = None, startup_only: bool = False,
+        provider: str = OPENAI_PROVIDER, pause: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         if type(startup_only) is not bool:
             raise ContractViolation("the startup-only selector must be boolean")
         if startup_only and catalog:
             raise ContractViolation("a startup-only conversation offers no callbacks")
+        if pause is not None and not startup_only:
+            raise ContractViolation("only a startup-only conversation may pause")
+        if type(provider) is not str or not provider.strip():
+            raise ContractViolation("a native operator conversation requires its sealed provider")
         selection = grants.model_selection
         if selection.kind != "explicit" or not (selection.model or "").strip():
             # ``turn_request`` refuses this too, but there it raises mid-turn and
@@ -348,6 +371,8 @@ class CodexConversation:
         self._worker = worker
         self._deadline = deadline
         self._startup_only = startup_only
+        self._provider = provider
+        self._pause = pause
         self._stream = RecordStream()
         self._queue: list[bytes] = []
         self._identifier = 0
@@ -476,6 +501,19 @@ class CodexConversation:
             if "method" not in record:
                 self._refuse(ANSWERED_NOTHING_FAULT)
                 return False
+            refused = account_request_faults(record)
+            if refused:
+                # An account or provider request (the pinned
+                # ``account/chatgptAuthTokens/refresh``, or an id-bearing
+                # ``account/updated``) meets the same allowlist as a notice,
+                # at every site, so no chunk boundary decides its verdict
+                # (N4-NOTICE-2). Any other native request stays damage.
+                self.faults += refused
+                return False
+            if self._startup_only:
+                # No turn exists to demote, so damage would reach no verdict.
+                self._refuse("this conversation authorizes no native request here")
+                return False
             # The fold counts it from the transcript. At the drain to EOF the
             # observation is already folded, so this is a no-op there, which is
             # harmless: an unsolicited request at EOF changes no verdict.
@@ -501,6 +539,13 @@ class CodexConversation:
             return None
         return record
 
+    def _notice_faults(self, record: Mapping[str, Any]) -> tuple[str, ...]:
+        """Every refusal an id-less record can carry, at every site that reads one."""
+
+        return account_notice_faults(record, self._expected) or settings_notice_faults(
+            record, model=self._grants.model_selection.model or "", provider=self._provider,
+        )
+
     def _absorb(self, line: bytes, record: Mapping[str, Any]) -> bool:
         """Handle one id-less notification; ``False`` when it is a refusal.
 
@@ -514,7 +559,7 @@ class CodexConversation:
         # window the readings bracket but cannot cover (ADR 0021): it discards
         # the turn exactly as a gate fault does. Only the method name reaches
         # the public detail; nothing from ``params``.
-        notice = account_notice_faults(record, self._expected)
+        notice = self._notice_faults(record)
         if notice:
             self.faults += notice
             return False
@@ -997,17 +1042,24 @@ class CodexConversation:
         return True
 
     def _audit(self, line: bytes) -> bool:
-        """Apply the duplicate-id rule to one drained record.
+        """Apply the duplicate-id rule and the notice rules to one drained record.
 
         Returns whether the record left the check inconclusive: bytes we could not
-        decode mean we cannot say whether a duplicate was among them.
+        decode mean we cannot say whether a duplicate was among them. A refused
+        notice or any native request read here refuses as it would anywhere
+        else: in the startup phase this drain is the whole window after the
+        readback (N4-NOTICE-1, RL-5), and a notice read after the last reply
+        must not be the one thing no rule sees.
         """
 
         try:
             record = parse_record(line)
         except RecordDamaged:
             return True
-        if not isinstance(record, dict) or "id" not in record:
+        if not isinstance(record, dict):
+            return False
+        if "id" not in record:
+            self.faults += self._notice_faults(record)
             return False
         if "method" in record and self._catalog:
             self._refuse("a native request arrived during the terminal drain")
@@ -1119,6 +1171,13 @@ class CodexConversation:
             self.faults += faults
             return
         self.observed_plan = account_plan(before)
+        if self.observed_plan is not None:
+            # One literal per run (SPEND-2): qualification's alternatives only
+            # select the first, so a later reading naming the other declared
+            # literal is a plan change, as orchestrator decision 1 says.
+            self._expected = replace(
+                self._expected, plan_type=self.observed_plan, alternatives=(),
+            )
 
         # The spend readback: the owner's N5 bound, and the first request that
         # exercises the credential, so an expired login refuses here rather
@@ -1136,6 +1195,11 @@ class CodexConversation:
         if self._startup_only:
             # N4's authorized phase ends here: four methods, no thread.
             self.gate_completed = True
+            if self._pause is not None:
+                # While the zone is live and before stdin closes (RL-3): the
+                # launcher's deadline bounds it, and the drain still audits
+                # everything emitted meanwhile.
+                await self._pause()
             return
 
         started = await self._request(io, thread_start_request(
@@ -1531,6 +1595,7 @@ class CodexOperatorHandle:
             input_limit=provider.launcher.limits.input_bytes,
             catalog=provider.catalog, worker=worker,
             deadline=deadline if worker is not None else None,
+            provider=configured_provider(provider.configuration),
         )
 
         def before_spawn() -> BindingCheck:

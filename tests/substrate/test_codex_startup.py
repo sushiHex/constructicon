@@ -17,6 +17,7 @@ from constructicon.core.executor import TaskSpec
 from constructicon.substrate.executors import codex
 from constructicon.substrate.executors.codex import CodexConversation
 from constructicon.substrate.executors.codex_protocol import (
+    ACCOUNT_NOTICE_FAULT,
     CONTAINED_PYTHON_CATALOG,
     CREDITS_FAULT,
     GATE_INCOMPLETE_FAULT,
@@ -42,6 +43,7 @@ from tests.substrate.test_codex_protocol import (
     ACCOUNT_ID,
     EMAIL,
     MANAGED,
+    codex_bucket,
     completed,
     spend_result,
 )
@@ -164,6 +166,8 @@ async def test_the_handle_never_runs_the_startup_phase(
     assert outcome.status == "success"
     assert len(constructed) == 1 and constructed[0].get("startup_only", False) is False
     assert launcher.native.methods == EIGHT
+    # N4-NOTICE-4: the conversation judges settings against the sealed provider.
+    assert constructed[0].get("provider") == "openai"
 
 
 # --- the task conversation's readbacks ---------------------------------------
@@ -260,6 +264,185 @@ async def test_qualification_records_whichever_declared_literal_the_account_repo
         startup(expected=ExpectedAccount(plan_type="pro", alternatives=("prolite",))), native,
     )
     assert conversation.faults == () and conversation.observed_plan == plan
+
+
+QUALIFYING = ExpectedAccount(plan_type="pro", alternatives=("prolite",))
+
+
+def with_plan(plan):
+    return {"result": {"account": {**MANAGED, "planType": plan}, "requiresOpenaiAuth": True}}
+
+
+async def test_one_run_binds_one_plan_literal_for_every_later_observation():
+    """SPEND-2 / N4-NOTICE-3: the first accepted literal is the run's only one."""
+
+    native = clean_native(
+        accounts=[with_plan("pro")], spends=[{"result": spend_result(planType="prolite")}],
+    )
+    conversation = await run(startup(expected=QUALIFYING), native)
+    assert conversation.faults == ("readback plan 'prolite' is not the expected 'pro'",)
+    assert conversation.gate_completed is False
+
+
+async def test_a_later_notice_naming_the_other_declared_literal_refuses():
+    notice = {"method": "account/rateLimits/updated",
+              "params": {"rateLimits": codex_bucket(planType="prolite")}}
+    native = clean_native(accounts=[with_plan("pro")], trailing=[notice])
+    conversation = await run(startup(expected=QUALIFYING), native)
+    assert ACCOUNT_NOTICE_FAULT.format(method="'account/rateLimits/updated'") in (
+        conversation.faults
+    )
+
+
+def startup_native(**overrides):
+    """One account answer, so the readback's reply is the last and carries ``trailing``."""
+
+    return clean_native(accounts=[{"result": MANAGED_RESULT}], **overrides)
+
+
+TRAILING_REFUSALS = {
+    "account-updated": {"method": "account/updated",
+                        "params": {"authMode": "apikey", "planType": "free"}},
+    "login-completed": {"method": "account/login/completed", "params": {"success": True}},
+    "provider": {"method": "modelProvider/authRecoveryStarted",
+                 "params": {"provider": "Amazon Bedrock"}},
+    "plan-change": {"method": "account/rateLimits/updated",
+                    "params": {"rateLimits": codex_bucket(planType="free")}},
+    "spend": {"method": "account/rateLimits/updated",
+              "params": {"rateLimits": codex_bucket(spendControlReached=True)}},
+    "settings": {"method": "thread/settings/updated", "params": {
+        "threadId": "t", "threadSettings": {"model": "gpt-5.6-sol",
+                                            "modelProvider": "amazon-bedrock"}}},
+}
+
+
+@pytest.mark.parametrize("record", TRAILING_REFUSALS.values(), ids=TRAILING_REFUSALS)
+async def test_a_refused_notice_after_the_last_reply_is_audited_not_dropped(record):
+    """N4-NOTICE-1 / RL-5: the drain to EOF judges id-less records too."""
+
+    native = startup_native(trailing=[record])
+    conversation = await run(startup(), native)
+    assert native.methods == FOUR
+    assert ACCOUNT_NOTICE_FAULT.format(method=repr(record["method"])) in conversation.faults
+
+
+@pytest.mark.parametrize("record", TRAILING_REFUSALS.values(), ids=TRAILING_REFUSALS)
+async def test_a_refused_notice_after_the_post_turn_readback_discards_the_turn(record):
+    conversation = await converse(clean_native(trailing=[record]))
+    assert ACCOUNT_NOTICE_FAULT.format(method=repr(record["method"])) in conversation.faults
+
+
+@pytest.mark.parametrize("record", TRAILING_REFUSALS.values(), ids=TRAILING_REFUSALS)
+async def test_a_refused_notice_before_the_readback_refuses_too(record):
+    conversation = await run(startup(), clean_native(early=[record]))
+    assert ACCOUNT_NOTICE_FAULT.format(method=repr(record["method"])) in conversation.faults
+    assert conversation.gate_completed is False
+
+
+async def test_a_clean_trailing_notice_still_passes():
+    notice = {"method": "account/rateLimits/updated", "params": {"rateLimits": codex_bucket()}}
+    native = startup_native(trailing=[notice, {"method": "warning"}])
+    conversation = await run(startup(), native)
+    assert conversation.faults == () and conversation.gate_completed is True
+    assert native.emitted[-1] == b'{"method": "warning"}\n', "the trailing records were sent"
+
+
+ACCOUNT_REQUESTS = {
+    "token-refresh": {"id": 77, "method": "account/chatgptAuthTokens/refresh", "params": {}},
+    "null-id": {"id": None, "method": "account/updated", "params": {}},
+    "provider": {"id": 79, "method": "modelProvider/authRecoveryStarted", "params": {}},
+}
+
+
+@pytest.mark.parametrize("record", ACCOUNT_REQUESTS.values(), ids=ACCOUNT_REQUESTS)
+@pytest.mark.parametrize("where", ["early", "trailing"])
+async def test_an_account_request_refuses_wherever_the_chunk_falls(record, where):
+    """N4-NOTICE-2: the verdict never depends on the chunk boundary."""
+
+    conversation = await run(startup(), startup_native(**{where: [record]}))
+    assert ACCOUNT_NOTICE_FAULT.format(method=repr(record["method"])) in conversation.faults
+
+
+@pytest.mark.parametrize("where", ["early", "trailing"])
+async def test_the_startup_phase_refuses_any_other_unowned_request(where):
+    """With no turn there is nothing to demote, so damage would be invisible."""
+
+    record = {"id": 78, "method": "item/tool/call", "params": {}}
+    conversation = await run(startup(), startup_native(**{where: [record]}))
+    assert "this conversation authorizes no native request here" in conversation.faults
+
+
+async def test_the_startup_pause_runs_while_the_zone_is_live():
+    """RL-3: ``--hold`` pauses after the gate and before stdin closes."""
+
+    native = clean_native()
+    seen = []
+
+    async def pause():
+        seen.append((native.stdin_closed, native.methods == FOUR))
+
+    conversation = CodexConversation(
+        task=TaskSpec(instruction="unused by the startup phase"), grants=GRANTS,
+        expected=EXPECTED, input_limit=1024 * 1024, startup_only=True, pause=pause,
+    )
+    await run(conversation, native)
+    assert seen == [(False, True)] and native.stdin_closed
+    assert conversation.faults == () and conversation.gate_completed is True
+
+
+async def test_a_refused_startup_never_pauses():
+    seen = []
+
+    async def pause():
+        seen.append(True)
+
+    conversation = CodexConversation(
+        task=TaskSpec(instruction="unused by the startup phase"), grants=GRANTS,
+        expected=EXPECTED, input_limit=1024 * 1024, startup_only=True, pause=pause,
+    )
+    await run(conversation, clean_native(spends=[UNREADABLE]))
+    assert seen == [] and conversation.faults
+
+
+def test_only_a_startup_conversation_pauses():
+    async def pause():
+        return None
+
+    with pytest.raises(ContractViolation, match="pause"):
+        CodexConversation(
+            task=TaskSpec(instruction="x"), grants=GRANTS, expected=EXPECTED,
+            input_limit=1024, pause=pause,
+        )
+
+
+@pytest.mark.parametrize(("configuration", "provider"), [
+    ('model = "m"\n', "openai"), ('model = "m"\nmodel_provider = "probe"\n', "probe"),
+], ids=["pinned-default", "configured"])
+def test_the_sealed_provider_is_the_configurations_or_the_pinned_default(
+    configuration, provider,
+):
+    assert codex.configured_provider(configuration) == provider
+
+
+@pytest.mark.parametrize("configuration", [
+    'model_provider = 7\n', 'model_provider = " "\n', "not toml = = \n",
+], ids=["non-string", "blank", "damaged"])
+def test_an_unusable_sealed_provider_refuses(configuration):
+    with pytest.raises(ContractViolation):
+        codex.configured_provider(configuration)
+
+
+async def test_a_settings_update_for_the_sealed_provider_passes_a_configured_session():
+    notice = {"method": "thread/settings/updated", "params": {"threadId": "t", "threadSettings": {
+        "model": "gpt-5.6-sol", "modelProvider": "probe"}}}
+    conversation = CodexConversation(
+        task=TaskSpec(instruction="unused by the startup phase"), grants=GRANTS,
+        expected=EXPECTED, input_limit=1024 * 1024, startup_only=True, provider="probe",
+    )
+    await run(conversation, startup_native(trailing=[notice]))
+    assert conversation.faults == ()
+    refused = await run(startup(), startup_native(trailing=[notice]))
+    assert refused.faults, "a provider other than the sealed default passed"
 
 
 async def test_qualification_refuses_an_undeclared_plan_and_records_none():

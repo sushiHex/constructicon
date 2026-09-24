@@ -147,6 +147,82 @@ def test_malformed_custody_arguments_refuse_before_any_open(tmp_path, monkeypatc
         os.close(fd)
 
 
+# --- the first login's credential file (runbook S2) -----------------------------
+
+
+def creating(monkeypatch) -> list[tuple[str, int]]:
+    """Record the mode set and every sync; the create itself is the world's."""
+
+    calls: list[tuple[str, int]] = []
+    monkeypatch.setattr(operator_store, "_fchmod", lambda fd, mode: calls.append(("mode", mode)))
+    monkeypatch.setattr(operator_store.os, "fsync", lambda fd: calls.append(("sync", fd)))
+    return calls
+
+
+def test_maintenance_creates_the_first_credential_exclusively(tmp_path, monkeypatch):
+    world, fd = world_with_inheritance(tmp_path, monkeypatch)
+    world.credential = None
+    calls = creating(monkeypatch)
+    try:
+        with inherit(world, fd) as maintenance:
+            maintenance.create_credential()
+            credential = maintenance.open_credential()
+            os.close(credential)
+            assert calls[0] == ("mode", 0o600) and [kind for kind, _ in calls[1:]] == [
+                "sync", "sync",
+            ]
+            assert calls[2] == ("sync", maintenance._opened.store_fd)
+    finally:
+        os.close(fd)
+    assert world.events.count("create-credential") == 1
+
+
+def test_an_existing_credential_is_never_replaced(tmp_path, monkeypatch):
+    world, fd = world_with_inheritance(tmp_path, monkeypatch)
+    calls = creating(monkeypatch)
+    try:
+        with (
+            inherit(world, fd) as maintenance,
+            pytest.raises(ContractViolation, match="no qualified credential"),
+        ):
+            maintenance.create_credential()
+    finally:
+        os.close(fd)
+    assert calls == [] and "create-credential" not in world.events
+
+
+def test_a_closed_maintenance_creates_nothing(tmp_path, monkeypatch):
+    world, fd = world_with_inheritance(tmp_path, monkeypatch)
+    world.credential = None
+    creating(monkeypatch)
+    try:
+        with inherit(world, fd) as maintenance:
+            pass
+        with pytest.raises(ContractViolation, match="maintenance is unavailable"):
+            maintenance.create_credential()
+    finally:
+        os.close(fd)
+    assert "create-credential" not in world.events
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="dir_fd creation runs in the Linux job")
+def test_the_real_create_is_exclusive_relative_and_never_follows(tmp_path):
+    store = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        fd = operator_store._create_credential_fd(store)
+        os.close(fd)
+        assert (tmp_path / "auth.json").is_file()
+        with pytest.raises(FileExistsError):
+            operator_store._create_credential_fd(store)
+        (tmp_path / "auth.json").unlink()
+        (tmp_path / "auth.json").symlink_to(tmp_path / "elsewhere")
+        with pytest.raises(FileExistsError):
+            operator_store._create_credential_fd(store)
+        assert not (tmp_path / "elsewhere").exists()
+    finally:
+        os.close(store)
+
+
 # --- root's side: the maintenance helper starts the lane ------------------------
 
 

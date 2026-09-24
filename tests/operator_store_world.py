@@ -174,8 +174,16 @@ class StoreWorld:
             assert self.credential is not None
             return self.credential
 
+        def create_credential_fd(store_fd: int) -> int:
+            if self.credential is not None:
+                raise FileExistsError(17, "File exists", "auth.json")
+            self.credential = (stat.S_IFREG | 0o600, 1, 1000)
+            self.events.append("create-credential")
+            return os.open(self.root / "created-credential", os.O_WRONLY | os.O_CREAT, 0o600)
+
         monkeypatch.setattr(operator_store, "_open_credential_fd", open_credential_fd)
         monkeypatch.setattr(operator_store, "_credential_facts", credential_facts)
+        monkeypatch.setattr(operator_store, "_create_credential_fd", create_credential_fd)
 
         from constructicon.substrate.executors import codex
 

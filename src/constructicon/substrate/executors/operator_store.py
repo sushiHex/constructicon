@@ -8,7 +8,8 @@ at its two boundaries.  Three synchronous offline helpers are the only writers:
 publication, maintenance (a durable withdrawal) and activation.  Maintenance
 may run one service-user lane that inherits only its lock
 (:func:`run_under_maintenance`); the lane proves that custody with
-:func:`inherit_maintenance` and writes nothing here.
+:func:`inherit_maintenance`. The lane's one write is a first login's empty
+credential file (:meth:`StoreMaintenance.create_credential`).
 """
 
 from __future__ import annotations
@@ -234,6 +235,28 @@ class StoreMaintenance:
         if self.closed or self._opened.closed:
             raise ContractViolation("native store maintenance is unavailable")
         return open_credential(self._opened)
+
+    def create_credential(self) -> None:
+        """The first login's empty credential file: create-exclusive, ``0600``.
+
+        Only inside maintenance and only where none exists, so an existing
+        credential is never replaced. Created by the lane's own process, which
+        is the store's owner, so the file has the owner ``check_credential``
+        requires with no ownership change (M8-N4-state-review.md, runbook S2).
+        """
+
+        if self.closed or self._opened.closed:
+            raise ContractViolation("native store maintenance is unavailable")
+        try:
+            fd = _create_credential_fd(self._opened.store_fd)
+        except OSError as exc:
+            raise ContractViolation(CREDENTIAL_UNAVAILABLE) from exc
+        try:
+            _fchmod(fd, _CREDENTIAL_MODE)  # the umask may have narrowed it
+            os.fsync(fd)
+        finally:
+            _close(fd)
+        os.fsync(self._opened.store_fd)
 
 
 def _require_token(value: object, *, field: str) -> str:
@@ -995,11 +1018,28 @@ def _open_credential_fd(store_fd: int) -> int:
     return os.open(CREDENTIAL_FILE, _O_PATH | _O_NOFOLLOW | _O_CLOEXEC, dir_fd=store_fd)
 
 
+def _create_credential_fd(store_fd: int) -> int:
+    """Create the credential file, never follow or replace one: ``O_EXCL``."""
+
+    if sys.platform != "linux":
+        raise ContractViolation("native store custody requires Linux")
+    return os.open(
+        CREDENTIAL_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW | _O_CLOEXEC,
+        _CREDENTIAL_MODE, dir_fd=store_fd,
+    )
+
+
 def _credential_facts(fd: int) -> tuple[int, int, int]:
     """The descriptor's mode, link count and owner; metadata only."""
 
     info = os.fstat(fd)
     return info.st_mode, info.st_nlink, info.st_uid
+
+
+def credential_facts(fd: int) -> tuple[int, int, int]:
+    """A bound credential's mode, link count and owner, read after a launch."""
+
+    return _credential_facts(fd)
 
 
 def check_credential(fd: int, owner_uid: int) -> None:

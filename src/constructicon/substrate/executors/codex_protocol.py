@@ -679,8 +679,9 @@ def named_value(value: Any) -> str:
         return repr(value)
     return f"a {type(value).__name__} value"
 
-ACCOUNT_NOTICE_FAULT = "the session reported {method} during the turn"
-"""Neutral by construction. ADR 0021 refuses on "an observed mode change" and
+ACCOUNT_NOTICE_FAULT = "the session reported {method}"
+"""Neutral by construction, and it names no turn: the startup phase has none.
+ADR 0021 refuses on "an observed mode change" and
 requires qualification that refresh "cannot silently select API/cloud
 authentication mid-turn"; a mode-change notification lands in exactly the window
 the two readings bracket but cannot cover. A refused record need not be a mode
@@ -730,7 +731,12 @@ def account_notice_faults(record: Mapping[str, Any], expected: ExpectedAccount) 
     snapshot is documented as sparse ("Nullable account metadata ... does not
     clear a previously observed value", ``v2/account.rs:553-557``), while a
     present different plan is a plan change inside the window the readings
-    bracket. Its spend fields are judged by the post-turn readback instead.
+    bracket. Its spend facts are judged too, because the pinned client builds
+    it from the model call's own response headers (``rate_limits.rs:218``):
+    it is the one in-band spend record inside that window. A present credits
+    object must meet the readback's zero rule, and ``spendControlReached``
+    must not be true. Absent or null values stay admissible, as the sparse
+    update requires.
     """
 
     method = record.get("method")
@@ -744,12 +750,71 @@ def account_notice_faults(record: Mapping[str, Any], expected: ExpectedAccount) 
             isinstance(params, Mapping) and set(params) == {"rateLimits"}
             and isinstance(snapshot, Mapping)
             and (snapshot.get(PLAN_TYPE_KEY) is None or expected.accepts(snapshot[PLAN_TYPE_KEY]))
+            and _no_spend(snapshot)
         ):
             return ()
         return refused
     if method.startswith((ACCOUNT_NAMESPACE, PROVIDER_NAMESPACE)):
         return refused
     return ()
+
+
+def account_request_faults(record: Mapping[str, Any]) -> tuple[str, ...]:
+    """An id-bearing record in either refused namespace refuses; nothing admits one.
+
+    The allowlist's one admitted method is a notification. The pinned
+    ``account/chatgptAuthTokens/refresh`` is a server *request* with an id, and
+    an ``account/updated`` may arrive with ``"id": null``; both are account
+    events, so neither may pass as ordinary damage.
+    """
+
+    method = record.get("method")
+    if isinstance(method, str) and method.startswith((ACCOUNT_NAMESPACE, PROVIDER_NAMESPACE)):
+        return (ACCOUNT_NOTICE_FAULT.format(method=named_method(method)),)
+    return ()
+
+
+def _no_spend(snapshot: Mapping[str, Any]) -> bool:
+    """A sparse snapshot's spend facts: absent or null, or proven zero."""
+
+    credits = snapshot.get("credits")
+    if credits is not None and not (
+        isinstance(credits, Mapping)
+        and credits.get("hasCredits") is False and credits.get("unlimited") is False
+        and _balance_zero(credits.get("balance")) is not False
+    ):
+        return False
+    return snapshot.get("spendControlReached") is not True
+
+
+SETTINGS_UPDATED = "thread/settings/updated"
+
+
+def settings_notice_faults(
+    record: Mapping[str, Any], *, model: str, provider: str,
+) -> tuple[str, ...]:
+    """A settings update must name the sealed model and provider, or it refuses.
+
+    The pinned ``thread/settings/updated`` (experimental, ``common.rs:1865``)
+    carries ``threadSettings.model`` and ``.modelProvider`` (``v2/thread.rs``).
+    It is outside both refused namespaces, yet a different provider in it is a
+    provider change inside the window the readings bracket, exactly the event
+    the ``modelProvider/`` refusal exists for. So it is judged, not withheld: a
+    missing, non-string or different value refuses. Only the method is named.
+    """
+
+    if record.get("method") != SETTINGS_UPDATED:
+        return ()
+    params = record.get("params")
+    values = params.get("threadSettings") if isinstance(params, Mapping) else None
+    if (
+        isinstance(values, Mapping)
+        and values.get("model") == model and type(values.get("model")) is str
+        and values.get("modelProvider") == provider
+        and type(values.get("modelProvider")) is str
+    ):
+        return ()
+    return (ACCOUNT_NOTICE_FAULT.format(method=named_method(SETTINGS_UPDATED)),)
 
 
 def _result_object(reply: Any) -> Mapping[str, Any] | None:

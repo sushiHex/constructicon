@@ -575,6 +575,27 @@ MUTANTS = (
         I + "test_the_helper_never_starts_a_root_lane[root-group]",
     ),
     (
+        "N4-M28 a closed maintenance creates no credential",
+        STORE + "StoreMaintenance.create_credential",
+        "if self.closed or self._opened.closed:",
+        "if False:",
+        I + "test_a_closed_maintenance_creates_nothing",
+    ),
+    (
+        "N4-M29 the first credential is exactly 0600 whatever the umask",
+        STORE + "StoreMaintenance.create_credential",
+        "_fchmod(fd, _CREDENTIAL_MODE)",
+        "pass",
+        I + "test_maintenance_creates_the_first_credential_exclusively",
+    ),
+    (
+        "N4-M30 the store directory is synced after the create",
+        STORE + "StoreMaintenance.create_credential",
+        "os.fsync(self._opened.store_fd)",
+        "pass",
+        I + "test_maintenance_creates_the_first_credential_exclusively",
+    ),
+    (
         "N4-M27 only the helper sets the store, key and custody",
         STORE + "main",
         "argument == name or argument.startswith(name + \"=\")",

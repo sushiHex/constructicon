@@ -141,6 +141,60 @@ Conversation = Callable[[ProcessIO], Awaitable[None]]
 NATIVE_HOME = "/tmp/home/.codex"
 """The native zone's vendor home: a fresh tmpfs directory, disposable with it."""
 
+VENDOR_MOUNT = "/opt/codex"
+CATALOG_MOUNT = "/opt/codex-models.json"
+"""Where the launch set's vendor tree and model catalog appear in the zone.
+
+The runtime image carries only the two empty mount points; the content is
+bound read-only from the launch set (M8-N4-state-review.md, host-runtime
+interface item 1)."""
+
+
+def _require_root_fixed(info: os.stat_result, *, kind: int) -> None:
+    if stat.S_IFMT(info.st_mode) != kind or info.st_uid != 0 or info.st_mode & 0o6022:
+        raise ContractViolation("the native vendor content must be root-owned and fixed")
+
+
+@dataclass(frozen=True)
+class NativeVendor:
+    """The launch set's installed vendor package and catalog, bound, never copied.
+
+    verify-launch checks both against their pinned digests at installation and
+    requalification. Rehashing the ~340 MB tree on every launch would cost each
+    launch, containment test and mutant up to ~0.7 s, so a launch checks custody
+    only (orchestrator decision, 2026-09-24):
+    - every entry is a real directory or regular file, never a link or device;
+    - every entry is root-owned, with no set-id bit and no group or other write;
+    - every ancestor is root-owned and not group- or other-writable.
+
+    Nothing but root can then change what the zone receives between this check
+    and the mount.
+    """
+
+    tree: Path
+    catalog: Path
+
+    def check(self) -> None:
+        for path in (self.tree, self.catalog):
+            if not path.is_absolute():
+                raise ContractViolation("the native vendor content needs absolute paths")
+            for parent in path.parents:
+                info = os.stat(parent)
+                if info.st_uid != 0 or info.st_mode & 0o022:
+                    raise ContractViolation(f"native vendor ancestor {parent} must be root-owned")
+        _require_root_fixed(os.lstat(self.catalog), kind=stat.S_IFREG)
+        pending = [self.tree]
+        _require_root_fixed(os.lstat(self.tree), kind=stat.S_IFDIR)
+        while pending:
+            with os.scandir(pending.pop()) as entries:
+                for entry in entries:
+                    info = os.lstat(entry.path)
+                    if stat.S_ISDIR(info.st_mode):
+                        _require_root_fixed(info, kind=stat.S_IFDIR)
+                        pending.append(Path(entry.path))
+                    else:
+                        _require_root_fixed(info, kind=stat.S_IFREG)
+
 
 @dataclass(frozen=True)
 class NativeStoreMount:
@@ -373,6 +427,7 @@ class LinuxLauncher:
     policy: Path
     expected_policy_sha256: str
     limits: ProcessLimits = DEFAULT_PROCESS_LIMITS
+    vendor: NativeVendor | None = None
 
     @property
     def root(self) -> Path:
@@ -383,6 +438,8 @@ class LinuxLauncher:
             raise ContractViolation("Linux containment requires a non-root Linux service user")
         for path in (self.bubblewrap, self.policy, self.root):
             require_fixed_artifact(path)
+        if self.vendor is not None:
+            self.vendor.check()
         if _sha(self.bubblewrap) != BWRAP_SHA256:
             raise ContractViolation("bubblewrap content differs from the supported build")
         if _sha(self.policy) != self.expected_policy_sha256:
@@ -403,6 +460,9 @@ class LinuxLauncher:
             "lifetime": digest("owned-lifetime", 1, inspect.getsource(finish_owned)),
             "policy": self.expected_policy_sha256,
             "limits": asdict(self.limits),
+            "vendor": None if self.vendor is None else [
+                str(self.vendor.tree), str(self.vendor.catalog),
+            ],
         })
 
     def argv(
@@ -436,6 +496,12 @@ class LinuxLauncher:
                 "--bind-fd", str(native_store.credential_fd), f"{NATIVE_HOME}/{CREDENTIAL_FILE}",
                 "--setenv", "CODEX_HOME", NATIVE_HOME,
             ]
+            if self.vendor is not None:
+                # Checked in ``check_artifacts`` on this launch's probe.
+                args += [
+                    "--ro-bind", str(self.vendor.tree), VENDOR_MOUNT,
+                    "--ro-bind", str(self.vendor.catalog), CATALOG_MOUNT,
+                ]
             if native_store.egress is not None:
                 native_store.egress.require_current()
                 args += ["--ro-bind", str(native_store.egress.path), ZONE_SOCKET]
