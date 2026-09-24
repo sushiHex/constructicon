@@ -319,6 +319,36 @@ def test_hold_must_lie_within_the_deadline():
         ])
 
 
+def test_the_binary_defaults_to_the_runtime_images_vendor_path(tmp_path, monkeypatch):
+    seen = {}
+
+    async def login(custody, launcher, policy, *, binary, **_):
+        seen["binary"] = binary
+        return {"faults": []}
+
+    class Withdrawn:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, *_):
+            return False
+
+    monkeypatch.setattr(codex_lane, "_launcher", lambda root: None)
+    monkeypatch.setattr(codex_lane, "_policy", lambda path: None)
+    monkeypatch.setattr(codex_lane, "maintain_offline", lambda *a, **k: Withdrawn())
+    monkeypatch.setattr(codex_lane, "maintenance_custody", lambda withdrawn: None)
+    monkeypatch.setattr(codex_lane, "run_login", login)
+    monkeypatch.setattr(codex_lane, "write_evidence", lambda path, evidence: "r")
+    (tmp_path / "config.toml").write_text("", encoding="utf-8")
+    assert codex_lane.main([
+        "login", "--store-root", "/s", "--key", "k", "--launch-root", "/r",
+        "--configuration", str(tmp_path / "config.toml"), "--policy", "/p",
+        "--lane-dir", "/l", "--evidence", "/e",
+    ]) == 0
+    assert seen["binary"] == codex_lane.RUNTIME_BINARY == "/opt/codex/bin/codex"
+    assert codex_lane.RUNTIME_CATALOG == "/opt/codex-models.json"
+
+
 # --- custody -----------------------------------------------------------------
 
 

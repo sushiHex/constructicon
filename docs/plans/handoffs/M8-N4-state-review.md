@@ -1236,14 +1236,24 @@ This is what this design needs from the parallel host-runtime installation.
 Nothing else is assumed.
 
 1. The immutable runtime root (`LinuxLauncher.root`, digest-verified) contains:
-   - the pinned `codex` binary (SHA-256 `56ef98ab…62da`);
+   - the pinned vendor package tree, exactly as `vendor_plan` extracts it
+     into the launch root's `native-codex`, at **`opt/codex/`**. The in-zone
+     binary is therefore **`/opt/codex/bin/codex`**
+     (`codex_lane.RUNTIME_BINARY`; SHA-256 `56ef98ab…62da`);
+   - the pinned model catalog (`codex-models.json`, checked against
+     `catalog_sha256`) at **`opt/codex-models.json`**, so in-zone it is
+     **`/opt/codex-models.json`** (`codex_lane.RUNTIME_CATALOG`). The sealed
+     configuration names exactly that path in `model_catalog_json`;
    - `/usr/libexec/constructicon-egress-bridge.py`;
    - the supervisor, at the N4 revision (`--mount-fds`);
-   - `/usr/bin/python3`;
-   - the **fixed model catalog JSON** at one fixed absolute path, which the
-     sealed configuration names in `model_catalog_json`.
+   - `/usr/bin/python3`.
 
-   It must **not** contain `/etc/codex`.
+   These entries fill `runtime_plan`'s marked slot in
+   `scripts/ci/m8_host_artifacts.py` ("N4's in-zone vendor image, once its
+   paths are fixed, is added here and nowhere else"). It has no
+   `vendor-store` mount point, since the layout slice removed it from
+   `RUNTIME_DIRECTORIES`. It must **not** contain `/etc/codex`. (Amended
+   2026-09-24 for the host-runtime slice.)
 2. The M8-D2 AppArmor profiles are loaded, and bubblewrap is
    `0.9.0-1ubuntu0.3`. That package must provide `--bind-fd` and
    `--ro-bind-data`; this is to be confirmed before implementation (section 1).
@@ -1251,8 +1261,34 @@ Nothing else is assumed.
 3. The `constructicon` package at commit C is importable by the service user's
    interpreter (never root), with the entry point
    `python -I -m constructicon.substrate.executors.codex_lane`.
-4. The operator-store bundle is provisioned as N3a/N3c specify. The service
-   user runs every lane and every offline helper.
+4. The operator-store bundle is provisioned as N3a/N3c specify. The N3c
+   offline helpers (publish, maintain, activate) run as **root**, only from
+   provenance-verified blobs of C via `/usr/bin/python3 -I`. That is the
+   root boundary's single named exception (host-runtime decision 1,
+   `M8-N4-host-runtime.md`). The login and qualification lanes run as
+   `m8-service` inside the maintenance context. (Amended 2026-09-24. The
+   first draft said the service user ran every offline helper, which
+   contradicts that decision.)
+
+   **Consequence, open for decision.** Two facts together mean the lane
+   cannot enter `maintain_offline` itself:
+   - N3c proves the service is refused at the withdrawal write
+     (`test_the_service_holds_the_lock_but_cannot_withdraw`);
+   - the launcher refuses to run as root.
+
+   A maintenance-held lane therefore has to *inherit* a root-held
+   maintenance context. The smallest form: the root helper, inside
+   `maintain_offline`, starts the lane as `m8-service` and passes it the
+   context's lock descriptor. The lane then:
+   - proves, by `fstat` identity, that the inherited descriptor is the
+     bundle's retained lock;
+   - re-checks this key's withdrawal and floor, as `StoreMaintenance.check()`
+     does;
+   - opens the credential relative to its own read of the store.
+
+   This is not built yet. Today `codex_lane --custody maintenance` enters
+   `maintain_offline` itself, which works only for a caller that may write
+   the bundle.
 5. A service-user-writable lane root that is short enough for the relay socket
    path, and a separate evidence directory.
 6. Host resolver access for S1, outside any zone.

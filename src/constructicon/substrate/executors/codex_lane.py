@@ -77,6 +77,9 @@ from constructicon.substrate.executors.operator_store import (
 LANE_SCHEMA = 1
 LOGIN_ARGUMENTS = ("login", "--device-auth")
 STARTUP_ARGUMENTS = ("app-server", "--strict-config", "--stdio")
+RUNTIME_BINARY = "/opt/codex/bin/codex"
+RUNTIME_CATALOG = "/opt/codex-models.json"
+"""In-zone paths of the pinned vendor tree and model catalog (``runtime_plan``'s N4 slot)."""
 REFRESH_DESTINATION = "auth.openai.com:443"
 """Where a proactive refresh goes (``login/src/auth/manager.rs:197``)."""
 DENIAL_FAULT = "the relay denied a connection in a lane expected to be clean"
@@ -353,7 +356,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--key", required=True)
     parser.add_argument("--sealed", type=Path, help="the active selection's store identity")
     parser.add_argument("--launch-root", type=Path, required=True)
-    parser.add_argument("--binary", required=True)
+    parser.add_argument("--binary", default=RUNTIME_BINARY)
     parser.add_argument("--configuration", type=Path, required=True)
     parser.add_argument("--policy", type=Path, required=True)
     parser.add_argument("--lane-dir", type=Path, required=True)
