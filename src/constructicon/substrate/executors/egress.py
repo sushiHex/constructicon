@@ -447,7 +447,9 @@ def _fixed(message: str, errors: list[BaseException]) -> ContractViolation:
 class EgressRelay:
     """One acquisition's CONNECT relay, entered and exited by one owner task.
 
-    ``observed`` counts classified outcomes as evidence only. ``closed`` is set
+    ``observed`` counts classified outcomes by reason, as evidence only;
+    ``destinations`` counts accepted and relayed connections per sealed
+    destination, named from the policy and never from a CONNECT head. ``closed`` is set
     as the last statement of a clean exit, never in a ``finally``.
     """
 
@@ -462,6 +464,8 @@ class EgressRelay:
         if not callable(check_control):
             raise ContractViolation("the native egress relay requires its control check")
         self.observed: Counter[str] = Counter()
+        # Per sealed destination only (N4 evidence); keyed from the policy.
+        self.destinations: Counter[str] = Counter()
         self.closed = False
         self._policy = policy
         self._directory = directory
@@ -601,11 +605,17 @@ class EgressRelay:
         try:
             try:
                 async with asyncio.timeout_at(self._deadline) as timeout:
-                    upstream = await self._open(client, loop)
+                    upstream, destination = await self._open(client, loop)
                     self.observed["accepted"] += 1
+                    # Named only from the sealed policy, never from the CONNECT
+                    # head, so no attempted hostname reaches evidence (N4).
+                    sealed = f"{destination.host}:{destination.port}"
+                    self.destinations["accepted:" + sealed] += 1
                     async with asyncio.TaskGroup() as streams:
                         streams.create_task(self._pump(client, upstream, loop))
-                        streams.create_task(self._pump(upstream, client, loop))
+                        streams.create_task(
+                            self._pump(upstream, client, loop, relayed="relayed:" + sealed),
+                        )
             except* EgressRefused as refused:
                 self.observed["denied:" + _reason(refused)] += 1
             except* TimeoutError:
@@ -631,7 +641,9 @@ class EgressRelay:
             raise EgressRefused("eof")
         buffer += data
 
-    async def _open(self, client: socket.socket, loop: asyncio.AbstractEventLoop) -> socket.socket:
+    async def _open(
+        self, client: socket.socket, loop: asyncio.AbstractEventLoop,
+    ) -> tuple[socket.socket, EgressDestination]:
         """Judge one CONNECT and its first ClientHello, then dial the pin."""
 
         buffer = bytearray()
@@ -667,12 +679,19 @@ class EgressRelay:
         except BaseException:
             upstream.close()
             raise
-        return upstream
+        return upstream, destination
 
     async def _pump(
         self, source: socket.socket, destination: socket.socket,
-        loop: asyncio.AbstractEventLoop,
+        loop: asyncio.AbstractEventLoop, *, relayed: str | None = None,
     ) -> None:
+        """Move bytes; ``relayed`` counts the first upstream byte relayed, once.
+
+        That count means bytes arrived from the pinned address, nothing more:
+        not a TLS result and not proof of the vendor endpoint, which only the
+        client's own validation shows.
+        """
+
         while True:
             data = await _receive(source, CHUNK_BYTES)
             # A queued wake-up runs before a timer expiring in the same
@@ -688,3 +707,6 @@ class EgressRelay:
                         raise
                 return
             await loop.sock_sendall(destination, data)
+            if relayed is not None:
+                self.destinations[relayed] += 1
+                relayed = None

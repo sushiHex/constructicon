@@ -16,6 +16,10 @@ BRIDGE = "constructicon.substrate.executors._egress_bridge:"
 LAUNCHER = "constructicon.substrate.executors.linux:"
 B = "tests/substrate/test_egress_bridge.py::"
 L = "tests/substrate/test_egress_launch.py::"
+RELAY = "constructicon.substrate.executors.egress:EgressRelay."
+LANE = "constructicon.substrate.executors.codex_lane:"
+E = "tests/substrate/test_egress.py::"
+T = "tests/substrate/test_codex_lane.py::"
 
 MUTANTS = (
     (
@@ -161,6 +165,80 @@ MUTANTS = (
         "for kind in (signal.SIGPIPE, signal.SIGXFSZ):",
         "for kind in ():",
         B + "test_the_script_execs_only_after_the_forwarder_is_ready",
+    ),
+    # --- N4 lane evidence (M8-N4-state-review.md, sections 4 and 5) ---------
+    (
+        "N4-L1 an accepted sealed destination is counted by its policy name",
+        RELAY + "_handle",
+        'self.destinations["accepted:" + sealed] += 1',
+        "pass",
+        E + "test_a_sealed_destination_is_counted_accepted_and_relayed_by_its_policy_name",
+    ),
+    (
+        "N4-L2 relayed bytes are counted once per connection",
+        RELAY + "_pump",
+        "        relayed = None",
+        "        pass",
+        E + "test_a_sealed_destination_is_counted_accepted_and_relayed_by_its_policy_name",
+    ),
+    (
+        "N4-L3 relayed is counted only after an upstream byte moved",
+        RELAY + "_pump",
+        # The runner dedents the method, so its body sits at four spaces.
+        "    while True:\n        data = await _receive(source, CHUNK_BYTES)",
+        "    if relayed is not None:\n        self.destinations[relayed] += 1\n"
+        "        relayed = None\n"
+        "    while True:\n        data = await _receive(source, CHUNK_BYTES)",
+        E + "test_a_sealed_destination_is_counted_accepted_and_relayed_by_its_policy_name",
+    ),
+    (
+        "N4-L4 a lane directory must be fresh",
+        LANE + "launch",
+        "lane_dir.mkdir(mode=0o700)",
+        "lane_dir.mkdir(mode=0o700, exist_ok=True)",
+        T + "test_an_existing_lane_directory_refuses_before_anything_opens",
+    ),
+    (
+        "N4-L5 any denial in a clean lane is a fault",
+        LANE + "run_startup",
+        "if bool(launched.denied) != expect_denial:",
+        "if False:",
+        T + "test_any_denial_in_a_clean_startup_is_a_fault",
+    ),
+    (
+        "N4-L6 a measured refresh needs the credential write",
+        LANE + "run_startup",
+        "and launched.credential_changed and conversation.gate_completed",
+        "and conversation.gate_completed",
+        T + "test_a_connection_without_a_write_is_not_a_measured_refresh",
+    ),
+    (
+        "N4-L7 evidence marks completed only as its last act",
+        LANE + "write_evidence",
+        'complete = {**evidence, "completed": True}',
+        'complete = {"completed": True, **evidence}',
+        T + "test_evidence_is_create_exclusive_completed_last_and_content_addressed",
+    ),
+    (
+        "N4-L8 evidence is never overwritten",
+        LANE + "write_evidence",
+        "os.O_WRONLY | os.O_CREAT | os.O_EXCL",
+        "os.O_WRONLY | os.O_CREAT | os.O_TRUNC",
+        T + "test_evidence_is_create_exclusive_completed_last_and_content_addressed",
+    ),
+    (
+        "N4-L9 a failed login is a fault",
+        LANE + "run_login",
+        "if launched.result.returncode or launched.result.payload_returncode:",
+        "if False:",
+        T + "test_a_failed_or_denied_login_is_a_fault",
+    ),
+    (
+        "N4-L10 the launch spawns only after its custody check",
+        LANE + "launch",
+        "before_spawn=custody.check",
+        "before_spawn=lambda: None",
+        T + "test_the_login_code_reaches_the_operator_and_never_the_evidence",
     ),
 )
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import errno
 import gzip
+import io
 import json
 import os
 import socket
@@ -24,10 +25,23 @@ from types import SimpleNamespace
 import pytest
 
 from constructicon.core.identity import Digest
-from constructicon.substrate.executors import egress
+from constructicon.substrate.executors import egress, operator_store
 from constructicon.substrate.executors._egress_bridge import PROXY_PORT
+from constructicon.substrate.executors.codex_lane import (
+    active_custody,
+    run_login,
+    run_startup,
+)
+from constructicon.substrate.executors.codex_protocol import ExpectedAccount
 from constructicon.substrate.executors.egress import identity_digests
-from tests.native_startup import BOOTSTRAP, MODELS, DuplexWire, configuration, initialize
+from tests.native_startup import (
+    BOOTSTRAP,
+    CATALOG,
+    MODELS,
+    DuplexWire,
+    configuration,
+    initialize,
+)
 from tests.substrate.test_egress import until
 from tests.substrate.test_linux_containment import launcher as launcher
 from tests.substrate.test_native_codex_mediation import write_evidence
@@ -356,7 +370,108 @@ def test_no_evidence_file_contains_key_material():
         pytest.skip("N4 bridge evidence is written only by the provisioned Linux lane")
     files = sorted(Path(directory).glob("n4-*.json"))
     if os.environ.get("M8_BRIDGE_REQUIRED"):
-        assert [path.name for path in files] == ["n4-bridge.json", "n4-pinned-client.json"]
+        assert [path.name for path in files] == [
+            "n4-bridge.json", "n4-lane-login.json", "n4-lane-startup.json",
+            "n4-pinned-client.json",
+        ]
     for path in files:
         text = path.read_text()
         assert "-----BEGIN" not in text and "PRIVATE KEY" not in text, path.name
+
+
+# --- N4 lanes with the pinned binary (M8-N4-state-review.md, L2 and L3) --------
+
+PINNED = "/opt/native-startup/native/bin/codex"
+EMPTY_AUTH = b"{}\n"
+"""An ``AuthDotJson`` with every field absent: no login, parsed rather than
+malformed, so the pinned client reports no account."""
+
+
+def sealed_configuration(*, plugins: bool) -> str:
+    """The production sealed configuration's shape (state review, section 1)."""
+    return (
+        f'model = "{MODELS[0]}"\nmodel_catalog_json = "{CATALOG}"\n'
+        'cli_auth_credentials_store = "file"\nforced_login_method = "chatgpt"\n'
+        'check_for_update_on_startup = false\nweb_search = "disabled"\n'
+        "[analytics]\nenabled = false\n[features]\n"
+        + ("" if plugins else "plugins = false\n")
+        + "apps = false\nshell_tool = false\nunified_exec = false\n"
+        "apply_patch_freeform = false\nview_image = false\nmulti_agent = false\n"
+        "code_mode = false\njs_repl = false\n"
+    )
+
+
+def decoy_policy() -> egress.EgressPolicy:
+    """A sealed policy naming only a decoy: every vendor CONNECT is a denial."""
+    return egress.EgressPolicy((egress.EgressDestination(DECOY, 443, "8.8.8.8"),), 8)
+
+
+@pytest.fixture
+def empty_auth(binding):
+    store = Path(binding.root) / operator_store._bundle_token("n3a-fixture") / "store"
+    credential = store / "auth.json"
+    original = credential.read_bytes()
+    credential.write_bytes(EMPTY_AUTH)
+    try:
+        yield credential
+    finally:
+        credential.write_bytes(original)
+
+
+async def test_the_production_configuration_makes_no_startup_connection_at_all(
+    binding, bridge_launcher, short_root, heads, empty_auth,
+):
+    """L2: zero denials with plugins off, beside a same-step control that counts."""
+    runs = {}
+    for plugins in (False, True):
+        heads.clear()
+        async with active_custody(binding) as custody:
+            runs[plugins] = await run_startup(
+                custody, bridge_launcher, decoy_policy(), binary=PINNED,
+                configuration=sealed_configuration(plugins=plugins),
+                expected=ExpectedAccount(plan_type="pro", alternatives=("prolite",)),
+                lane_dir=short_root / f"lane-{int(plugins)}", deadline_s=30,
+                expect_denial=plugins,
+            )
+        runs[plugins]["heads"] = [head.split(b"\r\n", 1)[0].decode() for head in heads]
+    clean, control = runs[False], runs[True]
+    assert clean["methods_sent"] == ["'initialize'", "'initialized'", "'account/read'"]
+    assert any("no usable account" in fault for fault in clean["faults"]), clean["faults"]
+    assert clean["relay"] == {"destinations": {}, "denied": {}}, clean["relay"]
+    assert clean["heads"] == [] and clean["readback"] is None
+    assert control["relay"]["denied"].get("denied:destination", 0) >= 1, control["relay"]
+    assert control["heads"], "the control's plugin sync never reached the relay"
+    assert empty_auth.read_bytes() == EMPTY_AUTH
+    write_evidence("n4-lane-startup.json", {
+        "schema_version": 1, "credential_free_fixture": True, "model_requests": 0,
+        "vendor_conformance_qualified": False,
+        "clean": {key: clean[key] for key in ("methods_sent", "relay", "heads", "faults")},
+        "control": {key: control[key] for key in ("relay", "heads")},
+    })
+
+
+async def test_the_pinned_device_login_reaches_only_the_relay_and_keeps_nothing(
+    binding, bridge_launcher, short_root, heads, empty_auth,
+):
+    """L3: the login's CONNECT is denied, its output is never evidence."""
+    out = io.BytesIO()
+    async with active_custody(binding) as custody:
+        evidence = await run_login(
+            custody, bridge_launcher, decoy_policy(), binary=PINNED,
+            configuration=sealed_configuration(plugins=False),
+            lane_dir=short_root / "lane-login", deadline_s=60, out=out,
+        )
+    lines = [head.split(b"\r\n", 1)[0].decode() for head in heads]
+    assert "CONNECT auth.openai.com:443 HTTP/1.1" in lines, lines
+    assert evidence["relay"]["denied"].get("denied:destination", 0) >= 1
+    assert evidence["process"]["returncode"] != 0
+    printed = out.getvalue().decode(errors="replace").strip()
+    assert not printed or printed not in json.dumps(evidence)
+    # The pre-login logout's unlink met the bind (EBUSY) and was ignored.
+    assert empty_auth.is_file() and empty_auth.stat().st_mode & 0o777 == 0o600
+    write_evidence("n4-lane-login.json", {
+        "schema_version": 1, "credential_free_fixture": True,
+        "vendor_conformance_qualified": False, "connect_heads": lines,
+        "relay": evidence["relay"], "process": evidence["process"],
+        "credential_still_bound_file": True,
+    })

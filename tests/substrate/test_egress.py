@@ -1275,3 +1275,60 @@ async def test_ancillary_descriptors_are_closed_and_refused():
 def test_identity_digests_refuse_an_unsealed_policy():
     with pytest.raises(ContractViolation):
         identity_digests(Path("not-a-policy"))  # type: ignore[arg-type]
+
+
+# --- per sealed destination (N4 evidence, M8-N4-state-review.md section 4) ----
+
+
+async def test_a_sealed_destination_is_counted_accepted_and_relayed_by_its_policy_name(
+    tmp_path, listeners, peer,
+):
+    hello = real_hello()
+    relay = relay_for(tmp_path, peer.port)
+
+    async def scenario(facts):
+        reader, writer = await client(listeners)
+        writer.write(head(port=peer.port) + hello)
+        await writer.drain()
+        facts["reply"] = await reply_of(reader)
+        await until(lambda: len(peer.connections) == 1 and len(peer.received()) >= len(hello))
+        facts["silent"] = dict(relay.destinations)
+        peer.connections[0].sock.sendall(b"server bytes")
+        facts["answer"] = await reply_of(reader, count=len(b"server bytes"))
+        await until(lambda: relay.destinations[f"relayed:{ALLOWED}:{peer.port}"] == 1)
+        peer.connections[0].sock.sendall(b"more")
+        facts["more"] = await reply_of(reader, count=4)
+        facts["destinations"] = dict(relay.destinations)
+        writer.close()
+
+    facts, failure = await drive(relay, scenario)
+    assert failure is None and facts["reply"] == ESTABLISHED
+    # Accepted but silent: no relayed count until an upstream byte moved.
+    assert facts["silent"] == {f"accepted:{ALLOWED}:{peer.port}": 1}
+    assert facts["answer"] == b"server bytes" and facts["more"] == b"more"
+    # Once per connection, not per chunk.
+    assert facts["destinations"] == {
+        f"accepted:{ALLOWED}:{peer.port}": 1, f"relayed:{ALLOWED}:{peer.port}": 1,
+    }
+    assert relay.observed == {"accepted": 1}
+
+
+async def test_a_refused_hostname_never_becomes_an_evidence_key(tmp_path, listeners, peer):
+    """A credential-bearing client could otherwise write 253 chosen bytes into evidence."""
+
+    planted = ("x" * 60 + ".") * 3 + "planted"
+    relay = relay_for(tmp_path, peer.port)
+
+    async def scenario(facts):
+        reader, writer = await client(listeners)
+        writer.write(head(host=planted, port=peer.port) + real_hello(planted))
+        await writer.drain()
+        facts["reply"] = await reply_of(reader)
+        await until(lambda: relay.observed["denied:destination"] == 1)
+        writer.close()
+
+    facts, failure = await drive(relay, scenario)
+    assert failure is None and facts["reply"] == b""
+    assert relay.observed == {"denied:destination": 1}
+    assert dict(relay.destinations) == {}
+    assert not any(planted in key for key in (*relay.observed, *relay.destinations))

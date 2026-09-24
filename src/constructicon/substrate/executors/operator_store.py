@@ -172,11 +172,54 @@ class _Withdrawal:
 
 @dataclass
 class StoreMaintenance:
-    """Exists only after the withdrawal is durable; the operator's one locator."""
+    """Exists only after the withdrawal is durable; the operator's one locator.
+
+    It also carries what a maintenance-held native launch needs (the N4 login
+    and qualification lanes): the context's own lock description, which the
+    supervisor inherits, the credential descriptor, and one positive check.
+    """
 
     store_path: Path
     generation_floor: int
+    lock_fd: int
+    _opened: OpenedBundle
+    _root: Path
+    _key: str
     closed: bool = False
+
+    def check(self) -> BindingCheck:
+        """This key's withdrawal, with this floor, over the same objects, still.
+
+        A positive in-memory check of the maintenance selection. Its digest
+        domain differs from every provider binding digest, so it can satisfy a
+        maintenance launch and never a provider.
+        """
+
+        if self.closed or self._opened.closed:
+            raise ContractViolation("native store maintenance is unavailable")
+        try:
+            current = _open_bundle(self._root, _bundle_token(self._key))
+        except (OSError, ValueError) as exc:
+            raise ContractViolation("native store maintenance is unavailable") from exc
+        try:
+            withdrawal = _current_withdrawal(current, self._key)
+            if withdrawal.generation_floor != self.generation_floor:
+                raise ContractViolation("native store maintenance is unavailable")
+            _require_same_objects(current, self._opened)
+        except (OSError, ValueError) as exc:
+            raise ContractViolation("native store maintenance is unavailable") from exc
+        finally:
+            _close_opened(current)
+        return BindingCheck(digest("native-operator-maintenance", 1, {
+            "key": self._key, "generation_floor": self.generation_floor,
+        }))
+
+    def open_credential(self) -> int:
+        """The store's credential descriptor for a maintenance-held launch."""
+
+        if self.closed or self._opened.closed:
+            raise ContractViolation("native store maintenance is unavailable")
+        return open_credential(self._opened)
 
 
 def _require_token(value: object, *, field: str) -> str:
@@ -1208,7 +1251,9 @@ def maintain_offline(root: Path, key: str, *, wait_s: float) -> Iterator[StoreMa
                 _replace_metadata(opened.bundle_fd, "anchor.json", anchor_raw)
         except (OSError, ValueError) as exc:
             raise ContractViolation("native store maintenance is unavailable") from exc
-        maintenance = StoreMaintenance(opened.store_path, floor)
+        maintenance = StoreMaintenance(
+            opened.store_path, floor, opened.lock_fd, opened, root, key,
+        )
         try:
             yield maintenance
         finally:

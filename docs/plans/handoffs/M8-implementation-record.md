@@ -2606,3 +2606,156 @@ The fix:
   the four it applied, so a wrong constant fails loudly.
 - Portable tests cover both selections, as mutants L20-L23. The read-back
   check itself has no mutant: only a wrong constant on Linux reaches it.
+
+## N4: the authenticated-startup lane
+
+This is the credential-free half of N4 (#77), on `m8/n4-startup`, stacked on
+the layout slice above. The design is
+[M8-N4-state-review.md](M8-N4-state-review.md). It was reviewed once by Codex
+(`job_874f14f36992`) and amended, and the orchestrator's decisions are
+recorded at its end. **The implementation has had no independent-model
+review.** No login, credential, vendor contact or model request has happened,
+and `vendor_conformance_qualified` stays false.
+
+What changed in `src/`:
+
+- `codex_protocol.py`:
+  - `rate_limits_read_request`, which is exactly `{"id", "method"}`.
+  - `spend_reading`. It judges only `rateLimitsByLimitId["codex"]`, and only
+    when that entry's own `limitId` is `"codex"`; the headline and every
+    other bucket are never read.
+  - `spend_faults`, the owner's N5 bound written as code. Credits must be
+    present with `hasCredits` false, `unlimited` false, and the balance absent
+    or a zero decimal. An absent credits object refuses. The readback plan is
+    compared.
+  - `spend_change_faults`: the five overage fields must not move across the
+    turn.
+  - `rate_limit_of`, a fixed vocabulary of `before.*` and `after.*` flags and
+    bounded numbers. `is_using_overage` is always `None`.
+  - `account_notice_faults` replaces the blanket namespace refusal. Only
+    `account/rateLimits/updated` with exactly `{rateLimits}` params and a
+    plan that is absent, null or accepted passes. Every other `account/` and
+    every `modelProvider/` notification refuses.
+  - `ExpectedAccount.alternatives`, for qualification only (decision 1).
+  - The dead projection from `turn.rateLimits` is removed. The pinned `Turn`
+    has no such field.
+- `codex.py`: `CodexConversation` sends the readback after the pre-turn gate
+  (refusing before `thread/start`) and after the pre-acceptance gate (the
+  change rule).
+  - `startup_only=True` ends the phase after the first readback, with four
+    methods. Only the lane sets it: the handle never does.
+  - The conversation records `before_spend`, `after_spend` and
+    `observed_plan`. The plan is recorded only once it has been accepted.
+  - The observation's `rate_limit` is `rate_limit_of(before, after)`.
+- `egress.py`: a separate `EgressRelay.destinations` counter holds
+  `accepted:<host>:<port>` and `relayed:<host>:<port>`. It is named from the
+  sealed policy only. Denials stay counted by reason in `observed`, so every
+  existing assertion is unchanged.
+- `operator_store.py`: `StoreMaintenance` carries its `lock_fd`, `check()`
+  (this key's withdrawal, this floor and the same objects, under a digest
+  domain no provider uses) and `open_credential()`.
+- New `codex_lane.py`, an offline operator helper:
+  - `run_login` (the device login's stdout goes only to the operator) and
+    `run_startup`;
+  - custody from maintenance or from the active selection;
+  - closed evidence, written create-exclusive with `completed` last. Its
+    digest is the conformance revision (decision 5);
+  - `main` for the host.
+
+### Local evidence (Windows 11, Python 3.11)
+
+- New tests:
+  - `test_codex_spend.py`: the bound in both directions, the bucket rules,
+    the change rule, publication and the notice allowlist;
+  - `test_codex_startup.py`: the four-method phase, aborts, the handle never
+    running startup, pre- and post-turn readbacks, WRITE never offering
+    tools, provider recovery, and the qualification plan set;
+  - `test_codex_lane.py`: the login output never reaching evidence,
+    denials, a fresh lane directory, measured versus unmeasured refresh,
+    evidence ordering and exclusivity, and both custody kinds;
+  - `test_egress.py`: per-destination counting, and a planted 190-character
+    hostname never becoming a key;
+  - `test_operator_store_credential.py`: the maintenance check and the
+    maintenance credential.
+- Changed tests:
+  - `SIX` becomes `EIGHT`;
+  - the scripted peer answers readbacks, and its last-reply hooks move to the
+    final readback;
+  - `FORGED_GOOD_ACCOUNT` now takes id 6;
+  - the recorded forward cost is flipped (a plan-free rate-limit update now
+    passes; a plan change refuses);
+  - the turn-rate-limit tests become "a turn record is never a rate-limit
+    source".
+- Inventories, each killed by assertion:
+  - `check_m8_n2_mutations.py`: **104/104**, of which 21 are new N4
+    mutants. Three stale anchors were retargeted: the plan fault, the
+    account refusal and the rate-limit vocabulary.
+  - `check_m8_n4_bridge_mutations.py`: 23, of which 10 are new (lane and
+    relay). The same 7 are Linux-only NOT PROVEN as before.
+  - `check_m8_n3c_mutations.py`: 52, of which 4 are new (the maintenance
+    check). The same 6 are Linux-only.
+  - Unchanged: N3a 65 (2 Linux-only), N3b 59/60, N2 WRITE 49/49.
+- The first N2 run surfaced four NOT PROVEN mutants, and each was corrected:
+  - one replacement raised `NameError`, and the test now also asserts that no
+    `None` value is published;
+  - one test died on a `KeyError`, not an assertion;
+  - two mutants were equivalent to the code (an extra guard, and a plan that
+    tests always accepted), and were rewritten to remove the request and to
+    record the plan before the gate.
+
+  One bridge mutant (5) was NOT PROVEN only while two inventories ran
+  concurrently. Rerun alone, it was killed.
+- `PYTHONIOENCODING=utf-8 uv run --python 3.11 verify` on this code:
+  - clean ruff;
+  - strict mypy over 104 source files;
+  - four import contracts kept;
+  - 3,051 tests passed and 560 skipped for platform.
+
+  The one failure was `test_docs_validation_accepts_the_actual_repository`,
+  because these documents were edited during the run. After their manifest
+  lines were refreshed, that test and `sha256sum --check` passed.
+
+### Linux proofs added, not yet executed
+
+These go in `test_native_egress_bridge.py`, which runs in the foundation
+lane's bridge step with the pinned binary and the store fixture, so no
+workflow change is needed. **Neither has executed.**
+
+- **L2:** the pinned `app-server` with the production-shaped sealed
+  configuration and no login (the fixture's `auth.json` is set to `{}` for
+  the test, then restored).
+  - It must send three methods, refuse on "no usable account", and show a
+    relay with no destinations, no denials and no CONNECT heads.
+  - Same-step control: the same configuration with plugins on must produce a
+    counted destination denial and a recorded head.
+- **L3:** the pinned `codex login --device-auth` against a policy that names
+  only a decoy.
+  - It must `CONNECT auth.openai.com:443`, be denied, and exit non-zero.
+  - Nothing printed reaches the evidence.
+  - `auth.json` stays a bound `0600` file: the pre-login logout's `unlink`
+    meets `EBUSY`.
+- The bridge step's key-material test now expects the two new files,
+  `n4-lane-startup.json` and `n4-lane-login.json`.
+
+### Deviations from the design
+
+- **`--hold` pauses after the exchange, while custody still holds the lock.**
+  The design paused before stdin closes. For control S6a the lock is what
+  matters, and custody holds it either way.
+- **The `refused-destinations` subcommand was dropped.** Decision 2 left
+  nothing for it to do.
+- **Per-destination counts live in their own counter.** They are not keys of
+  `observed`, which keeps every existing reason assertion intact.
+- **`active_custody` is an asynchronous context manager.** It is used from
+  the lane's async tests and from `main`'s single event loop.
+- **The readback is taken in every task turn,** so every existing turn test
+  now sends eight methods.
+
+### Limits carried
+
+The state review's limits apply unchanged. In particular:
+- no live readback, login or refresh has been observed;
+- qualification before activation stays operator-asserted;
+- mid-turn spend fields are judged only through the post-turn readback;
+- `modelProvider/` recovery during an N5 turn now discards that turn, which
+  is the new forward cost.

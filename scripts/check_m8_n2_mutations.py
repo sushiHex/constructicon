@@ -46,8 +46,13 @@ CALL = "constructicon.substrate.executors.codex:CodexConversation.__call__"
 CONVERSE = "constructicon.substrate.executors.codex:CodexConversation._converse"
 PARSE = "constructicon.substrate.executors.codex_protocol:parse_record"
 FINISH = "constructicon.substrate.executors.codex:CodexConversation._finish"
-RATE_LIMIT = "constructicon.substrate.executors.codex_protocol:_rate_limit"
-ACCOUNT_RECORD = "constructicon.substrate.executors.codex_protocol:is_account_record"
+RATE_LIMIT = "constructicon.substrate.executors.codex_protocol:rate_limit_of"
+ACCOUNT_RECORD = "constructicon.substrate.executors.codex_protocol:account_notice_faults"
+SPEND = "constructicon.substrate.executors.codex_protocol:spend_faults"
+SPEND_CHANGE = "constructicon.substrate.executors.codex_protocol:spend_change_faults"
+READING = "constructicon.substrate.executors.codex_protocol:spend_reading"
+BALANCE = "constructicon.substrate.executors.codex_protocol:_balance_zero"
+CONVERSATION = "constructicon.substrate.executors.codex:CodexConversation.__init__"
 TRANSCRIPT = "constructicon.substrate.executors.codex_protocol:_bounded_transcript"
 EVIDENCE = "constructicon.substrate.executors.codex_protocol:_evidence"
 EVIDENCE_ALLOWLIST = "constructicon.substrate.executors.codex_protocol:is_turn_evidence"
@@ -74,6 +79,9 @@ CONSTRUCTOR = "constructicon.substrate.executors.codex:CodexOperatorProvider.__i
 PROTOCOL = "tests/substrate/test_codex_protocol.py::"
 ADAPTER = "tests/substrate/test_codex_adapter.py::"
 STORE_ADAPTER = "tests/substrate/test_codex_store.py::"
+SPEND_TEST = "tests/substrate/test_codex_spend.py::"
+STARTUP_TEST = "tests/substrate/test_codex_startup.py::"
+MATRIX_TEST = "tests/substrate/test_codex_matrix.py::"
 
 ERROR_REPLY = PROTOCOL + "test_an_error_or_missing_result_refuses"
 NULL_ACCOUNT = PROTOCOL + "test_a_null_account_refuses_without_naming_a_cause"
@@ -130,7 +138,7 @@ MUTANTS = (
     (
         "fault 6: a plan other than the provisioned one refuses",
         GATE,
-        "if plan is not None and plan != expected.plan_type:",
+        "if plan is not None and not expected.accepts(plan):",
         "if False:",
         WRONG_PLAN,
     ),
@@ -165,8 +173,8 @@ MUTANTS = (
     (
         "a refused pre-turn reading sends no turn",
         CONVERSE,
-        "if faults:",
-        "if False:",
+        "if faults:\n        # A refused pre-turn reading never sends a turn.",
+        "if False:\n        # A refused pre-turn reading never sends a turn.",
         ADAPTER + "test_a_pre_turn_gate_fault_refuses_without_sending_a_turn",
     ),
     (
@@ -215,7 +223,7 @@ MUTANTS = (
     (
         "an account notification is refused wherever it arrives",
         ABSORB,
-        "if is_account_record(record):",
+        "if notice:",
         "if False:",
         ADAPTER + "test_an_account_notification_mid_turn_discards_the_turn",
     ),
@@ -390,11 +398,11 @@ MUTANTS = (
         + "test_materialization_retains_one_store_lock_and_records_three_checks",
     ),
     (
-        "the rate-limit detail is constrained by value shape",
+        "the published readback is a fixed vocabulary of present facts",
         RATE_LIMIT,
-        "and _number(item)",
-        "",
-        PROTOCOL + "test_an_accepted_turn_publishes_only_numeric_rate_limit_facts",
+        "if (value := getattr(reading, name)) is not None",
+        "if (value := getattr(reading, name)) is not None or True",
+        SPEND_TEST + "test_only_the_fixed_vocabulary_is_published_and_no_identity_fact",
     ),
     (
         "a wire value reaches a public detail only when classified",
@@ -422,8 +430,8 @@ MUTANTS = (
     (
         "the account namespace is a prefix, not an exact name",
         ACCOUNT_RECORD,
-        "method.startswith(ACCOUNT_NAMESPACE)",
-        "method == ACCOUNT_NAMESPACE",
+        "if method.startswith((ACCOUNT_NAMESPACE, PROVIDER_NAMESPACE)):",
+        "if method in (ACCOUNT_NAMESPACE, PROVIDER_NAMESPACE):",
         PROTOCOL + "test_the_whole_account_namespace_is_refused_not_a_list_of_known_methods",
     ),
     (
@@ -663,6 +671,160 @@ MUTANTS = (
         "if not coherent:",
         "if False:",
         ADAPTER + "test_read_profile_refuses_a_write_callback_catalog",
+    ),
+    # --- N4: the spend readback and the notice allowlist ----------------------
+    (
+        "N4-1 every account notice but the plan-checked update refuses",
+        ACCOUNT_RECORD,
+        "if method.startswith((ACCOUNT_NAMESPACE, PROVIDER_NAMESPACE)):",
+        "if False:",
+        SPEND_TEST
+        + "test_every_other_account_or_provider_notice_refuses_naming_only_the_method",
+    ),
+    (
+        "N4-2 a rate-limit update carrying another plan refuses",
+        ACCOUNT_RECORD,
+        "or expected.accepts(snapshot[PLAN_TYPE_KEY])",
+        "or True",
+        SPEND_TEST + "test_any_other_rate_limit_update_refuses[other-plan]",
+    ),
+    (
+        "N4-3 a rate-limit update with no plan change passes",
+        ACCOUNT_RECORD,
+        "            return ()\n        return refused",
+        "            return refused\n        return refused",
+        SPEND_TEST + "test_a_rate_limit_update_with_no_plan_change_passes",
+    ),
+    (
+        "N4-4 a rate-limit update's params are exactly the pinned key",
+        ACCOUNT_RECORD,
+        'and set(params) == {"rateLimits"}',
+        "",
+        SPEND_TEST + "test_any_other_rate_limit_update_refuses[extra-key]",
+    ),
+    (
+        "N4-5 the provider namespace refuses too",
+        ACCOUNT_RECORD,
+        "(ACCOUNT_NAMESPACE, PROVIDER_NAMESPACE)",
+        "(ACCOUNT_NAMESPACE,)",
+        STARTUP_TEST + "test_a_provider_auth_recovery_mid_turn_discards_it",
+    ),
+    (
+        "N4-6 purchased credits refuse",
+        SPEND,
+        "reading.has_credits is False and ",
+        "",
+        SPEND_TEST + "test_anything_but_proven_zero_credits_refuses[has-credits]",
+    ),
+    (
+        "N4-7 unlimited credits refuse",
+        SPEND,
+        "reading.unlimited is False\n        and ",
+        "",
+        SPEND_TEST + "test_anything_but_proven_zero_credits_refuses[unlimited]",
+    ),
+    (
+        "N4-8 a non-zero balance refuses",
+        SPEND,
+        "and reading.balance_zero is not False",
+        "",
+        SPEND_TEST + "test_anything_but_proven_zero_credits_refuses[cents]",
+    ),
+    (
+        "N4-9 only a zero decimal is zero",
+        BALANCE,
+        'return set(digits) == {"0"}',
+        "return True",
+        SPEND_TEST + "test_anything_but_proven_zero_credits_refuses[negative]",
+    ),
+    (
+        "N4-10 an unreadable readback refuses",
+        SPEND,
+        "        return (SPEND_UNREADABLE_FAULT,)",
+        "        return ()",
+        SPEND_TEST + "test_an_unreadable_or_unidentified_codex_bucket_refuses",
+    ),
+    (
+        "N4-11 the readback plan is compared",
+        SPEND,
+        "if reading.plan is not None and not expected.accepts(reading.plan):",
+        "if False:",
+        SPEND_TEST + "test_another_readback_plan_refuses_and_names_only_a_short_literal",
+    ),
+    (
+        "N4-12 only the bucket naming itself codex is judged",
+        READING,
+        'or bucket.get("limitId") != CODEX_LIMIT_ID',
+        "",
+        SPEND_TEST + "test_an_unreadable_or_unidentified_codex_bucket_refuses",
+    ),
+    (
+        "N4-13 the headline bucket is never judged",
+        READING,
+        'buckets.get(CODEX_LIMIT_ID) if isinstance(buckets, Mapping) else None',
+        'result.get("rateLimits") if result is not None else None',
+        SPEND_TEST + "test_the_headline_bucket_is_never_the_one_judged",
+    ),
+    (
+        "N4-14 a moved overage field refuses",
+        SPEND_CHANGE,
+        "if getattr(before, name) != getattr(after, name)",
+        "if False",
+        SPEND_TEST + "test_each_overage_field_that_moves_across_the_turn_refuses",
+    ),
+    (
+        "N4-15 the pre-turn readback is sent",
+        CONVERSE,
+        "    readback = await self._request(\n"
+        "        io, rate_limits_read_request(self._next_identifier()),\n"
+        "    )\n    if readback is None:\n        return\n    self.before_spend",
+        "    readback = None\n    self.before_spend",
+        STARTUP_TEST + "test_the_startup_phase_sends_exactly_the_four_authorized_methods",
+    ),
+    (
+        "N4-16 a refused pre-turn readback never reaches a thread",
+        CONVERSE,
+        "    faults = spend_faults(self.before_spend, self._expected)\n"
+        "    if faults:\n        self.faults += faults\n        return",
+        "    faults = spend_faults(self.before_spend, self._expected)\n"
+        "    self.faults += faults",
+        STARTUP_TEST + "test_a_refused_pre_turn_readback_never_sends_a_thread",
+    ),
+    (
+        "N4-17 the startup phase stops after its readback",
+        CONVERSE,
+        "    if self._startup_only:",
+        "    if False:",
+        STARTUP_TEST + "test_the_startup_phase_sends_exactly_the_four_authorized_methods",
+    ),
+    (
+        "N4-18 the post-turn readback is judged against its baseline",
+        CONVERSE,
+        "    self.faults += spend_change_faults(self.before_spend, self.after_spend)",
+        "    pass",
+        STARTUP_TEST + "test_a_post_turn_overage_change_discards_the_turn",
+    ),
+    (
+        "N4-19 the published rate limit carries the post-turn reading",
+        CALL,
+        "rate_limit=rate_limit_of(self.before_spend, self.after_spend)",
+        "rate_limit=rate_limit_of(self.before_spend, None)",
+        STARTUP_TEST + "test_the_accepting_turn_publishes_both_readbacks_and_no_identity",
+    ),
+    (
+        "N4-20 a startup conversation offers no callbacks",
+        CONVERSATION,
+        "if startup_only and catalog:",
+        "if False:",
+        STARTUP_TEST + "test_a_startup_conversation_offers_no_callbacks",
+    ),
+    (
+        "N4-21 only an accepted plan is recorded as observed",
+        CONVERSE,
+        "    faults = account_faults(before, self._expected)\n    if faults:",
+        "    self.observed_plan = account_plan(before)\n"
+        "    faults = account_faults(before, self._expected)\n    if faults:",
+        STARTUP_TEST + "test_qualification_refuses_an_undeclared_plan_and_records_none",
     ),
 )
 

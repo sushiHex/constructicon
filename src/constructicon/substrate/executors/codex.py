@@ -8,18 +8,24 @@ module is the thin binding between that protocol and
 
 The conversation is strictly sequential per direction::
 
-    initialize            (WRITE opts into the exact dynamic-tool field)
-    initialized           (notification)
-    account/read          -> account_faults(...)      pre-turn gate
-    <turn>                   collect records and mediate exact WRITE callbacks
-    account/read          -> account_faults(...)      pre-acceptance gate
+    initialize              (WRITE opts into the exact dynamic-tool field)
+    initialized             (notification)
+    account/read            -> account_faults(...)      pre-turn gate
+    account/rateLimits/read -> spend_faults(...)        pre-turn spend bound
+      [startup_only: the N4 phase ends here, four methods and no thread]
+    <turn>                     collect records and mediate exact WRITE callbacks
+    account/read            -> account_faults(...)      pre-acceptance gate
+    account/rateLimits/read -> spend_(change_)faults     pre-acceptance spend
     close stdin, drain to EOF
 
 Either gate faulting yields an unavailable failure naming the faults, and **a
 faulting pre-acceptance gate discards an otherwise successful turn**. That is
-ADR 0021's "refuses availability/result acceptance". An ``account/`` notification
-arriving between the two readings discards the turn the same way: it is the only
-in-band signal for the window they bracket but cannot cover.
+ADR 0021's "refuses availability/result acceptance". An account or provider
+notification arriving between the readings discards the turn the same way,
+except the plan-checked ``account/rateLimits/updated``: it is the only in-band
+signal for the window they bracket but cannot cover. The readback is also the
+first request that exercises the credential, so an expired login refuses before
+``thread/start`` (M8-N4-state-review.md, sections 2 and 3).
 
 **The gate records its completion; nothing infers it.** An empty fault tuple
 means either "the readings cleared" or "the conversation was aborted before it
@@ -91,7 +97,6 @@ from constructicon.core.workspace import (
 from constructicon.substrate._lifetime import finish_owned
 from constructicon.substrate.executors import codex_protocol
 from constructicon.substrate.executors.codex_protocol import (
-    ACCOUNT_NOTICE_FAULT,
     ANSWERED_NOTHING_FAULT,
     CONTAINED_PYTHON_CATALOG,
     CONTAINED_PYTHON_TOOL,
@@ -106,21 +111,28 @@ from constructicon.substrate.executors.codex_protocol import (
     ExpectedAccount,
     RecordDamaged,
     RecordStream,
+    SpendReading,
     TurnObservation,
     account_change_faults,
     account_faults,
+    account_notice_faults,
+    account_plan,
     account_read_request,
     bounded_detail,
     decode_turn,
     encode_record,
     initialize_request,
     initialized_notification,
-    is_account_record,
     is_terminal_record,
     named_method,
     observe_turn,
     parse_record,
     parse_tool_call,
+    rate_limit_of,
+    rate_limits_read_request,
+    spend_change_faults,
+    spend_faults,
+    spend_reading,
     thread_start_request,
     tool_call_response,
     turn_request,
@@ -297,8 +309,12 @@ class CodexConversation:
         self, *, task: TaskSpec, grants: EffectiveGrants, expected: ExpectedAccount,
         input_limit: int, preamble: int = 0, catalog: Sequence[str] = (),
         worker: Callable[[str], Awaitable[str]] | None = None,
-        deadline: float | None = None,
+        deadline: float | None = None, startup_only: bool = False,
     ) -> None:
+        if type(startup_only) is not bool:
+            raise ContractViolation("the startup-only selector must be boolean")
+        if startup_only and catalog:
+            raise ContractViolation("a startup-only conversation offers no callbacks")
         selection = grants.model_selection
         if selection.kind != "explicit" or not (selection.model or "").strip():
             # ``turn_request`` refuses this too, but there it raises mid-turn and
@@ -331,6 +347,7 @@ class CodexConversation:
         self._catalog = resolved_catalog
         self._worker = worker
         self._deadline = deadline
+        self._startup_only = startup_only
         self._stream = RecordStream()
         self._queue: list[bytes] = []
         self._identifier = 0
@@ -358,6 +375,12 @@ class CodexConversation:
         self.preamble_records: list[bytes] = []
         self.thread_id: str | None = None
         self.turn_id: str | None = None
+        # The spend readbacks, bounded (codex_protocol.SpendReading), and the
+        # plan literal the first reading reported once it was accepted: an
+        # operator-declared literal, never an arbitrary vendor string.
+        self.before_spend: SpendReading | None = None
+        self.after_spend: SpendReading | None = None
+        self.observed_plan: str | None = None
 
     async def __call__(self, io: ProcessIO) -> None:
         if self._entered:
@@ -388,28 +411,16 @@ class CodexConversation:
                 # in ``_converse`` already records one, so an unconditional form
                 # would only add noise to an already-explained refusal.
                 self._refuse(GATE_INCOMPLETE_FAULT)
-            self.observation = observe_turn(
+            self.observation = replace(observe_turn(
                 self._transcript, thread_id=self.thread_id, turn_id=self.turn_id,
                 transport_damage=self._stream.damage, excluded=self._excluded,
-            )
+            ), rate_limit=rate_limit_of(self.before_spend, self.after_spend))
             await self._finish(io)
 
     # -- transport ------------------------------------------------------------
 
     def _refuse(self, reason: str) -> None:
         self.faults += (reason,)
-
-    def _refuse_account(self, record: Mapping[str, Any]) -> None:
-        """An account notification mid-turn is a refusal, never transcript.
-
-        ADR 0021 refuses on an observed mode change and requires proof that
-        refresh cannot silently select API or cloud authentication mid-turn.
-        This is the only in-band signal for the window the two readings bracket
-        but cannot cover, so it discards the turn exactly as a gate fault does.
-        Only the method name reaches the public detail; nothing from ``params``.
-        """
-
-        self._refuse(ACCOUNT_NOTICE_FAULT.format(method=named_method(record.get("method"))))
 
     def _next_identifier(self) -> int:
         self._identifier += 1
@@ -499,8 +510,13 @@ class CodexConversation:
         drift apart between them.
         """
 
-        if is_account_record(record):
-            self._refuse_account(record)
+        # An account or provider notice is the only in-band signal for the
+        # window the readings bracket but cannot cover (ADR 0021): it discards
+        # the turn exactly as a gate fault does. Only the method name reaches
+        # the public detail; nothing from ``params``.
+        notice = account_notice_faults(record, self._expected)
+        if notice:
+            self.faults += notice
             return False
         if self._collecting:
             self._transcript.append(line)
@@ -1102,6 +1118,25 @@ class CodexConversation:
             # A refused pre-turn reading never sends a turn.
             self.faults += faults
             return
+        self.observed_plan = account_plan(before)
+
+        # The spend readback: the owner's N5 bound, and the first request that
+        # exercises the credential, so an expired login refuses here rather
+        # than after ``thread/start`` (M8-N4-state-review.md, section 2).
+        readback = await self._request(
+            io, rate_limits_read_request(self._next_identifier()),
+        )
+        if readback is None:
+            return
+        self.before_spend = spend_reading(readback)
+        faults = spend_faults(self.before_spend, self._expected)
+        if faults:
+            self.faults += faults
+            return
+        if self._startup_only:
+            # N4's authorized phase ends here: four methods, no thread.
+            self.gate_completed = True
+            return
 
         started = await self._request(io, thread_start_request(
             self._next_identifier(), cwd=NATIVE_CWD,
@@ -1152,6 +1187,14 @@ class CodexConversation:
             return
         self.faults += account_faults(after, self._expected)
         self.faults += account_change_faults(before, after)
+        readback = await self._request(
+            io, rate_limits_read_request(self._next_identifier()),
+        )
+        if readback is None:
+            return
+        self.after_spend = spend_reading(readback)
+        self.faults += spend_faults(self.after_spend, self._expected)
+        self.faults += spend_change_faults(self.before_spend, self.after_spend)
         # The gate ran to its end. Nothing earlier may set this: every path that
         # does not reach here leaves a result unacceptable.
         self.gate_completed = True

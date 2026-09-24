@@ -7,11 +7,12 @@ account reply here is scripted; nothing in this file reaches a vendor.
 import ast
 import inspect
 import json
+from dataclasses import replace
 
 import pytest
 
 from constructicon.core.errors import ContractViolation
-from constructicon.core.executor import RateLimitInfo, TaskSpec, Usage
+from constructicon.core.executor import TaskSpec, Usage
 from constructicon.core.grants import EffectiveGrants, ModelSelection, Posture
 from constructicon.substrate.executors import codex_protocol
 from constructicon.substrate.executors.codex_protocol import (
@@ -31,8 +32,6 @@ from constructicon.substrate.executors.codex_protocol import (
     PLAN_TYPE_KEY,
     PROVIDER_FLAG_KEY,
     PROVIDER_OVERRIDE_FAULT,
-    RATE_LIMIT_KEY_LENGTH,
-    RATE_LIMIT_KEYS,
     READ_WINDOW,
     RECORD_BYTES,
     TRANSCRIPT_CHARS,
@@ -42,18 +41,20 @@ from constructicon.substrate.executors.codex_protocol import (
     TurnObservation,
     account_change_faults,
     account_faults,
+    account_notice_faults,
     account_read_request,
     decode_turn,
     encode_record,
     initialize_request,
     initialized_notification,
-    is_account_record,
     is_terminal_record,
     is_turn_evidence,
     named_method,
     named_value,
     observe_turn,
     parse_record,
+    rate_limit_of,
+    spend_reading,
     split_records,
     thread_start_request,
     turn_request,
@@ -65,6 +66,36 @@ TURN = "turn-n2"
 EMAIL = "operator@example.invalid"
 MANAGED = {ACCOUNT_TYPE_KEY: "chatgpt", "email": EMAIL, PLAN_TYPE_KEY: "pro"}
 EXPECTED = ExpectedAccount(plan_type="pro")
+ACCOUNT_ID = "acct-planted-identity"
+
+
+def codex_bucket(**changes):
+    """The pinned ``RateLimitSnapshot`` shape (``v2/account.rs:565-575``), clean."""
+
+    bucket = {
+        "limitId": "codex", "limitName": "Codex " + EMAIL,
+        "primary": {"usedPercent": 3, "windowDurationMins": 300, "resetsAt": 1},
+        "secondary": {"usedPercent": 1, "windowDurationMins": 10080, "resetsAt": 2},
+        "credits": {"hasCredits": False, "unlimited": False, "balance": None},
+        "individualLimit": None, "spendControlReached": None, "planType": "pro",
+        "rateLimitReachedType": None,
+    }
+    bucket.update(changes)
+    return bucket
+
+
+def spend_result(**changes):
+    """A whole ``GetAccountRateLimitsResponse`` whose Codex bucket is ``changes``."""
+
+    bucket = codex_bucket(**changes)
+    return {
+        "rateLimits": bucket, "rateLimitsByLimitId": {"codex": bucket},
+        "rateLimitResetCredits": {"availableCount": 1, "credits": None},
+        "accountId": ACCOUNT_ID, "rateLimitUpsell": {"message": EMAIL},
+    }
+
+
+CLEAN_SPEND = spend_result()
 
 GRANTS = EffectiveGrants(
     posture=Posture.READ,
@@ -478,74 +509,36 @@ def test_a_clean_turn_reports_only_what_the_stream_emitted():
     assert "turn/delta" in observation.raw
 
 
-def test_emitted_model_usage_and_rate_limit_are_carried_through():
+def test_emitted_model_and_usage_are_carried_through():
     observation = folded([record(completed(
         model="gpt-5.6-sol", output={"summary": "done"},
         usage={"inputTokens": 11, "outputTokens": 3},
-        rateLimits={"usingOverage": True, "windowMinutes": 300},
     ))])
     assert observation.served_model == "gpt-5.6-sol"
     assert observation.usage == Usage(input_tokens=11, output_tokens=3)
-    assert observation.rate_limit == RateLimitInfo(
-        is_using_overage=True, detail={"usingOverage": True, "windowMinutes": 300},
-    )
     assert observation.output == {"summary": "done"}
 
 
-def test_an_accepted_turn_publishes_only_numeric_rate_limit_facts():
-    """The accepting path, which every refusal-shaped leak test misses.
+def test_a_turn_record_is_never_a_rate_limit_source():
+    """The pinned ``Turn`` has no rate limits (``thread_data.rs:366``).
 
-    ADR 0021 asks to surface emitted rate-limit facts, not to copy a vendor
-    object. Identity facts are strings and objects, so constraining by value
-    shape excludes them mechanically.
+    The readbacks are the only spend source (M8-N4-state-review.md, section 2),
+    so a ``rateLimits`` object inside a turn record publishes nothing, even
+    numbers, and never an identity fact beside them.
     """
     observation = folded([record(completed(rateLimits={
         "usingOverage": True, "windowMinutes": 300, "usedPercent": 12.5,
         "accountId": "acct_9182736455", "email": EMAIL, "planType": "pro",
-        "note": "n" * 5000, "limits": [{"email": EMAIL}],
     }))])
     outcome = decode_turn(observation, Facts(), requested_model=None)
-    assert outcome.status == "success"
+    assert outcome.status == "success" and outcome.rate_limit is None
     published = outcome.model_dump(mode="json")
     transcript = published.pop("raw_reply")
-    for leaked in (EMAIL, "acct_9182736455", "pro", "n" * 5000):
+    for leaked in (EMAIL, "acct_9182736455"):
         assert leaked not in json.dumps(published)
-    assert outcome.rate_limit.is_using_overage is True
-    assert outcome.rate_limit.detail == {
-        "usedPercent": 12.5, "usingOverage": True, "windowMinutes": 300,
-    }
     # The stated limit, pinned by a test rather than left in prose: a legitimate
-    # turn record's payload is the vendor's and passes through raw_reply. No
-    # filter can change that without a payload vocabulary this slice does not
-    # hold; qualifying what those payloads may contain is an N3/N4 prerequisite.
+    # turn record's payload is the vendor's and passes through raw_reply.
     assert EMAIL in transcript
-
-
-def test_a_rate_limit_object_of_only_identity_facts_publishes_no_detail():
-    observation = folded([record(completed(rateLimits={"email": EMAIL}))])
-    outcome = decode_turn(observation, Facts(), requested_model=None)
-    assert outcome.status == "success" and outcome.rate_limit.detail is None
-    published = outcome.model_dump(mode="json")
-    published.pop("raw_reply")  # the vendor's own record; see the stated limit
-    assert EMAIL not in json.dumps(published)
-
-
-def test_the_dropped_string_rate_limit_fact_is_a_pinned_cost_not_an_accident():
-    """The stated cost of constraining by value shape, as a test rather than prose."""
-    observation = folded([record(completed(rateLimits={
-        "resetsAt": "2026-01-01T00:00:00Z", "windowMinutes": 300,
-    }))])
-    outcome = decode_turn(observation, Facts(), requested_model=None)
-    assert outcome.rate_limit.detail == {"windowMinutes": 300}
-
-
-def test_a_rate_limit_object_is_bounded_in_key_count_and_key_length():
-    emitted = {f"metric{index}": index for index in range(40)}
-    emitted["k" * 200] = 1
-    observation = folded([record(completed(rateLimits=emitted))])
-    outcome = decode_turn(observation, Facts(), requested_model=None)
-    assert len(outcome.rate_limit.detail) <= RATE_LIMIT_KEYS
-    assert all(len(key) <= RATE_LIMIT_KEY_LENGTH for key in outcome.rate_limit.detail)
 
 
 def test_a_malformed_record_is_damage_a_later_success_cannot_promote():
@@ -626,9 +619,10 @@ def test_no_unparseable_byte_is_ever_published(damaged):
 
 @pytest.mark.parametrize("method", [
     "account/updated", "account/read", "account/login/start", "account/anythingUnenumerated",
+    "modelProvider/authRecoveryCompleted",
 ])
 def test_the_whole_account_namespace_is_refused_not_a_list_of_known_methods(method):
-    assert is_account_record({"method": method})
+    assert account_notice_faults({"method": method}, EXPECTED)
 
 
 @pytest.mark.parametrize("method", [
@@ -653,7 +647,7 @@ def test_no_account_method_is_attested_turn_evidence(method):
     {"method": "accounts/other"},
 ])
 def test_an_ordinary_notification_is_not_an_account_record(record_value):
-    assert not is_account_record(record_value)
+    assert account_notice_faults(record_value, EXPECTED) == ()
 
 
 def test_the_account_fault_names_the_method_and_nothing_from_its_params():
@@ -1034,15 +1028,18 @@ def test_no_published_number_is_larger_than_a_number():
     """
     huge = 10 ** 4200
     observation = folded([record(completed(
-        rateLimits={f"metric{index}": huge for index in range(RATE_LIMIT_KEYS + 4)},
         usage={"inputTokens": huge, "outputTokens": 7},
     ))])
+    window = {"usedPercent": huge, "windowDurationMins": 300, "resetsAt": 1}
+    readback = spend_reading({"result": spend_result(primary=window, secondary=window)})
+    observation = replace(observation, rate_limit=rate_limit_of(readback, readback))
     outcome = decode_turn(observation, Facts(), requested_model=None)
     assert outcome.status == "success"
     for field, number in numbers_of(outcome.model_dump(mode="json")):
         assert len(repr(number)) <= NUMBER_CHARS, (field, len(repr(number)))
     assert outcome.usage == Usage(input_tokens=None, output_tokens=7)
-    assert not outcome.rate_limit.detail
+    assert "before.primary_used_percent" not in outcome.rate_limit.detail
+    assert outcome.rate_limit.detail["before.has_credits"] is False
 
 
 def test_a_long_refusal_detail_is_bounded_in_the_outcome():

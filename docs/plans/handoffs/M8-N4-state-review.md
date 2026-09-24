@@ -6,6 +6,13 @@ not implement") and amended. Every premise was reproduced against source first.
 The dispositions are under [Review disposition](#review-disposition). By
 instruction there is one review pass, so these amendments have not been
 re-reviewed.
+
+**Implemented** on `m8/n4-startup`, stacked on the layout slice
+(`m8/n4-layout`). The implementation's evidence, its deviations from this
+design and what remains unexecuted are recorded in the
+[M8 implementation record](M8-implementation-record.md#n4-the-authenticated-startup-lane).
+The design text below is preserved as reviewed. Where it differs from the
+orchestrator decisions near its end, the decisions govern.
 Base: `main` at `9006f93`. Branch: `m8/n4-startup`.
 Scope: N4 of [issue 77](https://github.com/sushiHex/constructicon/issues/77),
 private authenticated startup for Codex. This covers everything that can be

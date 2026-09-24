@@ -16,6 +16,7 @@ MAINTAIN = STORE + "maintain_offline.__wrapped__"
 S = "tests/substrate/test_operator_store_maintenance.py::"
 U = "tests/substrate/test_operator_store_replace.py::"
 C = "tests/substrate/test_codex_matrix.py::"
+K = "tests/substrate/test_operator_store_credential.py::"
 REANCHOR = (
     "            if not anchored:\n"
     "                anchor_raw = canonical_json({\n"
@@ -31,7 +32,7 @@ MUTANTS = (
         "1 maintenance exposes the store only after its withdrawal returns",
         MAINTAIN,
         '_replace_metadata(opened.bundle_fd, "active.json", raw)',
-        "yield StoreMaintenance(opened.store_path, floor)\n"
+        "yield StoreMaintenance(opened.store_path, floor, opened.lock_fd, opened, root, key)\n"
         '            _replace_metadata(opened.bundle_fd, "active.json", raw)',
         S + "test_maintenance_withdraws_durably_before_it_exposes_the_store",
     ),
@@ -383,6 +384,35 @@ MUTANTS = (
         "if False and (",
         S + "test_a_lock_replaced_across_a_reboot_is_refused_under_the_same_store"
         "[replaced-activate]",
+    ),
+    # --- N4 maintenance-held launches (M8-N4-state-review.md, section 5) ---
+    (
+        "N4-M1 a maintenance check requires the same floor",
+        STORE + "StoreMaintenance.check",
+        "if withdrawal.generation_floor != self.generation_floor:",
+        "if False:",
+        K + "test_a_maintenance_check_refuses_once_its_selection_or_objects_moved[other-floor]",
+    ),
+    (
+        "N4-M2 a maintenance check re-proves the objects",
+        STORE + "StoreMaintenance.check",
+        "_require_same_objects(current, self._opened)",
+        "pass",
+        K + "test_a_maintenance_check_refuses_once_its_selection_or_objects_moved[substituted]",
+    ),
+    (
+        "N4-M3 a maintenance check requires this key's withdrawal",
+        STORE + "StoreMaintenance.check",
+        "withdrawal = _current_withdrawal(current, self._key)",
+        "withdrawal = _Withdrawal(self._key, self.generation_floor)",
+        K + "test_a_maintenance_check_refuses_once_its_selection_or_objects_moved[activated]",
+    ),
+    (
+        "N4-M4 a closed maintenance checks nothing",
+        STORE + "StoreMaintenance.check",
+        "if self.closed or self._opened.closed:",
+        "if False:",
+        K + "test_a_maintenance_check_is_positive_inside_the_context_and_never_a_binding",
     ),
 )
 

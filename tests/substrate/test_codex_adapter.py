@@ -78,6 +78,7 @@ from tests.native_operator_world import native_egress, native_store
 from tests.operator_store_world import StoreWorld
 from tests.substrate.test_codex_protocol import (
     ACCOUNT_NOTICE,
+    CLEAN_SPEND,
     EMAIL,
     MANAGED,
     THREAD,
@@ -148,7 +149,8 @@ class ScriptedNative:
                  hangs_up_after_turn=False, preamble=(), ends_after_preamble=False,
                  read_fails=None, fails_on_nth_account=None, tail=b"", early=(),
                  after_thread=(), duplicate_last_reply=False, read_limit=None,
-                 wedge=b"", reply_id=None, trailing=(), ends_after_initialize=False):
+                 wedge=b"", reply_id=None, trailing=(), ends_after_initialize=False,
+                 spends=None):
         # ``read_fails`` models a transport the adapter does not expect: an
         # exception type no layer catches, which is how a conversation aborts
         # without recording anything.
@@ -174,6 +176,9 @@ class ScriptedNative:
         self.armed = read_fails is not None and fails_on_nth_account is None
         self.accounts_seen = 0
         self.accounts = list(accounts)
+        # None answers every spend readback cleanly; a list is consumed, and
+        # an exhausted one means the child exited before answering.
+        self.spends = None if spends is None else list(spends)
         self.records = list(records)
         self.hangs_up_after_turn = hangs_up_after_turn
         self.thread = thread
@@ -203,6 +208,22 @@ class ScriptedNative:
         self.pending.extend(raw)
         self.changed.set()
 
+    def _final_reply(self, identifier, entry) -> None:
+        """The conversation's last reply, the post-turn readback's, and its hooks."""
+
+        if self.reply_id is not None:
+            self._emit({"id": self.reply_id, **entry})
+            self.eof = True  # nothing further will answer the real request
+            return
+        reply = {"id": identifier, **entry}
+        self._emit(reply)
+        if self.duplicate_last_reply:
+            if self.wedge:
+                self.pending.extend(self.wedge)  # deliberately unframed
+            self._emit(reply)  # the same id, answered twice
+        for value in self.trailing:
+            self._emit(value)
+
     def _respond(self, raw: bytes) -> None:
         request = json.loads(raw)
         self.received.append(request)
@@ -226,20 +247,20 @@ class ScriptedNative:
                 self.eof = True  # the child exited before answering
                 self.changed.set()
                 return
-            entry = self.accounts.pop(0)
-            if self.reply_id is not None and not self.accounts:
-                self._emit({"id": self.reply_id, **entry})
-                self.eof = True  # nothing further will answer the real request
+            self._emit({"id": identifier, **self.accounts.pop(0)})
+        elif method == "account/rateLimits/read":
+            if self.spends is None:
+                entry = {"result": CLEAN_SPEND}
+            elif not self.spends:
+                self.eof = True
+                self.changed.set()
                 return
-            reply = {"id": identifier, **entry}
-            self._emit(reply)
-            if self.duplicate_last_reply and not self.accounts:
-                if self.wedge:
-                    self.pending.extend(self.wedge)  # deliberately unframed
-                self._emit(reply)  # the same id, answered twice
-            if not self.accounts:
-                for value in self.trailing:
-                    self._emit(value)
+            else:
+                entry = self.spends.pop(0)
+            if self.accounts:
+                self._emit({"id": identifier, **entry})
+            else:
+                self._final_reply(identifier, entry)
         elif method == "thread/start":
             self._emit({"id": identifier, "result": {"thread": {"id": self.thread}}})
             for value in self.after_thread:
@@ -712,7 +733,8 @@ async def test_a_clean_conversation_reads_the_mode_twice_around_one_turn():
     conversation = await converse(native)
     assert conversation.faults == ()
     assert native.methods == [
-        "initialize", "initialized", "account/read", "thread/start", "turn/start", "account/read",
+        "initialize", "initialized", "account/read", "account/rateLimits/read", "thread/start",
+        "turn/start", "account/read", "account/rateLimits/read",
     ]
     assert conversation.observation.terminal
     outcome = decode_turn(
@@ -1750,7 +1772,7 @@ async def test_close_cancels_an_exchange_still_in_flight(
 
 # --- a reply must arrive after its request ------------------------------------
 
-FORGED_GOOD_ACCOUNT = {"id": 5, "result": MANAGED_RESULT}
+FORGED_GOOD_ACCOUNT = {"id": 6, "result": MANAGED_RESULT}
 """Ids are monotonic and therefore predictable: the pre-acceptance read is 5."""
 
 SWITCHED_RESULT = {"account": {"type": "apiKey", "planType": "pro"}, "requiresOpenaiAuth": True}
