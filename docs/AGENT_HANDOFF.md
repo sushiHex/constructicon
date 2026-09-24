@@ -15,6 +15,67 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## N3c — operator-store maintenance and the rest of the N3 matrix
+
+**Merged `a8a8f63` (PR #101) on 2026-09-24 UTC from head `3810b10`. It
+completes #76.** The operator store now has these pieces:
+- a withdrawn state of `active.json` that carries a generation floor;
+- offline withdrawal, activation and reboot re-anchoring, all under the
+  retained lock;
+- publication under the lock.
+
+An overages-forbidden profile is forced unavailable, whatever its labels say.
+The crash matrix, refresh, alias, persistence and non-widening proofs all run
+on Linux, with 291 mutants killed by assertion.
+
+**Corrections worth carrying.**
+
+- **A boot-bound anchor made every reboot a dead end.** N3a's immutable anchor
+  recorded `boot_id`, so after a restart no helper could recover the binding.
+  Maintenance now re-anchors under the lock, but only when the bundle's stable
+  identity is unchanged: handle, device, inode, mode, uid and `nlink`, with the
+  boot actually changed. The lock is checked on those same stable fields across
+  boots.
+- **A slice written on a review head must be re-proved on `main`.** N3c's first
+  Linux failure came from the merged N3b's routable-address rule, which did not
+  exist on the head N3c was written against.
+- **A killing test that runs past the harness limit is not a kill.** The
+  inventory reports NOT PROVEN on timeout. The fix was to make the test cheaper,
+  never to raise the limit.
+- **Never put a closing verb next to an issue number in a PR body.** "does not
+  close #76" closed #76, twice.
+
+**What this slice does NOT establish.**
+- The qualification record's content is operator-supplied.
+- Process death inside the re-anchor is unproved.
+- Real vendor refresh and overage behaviour are N4 and N5 work.
+
+---
+
+## N4 preparation — in-zone proxy bridge
+
+**Merged `d5c0760` (PR #103) on 2026-09-24 UTC from head `fd6bd8b`.** The pinned
+Codex client can use a proxy only as `http://host:port`; no transport accepts a
+Unix-socket proxy. So the launcher now prefixes the vendor with a trusted
+forwarder whenever it mounts the egress leaf: `127.0.0.1:18080` → leaf → relay.
+
+**Measured, not inferred.** The pinned `codex app-server` exported through
+`HTTPS_PROXY` to a controlled peer with no login.
+
+**Corrections worth carrying.**
+- **The pinned client connects to `chatgpt.com:443` unsolicited at startup,
+  before any login, and the relay denied it.** N4 must trace that code path.
+- **An absent evidence fact is not a failed one.** A test first reported "ssl
+  cannot import" when the client had simply never reported `ssl`.
+
+**What this slice does NOT establish.**
+- The websocket family is proved by source only.
+- The host installer does not yet carry the runtime.
+- Containment is the relay's claim alone, never the client's compliance with
+  the proxy.
+
+---
+
 ## N3b — acquisition-scoped vendor-session egress
 
 **Merged `6dac9f2` (PR #97) on 2026-09-23 UTC from reviewed head `9a94959`.**

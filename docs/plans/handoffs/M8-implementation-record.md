@@ -2160,6 +2160,32 @@ Evidence, on Windows 11 with Python 3.11:
   plan-manifest test and `sha256sum --check` passed. After that only this
   entry and its manifest line changed, and both were rechecked.
 
+### Merged at the reviewed head
+
+**Merged `a8a8f63` (PR #101) on 2026-09-24 UTC from head `3810b10`.** That
+head is the reviewed commits `0ddb247..34dd520`, applied onto `main` `d5c0760`
+after the N4 bridge. The conflicts were union-only, and the N3c code and test
+files are byte-identical to `34dd520`. Every "unexecuted" item above then ran
+([containment run 35938902900](https://github.com/sushiHex/constructicon/actions/runs/35938902900)).
+
+- **N3c proofs.** The root lane passed 10/10: the crash matrix with process
+  death at each kill point, the simulated reboot (R6), bind-mount aliases, the
+  second-name anchor (R7), and the lock controls. The service lane passed 3/3:
+  refresh, cleanup bytes, and persistence and non-widening through the real
+  relay.
+- **Earlier slices.** N3a (20 + 3), N3b (9) and the N4 bridge (6) passed in the
+  same lane.
+- **Mutants.** 291 were killed by assertion across the lane's inventories,
+  including N3c's six Linux-only mutants. None is NOT PROVEN.
+- **Verify** is green.
+
+The GitHub connector reviewed `3810b10` and posted no findings. This section
+supersedes the "unexecuted" lists above for that head. It qualifies that head
+and no later changed one. The limits above still stand: the operator-supplied
+qualification record; process death inside the re-anchor, which is unproved on
+the root lane; and the vendor's real refresh and overage behaviour, which is N4
+and N5 work.
+
 ## N4 preparation: proxy bridge
 
 Credential-free preparation for N4 (#77), on branch `m8/n4-proxy-bridge` off
@@ -2337,3 +2363,31 @@ that test passed on its own, and `sha256sum --check` passed.
 
 **Unexecuted until the next Linux CI run:** the environment-proxy client proof
 and its evidence file, and the N4 mutation step (mutants 4, 13-17 and 20).
+
+### Merged at the reviewed head
+
+**Merged `d5c0760` (PR #103) on 2026-09-24 UTC from head `fd6bd8b`.** Every
+unexecuted item above then ran
+([containment run 35935694711](https://github.com/sushiHex/constructicon/actions/runs/35935694711)).
+
+- **Bridge proofs.** All 6 passed:
+  - the environment-proxy client, through forwarder, leaf and relay to the
+    pinned peer;
+  - the decoy refusal;
+  - the in-zone listener inventory;
+  - the pinned `codex app-server` exporting through `HTTPS_PROXY`, with no
+    login and no model request.
+- **N3b under the bridge prefix.** Its 9 proofs passed.
+- **Mutants.** 237 were killed by assertion, including the seven Linux-only
+  bridge mutants. None is NOT PROVEN.
+
+The one intermediate failure was the half-close mutant. Its test died on
+`ENOTCONN`, not an assertion, so it reported NOT PROVEN. The test now fails by
+assertion.
+
+The connector reviewed `fd6bd8b` and posted no findings. The limits above
+stand:
+- the websocket family is proved by source only;
+- containment is the relay's claim alone;
+- the unsolicited startup `CONNECT chatgpt.com:443` has not been traced to its
+  code path, and belongs to N4's startup-traffic work.
