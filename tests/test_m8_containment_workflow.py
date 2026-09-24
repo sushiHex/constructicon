@@ -27,6 +27,11 @@ PROOFS = {
         "foundation",
         "tests/substrate/test_native_egress_containment.py scripts/check_m8_n3b_mutations.py",
     ),
+    "Prove N3c maintenance, refresh and non-widening": (
+        "foundation",
+        "tests/substrate/test_operator_store_maintenance_restart.py "
+        "tests/substrate/test_operator_store_persistence.py scripts/check_m8_n3c_mutations.py",
+    ),
     "Prove the N4 proxy bridge in the native zone": (
         "foundation",
         "tests/substrate/test_native_egress_bridge.py scripts/check_m8_n4_bridge_mutations.py",
@@ -138,6 +143,7 @@ def test_lane_evidence_is_disjoint_and_bound_to_the_reviewed_head():
     assert "if-no-files-found: error" in text
     assert "n3a-*.json" in text
     assert "n3b-*.json" in text
+    assert "n3c-*.json" in text
     assert "n4-*.json" in text
     assert "M8_BRIDGE_REQUIRED=1" in text
     assert "m8-bridge-runtime.json" in text

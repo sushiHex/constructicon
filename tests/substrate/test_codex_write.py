@@ -97,7 +97,8 @@ def write_profile() -> NativeOperatorExecutorProfileV3:
         ),
         authentication="vendor_managed_subscription",
         account_assurance="operator_bound_vendor_identity_unverified",
-        subscription_overage="forbidden",
+        # Forbidden is forced unavailable; see codex_profile() in test_codex_adapter.
+        subscription_overage="operator_authorized",
     )
 
 

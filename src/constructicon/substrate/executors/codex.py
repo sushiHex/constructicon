@@ -174,6 +174,11 @@ CALLBACK_PENDING_BYTES = RECORD_BYTES
 
 INGRESS_NOT_ESTABLISHED = "private fixed-actor ingress is not established by assembly"
 STORE_NOT_ESTABLISHED = "the operator store binding has no physical qualification"
+OVERAGE_NOT_ENFORCED = (
+    "an overages-forbidden profile has no proved refusal at its included limit"
+)
+"""ADR 0021 read mechanically: nothing here can supply that refusal, so no reason
+tuple, flag or label can clear this one. It reads the sealed overage literal only."""
 UNQUALIFIED_PREREQUISITES: tuple[str, ...] = (
     INGRESS_NOT_ESTABLISHED,
     STORE_NOT_ESTABLISHED,
@@ -1738,8 +1743,9 @@ class CodexOperatorProvider:
 
     Availability is an assembly fact read without runtime I/O. A configured
     binding still starts unavailable unless assembly explicitly clears every
-    independent prerequisite; an absent binding can never be cleared by an
-    empty caller-supplied reason tuple. An absent egress policy is not forced
+    independent prerequisite; an absent binding, and an overages-forbidden
+    profile, can never be cleared by an empty caller-supplied reason tuple. An
+    absent egress policy is not forced
     the same way: it allocates no relay and mounts no leaf, so the native zone
     keeps only ``lo``, a stronger denial rather than a widening.
     """
@@ -1859,6 +1865,8 @@ class CodexOperatorProvider:
         reasons = tuple(unavailable_reasons)
         if binding_store is None and STORE_NOT_ESTABLISHED not in reasons:
             reasons += (STORE_NOT_ESTABLISHED,)
+        if profile.subscription_overage == "forbidden" and OVERAGE_NOT_ENFORCED not in reasons:
+            reasons += (OVERAGE_NOT_ENFORCED,)
         self._unavailable = reasons
         self.binding_store = binding_store
         self.closure = closure

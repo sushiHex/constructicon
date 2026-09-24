@@ -43,12 +43,18 @@ class StoreWorld:
         self.names: list[str] = []
         self.lock_attempts = 0
         self.lock_after = 0
+        # Opt-in flock semantics: one holding descriptor, released by its close.
+        self.exclusive = False
+        self.holder: int | None = None
         self.closed: list[int] = []
+        # What the offline helpers did, in order; nothing here infers it.
+        self.events: list[str] = []
         self._write_anchor()
         self.write_descriptor(generation)
         self.activate(generation)
 
     def _opened(self) -> operator_store.OpenedBundle:
+        self.events.append("open")
         fds = tuple(os.open(os.devnull, os.O_RDONLY) for _ in range(5))
         return operator_store.OpenedBundle(
             self.root / "bundle", self.root / "bundle" / "store", *fds,
@@ -92,6 +98,13 @@ class StoreWorld:
             "descriptor_digest": str(descriptor.descriptor_digest),
         }).encode()
 
+    def sealed_for(self, generation: int) -> operator_store.NativeOperatorStoreIdentityV1:
+        return operator_store.store_identity_for(
+            self.key, generation, self.instance,
+            subscription_mode_adapter_revision=self.mode,
+            store_conformance_revision=self.conformance,
+        )
+
     def install(self, monkeypatch) -> None:
         monkeypatch.setattr(operator_store, "_open_bundle", lambda root, token: self._opened())
         def metadata(opened, name):
@@ -101,18 +114,77 @@ class StoreWorld:
                 raise FileNotFoundError(name) from exc
 
         monkeypatch.setattr(operator_store, "_read_metadata", metadata)
-        monkeypatch.setattr(operator_store, "_descriptor_names", lambda opened: tuple(self.names))
+
+        def names(opened) -> tuple[str, ...]:
+            self.events.append("inventory")
+            # Production order: numeric, never insertion or lexicographic.
+            return tuple(sorted(self.names, key=lambda name: int(name.removesuffix(".json"))))
+
+        monkeypatch.setattr(operator_store, "_descriptor_names", names)
 
         def flock(fd: int) -> bool:
             self.lock_attempts += 1
-            return self.lock_attempts > self.lock_after
+            if self.lock_attempts <= self.lock_after:
+                return False
+            if self.exclusive and self.holder not in (None, fd):
+                return False
+            self.holder = fd
+            self.events.append("lock")
+            return True
 
         monkeypatch.setattr(operator_store, "_flock", flock)
         def close(fd: int) -> None:
             self.closed.append(fd)
+            if fd == self.holder:
+                self.holder = None
             os.close(fd)
 
         monkeypatch.setattr(operator_store, "_close", close)
 
-    def binding(self) -> operator_store.BindingStore:
-        return operator_store.BindingStore(self.root, self.key, self.sealed)
+        def replace_metadata(directory_fd: int, name: str, raw: bytes) -> None:
+            self.events.append("replace")
+            self.metadata[name] = raw
+
+        monkeypatch.setattr(operator_store, "_replace_metadata", replace_metadata)
+
+    def install_publisher(self, monkeypatch) -> list[int]:
+        """Substitute only publication's provisioning primitives; returns fsyncs."""
+
+        synced: list[int] = []
+        devnull = lambda *args, **kwargs: os.open(os.devnull, os.O_RDONLY)  # noqa: E731
+        monkeypatch.setattr(operator_store, "_open_trusted_directory", devnull)
+        monkeypatch.setattr(operator_store, "_trusted_directory", lambda fd: None)
+        monkeypatch.setattr(operator_store, "_provision_directory", devnull)
+        monkeypatch.setattr(operator_store, "_provision_lock", devnull)
+        monkeypatch.setattr(operator_store.os, "fsync", synced.append)
+
+        def publish_new(directory_fd: int, name: str, raw: bytes) -> None:
+            if name in self.metadata:
+                raise operator_store.ContractViolation(
+                    "native store descriptor publication is unavailable"
+                )
+            self.events.append("publish")
+            self.metadata[name] = raw
+            if name != "anchor.json":
+                self.names.append(name)
+
+        monkeypatch.setattr(operator_store, "_publish_new", publish_new)
+        return synced
+
+    def reboot(self, *, boot_id: str = "00000000-0000-0000-0000-000000000002",
+               mount_id: int = 2) -> None:
+        """Change only the boot-scoped identity fields, as a real reboot does."""
+
+        for name in ("bundle", "store", "lock"):
+            setattr(self, name, replace(getattr(self, name), boot_id=boot_id, mount_id=mount_id))
+        self.instance = operator_store._identity_instance(self.store)
+
+    def withdraw(self, floor: int) -> None:
+        self.metadata["active.json"] = operator_store.canonical_json({
+            "generation_floor": floor, "key": self.key, "schema_version": 1,
+        }).encode()
+
+    def binding(self, sealed=None) -> operator_store.BindingStore:
+        return operator_store.BindingStore(
+            self.root, self.key, self.sealed if sealed is None else sealed,
+        )

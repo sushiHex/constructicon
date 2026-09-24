@@ -135,7 +135,9 @@ def codex_profile() -> NativeOperatorExecutorProfileV3:
         ),
         authentication="vendor_managed_subscription",
         account_assurance="operator_bound_vendor_identity_unverified",
-        subscription_overage="forbidden",
+        # A forbidden profile is forced unavailable (test_codex_matrix.py). This
+        # fixture's subject is protocol and custody, not overage approval.
+        subscription_overage="operator_authorized",
     )
 
 

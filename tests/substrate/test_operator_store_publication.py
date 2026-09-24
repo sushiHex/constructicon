@@ -204,6 +204,7 @@ def test_oversized_publisher_metadata_refuses_before_any_immutable_write(tmp_pat
     monkeypatch.setattr(operator_store, "_close_fds", lambda *fds: None)
     monkeypatch.setattr(operator_store, "_open_bundle", lambda path, token: opened)
     monkeypatch.setattr(operator_store, "_close_opened", lambda candidate: None)
+    monkeypatch.setattr(operator_store, "_flock", lambda fd: True)
     monkeypatch.setattr(
         operator_store,
         "_read_metadata",
@@ -240,6 +241,9 @@ def test_short_metadata_write_refuses_and_removes_its_private_temporary(monkeypa
         "unlink",
         lambda name, *, dir_fd: unlinked.append((name, dir_fd)),
     )
+    # Substituted so a zero-write mutant reaches the link rather than a Linux
+    # primitive; the ownership law has its own Linux unit proof.
+    monkeypatch.setattr(operator_store, "_seal_metadata_fd", lambda fd, directory_fd: None)
     monkeypatch.setattr(
         operator_store.os,
         "link",

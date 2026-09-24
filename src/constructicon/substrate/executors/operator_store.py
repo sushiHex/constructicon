@@ -1,9 +1,11 @@
 """Private physical custody for one ADR 0021 operator-store binding.
 
-This module is deliberately not a provider, account database, maintenance API,
-or public identity surface.  It reads an operator-provisioned static bundle and
-holds its retained lock.  The Codex provider owns lease/materialization and
-uses the positive :class:`BindingCheck` returned here at its two boundaries.
+This module is deliberately not a provider, account database, runtime
+maintenance API, or public identity surface.  It reads an operator-provisioned
+static bundle and holds its retained lock.  The Codex provider owns
+lease/materialization and uses the positive :class:`BindingCheck` returned here
+at its two boundaries.  Three synchronous offline helpers are the only writers:
+publication, maintenance (a durable withdrawal) and activation.
 """
 
 from __future__ import annotations
@@ -11,12 +13,15 @@ from __future__ import annotations
 import asyncio
 import ctypes
 import inspect
+import math
 import os
 import re
 import secrets
 import stat
 import sys
-from collections.abc import Awaitable, Callable, Mapping
+import time
+from collections.abc import Awaitable, Callable, Iterator, Mapping
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -36,6 +41,8 @@ _BUNDLE_MODE = 0o750
 _DESCRIPTORS_MODE = 0o750
 _STORE_MODE = 0o700
 _LOCK_MODE = 0o600
+_METADATA_MODE = 0o440
+_WAIT_POLL_S = 0.01
 _GENERATION = re.compile(r"[1-9][0-9]*\.json\Z")
 _AT_EMPTY_PATH = 0x1000
 _O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
@@ -149,6 +156,23 @@ class _Active:
     descriptor_digest: Digest
 
 
+@dataclass(frozen=True)
+class _Withdrawal:
+    """The third ``active.json`` state; every provider reads it as unavailable."""
+
+    key: str
+    generation_floor: int
+
+
+@dataclass
+class StoreMaintenance:
+    """Exists only after the withdrawal is durable; the operator's one locator."""
+
+    store_path: Path
+    generation_floor: int
+    closed: bool = False
+
+
 def _require_token(value: object, *, field: str) -> str:
     if type(value) is not str or not value or value.strip() != value or "\x00" in value:
         raise ValueError(f"{field} is invalid")
@@ -257,6 +281,23 @@ def _active(raw: bytes) -> _Active:
         raise ContractViolation("native store active selection is unavailable") from exc
 
 
+def _withdrawal(raw: bytes) -> _Withdrawal:
+    try:
+        body = _metadata(raw)
+        if (
+            set(body) != {"schema_version", "key", "generation_floor"}
+            or type(body["schema_version"]) is not int
+            or body["schema_version"] != 1
+        ):
+            raise ValueError("shape")
+        return _Withdrawal(
+            key=_require_token(body["key"], field="key"),
+            generation_floor=_require_int(body["generation_floor"], field="generation_floor"),
+        )
+    except ValueError as exc:
+        raise ContractViolation("native store withdrawal is unavailable") from exc
+
+
 def _bundle_token(key: str) -> str:
     return str(digest("native-operator-store-key-path", 1, key)).removeprefix("sha256:")
 
@@ -327,14 +368,20 @@ def _identity(fd: int) -> FileHandleV1:
     )
 
 
-def _mounts_below(path: Path, mount_id: int) -> None:
-    """Refuse a mount at, or below, the writable store root."""
+def _read_mountinfo() -> bytes:
+    """The one platform read behind the mount-topology check, bounded plus one."""
 
     try:
         with Path("/proc/self/mountinfo").open("rb") as stream:
-            raw = stream.read(MAX_MOUNTINFO_BYTES + 1)
+            return stream.read(MAX_MOUNTINFO_BYTES + 1)
     except OSError as exc:
         raise ContractViolation("native store mount topology is unavailable") from exc
+
+
+def _mounts_below(path: Path, mount_id: int) -> None:
+    """Refuse a mount at, or below, the writable store root."""
+
+    raw = _read_mountinfo()
     if len(raw) > MAX_MOUNTINFO_BYTES:
         raise ContractViolation("native store mount topology is unavailable")
     prefix = str(path)
@@ -519,6 +566,17 @@ def _close_opened(candidate: OpenedBundle) -> None:
         raise failure
 
 
+def _seal_metadata_fd(fd: int, directory_fd: int) -> None:
+    """One ownership law for every metadata writer: the directory's group, 0440.
+
+    The owner stays the writing process (root in production, which every reader
+    requires), so an unprivileged test exercises this exact primitive.
+    """
+
+    _fchown(fd, -1, os.fstat(directory_fd).st_gid)
+    _fchmod(fd, _METADATA_MODE)
+
+
 def _publish_new(directory_fd: int, name: str, raw: bytes) -> None:
     """Publish one immutable metadata file; an existing name is always refusal."""
 
@@ -537,6 +595,7 @@ def _publish_new(directory_fd: int, name: str, raw: bytes) -> None:
                 if count <= 0:
                     raise OSError("short write while publishing native store metadata")
                 written += count
+            _seal_metadata_fd(fd, directory_fd)
             os.fsync(fd)
         finally:
             os.close(fd)
@@ -556,6 +615,41 @@ def _publish_new(directory_fd: int, name: str, raw: bytes) -> None:
         if created:
             os.unlink(temporary, dir_fd=directory_fd)
             os.fsync(directory_fd)
+
+
+def _replace_metadata(directory_fd: int, name: str, raw: bytes) -> None:
+    """Atomically replace one mutable metadata file, then persist the directory.
+
+    Any failure before the replace leaves the previous file intact and removes
+    the temporary. A failure of the directory ``fsync`` after it raises with the
+    new file visible, so a caller never treats that state as durable.
+    """
+
+    temporary = ".pending-" + secrets.token_hex(16)
+    fd = os.open(
+        temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_CLOEXEC | _O_NOFOLLOW, 0o600,
+        dir_fd=directory_fd,
+    )
+    replaced = False
+    try:
+        try:
+            written = 0
+            while written < len(raw):
+                count = os.write(fd, raw[written:])
+                if count <= 0:
+                    raise OSError("short write while replacing native store metadata")
+                written += count
+            _seal_metadata_fd(fd, directory_fd)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(temporary, name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+        replaced = True
+    finally:
+        if not replaced:
+            with suppress(FileNotFoundError):
+                os.unlink(temporary, dir_fd=directory_fd)
+    os.fsync(directory_fd)
 
 
 def _provision_directory(
@@ -631,6 +725,45 @@ def _provision_lock(bundle_fd: int, *, runtime_uid: int) -> int:
         raise
 
 
+def _require_wait(wait_s: object) -> None:
+    if (
+        type(wait_s) not in (int, float)
+        or not math.isfinite(cast(float, wait_s))
+        or cast(float, wait_s) < 0
+    ):
+        raise ContractViolation("native store maintenance wait is invalid")
+
+
+def _require_same_objects(current: OpenedBundle, original: OpenedBundle) -> None:
+    if (
+        current.bundle_identity != original.bundle_identity
+        or not _same_store_identity(current.store_identity, original.store_identity)
+        or current.lock_identity != original.lock_identity
+    ):
+        raise ContractViolation("native store binding is unavailable")
+
+
+def _hold_offline(opened: OpenedBundle, root: Path, token: str, wait_s: float) -> None:
+    """Take the retained lock, then re-prove the objects it guards under it.
+
+    Holding this description is the affirmative "no materialized acquisition"
+    fact: every handle and supervisor retains its own until it is reaped. Zero
+    means exactly one attempt. The identities compared are the ones reopened
+    after the wait, never ones observed before it.
+    """
+
+    deadline = time.monotonic() + wait_s
+    while not _flock(opened.lock_fd):
+        if time.monotonic() >= deadline:
+            raise ContractViolation("native store retained lock is held")
+        time.sleep(_WAIT_POLL_S)
+    current = _open_bundle(root, token)
+    try:
+        _require_same_objects(current, opened)
+    finally:
+        _close_opened(current)
+
+
 def publish_descriptor_offline(
     root: Path,
     key: str,
@@ -639,14 +772,19 @@ def publish_descriptor_offline(
     runtime_uid: int,
     subscription_mode_adapter_revision: Digest,
     store_conformance_revision: Digest,
+    wait_s: float = 0,
 ) -> NativeOperatorStoreIdentityV1:
     """Create one immutable descriptor under a pre-protected operator root.
 
     This is an offline provisioning helper.  It cannot write ``active.json``;
-    activation, withdrawal, qualification and any maintenance sequencing remain
-    outside N3a.  The caller supplies no store-instance label or child paths.
+    withdrawal and activation are :func:`maintain_offline` and
+    :func:`activate_offline`.  It holds the retained lock from before it reads
+    the anchor and inventory until its descriptor is published, so no lock
+    holder ever sees the inventory change.  The caller supplies no
+    store-instance label or child paths.
     """
 
+    _require_wait(wait_s)
     if not root.is_absolute() or type(generation) is not int or generation < 1:
         raise ContractViolation("native store descriptor publication is unavailable")
     try:
@@ -688,6 +826,7 @@ def publish_descriptor_offline(
                 raise close_failure
         opened = _open_bundle(root, token)
         try:
+            _hold_offline(opened, root, token, wait_s)
             instance = _identity_instance(opened.store_identity)
             sealed = store_identity_for(
                 key, generation, instance,
@@ -725,6 +864,10 @@ def publish_descriptor_offline(
                     or old.lock != descriptor.lock
                 ):
                     raise ContractViolation("native store instance history is unavailable")
+                if _same_object_across_boots(old.store, descriptor.store) and (
+                    not _same_object_across_boots(old.lock, descriptor.lock)
+                ):
+                    raise ContractViolation("native store instance history is unavailable")
             _publish_new(
                 opened.descriptors_fd, f"{generation}.json",
                 descriptor_raw,
@@ -736,6 +879,49 @@ def publish_descriptor_offline(
         raise
     except (OSError, ValueError) as exc:
         raise ContractViolation("native store descriptor publication is unavailable") from exc
+
+
+def _check_descriptor(
+    opened: OpenedBundle,
+    descriptor: _Descriptor,
+    *,
+    key: str,
+    generation: int,
+    sealed: NativeOperatorStoreIdentityV1,
+) -> None:
+    """One descriptor law for both callers: a provider's selection and activation."""
+
+    if descriptor.key != key or descriptor.generation != generation:
+        raise ContractViolation("native store active selection is unavailable")
+    expected_binding = operator_binding_digest(
+        descriptor.key, descriptor.generation, descriptor.store_instance_id,
+    )
+    if (
+        descriptor.binding_digest != expected_binding
+        or descriptor.binding_digest != sealed.operator_binding_digest
+        or descriptor.layout_law_digest != BINDING_LAYOUT_LAW
+        or descriptor.mount_lock_law_digest != BINDING_MOUNT_LOCK_LAW
+        or descriptor.layout_law_digest != sealed.layout_law_digest
+        or descriptor.mount_lock_law_digest != sealed.mount_lock_law_digest
+        or descriptor.store_instance_id != _identity_instance(opened.store_identity)
+        or descriptor.bundle != opened.bundle_identity
+        or not _same_store_identity(descriptor.store, opened.store_identity)
+        or descriptor.lock != opened.lock_identity
+    ):
+        raise ContractViolation("native store binding is unavailable")
+    for name in _descriptor_names(opened):
+        old = _descriptor(_read_metadata(opened, name))
+        if old.store_instance_id == descriptor.store_instance_id and (
+            not _same_store_identity(old.store, descriptor.store)
+            or old.lock != descriptor.lock
+        ):
+            raise ContractViolation("native store instance history is unavailable")
+        # The instance changes with the boot; the physical store does not, and
+        # its retained lock is never replaced while the binding exists.
+        if _same_object_across_boots(old.store, descriptor.store) and (
+            not _same_object_across_boots(old.lock, descriptor.lock)
+        ):
+            raise ContractViolation("native store instance history is unavailable")
 
 
 class BindingStore:
@@ -781,34 +967,13 @@ class BindingStore:
             raise ContractViolation("native store active selection is unavailable")
         descriptor = _descriptor(_read_metadata(opened, f"{active.generation}.json"))
         if (
-            descriptor.key != self.key or descriptor.generation != active.generation
-            or descriptor.descriptor_digest != active.descriptor_digest
+            descriptor.descriptor_digest != active.descriptor_digest
             or descriptor.binding_digest != active.binding_digest
         ):
             raise ContractViolation("native store active selection is unavailable")
-        expected_binding = operator_binding_digest(
-            descriptor.key, descriptor.generation, descriptor.store_instance_id,
+        _check_descriptor(
+            opened, descriptor, key=self.key, generation=active.generation, sealed=self.sealed,
         )
-        if (
-            descriptor.binding_digest != expected_binding
-            or descriptor.binding_digest != self.sealed.operator_binding_digest
-            or descriptor.layout_law_digest != BINDING_LAYOUT_LAW
-            or descriptor.mount_lock_law_digest != BINDING_MOUNT_LOCK_LAW
-            or descriptor.layout_law_digest != self.sealed.layout_law_digest
-            or descriptor.mount_lock_law_digest != self.sealed.mount_lock_law_digest
-            or descriptor.store_instance_id != _identity_instance(opened.store_identity)
-            or descriptor.bundle != opened.bundle_identity
-            or not _same_store_identity(descriptor.store, opened.store_identity)
-            or descriptor.lock != opened.lock_identity
-        ):
-            raise ContractViolation("native store binding is unavailable")
-        for name in _descriptor_names(opened):
-            old = _descriptor(_read_metadata(opened, name))
-            if old.store_instance_id == descriptor.store_instance_id and (
-                not _same_store_identity(old.store, descriptor.store)
-                or old.lock != descriptor.lock
-            ):
-                raise ContractViolation("native store instance history is unavailable")
         return descriptor
 
     async def acquire_lock(
@@ -848,13 +1013,7 @@ class BindingStore:
             if anchor.key != self.key or anchor.bundle != current.bundle_identity:
                 raise ContractViolation("native store anchor is unavailable")
             descriptor = self._check_selection(current)
-            original = held._opened
-            if (
-                current.bundle_identity != original.bundle_identity
-                or not _same_store_identity(current.store_identity, original.store_identity)
-                or current.lock_identity != original.lock_identity
-            ):
-                raise ContractViolation("native store binding is unavailable")
+            _require_same_objects(current, held._opened)
             return BindingCheck(descriptor.binding_digest)
         except (OSError, ValueError) as exc:
             raise ContractViolation("native store binding is unavailable") from exc
@@ -875,12 +1034,198 @@ class BindingStore:
             raise ContractViolation("native store closure is unavailable") from exc
 
 
+def _across_reboot(anchored: FileHandleV1, live: FileHandleV1) -> bool:
+    """The same physical bundle after a reboot: only boot-scoped fields differ.
+
+    A handle, device, inode, mode, owner or link count that differs is another
+    object, and a mount id that differs within one boot is another mount; both
+    stay refused. The boot must actually have changed.
+    """
+
+    return (
+        anchored.boot_id != live.boot_id
+        and anchored.handle_type == live.handle_type
+        and anchored.handle_hex == live.handle_hex
+        and anchored.dev == live.dev
+        and anchored.ino == live.ino
+        and anchored.mode == live.mode
+        and anchored.uid == live.uid
+        and anchored.nlink == live.nlink
+    )
+
+
+def _anchor_is_current(opened: OpenedBundle, key: str, *, after_reboot: bool) -> bool:
+    """Whether the anchor names this bundle now; ``False`` is a reboot to repair.
+
+    Only maintenance passes ``after_reboot``. Publication, activation and every
+    provider require the anchor exactly, so a reboot needs maintenance rather
+    than silent reuse.
+    """
+
+    anchor = _anchor(_read_metadata(opened, "anchor.json"))
+    if anchor.key != key:
+        raise ContractViolation("native store anchor is unavailable")
+    if anchor.bundle == opened.bundle_identity:
+        return True
+    if after_reboot and _across_reboot(anchor.bundle, opened.bundle_identity):
+        return False
+    raise ContractViolation("native store anchor is unavailable")
+
+
+def _open_offline(
+    root: Path, key: str, wait_s: float, refusal: str, *, after_reboot: bool = False,
+) -> OpenedBundle:
+    """Open the bundle, check its anchor and hold the lock; the caller closes."""
+
+    _require_wait(wait_s)
+    if not root.is_absolute():
+        raise ContractViolation(refusal)
+    try:
+        key = _require_token(key, field="key")
+    except ValueError as exc:
+        raise ContractViolation(refusal) from exc
+    token = _bundle_token(key)
+    try:
+        opened = _open_bundle(root, token)
+    except (OSError, ValueError) as exc:
+        raise ContractViolation(refusal) from exc
+    try:
+        _anchor_is_current(opened, key, after_reboot=after_reboot)
+        _hold_offline(opened, root, token, wait_s)
+        return opened
+    except (OSError, ValueError) as exc:
+        _close_opened(opened)
+        raise ContractViolation(refusal) from exc
+    except BaseException:
+        _close_opened(opened)
+        raise
+
+
+@contextmanager
+def maintain_offline(root: Path, key: str, *, wait_s: float) -> Iterator[StoreMaintenance]:
+    """Withdraw the selection durably, then expose the store under the lock.
+
+    An offline operator helper, like publication. The floor is the highest
+    descriptor generation present under the lock, read from the inventory and
+    never from the previous record, so this runs whatever that state was:
+    withdrawal only disables. The receipt is built only after the directory
+    ``fsync`` returns. Exit closes every descriptor, which releases the lock;
+    it writes nothing and never activates.
+
+    After a reboot the anchor still names the previous boot, so every provider
+    and the other two helpers refuse. Maintenance alone repairs it, under the
+    lock and after the withdrawal is durable, and only for the same physical
+    bundle (``_across_reboot``). Every descriptor also names the previous boot,
+    so no earlier generation can be accepted again: the next is published and
+    activated as after any maintenance.
+    """
+
+    opened = _open_offline(
+        root, key, wait_s, "native store maintenance is unavailable", after_reboot=True,
+    )
+    try:
+        try:
+            # Decided again under the lock, never from the pre-lock reading.
+            anchored = _anchor_is_current(opened, key, after_reboot=True)
+            names = _descriptor_names(opened)
+            floor = int(names[-1].removesuffix(".json")) if names else 0
+            raw = canonical_json({
+                "schema_version": 1, "key": key, "generation_floor": floor,
+            }).encode()
+            _withdrawal(raw)
+            _replace_metadata(opened.bundle_fd, "active.json", raw)
+            if not anchored:
+                anchor_raw = canonical_json({
+                    "schema_version": 1, "key": key,
+                    "bundle": opened.bundle_identity.model_dump(),
+                }).encode()
+                _anchor(anchor_raw)
+                _replace_metadata(opened.bundle_fd, "anchor.json", anchor_raw)
+        except (OSError, ValueError) as exc:
+            raise ContractViolation("native store maintenance is unavailable") from exc
+        maintenance = StoreMaintenance(opened.store_path, floor)
+        try:
+            yield maintenance
+        finally:
+            maintenance.closed = True
+    finally:
+        _close_opened(opened)
+
+
+def _current_withdrawal(opened: OpenedBundle, key: str) -> _Withdrawal:
+    """Every activation follows a durable maintenance record for this key."""
+
+    try:
+        raw = _read_metadata(opened, "active.json")
+    except FileNotFoundError as exc:
+        raise ContractViolation("native store withdrawal is unavailable") from exc
+    withdrawal = _withdrawal(raw)
+    if withdrawal.key != key:
+        raise ContractViolation("native store withdrawal names another binding")
+    return withdrawal
+
+
+def activate_offline(
+    root: Path,
+    key: str,
+    generation: int,
+    *,
+    qualified: NativeOperatorStoreIdentityV1,
+    wait_s: float,
+) -> None:
+    """Select one generation published after the durable withdrawal.
+
+    Publication takes the lock that maintenance held from its inventory read
+    through its replace, so a generation above the floor was published after
+    the withdrawal was durable. ``qualified`` is the sealed identity that
+    qualification produced. It is trusted operator input, like every
+    conformance revision: this bounds which generation it may name and checks
+    it against the provider's own descriptor law and the live objects; it does
+    not prove that qualification ran.
+    """
+
+    if (
+        type(generation) is not int or generation < 1
+        or not isinstance(qualified, NativeOperatorStoreIdentityV1)
+    ):
+        raise ContractViolation("native store activation is unavailable")
+    opened = _open_offline(root, key, wait_s, "native store activation is unavailable")
+    try:
+        withdrawal = _current_withdrawal(opened, key)
+        if generation <= withdrawal.generation_floor:
+            raise ContractViolation("native store activation is unavailable")
+        descriptor = _descriptor(_read_metadata(opened, f"{generation}.json"))
+        _check_descriptor(opened, descriptor, key=key, generation=generation, sealed=qualified)
+        raw = canonical_json({
+            "schema_version": 1, "key": key, "generation": generation,
+            "binding_digest": str(descriptor.binding_digest),
+            "descriptor_digest": str(descriptor.descriptor_digest),
+        }).encode()
+        _active(raw)
+        _replace_metadata(opened.bundle_fd, "active.json", raw)
+    except (OSError, ValueError) as exc:
+        raise ContractViolation("native store activation is unavailable") from exc
+    finally:
+        _close_opened(opened)
+
+
 def _identity_instance(identity: FileHandleV1) -> str:
     return str(digest("native-operator-store-instance", 1, {
         "boot_id": identity.boot_id, "dev": identity.dev, "mount_id": identity.mount_id,
         "handle_type": identity.handle_type,
         "handle_hex": identity.handle_hex,
     }))
+
+
+def _same_object_across_boots(left: FileHandleV1, right: FileHandleV1) -> bool:
+    """One physical object in any boot: never the boot id, mount id or link count."""
+
+    return (
+        left.handle_type == right.handle_type
+        and left.handle_hex == right.handle_hex
+        and left.dev == right.dev
+        and left.ino == right.ino
+    )
 
 
 def _same_store_identity(left: FileHandleV1, right: FileHandleV1) -> bool:

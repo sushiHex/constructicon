@@ -1796,6 +1796,370 @@ session under the runbook. #73 stays open until that evidence exists, and a CI
 result never qualifies the host. The runtime and launch closure is carried to
 N4 (#77).
 
+## N3c — maintenance, activation and the remaining matrix (#76)
+
+N3c is the rest of issue #76 after N3a and N3b. It was written on the N3b
+review head `1ec4943`; its own diff was then applied onto `main` after N3b
+merged (`6dac9f2`) and the handoff record (`6c41ca3`), as `0ddb247` (PR #101).
+That move was not neutral. The final N3b refuses a loopback egress pin unless
+the `_routable` seam is applied, and N3's persistence proof did not apply it,
+so it failed in the foundation lane at `0ddb247`. The fixes for that and for
+the PR review are recorded under "PR #101 review fixes" below. The pre-code
+[state review](M8-N3c-state-review.md) was reviewed once by Codex
+(`gpt-5.6-terra`, job `job_2036d3ab16a8`) and amended in `dd1a36b`. Its six
+owner questions were decided by the orchestrator before any code, and the
+decisions and their reasons are recorded in that document. The one Codex pass
+for this PR was spent on the design; **the implementation has had no
+independent-model review.**
+
+What changed in `src/`, and nothing else:
+
+- `operator_store.py` gains a third state of `active.json`, the withdrawal
+  record `{"generation_floor", "key", "schema_version"}`. Every existing reader
+  refuses it by shape, so no reader changed. There are two offline helpers
+  beside publication. `maintain_offline` is a context manager: it takes the
+  retained lock and re-proves the bundle, store and lock identities under it.
+  It computes the floor from the descriptor inventory, durably replaces
+  `active.json` with the withdrawal record, and only then yields the store
+  locator; its exit only closes. `activate_offline` requires this key's
+  withdrawal record, a generation above its floor, and a descriptor that passes
+  the provider's own descriptor law (`_check_descriptor`, extracted from
+  `_check_selection`) against the qualified identity and the live objects. One
+  ownership law (`_seal_metadata_fd`: the directory's group, `0440`) covers
+  `_publish_new` and the new `_replace_metadata`. Publication now holds the
+  retained lock from before it reads the anchor and inventory until its
+  descriptor is published, and takes the same `wait_s`: finite, not a bool, at
+  least 0; 0 is exactly one attempt. The `/proc/self/mountinfo` read became
+  `_read_mountinfo()` so the parse runs portably. After the PR review
+  (decision 7), maintenance also re-anchors a bundle after a reboot. It does
+  so under the lock, after the withdrawal is durable, and only when every
+  stable field of the bundle's identity is unchanged and the boot id changed.
+  `_anchor_is_current` now holds the anchor check that `_open_offline` used to
+  inline.
+- `codex.py` forces `OVERAGE_NOT_ENFORCED` on an overages-forbidden profile.
+  It reads the sealed overage literal and nothing else, and no reason tuple
+  can clear it. The READ and WRITE accepting-path fixtures move to
+  `operator_authorized` under owner decision 2: that literal is not the
+  approval ADR 0021 requires, and the default unavailability keeps it
+  unavailable in production.
+
+No journal record, service, runtime maintenance API, walker change, L0 field
+or reader branch was added. Both store law digests move, because they digest
+`operator_store.py`: every existing descriptor refuses until it is republished.
+The CI fixture publishes afresh on every run.
+
+### Operator procedure
+
+This is the procedure the decisions assign to the operator. Nothing here
+automates it.
+
+1. Recover or cancel every run of the old generation under the old assembly.
+   That assembly's `reconcile` never reads the selection, so it can still
+   dispose after activation (S12). A new-generation assembly refuses the old
+   reference without disposal (S13).
+2. `maintain_offline(root, key, wait_s=...)`. It refuses, having written
+   nothing, while any acquisition is materialized or any supervisor survives
+   its controller. Portably that is S2 and S20. On Linux, a paused helper
+   holding the real lock refuses a contender (R2, R3). A surviving supervisor
+   keeps that same lock description (the N3a owner-death evidence). Inside the
+   context, and only there, run the vendor login against `store_path`.
+   **After a reboot**, start here. Providers, publication and activation
+   refuse until maintenance re-anchors the bundle (decision 7). Then publish
+   and activate a new generation, because every earlier descriptor names the
+   previous boot.
+3. Exit the context, then publish the next generation. Publication cannot run
+   inside the context, because the lock is per open file description. First
+   provisioning is: publish g1, maintain and log in, publish g2, activate g2.
+4. Qualify the published generation. The qualified identity is operator
+   input (decision 3).
+5. `activate_offline(root, key, g, qualified=..., wait_s=...)`.
+6. When a helper raises, read the state with the strict readers rather than
+   assume it. After a directory `fsync` failure the new record is already
+   visible. A second maintenance withdraws again, and a second activation over
+   an active state refuses (U4).
+7. A `.pending-*` left in `descriptors/` by a killed publication disables
+   selection, maintenance and publication until the operator removes it by
+   hand, having confirmed that no publisher is running (S10). In the bundle
+   directory it depends on who left it. A maintenance or activation killed
+   before its rename leaves an inert temporary, because no reader lists that
+   directory (R2's temporary kill point). A first publication killed between
+   linking and unlinking the anchor leaves a second name for `anchor.json`.
+   Every reader and helper then refuses on the link count until it is removed
+   (R7). Remove either kind the same way.
+
+### Local evidence
+
+Everything below ran on Windows 11 with Python 3.11. The portable doubles
+(`StoreWorld`) substitute only the descriptor, identity, flock and writer
+primitives. They prove ordering, parsing and lifecycle logic, never flock,
+ownership, `fsync` or mounts.
+
+**Every count in this subsection is pre-move.** The counts were taken on the
+tree based on `1ec4943`, at commits `8192b7c` and `607c20b`. Those commits
+survive only on the local branch `n3c-backup`, so no reviewer can reproduce
+them. The current evidence is under "PR #101 review fixes".
+
+- `test_operator_store_maintenance.py` (S, 73 tests) drives every helper rule
+  in both directions: exposure strictly after the durable withdrawal, with the
+  order recorded; a held lock and a failed withdrawal leave the body unrun;
+  every provider refuses inside the context; objects replaced during the wait
+  refuse under all three helpers, and unchanged objects proceed; exit releases
+  the lock and never activates; maintenance refuses while an acquisition is
+  materialized; a materializer waiting through a whole cycle refuses after
+  it, and a sealed successor is accepted; the full maintain, publish, activate cycle executes to
+  success, and the retired provider refuses; a descriptor published before
+  maintenance cannot be activated; absent, active, malformed and other-key
+  states refuse activation; the floor itself and below it refuse; the
+  qualified identity, laws, live store and lock, and the descriptor's own key
+  and generation are all checked; an orphaned `.pending-*` disables
+  everything until it is removed, through the real `_descriptor_names`;
+  store bytes survive close, reconcile, maintenance and activation; recovery
+  across a generation (S12, S13); seven mount-topology inputs; publication
+  waits for a held handle and for a maintenance context; and `wait_s`
+  validation and exact single-attempt semantics.
+- `test_codex_matrix.py` (C, 28 tests) covers the forced reason over posture,
+  plan label, binding and overage; that a caller's reason tuple can neither
+  clear nor duplicate it; and `describe()`. It also covers a WRITE
+  conversation refused at the pre-turn reading, which never sends
+  `thread/start` or `dynamicTools` and never calls the worker. With an early
+  callback it is refused before `account/read`. The accepting WRITE control is
+  here too. Then: an API-key switch at the pre-acceptance reading, with exactly
+  the six clean methods and one launch; the pinned `account/rateLimits/updated`
+  name discarding a turn; and a `usageLimitExceeded` turn, published as
+  partial with `rate_limit` `None`, six methods, one launch, no spend or login
+  request, and every field inside its bound. Its bytes do not depend on a
+  profile.
+- The field-walking surface test now also walks the withdrawal record as a
+  terminal state. The limit-reached partial walks every field bound (C5).
+- `scripts/check_m8_n3c_mutations.py` (pre-move): 22 of 28 killed by
+  assertion. The six Linux unit mutants (9, 10, 11, 15, 24, 27) reported NOT
+  PROVEN on Windows, where their tests skip. That is expected, and they are
+  not kills. At `0ddb247` the review reproduced only 19. Mutants 20-22 hit the
+  harness's 60 s limit, because every case of their killing test seeded a git
+  authority.
+- The retained inventories (pre-move): N3a 47/47 after two
+  changes. The eight `_check_selection` anchors that compare the descriptor
+  were retargeted to `_check_descriptor`, with the same killing tests. The
+  inventory also found one defect in this change: the pre-existing mutant
+  "zero metadata write cannot be treated as one byte of progress" had begun
+  to error at `_fchown` on Windows (NOT PROVEN), because the new seal sits
+  between the write loop and the link. Its test now substitutes
+  `_seal_metadata_fd`, as its sibling does, and the mutant is killed by
+  assertion again. N3b 42/43, which was the 43-mutant inventory of
+  `1ec4943`; the merged N3b has 60. N2 82/82 and N2 WRITE 49/49, all by
+  assertion, with the fixtures on `operator_authorized`.
+- `uv run verify` (pre-move, on `607c20b` plus these documents): clean ruff,
+  strict mypy over 102 source files, four import contracts kept, and 2,739
+  tests passed with 429 platform skips.
+
+### Self-review
+
+A narrow pass over this change asked three questions: what state exists when
+each `await` resumes, what is decided by negative inference, and which tests
+only refuse. What it found:
+
+- **The design's S16 was never written.** It is now: a candidate waits on the
+  lock while a withdrawal and then an activation land, refuses after the wait,
+  and a sealed successor is accepted in the same run.
+- **S4 only refused.** It now also has a permitting case: the same wait over
+  unchanged objects proceeds, under all three helpers.
+- **Decision 6's check was proved only indirectly.** S20 was added.
+- **The inventory found a defect inside the change.** This is the N3a
+  zero-write mutant described above.
+- **Two limits were added** (below): the pre-lock transient refusal, and the
+  conformance revisions that activation does not check.
+
+The new operator-store code is synchronous, so it has no `await`. The
+provider's awaits are unchanged. Their composition with the new writers is
+S16, portably, and R5 in a fresh interpreter. No success is inferred from an
+absence. Activation refuses an absent `active.json`. The withdrawal floor is
+read from the inventory under the lock. `_replace_metadata` marks the replace
+done only after `os.replace` returns. The receipt exists only after the
+directory `fsync`.
+
+### Deviations from the design
+
+- **File names.** The root-lane proofs are
+  `test_operator_store_maintenance_restart.py`, not additions to
+  `test_operator_store_restart.py`. The service-lane proofs are
+  `test_operator_store_persistence.py`, not additions to
+  `test_operator_store_containment.py`. The workflow pin requires each file to
+  run in exactly one step, and N3c has its own step.
+- **Publication re-proves its objects under the lock.** The design required
+  publication only to take the lock. All three helpers share `_hold_offline`,
+  which also reopens and compares identities after the wait. Without it, a
+  descriptor would carry identities observed before the wait.
+- **S20 was added** (maintenance refuses while an acquisition is
+  materialized). Decision 6 asks for its check to be proved directly, and
+  S17 and S18 prove only maintenance against maintenance and publication
+  against a handle.
+- **C2's early-callback variant** is refused before `account/read` (the
+  methods are `initialize, initialized`). That is stronger than the design's
+  three, and it is pinned as observed.
+- **S10 substitutes `os.scandir`** for the duration of the test, so the real
+  `_descriptor_names` filter runs portably. No further primitive was
+  extracted from `src/`.
+- **Three pre-existing tests substitute one more primitive:**
+  `_seal_metadata_fd` in the two `_publish_new` fault tests, and `_flock` in
+  the oversized-publisher test. Their subjects are unchanged.
+- **N3 compares only the native launches' arguments.** Each exchange also runs
+  its mount-free probe through `argv`. Both launches use one acquisition id,
+  so the leaf path is identical by construction and any difference is the
+  store's doing. Its write denials accept `EROFS`, `EACCES` or `EPERM`: which
+  one a read-only bind over a root-owned directory reports is kernel ordering
+  that nothing here measured. The observed errno is written to the evidence.
+- **U1 binds the group** with a supplementary group when the runner user has
+  one, and records the `fchown` call either way.
+
+### Limits and unexecuted proofs
+
+The state review's limits apply unchanged: power loss, the trusted operator
+and same-uid host processes, unobserved store content, qualification as
+operator input (decision 3), qualifying a withdrawn generation, orphaned
+temporaries, publication needing quiescence, old-generation recovery as a
+procedure (decision 6), store content inert to constructicon but not
+necessarily to the vendor (N4), the mid-turn root substitution proved in
+halves, and overage (decision 2). Two limits were added by self-review:
+
+- **A pre-lock candidate can refuse transiently.** `open_candidate` reads the
+  inventory before the lock, so a publication in progress can show it a
+  `.pending-*` and refuse it. That costs availability and is not a widening.
+  Under the lock the race is closed, as designed.
+- **Activation neither records nor checks the qualified identity's two
+  conformance revisions.** It checks the binding digest and both laws. The
+  revisions travel only in the provider's sealed identity, as they did before
+  N3c.
+
+Where the Linux proofs run, and what has run, is below. Windows skips are
+not passes.
+
+- **U1-U4** (`test_operator_store_replace.py`: the real writer's order, mode
+  and group, failed replaces, the directory `fsync` failure through both
+  helpers, and the mount-id comparisons in `_open_bundle`) run in the
+  unprivileged Linux `verify` job, not in the foundation step. At `0ddb247`
+  that job passed with 3,067 tests and no failure. Its log is quiet and names
+  no test, but this file skips only off Linux.
+- **R and N** run in the foundation step "Prove N3c maintenance, refresh and
+  non-widening", with evidence in `n3c-*.json`:
+  - R is `test_operator_store_maintenance_restart.py`: the full cycle read as
+    `m8-service`, `SIGKILL` at each helper's replace, bind-mount aliases, a
+    reader waiting through a cycle, a simulated reboot and a second anchor
+    name.
+  - N is `test_operator_store_persistence.py`: in-place and rename refresh
+    with both checks, cleanup bytes, persistence through the real relay, and
+    the service refused at the bundle write.
+- **The six Linux unit mutants** (9, 10, 11, 15, 24, 27) run only in that
+  step's inventory.
+
+`vendor_conformance_qualified` stays false.
+
+### PR #101 review fixes
+
+Two sources found these: an adversarial review of `0ddb247` (five
+dimensions, every finding reproduced by two independent skeptics) and the
+first Linux CI run on that head. Each premise was reproduced here before it
+was fixed. The fixes were test-first: the three reboot tests failed before the
+re-anchor existed. Still no independent-model review has run on the
+implementation.
+
+**Linux CI at `0ddb247`** (M8 containment run `35903421821`; verify run
+`35903421679`):
+
+- The foundation lane's N3c step passed R1-R5 (seven tests) and N1 and N4.
+- N3 failed at `policy_for`, which reported "an egress destination pins a
+  globally routable address". The step stopped there, so the N3c inventory,
+  and with it the six Linux unit mutants, never ran.
+- Every other proof lane passed. The Linux `verify` job passed with 3,067
+  tests and 325 skips.
+
+| Finding | Class | Disposition |
+| --- | --- | --- |
+| P1: N3 built its policy without N3b's `_routable` seam | introduced by the move | Fixed. N3 requests `controlled_loopback`, as N3b's lane does, and constructs its peers inside the `try`. Driven locally with only the Linux collaborators stubbed, the real body raised the CI error without the seam and reached the launch with it. Everything after that point (relay counters, errnos, argument equality) has still never executed |
+| P2: a reboot stranded the binding, because the boot-bound anchor refused every helper | pre-existing (N3a), surfaced by N3c | Fixed by decision 7 (state review). Maintenance re-anchors the same physical bundle. S covers a reboot permit; nine identity cases (a permit, a same-boot mount change, and each of seven stable fields); and a failed re-anchor whose rerun completes. R6 simulates the reboot in fresh interpreters by substituting the kernel boot id. Mutants 42-50 |
+| P2: the floor was correct only because the inventory sorts numerically, and no input showed it | introduced | Inventories {1, 9, 10} and {1, 3} now run through the real `_descriptor_names`, with the scan order reversed. The double now orders names numerically. Mutants 30 and 31 |
+| P2: mountinfo octal decoding was never exercised | introduced (row 8 took the check into scope) | Escaped space, tab and backslash inputs that bind; the size bound at its limit; malformed lines. Mutants 32-35 |
+| P2: the evidence counts were pre-move | introduced by the move | Relabelled as pre-move above. This head's numbers are below |
+| P3: mutants 20-22 hit the 60 s harness limit | introduced | The 16-case test requests the git-seeded binding only for its bound cases (about 90 s down to 13 s here). The three mutants target single unbound nodes. The limit is unchanged |
+| P3: the bundle-directory `.pending-*` row cited U2, which never creates that state, and was false for the anchor | introduced | Row and procedure corrected. R2 gains a kill point with the rename temporary on disk, which proves it inert. R7 plants a second name for the anchor, which refuses until removed. R2 and R3 now also show that the paused helper holds the real lock: a `wait_s=0` contender refuses and leaves `active.json` unchanged |
+| P3: gates with neither an input nor a mutant | introduced | New inputs: an anchor for another key, or a different bundle in the same boot, under maintenance and activation; a withdrawal record with schema 2, an extra key or a bool floor; activation's generation guard and its sealed-identity guard, both before filesystem entry. Mutants 36-41 |
+| P3: U1-U4's run location; design mutant 26 against the implemented one | introduced | The limits above now say U1-U4 run in the Linux `verify` job. The design's row 26 is marked as two mutants: 26, the key half, and 29, the generation half |
+| Stale line citations in the inventory table | introduced by the move | Refreshed against this head with a script that locates each cited line's text. Row 15's two fixture citations still describe the state before N3c |
+| Disputed: the overage reason keys on `== "forbidden"` | not acted on | The contract field is `Literal["forbidden", "operator_authorized"]` on a frozen, `extra="forbid"` model. No `src/` path builds a profile through `model_copy` or `model_construct`, the only ways to bypass validation. Inverting the test would guard against unvalidated construction, which nothing in `src/` performs |
+
+Evidence at this head, on Windows 11 with Python 3.11:
+
+- Tests by file: S 107, C 28, U 11, R 10, N 3. U, R and N are Linux-only.
+- `scripts/check_m8_n3c_mutations.py`: **44 of 50 killed by assertion.** The
+  six Linux unit mutants were NOT PROVEN, as expected. Of the original 28,
+  22 are killed and 6 are Linux-only.
+- N3a 47/47. N3b 59/60 (mutant 29 is Linux-only and NOT PROVEN). N2 82/82.
+  N2 WRITE 49/49.
+- `uv run verify` passed: clean ruff, strict mypy over 102 source files, four
+  import contracts kept, and 2,881 tests passed with 548 platform skips. After
+  that run only this entry and its manifest line changed. Both were rechecked
+  with `sha256sum --check` and the plan-manifest test.
+
+Still unexecuted until Linux CI reruns: R2's temporary kill point, R6, R7,
+the R2/R3 lock controls, N3 past its policy, and the six Linux unit mutants.
+
+**Self-review of these fixes:**
+
+- The re-anchor follows the durable withdrawal. A crash between the two
+  leaves a withdrawn binding with the old anchor, which the next maintenance
+  repairs (tested).
+- Whether to re-anchor is decided again under the lock.
+- `False` from `_anchor_is_current` is never a default. It requires a
+  changed boot id and seven equal stable fields.
+- Maintenance is still the only helper that may repair the anchor. A
+  provider, a publication or an activation after a reboot refuses.
+
+**One limit added:** a host whose device numbering changes across boots
+(`dev`), or an operator who adds a directory to the bundle (`nlink`), makes
+maintenance refuse after a reboot. That fails closed and needs a new binding.
+
+### Re-anchor attack fixes
+
+A three-lens attack on the re-anchor (`389b0d3`) found no P1 or P2. No
+different bundle could be adopted: fourteen single-field variations all
+refused. It found four reproduced P3s, fixed here test-first:
+
+- **A lock replaced across a reboot was accepted.** Instance history matched
+  old descriptors by instance, which includes the boot id. Both new tests
+  failed before the fix. Decided (option 1, recorded as part of decision 7):
+  publication and `_check_descriptor` match an old descriptor's store by its
+  boot-independent fields, and then require the lock to match on the same
+  fields. The tests run both directions at both sites; mutants 53 and 54. The
+  N3a mutant "historical lock identity cannot be remapped" then went NOT
+  PROVEN, because the new rule also refuses its remap to another object. Its
+  test gains a case the new rule does not look at (same object, other owner),
+  and the mutant is killed again.
+- **The re-anchor-after-withdrawal order was unpinned.** The failed-re-anchor
+  test now asserts that the withdrawal is recorded when the anchor write
+  starts. Mutant 51 swaps the two writes.
+- **The reboot decision under the lock was untested.** A new case makes a
+  genuine reboot pass the pre-lock check and then substitutes the anchor
+  during the wait; maintenance refuses and writes nothing. Mutant 52 drops
+  the under-lock rule.
+- **The crash table lacked the re-anchor points, and M1 still called the
+  pre-lock check exact.** The state review adds M3a and M7a-M7c and a
+  crash-matrix row, and corrects M1. Only an injected failure proves the
+  re-anchor points. Process death inside the re-anchor is unproved: no
+  root-lane kill point sits there.
+
+Evidence, on Windows 11 with Python 3.11:
+
+- S now has 112 tests.
+- `scripts/check_m8_n3c_mutations.py`: 48 of 54 killed by assertion; the six
+  Linux unit mutants NOT PROVEN, as expected.
+- N3a 47/47. The other inventories do not target the changed functions and
+  were not rerun; their results at `389b0d3` are above.
+- `uv run verify` on this code: clean ruff, strict mypy over 102 source
+  files, four import contracts kept, and 2,886 tests passed with 548
+  platform skips. The one failure was the plan-manifest digest check, because
+  these documents had not yet been refreshed. After the refresh, the
+  plan-manifest test and `sha256sum --check` passed. After that only this
+  entry and its manifest line changed, and both were rechecked.
+
 ## N4 preparation: proxy bridge
 
 Credential-free preparation for N4 (#77), on branch `m8/n4-proxy-bridge` off
