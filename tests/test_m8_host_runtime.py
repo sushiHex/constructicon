@@ -991,11 +991,17 @@ def test_staging_modified_after_judgement_is_caught_by_verify(
     target = launch_host.staged() / "runtime" / artifacts.LIBRARY / "os.py"
     unlocked(target)
     target.write_bytes(b"# edited after judgement\n")
+    # Restore the staged modes, which root's cp preserves, so only the content differs.
+    target.chmod(0o444)
+    target.parent.chmod(0o555)
     assert launch_host.install() == 0
     status, record = launch_host.run("verify-launch", capsys)
     assert status == 1 and "runtime is not the reviewed tree" in record["failure"]
     differences = record["observed"][LAUNCH_PATH + "/runtime"]["differences"]
     assert [d["path"] for d in differences] == [f"{artifacts.LIBRARY}/os.py"]
+    (difference,) = differences
+    assert difference["observed"][0] == difference["expected"][0] == 0o444
+    assert difference["observed"][1] != difference["expected"][1]
 
 
 @LINUX
