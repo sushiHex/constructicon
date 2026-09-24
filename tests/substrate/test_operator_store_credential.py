@@ -188,3 +188,60 @@ def test_present_seal_names_are_the_ones_used():
     )
     assert linux.seal_constants(module) == (7, 9, 16 | 32 | 64 | 128)
     assert linux.memfd_flags(SimpleNamespace(MFD_CLOEXEC=4, MFD_ALLOW_SEALING=8)) == 12
+
+
+# --- maintenance-held launches (M8-N4-state-review.md, section 5) ------------
+
+
+def maintain(world):
+    return operator_store.maintain_offline(world.root, world.key, wait_s=0)
+
+
+def test_a_maintenance_check_is_positive_inside_the_context_and_never_a_binding(
+    tmp_path, monkeypatch,
+):
+    world = StoreWorld(tmp_path)
+    world.install(monkeypatch)
+    with maintain(world) as maintenance:
+        check = maintenance.check()
+        assert isinstance(check, operator_store.BindingCheck)
+        assert check.binding_digest != world.sealed.operator_binding_digest
+        assert check == maintenance.check(), "the check is a function of key and floor"
+        os.fstat(maintenance.lock_fd)
+        fd = maintenance.open_credential()
+        assert world.credential_opens == [fd]
+        os.close(fd)
+    with pytest.raises(ContractViolation, match="maintenance is unavailable"):
+        maintenance.check()
+    with pytest.raises(ContractViolation, match="maintenance is unavailable"):
+        maintenance.open_credential()
+
+
+@pytest.mark.parametrize("change", ["activated", "other-floor", "other-key", "substituted"])
+def test_a_maintenance_check_refuses_once_its_selection_or_objects_moved(
+    tmp_path, monkeypatch, change,
+):
+    world = StoreWorld(tmp_path)
+    world.install(monkeypatch)
+    with maintain(world) as maintenance:
+        if change == "activated":
+            world.activate(1)
+        elif change == "other-floor":
+            world.withdraw(maintenance.generation_floor + 1)
+        elif change == "other-key":
+            world.metadata["active.json"] = operator_store.canonical_json({
+                "generation_floor": maintenance.generation_floor, "key": "another-key",
+                "schema_version": 1,
+            }).encode()
+        else:
+            world.store = replace(world.store, ino=world.store.ino + 1)
+        with pytest.raises(ContractViolation):
+            maintenance.check()
+
+
+def test_an_unqualified_credential_refuses_inside_maintenance_too(tmp_path, monkeypatch):
+    world = StoreWorld(tmp_path)
+    world.install(monkeypatch)
+    world.credential = (stat.S_IFREG | 0o644, 1, 1000)
+    with maintain(world) as maintenance, pytest.raises(ContractViolation, match="credential"):
+        maintenance.open_credential()

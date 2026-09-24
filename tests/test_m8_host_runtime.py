@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 from scripts.ci import m8_host_artifacts as artifacts
 
+from constructicon.substrate.executors import linux
 from tests.test_m8_host_artifacts import (
     FAKE_BWRAP,
     KERNEL_LIST,
@@ -194,6 +195,7 @@ def test_the_closure_plan_is_the_ci_rule(tmp_path: Path, monkeypatch: pytest.Mon
         "usr/libexec/constructicon-supervisor.py",
         "usr/libexec/constructicon-egress-bridge.py",
         artifacts.EGRESS_LEAF,
+        artifacts.CATALOG_MOUNT,
     }
     assert {n for n, (kind, _, _) in table.items() if kind == "file"} == files
     assert {n for n, (kind, _, _) in table.items() if kind == "link"} == {"usr/bin/python3"}
@@ -211,6 +213,13 @@ def test_the_closure_plan_is_the_ci_rule(tmp_path: Path, monkeypatch: pytest.Mon
         ("bytes", SUPERVISOR),
     )
     assert table[artifacts.EGRESS_LEAF] == ("file", 0o444, ("bytes", b""))
+    # The vendor tree and catalog are bound, never copied: two empty mount points.
+    assert table[artifacts.VENDOR_MOUNT] == ("directory", 0o555, None)
+    assert table[artifacts.CATALOG_MOUNT] == ("file", 0o444, ("bytes", b""))
+    assert ("/" + artifacts.VENDOR_MOUNT, "/" + artifacts.CATALOG_MOUNT) == (
+        linux.VENDOR_MOUNT, linux.CATALOG_MOUNT,
+    )
+    assert not [name for name in names if name.startswith(artifacts.VENDOR_MOUNT + "/")]
     for name in (artifacts.PYTHON, "usr/lib/x86_64-linux-gnu/libonly.so.1"):
         kind, mode, source = table[name]
         assert kind == "file"

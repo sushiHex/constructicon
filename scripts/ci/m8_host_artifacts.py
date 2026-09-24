@@ -127,6 +127,11 @@ RUNTIME_DIRECTORIES = ("proc", "dev", "tmp", "workspace")
 """No store mount point: the N4 layout binds the credential file into the
 zone's own tmpfs home by descriptor (M8-N4-state-review.md, section 1)."""
 EGRESS_LEAF = "vendor-egress.sock"
+VENDOR_MOUNT = "opt/codex"
+CATALOG_MOUNT = "opt/codex-models.json"
+"""Empty mount points only. The launcher binds the launch set's ``native-codex``
+and ``codex-models.json`` onto them read-only, so neither is copied into (or
+hashed with) the runtime (M8-N4-state-review.md, host-runtime interface item 1)."""
 # Inside the operator's workspace: the pinned vendor inputs, and the staged set.
 TARBALL = "codex.tar.gz"
 CATALOG = "codex-models.json"
@@ -149,11 +154,12 @@ WHEEL_MEMBERS = 4096
 WHEEL_NAME_BYTES = 255
 WHEEL_BYTES = 64 << 20
 LEGACY_MANYLINUX = {"manylinux1": 5, "manylinux2010": 12, "manylinux2014": 17}
-# Every module the proofs import; N4 adds its lane module in the change that lands it.
+# Every module the proofs import, including N4's lane module, which the service runs.
 PROOF_MODULES = (
     "constructicon.api",
     "constructicon.substrate.executors.linux",
     "constructicon.substrate.executors.codex",
+    "constructicon.substrate.executors.codex_lane",
     "pydantic_core._pydantic_core",
 )
 VERDICTS = {
@@ -526,7 +532,8 @@ def runtime_plan(
     otherwise; directories are ``0555``. The vendor is bound, not baked: N4's
     launcher binds the launch root's ``native-codex`` and catalog read-only
     into the zone, so no vendor file belongs here (M8-N4-host-runtime.md,
-    owner decision 4).
+    owner decision 4). The runtime holds only their two empty mount points
+    (VENDOR_MOUNT, CATALOG_MOUNT): a read-only root cannot gain one at launch.
     """
 
     entries: dict[str, Entry] = {".": (".", "directory", 0o555, None)}
@@ -580,6 +587,9 @@ def runtime_plan(
     for name in RUNTIME_DIRECTORIES:
         entries[name] = (name, "directory", 0o555, None)
     entries[EGRESS_LEAF] = (EGRESS_LEAF, "file", 0o444, ("bytes", b""))
+    directories(CATALOG_MOUNT)
+    entries[VENDOR_MOUNT] = (VENDOR_MOUNT, "directory", 0o555, None)
+    entries[CATALOG_MOUNT] = (CATALOG_MOUNT, "file", 0o444, ("bytes", b""))
     entries["usr/bin/python3"] = ("usr/bin/python3", "link", 0o777, "python3.12")
     return sorted(entries.values(), key=lambda entry: PurePosixPath(entry[0]).parts)
 

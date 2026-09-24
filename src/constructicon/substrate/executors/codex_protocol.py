@@ -44,7 +44,9 @@ and the fold below drops every id-bearing record. A server-initiated
 ``docs/plans/handoffs/M8-native-account-interface-preflight.md`` records, with
 pinned source links, that "Login responses and account notifications expose flow
 ids, auth mode, or plan type". So the fold drops the whole ``account/``
-namespace too, and the adapter refuses when one arrives. Bytes that fail to parse
+namespace too, and the adapter refuses every such notification except the one
+plan-checked rate-limit update (:func:`account_notice_faults`). The spend
+readback's reply is id-bearing like the account reading's. Bytes that fail to parse
 cannot be classified at all, so none of them is published: what is published is
 their *count* and a reason drawn from a closed set of literals. The decoder's own
 message is not published, because it names the offending key and a key name is
@@ -294,6 +296,18 @@ def account_read_request(request_id: int) -> dict[str, Any]:
     })
 
 
+def rate_limits_read_request(request_id: int) -> dict[str, Any]:
+    """The spend readback: the pinned request has no params at all.
+
+    ``common.rs:1234-1238`` declares ``params`` as an omitted unit, and the
+    wire test at ``:3014-3030`` serializes exactly ``{"id", "method"}``. It is
+    also the first request that exercises the credential: the handler calls
+    ``AuthManager::auth()``, which may refresh (M8-N4-state-review.md, Inputs 5-6).
+    """
+
+    return _sealed({"id": request_id, "method": RATE_LIMITS_READ})
+
+
 CONTAINED_PYTHON = "contained_python"
 CONTAINED_PYTHON_CATALOG = (CONTAINED_PYTHON,)
 CONTAINED_PYTHON_TOOL: dict[str, Any] = {
@@ -534,13 +548,21 @@ negative inference is gone.
 """
 
 ACCOUNT_NAMESPACE = "account/"
-"""Every account-bearing method, refused as a namespace rather than a list.
+PROVIDER_NAMESPACE = "modelProvider/"
+RATE_LIMITS_UPDATED = "account/rateLimits/updated"
+RATE_LIMITS_READ = "account/rateLimits/read"
+"""The account and provider-authentication notification surface, enumerated.
 
-The enumeration this repository holds is of *requests*: the preflight record
-lists the retained binary's eleven ``account/``-prefixed methods from its
-generated inventory, and the notification surface is separate and unenumerated.
-Naming individual notification methods would therefore be guessing at a list we
-do not have, so the namespace is the unit and the posture is fail closed.
+The pinned generated ``ServerNotification.json`` holds exactly three
+``account/`` notifications (lines 7596-7610, 7616-7630, 8318-8332):
+``account/updated`` (the auth mode and ``planType``) and ``account/login/completed``
+both refuse; ``account/rateLimits/updated`` is emitted on every token-count
+event of a turn (``bespoke_event_handling.rs:1676-1701``) and is admitted only
+by :func:`account_notice_faults`'s plan rule. Every other member of either
+namespace still refuses, so an unknown future method fails closed. The
+``modelProvider/`` pair (``common.rs:1920-1921``) names a provider and a
+recovery message: it is a provider-authentication event, refused rather than
+silently withheld (M8-N4-state-review.md, section 3).
 """
 
 TURN_EVIDENCE_PREFIXES = ("turn/",)
@@ -556,8 +578,8 @@ verbatim).
 ``turn/`` is the one **prefix**, and it is earned rather than assumed: its
 terminal member ``turn/completed`` is attested from the real binary
 (``tests/substrate/test_provider_placement.py``, ``test_native_startup.py``), and
-this module's entire projection — terminal detection, served model, usage, rate
-limits — is defined in terms of that namespace's semantics. A prefix still admits
+this module's turn projection — terminal detection, served model, usage — is
+defined in terms of that namespace's semantics. A prefix still admits
 members never observed, so this is the one place that residual is accepted, and
 it is frame admission inside a namespace that is the invocation's own by
 construction.
@@ -657,14 +679,14 @@ def named_value(value: Any) -> str:
         return repr(value)
     return f"a {type(value).__name__} value"
 
-ACCOUNT_NOTICE_FAULT = "the session reported {method} during the turn"
-"""Neutral by construction. ADR 0021 refuses on "an observed mode change" and
+ACCOUNT_NOTICE_FAULT = "the session reported {method}"
+"""Neutral by construction, and it names no turn: the startup phase has none.
+ADR 0021 refuses on "an observed mode change" and
 requires qualification that refresh "cannot silently select API/cloud
 authentication mid-turn"; a mode-change notification lands in exactly the window
-the two readings bracket but cannot cover. Because the namespace is refused
-wholesale, a record that is not ``account/updated`` need not be a mode change,
-so the text claims none — the method name supplies the specificity. Nothing from
-``params`` may appear here: ``ExecutorError.detail`` is public.
+the two readings bracket but cannot cover. A refused record need not be a mode
+change, so the text claims none — the method name supplies the specificity.
+Nothing from ``params`` may appear here: ``ExecutorError.detail`` is public.
 """
 
 
@@ -676,21 +698,123 @@ class ExpectedAccount:
     The plan is required: the pinned plan type is an untagged union with a known
     ``free`` member, so an accept-any default would admit a free ChatGPT plan as
     a vendor-managed subscription and a later lapse to free would go unnoticed.
+
+    ``alternatives`` exists for qualification alone. The pinned ``PlanType``
+    has both ``pro`` and ``prolite`` and nothing proves which one a subscription
+    reports, so the first authenticated reading may accept a declared set; the
+    literal it observes becomes the sole ``plan_type`` of every later run
+    (M8-N4-state-review.md, orchestrator decision 1). Production assembly
+    passes none.
     """
 
     plan_type: str
     account_type: Literal["chatgpt"] = "chatgpt"
+    alternatives: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.plan_type.strip():
             raise ValueError("an expected account requires the plan recorded at provisioning")
+        if type(self.alternatives) is not tuple or not all(
+            type(item) is str and item.strip() for item in self.alternatives
+        ):
+            raise ValueError("expected plan alternatives are non-empty literals")
+
+    def accepts(self, plan: Any) -> bool:
+        return type(plan) is str and (plan == self.plan_type or plan in self.alternatives)
 
 
-def is_account_record(record: Mapping[str, Any]) -> bool:
-    """Whether one parsed record belongs to the account namespace."""
+def account_notice_faults(record: Mapping[str, Any], expected: ExpectedAccount) -> tuple[str, ...]:
+    """Why one id-less record ends the phase, or ``()`` when it may pass.
+
+    Only ``account/rateLimits/updated`` passes, and only with exactly the pinned
+    ``{rateLimits}`` params whose ``planType`` is absent, null or accepted: the
+    snapshot is documented as sparse ("Nullable account metadata ... does not
+    clear a previously observed value", ``v2/account.rs:553-557``), while a
+    present different plan is a plan change inside the window the readings
+    bracket. Its spend facts are judged too, because the pinned client builds
+    it from the model call's own response headers (``rate_limits.rs:218``):
+    it is the one in-band spend record inside that window. A present credits
+    object must meet the readback's zero rule, and ``spendControlReached``
+    must not be true. Absent or null values stay admissible, as the sparse
+    update requires.
+    """
 
     method = record.get("method")
-    return isinstance(method, str) and method.startswith(ACCOUNT_NAMESPACE)
+    if not isinstance(method, str):
+        return ()
+    refused = (ACCOUNT_NOTICE_FAULT.format(method=named_method(method)),)
+    if method == RATE_LIMITS_UPDATED:
+        params = record.get("params")
+        snapshot = params.get("rateLimits") if isinstance(params, Mapping) else None
+        if (
+            isinstance(params, Mapping) and set(params) == {"rateLimits"}
+            and isinstance(snapshot, Mapping)
+            and (snapshot.get(PLAN_TYPE_KEY) is None or expected.accepts(snapshot[PLAN_TYPE_KEY]))
+            and _no_spend(snapshot)
+        ):
+            return ()
+        return refused
+    if method.startswith((ACCOUNT_NAMESPACE, PROVIDER_NAMESPACE)):
+        return refused
+    return ()
+
+
+def account_request_faults(record: Mapping[str, Any]) -> tuple[str, ...]:
+    """An id-bearing record in either refused namespace refuses; nothing admits one.
+
+    The allowlist's one admitted method is a notification. The pinned
+    ``account/chatgptAuthTokens/refresh`` is a server *request* with an id, and
+    an ``account/updated`` may arrive with ``"id": null``; both are account
+    events, so neither may pass as ordinary damage.
+    """
+
+    method = record.get("method")
+    if isinstance(method, str) and method.startswith((ACCOUNT_NAMESPACE, PROVIDER_NAMESPACE)):
+        return (ACCOUNT_NOTICE_FAULT.format(method=named_method(method)),)
+    return ()
+
+
+def _no_spend(snapshot: Mapping[str, Any]) -> bool:
+    """A sparse snapshot's spend facts: absent or null, or proven zero."""
+
+    credits = snapshot.get("credits")
+    if credits is not None and not (
+        isinstance(credits, Mapping)
+        and credits.get("hasCredits") is False and credits.get("unlimited") is False
+        and _balance_zero(credits.get("balance")) is not False
+    ):
+        return False
+    return snapshot.get("spendControlReached") is not True
+
+
+SETTINGS_UPDATED = "thread/settings/updated"
+
+
+def settings_notice_faults(
+    record: Mapping[str, Any], *, model: str, provider: str,
+) -> tuple[str, ...]:
+    """A settings update must name the sealed model and provider, or it refuses.
+
+    The pinned ``thread/settings/updated`` (experimental, ``common.rs:1865``)
+    carries ``threadSettings.model`` and ``.modelProvider`` (``v2/thread.rs``).
+    It is outside both refused namespaces, yet a different provider in it is a
+    provider change inside the window the readings bracket, exactly the event
+    the ``modelProvider/`` refusal exists for. So it is judged, not withheld: a
+    missing, non-string or different value refuses. Only the method is named.
+    """
+
+    if record.get("method") != SETTINGS_UPDATED:
+        return ()
+    params = record.get("params")
+    values = params.get("threadSettings") if isinstance(params, Mapping) else None
+    if (
+        isinstance(values, Mapping)
+        and values.get("model") == model and type(values.get("model")) is str
+        and values.get("modelProvider") == provider
+        and type(values.get("modelProvider")) is str
+    ):
+        return ()
+    return (ACCOUNT_NOTICE_FAULT.format(method=named_method(SETTINGS_UPDATED)),)
 
 
 def _result_object(reply: Any) -> Mapping[str, Any] | None:
@@ -734,12 +858,23 @@ def account_faults(reply: Any, expected: ExpectedAccount) -> tuple[str, ...]:
         # and surfaces absence as an error the first fault catches. Kept
         # fail-closed for a scripted or future reply that omits it.
         faults.append(NO_PLAN_FAULT)
-    if plan is not None and plan != expected.plan_type:
+    if plan is not None and not expected.accepts(plan):
         faults.append(
             f"account plan {named_value(plan)} is not the expected "
             f"{expected.plan_type!r}"
         )
     return tuple(faults)
+
+
+def account_plan(reply: Any) -> str | None:
+    """The plan literal of a reading, only when it is a string.
+
+    Called after :func:`account_faults` cleared, so the value is one the
+    binding's expected account accepts: an operator-declared literal.
+    """
+
+    plan = _reading(reply)[1]
+    return plan if isinstance(plan, str) else None
 
 
 def _reading(reply: Any) -> tuple[Any, Any, Any]:
@@ -769,6 +904,143 @@ def account_change_faults(before: Any, after: Any) -> tuple[str, ...]:
         for name, old, new in zip(names, _reading(before), _reading(after), strict=True)
         if old != new
     )
+
+
+# --- the spend readback ------------------------------------------------------
+
+CODEX_LIMIT_ID = "codex"
+BALANCE_CHARS = 32
+SPEND_UNREADABLE_FAULT = (
+    "the rate-limit readback is an error or carries no Codex bucket, so spend is unknown"
+)
+CREDITS_FAULT = "the rate-limit readback does not show zero purchased credits"
+SPEND_FIELDS = (
+    "has_credits", "unlimited", "balance_zero", "spend_control_reached", "rate_limit_reached",
+)
+USAGE_FIELDS = ("primary_used_percent", "secondary_used_percent")
+
+
+@dataclass(frozen=True)
+class SpendReading:
+    """One Codex bucket's spend state: flags and bounded numbers only.
+
+    ``plan`` is the wire value, compared and never published. Nothing else of
+    the reply is read: ``accountId``, ``rateLimitUpsell``, reset credits, other
+    buckets, ``limitName`` and ``individualLimit`` never leave the reply.
+    """
+
+    plan: Any
+    has_credits: bool | None
+    unlimited: bool | None
+    balance_zero: bool | None
+    spend_control_reached: bool | None
+    rate_limit_reached: bool | None
+    primary_used_percent: int | None
+    secondary_used_percent: int | None
+
+
+def _flag(value: Any) -> bool | None:
+    return value if type(value) is bool else None
+
+
+def _percent(window: Any) -> int | None:
+    value = window.get("usedPercent") if isinstance(window, Mapping) else None
+    return value if type(value) is int and _number(value) else None
+
+
+def _balance_zero(balance: Any) -> bool | None:
+    """``True`` only for a short decimal string equal to zero; absent is ``None``."""
+
+    if balance is None:
+        return None
+    if not isinstance(balance, str) or len(balance) > BALANCE_CHARS:
+        return False
+    whole, dot, fraction = balance.removeprefix("-").partition(".")
+    digits = whole + fraction
+    if not (whole and digits.isascii() and digits.isdigit()) or (dot and not fraction):
+        return False
+    return set(digits) == {"0"}
+
+
+def spend_reading(reply: Any) -> SpendReading | None:
+    """The bucket whose own ``limitId`` is ``codex``, or ``None``: never a fallback.
+
+    The pinned headline ``rateLimits`` is the ``codex`` snapshot only when one
+    exists, and otherwise the first bucket returned; ``rateLimitsByLimitId``
+    also keys an id-less snapshot as ``codex``
+    (``account_processor.rs:1164-1181``). So only a map entry naming itself
+    ``codex`` identifies the Codex bucket affirmatively.
+    """
+
+    result = _result_object(reply)
+    buckets = result.get("rateLimitsByLimitId") if result is not None else None
+    bucket = buckets.get(CODEX_LIMIT_ID) if isinstance(buckets, Mapping) else None
+    if not isinstance(bucket, Mapping) or bucket.get("limitId") != CODEX_LIMIT_ID:
+        return None
+    credits = bucket.get("credits")
+    credit = credits if isinstance(credits, Mapping) else {}
+    reached = bucket.get("rateLimitReachedType", ...)
+    return SpendReading(
+        plan=bucket.get(PLAN_TYPE_KEY),
+        has_credits=_flag(credit.get("hasCredits")),
+        unlimited=_flag(credit.get("unlimited")),
+        balance_zero=_balance_zero(credit.get("balance")),
+        spend_control_reached=_flag(bucket.get("spendControlReached")),
+        rate_limit_reached=None if reached is ... else reached is not None,
+        primary_used_percent=_percent(bucket.get("primary")),
+        secondary_used_percent=_percent(bucket.get("secondary")),
+    )
+
+
+def spend_faults(reading: SpendReading | None, expected: ExpectedAccount) -> tuple[str, ...]:
+    """The owner's N5 bound, as code: no purchased credits, the expected plan.
+
+    Absent credits are unknown, never zero, and refuse. A different owner bound
+    is a new ``PROTOCOL_REVISION``, never a parameter (M8-N4-state-review.md,
+    section 2).
+    """
+
+    if reading is None:
+        return (SPEND_UNREADABLE_FAULT,)
+    faults: list[str] = []
+    if reading.plan is not None and not expected.accepts(reading.plan):
+        faults.append(
+            f"readback plan {named_value(reading.plan)} is not the expected "
+            f"{expected.plan_type!r}"
+        )
+    if not (
+        reading.has_credits is False and reading.unlimited is False
+        and reading.balance_zero is not False
+    ):
+        faults.append(CREDITS_FAULT)
+    return tuple(faults)
+
+
+def spend_change_faults(before: SpendReading | None, after: SpendReading | None) -> tuple[str, ...]:
+    """Overage state must equal its pre-turn baseline; usage is expected to move."""
+
+    if before is None or after is None:
+        return ()  # the per-reading fault already refused
+    return tuple(
+        f"readback {name.replace('_', ' ')} changed across the turn"
+        for name in SPEND_FIELDS
+        if getattr(before, name) != getattr(after, name)
+    )
+
+
+def rate_limit_of(before: SpendReading | None, after: SpendReading | None) -> RateLimitInfo | None:
+    """The published readbacks: a fixed vocabulary of flags and bounded numbers.
+
+    ``is_using_overage`` stays ``None``: the pin emits no such fact (I4).
+    """
+
+    detail = {
+        f"{phase}.{name}": value
+        for phase, reading in (("before", before), ("after", after)) if reading is not None
+        for name in (*SPEND_FIELDS, *USAGE_FIELDS)
+        if (value := getattr(reading, name)) is not None
+    }
+    return RateLimitInfo(is_using_overage=None, detail=detail) if detail else None
 
 
 # --- observing one turn ------------------------------------------------------
@@ -849,15 +1121,12 @@ def _usage(value: Any) -> Usage | None:
     return Usage(**numbers) if numbers else None
 
 
-RATE_LIMIT_KEYS = 16
-RATE_LIMIT_KEY_LENGTH = 48
 NUMBER_CHARS = 32
 """How long a wire number's own text may be.
 
-Bounding the key count and the key-name length left the *magnitude* unbounded:
-``json.loads`` accepts integers up to 4,300 digits, so sixteen admitted keys
-serialized to 68,918 characters — past the transcript bound this module already
-declares. A number is only a fact if it is a number-sized fact."""
+``json.loads`` accepts integers up to 4,300 digits, and a bounded key count left
+that magnitude unbounded: sixteen admitted keys once serialized to 68,918
+characters. A number is only a fact if it is a number-sized fact."""
 
 DETAIL_CHARS = 4096
 """``ExecutorError.detail`` joins itemized faults, so several may accumulate."""
@@ -911,37 +1180,6 @@ def _bounded_transcript(kept: Sequence[str], unclassified: int) -> str:
     return "\n".join(transcript)
 
 
-def _rate_limit(value: Any) -> RateLimitInfo | None:
-    """Surface emitted rate-limit facts, constrained by value shape at use.
-
-    ADR 0021 asks to surface emitted rate-limit and overage facts, not to copy a
-    vendor object into a public field. We hold no schema for this payload, so the
-    constraint is the value's own shape: a key is carried only when its value is
-    a number or a flag. Rate-limit facts are numbers and flags; identity facts
-    are strings and objects, so an email, an account id and a plan name are
-    excluded mechanically rather than by vocabulary. Key names are wire-
-    controlled too, so both the count and the name length are bounded.
-
-    The cost, stated: a genuinely string-valued rate-limit fact is dropped. For
-    a public field that is the right direction, and this is the accepting path —
-    a refusal publishes no ``rate_limit`` at all.
-    """
-
-    if not isinstance(value, Mapping):
-        return None  # I4: an unemitted fact stays absent, never inferred.
-    overage = value.get("usingOverage")
-    detail = {
-        key: item
-        for key, item in sorted(value.items())[:RATE_LIMIT_KEYS]
-        if isinstance(key, str) and len(key) <= RATE_LIMIT_KEY_LENGTH
-        and _number(item)
-    }
-    return RateLimitInfo(
-        is_using_overage=overage if type(overage) is bool else None,
-        detail=detail or None,
-    )
-
-
 def observe_turn(
     records: Sequence[bytes], *, thread_id: str | None, turn_id: str | None,
     transport_damage: str | None = None, excluded: int = 0,
@@ -978,7 +1216,6 @@ def observe_turn(
     output: Any = None
     served_model: str | None = None
     usage: Usage | None = None
-    rate_limit: RateLimitInfo | None = None
     terminal = False
     malformed = 0
     # Records the *caller* excluded before the turn was named. They are
@@ -1027,9 +1264,11 @@ def observe_turn(
             model = turn.get("model")
             served_model = model if isinstance(model, str) else None
             usage = _usage(turn.get("usage"))
-            rate_limit = _rate_limit(turn.get("rateLimits"))
     return TurnObservation(
-        output=output, served_model=served_model, usage=usage, rate_limit=rate_limit,
+        output=output, served_model=served_model, usage=usage,
+        # The pinned Turn carries no rate limits (thread_data.rs:366); the
+        # conversation adds its readbacks, the only spend source (N4 section 2).
+        rate_limit=None,
         terminal=terminal, malformed_records=malformed, first_error=first_error,
         raw=_bounded_transcript(kept, unclassified),
     )

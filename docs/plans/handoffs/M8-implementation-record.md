@@ -2606,3 +2606,341 @@ The fix:
   the four it applied, so a wrong constant fails loudly.
 - Portable tests cover both selections, as mutants L20-L23. The read-back
   check itself has no mutant: only a wrong constant on Linux reaches it.
+
+## N4: the authenticated-startup lane
+
+This is the credential-free half of N4 (#77), on `m8/n4-startup`, stacked on
+the layout slice above. The design is
+[M8-N4-state-review.md](M8-N4-state-review.md). It was reviewed once by Codex
+(`job_874f14f36992`) and amended, and the orchestrator's decisions are
+recorded at its end. **The implementation has had no independent-model
+review.** No login, credential, vendor contact or model request has happened,
+and `vendor_conformance_qualified` stays false.
+
+What changed in `src/`:
+
+- `codex_protocol.py`:
+  - `rate_limits_read_request`, which is exactly `{"id", "method"}`.
+  - `spend_reading`. It judges only `rateLimitsByLimitId["codex"]`, and only
+    when that entry's own `limitId` is `"codex"`; the headline and every
+    other bucket are never read.
+  - `spend_faults`, the owner's N5 bound written as code. Credits must be
+    present with `hasCredits` false, `unlimited` false, and the balance absent
+    or a zero decimal. An absent credits object refuses. The readback plan is
+    compared.
+  - `spend_change_faults`: the five overage fields must not move across the
+    turn.
+  - `rate_limit_of`, a fixed vocabulary of `before.*` and `after.*` flags and
+    bounded numbers. `is_using_overage` is always `None`.
+  - `account_notice_faults` replaces the blanket namespace refusal. Only
+    `account/rateLimits/updated` with exactly `{rateLimits}` params and a
+    plan that is absent, null or accepted passes. Every other `account/` and
+    every `modelProvider/` notification refuses.
+  - `ExpectedAccount.alternatives`, for qualification only (decision 1).
+  - The dead projection from `turn.rateLimits` is removed. The pinned `Turn`
+    has no such field.
+- `codex.py`: `CodexConversation` sends the readback after the pre-turn gate
+  (refusing before `thread/start`) and after the pre-acceptance gate (the
+  change rule).
+  - `startup_only=True` ends the phase after the first readback, with four
+    methods. Only the lane sets it: the handle never does.
+  - The conversation records `before_spend`, `after_spend` and
+    `observed_plan`. The plan is recorded only once it has been accepted.
+  - The observation's `rate_limit` is `rate_limit_of(before, after)`.
+- `egress.py`: a separate `EgressRelay.destinations` counter holds
+  `accepted:<host>:<port>` and `relayed:<host>:<port>`. It is named from the
+  sealed policy only. Denials stay counted by reason in `observed`, so every
+  existing assertion is unchanged.
+- `operator_store.py`: `StoreMaintenance` carries its `lock_fd`, `check()`
+  (this key's withdrawal, this floor and the same objects, under a digest
+  domain no provider uses) and `open_credential()`.
+- New `codex_lane.py`, an offline operator helper:
+  - `run_login` (the device login's stdout goes only to the operator) and
+    `run_startup`;
+  - custody from maintenance or from the active selection;
+  - closed evidence, written create-exclusive with `completed` last. Its
+    digest is the conformance revision (decision 5);
+  - `main` for the host.
+
+### Local evidence (Windows 11, Python 3.11)
+
+- New tests:
+  - `test_codex_spend.py`: the bound in both directions, the bucket rules,
+    the change rule, publication and the notice allowlist;
+  - `test_codex_startup.py`: the four-method phase, aborts, the handle never
+    running startup, pre- and post-turn readbacks, WRITE never offering
+    tools, provider recovery, and the qualification plan set;
+  - `test_codex_lane.py`: the login output never reaching evidence,
+    denials, a fresh lane directory, measured versus unmeasured refresh,
+    evidence ordering and exclusivity, and both custody kinds;
+  - `test_egress.py`: per-destination counting, and a planted 190-character
+    hostname never becoming a key;
+  - `test_operator_store_credential.py`: the maintenance check and the
+    maintenance credential.
+- Changed tests:
+  - `SIX` becomes `EIGHT`;
+  - the scripted peer answers readbacks, and its last-reply hooks move to the
+    final readback;
+  - `FORGED_GOOD_ACCOUNT` now takes id 6;
+  - the recorded forward cost is flipped (a plan-free rate-limit update now
+    passes; a plan change refuses);
+  - the turn-rate-limit tests become "a turn record is never a rate-limit
+    source".
+- Inventories, each killed by assertion:
+  - `check_m8_n2_mutations.py`: **103/103**, of which 21 are new N4
+    mutants. Three stale anchors were retargeted: the plan fault, the
+    account refusal and the rate-limit vocabulary. (Corrected 2026-09-24,
+    review F2: the first version of this line said 104/104.)
+  - `check_m8_n4_bridge_mutations.py`: 30 in total, 20 existing and 10 new
+    (lane and relay). 23 were killed; the same 7 are Linux-only NOT PROVEN as
+    before. (Corrected, review F2: the first version gave 23 as the total.)
+  - `check_m8_n3c_mutations.py`: 58 in total on the rebased base, of which 4
+    are new (the maintenance check). 52 were killed; the same 6 are
+    Linux-only. (Corrected: the first version gave 52 without saying it was
+    the killed count.)
+  - Unchanged: N3a 65 (2 Linux-only), N3b 59/60, N2 WRITE 49/49.
+- The first N2 run surfaced four NOT PROVEN mutants, and each was corrected:
+  - one replacement raised `NameError`, and the test now also asserts that no
+    `None` value is published;
+  - one test died on a `KeyError`, not an assertion;
+  - two mutants were equivalent to the code (an extra guard, and a plan that
+    tests always accepted), and were rewritten to remove the request and to
+    record the plan before the gate.
+
+  One bridge mutant (5) was NOT PROVEN only while two inventories ran
+  concurrently. Rerun alone, it was killed.
+- `PYTHONIOENCODING=utf-8 uv run --python 3.11 verify` on this code:
+  - clean ruff;
+  - strict mypy over 104 source files;
+  - four import contracts kept;
+  - 3,051 tests passed and 560 skipped for platform.
+
+  The one failure was `test_docs_validation_accepts_the_actual_repository`,
+  because these documents were edited during the run. After their manifest
+  lines were refreshed, that test and `sha256sum --check` passed.
+
+### Linux proofs added, not yet executed
+
+These go in `test_native_egress_bridge.py`, which runs in the foundation
+lane's bridge step with the pinned binary and the store fixture, so no
+workflow change is needed. **Neither has executed.**
+
+- **L2:** the pinned `app-server` with the production-shaped sealed
+  configuration and no login (the fixture's `auth.json` is set to `{}` for
+  the test, then restored).
+  - It must send three methods and refuse with exactly the fault set an
+    `account/read` error reply produces: no result object, so the gate never
+    completes, the fourth method is never sent and no readback is judged. It
+    must show a relay with no destinations, no denials and no CONNECT heads.
+  - Same-step control: the same configuration with plugins on must produce a
+    counted destination denial and a recorded head.
+- **L3:** the pinned `codex login --device-auth` against a policy that names
+  only a decoy.
+  - It must `CONNECT auth.openai.com:443`, be denied, and exit non-zero.
+  - Nothing printed reaches the evidence.
+  - `auth.json` stays a bound `0600` file: the pre-login logout's `unlink`
+    meets `EBUSY`.
+- The bridge step's key-material test now expects the two new files,
+  `n4-lane-startup.json` and `n4-lane-login.json`.
+
+### Deviations from the design
+
+- **`--hold` pauses after the exchange, while custody still holds the lock.**
+  The design paused before stdin closes. For control S6a the lock is what
+  matters, and custody holds it either way.
+- **The `refused-destinations` subcommand was dropped.** Decision 2 left
+  nothing for it to do.
+- **Per-destination counts live in their own counter.** They are not keys of
+  `observed`, which keeps every existing reason assertion intact.
+- **`active_custody` is an asynchronous context manager.** It is used from
+  the lane's async tests and from `main`'s single event loop.
+- **The readback is taken in every task turn,** so every existing turn test
+  now sends eight methods.
+- **The evidence schema differs from the first draft's block** (review F1).
+  The block in the state review is now the emitted schema, and a test pins
+  the two together. The changes and their reasons are listed there.
+
+### Limits carried
+
+The state review's limits apply unchanged. In particular:
+- no live readback, login or refresh has been observed;
+- qualification before activation stays operator-asserted;
+- mid-turn spend fields are judged only through the post-turn readback;
+- `modelProvider/` recovery during an N5 turn now discards that turn, which
+  is the new forward cost.
+
+### Inherited-lock custody (orchestrator decision, 2026-09-24)
+
+Host-runtime decision 1 runs the N3c helpers as root. The service is refused
+at the withdrawal write, and the launcher refuses root. So the lane's own
+`maintain_offline` call could not work on the host. The decided design and
+its reasons are in the state review ("Host-runtime interface required",
+item 4). What changed:
+
+- `operator_store.py`:
+  - `run_under_maintenance` and `main` (`maintain ... -- LANE-COMMAND`) are
+    root's side, inside the maintenance helper.
+    - The lane starts as the service by `subprocess`'s own
+      `user`/`group`/`extra_groups=[]`, not `setpriv`.
+    - Its environment is fixed, it inherits only the lock, the helper sets
+      the custody options itself, and the helper waits for the lane before
+      leaving maintenance.
+  - `inherit_maintenance` is the lane's side. It proves custody before
+    anything is exposed:
+    - the lock identity;
+    - that the description holds the lock, taken by the parent
+      (`/proc/self/fdinfo`);
+    - the anchor, the withdrawal, and a floor that matches the record, the
+      inventory and the helper.
+- `codex_lane.py`:
+  - `--custody maintenance` now takes `--lock-fd` and `--floor`, and uses
+    `inherit_maintenance` with `parent=os.getppid()`;
+  - without those options it refuses to start;
+  - `--wait` moved to the helper;
+  - `allow_abbrev=False`.
+- Runbook S2 to S4 are amended in the state review:
+  - the empty `auth.json` is created with the store owner's ownership before
+    any activation;
+  - login and qualification are separate helper runs.
+
+Local evidence (Windows 11, Python 3.11):
+
+- New `test_operator_store_inheritance.py`: 37 portable tests, plus one
+  Linux unit test of the real kernel report with a real inherited
+  description in a child.
+- The lane tests cover the new options.
+- Root lane: a new test in `test_operator_store_maintenance_restart.py` (the
+  N3c root step, so no workflow change), with evidence
+  `n4-inherited-maintenance.json`. **It has not executed.**
+- `check_m8_n3c_mutations.py` has 81 mutants: 23 new (N4-M5..M27) and 75
+  killed. The same 6 are Linux-only NOT PROVEN. (Corrected: the first
+  version said 75 and 69, counting from the wrong base.)
+- `check_m8_n4_bridge_mutations.py` has 32 mutants: 2 new (N4-L11, L12), 25
+  killed. (Corrected: the first version gave 25 as the total.)
+  - Mutant 5 (a failed leaf dial authors no reply) was NOT PROVEN once, when
+    it ran directly after the N3c inventory. Rerun alone, it was killed. That
+    is the timing sensitivity recorded above; the bridge code is unchanged
+    here.
+  - The same 7 are Linux-only.
+- `PYTHONIOENCODING=utf-8 uv run verify` passed: 3,168 tests passed and 624
+  were skipped for platform.
+
+### Lane review fixes and the bound vendor tree (2026-09-24)
+
+A five-lens review of the lane (at the pre-rebase `ef145d7`) confirmed 19
+findings, each by two independent skeptics, and refuted none. Every premise was
+reproduced here before its fix. The protocol and conversation findings were
+reproduced by new tests failing against the unfixed code. The lane findings
+were reproduced by a probe run against a temporary worktree at `6c97d7d`:
+- a login ran under active custody with no fault;
+- a startup whose launcher never conversed wrote `faults: []`;
+- `credential.checked` was the literal `True`, and no executable was recorded;
+- an fsync failure left a complete file at the final name;
+- an existing evidence path was found only after the lane ran, at a 120 s
+  login deadline.
+
+The design and the reasons are in the state review: sections 3 and 5, the
+evidence schema, runbook S2 to S4, and interface item 1. What changed:
+
+- `codex_protocol.py`:
+  - the notice fault names no turn (NOTICE-5);
+  - `account/rateLimits/updated` is judged for spend: credits must meet the
+    zero rule and `spendControlReached` must not be true (SPEND-3);
+  - `account_request_faults` refuses id-bearing `account/` and
+    `modelProvider/` records (NOTICE-2);
+  - `settings_notice_faults` requires `thread/settings/updated` to name the
+    sealed model and provider (NOTICE-4, adopted although disputed).
+- `codex.py`:
+  - the drain to EOF judges id-less records (NOTICE-1, RL-5);
+  - `_judge_identified` applies the account-request rule at every site, and
+    in the startup phase refuses any other unowned request;
+  - one plan literal per run (SPEND-2, NOTICE-3);
+  - `pause` for the startup hold (RL-3);
+  - `provider` and `configured_provider`, which the handle passes.
+- `codex_lane.py`:
+  - login is maintenance-only, in `run_login` and in `main` (CC-1);
+  - an affirmative pass, where every missing fact is a named fault (SPEND-1,
+    RL-1);
+  - credential facts are measured after the run, and a terminal custody check
+    runs (CC-2, RL-4);
+  - the executable's path and SHA-256 are recorded, and `--binary` is gone
+    (CC-3);
+  - `EvidenceFile` reserves the evidence path first and publishes by a
+    no-replace link (RL-2, RL-6);
+  - the hold runs inside the exchange (RL-3);
+  - the login deadline is 960 s (RL-7);
+  - `--first-login` covers S2 (CC-4);
+  - the closed schema is `LOGIN_FIELDS` and `STARTUP_FIELDS` (F1).
+- `operator_store.py`: `StoreMaintenance.create_credential`
+  (create-exclusive, `0600`) and `credential_facts`.
+- **The bound vendor tree (orchestrator decision).**
+  - `linux.py` gains `NativeVendor`: the launch set's `native-codex` and
+    `codex-models.json`, bound read-only at `/opt/codex` and
+    `/opt/codex-models.json` on native launches only.
+  - A launch checks their custody in `check_artifacts`, never their content.
+  - The launch revision names both paths.
+  - `runtime_plan` gains only the two empty mount points.
+  - `codex_lane._launcher` binds them.
+- Linux proofs, not yet executed:
+  - L2 and L3 now run the client from the bound tree and read the bound
+    catalog;
+  - L3 runs under a test-only maintenance relabelling (CC-1);
+  - L2's relay record includes `closed`.
+- F2: the earlier inventory counts are corrected above.
+
+Local evidence (Windows 11, Python 3.11):
+- Inventories, each killed by assertion unless stated:
+  - `check_m8_n2_mutations.py`: **118/118**, of which 15 are new (N4-22 to
+    N4-36).
+  - `check_m8_n3c_mutations.py`: 84, of which 3 are new (N4-M28 to M30); 78
+    killed, the same 6 Linux-only.
+  - `check_m8_n4_bridge_mutations.py`: 75, of which 43 are new:
+    - N4-L13 to L41 (the lane findings);
+    - N4-V1 to V14 (vendor custody, bind and revision).
+
+    68 killed, the same 7 Linux-only. Mutant 5 was NOT PROVEN once, again
+    after the N3c inventory, and was killed alone.
+  - N2 WRITE, N3a (1 Linux-only) and N3b (1 Linux-only) are unchanged.
+  - `check_m8_host_artifact_mutations.py`: 41 killed. Each NOT PROVEN is a
+    host check that needs Linux (root, ownership, ancestors, the staged
+    trees). The runtime plan's two new mount points add no mutant; the
+    host-runtime test pins them.
+- `test_the_design_documents_the_emitted_schema` pins the state review's
+  schema block to the code.
+- `PYTHONIOENCODING=utf-8 uv run verify` passed before the rebase: 3,284
+  tests passed and 625 were skipped for platform.
+
+**After the rebase onto `88c033d` (#107, the controller environment).**
+- `PROOF_MODULES` gains `constructicon.substrate.executors.codex_lane`.
+  R19's module list in `M8-N4-host-runtime.md` is updated to match, and a
+  test holds the two equal. So the verify lane's import proof and the host
+  check load exactly the module N4 runs, under `python3 -I -S -B` from the
+  flat tree.
+- A portable test runs the lane's entry point as `-I -S -B -c`, with only
+  explicit `sys.path` entries. That rules out any reliance on site
+  processing, `.pth` files or a writable cache.
+- One conflict, in `runtime_plan`'s docstring: #107 already records the
+  bound-not-baked decision. The resolution keeps its words and adds the two
+  mount points, because a read-only root cannot gain one at launch.
+- `PYTHONIOENCODING=utf-8 uv run verify` on the rebased head: 3,353 tests
+  passed and 648 were skipped for platform.
+
+**Bridge mutant 5 made deterministic (2026-09-24).** It had passed or failed
+depending on what ran before it, which is flakiness, not evidence.
+- **The shared cause was timing, not leftover state.** The killing test sent
+  the vendor's `CONNECT` and then read. When the forwarder thread finished
+  first, the `CONNECT` reached a closed socket. Its RST discarded the
+  client's receive buffer, so the mutant's authored `502` read as `b""` with
+  EOF. The mutant survived whenever the thread won the race.
+- **Reproduced on Windows with a scratch test:** the same mutant body loses
+  its reply to exactly that order, and keeps it when the client is already
+  reading.
+- **The fix.** The forwarder dials before it reads, so a refused dial never
+  depends on the client's bytes. The test therefore joins the forwarder
+  before the client does anything, and the client writes nothing. The close
+  is a plain FIN, and an authored byte is always read.
+- **Measured afterwards:**
+  - mutant 5 killed 15 of 15 times alone;
+  - mutant 6 killed 5 of 5 times;
+  - both killed in a run of the full bridge inventory directly after the
+    N3c inventory, the order that had failed.

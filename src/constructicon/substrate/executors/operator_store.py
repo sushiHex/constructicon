@@ -5,11 +5,16 @@ maintenance API, or public identity surface.  It reads an operator-provisioned
 static bundle and holds its retained lock.  The Codex provider owns
 lease/materialization and uses the positive :class:`BindingCheck` returned here
 at its two boundaries.  Three synchronous offline helpers are the only writers:
-publication, maintenance (a durable withdrawal) and activation.
+publication, maintenance (a durable withdrawal) and activation.  Maintenance
+may run one service-user lane that inherits only its lock
+(:func:`run_under_maintenance`); the lane proves that custody with
+:func:`inherit_maintenance`. The lane's one write is a first login's empty
+credential file (:meth:`StoreMaintenance.create_credential`).
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import ctypes
 import inspect
@@ -18,9 +23,10 @@ import os
 import re
 import secrets
 import stat
+import subprocess
 import sys
 import time
-from collections.abc import Awaitable, Callable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +43,15 @@ MAX_METADATA_BYTES = 64 * 1024
 MAX_HANDLE_BYTES = 128
 MAX_DESCRIPTOR_COUNT = 1024
 MAX_MOUNTINFO_BYTES = 1024 * 1024
+MAX_FDINFO_BYTES = 64 * 1024
+_FLOCK_LINE = re.compile(
+    rb"lock:\t[0-9]+: FLOCK  ADVISORY  WRITE ([0-9]+) [0-9a-f]+:[0-9a-f]+:([0-9]+) 0 EOF"
+)
+"""One ``flock`` exclusive lock as ``fs/locks.c`` ``lock_get_status`` prints it."""
+LANE_ENVIRONMENT = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
+"""A maintenance lane's whole environment; nothing of root's is passed on."""
+HELPER_OPTIONS = ("--store-root", "--key", "--custody", "--sealed", "--lock-fd", "--floor")
+"""What only the maintenance helper sets on a lane's command line."""
 _BUNDLE_MODE = 0o750
 _DESCRIPTORS_MODE = 0o750
 _STORE_MODE = 0o700
@@ -172,11 +187,76 @@ class _Withdrawal:
 
 @dataclass
 class StoreMaintenance:
-    """Exists only after the withdrawal is durable; the operator's one locator."""
+    """Exists only after the withdrawal is durable; the operator's one locator.
+
+    It also carries what a maintenance-held native launch needs (the N4 login
+    and qualification lanes): the context's own lock description, which the
+    supervisor inherits, the credential descriptor, and one positive check.
+    """
 
     store_path: Path
     generation_floor: int
+    lock_fd: int
+    _opened: OpenedBundle
+    _root: Path
+    _key: str
     closed: bool = False
+
+    def check(self) -> BindingCheck:
+        """This key's withdrawal, with this floor, over the same objects, still.
+
+        A positive in-memory check of the maintenance selection. Its digest
+        domain differs from every provider binding digest, so it can satisfy a
+        maintenance launch and never a provider.
+        """
+
+        if self.closed or self._opened.closed:
+            raise ContractViolation("native store maintenance is unavailable")
+        try:
+            current = _open_bundle(self._root, _bundle_token(self._key))
+        except (OSError, ValueError) as exc:
+            raise ContractViolation("native store maintenance is unavailable") from exc
+        try:
+            withdrawal = _current_withdrawal(current, self._key)
+            if withdrawal.generation_floor != self.generation_floor:
+                raise ContractViolation("native store maintenance is unavailable")
+            _require_same_objects(current, self._opened)
+        except (OSError, ValueError) as exc:
+            raise ContractViolation("native store maintenance is unavailable") from exc
+        finally:
+            _close_opened(current)
+        return BindingCheck(digest("native-operator-maintenance", 1, {
+            "key": self._key, "generation_floor": self.generation_floor,
+        }))
+
+    def open_credential(self) -> int:
+        """The store's credential descriptor for a maintenance-held launch."""
+
+        if self.closed or self._opened.closed:
+            raise ContractViolation("native store maintenance is unavailable")
+        return open_credential(self._opened)
+
+    def create_credential(self) -> None:
+        """The first login's empty credential file: create-exclusive, ``0600``.
+
+        Only inside maintenance and only where none exists, so an existing
+        credential is never replaced. Created by the lane's own process, which
+        is the store's owner, so the file has the owner ``check_credential``
+        requires with no ownership change (M8-N4-state-review.md, runbook S2).
+        """
+
+        if self.closed or self._opened.closed:
+            raise ContractViolation("native store maintenance is unavailable")
+        try:
+            fd = _create_credential_fd(self._opened.store_fd)
+        except OSError as exc:
+            raise ContractViolation(CREDENTIAL_UNAVAILABLE) from exc
+        try:
+            _fchmod(fd, _CREDENTIAL_MODE)  # the umask may have narrowed it
+            os.fsync(fd)
+        finally:
+            _close(fd)
+        os.fsync(self._opened.store_fd)
 
 
 def _require_token(value: object, *, field: str) -> str:
@@ -938,11 +1018,28 @@ def _open_credential_fd(store_fd: int) -> int:
     return os.open(CREDENTIAL_FILE, _O_PATH | _O_NOFOLLOW | _O_CLOEXEC, dir_fd=store_fd)
 
 
+def _create_credential_fd(store_fd: int) -> int:
+    """Create the credential file, never follow or replace one: ``O_EXCL``."""
+
+    if sys.platform != "linux":
+        raise ContractViolation("native store custody requires Linux")
+    return os.open(
+        CREDENTIAL_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW | _O_CLOEXEC,
+        _CREDENTIAL_MODE, dir_fd=store_fd,
+    )
+
+
 def _credential_facts(fd: int) -> tuple[int, int, int]:
     """The descriptor's mode, link count and owner; metadata only."""
 
     info = os.fstat(fd)
     return info.st_mode, info.st_nlink, info.st_uid
+
+
+def credential_facts(fd: int) -> tuple[int, int, int]:
+    """A bound credential's mode, link count and owner, read after a launch."""
+
+    return _credential_facts(fd)
 
 
 def check_credential(fd: int, owner_uid: int) -> None:
@@ -1208,13 +1305,186 @@ def maintain_offline(root: Path, key: str, *, wait_s: float) -> Iterator[StoreMa
                 _replace_metadata(opened.bundle_fd, "anchor.json", anchor_raw)
         except (OSError, ValueError) as exc:
             raise ContractViolation("native store maintenance is unavailable") from exc
-        maintenance = StoreMaintenance(opened.store_path, floor)
+        maintenance = StoreMaintenance(
+            opened.store_path, floor, opened.lock_fd, opened, root, key,
+        )
         try:
             yield maintenance
         finally:
             maintenance.closed = True
     finally:
         _close_opened(opened)
+
+
+def _read_fdinfo(fd: int) -> bytes:
+    """The kernel's report on one of this process's descriptors, bounded plus one."""
+
+    try:
+        with Path(f"/proc/self/fdinfo/{fd}").open("rb") as stream:
+            return stream.read(MAX_FDINFO_BYTES + 1)
+    except OSError as exc:
+        raise ContractViolation("native store maintenance is unavailable") from exc
+
+
+def _require_inherited_hold(fd: int, lock: FileHandleV1, parent: int) -> None:
+    """This very description holds the retained lock, and our parent took it.
+
+    Linux lists a ``flock`` lock under ``/proc/self/fdinfo/<fd>`` only when that
+    descriptor's own open file description owns it (``fs/locks.c``
+    ``__show_fd_locks``: ``filp == fl_file``, and ``flock_make_lock`` sets the
+    owner to ``filp``). A stranger's descriptor of the same file lists nothing,
+    even while the lock is held elsewhere, and reading it never takes the lock.
+    A non-blocking re-lock could not tell these apart: on a free lock it
+    succeeds by taking it. The pid is the ``tgid`` that called ``flock``
+    (``flock_make_lock``), so a lock this process took for itself is refused.
+    """
+
+    raw = _read_fdinfo(fd)
+    if len(raw) > MAX_FDINFO_BYTES:
+        raise ContractViolation("native store maintenance is unavailable")
+    locks = [line for line in raw.split(b"\n") if line.startswith(b"lock:")]
+    match = _FLOCK_LINE.fullmatch(locks[0]) if len(locks) == 1 else None
+    if match is None or int(match[1]) != parent or int(match[2]) != lock.ino:
+        raise ContractViolation("native store maintenance is unavailable")
+
+
+@contextmanager
+def inherit_maintenance(
+    root: Path, key: str, lock_fd: int, *, generation_floor: int, parent: int,
+) -> Iterator[StoreMaintenance]:
+    """The lane's side of a root-held maintenance: prove custody, never take it.
+
+    The root helper holds the retained lock and has made its withdrawal durable
+    before it starts the lane as the service user, passing only ``lock_fd``
+    (host-runtime decision 1; the service cannot write the withdrawal itself).
+    Nothing is exposed until all of these hold, in this order:
+
+    * the inherited descriptor is the bundle's retained lock: the same object
+      identity this process observes through its own walk of the bundle;
+    * that description holds the lock, taken by ``parent``
+      (:func:`_require_inherited_hold`);
+    * under the lock, the anchor names this bundle, this key's withdrawal is
+      the current state, and its floor is both ``generation_floor`` and the
+      highest generation present.
+
+    It writes nothing, and exit closes only the descriptors this opened. The
+    inherited description keeps the lock until the lane and every launch it
+    guards have exited; the helper waits for the lane before it continues.
+    """
+
+    refusal = "native store maintenance is unavailable"
+    if (
+        not root.is_absolute()
+        or type(lock_fd) is not int or lock_fd < 0
+        or type(generation_floor) is not int or generation_floor < 0
+        or type(parent) is not int or parent <= 0
+    ):
+        raise ContractViolation(refusal)
+    try:
+        key = _require_token(key, field="key")
+        opened = _open_bundle(root, _bundle_token(key))
+    except (OSError, ValueError) as exc:
+        raise ContractViolation(refusal) from exc
+    try:
+        try:
+            if _identity(lock_fd) != opened.lock_identity:
+                raise ContractViolation(refusal)
+            _require_inherited_hold(lock_fd, opened.lock_identity, parent)
+            _anchor_is_current(opened, key, after_reboot=False)
+            withdrawal = _current_withdrawal(opened, key)
+            names = _descriptor_names(opened)
+            highest = int(names[-1].removesuffix(".json")) if names else 0
+            if not withdrawal.generation_floor == highest == generation_floor:
+                raise ContractViolation(refusal)
+        except (OSError, ValueError) as exc:
+            raise ContractViolation(refusal) from exc
+        maintenance = StoreMaintenance(
+            opened.store_path, generation_floor, lock_fd, opened, root, key,
+        )
+        try:
+            yield maintenance
+        finally:
+            maintenance.closed = True
+    finally:
+        _close_opened(opened)
+
+
+def run_under_maintenance(
+    root: Path, key: str, command: Sequence[str], *, service: tuple[int, int], wait_s: float,
+) -> int:
+    """Maintenance that runs one service-user lane holding only the lock.
+
+    Root's side of :func:`inherit_maintenance`, and part of the maintenance
+    helper, so root runs nothing beyond the named exception.
+    :func:`maintain_offline` holds the retained lock and has made the
+    withdrawal durable before the lane starts. ``subprocess`` drops privilege
+    between fork and exec (``setgroups([])``, ``setregid``, ``setreuid``; no
+    ``preexec_fn``), so no other root work runs in the child. With every uid
+    non-zero, the kernel clears its permitted, effective and ambient
+    capabilities. The lane inherits descriptors 0-2 (the operator's terminal,
+    where the login code must appear) and exactly the lock; every other
+    descriptor is closed. Maintenance ends only after the lane exits.
+    Publication and activation stay the operator's next steps.
+    """
+
+    uid, gid = service
+    if uid == 0 or gid == 0:
+        raise ContractViolation("a maintenance lane never runs as root")
+    with maintain_offline(root, key, wait_s=wait_s) as withdrawn:
+        child = subprocess.Popen(
+            [
+                *command, f"--store-root={root}", f"--key={key}", "--custody=maintenance",
+                f"--lock-fd={withdrawn.lock_fd}", f"--floor={withdrawn.generation_floor}",
+            ],
+            user=uid, group=gid, extra_groups=[], env=dict(LANE_ENVIRONMENT), cwd="/",
+            close_fds=True, pass_fds=(withdrawn.lock_fd,),
+        )
+        try:
+            return child.wait()
+        except BaseException:
+            child.kill()
+            child.wait()
+            raise
+
+
+def _service(name: str) -> tuple[int, int]:
+    if sys.platform == "win32":
+        raise ContractViolation("a maintenance lane requires Linux")
+    import pwd
+
+    entry = pwd.getpwnam(name)
+    return entry.pw_uid, entry.pw_gid
+
+
+def main(argv: list[str] | None = None) -> int:
+    """``maintain --store-root ROOT --key KEY [--wait S] [--service NAME] -- LANE ...``.
+
+    ``LANE`` is the service interpreter's full lane command (its entry point is
+    the controller environment's). The helper appends the store, the key and
+    the custody, and refuses a command that sets any of them itself.
+    """
+
+    parser = argparse.ArgumentParser(prog="operator_store", allow_abbrev=False)
+    parser.add_argument("helper", choices=("maintain",))
+    parser.add_argument("--store-root", type=Path, required=True)
+    parser.add_argument("--key", required=True)
+    parser.add_argument("--wait", type=float, default=0.0)
+    parser.add_argument("--service", default="m8-service")
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if "--" not in arguments:
+        parser.error("the lane's command follows --")
+    split = arguments.index("--")
+    options = parser.parse_args(arguments[:split])
+    lane = arguments[split + 1:]
+    if not lane or any(
+        argument == name or argument.startswith(name + "=")
+        for argument in lane for name in HELPER_OPTIONS
+    ):
+        parser.error("the lane's command is missing or sets the store, the key or the custody")
+    return run_under_maintenance(
+        options.store_root, options.key, lane,
+        service=_service(options.service), wait_s=options.wait,
+    )
 
 
 def _current_withdrawal(opened: OpenedBundle, key: str) -> _Withdrawal:
@@ -1330,3 +1600,7 @@ def store_identity_for(
 _MODULE_SOURCE = inspect.getsource(sys.modules[__name__])
 BINDING_LAYOUT_LAW = digest("native-operator-store-layout", 1, {"source": _MODULE_SOURCE})
 BINDING_MOUNT_LOCK_LAW = digest("native-operator-store-mount-lock", 1, {"source": _MODULE_SOURCE})
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

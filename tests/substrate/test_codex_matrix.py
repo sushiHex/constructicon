@@ -65,10 +65,13 @@ from tests.substrate.test_codex_write import (
     write_profile,
 )
 
-SIX = [
-    "initialize", "initialized", "account/read", "thread/start", "turn/start", "account/read",
+EIGHT = [
+    "initialize", "initialized", "account/read", "account/rateLimits/read",
+    "thread/start", "turn/start", "account/read", "account/rateLimits/read",
 ]
-"""Every request a clean conversation sends, in order; nothing follows the last."""
+"""Every request a clean conversation sends, in order; nothing follows the last.
+
+Two spend readbacks were added at N4 (M8-N4-state-review.md, section 2)."""
 
 
 # --- overage ---------------------------------------------------------------
@@ -182,7 +185,7 @@ async def test_a_clean_write_reading_offers_its_tools_and_dispatches_once():
 
     conversation = await run_write_conversation(native, worker)
     assert conversation.faults == ()
-    assert native.methods[:5] == SIX[:5] and native.methods[-1] == "account/read"
+    assert native.methods[:6] == EIGHT[:6] and native.methods[-2:] == EIGHT[-2:]
     assert b"dynamicTools" in b"".join(native.raw_received)
     assert calls == ["print('changed')"]
 
@@ -200,7 +203,7 @@ async def test_a_mode_switch_is_refused_with_no_further_request_and_one_launch(
     )
     handle = await materialized(launcher, tmp_path, portable_binding[1:])
     outcome = await handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
-    assert launcher.native.methods == SIX
+    assert launcher.native.methods == EIGHT
     assert len(launcher.calls) == 1 and len(launcher.commands) == 1
     if switched:
         assert outcome.status == "failure" and outcome.error.kind == "unavailable"
@@ -210,18 +213,29 @@ async def test_a_mode_switch_is_refused_with_no_further_request_and_one_launch(
         assert outcome.status == "success"
 
 
-async def test_the_pinned_rate_limit_notification_discards_the_turn():
-    """The pinned name, read from source rather than guessed.
+@pytest.mark.parametrize("plan", [None, "pro"], ids=["sparse", "expected"])
+async def test_the_pinned_rate_limit_notification_no_longer_discards_a_turn(plan):
+    """The recorded forward cost, fixed with evidence (M8-N4-state-review.md).
 
-    ``account/rateLimits/updated`` is declared at
-    ``codex-rs/app-server-protocol/src/protocol/common.rs:1907`` at ``3d2ee51``
-    (tag ``rust-v0.153.4``), read with ``gh api`` for the N3c state review; the
-    independent reviewer could not reach it. The params below are not the pinned
-    shape: the adapter refuses the ``account/`` namespace whatever they carry.
-    This is the recorded forward cost, pinned rather than fixed.
+    ``account/rateLimits/updated`` is declared at ``common.rs:1907`` and emitted
+    on every token-count event of a turn (``bespoke_event_handling.rs:1676-1701``)
+    with exactly ``{rateLimits}`` params. A sparse or unchanged plan passes; its
+    spend fields are judged by the post-turn readback instead.
     """
 
-    notice = {"method": "account/rateLimits/updated", "params": {"rateLimits": {"x": 1}}}
+    snapshot = {"limitId": "codex", "usedPercent": 1}
+    if plan is not None:
+        snapshot["planType"] = plan
+    notice = {"method": "account/rateLimits/updated", "params": {"rateLimits": snapshot}}
+    native = clean_native(records=[notice, completed(output={"summary": "done"})])
+    conversation = await converse(native)
+    assert conversation.faults == () and conversation.gate_completed
+    assert "account/rateLimits/updated" not in conversation.observation.raw
+
+
+async def test_a_plan_change_inside_the_rate_limit_notification_discards_the_turn():
+    notice = {"method": "account/rateLimits/updated",
+              "params": {"rateLimits": {"planType": "plus"}}}
     native = clean_native(records=[notice, completed(output={"summary": "done"})])
     conversation = await converse(native)
     assert any("account/rateLimits/updated" in fault for fault in conversation.faults)
@@ -229,8 +243,6 @@ async def test_the_pinned_rate_limit_notification_discards_the_turn():
         conversation.faults, conversation.observation, FINISHED, requested_model="gpt-5.6-sol",
     )
     assert outcome.status == "failure" and outcome.output is None
-    control = await converse(clean_native(records=[completed(output={"summary": "done"})]))
-    assert control.faults == ()
 
 
 # --- a turn that reaches its limit -------------------------------------------
@@ -269,11 +281,13 @@ async def test_a_limit_reached_turn_is_not_success_and_asks_for_nothing_more(
     launcher = bare_launcher(native)
     handle = await materialized(launcher, tmp_path, portable_binding[1:])
     outcome = await handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
-    assert native.methods == SIX and len(launcher.calls) == 1
+    assert native.methods == EIGHT and len(launcher.calls) == 1
     raw = b"".join(native.raw_received)
     assert b"rateLimitResetCredit" not in raw and b"login" not in raw
-    # No rateLimits object was emitted, so no overage fact exists: None, never False.
-    assert outcome.rate_limit is None
+    # The only overage facts are the two readbacks' bounded fields; the pin
+    # emits no overage flag, so that one stays None rather than False.
+    assert outcome.rate_limit.is_using_overage is None
+    assert outcome.rate_limit.detail["after.has_credits"] is False
     assert_published_surfaces_are_bounded(outcome)
     if status == "completed":
         assert outcome.status == "success"
@@ -289,4 +303,4 @@ async def test_the_limit_reached_conversation_takes_no_overage_input():
     first, second = clean_native(records=[limit_reached()]), clean_native(records=[limit_reached()])
     await converse(first)
     await converse(second)
-    assert first.raw_received == second.raw_received and first.methods == SIX
+    assert first.raw_received == second.raw_received and first.methods == EIGHT

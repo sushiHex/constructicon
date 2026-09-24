@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import errno
 import gzip
+import io
 import json
 import os
 import socket
@@ -24,10 +25,28 @@ from types import SimpleNamespace
 import pytest
 
 from constructicon.core.identity import Digest
-from constructicon.substrate.executors import egress
+from constructicon.substrate.executors import egress, operator_store
 from constructicon.substrate.executors._egress_bridge import PROXY_PORT
+from constructicon.substrate.executors.codex_lane import (
+    RUNTIME_CATALOG,
+    active_custody,
+    run_login,
+    run_startup,
+    vendor_executable,
+)
+from constructicon.substrate.executors.codex_protocol import (
+    NO_RESULT_FAULT,
+    ExpectedAccount,
+)
 from constructicon.substrate.executors.egress import identity_digests
-from tests.native_startup import BOOTSTRAP, MODELS, DuplexWire, configuration, initialize
+from constructicon.substrate.executors.linux import NativeVendor
+from tests.native_startup import (
+    BOOTSTRAP,
+    MODELS,
+    DuplexWire,
+    configuration,
+    initialize,
+)
 from tests.substrate.test_egress import until
 from tests.substrate.test_linux_containment import launcher as launcher
 from tests.substrate.test_native_codex_mediation import write_evidence
@@ -348,6 +367,159 @@ def test_the_bridge_client_reports_the_ssl_fact():
     assert "'ssl': True" in CLIENT.split("results = {", 1)[1]
 
 
+# --- N4 lanes with the pinned binary (M8-N4-state-review.md, L2 and L3) --------
+
+EMPTY_AUTH = b"{}\n"
+"""An ``AuthDotJson`` with every field absent: no login, parsed rather than
+malformed, so the pinned client reports no account."""
+
+
+@pytest.fixture
+def vendor_launcher(bridge_launcher):
+    """The launch set's own vendor tree and catalog, bound as production binds them."""
+    launch = Path(os.environ.get("M8_LINUX_ROOT", "/var/lib/constructicon-m8-launch"))
+    return replace(bridge_launcher, vendor=NativeVendor(
+        launch / "native-codex", launch / "codex-models.json",
+    ))
+
+
+def sealed_configuration(*, plugins: bool) -> str:
+    """The production sealed configuration's shape (state review, section 1).
+
+    It names the bound catalog, so the client reading it proves the bind.
+    """
+    return (
+        f'model = "{MODELS[0]}"\nmodel_catalog_json = "{RUNTIME_CATALOG}"\n'
+        'cli_auth_credentials_store = "file"\nforced_login_method = "chatgpt"\n'
+        'check_for_update_on_startup = false\nweb_search = "disabled"\n'
+        "[analytics]\nenabled = false\n[features]\n"
+        + ("" if plugins else "plugins = false\n")
+        + "apps = false\nshell_tool = false\nunified_exec = false\n"
+        "apply_patch_freeform = false\nview_image = false\nmulti_agent = false\n"
+        "code_mode = false\njs_repl = false\n"
+    )
+
+
+def decoy_policy() -> egress.EgressPolicy:
+    """A sealed policy naming only a decoy: every vendor CONNECT is a denial."""
+    return egress.EgressPolicy((egress.EgressDestination(DECOY, 443, "8.8.8.8"),), 8)
+
+
+NO_LOGIN = frozenset({
+    # An empty ``auth.json`` makes ``account/read`` the pinned client's error
+    # reply, so ``account_faults`` (codex_protocol.py) sees no result object
+    # and returns only this one fault before any other check can run.
+    NO_RESULT_FAULT,
+    # No module constant names these three: they are the ``checks`` tuple
+    # inline in ``codex_lane.run_startup`` (codex_lane.py lines 411-414),
+    # copied verbatim from there rather than retyped from memory. With the
+    # gate refused at ``account/read``, the gate never completes, the fourth
+    # method (``rate_limits/read``) is never sent, and no readback is judged.
+    "the startup gate did not complete",
+    "the startup did not send exactly the four authorized methods",
+    "no spend readback was judged",
+})
+"""The verdict's exact fault set with no login (state review, section 2)."""
+
+
+@pytest.fixture
+def empty_auth(binding):
+    store = Path(binding.root) / operator_store._bundle_token("n3a-fixture") / "store"
+    credential = store / "auth.json"
+    original = credential.read_bytes()
+    credential.write_bytes(EMPTY_AUTH)
+    try:
+        yield credential
+    finally:
+        credential.write_bytes(original)
+
+
+async def test_the_production_configuration_makes_no_startup_connection_at_all(
+    binding, vendor_launcher, short_root, heads, empty_auth,
+):
+    """L2: zero denials with plugins off, beside a same-step control that counts.
+
+    The client runs from the launch set's bound vendor tree and reads the bound
+    catalog, so this also proves the bind (host-runtime interface item 1).
+    """
+    runs = {}
+    executable = vendor_executable(vendor_launcher)
+    for plugins in (False, True):
+        heads.clear()
+        async with active_custody(binding) as custody:
+            runs[plugins] = await run_startup(
+                custody, vendor_launcher, decoy_policy(), executable=executable,
+                configuration=sealed_configuration(plugins=plugins),
+                expected=ExpectedAccount(plan_type="pro", alternatives=("prolite",)),
+                lane_dir=short_root / f"lane-{int(plugins)}", deadline_s=30,
+                expect_denial=plugins,
+            )
+        runs[plugins]["heads"] = [head.split(b"\r\n", 1)[0].decode() for head in heads]
+    clean, control = runs[False], runs[True]
+    # The fact this test exists for, independent of the verdict: the production
+    # configuration made no connection at all. The bridge records every CONNECT
+    # head and the relay every accepted or denied connection, whatever the
+    # conversation concluded, so a refusal cannot hide one.
+    assert clean["relay"] == {"destinations": {}, "denied": {}, "closed": True}, clean["relay"]
+    assert clean["heads"] == [], clean["heads"]
+    # With no login the verdict refuses, affirmatively and for exactly these
+    # reasons: the account reading is the pinned client's error reply, so the
+    # gate, the fourth method and the readback are each reported missing. No
+    # launch fact failed (clean exit, closed relay, bound 0600 credential).
+    assert set(clean["faults"]) == NO_LOGIN, clean["faults"]
+    assert clean["methods_sent"] == ["'initialize'", "'initialized'", "'account/read'"]
+    assert clean["readback"] is None and clean["gate"]["completed"] is False
+    assert clean["executable"]["path"] == "/opt/codex/bin/codex"
+    # The same-run positive control: the same refusal at the same point, so the
+    # same zone lifetime, and yet the plugin sync's CONNECT was seen and denied.
+    assert control["methods_sent"] == clean["methods_sent"]
+    assert set(control["faults"]) == NO_LOGIN, control["faults"]
+    assert control["relay"]["denied"].get("denied:destination", 0) >= 1, control["relay"]
+    assert control["heads"], "the control's plugin sync never reached the relay"
+    assert empty_auth.read_bytes() == EMPTY_AUTH
+    write_evidence("n4-lane-startup.json", {
+        "schema_version": 1, "credential_free_fixture": True, "model_requests": 0,
+        "vendor_conformance_qualified": False, "vendor_bound": True,
+        "executable": clean["executable"],
+        "clean": {key: clean[key] for key in ("methods_sent", "relay", "heads", "faults")},
+        "control": {key: control[key] for key in ("relay", "heads")},
+    })
+
+
+async def test_the_pinned_device_login_reaches_only_the_relay_and_keeps_nothing(
+    binding, vendor_launcher, short_root, heads, empty_auth,
+):
+    """L3: the login's CONNECT is denied, its output is never evidence.
+
+    A login runs only in maintenance (CC-1). The service cannot enter one on
+    this fixture, so the test relabels the fixture's held custody as a
+    maintenance custody; nothing in production can build one this way.
+    """
+    out = io.BytesIO()
+    async with active_custody(binding) as held:
+        custody = replace(held, kind="maintenance", detail={"test_only": True})
+        evidence = await run_login(
+            custody, vendor_launcher, decoy_policy(),
+            executable=vendor_executable(vendor_launcher),
+            configuration=sealed_configuration(plugins=False),
+            lane_dir=short_root / "lane-login", deadline_s=60, out=out,
+        )
+    lines = [head.split(b"\r\n", 1)[0].decode() for head in heads]
+    assert "CONNECT auth.openai.com:443 HTTP/1.1" in lines, lines
+    assert evidence["relay"]["denied"].get("denied:destination", 0) >= 1
+    assert evidence["process"]["returncode"] != 0
+    printed = out.getvalue().decode(errors="replace").strip()
+    assert not printed or printed not in json.dumps(evidence)
+    # The pre-login logout's unlink met the bind (EBUSY) and was ignored.
+    assert empty_auth.is_file() and empty_auth.stat().st_mode & 0o777 == 0o600
+    write_evidence("n4-lane-login.json", {
+        "schema_version": 1, "credential_free_fixture": True,
+        "vendor_conformance_qualified": False, "connect_heads": lines,
+        "relay": evidence["relay"], "process": evidence["process"],
+        "credential_still_bound_file": True,
+    })
+
+
 def test_no_evidence_file_contains_key_material():
     directory = os.environ.get("M8_EVIDENCE_DIRECTORY")
     if not directory:
@@ -356,7 +528,13 @@ def test_no_evidence_file_contains_key_material():
         pytest.skip("N4 bridge evidence is written only by the provisioned Linux lane")
     files = sorted(Path(directory).glob("n4-*.json"))
     if os.environ.get("M8_BRIDGE_REQUIRED"):
-        assert [path.name for path in files] == ["n4-bridge.json", "n4-pinned-client.json"]
+        # The root lane's inherited-custody proof runs earlier in the same
+        # foundation lane and writes into the same evidence directory, so its
+        # file is present too and is scanned with the bridge's own.
+        assert [path.name for path in files] == [
+            "n4-bridge.json", "n4-inherited-maintenance.json",
+            "n4-lane-login.json", "n4-lane-startup.json", "n4-pinned-client.json",
+        ]
     for path in files:
         text = path.read_text()
         assert "-----BEGIN" not in text and "PRIVATE KEY" not in text, path.name

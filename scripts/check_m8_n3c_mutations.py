@@ -16,6 +16,11 @@ MAINTAIN = STORE + "maintain_offline.__wrapped__"
 S = "tests/substrate/test_operator_store_maintenance.py::"
 U = "tests/substrate/test_operator_store_replace.py::"
 C = "tests/substrate/test_codex_matrix.py::"
+K = "tests/substrate/test_operator_store_credential.py::"
+I = "tests/substrate/test_operator_store_inheritance.py::"  # noqa: E741
+INHERIT = STORE + "inherit_maintenance.__wrapped__"
+HOLD = STORE + "_require_inherited_hold"
+SPAWN = STORE + "run_under_maintenance"
 REANCHOR = (
     "            if not anchored:\n"
     "                anchor_raw = canonical_json({\n"
@@ -31,7 +36,7 @@ MUTANTS = (
         "1 maintenance exposes the store only after its withdrawal returns",
         MAINTAIN,
         '_replace_metadata(opened.bundle_fd, "active.json", raw)',
-        "yield StoreMaintenance(opened.store_path, floor)\n"
+        "yield StoreMaintenance(opened.store_path, floor, opened.lock_fd, opened, root, key)\n"
         '            _replace_metadata(opened.bundle_fd, "active.json", raw)',
         S + "test_maintenance_withdraws_durably_before_it_exposes_the_store",
     ),
@@ -383,6 +388,219 @@ MUTANTS = (
         "if False and (",
         S + "test_a_lock_replaced_across_a_reboot_is_refused_under_the_same_store"
         "[replaced-activate]",
+    ),
+    # --- N4 maintenance-held launches (M8-N4-state-review.md, section 5) ---
+    (
+        "N4-M1 a maintenance check requires the same floor",
+        STORE + "StoreMaintenance.check",
+        "if withdrawal.generation_floor != self.generation_floor:",
+        "if False:",
+        K + "test_a_maintenance_check_refuses_once_its_selection_or_objects_moved[other-floor]",
+    ),
+    (
+        "N4-M2 a maintenance check re-proves the objects",
+        STORE + "StoreMaintenance.check",
+        "_require_same_objects(current, self._opened)",
+        "pass",
+        K + "test_a_maintenance_check_refuses_once_its_selection_or_objects_moved[substituted]",
+    ),
+    (
+        "N4-M3 a maintenance check requires this key's withdrawal",
+        STORE + "StoreMaintenance.check",
+        "withdrawal = _current_withdrawal(current, self._key)",
+        "withdrawal = _Withdrawal(self._key, self.generation_floor)",
+        K + "test_a_maintenance_check_refuses_once_its_selection_or_objects_moved[activated]",
+    ),
+    (
+        "N4-M4 a closed maintenance checks nothing",
+        STORE + "StoreMaintenance.check",
+        "if self.closed or self._opened.closed:",
+        "if False:",
+        K + "test_a_maintenance_check_is_positive_inside_the_context_and_never_a_binding",
+    ),
+    # --- N4 inherited maintenance (host-runtime interface item 4) ---
+    (
+        "N4-M5 the inherited descriptor is the bundle's retained lock",
+        INHERIT,
+        "if _identity(lock_fd) != opened.lock_identity:",
+        "if False:",
+        I + "test_custody_that_is_not_proven_refuses_before_anything_is_exposed[wrong-identity]",
+    ),
+    (
+        "N4-M6 the inherited description must hold the lock",
+        INHERIT,
+        "_require_inherited_hold(lock_fd, opened.lock_identity, parent)",
+        "pass",
+        I + "test_custody_that_is_not_proven_refuses_before_anything_is_exposed[stranger]",
+    ),
+    (
+        "N4-M7 the anchor names this bundle",
+        INHERIT,
+        "_anchor_is_current(opened, key, after_reboot=False)",
+        "pass",
+        I + "test_custody_that_is_not_proven_refuses_before_anything_is_exposed[other-anchor]",
+    ),
+    (
+        "N4-M8 this key's withdrawal is the current state",
+        INHERIT,
+        "withdrawal = _current_withdrawal(opened, key)",
+        "withdrawal = _Withdrawal(key, generation_floor)",
+        I + "test_custody_that_is_not_proven_refuses_before_anything_is_exposed[active]",
+    ),
+    (
+        "N4-M9 the recorded floor is compared",
+        INHERIT,
+        "if not withdrawal.generation_floor == highest == generation_floor:",
+        "if not highest == generation_floor:",
+        I + "test_custody_that_is_not_proven_refuses_before_anything_is_exposed[record-floor]",
+    ),
+    (
+        "N4-M10 the inventory's highest generation is compared",
+        INHERIT,
+        "if not withdrawal.generation_floor == highest == generation_floor:",
+        "if not withdrawal.generation_floor == generation_floor:",
+        I + "test_custody_that_is_not_proven_refuses_before_anything_is_exposed"
+        "[inventory-floor]",
+    ),
+    (
+        "N4-M11 the helper's floor is compared",
+        INHERIT,
+        "if not withdrawal.generation_floor == highest == generation_floor:",
+        "if not withdrawal.generation_floor == highest:",
+        I + "test_the_helpers_floor_must_be_the_recorded_one[higher]",
+    ),
+    (
+        "N4-M12 the helper's floor is an integer",
+        INHERIT,
+        "or type(generation_floor) is not int or generation_floor < 0",
+        "or False",
+        I + "test_malformed_custody_arguments_refuse_before_any_open",
+    ),
+    (
+        "N4-M13 exactly one lock is reported",
+        HOLD,
+        "if len(locks) == 1 else None",
+        "if locks else None",
+        I + "test_custody_that_is_not_proven_refuses_before_anything_is_exposed[two-locks]",
+    ),
+    (
+        "N4-M14 the lock was taken by the parent",
+        HOLD,
+        "int(match[1]) != parent",
+        "False",
+        I + "test_custody_that_is_not_proven_refuses_before_anything_is_exposed[self-taken]",
+    ),
+    (
+        "N4-M15 the lock is on the retained lock's inode",
+        HOLD,
+        "int(match[2]) != lock.ino",
+        "False",
+        I + "test_custody_that_is_not_proven_refuses_before_anything_is_exposed[other-inode]",
+    ),
+    (
+        "N4-M16 the kernel report is bounded",
+        HOLD,
+        "if len(raw) > MAX_FDINFO_BYTES:",
+        "if False:",
+        I + "test_custody_that_is_not_proven_refuses_before_anything_is_exposed[oversized]",
+    ),
+    (
+        "N4-M17 only an exclusive flock is a hold",
+        HOLD,
+        "_FLOCK_LINE.fullmatch(locks[0])",
+        're.search(rb"([0-9]+) [0-9a-f]+:[0-9a-f]+:([0-9]+)", locks[0])',
+        I + "test_custody_that_is_not_proven_refuses_before_anything_is_exposed[shared]",
+    ),
+    (
+        "N4-M18 the lane runs as the service user and group",
+        SPAWN,
+        "user=uid, group=gid,",
+        "user=None, group=None,",
+        I + "test_the_helper_starts_the_lane_as_the_service_with_only_the_lock",
+    ),
+    (
+        "N4-M19 the lane's supplementary groups are cleared",
+        SPAWN,
+        "extra_groups=[]",
+        "extra_groups=None",
+        I + "test_the_helper_starts_the_lane_as_the_service_with_only_the_lock",
+    ),
+    (
+        "N4-M20 the lane's environment is the fixed one",
+        SPAWN,
+        "env=dict(LANE_ENVIRONMENT)",
+        "env=None",
+        I + "test_the_helper_starts_the_lane_as_the_service_with_only_the_lock",
+    ),
+    (
+        "N4-M21 every other descriptor is closed",
+        SPAWN,
+        "close_fds=True",
+        "close_fds=False",
+        I + "test_the_helper_starts_the_lane_as_the_service_with_only_the_lock",
+    ),
+    (
+        "N4-M22 exactly the lock is passed",
+        SPAWN,
+        "pass_fds=(withdrawn.lock_fd,)",
+        "pass_fds=(withdrawn.lock_fd, 0)",
+        I + "test_the_helper_starts_the_lane_as_the_service_with_only_the_lock",
+    ),
+    (
+        "N4-M23 maintenance lasts until the lane exits",
+        SPAWN,
+        "return child.wait()",
+        "return 0",
+        I + "test_the_helper_starts_the_lane_as_the_service_with_only_the_lock",
+    ),
+    (
+        "N4-M24 an interrupted helper stops the lane first",
+        SPAWN,
+        "child.kill()",
+        "pass",
+        I + "test_an_interrupted_helper_stops_the_lane_before_leaving_maintenance",
+    ),
+    (
+        "N4-M25 the lane never runs as the root user",
+        SPAWN,
+        "if uid == 0 or gid == 0:",
+        "if gid == 0:",
+        I + "test_the_helper_never_starts_a_root_lane[root-user]",
+    ),
+    (
+        "N4-M26 the lane never runs as the root group",
+        SPAWN,
+        "if uid == 0 or gid == 0:",
+        "if uid == 0:",
+        I + "test_the_helper_never_starts_a_root_lane[root-group]",
+    ),
+    (
+        "N4-M28 a closed maintenance creates no credential",
+        STORE + "StoreMaintenance.create_credential",
+        "if self.closed or self._opened.closed:",
+        "if False:",
+        I + "test_a_closed_maintenance_creates_nothing",
+    ),
+    (
+        "N4-M29 the first credential is exactly 0600 whatever the umask",
+        STORE + "StoreMaintenance.create_credential",
+        "_fchmod(fd, _CREDENTIAL_MODE)",
+        "pass",
+        I + "test_maintenance_creates_the_first_credential_exclusively",
+    ),
+    (
+        "N4-M30 the store directory is synced after the create",
+        STORE + "StoreMaintenance.create_credential",
+        "os.fsync(self._opened.store_fd)",
+        "pass",
+        I + "test_maintenance_creates_the_first_credential_exclusively",
+    ),
+    (
+        "N4-M27 only the helper sets the store, key and custody",
+        STORE + "main",
+        "argument == name or argument.startswith(name + \"=\")",
+        "False",
+        I + "test_only_the_helper_sets_the_store_the_key_and_the_custody",
     ),
 )
 

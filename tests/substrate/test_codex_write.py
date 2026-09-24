@@ -254,9 +254,9 @@ async def test_conversation_dispatches_one_callback_and_completes_its_response()
 
 
 async def test_server_request_and_client_reply_ids_have_distinct_domains():
-    # Five is the next client RPC id (the pre-acceptance account/read). The
+    # Six is the next client RPC id (the pre-acceptance account/read). The
     # callback may use it without answering or consuming that future request.
-    callback = WriteNative._callback_for(5, "call-collision", "print('once')")
+    callback = WriteNative._callback_for(6, "call-collision", "print('once')")
     native = WriteNative("print('once')", callbacks=[callback])
     calls: list[str] = []
 
@@ -267,9 +267,9 @@ async def test_server_request_and_client_reply_ids_have_distinct_domains():
     conversation = await run_write_conversation(native, worker)
     assert conversation.faults == () and conversation.gate_completed
     assert calls == ["print('once')"]
-    assert [item["method"] for item in native.received if "method" in item][-1] == (
-        "account/read"
-    )
+    assert [item["method"] for item in native.received if "method" in item][-2:] == [
+        "account/read", "account/rateLimits/read",
+    ]
 
 
 async def test_duplicate_inbound_request_id_refuses_without_a_second_effect():
@@ -606,7 +606,8 @@ async def test_read_conversation_bytes_remain_without_opt_in_or_catalog():
     )
     await asyncio.wait_for(conversation(native), 5)
     assert native.received[0]["params"]["capabilities"] == {}
-    assert "dynamicTools" not in native.received[3]["params"]
+    assert native.received[4]["method"] == "thread/start"
+    assert "dynamicTools" not in native.received[4]["params"]
 
 
 def test_write_helpers_build_the_exact_profile_catalog_coherence():
