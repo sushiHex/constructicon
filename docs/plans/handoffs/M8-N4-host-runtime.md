@@ -1,6 +1,6 @@
 # M8-N4 host runtime: reviewed-artifact installation of the launch set
 
-Status: design and bounded operator runbook for the host prerequisite of
+Status: design, implementation and bounded operator runbook for the host prerequisite of
 [N4 (#77)](https://github.com/sushiHex/constructicon/issues/77). Base: `9006f93`.
 It extends [M8-D2](M8-D2-host-installation.md) (#94, merged `8c1b14e`) and does
 not redesign it. Authority: the owner's
@@ -32,7 +32,7 @@ images (`build_m8_startup_fixture.py`, which copies test code from `tests/`
 into the image, `:36`, `:41-42`), the N3a store fixture
 (`build_m8_store_fixture.py`) and the run-scoped evidence directory. Test code
 never reaches the credential host. Publishing an operator-store bundle and the
-production native image are N4 design questions, listed under "Open questions".
+production native image are settled by "Owner decisions" 1 and 4.
 
 The CI guards stay byte-identical (`test_hosted_runner_guards_are_unchanged`).
 No host marker exists.
@@ -123,11 +123,13 @@ program that resolves shared-library dependencies, which the stage, judge and
 verify all run, so a replaceable resolver would corrupt all three alike. CI runs
 bare `ldd` from `PATH` (`build_m8_runtime.py:50`). `ldd` is a bash script whose
 work is to run the dynamic loader in trace mode, so the shared plan runs the
-loader directly: `/lib64/ld-linux-x86-64.so.2 --list <binary>`, by absolute
-path, in the script's fixed environment. That removes bash and the `ldd` script
-from the trusted set, and leaves one executable whose real path gets the same
-custody proof as the root tools, together with `/etc/ld.so.cache`, which decides
-resolution. A bounded ELF resolver was rejected: it would reimplement the
+loader directly: `/lib64/ld-linux-x86-64.so.2 --list <binary>`, in the
+script's fixed environment. It runs by that canonical path, as ldd does,
+because the trace names the loader by the path it was started as. The links
+along that path (`/lib64` on a merged-`/usr` host) sit in root-only directories.
+That removes bash and the `ldd` script from the trusted set. It leaves one
+executable, whose real path gets the same custody proof as the root tools,
+together with `/etc/ld.so.cache`, which decides resolution. A bounded ELF resolver was rejected: it would reimplement the
 loader's search order and could only diverge from CI. CI's builder makes the
 same call through the shared plan, so every lane runs on a `--list`-resolved
 runtime. That the switch changes nothing is shown separately: a foundation-lane
@@ -243,7 +245,7 @@ launch profile does not block reinstalling the qualification set. New commands:
   refusing any member that is not a directory or regular file, any absolute or
   `..` name, and any duplicate. It prints the plan's record.
 - **`judge-launch C W`** never writes. In order: effective uid is not 0;
-  custody of `$W` (M8-D2 check 2); provenance of the four blobs and the
+  custody of `$W` (M8-D2 check 2); provenance of the six blobs and the
   script's self-check; both pins; `m8-service` exists with non-zero uid and
   gid, its primary group named `m8-service` and no supplementary membership;
   every host source's custody and attribution; staging equals the recomputed
@@ -361,118 +363,138 @@ profile list and `apparmor_parser` load on the VM; the launcher probe on the
 VM; and boot-time profile loading. R13's and N4's first host run are their
 first execution; the R9 checkpoint makes that recoverable.
 
-## Test plan
+## Test plan (as implemented)
 
-In `tests/test_m8_host_artifacts.py`, both directions from the first commit.
+In `tests/test_m8_host_runtime.py`, both directions from the first commit;
+`tests/test_m8_host_artifacts.py` keeps M8-D2's suite.
 
-**Portable (Windows and Linux).** Derived values: extraction from this
-repository's blobs yields exactly `linux.BWRAP_SHA256`, `NAMESPACE_SCRIPT`,
-`BRIDGE_SCRIPT`, and the workflow's two digests, the catalog's equal to
-`CATALOG_SHA256`; a blob with zero or two matches refuses. Pins: destinations
-and modes equal the workflow's provisioning lines; the closure enumerates
-`*.so` over the unfiltered tree (a fixture whose excluded directory holds the
-only extension needing a library); the stdlib digest and inventory equal
-Constructicon's on the same tree; `build_m8_runtime.py` takes its entries from
-the shared function and its guard is unchanged; R13's root sequence equals the
-inventory in order; every `sudo` in both runbooks names an allowed stock tool
-or `m8-probe`; `judge-launch` and `verify-launch` never write, and
-`stage-launch` writes only through one `O_CREAT|O_EXCL|O_NOFOLLOW` opener under
-staging (an AST walk). Provenance against temporary repositories for the four
-new blob paths (off `main`, off the first-parent line, modes `100755` and
-`120000`, missing path, grafts, replacement refs). dpkg attribution against a
-temporary database: owned and matching, alias spelling, conffile, unattributed,
-and mismatching (refused). Tar planning: the accepted member set, and each of a
-symlink, hard link, device, FIFO, absolute name, `..`, duplicate and setuid
-member refused. Assessment: each observed fact required; absence; a shrunken or
-grown tree; a retargeted link; bounded records and 32-path summaries at and
-beyond the bound. Exit status follows each verdict.
+**Portable (Windows and Linux).**
+- Derived values: extraction from this repository's blobs yields exactly
+  `linux.BWRAP_SHA256`, `NAMESPACE_SCRIPT`, `BRIDGE_SCRIPT`, and the workflow's
+  two digests, the catalog's equal to `CATALOG_SHA256`. For every value, a blob
+  that names it zero or two times refuses.
+- The stdlib identity law and `runtime.json` equal Constructicon's
+  `digest`/`runtime_digest` on the same tree and payload.
+- The closure plan over a fixture host with a stand-in loader trace: the exact
+  file, link and directory set, modes, first-source rule, and sort order.
+  IGNORED names are never copied, but `libonly.so.1`, needed only by an
+  extension under the excluded `test/` directory, is present, so enumeration
+  runs over the unfiltered tree. A trace with `not found`, or a nonzero exit,
+  refuses; a supervisor path that would replace a runtime file refuses.
+- The vendor plan: the accepted member set, with implicit parents and CI's
+  `go-w` masking. Each of a symlink, hard link, FIFO, character device,
+  absolute name, `..`, a climbing path, a duplicate, a setuid member and a
+  sticky directory refuses.
+- dpkg attribution against a fixture database: the owned and matching file,
+  the pre-merge spelling, the conffile, the unattributed file, the removed
+  package ignored. A modified file refuses for each of the three attribution
+  routes, and the unattributed list is bounded at 64.
+- Tree comparison reports a mode, content, missing, extra and owner
+  difference. The service account refuses uid 0, gid 0, a foreign primary
+  group and a supplementary group.
+- Assessment: the reviewed set is accepted; each of thirteen observed facts is
+  required; both launch profiles must be loaded in enforce mode.
+- The command record: each launch command reports its own verdict and exit
+  status, and a verifier's own observation (with its tree differences)
+  survives its failure.
+- Repository pins: the launch layout equals CI's provisioning lines, the store
+  fixture's root and mode, and the profile's and launcher's names. The CI
+  builder takes the shared plan and no longer names `ldd`. The foundation
+  lane runs both parity tests as `m8-service`. R13 is the inventory, in order.
+  Every `sudo` in the runbook is an allowed stock tool. R11 lists the six
+  blobs. Only `materialize` writes, only the stager calls it, and its open is
+  `O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW` (an AST walk).
 
-**Linux only (skipped elsewhere).** Accepting: `stage-launch`, `judge-launch`,
-root's sequence through real coreutils `install` and `cp` into a temporary
-root, then `verify-launch`, with the plan's host sources replaced by a small
-root-view fixture tree plus the real Python closure; the same under umask
-`0277`. Refusing, each asserting which check refused: as root; each custody
-case; a staged entry altered by one byte, re-moded, added, removed, retyped
-(FIFO, symlink) or retargeted; staged `runtime.json` altered; each pin off by
-one byte; the account missing, uid 0, gid 0 or with a supplementary group; a
-host source that is a symlink to an unsafe file, operator-owned or under an
-unsafe parent; each root tool unsafe or missing, including `cp`; the loader or
-`/etc/ld.so.cache` unsafe (a stand-in root-view loader); each existing
-or dangling destination; each unsafe ancestor; a loaded launch or workload
-profile; a failed or empty list. `verify-launch`: staging modified after
-judgement caught; **the accepting control**, a valid installation with staging
-deleted, verifies `installed: true`, kept separate from the drift refusals;
-every prefix of root's
-sequence is never installed and blocks a rerun; a refused profile load; drift
-after installation (a runtime byte, a mode, an extra entry, a retargeted link,
-`runtime.json`, `operator-stores` group or mode, a vendor member, an unloaded
-profile); and a host package change after installation, reported as a
-mismatch. The existing M8-D2 suite stays green, plus a test that the
-qualification `judge` accepts while launch profiles are loaded.
+**Linux only (skipped elsewhere).** This runs on a temporary host with a
+stand-in loader (a shell script printing the loader's trace format), fixture
+dpkg tables, M8-D2's uid view extended to group ids, and real coreutils
+`install` and `cp` for root's sequence.
+- Accepting: stage, judge, R13, verify; the same under umask `0277`; and the
+  accepting control, where a valid installation verifies with staging deleted.
+- The stager refuses an existing staging, and the writer never overwrites.
+  Every launch command refuses to run as root.
+- The judge refuses, each asserting its message, each of these staged faults:
+  a runtime byte, a mode, an extra entry, a missing entry, a FIFO, a
+  retargeted link, a vendor member, `runtime.json` and the profile. It also
+  refuses sixteen preconditions: the tarball and catalog pins, the account, a
+  host source's owner and parent, the loader and its cache, `cp` unsafe and
+  missing, bubblewrap, an existing launch root or profile, an unsafe ancestor,
+  a loaded launch or workload profile, and a dpkg mismatch.
+- `verify-launch`: staging modified after judgement is caught, with the
+  differing path itemized; every prefix of R13 is never installed and blocks a
+  rerun; a refused profile load. Drift is refused for each of thirteen cases,
+  among them a host package update, which leaves the installed closure intact
+  and changes only the recomputed plan. With nothing installed, every
+  destination is itemized as absent. Tree summaries are bounded. A host source
+  resolving outside the root refuses.
+- M8-D2's qualification `judge` accepts while the launch profiles are loaded.
 
-**Linux, foundation lane with `M8_CONTAINMENT_REQUIRED=1`:** the parity test
-above and the `--list`-equals-`ldd` test, both failing rather than skipping when
-`M8_LINUX_ROOT` is absent.
+**Linux, foundation lane as `m8-service` with `M8_CONTAINMENT_REQUIRED=1`:**
+`test_the_host_writer_reproduces_the_ci_runtime` (the stager's writer, then the
+real `cp`, equal CI's installed runtime inventory, and the recomputed
+`runtime.json` equals CI's) and `test_the_loader_list_resolves_as_ldd_does`.
+Both fail rather than skip when `M8_LINUX_ROOT` is absent.
 
-## Mutation list
+## Mutation list (as implemented)
 
-Added to `scripts/check_m8_host_artifact_mutations.py`; each names its killing
-test and must be killed by assertion.
+In `scripts/check_m8_host_artifact_mutations.py`; each must be killed by
+assertion. Portable:
 
-| # | Mutant | Killed by |
-| --- | --- | --- |
-| 1 | `judge-launch` skips the tarball pin | a pin off by one byte |
-| 2 | `judge-launch` skips the catalog pin | a pin off by one byte |
-| 3 | staging compared as a subset, not equality | an added staged entry |
-| 4 | staging comparison ignores mode | a re-moded entry |
-| 5 | staging comparison ignores link targets | a retargeted link |
-| 6 | staged `runtime.json` not compared | an altered `runtime.json` |
-| 7 | host-source custody check removed | an operator-owned source |
-| 8 | host sources not resolved before custody | a symlink to an unsafe file |
-| 9 | dpkg digest mismatch accepted | the mismatching database |
-| 10 | `/usr`-merge alias not matched | the alias-spelling case |
-| 11 | `cp` dropped from the root tools | an unsafe `cp` |
-| 12 | launch-root absence check removed | an existing `L` |
-| 13 | only `ENOENT`-means-absent weakened to `exists()` | a dangling destination |
-| 14 | profile ancestor check removed | an unsafe `/etc/apparmor.d` |
-| 15 | loaded launch profile not refused | a loaded workload profile |
-| 16 | qualification `judge` refuses every `constructicon-m8-*` again | the new acceptance test |
-| 17 | `verify-launch` accepts a missing workload profile | the profile assessment |
-| 18 | the stdlib inventory drops its uid-0 requirement, the only tree-ownership check in `verify-launch` | a non-root entry |
-| 19 | `verify-launch` skips the `operator-stores` gid | a wrong group |
-| 20 | `verify-launch` reads staging instead of recomputing | the accepting control: valid installation, staging deleted |
-| 21 | a derived value accepts the first of two pattern matches | a blob with two matches |
-| 22 | `verify-launch` skips `L`'s exact listing | an extra entry in `L` |
-| 23 | tar plan accepts a symlink member | the symlink case |
-| 24 | tar plan accepts `..` or an absolute name | each case |
-| 25 | tar plan keeps setuid or group/other write | the setuid case |
-| 26 | stage opens without `O_EXCL` | a pre-existing staged file |
-| 27 | stage runs as root | refusal as root |
-| 28 | account check accepts a supplementary group | the group case |
-| 29 | stdlib digest separator changed | the digest-equality pin |
-| 30 | tree summary bound removed | the bound test |
-| 31 | the closure plan omits the bridge | the plan test and CI parity |
-| 32 | the loader dropped from the custody checks | an unsafe loader |
-| 33 | `*.so` enumerated over the filtered tree | the unfiltered-enumeration fixture |
+| Mutant | Killed by |
+| --- | --- |
+| a derived value accepts two matches | the two-match case |
+| the account check always passes | the four refused accounts |
+| an archive member of any type, with a special bit, duplicated, with an unplain name, or climbing `..` | the unsafe-member cases |
+| archive modes not masked | the planned package's `0755`/`0644` |
+| an unresolved dependency accepted | the `not found` trace |
+| `*.so` enumerated over the filtered tree | `libonly.so.1` |
+| IGNORED names copied | the closure plan |
+| a dpkg mismatch accepted; merged-usr spelling not matched; unattributed list unbounded | the three attribution tests |
+| tree owner or mode not compared | the difference cases |
+| an installed tree, the store group, a destination owner, or the enforce-mode profiles not assessed | the fact and profile cases |
+| identity-law separators changed | the digest equality |
+| a verifier's observation overwritten on failure | the surviving-observation test |
+| the three command-record mutants carried from M8-D2, re-anchored to `VERDICTS` and `observer` | the record tests |
 
-Each ownership, digest and listing fact has exactly one check, so no mutant is
-masked by an earlier guard; a mutant whose fact is implied by another check is
-not listed (there is no separate `runtime_digest` check, because exact
-`runtime.json` bytes and the exact tree imply it). Mutants whose tests are Linux-only report NOT PROVEN on Windows, as in M8-D2;
-they count only from the Linux `verify.yml` run.
+Linux only (NOT PROVEN on Windows, killed only by the Linux `verify.yml` run):
+staged trees not compared; `cp` dropped from the checked root tools; launch
+destinations not required fresh; a loaded launch profile not refused; host
+sources' custody skipped; the loader's custody skipped; the writer truncating
+instead of `O_EXCL`; verify reading staging instead of recomputing (killed by
+the staging-deleted accepting control); tree summaries unbounded; and M8-D2's
+judge refusing every `constructicon-m8-*` again.
 
-## Changes this design implies
+**Not mutated, with the reason.** There is no separate `runtime_digest` check,
+because exact `runtime.json` bytes and the exact tree imply it. The launch
+destinations' ancestor checks in `judge-launch` and `verify-launch` are kept,
+but on this layout the host sources' custody walks the same ancestors (`/`,
+`/etc`, `/var/lib` through dpkg's database) first, so removing them is
+unobservable and a mutant would survive for that reason alone.
 
-- `scripts/ci/m8_host_artifacts.py`: the launch inventory and pins, the shared
-  closure plan, dpkg attribution, the tar plan, the stdlib digest, the three
+## Changes
+
+- `scripts/ci/m8_host_artifacts.py`: the launch inventory, derived values, the
+  shared closure plan with the loader's `--list`, dpkg attribution, the vendor
+  plan, the stdlib identity law and inventory, the one writer, the three
   commands, and the narrowed qualification profile check.
-- `scripts/ci/build_m8_runtime.py`: entries from the shared plan, which resolves
-  dependencies with the loader's `--list` instead of bare `ldd`; guard and
-  output keys unchanged.
-- `tests/test_m8_host_artifacts.py`, `scripts/check_m8_host_artifact_mutations.py`.
-- `.github/workflows/m8-containment.yml`: the parity test added to the
+- `scripts/ci/build_m8_runtime.py`: entries from the shared plan through the
+  same writer; guard and output keys unchanged.
+- `scripts/ci/constructicon-m8-launch.apparmor`: the header comment now names
+  the private host (owner decision 3). Its digest changes; nothing pins it.
+- `tests/test_m8_host_runtime.py` (new), `tests/test_m8_host_artifacts.py`
+  (the writer pin and the narrowed judge), `tests/test_m8_containment_workflow.py`
+  (the foundation step's inventory), `scripts/check_m8_host_artifact_mutations.py`.
+- `.github/workflows/m8-containment.yml`: the two parity tests in the
   foundation lane's `m8-service` step. No provisioning line changes.
-- This document's runbook. M8-D2's document is not edited.
+
+**Local evidence (Windows, before any Linux run).** `uv run verify`: ruff,
+mypy and import-linter passed. Pytest gave 2,974 passed and 618 skipped; the
+one failure was this document's manifest digest before its refresh. The
+inventory killed all 41 portable mutants (M8-D2's 19 and this change's 22).
+The 28 Linux-only mutants (M8-D2's 19, including the narrowed judge, and this
+change's 9) report NOT PROVEN here, which is not evidence. **Unexecuted until
+Linux CI runs:** every Linux-only test in both files, both foundation-lane
+parity tests, the CI builder on the shared plan, and those 28 mutants.
 
 ## Limits
 
@@ -497,25 +519,54 @@ they count only from the Linux `verify.yml` run.
 - **Disk:** staging and the installed copy each hold about 340 MB of vendor
   package plus the closure. R10 checks free space.
 
-## Open questions for the owner
+## Owner decisions (relayed 2026-09-24)
 
-1. **Operator-store publication needs root to run repository code.**
-   `publish_descriptor_offline`, `activate_offline` and `maintain_offline`
-   `fchown` metadata to uid 0 (`operator_store.py:805-816`), and CI runs them as
-   root. This design installs only the empty store root. Under the ruling, N4
-   needs either an owner decision on how a bundle is published on the host, or
-   a publication path whose root part is stock tools.
-2. **N4's controller runs repository code unprivileged.** The #73 decision
-   reads "the credential host never running repository code"; the #94 ruling
-   bars root. The launcher, supervisor and bridge are repository code by
-   construction. N4 needs the owner to confirm that reviewed code at a merged
-   `C` may run as `m8-service`, and a provisioning path for its Python
-   environment (for example `uv.lock`'s hashes). Not designed here.
-3. **The launch profile's header** says "Provisioned only on the disposable
-   Linux proof runner … No host-wide change" (`:3-4`). Installing it on the host
-   contradicts the comment. Recommended: amend the comment in the implementation
-   PR (its digest is not pinned in source; CI recomputes it).
-4. **The in-zone vendor image** (see "How N4's lane consumes it").
+Relayed to the implementing session by the orchestrator; not yet linked from a
+GitHub comment, and the PR should link them.
+
+1. **Store-bundle publication runs as root, as the root boundary's single
+   named exception.** The #94 ruling (root executes no repository code)
+   governs provisioning, where root is avoidable. Store custody is not: N3a's
+   law makes the bundle root-owned so the runtime uid cannot alter descriptors
+   (`operator_store.py:805-816`), and the #73 decision names "a vendor login
+   under the maintenance/lock procedure" for the credential role. So the N3c
+   offline helpers (`publish_descriptor_offline`, `maintain_offline`,
+   `activate_offline`) may run as root, and nothing else of the repository
+   may. They run only from provenance-verified blobs of `C` (the same stock-git
+   proof as R11), through `/usr/bin/python3 -I`, never from a checkout. That
+   procedure belongs to N4's runbook; this runbook runs none of them. The N4
+   design at `a2b2004` (`M8-N4-state-review.md`, "Host-runtime interface
+   required", item 4) still says the service user runs every offline helper.
+   The two must be reconciled in N4's amendment.
+2. **The controller environment is its own reviewed slice.** Repository code
+   runs as `m8-service`, unprivileged: C's tree with hash-pinned dependencies
+   from `uv.lock`, built unprivileged into staging, installed read-only and
+   root-owned by stock `cp`, recomputed by a verifier, and needing no network
+   at run time. It is split out of this change because a virtual environment
+   is not relocatable (`pyvenv.cfg` and script shebangs carry absolute paths),
+   the pinned tool (`uv` or pip) must itself be obtained and pinned on the
+   host, and the wheels must match the host's Python 3.12 while CI uses 3.11.
+   Its interface to this set is the same: a destination under root-only
+   ancestors, a staged tree the judge compares, and a verifier that
+   recomputes.
+3. **The launch profile's header** is updated in this change. It no longer
+   says "Provisioned only on the disposable Linux proof runner … No host-wide
+   change"; it names this document. Nothing in the qualification or
+   containment tests pinned that text.
+4. **The in-zone vendor image follows N4's design, not this one.** N4's
+   design at `a2b2004` ("Host-runtime interface required", item 1) requires
+   these in the runtime root: the pinned `codex` binary (SHA-256
+   `56ef98ab…62da`), the bridge, the supervisor, `/usr/bin/python3`, and the
+   fixed model catalog at one fixed absolute path named by
+   `model_catalog_json`. It forbids `/etc/codex`. It does not yet fix the two
+   in-runtime paths, or whether the catalog is the pinned bytes or a derived
+   form. **Marked interface:** when N4 fixes them, they become entries of
+   `runtime_plan` (its docstring says so), sourced from the verified archive
+   member and catalog that this set already stages. CI's builder then gains
+   them through the same shared plan, and the parity test covers them.
+   Nothing is invented here: the runtime this change installs carries no
+   vendor file, and `L/native-codex` and `L/codex-models.json` hold the pinned
+   inputs as CI lays them out.
 
 ## Review dispositions
 
@@ -549,7 +600,7 @@ unverified; none of its findings rests on one.
 - **Checked and not found.** The runtime inventory has no owner field
   (`linux.py:72-102`); the listed runtime components match the builder; the
   exclusions match their CI-only uses; `root:m8-service 0750` satisfies
-  `_open_trusted_directory`; open question 1 is correctly framed; the narrowed
+  `_open_trusted_directory`; the store-publication question (now owner decision 1) was correctly framed; the narrowed
   qualification judge is safe at source level (distinct profile names). No
   non-operator bypass of root's `cp` was found, conditional on the judge being
   implemented as specified.
@@ -591,7 +642,9 @@ written authorization on #77 must name:
   vendor credential or account, model calls, publishing an operator-store
   bundle, any checkout or clone with a working tree, git or any repository file
   run as root, the CI scripts, setting `RUNNER_ENVIRONMENT`, sysctl changes,
-  `Save-VM`, and any change to M8-D2's installed set;
+  `Save-VM`, and any change to M8-D2's installed set. The root boundary's one
+  named exception, the N3c offline helpers run from provenance-verified blobs
+  (owner decision 1), belongs to N4's runbook; this runbook runs none of them;
 - how long the evidence is kept.
 
 ## R9 — Checkpoint, then start (PowerShell)
@@ -668,6 +721,7 @@ test "${#C}" -eq 40 && /usr/bin/mkdir "$W" \
   && "${G[@]}" rev-list --first-parent refs/heads/main | grep -qxF "$C" && echo first-parent \
   && "${G[@]}" ls-tree "$C" -- scripts/ci/m8_host_artifacts.py scripts/ci/constructicon-m8-launch.apparmor \
        src/constructicon/substrate/executors/_supervisor.py src/constructicon/substrate/executors/_egress_bridge.py \
+       src/constructicon/substrate/executors/linux.py .github/workflows/m8-containment.yml \
   && "${G[@]}" cat-file blob "$C:scripts/ci/m8_host_artifacts.py" > "$W/m8_host_artifacts.py" \
   && "${K[@]}" --output "$W/codex.tar.gz" "$T" \
   && "${K[@]}" --output "$W/codex-models.json" "$M" \
@@ -675,7 +729,7 @@ test "${#C}" -eq 40 && /usr/bin/mkdir "$W" \
   && echo "R11 complete"
 ```
 
-The `rev-parse` and `ls-remote` SHAs must be equal; each of the four `ls-tree`
+The `rev-parse` and `ls-remote` SHAs must be equal; each of the six `ls-tree`
 lines must read `100644 blob <oid>`, a tab, then its path. The tarball must hash
 to `a822187e1a2420c61c5926721bfbd878701ed95547c9bb0d4de4498a16ba1821` and the
 catalog to `d7136a413cfac1b5b1686d9e0dcc5c80ca05bebed5e9fc3911376561d0ef6ee8`.
@@ -762,7 +816,7 @@ Posted on #77, all of it:
 2. The R10 output ending in `R10 passed`, including the package versions, the
    account line, `passwd -S` and `sudo -l`.
 3. The R11 output: `main`, the matching `ls-remote` line, `first-parent`, the
-   four `ls-tree` lines, the three sha256 lines and `R11 complete`.
+   six `ls-tree` lines, the three sha256 lines and `R11 complete`.
 4. `stage.json`, `judge.json` (`ready: true`), the `R13 installed` line, and
    `verify.json` (`installed: true`, `runtime_digest`, the blob digests, the
    package versions and the unattributed list).

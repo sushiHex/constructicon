@@ -169,8 +169,11 @@ def test_script_reads_no_environment_and_no_marker() -> None:
     }
 
 
-def test_script_never_writes() -> None:
-    """It is a judge and a verifier; every write on the host is root's stock tools."""
+def test_only_the_stager_writes() -> None:
+    """Judges and verifiers never write; ``materialize`` is the one writer, used by the stager.
+
+    Every write on the host itself is root's stock tools.
+    """
 
     names = names_in_script()
     assert "lstat" in names, "the name walk found nothing, so it proved nothing"
@@ -178,18 +181,41 @@ def test_script_never_writes() -> None:
         "O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "O_APPEND", "write", "write_bytes",
         "write_text", "mkdir", "makedirs", "chmod", "fchmod", "chown", "fchown", "unlink",
         "remove", "rmdir", "rename", "replace", "symlink", "link", "truncate", "fsync",
-        "copy", "copyfile", "move", "open",
+        "copy", "copyfile", "move", "materialize",
     }  # fmt: skip
-    # ``os.open`` reads with O_RDONLY; the builtin ``open`` is not used at all.
-    assert names & writes == {"open"}
     tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
+    functions = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    writers = {
+        name
+        for name, node in functions.items()
+        for n in ast.walk(node)
+        if (n.attr if isinstance(n, ast.Attribute) else getattr(n, "id", None)) in writes
+    }
+    assert writers == {"materialize", "stage_launch"}, writers
+    # The stager's only write is the call to the writer.
+    stager = {
+        n.attr if isinstance(n, ast.Attribute) else n.id
+        for n in ast.walk(functions["stage_launch"])
+        if isinstance(n, ast.Attribute | ast.Name)
+    }
+    assert stager & writes == {"materialize"}
+    writer = ast.unparse(functions["materialize"])
+    assert "os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW" in writer
+    # The builtin ``open`` is not used at all; every other ``os.open`` reads.
     assert not [n for n in ast.walk(tree) if isinstance(n, ast.Name) and n.id == "open"]
     opens = [
-        n
-        for n in ast.walk(tree)
+        (name, ast.unparse(n))
+        for name, node in functions.items()
+        for n in ast.walk(node)
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "open"
     ]
-    assert len(opens) == 1 and "os.O_RDONLY" in ast.unparse(opens[0])
+    assert len(opens) == 4, opens
+    for name, call in opens:
+        assert (
+            name == "materialize"
+            or call.startswith("tarfile.open(fileobj=stream, mode='r:gz')")
+            or ("os.O_RDONLY" in call and "O_WR" not in call and "O_CREAT" not in call)
+        ), (name, call)
 
 
 def test_production_root_and_destinations_are_fixed() -> None:
@@ -1180,6 +1206,17 @@ def test_an_already_loaded_profile_refuses_judgement(
 ) -> None:
     host.kernel.write_text(KERNEL_LIST + "constructicon-m8-payload (complain)\n", encoding="utf-8")
     refused(host, capsys, "already loaded")
+
+
+@LINUX
+def test_loaded_launch_profiles_do_not_block_the_qualification_judge(
+    host: Host, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The judge refuses only its own two profiles, so the launch set can stay loaded."""
+
+    launch = "constructicon-m8-launch (enforce)\nconstructicon-m8-workload (enforce)\n"
+    host.kernel.write_text(KERNEL_LIST + launch, encoding="utf-8")
+    judged(host, capsys)
 
 
 @LINUX

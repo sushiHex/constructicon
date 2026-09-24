@@ -333,6 +333,8 @@ jobs:
               tests/runtime/test_async_workspace.py tests/api/test_capture_assembly.py \
               tests/substrate/test_contained_gates.py tests/substrate/test_gate_lifecycle.py \
               tests/runtime/test_async_gates.py \
+              tests/test_m8_host_runtime.py::test_the_host_writer_reproduces_the_ci_runtime \
+              tests/test_m8_host_runtime.py::test_the_loader_list_resolves_as_ldd_does \
               -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
       - name: Kill the native review-regression mutants
         if: matrix.lane == 'foundation'
