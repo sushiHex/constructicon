@@ -333,11 +333,10 @@ is for M8-D2; it is N4's first action on the host. After a reboot or any H3
 trigger, `verify-launch` and the probe run again under a new authorization.
 
 `L/native-codex` and `L/codex-models.json` are the pinned vendor inputs, laid
-out as CI lays them out. The production launcher can only execute what is
-inside its runtime root (`linux.py:331`, the root bound read-only at `/`), and
-CI builds a runtime containing the vendor only as a test fixture. The in-zone
-production image is therefore N4's to define; when it is, it becomes one more
-staged tree in this inventory, built by the same stage, judge and verify.
+out as CI lays them out. They are also the production vendor. N4's launcher
+binds them read-only into the zone at `/opt/codex` and
+`/opt/codex-models.json` and checks their custody at each launch. They are
+not baked into the runtime root (owner decision 4).
 
 ## What CI can and cannot prove
 
@@ -579,6 +578,35 @@ GitHub comment, and the PR should link them.
    Nothing is invented here: the runtime this change installs carries no
    vendor file, and `L/native-codex` and `L/codex-models.json` hold the pinned
    inputs as CI lays them out.
+
+   **Decided (orchestrator, 2026-09-24): the vendor is bound, not baked.** N4's
+   lane fixed the in-zone paths (`codex_lane.py` at `ef145d7`):
+   `/opt/codex/bin/codex` and `/opt/codex-models.json`. The vendor tree
+   stays where this launch set installs it:
+   - `L/native-codex` is the pinned package;
+   - `L/codex-models.json` is the pinned catalog.
+
+   `verify-launch` checks both against the pinned tarball and catalog digests
+   at installation and at every requalification. N4's launcher binds them
+   read-only into the zone, at `/opt/codex` and `/opt/codex-models.json`. Its
+   per-launch check is custody: root-owned, no group or other write, and real
+   directories and files. It does not rehash them. That is the same trust
+   basis as the rest of the root-owned launch root.
+
+   Baking the vendor into the runtime image was built and dropped unmerged,
+   for its cost:
+   - The launcher's `check_artifacts` recomputes `runtime_digest` over the
+     whole runtime before every launch (`linux.py`), so about 340 MB more
+     would be hashed per launch. That is roughly 0.3 to 0.7 s across every
+     containment test and mutant.
+   - CI's startup, bridge and placement fixture images copy the runtime and
+     would copy the package with it.
+   - CI would have to fetch the tarball before building the runtime.
+   - The paths could not be single-sourced from `C` while `codex_lane.py`
+     was not on `main`.
+
+   `runtime_plan` keeps no vendor slot; its docstring says the vendor is
+   bound, not baked.
 
 ## Addendum: the controller environment (owner decision 2)
 

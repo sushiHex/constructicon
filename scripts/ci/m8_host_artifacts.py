@@ -523,8 +523,10 @@ def runtime_plan(
     UNFILTERED tree (as CI always enumerated it), the fixed supervisor, bridge,
     directories and egress leaf, and the ``python3`` link. Files keep their
     first source, are ``0555`` if the source is executable and ``0444``
-    otherwise; directories are ``0555``. N4's in-zone vendor image, once its
-    paths are fixed, is added here and nowhere else (M8-N4-host-runtime.md).
+    otherwise; directories are ``0555``. The vendor is bound, not baked: N4's
+    launcher binds the launch root's ``native-codex`` and catalog read-only
+    into the zone, so no vendor file belongs here (M8-N4-host-runtime.md,
+    owner decision 4).
     """
 
     entries: dict[str, Entry] = {".": (".", "directory", 0o555, None)}
