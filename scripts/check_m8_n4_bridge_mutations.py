@@ -397,7 +397,7 @@ MUTANTS = (
         LANE + "EvidenceFile.publish",
         "os.fsync(self._fd)",
         "pass",
-        T + "test_a_failed_evidence_write_leaves_no_file_at_all[fsync]",
+        T + "test_publish_syncs_the_records_fd_before_it_links_the_name",
     ),
     (
         "N4-L38 a failure after the link removes the published name",

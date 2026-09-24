@@ -495,6 +495,35 @@ def test_a_failed_evidence_write_leaves_no_file_at_all(tmp_path, monkeypatch, fa
     assert os.listdir(tmp_path) == []
 
 
+def test_publish_syncs_the_records_fd_before_it_links_the_name(tmp_path, monkeypatch):
+    """RL-6, by order: a mutant that drops the fsync must fail this by
+
+    assertion. ``os.fsync`` and ``os.link`` are replaced with recording
+    wrappers that delegate to the real functions, so the write still lands;
+    only the order of calls is observed. The record's own fsync must appear,
+    and it must appear before the temporary is linked to its final name --
+    portable across Windows (no directory fsync) and Linux (one more fsync,
+    of the directory, after the link).
+    """
+
+    calls: list[str] = []
+    real_fsync, real_link = os.fsync, os.link
+
+    def fsync(fd):
+        calls.append("fsync")
+        return real_fsync(fd)
+
+    def link(src, dst):
+        calls.append("link")
+        return real_link(src, dst)
+
+    monkeypatch.setattr(codex_lane.os, "fsync", fsync)
+    monkeypatch.setattr(codex_lane.os, "link", link)
+    write_evidence(tmp_path / "evidence.json", {"faults": []})
+    assert "fsync" in calls and "link" in calls
+    assert calls.index("fsync") < calls.index("link")
+
+
 def test_a_failure_after_the_link_removes_the_published_name_too(tmp_path, monkeypatch):
     def fail(path):
         raise OSError(5, "injected")
