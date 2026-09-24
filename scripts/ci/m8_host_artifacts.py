@@ -1314,6 +1314,16 @@ def controller_selection(commit: str, workspace: Path, record: dict) -> tuple[di
     return blobs, selected
 
 
+def require_locked(stream: IO[bytes], wheel: dict[str, str]) -> None:
+    """The wheel file is the one the lock pins; the stream is left at its start."""
+
+    require(
+        hashlib.file_digest(stream, "sha256").hexdigest() == wheel["sha256"],
+        f"{wheel['file']} is not the locked wheel",
+    )
+    stream.seek(0)
+
+
 @contextmanager
 def controller_plan(
     commit: str, workspace: Path, record: dict
@@ -1326,11 +1336,7 @@ def controller_plan(
         planned = []
         for wheel in selected:
             stream = stack.enter_context(open_regular(workspace / WHEELS / wheel["file"]))
-            require(
-                hashlib.file_digest(stream, "sha256").hexdigest() == wheel["sha256"],
-                f"{wheel['file']} is not the locked wheel",
-            )
-            stream.seek(0)
+            require_locked(stream, wheel)
             try:
                 archive = stack.enter_context(zipfile.ZipFile(stream))
                 planned.append(wheel_entries(archive, wheel["file"]))

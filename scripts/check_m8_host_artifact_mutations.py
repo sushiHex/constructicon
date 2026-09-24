@@ -144,6 +144,10 @@ CONTROLLER_PORTABLE = (
     ("no path installed twice", MODULE + "controller_entries",
      '        require(name not in entries, f"{name} would be installed twice")', "        pass",
      CONTROLLER + "test_the_tree_joins_the_package_and_every_wheel_once"),
+    # A plain function, not controller_plan: a decorated target cannot be swapped.
+    ("a wheel must match its lock digest", MODULE + "require_locked",
+     'hashlib.file_digest(stream, "sha256").hexdigest() == wheel["sha256"]', "True",
+     CONTROLLER + "test_a_wheel_must_be_the_one_the_lock_pins"),
     ("the module name is popped", MODULE + "controller_command", "sys.argv.pop(1)",
      "sys.argv[1]", CONTROLLER + "test_the_command_runs_a_module_as_python_m_would"),
 )  # fmt: skip
@@ -159,9 +163,6 @@ CONTROLLER_LINUX = (
      CONTROLLER + "test_each_controller_precondition_refuses_judgement"),
     ("the controller is fresh-only", MODULE + "judge_controller", "absent(root / CONTROLLER)",
      "True", CONTROLLER + "test_each_controller_precondition_refuses_judgement"),
-    ("a wheel must match its lock digest", MODULE + "controller_plan",
-     'hashlib.file_digest(stream, "sha256").hexdigest() == wheel["sha256"]', "True",
-     CONTROLLER + "test_each_controller_precondition_refuses_judgement"),
     ("verify recomputes, never reads staging", MODULE + "verify_controller",
      'record["observed"] = observe_controller(root, listing, inventory)',
      'record["observed"] = observe_controller(root, listing, '

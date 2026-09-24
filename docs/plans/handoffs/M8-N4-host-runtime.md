@@ -821,14 +821,18 @@ argument.
   `controller_entries`, and the four commands.
 - The tests are `tests/test_m8_controller_env.py`, with 66 portable and 23
   Linux-only.
-- `scripts/check_m8_host_artifact_mutations.py` gains 24 portable mutants,
-  all killed locally by assertion, and 6 Linux-only mutants, which are NOT
+- `scripts/check_m8_host_artifact_mutations.py` gains 25 portable mutants,
+  all killed locally by assertion, and 5 Linux-only mutants, which are NOT
   PROVEN locally.
 - The verify-lane proof is `verify.yml`'s
   `M8_CONTROLLER_REQUIRED=1 … ::test_the_staged_controller_imports_under_isolated_python`.
 
-**Unexecuted until Linux CI runs:** the Linux-only tests, the 6 mutants and
+**Unexecuted until Linux CI runs:** the Linux-only tests, the 5 mutants and
 the import proof. Locally on Windows they are skips, which is not evidence.
+(The first Linux run found the wheel-digest mutant NOT PROVEN because it never
+applied: it targeted `controller_plan`, a `@contextmanager`, whose wrapper the
+harness cannot swap. It now targets the plain `require_locked`, with a
+portable test that kills it.)
 Two things differ from the text above:
 - the command pops the module name (`sys.argv.pop(1)`), so the module sees
   `python -m`'s `argv`, and a portable test runs it;

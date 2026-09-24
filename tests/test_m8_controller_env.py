@@ -375,6 +375,14 @@ def test_every_extraction_bound_binds(bound: str, monkeypatch: pytest.MonkeyPatc
         entries_of(wheel)
 
 
+def test_a_wheel_must_be_the_one_the_lock_pins() -> None:
+    stream = io.BytesIO(b"the locked wheel")
+    artifacts.require_locked(stream, {"file": "x.whl", "sha256": sha256(b"the locked wheel")})
+    assert stream.tell() == 0, "the stream is left at its start for unpacking"
+    with pytest.raises(ValueError, match=r"x\.whl is not the locked wheel"):
+        artifacts.require_locked(stream, {"file": "x.whl", "sha256": sha256(b"another wheel")})
+
+
 def test_zip64_is_needed_at_the_four_gibibyte_boundary() -> None:
     info = zipfile.ZipInfo("big")
     info.header_offset = 0  # set on every member of an archive read back
