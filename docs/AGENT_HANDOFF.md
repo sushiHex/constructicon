@@ -15,6 +15,48 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## N4 — credential-free startup lane and its host prerequisites
+
+**Merged on 2026-09-24 UTC, each with every check green on its final head:**
+- `e26f438` (PR #105), the launch set installed from reviewed artifacts;
+- `908b9ae` (PR #106), the narrow `CODEX_HOME` layout;
+- `88c033d` (PR #107), the hash-pinned controller environment;
+- `40b663e` (PR #108), the authenticated-startup lane.
+
+Everything N4 needs before the owner is now on `main`. The lane holds custody
+by the lock it inherits from root's maintenance helper. It passes only on
+affirmative facts, reads spend back before any thread, and writes closed
+evidence. On #108's final head, every Linux proof passed and all four proof
+lanes killed 671 mutants by assertion, none NOT PROVEN.
+
+**Corrections worth carrying.**
+- **The unsolicited `CONNECT chatgpt.com:443` was plugin sync.** It is
+  disabled in the sealed configuration (`[features] plugins = false`), and
+  the relay still denies it.
+- **A default literal is a decision made silently.** The lane's `--expected`
+  defaulted to `pro`, so an account reporting the other approved plan,
+  `prolite`, would have stopped qualification. Qualification now binds the
+  approved pair, and active custody requires the recorded literal.
+- **A verdict inferred from no faults is not a pass.** A startup whose
+  launcher never conversed wrote `faults: []`. Every required fact is now
+  named, and a missing one is a fault.
+- **Login under active custody would have rewritten the live credential with
+  no withdrawal.** Login now refuses outside maintenance.
+
+**Token refresh** ([research](../research/m8-codex-token-refresh.md)). One
+device login persists; the pinned client renews it in place when it is used,
+never while idle. The server's lifetime is undocumented, so S10 measures it.
+A vendor process killed mid-save can empty `auth.json` and cost the binding.
+
+**What this slice does NOT establish.**
+- No login, readback, refresh or model request has happened on the host.
+- `vendor_conformance_qualified` stays false until the owner-attended session
+  records runbook S0 to S10 on #77.
+- The two credential managers inside one app-server refresh without a lock
+  between them.
+
+---
+
 ## N3c — operator-store maintenance and the rest of the N3 matrix
 
 **Merged `a8a8f63` (PR #101) on 2026-09-24 UTC from head `3810b10`. It

@@ -18,8 +18,9 @@ same typed control plane.
 > Authored intent may be ergonomic. Executed reality must be explicit.
 
 **Developer preview.** M1 through M7.1 are complete. M8 has landed executor
-contracts, networkless Linux containment, safe WRITE capture, and contained
-gates; live Claude Code, Codex, and Pi adapters are not available yet. See
+contracts, networkless Linux containment, safe WRITE capture, contained gates,
+and the credential-free half of the Codex subscription adapter. Live Claude
+Code, Codex, and Pi adapters are not available yet. See
 [current status](#what-is-implemented) and
 [open work](https://github.com/sushiHex/constructicon/issues).
 
@@ -323,8 +324,22 @@ Contained async gates use the same boundary to check the exact prepared merge
 snapshot. Runtime identification happens without a candidate mount; cancellation
 and descendant cleanup complete before authority is minted.
 
-Still outstanding: provider-route conformance and the live adapters. A networkless launcher is
-not a working subscription integration or a live coding-agent backend. Track
+The Codex subscription adapter follows [ADR 0021](docs/adr/0021-subscription-executors-bind-operator-stores.md).
+Its credential-free half is merged:
+- a strict READ and WRITE operator adapter for the pinned client;
+- operator-store custody with offline maintenance and activation;
+- vendor egress through a host relay limited to the sealed vendor
+  destinations, for one acquisition at a time;
+- installation on a private Linux host from reviewed artifacts only;
+- an authenticated-startup lane that refuses unless purchased credits are
+  proved zero.
+
+All of it is proved against hostile fixtures, with no login and no model
+request. The next step is the owner-attended device login on the private host.
+
+Still outstanding: provider-route conformance and the live adapters. None of
+this is yet a working subscription integration or a live coding-agent backend.
+Track
 the remaining work in the [M8 implementation record](docs/plans/handoffs/M8-implementation-record.md)
 and [authentication assessment](docs/designs/EXECUTOR_AUTHENTICATION.md).
 
