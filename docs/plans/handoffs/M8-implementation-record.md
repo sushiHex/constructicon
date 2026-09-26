@@ -2944,3 +2944,53 @@ depending on what ran before it, which is flakiness, not evidence.
   - mutant 6 killed 5 of 5 times;
   - both killed in a run of the full bridge inventory directly after the
     N3c inventory, the order that had failed.
+
+### Merged
+
+The N4 prerequisites and the lane merged on 2026-09-24 UTC. Every check was
+green on each final head: verify, runner qualification and Linux containment.
+The launch set and the controller environment are recorded in
+[M8-N4-host-runtime.md](M8-N4-host-runtime.md).
+
+| PR | Slice | Merge | Final head | Containment run |
+|---|---|---|---|---|
+| #105 | launch set | `e26f438` | `50ec94c` | [35969460318](https://github.com/sushiHex/constructicon/actions/runs/35969460318) |
+| #106 | narrow layout (above) | `908b9ae` | `fb22d26` | [35974188145](https://github.com/sushiHex/constructicon/actions/runs/35974188145) |
+| #107 | controller environment | `88c033d` | `18f3a67` | [35980325990](https://github.com/sushiHex/constructicon/actions/runs/35980325990) |
+| #108 | this lane | `40b663e` | `a4c3053` | [36053680493](https://github.com/sushiHex/constructicon/actions/runs/36053680493) |
+
+**The layout's Linux proofs ran on `fb22d26`.** These are the items listed
+above as unexecuted: the layout and descriptor proofs, refresh and
+persistence, and bubblewrap accepting `--bind-fd` and `--ro-bind-data` from
+inherited descriptors.
+
+**Every unexecuted lane item ran at `a4c3053`:** L2, L3, the inherited-custody
+proof and the Linux-only mutants. Mutants killed by assertion per proof lane:
+foundation 402, lifecycle 51, combined 196, mediation 22. None is NOT PROVEN.
+
+**Review of #108.** The connector reviewed `d01d937` and raised one P1:
+- `--expected` defaulted to `pro`;
+- an account reporting `prolite` would have refused at S4, stopping the
+  owner-attended qualification.
+
+`a4c3053` fixes it:
+- `QUALIFICATION_PLANS = ("pro", "prolite")` is bound in maintenance custody,
+  and an operator-supplied `--expected` refuses there;
+- active custody requires `--expected` naming the literal recorded at S4;
+- `--alternative` is removed.
+
+Tests and the CI run above verify the fix. By the one-pass rule, there was no
+second connector pass.
+
+**Limit added: a kill mid-save.** The pinned save truncates `auth.json` and
+then writes it ([token-refresh research](../../../research/m8-codex-token-refresh.md)).
+- A vendor process killed between the two, by the lane's deadline or by power
+  loss, can leave the file empty or partial.
+- After a server-side rotation, the previous refresh token is spent as well.
+- The next run refuses, and maintenance must log in again.
+
+The state review names this only for controller death during login. The
+window is one small write, and the vendor's save cannot be changed from here.
+
+**Remaining for N4:** the owner-attended session on `constructicon-m8`,
+runbook S0 to S10, with the evidence recorded on #77.
