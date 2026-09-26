@@ -496,15 +496,32 @@ def installed_launch() -> dict[str, object]:
         LAUNCH_PATH + "/native-codex": dict(tree, mode="0o755"),
         LAUNCH_PATH + "/codex-models.json": file(0o444, "c" * 64),
         LAUNCH_PATH + "/operator-stores": {
-            "state": "directory",
-            "uid": 0,
-            "gid": GID,
-            "mode": "0o750",
-            "entries": [],
-            "count": 0,
+            "state": "directory", "uid": 0, "gid": GID, "mode": "0o750",
         },
         "loaded_profiles": LAUNCH_LOADED.splitlines(),
     }
+
+
+def test_the_operator_store_is_observed_without_listing_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On the host the operator is outside ``m8-service``, so the ``0750`` store
+    cannot be listed (#77, R13 at ``376a3fd``). Its contents are never part of the
+    installation, so verify must not read them."""
+
+    store = tmp_path / artifacts.LAUNCH / "operator-stores"
+    store.mkdir(parents=True)
+    listdir = os.listdir
+
+    def operator_listdir(path: str | os.PathLike[str]) -> list[str]:
+        if Path(path) == store:
+            raise PermissionError(13, "Permission denied", str(path))
+        return listdir(path)
+
+    monkeypatch.setattr(os, "listdir", operator_listdir)
+    observed = artifacts.observe_launch(tmp_path, "")
+    assert observed[LAUNCH_PATH + "/operator-stores"]["state"] == "directory"
+    assert observed[LAUNCH_PATH]["entries"] == ["operator-stores"]
 
 
 def table() -> dict[str, tuple[str, int, object]]:
