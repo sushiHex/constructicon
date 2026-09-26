@@ -9,7 +9,8 @@ tag stripping. No login, credential or model call was made.
 **The question:** does the owner's device login have to happen before every
 run? **No.** One login persists in the store's `auth.json`, and the client
 renews it during use. How long a binding survives without use is set by the
-server and is not documented. S10 is the measurement.
+server and is not documented. S10 does not measure it; S10 observes only
+whether one refresh succeeds at least a day after login.
 
 ## When the client refreshes
 
@@ -80,10 +81,12 @@ payer.
 ## Consequences for N4
 
 1. **Log in once.** Later runs renew the binding by using it.
-2. **Re-login cadence is unknown until measured.** S10 (an active-path startup
-   at least 24 hours after login) observes the first refresh. If a binding
-   left idle expires quickly, a scheduled startup run (four methods, no model
-   request) would keep it renewed. That is a decision after S10, not before.
+2. **Re-login cadence stays unknown.** S10 (an active-path startup at least
+   24 hours after login) observes one refresh at that point. It does not bound
+   the lifetime. Only a binding that is actually refused shows where the limit
+   was. If refusals come often, a scheduled startup run (four methods, no
+   model request) could keep a binding in use. That is a decision for when it
+   is needed, not before.
 3. **A kill during a save can cost the binding.** Truncate-then-write is not
    atomic. A vendor process killed between the two, by the lane's deadline or
    by power loss, can leave `auth.json` empty or partial. If the server had

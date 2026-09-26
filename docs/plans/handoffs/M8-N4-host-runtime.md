@@ -2,7 +2,6 @@
 
 Status: design, implementation and bounded operator runbook for the host prerequisite of
 [N4 (#77)](https://github.com/sushiHex/constructicon/issues/77). Base: `9006f93`.
-Merged `e26f438` (PR #105) on 2026-09-24 UTC from head `50ec94c`.
 It extends [M8-D2](M8-D2-host-installation.md) (#94, merged `8c1b14e`) and does
 not redesign it. Authority: the owner's
 [three-role/two-host decision](https://github.com/sushiHex/constructicon/issues/73#issuecomment-5752858107)
@@ -611,8 +610,7 @@ GitHub comment, and the PR should link them.
 
 ## Addendum: the controller environment (owner decision 2)
 
-Status: merged `88c033d` (PR #107) on 2026-09-24 UTC from head `18f3a67`.
-Base: `e26f438` (#105 merged). The
+Status: design for the follow-on slice. Base: `e26f438` (#105 merged). The
 same authority and ruling apply. Root runs one stock command, and the
 reviewed script stages, judges and verifies unprivileged.
 

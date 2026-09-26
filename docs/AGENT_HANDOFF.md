@@ -45,7 +45,9 @@ lanes killed 671 mutants by assertion, none NOT PROVEN.
 
 **Token refresh** ([research](../research/m8-codex-token-refresh.md)). One
 device login persists; the pinned client renews it in place when it is used,
-never while idle. The server's lifetime is undocumented, so S10 measures it.
+never while idle. The server's lifetime is undocumented and stays unknown:
+S10 observes whether one refresh succeeds a day after login, not how long a
+binding lasts.
 A vendor process killed mid-save can empty `auth.json` and cost the binding.
 
 **What this slice does NOT establish.**
