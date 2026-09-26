@@ -2994,3 +2994,36 @@ window is one small write, and the vendor's save cannot be changed from here.
 
 **Remaining for N4:** the owner-attended session on `constructicon-m8`,
 runbook S0 to S10, with the evidence recorded on #77.
+
+### First host installation: a verify defect (2026-09-26)
+
+R8 ran on the host at `C` = `376a3fd` under the
+[owner's authorization](https://github.com/sushiHex/constructicon/issues/77#issuecomment-5841548875).
+The steps up to the root install all passed:
+- R10, after the permitted `useradd m8-service`;
+- R11, with every pin matched;
+- R12, with nothing unattributed;
+- R13's judge (`ready: true`), and the chain printed `R13 installed`.
+
+**`verify-launch` then refused an installation that was correct**
+([output](https://github.com/sushiHex/constructicon/issues/77#issuecomment-5841573222)).
+- `observe_launch` listed every directory that was not a tree, including
+  `operator-stores`.
+- That directory is `0750 root:m8-service` by design, and the operator account
+  is outside that group. So the listing raised `PermissionError`, the entry
+  became "unobservable", and the assessment failed.
+- The tests missed it because their fake host's store belongs to the test
+  user, who can always list it.
+
+**Fix.** Only the launch root's entries are reviewed, so only the launch root
+is listed. The store is judged on uid, gid and mode alone, as the table always
+said. What guards it:
+- a portable test that denies the listing as the host did;
+- a mutant, "the store is never listed".
+
+**Recovery, as the runbook says.** The output was posted, then
+`pre-m8-runtime` was restored with the VM off. No vendor store ever existed.
+- The restore is an M8-D2 requalification trigger. The next session reruns
+  M8-D2's verify and R5 before R10.
+- The controller runbook (R16-R20) did not run.
+- The rerun needs a new authorization naming the new `C`.

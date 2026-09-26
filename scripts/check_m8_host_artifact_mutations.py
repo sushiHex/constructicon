@@ -201,6 +201,9 @@ LAUNCH_LINUX = (
     ("tree summaries are bounded", MODULE + "observe_launch",
      'entry["differences"] = differences[:TREE_SUMMARY]', 'entry["differences"] = differences',
      RUNTIME + "test_a_tree_summary_is_bounded"),
+    ("the store is never listed", MODULE + "observe_launch",
+     "if destination == LAUNCH:", "if True:",
+     RUNTIME + "test_the_operator_store_is_observed_without_listing_it"),
 )  # fmt: skip
 
 MUTANTS = (

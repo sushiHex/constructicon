@@ -989,9 +989,12 @@ def observe_launch(root: Path, listing: str, expected: dict | None = None) -> di
                 entry["differences"] = differences[:TREE_SUMMARY]
             elif stat.S_ISDIR(info.st_mode):
                 entry["state"] = "directory"
-                listed = sorted(os.listdir(path))
-                entry["entries"] = listed[:16]
-                entry["count"] = len(listed)
+                # Only the launch root's entries are reviewed. The store is
+                # 0750 root:m8-service, which the operator cannot list.
+                if destination == LAUNCH:
+                    listed = sorted(os.listdir(path))
+                    entry["entries"] = listed[:16]
+                    entry["count"] = len(listed)
             elif stat.S_ISREG(info.st_mode):
                 entry["state"] = "file"
                 entry["sha256"] = hash_regular(path)
