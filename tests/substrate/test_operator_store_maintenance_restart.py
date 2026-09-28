@@ -17,6 +17,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import sysconfig
 import tempfile
 from pathlib import Path
 
@@ -126,6 +127,118 @@ def service_root(root: Path) -> tuple[int, int]:
     os.chown(root, 0, gid)
     os.chmod(root, 0o750)
     return uid, gid
+
+
+PREPARE_AS_SERVICE = """
+import socket, sys
+from constructicon.substrate.executors import codex_lane
+def resolve(host, port, *, family, type):
+    assert family == socket.AF_INET and type == socket.SOCK_STREAM and port == 443
+    assert host in ('auth.openai.com', 'chatgpt.com')
+    address = '8.8.8.8' if host == 'auth.openai.com' else '8.8.4.4'
+    return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', (address, port))]
+codex_lane.socket.getaddrinfo = resolve
+raise SystemExit(codex_lane.main(['prepare', '--out', sys.argv[1]]))
+"""
+READ_PREPARED_AS_SERVICE = """
+import json, os, stat, sys
+from pathlib import Path
+from constructicon.substrate.executors import codex_lane
+from constructicon.substrate.executors.egress import EgressDestination
+root = Path(sys.argv[1])
+assert stat.S_IMODE(root.stat().st_mode) == 0o700
+assert {path.name for path in root.iterdir()} == {
+    'config.toml', 'login-policy.json', 'startup-policy.json', 'pin-record.json'}
+assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in root.iterdir())
+config = (root / 'config.toml').read_text(encoding='utf-8')
+assert config == codex_lane.production_configuration()
+assert codex_lane.configured_model(config) == 'gpt-5.5'
+login = codex_lane._policy(root / 'login-policy.json')
+startup = codex_lane._policy(root / 'startup-policy.json')
+auth = EgressDestination('auth.openai.com', 443, '8.8.8.8')
+chatgpt = EgressDestination('chatgpt.com', 443, '8.8.4.4')
+assert login.destinations == (auth,) and startup.destinations == (auth, chatgpt)
+assert login.connections == startup.connections == 8
+pin = json.loads((root / 'pin-record.json').read_text(encoding='utf-8'))
+assert pin['completed'] is True
+assert [item['address'] for item in pin['pins']] == ['8.8.8.8', '8.8.4.4']
+print('service-consumed-prepared-inputs')
+"""
+
+
+def test_root_lane_prepares_and_consumes_s1_only_as_service(protected_root: Path) -> None:
+    """The actual uid boundary accepts S1 files; DNS is scripted in the child."""
+
+    uid, gid = service_root(protected_root)
+    parent = protected_root / "operator"
+    parent.mkdir(mode=0o700)
+    os.chown(parent, uid, gid)
+    out = parent / "s1"
+    options = {
+        "user": uid, "group": gid, "extra_groups": [],
+        "env": {"HOME": "/home/m8-service", "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
+    }
+    prepared = subprocess.run(
+        [sys.executable, "-c", PREPARE_AS_SERVICE, str(out)],
+        capture_output=True, text=True, timeout=10, check=False, **options,
+    )
+    assert prepared.returncode == 0, prepared.stderr
+    assert json.loads(prepared.stdout) == {"prepared": True, "out": str(out)}
+    consumed = subprocess.run(
+        [sys.executable, "-c", READ_PREPARED_AS_SERVICE, str(out)],
+        capture_output=True, text=True, timeout=10, check=False, **options,
+    )
+    assert consumed.returncode == 0, consumed.stderr
+    assert consumed.stdout.strip() == "service-consumed-prepared-inputs"
+
+
+def test_operator_commands_provision_withdraw_publish_and_activate_from_root(
+    protected_root: Path,
+) -> None:
+    """The disposable root lane uses no credential or vendor process."""
+
+    service_root(protected_root)
+    source = Path(__file__).parents[2] / "src"
+    purelib = sysconfig.get_paths()["purelib"]
+    entry = (
+        "import runpy, sys; sys.path[:0] = sys.argv[1:3]; del sys.argv[1:3]; "
+        'runpy.run_module(sys.argv.pop(1), run_name="__main__", alter_sys=True)'
+    )
+
+    def command(*arguments: str) -> str:
+        result = subprocess.run(
+            [
+                sys.executable, "-I", "-S", "-B", "-c", entry, str(source), purelib,
+                "constructicon.substrate.executors.operator_store", *arguments,
+            ],
+            capture_output=True, text=True, timeout=30, check=False, cwd="/",
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stderr == ""
+        return result.stdout
+
+    base = ["--store-root", str(protected_root), "--key", KEY]
+    first = NativeOperatorStoreIdentityV1.model_validate_json(command("provision", *base))
+    bundle = bundle_of(protected_root)
+    assert (bundle / "descriptors" / "1.json").is_file()
+    with stores.maintain_offline(protected_root, KEY, wait_s=0) as withdrawn:
+        assert withdrawn.generation_floor == 1
+    revision = str(digest("n3c-command-fixture", 1, "synthetic-clean-qualification"))
+    second = NativeOperatorStoreIdentityV1.model_validate_json(command(
+        "publish", *base, "--generation", "2",
+        "--qualification-evidence-digest", revision,
+    ))
+    assert str(second.store_conformance_revision) == revision
+    assert str(second.subscription_mode_adapter_revision) == revision
+    sealed_file = protected_root / "qualified-identity.json"
+    sealed_file.write_text(second.model_dump_json(), encoding="utf-8")
+    sealed_file.chmod(0o600)
+    assert command(
+        "activate", *base, "--generation", "2", "--sealed", str(sealed_file),
+        "--qualification-evidence-digest", revision,
+    ) == ""
+    assert fresh_read(protected_root, second, as_service=True) == "accepted"
+    assert fresh_read(protected_root, first, as_service=True) == "refused"
 
 
 def bundle_of(root: Path, key: str = KEY) -> Path:

@@ -30,6 +30,7 @@ from constructicon.substrate.executors._egress_bridge import PROXY_PORT
 from constructicon.substrate.executors.codex_lane import (
     RUNTIME_CATALOG,
     active_custody,
+    production_configuration,
     run_login,
     run_startup,
     vendor_executable,
@@ -398,6 +399,20 @@ def sealed_configuration(*, plugins: bool) -> str:
         "apply_patch_freeform = false\nview_image = false\nmulti_agent = false\n"
         "code_mode = false\njs_repl = false\n"
     )
+
+
+def test_the_production_configuration_is_the_reviewed_literal():
+    expected = (
+        f'model = "{MODELS[0]}"\nmodel_catalog_json = "{RUNTIME_CATALOG}"\n'
+        'cli_auth_credentials_store = "file"\nforced_login_method = "chatgpt"\n'
+        'check_for_update_on_startup = false\nweb_search = "disabled"\n'
+        "[analytics]\nenabled = false\n[features]\nplugins = false\n"
+        "apps = false\nshell_tool = false\nunified_exec = false\n"
+        "apply_patch_freeform = false\nview_image = false\nmulti_agent = false\n"
+        "code_mode = false\njs_repl = false\n"
+    )
+    assert production_configuration() == expected
+    assert production_configuration(plugins=True) == expected.replace("plugins = false\n", "")
 
 
 def decoy_policy() -> egress.EgressPolicy:

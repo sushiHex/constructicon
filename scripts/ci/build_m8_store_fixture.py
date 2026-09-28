@@ -12,7 +12,7 @@ import stat
 import sys
 from pathlib import Path
 
-from constructicon.core.identity import canonical_json, digest
+from constructicon.core.identity import canonical_json
 from constructicon.substrate.executors import operator_store
 
 RUNNER_ROOT = Path("/var/lib/constructicon-m8-launch")
@@ -110,17 +110,8 @@ def main() -> None:
     os.chown(STORE_ROOT, 0, service_gid)
     os.chmod(STORE_ROOT, 0o750)
 
-    mode_revision = digest("native-operator-store-fixture", 1, "subscription-mode")
-    conformance_revision = digest(
-        "native-operator-store-fixture", 1, "fixture-only-unqualified",
-    )
-    identity = operator_store.publish_descriptor_offline(
-        STORE_ROOT,
-        STORE_KEY,
-        GENERATION,
-        runtime_uid=service_uid,
-        subscription_mode_adapter_revision=mode_revision,
-        store_conformance_revision=conformance_revision,
+    identity = operator_store.provision_offline(
+        STORE_ROOT, STORE_KEY, service=(service_uid, service_gid),
     )
 
     bundle = STORE_ROOT / operator_store._bundle_token(STORE_KEY)

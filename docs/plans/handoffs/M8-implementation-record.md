@@ -3027,3 +3027,59 @@ said. What guards it:
   M8-D2's verify and R5 before R10.
 - The controller runbook (R16-R20) did not run.
 - The rerun needs a new authorization naming the new `C`.
+
+### N4 operator command entry points (2026-09-28, unmerged)
+
+Scope: the offline entry points and session preparation missing from S0-S10,
+not the owner-attended session itself. The command companion is
+[M8-N4-operator-commands.md](M8-N4-operator-commands.md). The accepted state
+review, host-runtime design and host-installation document remain unchanged.
+
+**Design checks before implementation.** The root helper stays in
+`operator_store`: it neither imports the vendor lane nor reads a credential.
+Provisioning uses the existing descriptor publisher and an exclusive first
+bundle creation; publication and activation retain the existing lock and
+generation laws. A qualification digest is explicit operator input, not a
+claim that this helper performed qualification (state-review decision 5).
+Preparation runs as the unprivileged service user, resolves the two fixed
+hosts once, and publishes its completion record only after the three input
+artifacts. A partial directory is not reusable completion evidence.
+
+**Two command-level corrections.**
+
+- The controller is an explicit import-path installation, not a global Python
+  package. The commands use the host-runtime's reviewed isolated bootstrap,
+  which supplies the same module arguments as `-m` without site processing.
+- The lock-contention control S6a must precede g2 publication: maintenance
+  after publication would raise the withdrawal floor to g2 and prevent its
+  activation. The command companion orders the control accordingly and uses
+  the last clean maintenance startup's evidence for publication.
+
+**Review corrections (introduced, reproduced in portable tests).** A failed
+exclusive completion-file write must not delete the existing file that caused
+the refusal. Preparation now reuses `EvidenceFile` for its last publication,
+rather than adding a second completion/cleanup protocol. A partial initial
+bundle must not be repaired implicitly by `publish`; the CLI requires its
+current anchor before delegating. A supplied qualification digest must match
+both sealed revision fields independently. Tests isolate each refusal so a
+later guard cannot conceal a removed earlier guard.
+
+**Credential-free evidence so far.** The focused command, lane, inheritance,
+runbook and configuration checks passed locally: 198 passed, two
+Windows platform skips. The extracted runbook checker accepts actual fake-lane
+login, qualification, lock hold, active startup, refresh and expected refusals;
+it refuses missing completion, extra faults and mismatched plan or custody.
+All 48 new mutants (31 store CLI, 17 preparation)
+were independently rerun and killed by assertion, not collection errors or
+skips. Final-head gate and Linux results belong to the PR evidence. The added
+root proofs use synthetic qualification and fake DNS;
+they run in the existing N3c root step, without a workflow change. The existing
+binary-test fixtures and their binary executions are unchanged; the new
+configuration comparison is portable and launches nothing.
+
+**Evidence status.** Final verification and Linux proof results will be
+recorded on the PR's exact head. No private-host command, credential
+operation, vendor login, model request or deployment qualification is performed
+by this slice. Installing the new helpers requires its own authorized,
+verified controller update; the installed `29a5fa5` controller lacks them.
+An R6 drift-baseline change is not authorized by this implementation.
