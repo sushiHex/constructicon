@@ -36,14 +36,17 @@ import argparse
 import asyncio
 import errno
 import hashlib
+import ipaddress
 import json
 import os
 import secrets
+import socket
 import stat
 import sys
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, BinaryIO, Literal
 
@@ -104,6 +107,10 @@ orchestrator decision 1); the operator cannot narrow or widen this with a flag."
 RUNTIME_BINARY = VENDOR_MOUNT + "/bin/codex"
 RUNTIME_CATALOG = CATALOG_MOUNT
 """In-zone paths of the bound vendor tree's client and the bound model catalog."""
+PREPARE_MODEL = "gpt-5.5"
+"""The reviewed production fixture's model for the N4 startup configuration."""
+PREPARE_CONNECTIONS = 8
+"""A fixed per-lane relay bound, matching the reviewed N4 bridge fixture."""
 LOGIN_DEADLINE_S = 960.0
 """The pinned device flow polls for up to 15 minutes
 (``login/src/device_code_auth.rs:108``); 60 s more covers the launcher's probe,
@@ -558,7 +565,108 @@ def _policy(path: Path) -> EgressPolicy:
     )
 
 
+def production_configuration(*, plugins: bool = False) -> str:
+    """The reviewed startup configuration, with a plugin-on containment control."""
+
+    return (
+        f'model = "{PREPARE_MODEL}"\nmodel_catalog_json = "{RUNTIME_CATALOG}"\n'
+        'cli_auth_credentials_store = "file"\nforced_login_method = "chatgpt"\n'
+        'check_for_update_on_startup = false\nweb_search = "disabled"\n'
+        "[analytics]\nenabled = false\n[features]\n"
+        + ("" if plugins else "plugins = false\n")
+        + "apps = false\nshell_tool = false\nunified_exec = false\n"
+        "apply_patch_freeform = false\nview_image = false\nmulti_agent = false\n"
+        "code_mode = false\njs_repl = false\n"
+    )
+
+
+def _pin(host: str) -> tuple[EgressDestination, dict[str, str]]:
+    """Use one host resolver query and the first globally routable IPv4 answer."""
+
+    answers = socket.getaddrinfo(host, 443, family=socket.AF_INET, type=socket.SOCK_STREAM)
+    observed_at = datetime.now(UTC).isoformat(timespec="seconds")
+    for family, _, _, _, endpoint in answers:
+        if family != socket.AF_INET or not isinstance(endpoint, tuple) or not endpoint:
+            continue
+        address = endpoint[0]
+        if not isinstance(address, str):
+            continue
+        try:
+            canonical = str(ipaddress.IPv4Address(address))
+            destination = EgressDestination(host, 443, canonical)
+        except (ValueError, ContractViolation):
+            continue
+        return destination, {
+            "host": host, "address": destination.address,
+            "resolver": "system getaddrinfo", "resolved_at_utc": observed_at,
+        }
+    raise ContractViolation("the host resolver returned no globally routable IPv4 address")
+
+
+def _write_prepared(path: Path, content: bytes) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW, 0o600)
+    try:
+        view = memoryview(content)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise ContractViolation("a prepare artifact was not written")
+            view = view[written:]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def prepare(out: Path) -> None:
+    """Create a fresh S1 pin and the four offline inputs to login/startup.
+
+    A crash leaves an incomplete directory. No caller resumes it: the next
+    preparation uses a new output path and makes a new pair of DNS queries.
+    The completion record is written only after the other three files are
+    synced; a returned success also requires the directory sync.
+    """
+
+    if getattr(os, "geteuid", lambda: 1)() == 0:
+        raise ContractViolation("the N4 operator preparation cannot run as root")
+    if os.path.lexists(out):
+        raise FileExistsError(errno.EEXIST, "the prepare directory already exists", str(out))
+
+    auth, auth_record = _pin("auth.openai.com")
+    chatgpt, chatgpt_record = _pin("chatgpt.com")
+    login = EgressPolicy((auth,), PREPARE_CONNECTIONS)
+    startup = EgressPolicy((auth, chatgpt), PREPARE_CONNECTIONS)
+    configuration = production_configuration()
+    if (
+        configured_model(configuration) != PREPARE_MODEL
+        or configured_provider(configuration) != "openai"
+    ):
+        raise ContractViolation("the production startup configuration is invalid")
+
+    out.mkdir(mode=0o700)
+    def policy_bytes(policy: EgressPolicy) -> bytes:
+        return (json.dumps({
+            "destinations": [[item.host, item.port, item.address] for item in policy.destinations],
+            "connections": policy.connections,
+        }, sort_keys=True) + "\n").encode("utf-8")
+
+    _write_prepared(out / "config.toml", configuration.encode("utf-8"))
+    _write_prepared(out / "login-policy.json", policy_bytes(login))
+    _write_prepared(out / "startup-policy.json", policy_bytes(startup))
+    EvidenceFile(out / "pin-record.json").publish({
+        "schema_version": 1, "pins": [auth_record, chatgpt_record],
+    })
+
+
 def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv and argv[0] == "prepare":
+        prepare_parser = argparse.ArgumentParser(prog="codex_lane prepare", allow_abbrev=False)
+        prepare_parser.add_argument("--out", type=Path, required=True)
+        prepared = prepare_parser.parse_args(argv[1:])
+        prepare(prepared.out)
+        print(json.dumps({"prepared": True, "out": str(prepared.out)}))
+        return 0
     parser = argparse.ArgumentParser(prog="codex_lane", allow_abbrev=False)
     parser.add_argument("lane", choices=("login", "startup"))
     parser.add_argument("--custody", choices=("maintenance", "active"), default="maintenance")

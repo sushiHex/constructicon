@@ -30,7 +30,9 @@ from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
+
+from pydantic import ValidationError
 
 from constructicon.core.errors import ContractViolation
 from constructicon.core.identity import Digest, canonical_json, digest, parse_json_value
@@ -70,6 +72,7 @@ CREDENTIAL_FILE = "auth.json"
 reads and saves exactly ``$CODEX_HOME/auth.json`` in place (M8-N4-state-review.md)."""
 _CREDENTIAL_MODE = 0o600
 CREDENTIAL_UNAVAILABLE = "the operator store has no qualified credential file"
+UNQUALIFIED_REVISION = digest("native-operator-store-unqualified", 1, "initial-provision")
 
 
 @dataclass(frozen=True)
@@ -745,15 +748,18 @@ def _provision_directory(
     mode: int,
     owner_uid: int,
     owner_gid: int | None,
+    presence: Literal["either", "fresh", "existing"] = "either",
 ) -> int:
     """Create or verify one fixed child before applying any ownership mutation."""
 
     created = False
-    try:
-        os.mkdir(name, mode=mode, dir_fd=parent_fd)
-        created = True
-    except FileExistsError:
-        pass
+    if presence != "existing":
+        try:
+            os.mkdir(name, mode=mode, dir_fd=parent_fd)
+            created = True
+        except FileExistsError:
+            if presence == "fresh":
+                raise ContractViolation("native store destination must be fresh") from None
     descriptor = os.open(
         name, os.O_RDONLY | _O_DIRECTORY | _O_CLOEXEC | _O_NOFOLLOW,
         dir_fd=parent_fd,
@@ -859,6 +865,8 @@ def publish_descriptor_offline(
     subscription_mode_adapter_revision: Digest,
     store_conformance_revision: Digest,
     wait_s: float = 0,
+    bundle_presence: Literal["either", "fresh", "existing"] = "either",
+    require_next_generation: bool = False,
 ) -> NativeOperatorStoreIdentityV1:
     """Create one immutable descriptor under a pre-protected operator root.
 
@@ -871,7 +879,10 @@ def publish_descriptor_offline(
     """
 
     _require_wait(wait_s)
-    if not root.is_absolute() or type(generation) is not int or generation < 1:
+    if (
+        not root.is_absolute() or type(generation) is not int or generation < 1
+        or bundle_presence not in ("either", "fresh", "existing")
+    ):
         raise ContractViolation("native store descriptor publication is unavailable")
     try:
         key = _require_token(key, field="key")
@@ -883,6 +894,9 @@ def publish_descriptor_offline(
         raise ContractViolation("native store custody requires Linux")
     token = _bundle_token(key)
     try:
+        if bundle_presence == "existing":
+            current = _open_bundle(root, token)
+            _close_opened(current)
         root_fd = _open_trusted_directory(root)
         bundle_fd = descriptors_fd = store_fd = lock_fd = -1
         try:
@@ -890,6 +904,7 @@ def publish_descriptor_offline(
             root_group = os.fstat(root_fd).st_gid
             bundle_fd = _provision_directory(
                 root_fd, token, mode=_BUNDLE_MODE, owner_uid=0, owner_gid=root_group,
+                presence=bundle_presence,
             )
             descriptors_fd = _provision_directory(
                 bundle_fd, "descriptors", mode=_DESCRIPTORS_MODE, owner_uid=0,
@@ -943,7 +958,12 @@ def publish_descriptor_offline(
             else:
                 if current_anchor != _Anchor(key, opened.bundle_identity):
                     raise ContractViolation("native store anchor is unavailable")
-            for name in _descriptor_names(opened):
+            names = _descriptor_names(opened)
+            if require_next_generation and generation != (
+                int(names[-1].removesuffix(".json")) + 1 if names else 1
+            ):
+                raise ContractViolation("native store generation is not next")
+            for name in names:
                 old = _descriptor(_read_metadata(opened, name))
                 if old.store_instance_id == instance and (
                     not _same_store_identity(old.store, descriptor.store)
@@ -1456,6 +1476,86 @@ def _service(name: str) -> tuple[int, int]:
     return entry.pw_uid, entry.pw_gid
 
 
+def _operator_root(root: Path, service: tuple[int, int]) -> int:
+    """The already installed root and service are the command's fixed authority."""
+
+    uid, gid = service
+    if sys.platform != "linux" or os.geteuid() != 0 or uid <= 0 or gid <= 0:
+        raise ContractViolation("native store operator requires root and an unprivileged service")
+    fd = _open_trusted_directory(root)
+    try:
+        info = os.fstat(fd)
+        if info.st_uid != 0 or info.st_gid != gid or stat.S_IMODE(info.st_mode) != 0o750:
+            raise ContractViolation("native store operator root is unavailable")
+    finally:
+        _close(fd)
+    return uid
+
+
+def _operator_digest(raw: str) -> Digest:
+    try:
+        return Digest(raw)
+    except ValidationError as exc:
+        raise ContractViolation("qualification evidence digest is invalid") from exc
+
+
+def _sealed_file(path: Path, runtime_uid: int) -> NativeOperatorStoreIdentityV1:
+    """Read a bounded operator identity, never a credential or lane transcript."""
+
+    fd = os.open(path, os.O_RDONLY | _O_CLOEXEC | _O_NOFOLLOW | _O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        if (
+            not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+            or info.st_uid not in (0, runtime_uid) or stat.S_IMODE(info.st_mode) != 0o600
+            or info.st_size > MAX_METADATA_BYTES
+        ):
+            raise ContractViolation("qualified store identity is unavailable")
+        raw = bytearray()
+        while len(raw) <= MAX_METADATA_BYTES:
+            chunk = os.read(fd, min(8192, MAX_METADATA_BYTES + 1 - len(raw)))
+            if not chunk:
+                break
+            raw.extend(chunk)
+        if len(raw) > MAX_METADATA_BYTES:
+            raise ContractViolation("qualified store identity is unavailable")
+        return NativeOperatorStoreIdentityV1.model_validate_json(bytes(raw))
+    except (OSError, ValidationError, ValueError) as exc:
+        raise ContractViolation("qualified store identity is unavailable") from exc
+    finally:
+        _close(fd)
+
+
+def _operator_bundle(root: Path, key: str, runtime_uid: int) -> None:
+    """A publish or activation must target an existing, correctly owned bundle."""
+
+    try:
+        token = _bundle_token(_require_token(key, field="key"))
+        opened = _open_bundle(root, token)
+    except (OSError, ValueError) as exc:
+        raise ContractViolation("native store operator bundle is unavailable") from exc
+    try:
+        if opened.store_identity.uid != runtime_uid or opened.lock_identity.uid != runtime_uid:
+            raise ContractViolation("native store operator bundle owner is unavailable")
+        _anchor_is_current(opened, key, after_reboot=False)
+    finally:
+        _close_opened(opened)
+
+
+def provision_offline(
+    root: Path, key: str, *, service: tuple[int, int], wait_s: float = 0,
+) -> NativeOperatorStoreIdentityV1:
+    """Fresh g1 under an already installed root; also used by the CI fixture."""
+
+    runtime_uid = _operator_root(root, service)
+    return publish_descriptor_offline(
+        root, key, 1, runtime_uid=runtime_uid,
+        subscription_mode_adapter_revision=UNQUALIFIED_REVISION,
+        store_conformance_revision=UNQUALIFIED_REVISION,
+        bundle_presence="fresh", require_next_generation=True, wait_s=wait_s,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """``maintain --store-root ROOT --key KEY [--wait S] [--service NAME] -- LANE ...``.
 
@@ -1464,13 +1564,88 @@ def main(argv: list[str] | None = None) -> int:
     the custody, and refuses a command that sets any of them itself.
     """
 
-    parser = argparse.ArgumentParser(prog="operator_store", allow_abbrev=False)
-    parser.add_argument("helper", choices=("maintain",))
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] in ("provision", "publish", "activate"):
+        parser = argparse.ArgumentParser(prog="operator_store", allow_abbrev=False)
+        parser.add_argument("helper", choices=("provision", "publish", "activate"))
+        parser.add_argument("--store-root", type=Path, required=True)
+        parser.add_argument("--key", required=True)
+        parser.add_argument("--service", default="m8-service")
+        parser.add_argument("--generation", type=int)
+        parser.add_argument("--qualification-evidence-digest")
+        parser.add_argument("--sealed", type=Path)
+        parser.add_argument("--wait", type=float, default=0.0)
+        options = parser.parse_args(arguments)
+        if options.helper == "provision":
+            if any(value is not None for value in (
+                options.generation, options.sealed, options.qualification_evidence_digest,
+            )):
+                parser.error("provision fixes generation 1 and its unqualified revision")
+        elif options.helper == "publish":
+            if (
+                options.generation is None or options.qualification_evidence_digest is None
+                or options.sealed is not None
+            ):
+                parser.error("publish requires a generation and qualification evidence digest")
+        elif any(value is None for value in (
+            options.generation, options.qualification_evidence_digest, options.sealed,
+        )):
+            parser.error(
+                "activate requires a generation, sealed identity and qualification evidence digest"
+            )
+        if (
+            options.helper != "provision" and options.generation is not None
+            and options.generation < 2
+        ):
+            parser.error("qualified generations start at 2")
+        try:
+            service = _service(options.service)
+            if options.helper == "provision":
+                sealed = provision_offline(
+                    options.store_root, options.key, service=service, wait_s=options.wait,
+                )
+                print(sealed.model_dump_json())
+                return 0
+            runtime_uid = _operator_root(options.store_root, service)
+            _operator_bundle(options.store_root, options.key, runtime_uid)
+            revision = _operator_digest(cast(str, options.qualification_evidence_digest))
+            if revision == UNQUALIFIED_REVISION:
+                raise ContractViolation("qualification evidence digest is unqualified")
+            if options.helper == "publish":
+                sealed = publish_descriptor_offline(
+                    options.store_root, options.key, cast(int, options.generation),
+                    runtime_uid=runtime_uid,
+                    subscription_mode_adapter_revision=revision,
+                    store_conformance_revision=revision,
+                    bundle_presence="existing", require_next_generation=True, wait_s=options.wait,
+                )
+                print(sealed.model_dump_json())
+                return 0
+            qualified = _sealed_file(cast(Path, options.sealed), runtime_uid)
+            if (
+                qualified.subscription_mode_adapter_revision != revision
+                or qualified.store_conformance_revision != revision
+            ):
+                raise ContractViolation("qualified store identity does not match evidence digest")
+            activate_offline(
+                options.store_root, options.key, cast(int, options.generation),
+                qualified=qualified, wait_s=options.wait,
+            )
+            return 0
+        except (ContractViolation, OSError, KeyError) as exc:
+            parser.exit(1, f"operator_store: {exc}\n")
+
+    parser = argparse.ArgumentParser(
+        prog="operator_store", allow_abbrev=False,
+        description="Offline store commands: provision, maintain, publish, activate.",
+    )
+    parser.add_argument("helper", choices=("maintain", "provision", "publish", "activate"))
     parser.add_argument("--store-root", type=Path, required=True)
     parser.add_argument("--key", required=True)
     parser.add_argument("--wait", type=float, default=0.0)
     parser.add_argument("--service", default="m8-service")
-    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments in (["--help"], ["-h"]):
+        parser.parse_args(arguments)
     if "--" not in arguments:
         parser.error("the lane's command follows --")
     split = arguments.index("--")

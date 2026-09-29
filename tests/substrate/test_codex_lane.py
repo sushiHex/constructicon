@@ -12,6 +12,7 @@ import io
 import json
 import os
 import re
+import socket
 import stat
 from collections import Counter
 from dataclasses import replace
@@ -597,6 +598,251 @@ def lane_command(tmp_path, *extra: str, evidence: Path | None = None, lane: str 
         "--configuration", str(tmp_path / "config.toml"), "--policy", "/p",
         "--lane-dir", "/l", "--evidence", str(evidence or tmp_path / "evidence.json"), *extra,
     ]
+
+
+def prepare_world(monkeypatch):
+    """S1's resolver and uid are fake; the publication and parser are real."""
+
+    calls: list[tuple[str, int, int, int]] = []
+
+    def resolve(host, port, *, family, type):
+        calls.append((host, port, family, type))
+        address = "8.8.8.8" if host == "auth.openai.com" else "8.8.4.4"
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443)),
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, 443)),
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("1.1.1.1", 443)),
+        ]
+
+    monkeypatch.setattr(codex_lane.os, "geteuid", lambda: 1000, raising=False)
+    monkeypatch.setattr(codex_lane.socket, "getaddrinfo", resolve)
+    return calls
+
+
+def test_prepare_creates_four_parseable_reviewed_inputs_from_one_pin_each(
+    tmp_path, monkeypatch, capsys,
+):
+    calls = prepare_world(monkeypatch)
+    out = tmp_path / "s1"
+    assert codex_lane.main(["prepare", "--out", str(out)]) == 0
+    assert json.loads(capsys.readouterr().out) == {"prepared": True, "out": str(out)}
+    assert calls == [
+        ("auth.openai.com", 443, socket.AF_INET, socket.SOCK_STREAM),
+        ("chatgpt.com", 443, socket.AF_INET, socket.SOCK_STREAM),
+    ]
+    assert {path.name for path in out.iterdir()} == {
+        "config.toml", "login-policy.json", "startup-policy.json", "pin-record.json",
+    }
+    assert out.joinpath("config.toml").read_text(encoding="utf-8") == (
+        codex_lane.production_configuration()
+    )
+    assert codex_lane.configured_model(out.joinpath("config.toml").read_text()) == "gpt-5.5"
+    assert codex_lane.configured_provider(out.joinpath("config.toml").read_text()) == "openai"
+    login = codex_lane._policy(out / "login-policy.json")
+    startup = codex_lane._policy(out / "startup-policy.json")
+    assert login.destinations == (EgressDestination("auth.openai.com", 443, "8.8.8.8"),)
+    assert startup.destinations == (
+        EgressDestination("auth.openai.com", 443, "8.8.8.8"),
+        EgressDestination("chatgpt.com", 443, "8.8.4.4"),
+    )
+    assert login.connections == startup.connections == 8
+    pin = json.loads((out / "pin-record.json").read_text(encoding="utf-8"))
+    assert pin["completed"] is True and pin["schema_version"] == 1
+    assert [(item["host"], item["address"], item["resolver"])
+            for item in pin["pins"]] == [
+        ("auth.openai.com", "8.8.8.8", "system getaddrinfo"),
+        ("chatgpt.com", "8.8.4.4", "system getaddrinfo"),
+    ]
+    assert all(item["resolved_at_utc"].endswith("+00:00") for item in pin["pins"])
+    if os.name == "posix":
+        assert stat.S_IMODE(out.stat().st_mode) == 0o700
+        assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in out.iterdir())
+
+
+def test_prepare_refuses_root_before_dns_or_output(tmp_path, monkeypatch):
+    calls = prepare_world(monkeypatch)
+    monkeypatch.setattr(codex_lane.os, "geteuid", lambda: 0)
+    out = tmp_path / "s1"
+    with pytest.raises(ContractViolation, match="cannot run as root"):
+        codex_lane.main(["prepare", "--out", str(out)])
+    assert calls == [] and not out.exists()
+
+
+def test_prepare_refuses_an_existing_output_before_dns(tmp_path, monkeypatch):
+    calls = prepare_world(monkeypatch)
+    out = tmp_path / "s1"
+    out.mkdir()
+    (out / "mine").write_text("untouched")
+    with pytest.raises(FileExistsError):
+        codex_lane.main(["prepare", "--out", str(out)])
+    assert calls == [] and (out / "mine").read_text() == "untouched"
+
+
+@pytest.mark.parametrize("address", ["127.0.0.1", "10.0.0.1", "224.0.0.1", "2001:4860::1"])
+def test_prepare_refuses_when_a_host_has_no_global_ipv4(tmp_path, monkeypatch, address):
+    prepare_world(monkeypatch)
+    monkeypatch.setattr(codex_lane.socket, "getaddrinfo", lambda *a, **kw: [
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, 443)),
+    ])
+    out = tmp_path / "s1"
+    with pytest.raises(ContractViolation, match="no globally routable IPv4"):
+        codex_lane.main(["prepare", "--out", str(out)])
+    assert not out.exists()
+
+
+def test_prepare_second_dns_failure_publishes_nothing(tmp_path, monkeypatch):
+    calls = prepare_world(monkeypatch)
+    resolver = codex_lane.socket.getaddrinfo
+
+    def fails_second(host, *args, **kwargs):
+        if host == "chatgpt.com":
+            raise socket.gaierror("offline")
+        return resolver(host, *args, **kwargs)
+
+    monkeypatch.setattr(codex_lane.socket, "getaddrinfo", fails_second)
+    out = tmp_path / "s1"
+    with pytest.raises(socket.gaierror):
+        codex_lane.main(["prepare", "--out", str(out)])
+    assert len(calls) == 1 and not out.exists()
+
+
+def test_prepare_failed_final_directory_sync_does_not_leave_completion(
+    tmp_path, monkeypatch, capsys,
+):
+    prepare_world(monkeypatch)
+    monkeypatch.setattr(codex_lane, "_fsync_directory", lambda path: (_ for _ in ()).throw(
+        OSError(5, "injected directory sync failure")
+    ))
+    out = tmp_path / "s1"
+    with pytest.raises(OSError, match="injected directory sync failure"):
+        codex_lane.main(["prepare", "--out", str(out)])
+    assert capsys.readouterr().out == ""
+    assert out.is_dir() and not (out / "pin-record.json").exists()
+    assert {path.name for path in out.iterdir()} == {
+        "config.toml", "login-policy.json", "startup-policy.json",
+    }
+
+
+def test_prepare_publishes_completion_last_after_four_file_syncs(tmp_path, monkeypatch):
+    prepare_world(monkeypatch)
+    events: list[str] = []
+    write = codex_lane._write_prepared
+    directory_sync = codex_lane._fsync_directory
+    file_sync = codex_lane.os.fsync
+    publish = codex_lane.EvidenceFile.publish
+
+    def recording_write(path, content):
+        events.append(path.name)
+        return write(path, content)
+
+    def recording_file_sync(fd):
+        events.append("file-sync")
+        return file_sync(fd)
+
+    def recording_directory_sync(path):
+        events.append("directory-sync")
+        return directory_sync(path)
+
+    def recording_publish(self, content):
+        events.append(self.path.name)
+        return publish(self, content)
+
+    monkeypatch.setattr(codex_lane, "_write_prepared", recording_write)
+    monkeypatch.setattr(codex_lane.os, "fsync", recording_file_sync)
+    monkeypatch.setattr(codex_lane, "_fsync_directory", recording_directory_sync)
+    monkeypatch.setattr(codex_lane.EvidenceFile, "publish", recording_publish)
+    codex_lane.prepare(tmp_path / "s1")
+    assert events[:8] == [
+        "config.toml", "file-sync", "login-policy.json", "file-sync",
+        "startup-policy.json", "file-sync", "pin-record.json", "file-sync",
+    ]
+    assert events[8:9] == ["directory-sync"]
+
+
+@pytest.mark.parametrize("name", [
+    "config.toml", "login-policy.json", "startup-policy.json",
+])
+def test_prepare_artifact_writer_never_replaces_an_existing_name(tmp_path, monkeypatch, name):
+    prepare_world(monkeypatch)
+    out = tmp_path / "s1"
+    write = codex_lane._write_prepared
+
+    def intrude(path, content):
+        if path.name == name:
+            path.write_text("attacker owns this", encoding="utf-8")
+        return write(path, content)
+
+    monkeypatch.setattr(codex_lane, "_write_prepared", intrude)
+    with pytest.raises(FileExistsError):
+        codex_lane.prepare(out)
+    assert (out / name).read_text(encoding="utf-8") == "attacker owns this"
+    assert not (out / "pin-record.json").exists()
+
+
+def test_prepare_preserves_an_existing_pin_record_at_final_reservation(tmp_path, monkeypatch):
+    prepare_world(monkeypatch)
+    out = tmp_path / "s1"
+    original = codex_lane.EvidenceFile.__init__
+
+    def intrude(self, path):
+        if path.name == "pin-record.json":
+            path.write_text("attacker owns this", encoding="utf-8")
+        original(self, path)
+
+    monkeypatch.setattr(codex_lane.EvidenceFile, "__init__", intrude)
+    with pytest.raises(FileExistsError):
+        codex_lane.prepare(out)
+    assert (out / "pin-record.json").read_text(encoding="utf-8") == "attacker owns this"
+
+
+def test_pin_selects_first_global_ipv4_without_a_second_resolution(monkeypatch):
+    calls = prepare_world(monkeypatch)
+    destination, record = codex_lane._pin("auth.openai.com")
+    assert destination == EgressDestination("auth.openai.com", 443, "8.8.8.8")
+    assert record["address"] == destination.address
+    assert calls == [("auth.openai.com", 443, socket.AF_INET, socket.SOCK_STREAM)]
+
+
+def test_prepare_file_sync_failure_never_publishes_completion(tmp_path, monkeypatch):
+    prepare_world(monkeypatch)
+    monkeypatch.setattr(codex_lane.os, "fsync", lambda fd: (_ for _ in ()).throw(
+        OSError(5, "injected file sync failure")
+    ))
+    out = tmp_path / "s1"
+    with pytest.raises(OSError, match="injected file sync failure"):
+        codex_lane.prepare(out)
+    assert out.is_dir() and not (out / "pin-record.json").exists()
+
+
+def test_prepare_artifact_refuses_a_zero_write_before_retry(tmp_path, monkeypatch):
+    real_write = codex_lane.os.write
+    calls = [0]
+
+    def interrupted(fd, content):
+        calls[0] += 1
+        return 0 if calls[0] == 1 else real_write(fd, content)
+
+    monkeypatch.setattr(codex_lane.os, "write", interrupted)
+    with pytest.raises(ContractViolation, match="not written"):
+        codex_lane._write_prepared(tmp_path / "artifact", b"harmless")
+    assert calls == [1]
+
+
+@pytest.mark.parametrize("fault", ["model", "provider"])
+def test_prepare_refuses_a_configuration_outside_the_reviewed_route(
+    tmp_path, monkeypatch, fault,
+):
+    calls = prepare_world(monkeypatch)
+    original = codex_lane.production_configuration()
+    configuration = (
+        original.replace('model = "gpt-5.5"', 'model = "wrong"')
+        if fault == "model" else 'model_provider = "other"\n' + original
+    )
+    monkeypatch.setattr(codex_lane, "production_configuration", lambda: configuration)
+    out = tmp_path / "s1"
+    with pytest.raises(ContractViolation, match="production startup configuration"):
+        codex_lane.prepare(out)
+    assert len(calls) == 2 and not out.exists()
 
 
 class Recorded:
