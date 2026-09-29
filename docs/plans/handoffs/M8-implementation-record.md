@@ -3083,3 +3083,27 @@ operation, vendor login, model request or deployment qualification is performed
 by this slice. Installing the new helpers requires its own authorized,
 verified controller update; the installed `29a5fa5` controller lacks them.
 An R6 drift-baseline change is not authorized by this implementation.
+
+**PR review follow-up (2026-09-29).** The review found introduced proof gaps:
+the guard's own tests did not prove the CLI called it, and the direct
+next-generation test did not prove publication requested that law. Main-level
+tests now exercise the real root guard with the command's root and service,
+publication of a non-next generation, and activation's sealed-file reader.
+Additional tests cover no-follow handling of a sealed-file symlink; call-site
+and no-follow mutants require assertion failures, not harness errors.
+
+The command companion now runs each step as a script over non-interactive SSH,
+checks non-interactive sudo before starting, rechecks drift after reboot and
+before refresh, and reconstructs shell state from recorded evidence. The
+negative binding controls distinguish stale-generation binding refusal from
+reboot-anchor refusal; unrelated failures cannot pass. Preparation itself,
+running as the service user, owns the fresh-directory check. No additional
+review round or private-host action is part of this follow-up; exact-head
+verification is recorded on the same PR.
+
+The follow-up focused suite passed 81 tests locally, with the real Linux
+symlink check skipped on Windows. Nine added call-site/no-follow mutants
+were independently rerun and assertion-killed, including literal deletion
+and bypass of both root-validation call sites. The PR's added inventory is
+now 57 mutants (40 store CLI and 17 preparation). Runtime source and frozen
+plans are unchanged by this follow-up.

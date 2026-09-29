@@ -823,6 +823,70 @@ MUTANTS = (
         'bundle_presence="either", require_next_generation=True, wait_s=options.wait,',
         CLI_TEST + "test_publish_then_activate_wrap_the_existing_lock_and_selection",
     ),
+    (
+        "CLI-32 provision invokes installed-root validation",
+        STORE + "provision_offline",
+        "runtime_uid = _operator_root(root, service)",
+        "runtime_uid = service[0]",
+        CLI_TEST + "test_provision_cli_validates_the_installed_root_and_named_service",
+    ),
+    (
+        "CLI-33 publish invokes installed-root validation",
+        STORE + "main",
+        "runtime_uid = _operator_root(options.store_root, service)",
+        "runtime_uid = service[0]",
+        CLI_TEST + "test_qualified_cli_validates_the_installed_root_and_named_service[publish]",
+    ),
+    (
+        "CLI-34 activate invokes installed-root validation",
+        STORE + "main",
+        "runtime_uid = _operator_root(options.store_root, service)",
+        "runtime_uid = service[0]",
+        CLI_TEST + "test_qualified_cli_validates_the_installed_root_and_named_service[activate]",
+    ),
+    (
+        "CLI-35 publish CLI requires the next generation",
+        STORE + "main",
+        'bundle_presence="existing", require_next_generation=True, wait_s=options.wait,',
+        'bundle_presence="existing", require_next_generation=False, wait_s=options.wait,',
+        CLI_TEST + "test_publish_cli_refuses_to_skip_a_generation",
+    ),
+    (
+        "CLI-36 a sealed path cannot follow a symlink",
+        STORE + "_sealed_file",
+        "_O_NOFOLLOW | _O_NONBLOCK",
+        "_O_NONBLOCK",
+        CLI_TEST + "test_qualified_identity_file_refuses_symlink_at_open_portably",
+    ),
+    (
+        "CLI-37 activation invokes the physical sealed reader",
+        STORE + "main",
+        "qualified = _sealed_file(cast(Path, options.sealed), runtime_uid)",
+        "qualified = NativeOperatorStoreIdentityV1.model_validate_json("
+        "cast(Path, options.sealed).read_bytes())",
+        CLI_TEST + "test_activate_cli_never_bypasses_the_physical_sealed_reader",
+    ),
+    (
+        "CLI-38 provision cannot omit installed-root validation",
+        STORE + "provision_offline",
+        "runtime_uid = _operator_root(root, service)",
+        "pass",
+        CLI_TEST + "test_provision_cli_validates_the_installed_root_and_named_service",
+    ),
+    (
+        "CLI-39 publish cannot omit installed-root validation",
+        STORE + "main",
+        "runtime_uid = _operator_root(options.store_root, service)",
+        "pass",
+        CLI_TEST + "test_qualified_cli_validates_the_installed_root_and_named_service[publish]",
+    ),
+    (
+        "CLI-40 activate cannot omit installed-root validation",
+        STORE + "main",
+        "runtime_uid = _operator_root(options.store_root, service)",
+        "pass",
+        CLI_TEST + "test_qualified_cli_validates_the_installed_root_and_named_service[activate]",
+    ),
 )
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import stat
 from dataclasses import replace
@@ -30,6 +31,130 @@ def _publish(world: StoreWorld, revision: str) -> list[str]:
         "publish", "--store-root", str(world.root), "--key", world.key,
         "--generation", "2", "--qualification-evidence-digest", revision,
     ]
+
+
+def _operator_with_real_root(
+    world: StoreWorld, monkeypatch: pytest.MonkeyPatch, facts: list[int], roots: list[Path],
+) -> None:
+    real_guard = stores._operator_root
+    _operator(world, monkeypatch)
+    primitive = stores._open_trusted_directory
+
+    def open_root(root: Path) -> int:
+        roots.append(root)
+        return primitive(root)
+
+    monkeypatch.setattr(stores, "_open_trusted_directory", open_root)
+    monkeypatch.setattr(stores, "_operator_root", real_guard)
+    monkeypatch.setattr(stores.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(stores.os, "fstat", lambda fd: SimpleNamespace(
+        st_uid=facts[0], st_gid=facts[1], st_mode=stat.S_IFDIR | facts[2],
+    ))
+
+
+def _main_with_bound_runtime_uid(command: list[str]) -> int:
+    try:
+        return stores.main(command)
+    except NameError as exc:
+        if exc.name != "runtime_uid":
+            raise
+        pytest.fail("operator command must bind runtime_uid through root validation")
+
+
+def test_provision_cli_validates_the_installed_root_and_named_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    world = StoreWorld(tmp_path)
+    facts = [0, 2000, 0o750]
+    roots: list[Path] = []
+    _operator_with_real_root(world, monkeypatch, facts, roots)
+    services: list[str] = []
+    monkeypatch.setattr(stores, "_service", lambda name: (
+        services.append(name) or 1000, 2000,
+    ))
+    publications: list[tuple[Path, str, int, dict[str, object]]] = []
+
+    def publish(root: Path, key: str, generation: int, **kwargs: object
+                ) -> NativeOperatorStoreIdentityV1:
+        publications.append((root, key, generation, kwargs))
+        return world.sealed
+
+    monkeypatch.setattr(stores, "publish_descriptor_offline", publish)
+    command = [
+        "provision", "--store-root", str(world.root), "--key", world.key,
+        "--service", "test-service",
+    ]
+    assert _main_with_bound_runtime_uid(command) == 0
+    printed = NativeOperatorStoreIdentityV1.model_validate_json(capsys.readouterr().out)
+    assert printed == world.sealed
+    assert services == ["test-service"] and roots == [world.root]
+    assert publications == [(
+        world.root, world.key, 1,
+        {
+            "runtime_uid": 1000,
+            "subscription_mode_adapter_revision": stores.UNQUALIFIED_REVISION,
+            "store_conformance_revision": stores.UNQUALIFIED_REVISION,
+            "bundle_presence": "fresh", "require_next_generation": True, "wait_s": 0.0,
+        },
+    )]
+    facts[0] = 1001
+    opened_before = len(roots)
+    with pytest.raises(SystemExit) as refused:
+        stores.main(command)
+    assert refused.value.code == 1 and len(publications) == 1
+    assert services == ["test-service", "test-service"]
+    assert roots[opened_before:] == [world.root]
+
+
+@pytest.mark.parametrize("helper", ["publish", "activate"])
+def test_qualified_cli_validates_the_installed_root_and_named_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str], helper: str,
+) -> None:
+    world = StoreWorld(tmp_path)
+    facts = [0, 2000, 0o750]
+    roots: list[Path] = []
+    _operator_with_real_root(world, monkeypatch, facts, roots)
+    services: list[str] = []
+    monkeypatch.setattr(stores, "_service", lambda name: (
+        services.append(name) or 1000, 2000,
+    ))
+    world.withdraw(1)
+    revision = digest("qualification-test", 1, "cli-root-evidence")
+    if helper == "activate":
+        sealed = stores.publish_descriptor_offline(
+            world.root, world.key, 2, runtime_uid=1000,
+            subscription_mode_adapter_revision=revision,
+            store_conformance_revision=revision, bundle_presence="existing",
+            require_next_generation=True,
+        )
+        monkeypatch.setattr(stores, "_sealed_file", lambda path, runtime_uid: sealed)
+        command = [
+            "activate", "--store-root", str(world.root), "--key", world.key,
+            "--generation", "2", "--qualification-evidence-digest", str(revision),
+            "--sealed", str(tmp_path / "sealed.json"),
+        ]
+    else:
+        command = _publish(world, str(revision))
+    command.extend(("--service", "test-service"))
+    assert _main_with_bound_runtime_uid(command) == 0
+    assert world.root in roots and all(root == world.root for root in roots)
+    capsys.readouterr()
+    if helper == "activate":
+        assert stores._active(world.metadata["active.json"]).generation == 2
+        world.withdraw(1)
+    else:
+        assert "2.json" in world.metadata
+        command[command.index("--generation") + 1] = "3"
+    before = dict(world.metadata)
+    facts[0] = 1001
+    opened_before = len(roots)
+    with pytest.raises(SystemExit) as refused:
+        stores.main(command)
+    assert refused.value.code == 1 and world.metadata == before
+    assert services == ["test-service", "test-service"]
+    assert roots[opened_before:] == [world.root]
 
 
 def test_publish_then_activate_wrap_the_existing_lock_and_selection(
@@ -254,6 +379,21 @@ def test_publish_requires_the_next_generation_under_the_lock(
     assert "3.json" not in world.metadata and "publish" not in world.events
 
 
+def test_publish_cli_refuses_to_skip_a_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = StoreWorld(tmp_path)
+    _operator(world, monkeypatch)
+    world.withdraw(1)
+    command = _publish(world, str(digest("qualification-test", 1, "evidence")))
+    command[command.index("--generation") + 1] = "3"
+    before = dict(world.metadata)
+    with pytest.raises(SystemExit) as refused:
+        stores.main(command)
+    assert refused.value.code == 1 and world.metadata == before
+    assert "3.json" not in world.metadata and "publish" not in world.events
+
+
 @pytest.mark.parametrize("failure", ["platform", "root", "service_uid", "service_gid"])
 def test_operator_requires_linux_root_and_an_unprivileged_service(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str,
@@ -369,6 +509,96 @@ def test_qualified_identity_file_refuses_growth_beyond_the_read_bound(
     monkeypatch.setattr(stores.os, "read", growing_read)
     with pytest.raises(ContractViolation, match="identity is unavailable"):
         stores._sealed_file(path, 1000)
+
+
+def test_qualified_identity_file_refuses_symlink_at_open_portably(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = stores.store_identity_for(
+        "operator-test", 2, "instance",
+        subscription_mode_adapter_revision=digest("qualification-test", 1, "evidence"),
+        store_conformance_revision=digest("qualification-test", 1, "evidence"),
+    )
+    target = tmp_path / "sealed.json"
+    target.write_text(identity.model_dump_json(), encoding="utf-8")
+    alias = tmp_path / "sealed.link"
+    nofollow = 1 << 27
+    real_open, real_fstat = os.open, os.fstat
+    monkeypatch.setattr(stores, "_O_NOFOLLOW", nofollow)
+
+    def open_file(path: Path, flags: int) -> int:
+        if path == alias:
+            if flags & nofollow:
+                raise OSError(errno.ELOOP, "symbolic link refused")
+            return real_open(target, flags & ~nofollow)
+        return real_open(path, flags & ~nofollow)
+
+    def file_facts(fd: int) -> SimpleNamespace:
+        info = real_fstat(fd)
+        return SimpleNamespace(
+            st_mode=stat.S_IFREG | 0o600, st_nlink=1, st_uid=1000,
+            st_size=info.st_size,
+        )
+
+    monkeypatch.setattr(stores.os, "open", open_file)
+    monkeypatch.setattr(stores.os, "fstat", file_facts)
+    assert stores._sealed_file(target, 1000) == identity
+    with pytest.raises(OSError) as refused:
+        stores._sealed_file(alias, 1000)
+    assert refused.value.errno == errno.ELOOP
+
+
+def test_linux_sealed_identity_open_refuses_a_real_symlink(tmp_path: Path) -> None:
+    if stores.sys.platform != "linux":
+        pytest.skip("real O_NOFOLLOW symlink behaviour requires Linux")
+    target = tmp_path / "sealed.json"
+    target.write_text("{}", encoding="utf-8")
+    alias = tmp_path / "sealed.link"
+    alias.symlink_to(target)
+    with pytest.raises(OSError) as refused:
+        stores._sealed_file(alias, os.getuid())
+    assert refused.value.errno == errno.ELOOP
+
+
+def test_activate_cli_never_bypasses_the_physical_sealed_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = StoreWorld(tmp_path)
+    _operator(world, monkeypatch)
+    world.withdraw(1)
+    revision = digest("qualification-test", 1, "evidence")
+    sealed = stores.publish_descriptor_offline(
+        world.root, world.key, 2, runtime_uid=1000,
+        subscription_mode_adapter_revision=revision,
+        store_conformance_revision=revision, bundle_presence="existing",
+        require_next_generation=True,
+    )
+    path = tmp_path / "sealed.json"
+    path.write_text(sealed.model_dump_json(), encoding="utf-8")
+    mode = [0o600]
+    real_fstat = os.fstat
+
+    def file_facts(fd: int) -> SimpleNamespace:
+        info = real_fstat(fd)
+        return SimpleNamespace(
+            st_mode=stat.S_IFREG | mode[0], st_nlink=1, st_uid=1000,
+            st_size=info.st_size,
+        )
+
+    monkeypatch.setattr(stores.os, "fstat", file_facts)
+    command = [
+        "activate", "--store-root", str(world.root), "--key", world.key,
+        "--generation", "2", "--sealed", str(path),
+        "--qualification-evidence-digest", str(revision),
+    ]
+    assert stores.main(command) == 0
+    assert stores._active(world.metadata["active.json"]).generation == 2
+    world.withdraw(1)
+    before = bytes(world.metadata["active.json"])
+    mode[0] = 0o644
+    with pytest.raises(SystemExit) as refused:
+        stores.main(command)
+    assert refused.value.code == 1 and world.metadata["active.json"] == before
 
 
 @pytest.mark.parametrize("raw", ["sha256:" + "A" * 64, "sha256:abc", "not-a-digest"])

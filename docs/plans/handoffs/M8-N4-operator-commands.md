@@ -5,11 +5,28 @@ here authorizes a host action. The accepted N4 state review and its S0--S10
 limits govern. No command below sends a model request. A failed or unmeasured
 control leaves the profile unqualified; stop and retain its bounded evidence.
 
-Run the bash blocks in one shell on the VM, in the order shown. After the S9
-reboot, open a new shell and paste the setup block again with the same values.
-Use fresh filenames shown here; no step is an in-place retry. The only
-workstation commands are the two PowerShell lines in S9. Do not run a CI,
-artifact installer, or drift-baseline *creation* command in this session.
+Put the two Setup bash blocks in one local `n4-common.sh` file and each step's
+bash block in its own local `n4-s0.sh` through `n4-s10.sh` file. Run each step
+through a fresh, noninteractive SSH session; do not paste commands into an
+interactive VM shell. From workstation Bash, set the owner-authorized `C` and
+SSH target, then use this pattern for each step (substitute the step filename):
+
+```bash
+set -Eeuo pipefail
+: "${C:?Set the owner-authorized merged commit}"
+: "${SSH_TARGET:?Set the owner-authorized VM SSH target}"
+[[ "$C" =~ ^[0-9a-f]{40}$ ]]
+{ /usr/bin/cat n4-common.sh n4-s0.sh; } | /usr/bin/ssh -T -o BatchMode=yes "$SSH_TARGET" "C=$C /bin/bash -se"
+```
+
+The common file defines variables and functions in every session; it does not
+rerun a step. Run S0, S1, S2, S3, S4, S6a, S5, S7, then S8, then the two separately authorized
+PowerShell VM commands in S9, then S9's bash block with a fresh SSH session.
+Run S10 through another fresh SSH session after the wait. Every command's
+stdin is either the explicit script stream or `/dev/null`; the SSH session
+does not preserve shell variables between steps. Use fresh filenames shown
+here; no step is an in-place retry. Do not run a CI, artifact installer, or
+drift-baseline *creation* command in this session.
 
 ## Setup: fixed controller and evidence checks
 
@@ -23,7 +40,7 @@ The setup is read-only. `C` is the separately authorized merged commit and
 ```bash
 set -Eeuo pipefail
 umask 077
-: "${C:?Set the owner-authorized 40-hex merged commit before pasting this block}"
+: "${C:?Set the owner-authorized 40-hex merged commit before running this script}"
 R=/var/lib/constructicon-m8-launch/operator-stores
 L=/var/lib/constructicon-m8-launch
 K=n4-codex-pro
@@ -162,7 +179,7 @@ if plan not in QUALIFICATION_PLANS: raise ValueError("qualification has no appro
 print(plan)' "$1" < /dev/null
 }
 binding_check() {
-  test "$#" -eq 2
+  test "$#" -eq 3
   "${SERVICE[@]}" /usr/bin/python3 -I -S -B -c 'import asyncio, sys
 from pathlib import Path
 sys.path.insert(0, "/opt/constructicon-m8-controller")
@@ -170,21 +187,49 @@ from constructicon.core.errors import ContractViolation
 from constructicon.core.native_operator import NativeOperatorStoreIdentityV1
 from constructicon.substrate.executors.operator_store import BindingStore
 async def no_closure(): pass
-async def check():
+async def open_binding(sealed):
     held = None
+    store = BindingStore(Path(sys.argv[1]), sys.argv[2], sealed)
     try:
-        sealed = NativeOperatorStoreIdentityV1.model_validate_json(Path(sys.argv[3]).read_bytes())
-        store = BindingStore(Path(sys.argv[1]), sys.argv[2], sealed)
         held = await asyncio.wait_for(store.acquire_lock(store.open_candidate(), lambda: None, no_closure), timeout=10)
         store.check_held(held)
-    except ContractViolation:
-        observed = "refused"
-    else:
-        observed = "accepted"
     finally:
         if held is not None: store.close_held(held)
-    print(observed)
-asyncio.run(check())' "$R" "$K" "$1" < /dev/null | /usr/bin/grep -qxF "$2"
+async def check():
+    sealed = NativeOperatorStoreIdentityV1.model_validate_json(Path(sys.argv[3]).read_bytes())
+    mode = sys.argv[4]
+    if mode == "accepted":
+        if sys.argv[5] != "-": raise ValueError("accepted check has an unexpected comparison")
+        await open_binding(sealed)
+    elif mode == "stale-generation":
+        current = NativeOperatorStoreIdentityV1.model_validate_json(Path(sys.argv[5]).read_bytes())
+        if sealed.operator_binding_digest == current.operator_binding_digest:
+            raise ValueError("old and current binding digests are identical")
+        await open_binding(current)
+        try: await open_binding(sealed)
+        except ContractViolation as exc:
+            if str(exc) != "native store binding is unavailable": raise
+        else: raise ValueError("stale sealed binding was accepted")
+    elif mode == "reboot-anchor":
+        if sys.argv[5] != "-": raise ValueError("reboot check has an unexpected comparison")
+        try: await open_binding(sealed)
+        except ContractViolation as exc:
+            if str(exc) != "native store anchor is unavailable": raise
+        else: raise ValueError("pre-reanchor binding was accepted")
+    else: raise ValueError("unknown binding check mode")
+    print(mode)
+asyncio.run(check())' "$R" "$K" "$1" "$2" "$3" < /dev/null | /usr/bin/grep -qxF "$2"
+}
+load_s4_plan() {
+  check_evidence qualify "$W/s4-qualification.json" maintenance - "$W/startup-policy.json" > /dev/null
+  S4_PLAN="$(read_plan "$W/s4-qualification.json")"
+}
+load_final_qualification() {
+  load_s4_plan
+  Q="$(check_evidence hold "$W/s6a-qualification.json" maintenance "$S4_PLAN" "$W/startup-policy.json")"
+  test "${Q#sha256:}" != "$Q" && test "${#Q}" -eq 71
+  PLAN="$(read_plan "$W/s6a-qualification.json")"
+  test "$PLAN" = "$S4_PLAN"
 }
 ```
 
@@ -209,8 +254,11 @@ recorded in the R2 host-interface evidence. Require status zero and the
 affirmative no-drift output. The command below checks the existing baseline;
 it does not create or update one. If any record or matching commit is
 missing, stop.
+If `sudo -n true` fails, stop before the drift check or any store operation;
+the session has no noninteractive root authority.
 
 ```bash
+sudo -n true < /dev/null
 /usr/local/bin/m8-host-drift < /dev/null
 ```
 
@@ -225,7 +273,6 @@ The login policy seals only `auth.openai.com:443`; startup seals that host and
 the reviewed `gpt-5.5` model, bound catalog and disabled auxiliary features.
 
 ```bash
-test ! -e "$W" && test ! -L "$W"
 "${SERVICE[@]}" "${LANE[@]}" prepare --out "$W" < /dev/null
 "${SERVICE[@]}" /usr/bin/python3 -I -S -B -c 'import json, stat, sys
 from pathlib import Path
@@ -302,6 +349,7 @@ before stdin closes. A separate nonblocking maintenance attempt must refuse
 on the retained lock. No second vendor process is run for that attempt.
 
 ```bash
+load_s4_plan
 "${ROOT_STORE[@]}" maintain --store-root "$R" --key "$K" \
   --service m8-service --wait 5 -- \
   "${LANE[@]}" startup --launch-root "$L" \
@@ -349,10 +397,7 @@ that exact digest in both conformance revisions of g2. Publication alone
 does not select a generation.
 
 ```bash
-Q="$(check_evidence hold "$W/s6a-qualification.json" maintenance "$S4_PLAN" "$W/startup-policy.json")"
-test "${Q#sha256:}" != "$Q" && test "${#Q}" -eq 71
-PLAN="$(read_plan "$W/s6a-qualification.json")"
-test "$PLAN" = "$S4_PLAN"
+load_final_qualification
 "${ROOT_STORE[@]}" publish --store-root "$R" --key "$K" --generation 2 \
   --qualification-evidence-digest "$Q" --service m8-service --wait 0 \
   < /dev/null | save_sealed "$W/g2.sealed.json"
@@ -365,11 +410,12 @@ Root invokes the existing activation law using the sealed g2 identity. The
 fresh service-side `BindingStore` check is the affirmative selection result.
 
 ```bash
+load_final_qualification
 "${ROOT_STORE[@]}" activate --store-root "$R" --key "$K" --generation 2 \
   --sealed "$W/g2.sealed.json" --qualification-evidence-digest "$Q" \
   --service m8-service --wait 0 < /dev/null
-binding_check "$W/g2.sealed.json" accepted
-binding_check "$W/g1.sealed.json" refused
+binding_check "$W/g2.sealed.json" accepted -
+binding_check "$W/g1.sealed.json" stale-generation "$W/g2.sealed.json"
 ```
 
 ### S8. Active startup and S6b/S6c refusals
@@ -379,6 +425,7 @@ run the two separately declared refusals. A refusal passes only if its
 completed evidence has the specific faults and facts checked below.
 
 ```bash
+load_final_qualification
 "${SERVICE[@]}" "${LANE[@]}" startup --custody active --store-root "$R" --key "$K" \
   --sealed "$W/g2.sealed.json" --expected "$PLAN" --launch-root "$L" \
   --configuration "$W/config.toml" --policy "$W/startup-policy.json" \
@@ -406,7 +453,7 @@ if "${SERVICE[@]}" "${LANE[@]}" startup --custody active --store-root "$R" --key
   --lane-dir "$W/s6c-lane" --evidence "$W/s6c-plan-refusal.json" \
   < /dev/null; then echo 'S6c unexpectedly accepted' >&2; exit 1; else test "$?" -eq 1; fi
 check_evidence wrongplan "$W/s6c-plan-refusal.json" active "$PLAN" "$W/startup-policy.json" > /dev/null
-binding_check "$W/g1.sealed.json" refused
+binding_check "$W/g1.sealed.json" stale-generation "$W/g2.sealed.json"
 ```
 
 S6b's policy removes `chatgpt.com`, so the rate-limit readback is denied.
@@ -424,17 +471,18 @@ Stop-VM constructicon-m8
 Start-VM constructicon-m8
 ```
 
-Back on the VM, paste the **Setup** block into a new shell with the same
-`C`, `R`, `L`, `K`, and `W`; this defines functions but does not run S1 or
-provision again. Recompute `Q` and `PLAN` from S6a's retained checked record.
-Before maintenance, the old binding must refuse across the boot-bound anchor.
+Run S9's bash script through a new, noninteractive SSH session. The common
+setup is loaded again, but S1 and provisioning are not repeated. Recompute
+`Q` and `PLAN` from S4 and S6a's retained checked records. Require the bare
+host drift check again before any store or lane operation. Before maintenance,
+the old binding must refuse for the specific boot-bound anchor reason.
 Root's publish helper must also refuse before re-anchoring; its failure output
 is checked, and no new descriptor is accepted from that call.
 
 ```bash
-Q="$(check_evidence hold "$W/s6a-qualification.json" maintenance - "$W/startup-policy.json")"
-PLAN="$(read_plan "$W/s6a-qualification.json")"
-binding_check "$W/g2.sealed.json" refused
+/usr/local/bin/m8-host-drift < /dev/null
+load_final_qualification
+binding_check "$W/g2.sealed.json" reboot-anchor -
 if PREANCHOR="$("${ROOT_STORE[@]}" publish --store-root "$R" --key "$K" \
   --generation 3 --qualification-evidence-digest "$Q" --service m8-service --wait 0 \
   < /dev/null 2>&1)"; then echo 'pre-anchor publish unexpectedly accepted' >&2; exit 1; else test "$?" -eq 1; fi
@@ -454,8 +502,8 @@ check_sealed "$W/g3.sealed.json" "$Q3"
 "${ROOT_STORE[@]}" activate --store-root "$R" --key "$K" --generation 3 \
   --sealed "$W/g3.sealed.json" --qualification-evidence-digest "$Q3" \
   --service m8-service --wait 0 < /dev/null
-binding_check "$W/g3.sealed.json" accepted
-binding_check "$W/g2.sealed.json" refused
+binding_check "$W/g3.sealed.json" accepted -
+binding_check "$W/g2.sealed.json" stale-generation "$W/g3.sealed.json"
 "${SERVICE[@]}" "${LANE[@]}" startup --custody active --store-root "$R" --key "$K" \
   --sealed "$W/g3.sealed.json" --expected "$PLAN" --launch-root "$L" \
   --configuration "$W/config.toml" --policy "$W/startup-policy.json" \
@@ -470,13 +518,18 @@ the readback is a failed qualification, not a cue to change policy in place.
 ### S10. Refresh
 
 At least 24 hours after the S3 timestamp, within the same authorization, run
-one active g3 startup. The time check deliberately starts from the timestamp
+S10's bash script through a new, noninteractive SSH session. The common setup
+is loaded again; `PLAN` and `S4_PLAN` are recomputed from the retained checked
+S4/S6a records. Require the bare host drift check again before the startup.
+Run one active g3 startup. The time check deliberately starts from the timestamp
 written after S3's affirmative login, so it cannot overstate elapsed time.
 Refresh is measured only if that same run has a clean judged readback,
 `accepted:auth.openai.com:443 > 0`, and a changed credential-file mtime. It
 does not identify which vendor manager refreshed.
 
 ```bash
+/usr/local/bin/m8-host-drift < /dev/null
+load_final_qualification
 "${SERVICE[@]}" /usr/bin/python3 -I -S -B -c 'from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import sys

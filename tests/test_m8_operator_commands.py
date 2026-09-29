@@ -15,16 +15,20 @@ import shutil
 import subprocess
 import sys
 import sysconfig
+from contextlib import redirect_stdout
 from dataclasses import replace
+from io import StringIO
 from pathlib import Path
 
 import pytest
 from scripts.ci import m8_host_artifacts as artifacts
 
+from constructicon.core.errors import ContractViolation
 from constructicon.core.identity import digest
-from constructicon.substrate.executors import codex_lane
+from constructicon.substrate.executors import codex_lane, operator_store
 from constructicon.substrate.executors.codex_lane import write_evidence
 from constructicon.substrate.executors.codex_protocol import ExpectedAccount
+from tests.operator_store_world import StoreWorld
 from tests.substrate import test_codex_lane as fake_lane
 
 ROOT = Path(__file__).parents[1]
@@ -120,6 +124,38 @@ def test_s0_runs_the_bare_drift_check_and_stops_without_a_passing_baseline() -> 
     assert "Require status zero and the affirmative no-drift output" in wording
     assert "does not create or update one" in wording
     assert "If any record or matching commit is missing, stop" in wording
+    assert section.index("sudo -n true < /dev/null") < section.index(
+        "/usr/local/bin/m8-host-drift < /dev/null",
+    )
+
+
+def test_each_ssh_step_reloads_setup_and_retained_evidence() -> None:
+    document = _runbook()
+    assert "n4-common.sh n4-s0.sh" in document
+    assert '/usr/bin/ssh -T -o BatchMode=yes "$SSH_TARGET" "C=$C /bin/bash -se"' in document
+    assert "do not paste commands into an interactive VM shell" in " ".join(document.split())
+    assert 'test ! -e "$W"' not in document
+    assert "load_s4_plan() {" in document
+    assert "load_final_qualification() {" in document
+    assert 'check_evidence qualify "$W/s4-qualification.json"' in document
+    assert 'check_evidence hold "$W/s6a-qualification.json"' in document
+    steps = {
+        "### S6a.": "load_s4_plan",
+        "### S5.": "load_final_qualification",
+        "### S7.": "load_final_qualification",
+        "### S8.": "load_final_qualification",
+        "### S9.": "load_final_qualification",
+        "### S10.": "load_final_qualification",
+    }
+    for heading, call in steps.items():
+        section = document.split(heading, 1)[1].split("### ", 1)[0]
+        assert f"{call}\n" in section
+    for heading in ("### S9.", "### S10."):
+        section = document.split(heading, 1)[1].split("### ", 1)[0]
+        drift = section.index("/usr/local/bin/m8-host-drift < /dev/null")
+        assert drift < section.index("load_final_qualification")
+    assert 'binding_check "$W/g2.sealed.json" reboot-anchor -' in document
+    assert 'binding_check "$W/g1.sealed.json" stale-generation "$W/g2.sealed.json"' in document
 
 
 @pytest.mark.parametrize(
@@ -144,6 +180,91 @@ def _evidence_program() -> str:
 
     section = _runbook().split("check_evidence() {\n", 1)[1].split("\ncheck_sealed() {", 1)[0]
     return section.split("-c '", 1)[1].split("' \\\n    \"$1\"", 1)[0]
+
+
+def _binding_program() -> str:
+    section = _runbook().split("binding_check() {\n", 1)[1].split("\nload_s4_plan() {", 1)[0]
+    return section.split("-c '", 1)[1].split("' \"$R\"", 1)[0]
+
+
+def _run_binding_program(
+    world: StoreWorld, old: Path, mode: str, comparison: Path | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> str:
+    monkeypatch.setattr(sys, "argv", [
+        "binding-check", str(world.root), world.key, str(old), mode,
+        str(comparison) if comparison is not None else "-",
+    ])
+    before = sys.path[:]
+    output = StringIO()
+    try:
+        with redirect_stdout(output):
+            exec(compile(_binding_program(), "runbook-binding-check", "exec"), {})
+    finally:
+        sys.path[:] = before
+    return output.getvalue().strip()
+
+
+def test_documented_binding_checker_accepts_current_and_specific_stale_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = StoreWorld(tmp_path)
+    world.install(monkeypatch)
+    g1 = tmp_path / "g1.sealed.json"
+    g1.write_text(world.sealed.model_dump_json(), encoding="utf-8")
+    assert _run_binding_program(world, g1, "accepted", None, monkeypatch) == "accepted"
+    world.write_descriptor(2)
+    world.activate(2)
+    g2 = tmp_path / "g2.sealed.json"
+    g2.write_text(world.sealed_for(2).model_dump_json(), encoding="utf-8")
+    assert _run_binding_program(world, g2, "accepted", None, monkeypatch) == "accepted"
+    assert (
+        _run_binding_program(world, g1, "stale-generation", g2, monkeypatch)
+        == "stale-generation"
+    )
+    original = operator_store.BindingStore.open_candidate
+
+    def unrelated_old_refusal(
+        self: operator_store.BindingStore,
+    ) -> operator_store.OpenedBundle:
+        if self.sealed.operator_binding_digest == world.sealed.operator_binding_digest:
+            raise ContractViolation("unrelated old-binding refusal")
+        return original(self)
+
+    with monkeypatch.context() as local:
+        local.setattr(operator_store.BindingStore, "open_candidate", unrelated_old_refusal)
+        with pytest.raises(ContractViolation, match="unrelated old-binding refusal"):
+            _run_binding_program(world, g1, "stale-generation", g2, monkeypatch)
+    with pytest.raises(ValueError, match="binding digests are identical"):
+        _run_binding_program(world, g2, "stale-generation", g2, monkeypatch)
+    del world.metadata["active.json"]
+    with pytest.raises(ContractViolation, match="active selection is unavailable"):
+        _run_binding_program(world, g1, "stale-generation", g2, monkeypatch)
+
+
+def test_documented_binding_checker_requires_exact_reboot_anchor_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = StoreWorld(tmp_path)
+    world.install(monkeypatch)
+    sealed = tmp_path / "g1.sealed.json"
+    sealed.write_text(world.sealed.model_dump_json(), encoding="utf-8")
+    with pytest.raises(ValueError, match="pre-reanchor binding was accepted"):
+        _run_binding_program(world, sealed, "reboot-anchor", None, monkeypatch)
+    world.bundle = replace(world.bundle, boot_id="00000000-0000-0000-0000-000000000002")
+    assert (
+        _run_binding_program(world, sealed, "reboot-anchor", None, monkeypatch)
+        == "reboot-anchor"
+    )
+    with pytest.raises(ContractViolation, match="anchor is unavailable"):
+        _run_binding_program(world, sealed, "accepted", None, monkeypatch)
+
+    def other_refusal(self: operator_store.BindingStore) -> operator_store.OpenedBundle:
+        raise ContractViolation("unrelated store refusal")
+
+    monkeypatch.setattr(operator_store.BindingStore, "open_candidate", other_refusal)
+    with pytest.raises(ContractViolation, match="unrelated store refusal"):
+        _run_binding_program(world, sealed, "reboot-anchor", None, monkeypatch)
 
 
 def _check_evidence(
