@@ -524,7 +524,29 @@ MUTANTS = (
         LANE + "_launcher",
         'vendor=NativeVendor(root / "native-codex", root / "codex-models.json"),',
         "",
-        T + "test_the_installed_launcher_binds_the_launch_sets_vendor",
+        T + "test_the_installed_launcher_reads_the_runtime_json_the_host_installs",
+    ),
+    # --- the installed runtime.json's own keys (S3 stop on the host, #77) ---
+    (
+        "N4-V15 the launch policy is the installed profile",
+        LANE + "_launcher",
+        'bubblewrap=root / "bwrap", policy=LAUNCH_POLICY,',
+        'bubblewrap=root / "bwrap", policy=root / "runtime.json",',
+        T + "test_the_installed_launcher_reads_the_runtime_json_the_host_installs",
+    ),
+    (
+        "N4-V16 the policy pin is the manifest's launch-profile digest",
+        LANE + "_launcher",
+        'expected_policy_sha256=manifest["apparmor_policy_sha256"],',
+        'expected_policy_sha256=manifest["bubblewrap_sha256"],',
+        T + "test_the_installed_launcher_reads_the_runtime_json_the_host_installs",
+    ),
+    (
+        "N4-V17 preflight checks the launch set",
+        LANE + "main",
+        "        launcher.check_artifacts()\n",
+        "        pass\n",
+        T + "test_preflight_checks_the_launch_set_and_starts_nothing",
     ),
     # --- the qualification plan literal (P1 review, 2026-09-24) ---
     (

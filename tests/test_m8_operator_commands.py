@@ -165,6 +165,7 @@ def test_each_ssh_step_reloads_setup_and_retained_evidence() -> None:
         ("constructicon.substrate.executors.operator_store", ("publish", "--help"), "publish"),
         ("constructicon.substrate.executors.operator_store", ("activate", "--help"), "activate"),
         ("constructicon.substrate.executors.codex_lane", ("prepare", "--help"), "prepare"),
+        ("constructicon.substrate.executors.codex_lane", ("preflight", "--help"), "preflight"),
     ],
 )
 def test_documented_entry_points_offer_isolated_help(

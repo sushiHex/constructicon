@@ -542,14 +542,18 @@ def write_evidence(path: Path, evidence: Mapping[str, Any]) -> Digest:
 # --- the operator's command line ---------------------------------------------
 
 
+LAUNCH_POLICY = Path("/etc/apparmor.d/constructicon-m8-launch")
+"""The launch profile R13 installs. Its pin is the manifest's ``apparmor_policy_sha256``."""
+
+
 def _launcher(root: Path) -> LinuxLauncher:
-    """The installed runtime and launch set, from its reviewed manifest."""
+    """The installed runtime and launch set, from the ``runtime.json`` R13 installs."""
 
     manifest = json.loads((root / "runtime.json").read_text(encoding="utf-8"))
     return LinuxLauncher(
         runtime_root=root / "runtime", expected_runtime=Digest(manifest["runtime_digest"]),
-        bubblewrap=root / "bwrap", policy=Path(manifest["policy"]),
-        expected_policy_sha256=manifest["policy_sha256"],
+        bubblewrap=root / "bwrap", policy=LAUNCH_POLICY,
+        expected_policy_sha256=manifest["apparmor_policy_sha256"],
         vendor=NativeVendor(root / "native-codex", root / "codex-models.json"),
     )
 
@@ -666,6 +670,15 @@ def main(argv: list[str] | None = None) -> int:
         prepared = prepare_parser.parse_args(argv[1:])
         prepare(prepared.out)
         print(json.dumps({"prepared": True, "out": str(prepared.out)}))
+        return 0
+    if argv and argv[0] == "preflight":
+        # Every launch-set check a lane makes before its vendor process, with none started.
+        preflight_parser = argparse.ArgumentParser(prog="codex_lane preflight", allow_abbrev=False)
+        preflight_parser.add_argument("--launch-root", type=Path, required=True)
+        launcher = _launcher(preflight_parser.parse_args(argv[1:]).launch_root)
+        launcher.check_artifacts()
+        executable = vendor_executable(launcher)
+        print(json.dumps({"launch_ready": True, "executable_sha256": executable.sha256}))
         return 0
     parser = argparse.ArgumentParser(prog="codex_lane", allow_abbrev=False)
     parser.add_argument("lane", choices=("login", "startup"))

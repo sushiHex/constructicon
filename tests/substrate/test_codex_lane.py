@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
+from scripts.ci import m8_host_artifacts as artifacts
 
 from constructicon.core.errors import ContractViolation
 from constructicon.core.identity import digest
@@ -1067,15 +1068,65 @@ def test_a_launcher_without_the_bound_vendor_runs_no_lane():
     assert raised.type is ContractViolation and "bound vendor" in str(raised.value)
 
 
-def test_the_installed_launcher_binds_the_launch_sets_vendor(tmp_path):
-    (tmp_path / "runtime.json").write_text(json.dumps({
-        "runtime_digest": str(digest("runtime", 1, "x")), "policy": "/p",
-        "policy_sha256": "0" * 64,
-    }))
+def test_the_installed_launcher_reads_the_runtime_json_the_host_installs(tmp_path):
+    """The file comes from the host tool's own writer, never an invented shape.
+
+    An invented ``{"policy", "policy_sha256"}`` document once passed here while
+    the real file had neither key, and S3 stopped on the host (#77).
+    """
+
+    written = artifacts.runtime_json([], "b" * 64, "p" * 64, "a" * 64)
+    (tmp_path / "runtime.json").write_bytes(written)
     launcher = codex_lane._launcher(tmp_path)
+    assert launcher.runtime_root == tmp_path / "runtime"
+    assert str(launcher.expected_runtime) == json.loads(written)["runtime_digest"]
+    assert launcher.bubblewrap == tmp_path / "bwrap"
+    assert launcher.policy == Path("/" + artifacts.LAUNCH_PROFILE_DESTINATION)
+    assert launcher.expected_policy_sha256 == "p" * 64
     assert launcher.vendor == linux.NativeVendor(
         tmp_path / "native-codex", tmp_path / "codex-models.json",
     )
+
+
+class _Checked(linux.LinuxLauncher):
+    checks: ClassVar[list[str]] = []
+
+    def check_artifacts(self) -> None:
+        self.checks.append("checked")
+        if self.expected_policy_sha256 == "refused":
+            raise ContractViolation("launch policy content changed")
+
+
+def preflight_launcher(tmp_path: Path, policy_sha256: str) -> _Checked:
+    tree = tmp_path / "native-codex"
+    (tree / "bin").mkdir(parents=True)
+    (tree / "bin" / "codex").write_bytes(b"pinned client")
+    base = bare_launcher(clean_native())
+    return _Checked(
+        runtime_root=base.runtime_root, expected_runtime=base.expected_runtime,
+        bubblewrap=base.bubblewrap, policy=base.policy, expected_policy_sha256=policy_sha256,
+        vendor=linux.NativeVendor(tree, tmp_path / "codex-models.json"),
+    )
+
+
+def test_preflight_checks_the_launch_set_and_starts_nothing(tmp_path, monkeypatch, capsys):
+    _Checked.checks = []
+    launcher = preflight_launcher(tmp_path, "0" * 64)
+    monkeypatch.setattr(codex_lane, "_launcher", lambda root: launcher)
+    assert codex_lane.main(["preflight", "--launch-root", str(tmp_path)]) == 0
+    assert _Checked.checks == ["checked"]
+    assert json.loads(capsys.readouterr().out) == {
+        "launch_ready": True, "executable_sha256": hashlib.sha256(b"pinned client").hexdigest(),
+    }
+
+
+def test_preflight_refuses_what_a_lane_would_refuse(tmp_path, monkeypatch, capsys):
+    _Checked.checks = []
+    launcher = preflight_launcher(tmp_path, "refused")
+    monkeypatch.setattr(codex_lane, "_launcher", lambda root: launcher)
+    with pytest.raises(ContractViolation, match="launch policy content changed"):
+        codex_lane.main(["preflight", "--launch-root", str(tmp_path)])
+    assert capsys.readouterr().out == ""
 
 
 # --- custody -----------------------------------------------------------------
