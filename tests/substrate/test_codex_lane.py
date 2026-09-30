@@ -1089,12 +1089,14 @@ def test_the_installed_launcher_reads_the_runtime_json_the_host_installs(tmp_pat
 
 
 class _Checked(linux.LinuxLauncher):
+    """``probe`` is the artifact checks plus the benign physical probe every launch runs."""
+
     checks: ClassVar[list[str]] = []
 
-    def check_artifacts(self) -> None:
-        self.checks.append("checked")
+    async def probe(self, *, deadline: float | None = None) -> None:
+        self.checks.append("probed")
         if self.expected_policy_sha256 == "refused":
-            raise ContractViolation("launch policy content changed")
+            raise ContractViolation("the physical Linux launch probe contradicts containment")
 
 
 def preflight_launcher(tmp_path: Path, policy_sha256: str) -> _Checked:
@@ -1114,7 +1116,7 @@ def test_preflight_checks_the_launch_set_and_starts_nothing(tmp_path, monkeypatc
     launcher = preflight_launcher(tmp_path, "0" * 64)
     monkeypatch.setattr(codex_lane, "_launcher", lambda root: launcher)
     assert codex_lane.main(["preflight", "--launch-root", str(tmp_path)]) == 0
-    assert _Checked.checks == ["checked"]
+    assert _Checked.checks == ["probed"]
     assert json.loads(capsys.readouterr().out) == {
         "launch_ready": True, "executable_sha256": hashlib.sha256(b"pinned client").hexdigest(),
     }
@@ -1124,7 +1126,7 @@ def test_preflight_refuses_what_a_lane_would_refuse(tmp_path, monkeypatch, capsy
     _Checked.checks = []
     launcher = preflight_launcher(tmp_path, "refused")
     monkeypatch.setattr(codex_lane, "_launcher", lambda root: launcher)
-    with pytest.raises(ContractViolation, match="launch policy content changed"):
+    with pytest.raises(ContractViolation, match="launch probe contradicts containment"):
         codex_lane.main(["preflight", "--launch-root", str(tmp_path)])
     assert capsys.readouterr().out == ""
 

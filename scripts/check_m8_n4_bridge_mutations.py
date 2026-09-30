@@ -542,9 +542,9 @@ MUTANTS = (
         T + "test_the_installed_launcher_reads_the_runtime_json_the_host_installs",
     ),
     (
-        "N4-V17 preflight checks the launch set",
+        "N4-V17 preflight runs the launch probe",
         LANE + "main",
-        "        launcher.check_artifacts()\n",
+        "        asyncio.run(launcher.probe())\n",
         "        pass\n",
         T + "test_preflight_checks_the_launch_set_and_starts_nothing",
     ),

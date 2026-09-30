@@ -3122,8 +3122,8 @@ The owner-attended session ran S0 to S2 at `def8e73` ([#77](https://github.com/s
 **Fix.**
 - `_launcher` binds the installed profile `/etc/apparmor.d/constructicon-m8-launch` (`LAUNCH_POLICY`), pinned by the manifest's `apparmor_policy_sha256`.
 - The test now builds `runtime.json` with the host tool's own writer, and fails on the old code with the host's exact `KeyError`.
-- New `codex_lane preflight --launch-root L` runs every launch-set check a lane makes before its vendor process, and starts none. The runbook runs it as S3's first command, so a defect of this kind stops the session before a device code exists.
-- Mutants: N4-V15 (the policy path), N4-V16 (the pin's key) and N4-V17 (preflight checks).
+- New `codex_lane preflight --launch-root L` runs `LinuxLauncher.probe()`: the artifact checks, then the benign physical probe every launch runs first, including the AppArmor child attachment. It starts no vendor process. The runbook runs it as S3's first command, so a defect of this kind stops the session before a device code exists. (The first version ran only the artifact checks; the connector's P2 review corrected it.)
+- Mutants: N4-V15 (the policy path), N4-V16 (the pin's key) and N4-V17 (preflight runs the probe).
 
 **To resume.**
 1. Reinstall the controller at the new `C` (R15).

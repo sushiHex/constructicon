@@ -672,11 +672,12 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"prepared": True, "out": str(prepared.out)}))
         return 0
     if argv and argv[0] == "preflight":
-        # Every launch-set check a lane makes before its vendor process, with none started.
+        # Every check a lane makes before its vendor process, with none started:
+        # the artifact checks and the benign physical probe every launch runs first.
         preflight_parser = argparse.ArgumentParser(prog="codex_lane preflight", allow_abbrev=False)
         preflight_parser.add_argument("--launch-root", type=Path, required=True)
         launcher = _launcher(preflight_parser.parse_args(argv[1:]).launch_root)
-        launcher.check_artifacts()
+        asyncio.run(launcher.probe())
         executable = vendor_executable(launcher)
         print(json.dumps({"launch_ready": True, "executable_sha256": executable.sha256}))
         return 0
