@@ -149,6 +149,7 @@ def closure_host(root: Path) -> None:
     for path, data in {
         artifacts.PYTHON: b"\x7fELF python\n",
         artifacts.GIT_BINARY: b"\x7fELF git\n",
+        artifacts.TRUST_BUNDLE: b"-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----\n",
         **LIBRARIES,
         **{f"{artifacts.LIBRARY}/{name}": data for name, data in LIBRARY_TREE.items()},
     }.items():
@@ -188,6 +189,7 @@ def test_the_closure_plan_is_the_ci_rule(tmp_path: Path, monkeypatch: pytest.Mon
     files = {
         artifacts.PYTHON,
         artifacts.GIT_BINARY,
+        artifacts.TRUST_BUNDLE,
         *LIBRARIES,
         f"{library}/os.py",
         f"{library}/encodings/utf_8.py",
@@ -200,6 +202,12 @@ def test_the_closure_plan_is_the_ci_rule(tmp_path: Path, monkeypatch: pytest.Mon
     assert {n for n, (kind, _, _) in table.items() if kind == "file"} == files
     assert {n for n, (kind, _, _) in table.items() if kind == "link"} == {"usr/bin/python3"}
     assert table["usr/bin/python3"] == ("link", 0o777, "python3.12")
+    # The zone's one trust store is the host's bundle, read-only, at the path
+    # the launcher names to the vendor (#77, S3).
+    assert table[artifacts.TRUST_BUNDLE] == (
+        "file", 0o444, ("host", artifacts.real_source(root, root / artifacts.TRUST_BUNDLE)),
+    )
+    assert linux.TRUST_BUNDLE == "/" + artifacts.TRUST_BUNDLE
     # Excluded names are never copied, but the library they alone need still is.
     for ignored in artifacts.IGNORED:
         assert not [n for n in names if f"/{ignored}/" in n + "/"], ignored

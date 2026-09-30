@@ -203,12 +203,19 @@ jobs:
             /var/lib/constructicon-m8-launch/native-codex/bin/codex \
             /var/lib/constructicon-m8-launch/codex-models.json | tee "$RUNNER_TEMP/m8-bridge-runtime.json"
           sudo install -m 0444 "$RUNNER_TEMP/m8-bridge-runtime.json" /var/lib/constructicon-m8-launch/bridge-runtime.json
+          # The trust store's accepting control: the bridge image plus one throwaway CA.
+          sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" scripts/ci/build_m8_trust_fixture.py \
+            /var/lib/constructicon-m8-launch/bridge-runtime /var/lib/constructicon-m8-launch/trust-runtime \
+            /var/lib/constructicon-m8-launch/trust-pki > "$RUNNER_TEMP/m8-trust-runtime.json"
+          sudo install -m 0444 "$RUNNER_TEMP/m8-trust-runtime.json" /var/lib/constructicon-m8-launch/trust-runtime.json
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
             M8_OPERATOR_STORE_REQUIRED=1 \
             M8_OPERATOR_STORE_ROOT=/var/lib/constructicon-m8-launch/operator-stores \
             M8_EGRESS_REQUIRED=1 M8_BRIDGE_REQUIRED=1 \
             M8_BRIDGE_ROOT=/var/lib/constructicon-m8-launch/bridge-runtime \
+            M8_TRUST_ROOT=/var/lib/constructicon-m8-launch/trust-runtime \
+            M8_TRUST_PKI=/var/lib/constructicon-m8-launch/trust-pki \
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_native_egress_bridge.py \
               -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider

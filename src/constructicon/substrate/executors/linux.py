@@ -149,6 +149,20 @@ The runtime image carries only the two empty mount points; the content is
 bound read-only from the launch set (M8-N4-state-review.md, host-runtime
 interface item 1)."""
 
+TRUST_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
+"""The zone's one trust store: the runtime image's copy of the host bundle.
+
+Installation admits it with the rest of the image, so ``runtime_digest`` pins
+its bytes and every launch rechecks them. ``CODEX_CA_CERTIFICATE`` names it to
+the vendor:
+- the client's HTTP stack then switches to rustls and adds these roots;
+- its websocket stack layers them over the native roots, which it finds at this
+  same standard path (``http-client/src/custom_ca.rs`` at the pin).
+
+A CA in this file is therefore what the client needs. That this file is all it
+trusts is not proved: the HTTP stack may also compile in roots. Without this
+store, the pinned client's default TLS found no roots in the zone (#77, S3)."""
+
 
 def _require_root_fixed(info: os.stat_result, *, kind: int) -> None:
     if stat.S_IFMT(info.st_mode) != kind or info.st_uid != 0 or info.st_mode & 0o6022:
@@ -495,6 +509,7 @@ class LinuxLauncher:
                 "--ro-bind-data", str(native_store.configuration_fd), f"{NATIVE_HOME}/config.toml",
                 "--bind-fd", str(native_store.credential_fd), f"{NATIVE_HOME}/{CREDENTIAL_FILE}",
                 "--setenv", "CODEX_HOME", NATIVE_HOME,
+                "--setenv", "CODEX_CA_CERTIFICATE", TRUST_BUNDLE,
             ]
             if self.vendor is not None:
                 # Checked in ``check_artifacts`` on this launch's probe.

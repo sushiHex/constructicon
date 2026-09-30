@@ -18,6 +18,7 @@ import json
 import os
 import socket
 import ssl
+import threading
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,8 +29,10 @@ from constructicon.core.identity import Digest
 from constructicon.substrate.executors import egress, operator_store
 from constructicon.substrate.executors._egress_bridge import PROXY_PORT
 from constructicon.substrate.executors.codex_lane import (
+    LOGIN_ARGUMENTS,
     RUNTIME_CATALOG,
     active_custody,
+    launch,
     production_configuration,
     run_login,
     run_startup,
@@ -48,7 +51,7 @@ from tests.native_startup import (
     configuration,
     initialize,
 )
-from tests.substrate.test_egress import until
+from tests.substrate.test_egress import CONTROLLED, until
 from tests.substrate.test_linux_containment import launcher as launcher
 from tests.substrate.test_native_codex_mediation import write_evidence
 from tests.substrate.test_native_egress_containment import (
@@ -71,6 +74,7 @@ ZONE_ENVIRONMENT = {
     "HOME": "/tmp/home", "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "PWD": "/tmp",
     # The N4 layout names the vendor home explicitly on every native launch.
     "CODEX_HOME": "/tmp/home/.codex",
+    "CODEX_CA_CERTIFICATE": "/etc/ssl/certs/ca-certificates.crt",
 }
 
 CLIENT = r"""
@@ -535,6 +539,157 @@ async def test_the_pinned_device_login_reaches_only_the_relay_and_keeps_nothing(
     })
 
 
+# --- the zone's trust store (#77, S3) -------------------------------------------
+
+
+@pytest.fixture
+def trust_launcher(vendor_launcher):
+    """The bridge image plus one throwaway CA in its trust store (build_m8_trust_fixture)."""
+    location = os.environ.get("M8_TRUST_ROOT")
+    if not location:
+        if os.environ.get("M8_BRIDGE_REQUIRED"):
+            pytest.fail("the required trust-store fixture is missing")
+        pytest.skip("the trust-store fixture is not provisioned")
+    root = Path(location)
+    pinned = json.loads(root.with_suffix(".json").read_text())["runtime_digest"]
+    return replace(vendor_launcher, runtime_root=root, expected_runtime=Digest(pinned))
+
+
+class IssuerPeer:
+    """A controlled issuer that records, per connection, one affirmative outcome.
+
+    The outcome is the TLS alert the client sent (its certificate verdict) or
+    the request line it sent after a completed handshake. A session that ends
+    any other way records the error's name, and the test refuses it, so a
+    reset, a deadline or a peer fault can never pass as a rejection.
+    """
+
+    def __init__(self, leaf: str) -> None:
+        directory = Path(os.environ["M8_TRUST_PKI"])
+        self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        self.context.load_cert_chain(directory / f"{leaf}.pem", directory / f"{leaf}.key")
+        self.server = socket.create_server(("127.0.0.1", 0))
+        self.port = self.server.getsockname()[1]
+        self.sessions: list[dict] = []
+        threading.Thread(target=self._serve, daemon=True).start()
+
+    def _serve(self) -> None:
+        while True:
+            try:
+                raw, _ = self.server.accept()
+            except OSError:
+                return
+            session: dict = {"done": False, "alert": None, "error": None, "request": None}
+            self.sessions.append(session)
+            threading.Thread(target=self._session, args=(raw, session), daemon=True).start()
+
+    def _session(self, raw: socket.socket, session: dict) -> None:
+        try:
+            with self.context.wrap_socket(raw, server_side=True) as tls:
+                head = b""
+                while b"\r\n\r\n" not in head and (chunk := tls.recv(8192)):
+                    head += chunk
+                session["request"] = head.split(b"\r\n", 1)[0].decode(errors="replace")
+                tls.sendall(b"HTTP/1.1 503 Service Unavailable\r\n"
+                            b"Content-Length: 0\r\nConnection: close\r\n\r\n")
+        except ssl.SSLError as exc:
+            session["alert"] = exc.reason
+        except OSError as exc:
+            session["error"] = type(exc).__name__
+        finally:
+            raw.close()
+            session["done"] = True
+
+    def close(self) -> None:
+        self.server.close()
+
+
+async def device_login_to(peer: IssuerPeer, launcher, binding, root: Path) -> dict:
+    """The pinned client's own device login, its issuer moved to the peer's port.
+
+    ``--experimental_issuer`` (cli/src/main.rs:522 at the pin) changes only the
+    issuer URL, so the auth client, its TLS stack and the relay path are the
+    production ones. The relay pins ``auth.openai.com`` at that port to the peer.
+    """
+    policy = egress.EgressPolicy(
+        (egress.EgressDestination("auth.openai.com", peer.port, CONTROLLED),), 8,
+    )
+    command = (
+        vendor_executable(launcher).path, *LOGIN_ARGUMENTS,
+        "--experimental_issuer", f"https://auth.openai.com:{peer.port}",
+    )
+
+    async def drain(io) -> None:
+        while await io.read(8192):
+            pass
+        await io.close_stdin()
+
+    async with active_custody(binding) as held:
+        custody = replace(held, kind="maintenance", detail={"test_only": True})
+        launched = await launch(
+            custody, launcher, policy, command, drain,
+            configuration=sealed_configuration(plugins=False), lane_dir=root, deadline_s=60,
+        )
+    assert await until(lambda: all(session["done"] for session in peer.sessions), 10)
+    peer.close()
+    return {
+        "accepted": launched.destinations.get(f"accepted:auth.openai.com:{peer.port}", 0),
+        "sessions": [{key: session[key] for key in ("alert", "error", "request")}
+                     for session in peer.sessions],
+        "returncode": launched.result.returncode,
+        "stderr_bytes": len(launched.result.stderr),
+        "stderr": launched.result.stderr.decode(errors="replace")[:600],
+        "credential_changed": launched.credential["mtime_changed"],
+    }
+
+
+async def test_the_zone_trust_store_decides_what_the_device_login_trusts(
+    binding, vendor_launcher, trust_launcher, short_root, empty_auth,
+):
+    """A CA in the zone's store, named by CODEX_CA_CERTIFICATE, is what the auth client needs.
+
+    This proves the store necessary and sufficient for a CA the client does not
+    otherwise trust. It does not prove the store exclusive: the pinned HTTP
+    stack may also carry compiled-in roots (UNVERIFIED; implementation record).
+    - Refused: the production image's store lacks the throwaway CA. The client
+      sends an unknown-CA alert before any request. This is the host's S3
+      failure mode: a relayed connection, then a refusal.
+    - Accepted: with the CA in the store, the same client and relay complete TLS
+      and send the device-code request (``POST .../deviceauth/usercode``,
+      login/src/device_code_auth.rs:68 at the pin). The peer's reply is not the
+      vendor's, so the login still fails, and no credential is written.
+    - Wrong name: the CA is trusted but the leaf names another host. Refused by
+      certificate alert.
+    """
+    refused = await device_login_to(IssuerPeer("issuer"), vendor_launcher, binding,
+                                    short_root / "tr-r")
+    accepted = await device_login_to(IssuerPeer("issuer"), trust_launcher, binding,
+                                     short_root / "tr-a")
+    stranger = await device_login_to(IssuerPeer("stranger"), trust_launcher, binding,
+                                     short_root / "tr-s")
+    for run in (refused, accepted, stranger):
+        assert run["accepted"] >= 1 and run["sessions"], run
+        assert run["returncode"] != 0 and run["credential_changed"] is False, run
+        assert all(session["error"] is None for session in run["sessions"]), run
+    assert {s["alert"] for s in refused["sessions"]} == {"TLSV1_ALERT_UNKNOWN_CA"}, refused
+    assert all(s["request"] is None for s in refused["sessions"]), refused
+    requests = [s["request"] for s in accepted["sessions"] if s["request"]]
+    assert requests and requests[0].startswith("POST "), accepted
+    assert "/deviceauth/usercode " in requests[0], accepted
+    assert all(s["alert"] is None for s in accepted["sessions"]), accepted
+    assert {s["alert"] for s in stranger["sessions"]} <= {
+        "SSLV3_ALERT_BAD_CERTIFICATE", "SSLV3_ALERT_CERTIFICATE_UNKNOWN",
+    }, stranger
+    assert all(s["request"] is None for s in stranger["sessions"]), stranger
+    assert empty_auth.read_bytes() == EMPTY_AUTH
+    write_evidence("n4-lane-trust.json", {
+        "schema_version": 1, "credential_free_fixture": True,
+        "vendor_conformance_qualified": False,
+        "trust_bundle": "/etc/ssl/certs/ca-certificates.crt",
+        "refused": refused, "accepted": accepted, "stranger": stranger,
+    })
+
+
 def test_no_evidence_file_contains_key_material():
     directory = os.environ.get("M8_EVIDENCE_DIRECTORY")
     if not directory:
@@ -548,7 +703,8 @@ def test_no_evidence_file_contains_key_material():
         # file is present too and is scanned with the bridge's own.
         assert [path.name for path in files] == [
             "n4-bridge.json", "n4-inherited-maintenance.json",
-            "n4-lane-login.json", "n4-lane-startup.json", "n4-pinned-client.json",
+            "n4-lane-login.json", "n4-lane-startup.json", "n4-lane-trust.json",
+            "n4-pinned-client.json",
         ]
     for path in files:
         text = path.read_text()

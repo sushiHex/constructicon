@@ -204,6 +204,9 @@ LAUNCH_LINUX = (
     ("the store is never listed", MODULE + "observe_launch",
      "if destination == LAUNCH:", "if True:",
      RUNTIME + "test_the_operator_store_is_observed_without_listing_it"),
+    ("the runtime admits the zone's trust store", MODULE + "runtime_plan",
+     "    host_file(TRUST_BUNDLE, root / TRUST_BUNDLE)\n", "",
+     RUNTIME + "test_the_closure_plan_is_the_ci_rule"),
 )  # fmt: skip
 
 MUTANTS = (
