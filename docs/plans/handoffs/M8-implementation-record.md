@@ -3107,3 +3107,24 @@ were independently rerun and assertion-killed, including literal deletion
 and bypass of both root-validation call sites. The PR's added inventory is
 now 57 mutants (40 store CLI and 17 preparation). Runtime source and frozen
 plans are unchanged by this follow-up.
+
+### N4 session: S3 stopped on the lane launcher (2026-09-30)
+
+The owner-attended session ran S0 to S2 at `def8e73` ([#77](https://github.com/sushiHex/constructicon/issues/77#issuecomment-5903006364)).
+- **Passed:** the checkpoints were deleted, the drift check reported NO DRIFT, S1 prepared its inputs, and S2 provisioned g1.
+- **S3 stopped:** `codex_lane._launcher` raised `KeyError: 'policy'` before building a launcher.
+- **Nothing reached the vendor:** no vendor process, relay, device code or credential. The store was left in its withdrawn state with floor 1, and its directory is empty.
+
+**Cause.** `_launcher` (#108) read `policy` and `policy_sha256` from the launch set's `runtime.json`.
+- The file R13 installs is written by `m8_host_artifacts.runtime_json`, and has neither key. Its launch-profile pin is `apparmor_policy_sha256`.
+- The one test of `_launcher` built an invented document with the wrong keys. Every other lane test replaced `_launcher` outright.
+
+**Fix.**
+- `_launcher` binds the installed profile `/etc/apparmor.d/constructicon-m8-launch` (`LAUNCH_POLICY`), pinned by the manifest's `apparmor_policy_sha256`.
+- The test now builds `runtime.json` with the host tool's own writer, and fails on the old code with the host's exact `KeyError`.
+- New `codex_lane preflight --launch-root L` runs `LinuxLauncher.probe()`: the artifact checks, then the benign physical probe every launch runs first, including the AppArmor child attachment. It starts no vendor process. The runbook runs it as S3's first command, so a defect of this kind stops the session before a device code exists. (The first version ran only the artifact checks; the connector's P2 review corrected it.)
+- Mutants: N4-V15 (the policy path), N4-V16 (the pin's key) and N4-V17 (preflight runs the probe).
+
+**To resume.**
+1. Reinstall the controller at the new `C` (R15).
+2. Run S3 as written. S0 to S2 stand, and S3 left no file to collide with.

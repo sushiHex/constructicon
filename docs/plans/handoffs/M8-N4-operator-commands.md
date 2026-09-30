@@ -309,7 +309,16 @@ inherited lock and terminal descriptors. The owner sees the device URL and
 one-time code on the terminal and completes sign-in on their own device. Do
 not save stdout, stderr text, code, account identifier, or credential bytes.
 
+`preflight` runs first, as the service. It runs every check a lane makes before
+its vendor process: the artifact checks and the benign physical launch probe,
+which also proves the `constructicon-m8-launch//&constructicon-m8-workload
+(enforce)` child attachment. It starts no vendor process. A failure stops
+the session before a device code exists, so the owner's sign-in window is
+never spent on a launch-set defect.
+
 ```bash
+"${SERVICE[@]}" "${LANE[@]}" preflight --launch-root "$L" < /dev/null | \
+  /usr/bin/grep -qF '"launch_ready": true'
 "${ROOT_STORE[@]}" maintain --store-root "$R" --key "$K" \
   --service m8-service --wait 0 -- \
   "${LANE[@]}" login --launch-root "$L" \
