@@ -149,8 +149,8 @@ MUTANTS = (
     (
         "18 the launcher adds the bridge only with a leaf",
         LAUNCHER + "LinuxLauncher.argv",
-        '"--setenv", "CODEX_HOME", NATIVE_HOME,\n        ]',
-        '"--setenv", "CODEX_HOME", NATIVE_HOME,\n        ]\n'
+        '"--setenv", "CODEX_CA_CERTIFICATE", TRUST_BUNDLE,\n        ]',
+        '"--setenv", "CODEX_CA_CERTIFICATE", TRUST_BUNDLE,\n        ]\n'
         '        command = ("/usr/bin/python3", "-I", BRIDGE_SCRIPT, *command)',
         L + "test_no_egress_socket_means_no_leaf_and_the_namespace_stays_unshared",
     ),
@@ -511,6 +511,14 @@ MUTANTS = (
         '"--ro-bind", str(self.vendor.tree), VENDOR_MOUNT,',
         '"--bind", str(self.vendor.tree), VENDOR_MOUNT,',
         V + "test_a_native_launch_binds_the_vendor_tree_and_catalog_read_only",
+    ),
+    (
+        "N4-V18 a native launch names the zone's trust store to the vendor",
+        LAUNCHER + "LinuxLauncher.argv",
+        '"--setenv", "CODEX_CA_CERTIFICATE", TRUST_BUNDLE,',
+        "",
+        "tests/substrate/test_native_store_launch.py::"
+        "test_the_native_layout_binds_two_descriptors_into_a_disposable_codex_home",
     ),
     (
         "N4-V13 the launch revision names the bound tree",

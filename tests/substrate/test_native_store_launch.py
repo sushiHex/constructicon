@@ -62,11 +62,13 @@ def test_the_native_layout_binds_two_descriptors_into_a_disposable_codex_home(
     )
     assert "/tmp/home/.codex" in argv, "the native layout is missing"
     start = argv.index("/tmp/home/.codex") - 1
-    assert argv[start:start + 11] == [
+    assert argv[start:start + 14] == [
         "--dir", "/tmp/home/.codex",
         "--ro-bind-data", str(CONFIGURATION_FD), "/tmp/home/.codex/config.toml",
         "--bind-fd", str(CREDENTIAL_FD), "/tmp/home/.codex/auth.json",
         "--setenv", "CODEX_HOME", "/tmp/home/.codex",
+        # The zone's one trust store, admitted with the runtime image (#77, S3).
+        "--setenv", "CODEX_CA_CERTIFICATE", "/etc/ssl/certs/ca-certificates.crt",
     ]
     # No path-based store mount remains, and the home itself stays disposable.
     assert "--bind" not in argv and "/vendor-store" not in argv
@@ -82,6 +84,7 @@ def test_a_worker_launch_gets_no_codex_home(tmp_path, monkeypatch):
         ("/usr/bin/python3",), workspace=tmp_path / "workspace", posture=Posture.WRITE,
     )
     assert "/tmp/home/.codex" not in argv and "CODEX_HOME" not in argv
+    assert "CODEX_CA_CERTIFICATE" not in argv
     assert "--bind-fd" not in argv and "--ro-bind-data" not in argv
 
 
