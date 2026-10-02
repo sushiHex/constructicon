@@ -50,6 +50,7 @@ RATE_LIMIT = "constructicon.substrate.executors.codex_protocol:rate_limit_of"
 ACCOUNT_RECORD = "constructicon.substrate.executors.codex_protocol:account_notice_faults"
 SPEND = "constructicon.substrate.executors.codex_protocol:spend_faults"
 READBACK = "constructicon.substrate.executors.codex_protocol:readback_faults"
+NOTICE_STOP = "constructicon.substrate.executors.codex_protocol:notice_stop_faults"
 READING = "constructicon.substrate.executors.codex_protocol:spend_reading"
 BALANCE = "constructicon.substrate.executors.codex_protocol:_balance_zero"
 CONVERSATION = "constructicon.substrate.executors.codex:CodexConversation.__init__"
@@ -935,6 +936,38 @@ MUTANTS = (
         'refused = (ACCOUNT_NOTICE_FAULT.format(method=named_method(method)) + " during'
         ' the turn",)',
         SPEND_TEST + "test_the_notice_fault_claims_no_turn",
+    ),
+    # --- the connector's P1 on #115: a stop report before turn/start ---
+    (
+        "N4-37 a stop notice before turn/start starts no turn",
+        NOTICES,
+        "or (() if self._turn_requested else notice_stop_faults(record))",
+        "or ()",
+        STARTUP_TEST + "test_a_stop_notice_before_turn_start_starts_no_turn"
+        "[after_readback-reached]",
+    ),
+    (
+        "N4-38 a started turn is never second-guessed on a stop notice",
+        CORRELATE,
+        'self._turn_requested = self._turn_requested or method == "turn/start"',
+        "pass",
+        STARTUP_TEST + "test_a_stop_notice_after_turn_start_is_not_judged",
+    ),
+    (
+        "N4-39 the turn starts at turn/start, not thread/start",
+        CORRELATE,
+        'self._turn_requested or method == "turn/start"',
+        'self._turn_requested or method == "thread/start"',
+        STARTUP_TEST + "test_a_stop_notice_before_turn_start_starts_no_turn"
+        "[after_thread-reached]",
+    ),
+    (
+        "N4-40 a damaged stop flag in a notice is a report",
+        NOTICE_STOP,
+        "stop is None or stop is False",
+        "stop is not True",
+        SPEND_TEST + "test_a_notice_reports_the_spend_control_reached"
+        "_unless_null_absent_or_false[string]",
     ),
 )
 

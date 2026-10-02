@@ -126,6 +126,7 @@ from constructicon.substrate.executors.codex_protocol import (
     initialized_notification,
     is_terminal_record,
     named_method,
+    notice_stop_faults,
     observe_turn,
     parse_record,
     parse_tool_call,
@@ -378,6 +379,7 @@ class CodexConversation:
         self._identifier = 0
         self._transcript: list[bytes] = []
         self._collecting = False
+        self._turn_requested = False
         self._spent = 0
         self._allocated: set[int] = set()
         self._correlated: set[int] = set()
@@ -544,7 +546,7 @@ class CodexConversation:
 
         return account_notice_faults(record, self._expected) or settings_notice_faults(
             record, model=self._grants.model_selection.model or "", provider=self._provider,
-        )
+        ) or (() if self._turn_requested else notice_stop_faults(record))
 
     def _absorb(self, line: bytes, record: Mapping[str, Any]) -> bool:
         """Handle one id-less notification; ``False`` when it is a refusal.
@@ -695,6 +697,9 @@ class CodexConversation:
         method = payload["method"]
         if not self._drain_before(method):
             return None
+        # The turn starts when its request is written: a notice before then
+        # may still stop it (#78), and none after it may.
+        self._turn_requested = self._turn_requested or method == "turn/start"
         if not await self._send(io, payload):
             return None
         while True:

@@ -150,7 +150,7 @@ class ScriptedNative:
                  read_fails=None, fails_on_nth_account=None, tail=b"", early=(),
                  after_thread=(), duplicate_last_reply=False, read_limit=None,
                  wedge=b"", reply_id=None, trailing=(), ends_after_initialize=False,
-                 spends=None):
+                 spends=None, after_readback=()):
         # ``read_fails`` models a transport the adapter does not expect: an
         # exception type no layer catches, which is how a conversation aborts
         # without recording anything.
@@ -158,6 +158,8 @@ class ScriptedNative:
         self.tail = tail
         self.early = list(early)
         self.after_thread = list(after_thread)
+        # Emitted right after a readback reply that is not the final one.
+        self.after_readback = list(after_readback)
         self.duplicate_last_reply = duplicate_last_reply
         # Bytes inserted between the two replies: an unterminated prefix or an
         # oversized record used to end the drain before the duplicate arrived.
@@ -259,6 +261,8 @@ class ScriptedNative:
                 entry = self.spends.pop(0)
             if self.accounts:
                 self._emit({"id": identifier, **entry})
+                for value in self.after_readback:
+                    self._emit(value)
             else:
                 self._final_reply(identifier, entry)
         elif method == "thread/start":

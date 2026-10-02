@@ -731,9 +731,8 @@ def account_notice_faults(record: Mapping[str, Any], expected: ExpectedAccount) 
     snapshot is documented as sparse ("Nullable account metadata ... does not
     clear a previously observed value", ``v2/account.rs:553-557``), while a
     present different plan is a plan change inside the window the readings
-    bracket. Its spend facts are not judged: the owner's bound starts no turn
-    while the readback reports the spend control reached, and never
-    second-guesses a turn once it has started (:func:`spend_faults`).
+    bracket. Its spend facts are judged separately, by
+    :func:`notice_stop_faults`, and only until the turn starts.
     """
 
     method = record.get("method")
@@ -753,6 +752,24 @@ def account_notice_faults(record: Mapping[str, Any], expected: ExpectedAccount) 
     if method.startswith((ACCOUNT_NAMESPACE, PROVIDER_NAMESPACE)):
         return refused
     return ()
+
+
+def notice_stop_faults(record: Mapping[str, Any]) -> tuple[str, ...]:
+    """A rate-limit notice reporting the spend control reached, before a turn starts.
+
+    The owner's bound (#78) starts no turn once the account reports its spend
+    control reached, and a notice arriving after the readback reply but before
+    ``turn/start`` is such a report. Its caller stops asking once ``turn/start``
+    is written: a started turn is never second-guessed. Only ``null``, absent
+    and ``false`` are not a report; anything else is, damage included.
+    """
+
+    params = record.get("params")
+    snapshot = params.get("rateLimits") if isinstance(params, Mapping) else None
+    if record.get("method") != RATE_LIMITS_UPDATED or not isinstance(snapshot, Mapping):
+        return ()
+    stop = snapshot.get("spendControlReached")
+    return () if stop is None or stop is False else (SPEND_CONTROL_FAULT,)
 
 
 def account_request_faults(record: Mapping[str, Any]) -> tuple[str, ...]:
@@ -1002,7 +1019,8 @@ def spend_faults(reading: SpendReading | None, expected: ExpectedAccount) -> tup
     The owner approved ``operator_authorized`` overage bounded by the account's
     own settings, which the owner holds (#78). So no credit state refuses and
     nothing here is a ceiling: a turn does not start while the account reports
-    its spend control reached, and a completed turn is never second-guessed —
+    its spend control reached, here or in a notice before ``turn/start``
+    (:func:`notice_stop_faults`), and a completed turn is never second-guessed —
     after it only :func:`readback_faults` applies. Absent is not reached. A
     different owner bound is a new ``PROTOCOL_REVISION``, never a parameter.
     """

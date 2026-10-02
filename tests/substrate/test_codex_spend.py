@@ -21,6 +21,7 @@ from constructicon.substrate.executors.codex_protocol import (
     account_faults,
     account_notice_faults,
     encode_record,
+    notice_stop_faults,
     rate_limit_of,
     rate_limits_read_request,
     readback_faults,
@@ -280,6 +281,23 @@ def test_a_rate_limit_updates_spend_facts_are_never_judged(changes):
     assert account_notice_faults(
         notice("account/rateLimits/updated", {"rateLimits": snapshot}), EXPECTED,
     ) == ()
+
+
+@pytest.mark.parametrize("stop,refused", [
+    (True, True), ("true", True), (1, True), (False, False), (None, False), (..., False),
+], ids=["reached", "string", "number", "false", "null", "absent"])
+def test_a_notice_reports_the_spend_control_reached_unless_null_absent_or_false(stop, refused):
+    snapshot = codex_bucket(spendControlReached=stop)
+    if stop is ...:
+        del snapshot["spendControlReached"]
+    faults = notice_stop_faults(notice("account/rateLimits/updated", {"rateLimits": snapshot}))
+    assert faults == ((SPEND_CONTROL_FAULT,) if refused else ())
+
+
+def test_only_a_rate_limit_update_can_report_the_spend_control():
+    stopped = {"rateLimits": codex_bucket(spendControlReached=True)}
+    assert notice_stop_faults(notice("account/updated", stopped)) == ()
+    assert notice_stop_faults(notice("account/rateLimits/updated", None)) == ()
 
 
 def settings(**changes):

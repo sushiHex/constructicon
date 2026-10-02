@@ -3217,7 +3217,7 @@ This is ADR 0021's approval "of subscription-linked overage and its bounds" for 
 | --- | --- | --- |
 | Before a turn (`spend_faults`) | unreadable, other plan, or not proved zero credits refuses | unreadable, other plan, or `spend_control_reached` true refuses; credit state never does |
 | After the turn | `spend_faults` plus `spend_change_faults` (five fields unchanged) | `readback_faults`: unreadable or other plan only. A completed turn is never second-guessed on spend |
-| `account/rateLimits/updated` | credits must prove zero, the control must not be reached | plan only; spend facts not judged |
+| `account/rateLimits/updated` | credits must prove zero, the control must not be reached | plan always; until `turn/start` is written, a `spendControlReached` other than `null`, absent or `false` also refuses (`notice_stop_faults`). Credits are never judged |
 | `spendControlReached` present, non-null and not a boolean | read as unknown (`None`) | the reading is unreadable: damage is never "not reached". JSON `null` stays admissible |
 | Unparseable balance | published `balance_zero: false` | published as unknown (`None`) |
 | Runbook `check_evidence` | zero-credit predicate | `spend_control_reached` is exactly `false` or `null`, so damaged evidence refuses too |
@@ -3238,9 +3238,11 @@ This is ADR 0021's approval "of subscription-linked overage and its bounds" for 
   - a startup on an account holding credits completes;
   - a reached control starts no thread and offers no WRITE tools;
   - through the handle, a turn that draws credits and reaches the control succeeds with its output, and its outcome publishes both readbacks;
-  - through the handle, a post-turn plan change fails as unavailable with no output.
+  - through the handle, a post-turn plan change fails as unavailable with no output;
+  - a stop notice reported before `turn/start` (after `initialize`, after the readback reply, or after `thread/start`) starts no turn, and one ends a startup;
+  - a stop notice after `turn/start` is not judged.
 - `test_m8_operator_commands.py`: the runbook checker accepts actual lane evidence with credits. It refuses a reached control and the malformed values `1`, `0`, `"true"`, `{}` and `[]`.
-- Mutants N4-6/7/8/9/9b/10/11/14/18/26 were rewritten for the new rule; N4-27 and N4-28 are retired with `_no_spend`. Locally the runner reported "117/117 mutants KILLED by assertion; 0 UNMEASURED".
+- Mutants N4-6/7/8/9/9b/10/11/14/18/26 were rewritten for the new rule, and N4-27 and N4-28 are retired with `_no_spend`. N4-37 to N4-40 cover the pre-turn stop notice: the notice is judged; the turn starts at `turn/start` and not at `thread/start`; and a damaged flag counts as a report. Locally the runner reported "121/121 mutants KILLED by assertion; 0 UNMEASURED".
 
 **Cross-review** (Codex `gpt-6-astra`, two passes before building).
 
@@ -3260,6 +3262,8 @@ The one pass on the diff (`gpt-6-astra`, fix-then-ship) found four issues; all w
 - two outcome tests asserted less than their names claimed;
 - the mutant count was wrong (117, not 118);
 - the record did not say that JSON `null` stays admissible.
+
+The connector review on ready raised one P1, which was adopted. As first written, a `spendControlReached: true` notice that arrived after the clean readback but before `thread/start` was accepted, so a turn could start after the account had reported its control reached. The turn now counts as started when `turn/start` is written. Until then, such a notice refuses.
 
 **Limits.**
 - Nothing here bounds money. The account's settings do, and Constructicon neither reads nor enforces them.

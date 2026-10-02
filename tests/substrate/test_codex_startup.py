@@ -238,6 +238,35 @@ async def test_a_turn_that_draws_credits_or_reaches_the_control_is_kept(
     assert published["after.spend_control_reached"] is True
 
 
+def stop_notice(stop=True):
+    return {"method": "account/rateLimits/updated",
+            "params": {"rateLimits": codex_bucket(spendControlReached=stop)}}
+
+
+@pytest.mark.parametrize("stop", [True, "true"], ids=["reached", "malformed"])
+@pytest.mark.parametrize("where", ["early", "after_readback", "after_thread"])
+async def test_a_stop_notice_before_turn_start_starts_no_turn(where, stop):
+    """A report after the clean readback but before ``turn/start`` still stops it (#78)."""
+
+    native = clean_native(**{where: [stop_notice(stop)]})
+    conversation = await converse(native)
+    assert SPEND_CONTROL_FAULT in conversation.faults
+    assert "turn/start" not in native.methods
+
+
+async def test_a_stop_notice_ends_a_startup_too():
+    conversation = await run(startup(), startup_native(trailing=[stop_notice()]))
+    assert SPEND_CONTROL_FAULT in conversation.faults
+
+
+async def test_a_stop_notice_after_turn_start_is_not_judged(
+    tmp_path, portable_binding, substituted_guard,
+):
+    native = clean_native(trailing=[stop_notice()])
+    outcome = await handle_outcome(native, tmp_path, portable_binding)
+    assert outcome.status == "success" and native.methods == EIGHT
+
+
 async def test_a_post_turn_plan_change_discards_the_turn(
     tmp_path, portable_binding, substituted_guard,
 ):
@@ -372,7 +401,7 @@ async def test_a_refused_notice_before_the_readback_refuses_too(record):
 async def test_a_clean_trailing_notice_still_passes():
     notice = {"method": "account/rateLimits/updated", "params": {"rateLimits": codex_bucket()}}
     spend = {"method": "account/rateLimits/updated", "params": {"rateLimits": codex_bucket(
-        spendControlReached=True, credits={"hasCredits": True, "unlimited": False, "balance": "1"},
+        spendControlReached=False, credits={"hasCredits": True, "unlimited": False, "balance": "1"},
     )}}
     native = startup_native(trailing=[notice, spend, {"method": "warning"}])
     conversation = await run(startup(), native)
