@@ -30,6 +30,7 @@ from constructicon.substrate.executors.codex_lane import write_evidence
 from constructicon.substrate.executors.codex_protocol import ExpectedAccount
 from tests.operator_store_world import StoreWorld
 from tests.substrate import test_codex_lane as fake_lane
+from tests.substrate.test_codex_protocol import spend_result
 
 ROOT = Path(__file__).parents[1]
 RUNBOOK = ROOT / "docs" / "plans" / "handoffs" / "M8-N4-operator-commands.md"
@@ -337,6 +338,29 @@ async def test_documented_checker_refuses_missing_completion_and_new_fault(
                     encoding="utf-8")
     assert _check_evidence("qualify", path, "maintenance", "-", policy, directory).returncode != 0
     raw["faults"] = ["unexpected fault"]
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    assert _check_evidence("qualify", path, "maintenance", "-", policy, directory).returncode != 0
+
+
+async def test_documented_checker_accepts_credits_and_refuses_a_reached_spend_control(
+    evidence_world: tuple[Path, Path],
+) -> None:
+    """The owner's bound (#78): credits pass; a reached spend control never does."""
+
+    directory, policy = evidence_world
+    native = fake_lane.startup_native(spends=[{"result": spend_result(credits={
+        "hasCredits": True, "unlimited": False, "balance": "25.00",
+    })}])
+    _, evidence = await fake_lane.startup(
+        directory, native, expected=fake_lane.qualification_expected(),
+    )
+    path = directory / "credits.json"
+    write_evidence(path, evidence)
+    result = _check_evidence("qualify", path, "maintenance", "-", policy, directory)
+    assert result.returncode == 0, result.stderr
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert raw["readback"]["has_credits"] is True
+    raw["readback"]["spend_control_reached"] = True
     path.write_text(json.dumps(raw), encoding="utf-8")
     assert _check_evidence("qualify", path, "maintenance", "-", policy, directory).returncode != 0
 

@@ -731,12 +731,9 @@ def account_notice_faults(record: Mapping[str, Any], expected: ExpectedAccount) 
     snapshot is documented as sparse ("Nullable account metadata ... does not
     clear a previously observed value", ``v2/account.rs:553-557``), while a
     present different plan is a plan change inside the window the readings
-    bracket. Its spend facts are judged too, because the pinned client builds
-    it from the model call's own response headers (``rate_limits.rs:218``):
-    it is the one in-band spend record inside that window. A present credits
-    object must meet the readback's zero rule, and ``spendControlReached``
-    must not be true. Absent or null values stay admissible, as the sparse
-    update requires.
+    bracket. Its spend facts are not judged: the owner's bound starts no turn
+    while the readback reports the spend control reached, and never
+    second-guesses a turn once it has started (:func:`spend_faults`).
     """
 
     method = record.get("method")
@@ -750,7 +747,6 @@ def account_notice_faults(record: Mapping[str, Any], expected: ExpectedAccount) 
             isinstance(params, Mapping) and set(params) == {"rateLimits"}
             and isinstance(snapshot, Mapping)
             and (snapshot.get(PLAN_TYPE_KEY) is None or expected.accepts(snapshot[PLAN_TYPE_KEY]))
-            and _no_spend(snapshot)
         ):
             return ()
         return refused
@@ -772,19 +768,6 @@ def account_request_faults(record: Mapping[str, Any]) -> tuple[str, ...]:
     if isinstance(method, str) and method.startswith((ACCOUNT_NAMESPACE, PROVIDER_NAMESPACE)):
         return (ACCOUNT_NOTICE_FAULT.format(method=named_method(method)),)
     return ()
-
-
-def _no_spend(snapshot: Mapping[str, Any]) -> bool:
-    """A sparse snapshot's spend facts: absent or null, or proven zero."""
-
-    credits = snapshot.get("credits")
-    if credits is not None and not (
-        isinstance(credits, Mapping)
-        and credits.get("hasCredits") is False and credits.get("unlimited") is False
-        and _balance_zero(credits.get("balance")) is not False
-    ):
-        return False
-    return snapshot.get("spendControlReached") is not True
 
 
 SETTINGS_UPDATED = "thread/settings/updated"
@@ -911,9 +894,10 @@ def account_change_faults(before: Any, after: Any) -> tuple[str, ...]:
 CODEX_LIMIT_ID = "codex"
 BALANCE_CHARS = 32
 SPEND_UNREADABLE_FAULT = (
-    "the rate-limit readback is an error or carries no Codex bucket, so spend is unknown"
+    "the rate-limit readback is an error or carries no well-formed Codex bucket, "
+    "so spend is unknown"
 )
-CREDITS_FAULT = "the rate-limit readback does not show zero purchased credits"
+SPEND_CONTROL_FAULT = "the account reports its spend control reached, so no turn starts"
 SPEND_FIELDS = (
     "has_credits", "unlimited", "balance_zero", "spend_control_reached", "rate_limit_reached",
 )
@@ -949,16 +933,17 @@ def _percent(window: Any) -> int | None:
 
 
 def _balance_zero(balance: Any) -> bool | None:
-    """``True`` only for a short decimal string equal to zero; absent is ``None``."""
+    """Whether a short decimal string equals zero; absent or unparseable is ``None``.
 
-    if balance is None:
-        return None
+    Published telemetry only: a malformed balance is not a measured nonzero one.
+    """
+
     if not isinstance(balance, str) or len(balance) > BALANCE_CHARS:
-        return False
+        return None
     whole, dot, fraction = balance.removeprefix("-").partition(".")
     digits = whole + fraction
     if not (whole and digits.isascii() and digits.isdigit()) or (dot and not fraction):
-        return False
+        return None
     return set(digits) == {"0"}
 
 
@@ -969,13 +954,19 @@ def spend_reading(reply: Any) -> SpendReading | None:
     exists, and otherwise the first bucket returned; ``rateLimitsByLimitId``
     also keys an id-less snapshot as ``codex``
     (``account_processor.rs:1164-1181``). So only a map entry naming itself
-    ``codex`` identifies the Codex bucket affirmatively.
+    ``codex`` identifies the Codex bucket affirmatively. A present
+    ``spendControlReached`` that is not a boolean is damage, never "not
+    reached": it is the one spend fact :func:`spend_faults` judges. The other
+    facts are telemetry, so a malformed one is published as unknown.
     """
 
     result = _result_object(reply)
     buckets = result.get("rateLimitsByLimitId") if result is not None else None
     bucket = buckets.get(CODEX_LIMIT_ID) if isinstance(buckets, Mapping) else None
     if not isinstance(bucket, Mapping) or bucket.get("limitId") != CODEX_LIMIT_ID:
+        return None
+    stop = bucket.get("spendControlReached")
+    if stop is not None and type(stop) is not bool:
         return None
     credits = bucket.get("credits")
     credit = credits if isinstance(credits, Mapping) else {}
@@ -985,47 +976,41 @@ def spend_reading(reply: Any) -> SpendReading | None:
         has_credits=_flag(credit.get("hasCredits")),
         unlimited=_flag(credit.get("unlimited")),
         balance_zero=_balance_zero(credit.get("balance")),
-        spend_control_reached=_flag(bucket.get("spendControlReached")),
+        spend_control_reached=stop,
         rate_limit_reached=None if reached is ... else reached is not None,
         primary_used_percent=_percent(bucket.get("primary")),
         secondary_used_percent=_percent(bucket.get("secondary")),
     )
 
 
-def spend_faults(reading: SpendReading | None, expected: ExpectedAccount) -> tuple[str, ...]:
-    """The owner's N5 bound, as code: no purchased credits, the expected plan.
-
-    Absent credits are unknown, never zero, and refuse. A different owner bound
-    is a new ``PROTOCOL_REVISION``, never a parameter (M8-N4-state-review.md,
-    section 2).
-    """
+def readback_faults(reading: SpendReading | None, expected: ExpectedAccount) -> tuple[str, ...]:
+    """Every readback, before or after a turn: a well-formed Codex bucket, the expected plan."""
 
     if reading is None:
         return (SPEND_UNREADABLE_FAULT,)
-    faults: list[str] = []
     if reading.plan is not None and not expected.accepts(reading.plan):
-        faults.append(
+        return (
             f"readback plan {named_value(reading.plan)} is not the expected "
-            f"{expected.plan_type!r}"
+            f"{expected.plan_type!r}",
         )
-    if not (
-        reading.has_credits is False and reading.unlimited is False
-        and reading.balance_zero is not False
-    ):
-        faults.append(CREDITS_FAULT)
-    return tuple(faults)
+    return ()
 
 
-def spend_change_faults(before: SpendReading | None, after: SpendReading | None) -> tuple[str, ...]:
-    """Overage state must equal its pre-turn baseline; usage is expected to move."""
+def spend_faults(reading: SpendReading | None, expected: ExpectedAccount) -> tuple[str, ...]:
+    """The owner's N5 bound, as code: whether a turn may start.
 
-    if before is None or after is None:
-        return ()  # the per-reading fault already refused
-    return tuple(
-        f"readback {name.replace('_', ' ')} changed across the turn"
-        for name in SPEND_FIELDS
-        if getattr(before, name) != getattr(after, name)
-    )
+    The owner approved ``operator_authorized`` overage bounded by the account's
+    own settings, which the owner holds (#78). So no credit state refuses and
+    nothing here is a ceiling: a turn does not start while the account reports
+    its spend control reached, and a completed turn is never second-guessed —
+    after it only :func:`readback_faults` applies. Absent is not reached. A
+    different owner bound is a new ``PROTOCOL_REVISION``, never a parameter.
+    """
+
+    faults = readback_faults(reading, expected)
+    if reading is not None and reading.spend_control_reached is True:
+        faults += (SPEND_CONTROL_FAULT,)
+    return faults
 
 
 def rate_limit_of(before: SpendReading | None, after: SpendReading | None) -> RateLimitInfo | None:

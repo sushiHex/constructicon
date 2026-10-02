@@ -13,7 +13,7 @@ import pytest
 from constructicon.core.executor import RateLimitInfo
 from constructicon.substrate.executors.codex_protocol import (
     ACCOUNT_NOTICE_FAULT,
-    CREDITS_FAULT,
+    SPEND_CONTROL_FAULT,
     SPEND_FIELDS,
     SPEND_UNREADABLE_FAULT,
     USAGE_FIELDS,
@@ -23,8 +23,8 @@ from constructicon.substrate.executors.codex_protocol import (
     encode_record,
     rate_limit_of,
     rate_limits_read_request,
+    readback_faults,
     settings_notice_faults,
-    spend_change_faults,
     spend_faults,
     spend_reading,
 )
@@ -54,34 +54,64 @@ def test_the_readback_request_is_exactly_the_pinned_wire_form():
 # --- the bound ---------------------------------------------------------------
 
 
-@pytest.mark.parametrize("balance", [None, "0", "0.00", "-0", "000"])
-def test_zero_purchased_credits_pass_the_bound(balance):
-    reply = {"result": spend_result(credits={
-        "hasCredits": False, "unlimited": False, "balance": balance,
-    })}
+CREDIT_STATES = [
+    {"hasCredits": False, "unlimited": False, "balance": "0"},
+    {"hasCredits": True, "unlimited": False, "balance": "25.00"},
+    {"hasCredits": False, "unlimited": True, "balance": None},
+    {"hasCredits": "false", "unlimited": False, "balance": None},
+    {"unlimited": False, "balance": None},
+    "none",
+    None,
+]
+CREDIT_IDS = [
+    "zero", "purchased", "unlimited", "string-flag", "flag-absent", "non-object", "absent",
+]
+
+
+@pytest.mark.parametrize("credits", CREDIT_STATES, ids=CREDIT_IDS)
+def test_no_credit_state_refuses_a_turn(credits):
+    """The owner's bound (#78): the account's own settings bound overage."""
+
+    reading = spend_reading({"result": spend_result(credits=credits)})
+    assert spend_faults(reading, EXPECTED) == ()
+
+
+@pytest.mark.parametrize("balance,zero", [
+    ("0", True), ("0.00", True), ("-0", True), ("000", True),
+    ("0.01", False), ("1", False), ("-1", False), ("25.00", False),
+    ("1e400", None), ("abc", None), ("0." + "0" * 31, None), (0, None), (None, None),
+], ids=[
+    "zero", "zero-cents", "negative-zero", "zeros", "cents", "one", "negative", "grant",
+    "exponent", "text", "over-long", "non-string", "absent",
+])
+def test_the_balance_is_published_as_measured_and_malformed_is_unknown(balance, zero):
+    reading = spend_reading({"result": spend_result(credits={
+        "hasCredits": True, "unlimited": False, "balance": balance,
+    })})
+    assert reading.balance_zero is zero
+
+
+def test_a_reached_spend_control_starts_no_turn():
+    reading = spend_reading({"result": spend_result(spendControlReached=True)})
+    assert spend_faults(reading, EXPECTED) == (SPEND_CONTROL_FAULT,)
+    assert readback_faults(reading, EXPECTED) == ()
+
+
+@pytest.mark.parametrize("stop", [False, None, ...], ids=["false", "null", "absent"])
+def test_a_spend_control_not_reported_reached_starts(stop):
+    bucket = codex_bucket(spendControlReached=stop)
+    if stop is ...:
+        del bucket["spendControlReached"]
+    reply = {"result": {**CLEAN_SPEND, "rateLimitsByLimitId": {"codex": bucket}}}
     assert spend_faults(spend_reading(reply), EXPECTED) == ()
 
 
-@pytest.mark.parametrize("credits", [
-    {"hasCredits": True, "unlimited": False, "balance": None},
-    {"hasCredits": False, "unlimited": True, "balance": None},
-    {"hasCredits": False, "unlimited": False, "balance": "0.01"},
-    {"hasCredits": False, "unlimited": False, "balance": "1"},
-    {"hasCredits": False, "unlimited": False, "balance": "-1"},
-    {"hasCredits": False, "unlimited": False, "balance": "1e400"},
-    {"hasCredits": False, "unlimited": False, "balance": "abc"},
-    {"hasCredits": False, "unlimited": False, "balance": "0." + "0" * 31},
-    {"hasCredits": False, "unlimited": False, "balance": 0},
-    {"hasCredits": "false", "unlimited": False, "balance": None},
-    {"unlimited": False, "balance": None},
-    None,
-], ids=[
-    "has-credits", "unlimited", "cents", "one", "negative", "exponent", "text",
-    "over-long", "non-string", "string-flag", "flag-absent", "credits-absent",
-])
-def test_anything_but_proven_zero_credits_refuses(credits):
-    reading = spend_reading({"result": spend_result(credits=credits)})
-    assert CREDITS_FAULT in spend_faults(reading, EXPECTED)
+@pytest.mark.parametrize("stop", ["true", 1, {}], ids=["string", "number", "object"])
+def test_a_malformed_spend_control_is_unreadable_never_open(stop):
+    reply = {"result": spend_result(spendControlReached=stop)}
+    assert spend_reading(reply) is None
+    for judge in (readback_faults, spend_faults):
+        assert judge(spend_reading(reply), EXPECTED) == (SPEND_UNREADABLE_FAULT,)
 
 
 @pytest.mark.parametrize("reply", [
@@ -101,53 +131,45 @@ def test_an_unreadable_or_unidentified_codex_bucket_refuses(reply):
 def test_the_headline_bucket_is_never_the_one_judged():
     """The vendor falls back to the first bucket when no ``codex`` one exists."""
 
-    dirty = codex_bucket(limitId="other", credits={
-        "hasCredits": True, "unlimited": False, "balance": "5",
-    })
+    dirty = codex_bucket(limitId="other", spendControlReached=True)
     clean_headline = {**CLEAN_SPEND, "rateLimitsByLimitId": {
-        "codex": codex_bucket(credits={"hasCredits": True, "unlimited": False, "balance": "5"}),
+        "codex": codex_bucket(spendControlReached=True),
     }}
-    assert CREDITS_FAULT in spend_faults(spend_reading({"result": clean_headline}), EXPECTED)
+    assert spend_faults(spend_reading({"result": clean_headline}), EXPECTED) == (
+        SPEND_CONTROL_FAULT,
+    )
     dirty_headline = {**CLEAN_SPEND, "rateLimits": dirty}
     assert spend_faults(spend_reading({"result": dirty_headline}), EXPECTED) == ()
 
 
+@pytest.mark.parametrize("judge", [readback_faults, spend_faults])
 @pytest.mark.parametrize("plan", [None, "pro"])
-def test_an_absent_or_expected_readback_plan_passes(plan):
-    assert spend_faults(spend_reading({"result": spend_result(planType=plan)}), EXPECTED) == ()
+def test_an_absent_or_expected_readback_plan_passes(plan, judge):
+    assert judge(spend_reading({"result": spend_result(planType=plan)}), EXPECTED) == ()
 
 
-def test_another_readback_plan_refuses_and_names_only_a_short_literal():
-    faults = spend_faults(spend_reading({"result": spend_result(planType="plus")}), EXPECTED)
+@pytest.mark.parametrize("judge", [readback_faults, spend_faults])
+def test_another_readback_plan_refuses_and_names_only_a_short_literal(judge):
+    faults = judge(spend_reading({"result": spend_result(planType="plus")}), EXPECTED)
     assert any("'plus'" in fault for fault in faults)
-    faults = spend_faults(spend_reading({"result": spend_result(planType=EMAIL)}), EXPECTED)
+    faults = judge(spend_reading({"result": spend_result(planType=EMAIL)}), EXPECTED)
     assert faults and not any(EMAIL in fault for fault in faults)
 
 
-# --- the change rule ---------------------------------------------------------
+# --- after the turn ----------------------------------------------------------
 
 
-@pytest.mark.parametrize("field,changes", [
-    ("has_credits", {"credits": {"hasCredits": True, "unlimited": False, "balance": None}}),
-    ("unlimited", {"credits": {"hasCredits": False, "unlimited": True, "balance": None}}),
-    ("balance_zero", {"credits": {"hasCredits": False, "unlimited": False, "balance": "0"}}),
-    ("spend_control_reached", {"spendControlReached": True}),
-    ("rate_limit_reached", {"rateLimitReachedType": "rate_limit_reached"}),
-])
-def test_each_overage_field_that_moves_across_the_turn_refuses(field, changes):
-    before = spend_reading({"result": CLEAN_SPEND})
-    after = spend_reading({"result": spend_result(**changes)})
-    assert getattr(before, field) != getattr(after, field)
-    faults = spend_change_faults(before, after)
-    assert faults == (f"readback {field.replace('_', ' ')} changed across the turn",)
+@pytest.mark.parametrize("changes", [
+    {"credits": {"hasCredits": True, "unlimited": False, "balance": "24.99"}},
+    {"credits": {"hasCredits": False, "unlimited": True, "balance": None}},
+    {"spendControlReached": True},
+    {"rateLimitReachedType": "rate_limit_reached"},
+    {"primary": {"usedPercent": 100, "windowDurationMins": 300, "resetsAt": 1}},
+], ids=["credits-drawn", "unlimited", "spend-control", "limit-reached", "usage"])
+def test_a_completed_turn_is_never_second_guessed_on_spend(changes):
+    """Carry-over is authorized (#78): only the bucket and its plan are judged."""
 
-
-def test_usage_moving_across_the_turn_is_expected():
-    before = spend_reading({"result": CLEAN_SPEND})
-    after = spend_reading({"result": spend_result(
-        primary={"usedPercent": 40, "windowDurationMins": 300, "resetsAt": 1},
-    )})
-    assert spend_change_faults(before, after) == ()
+    assert readback_faults(spend_reading({"result": spend_result(**changes)}), EXPECTED) == ()
 
 
 # --- publication -------------------------------------------------------------
@@ -241,25 +263,15 @@ def test_the_notice_fault_claims_no_turn():
 @pytest.mark.parametrize("changes", [
     {"credits": {"hasCredits": True, "unlimited": False, "balance": "25.00"}},
     {"credits": {"hasCredits": False, "unlimited": True, "balance": None}},
-    {"credits": {"hasCredits": False, "unlimited": False, "balance": "0.01"}},
-    {"credits": {"unlimited": False, "balance": None}},
-    {"credits": "none"},
-    {"spendControlReached": True},
-], ids=["purchased", "unlimited", "balance", "no-has-credits", "non-object", "spend-control"])
-def test_a_rate_limit_update_showing_spend_refuses(changes):
-    """SPEND-3: the one in-band spend record inside the bracketed window."""
+    {"credits": "none"}, {"credits": None},
+    {"spendControlReached": True}, {"spendControlReached": False}, {"spendControlReached": None},
+], ids=[
+    "purchased", "unlimited", "non-object", "null-credits",
+    "spend-control", "spend-control-false", "spend-control-null",
+])
+def test_a_rate_limit_updates_spend_facts_are_never_judged(changes):
+    """The bound is judged once, before a turn starts (#78); a notice only checks the plan."""
 
-    faults = account_notice_faults(
-        notice("account/rateLimits/updated", {"rateLimits": codex_bucket(**changes)}), EXPECTED,
-    )
-    assert faults == (ACCOUNT_NOTICE_FAULT.format(method="'account/rateLimits/updated'"),)
-
-
-@pytest.mark.parametrize("changes", [
-    {"credits": None}, {"credits": {"hasCredits": False, "unlimited": False, "balance": "0"}},
-    {"spendControlReached": False}, {"spendControlReached": None},
-], ids=["null-credits", "zero-credits", "spend-control-false", "spend-control-null"])
-def test_a_sparse_or_zero_spend_update_passes(changes):
     snapshot = codex_bucket(**changes)
     assert account_notice_faults(
         notice("account/rateLimits/updated", {"rateLimits": snapshot}), EXPECTED,

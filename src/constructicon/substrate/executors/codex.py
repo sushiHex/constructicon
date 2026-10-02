@@ -15,7 +15,7 @@ The conversation is strictly sequential per direction::
       [startup_only: the N4 phase ends here, four methods and no thread]
     <turn>                     collect records and mediate exact WRITE callbacks
     account/read            -> account_faults(...)      pre-acceptance gate
-    account/rateLimits/read -> spend_(change_)faults     pre-acceptance spend
+    account/rateLimits/read -> readback_faults(...)     pre-acceptance readback
     close stdin, drain to EOF
 
 Either gate faulting yields an unavailable failure naming the faults, and **a
@@ -131,8 +131,8 @@ from constructicon.substrate.executors.codex_protocol import (
     parse_tool_call,
     rate_limit_of,
     rate_limits_read_request,
+    readback_faults,
     settings_notice_faults,
-    spend_change_faults,
     spend_faults,
     spend_reading,
     thread_start_request,
@@ -1257,8 +1257,9 @@ class CodexConversation:
         if readback is None:
             return
         self.after_spend = spend_reading(readback)
-        self.faults += spend_faults(self.after_spend, self._expected)
-        self.faults += spend_change_faults(self.before_spend, self.after_spend)
+        # A completed turn is never second-guessed on spend (#78): only the
+        # bucket and its plan are judged here.
+        self.faults += readback_faults(self.after_spend, self._expected)
         # The gate ran to its end. Nothing earlier may set this: every path that
         # does not reach here leaves a result unacceptable.
         self.gate_completed = True
