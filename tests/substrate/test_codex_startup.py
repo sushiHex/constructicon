@@ -23,7 +23,6 @@ from constructicon.substrate.executors.codex_protocol import (
     SPEND_CONTROL_FAULT,
     SPEND_UNREADABLE_FAULT,
     ExpectedAccount,
-    rate_limit_of,
     unavailable_outcome,
 )
 from tests.substrate.test_codex_adapter import (
@@ -217,27 +216,37 @@ async def test_a_refused_pre_turn_readback_never_offers_write_tools():
     assert calls == [] and SPEND_CONTROL_FAULT in conversation.faults
 
 
-async def test_a_turn_that_draws_credits_or_reaches_the_control_is_kept():
+async def handle_outcome(native, tmp_path, binding):
+    handle = await materialized(bare_launcher(native), tmp_path, binding[1:])
+    return await handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
+
+
+async def test_a_turn_that_draws_credits_or_reaches_the_control_is_kept(
+    tmp_path, portable_binding, substituted_guard,
+):
     """Carry-over is authorized (#78): a completed turn is never second-guessed."""
 
     after = {"result": spend_result(spendControlReached=True, credits={
         "hasCredits": True, "unlimited": False, "balance": "0.40",
     })}
     native = clean_native(spends=[WITH_CREDITS, after])
-    conversation = await converse(native)
-    assert native.methods == EIGHT and conversation.gate_completed
-    assert conversation.faults == ()
-    published = rate_limit_of(conversation.before_spend, conversation.after_spend).detail
+    outcome = await handle_outcome(native, tmp_path, portable_binding)
+    assert outcome.status == "success" and native.methods == EIGHT
+    assert outcome.output is not None
+    published = outcome.rate_limit.detail
     assert published["before.has_credits"] is True and published["before.balance_zero"] is False
     assert published["after.spend_control_reached"] is True
 
 
-async def test_a_post_turn_plan_change_discards_the_turn():
+async def test_a_post_turn_plan_change_discards_the_turn(
+    tmp_path, portable_binding, substituted_guard,
+):
     after = {"result": spend_result(planType="plus")}
     native = clean_native(spends=[{"result": spend_result()}, after])
-    conversation = await converse(native)
-    assert native.methods == EIGHT and conversation.gate_completed
-    assert any("'plus'" in fault for fault in conversation.faults)
+    outcome = await handle_outcome(native, tmp_path, portable_binding)
+    assert native.methods == EIGHT
+    assert outcome.status == "failure" and outcome.output is None
+    assert outcome.error.kind == "unavailable" and "'plus'" in outcome.error.detail
 
 
 async def test_a_post_turn_readback_that_never_arrives_is_a_refusal():

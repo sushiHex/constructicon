@@ -360,9 +360,11 @@ async def test_documented_checker_accepts_credits_and_refuses_a_reached_spend_co
     assert result.returncode == 0, result.stderr
     raw = json.loads(path.read_text(encoding="utf-8"))
     assert raw["readback"]["has_credits"] is True
-    raw["readback"]["spend_control_reached"] = True
-    path.write_text(json.dumps(raw), encoding="utf-8")
-    assert _check_evidence("qualify", path, "maintenance", "-", policy, directory).returncode != 0
+    for reached in (True, 1, 0, "true", {}, []):
+        raw["readback"]["spend_control_reached"] = reached
+        path.write_text(json.dumps(raw), encoding="utf-8")
+        refused = _check_evidence("qualify", path, "maintenance", "-", policy, directory)
+        assert refused.returncode != 0, reached
 
 
 def _active_lane(directory: Path, native: object, *, during=None, writes=None) -> fake_lane.Lane:

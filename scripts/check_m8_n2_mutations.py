@@ -748,7 +748,8 @@ MUTANTS = (
         BALANCE,
         "        return None\n    whole",
         "        return False\n    whole",
-        SPEND_TEST + "test_the_balance_is_published_as_measured_and_malformed_is_unknown[non-string]",
+        SPEND_TEST + "test_the_balance_is_published_as_measured_and_malformed_is_unknown"
+        "[non-string]",
     ),
     (
         "N4-10 an unreadable readback refuses",

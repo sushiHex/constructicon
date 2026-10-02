@@ -3218,9 +3218,9 @@ This is ADR 0021's approval "of subscription-linked overage and its bounds" for 
 | Before a turn (`spend_faults`) | unreadable, other plan, or not proved zero credits refuses | unreadable, other plan, or `spend_control_reached` true refuses; credit state never does |
 | After the turn | `spend_faults` plus `spend_change_faults` (five fields unchanged) | `readback_faults`: unreadable or other plan only. A completed turn is never second-guessed on spend |
 | `account/rateLimits/updated` | credits must prove zero, the control must not be reached | plan only; spend facts not judged |
-| `spendControlReached` present but not a boolean | read as unknown (`None`) | the reading is unreadable: damage is never "not reached" |
+| `spendControlReached` present, non-null and not a boolean | read as unknown (`None`) | the reading is unreadable: damage is never "not reached". JSON `null` stays admissible |
 | Unparseable balance | published `balance_zero: false` | published as unknown (`None`) |
-| Runbook `check_evidence` | zero-credit predicate | `spend_control_reached` is not true |
+| Runbook `check_evidence` | zero-credit predicate | `spend_control_reached` is exactly `false` or `null`, so damaged evidence refuses too |
 
 `spend_faults` previously never checked `spend_control_reached`; only the notice path did. That gap is closed.
 
@@ -3237,10 +3237,10 @@ This is ADR 0021's approval "of subscription-linked overage and its bounds" for 
 - `test_codex_startup.py`:
   - a startup on an account holding credits completes;
   - a reached control starts no thread and offers no WRITE tools;
-  - a turn that draws credits and reaches the control is kept, and its readbacks are published;
-  - a post-turn plan change still discards.
-- `test_m8_operator_commands.py`: the runbook checker accepts actual lane evidence with credits, and refuses a reached control.
-- Mutants N4-6/7/8/9/9b/10/11/14/18/26 were rewritten for the new rule; N4-27 and N4-28 are retired with `_no_spend`. All 118 N2 mutants are killed locally.
+  - through the handle, a turn that draws credits and reaches the control succeeds with its output, and its outcome publishes both readbacks;
+  - through the handle, a post-turn plan change fails as unavailable with no output.
+- `test_m8_operator_commands.py`: the runbook checker accepts actual lane evidence with credits. It refuses a reached control and the malformed values `1`, `0`, `"true"`, `{}` and `[]`.
+- Mutants N4-6/7/8/9/9b/10/11/14/18/26 were rewritten for the new rule; N4-27 and N4-28 are retired with `_no_spend`. Locally the runner reported "117/117 mutants KILLED by assertion; 0 UNMEASURED".
 
 **Cross-review** (Codex `gpt-6-astra`, two passes before building).
 
@@ -3254,6 +3254,12 @@ Rejected:
 - "A new post-login controller replacement procedure is needed." `M8-N4-host-runtime.md:770-773` already defines it: removal, then a fresh install. It does not touch the store.
 - "Publish readback telemetry on refused outcomes." This is pre-existing, and a refusal-contract change.
 - "Compare revision values in `check_evidence`." This is pre-existing. Both are recorded on #78.
+
+The one pass on the diff (`gpt-6-astra`, fix-then-ship) found four issues; all were fixed:
+- the runbook check accepted malformed stop values;
+- two outcome tests asserted less than their names claimed;
+- the mutant count was wrong (117, not 118);
+- the record did not say that JSON `null` stays admissible.
 
 **Limits.**
 - Nothing here bounds money. The account's settings do, and Constructicon neither reads nor enforces them.
