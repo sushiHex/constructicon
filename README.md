@@ -331,11 +331,14 @@ Its credential-free half is merged:
 - vendor egress through a host relay limited to the sealed vendor
   destinations, for one acquisition at a time;
 - installation on a private Linux host from reviewed artifacts only;
-- an authenticated-startup lane that refuses unless purchased credits are
-  proved zero.
+- an authenticated-startup lane under the owner's `operator_authorized`
+  overage bound: the account's own settings bound spend, and Constructicon
+  enforces no ceiling. It starts no turn while the account reports its spend
+  control reached, and publishes the readback facts.
 
 All of it is proved against hostile fixtures, with no login and no model
-request. The next step is the owner-attended device login on the private host.
+request. On the private host the owner's device login has succeeded; the
+qualification steps resume next.
 
 Still outstanding: provider-route conformance and the live adapters. None of
 this is yet a working subscription integration or a live coding-agent backend.

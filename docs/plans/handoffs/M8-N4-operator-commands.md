@@ -140,7 +140,7 @@ else:
         require(e["methods_sent"] == methods and e["gate"]["completed"] is True)
         require(e["gate"]["plan"] in QUALIFICATION_PLANS and (expected == "-" or e["gate"]["plan"] == expected))
         require(type(e["readback"]) is dict and set(e["readback"]) == set(SPEND_FIELDS) | set(USAGE_FIELDS))
-        require(e["readback"]["has_credits"] is False and e["readback"]["unlimited"] is False and e["readback"]["balance_zero"] is not False)
+        require(e["readback"]["spend_control_reached"] is False or e["readback"]["spend_control_reached"] is None)
         require(e["relay"]["denied"] == {})
         require(custody == ("maintenance" if mode in ("qualify", "hold") else "active"))
         if mode == "refresh":

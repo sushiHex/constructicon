@@ -15,7 +15,7 @@ The conversation is strictly sequential per direction::
       [startup_only: the N4 phase ends here, four methods and no thread]
     <turn>                     collect records and mediate exact WRITE callbacks
     account/read            -> account_faults(...)      pre-acceptance gate
-    account/rateLimits/read -> spend_(change_)faults     pre-acceptance spend
+    account/rateLimits/read -> readback_faults(...)     pre-acceptance readback
     close stdin, drain to EOF
 
 Either gate faulting yields an unavailable failure naming the faults, and **a
@@ -126,13 +126,14 @@ from constructicon.substrate.executors.codex_protocol import (
     initialized_notification,
     is_terminal_record,
     named_method,
+    notice_stop_faults,
     observe_turn,
     parse_record,
     parse_tool_call,
     rate_limit_of,
     rate_limits_read_request,
+    readback_faults,
     settings_notice_faults,
-    spend_change_faults,
     spend_faults,
     spend_reading,
     thread_start_request,
@@ -378,6 +379,7 @@ class CodexConversation:
         self._identifier = 0
         self._transcript: list[bytes] = []
         self._collecting = False
+        self._turn_requested = False
         self._spent = 0
         self._allocated: set[int] = set()
         self._correlated: set[int] = set()
@@ -544,7 +546,7 @@ class CodexConversation:
 
         return account_notice_faults(record, self._expected) or settings_notice_faults(
             record, model=self._grants.model_selection.model or "", provider=self._provider,
-        )
+        ) or (() if self._turn_requested else notice_stop_faults(record))
 
     def _absorb(self, line: bytes, record: Mapping[str, Any]) -> bool:
         """Handle one id-less notification; ``False`` when it is a refusal.
@@ -695,6 +697,9 @@ class CodexConversation:
         method = payload["method"]
         if not self._drain_before(method):
             return None
+        # The turn starts when its request is written: a notice before then
+        # may still stop it (#78), and none after it may.
+        self._turn_requested = self._turn_requested or method == "turn/start"
         if not await self._send(io, payload):
             return None
         while True:
@@ -1257,8 +1262,9 @@ class CodexConversation:
         if readback is None:
             return
         self.after_spend = spend_reading(readback)
-        self.faults += spend_faults(self.after_spend, self._expected)
-        self.faults += spend_change_faults(self.before_spend, self.after_spend)
+        # A completed turn is never second-guessed on spend (#78): only the
+        # bucket and its plan are judged here.
+        self.faults += readback_faults(self.after_spend, self._expected)
         # The gate ran to its end. Nothing earlier may set this: every path that
         # does not reach here leaves a result unacceptable.
         self.gate_completed = True

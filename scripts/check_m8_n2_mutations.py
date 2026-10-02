@@ -49,7 +49,8 @@ FINISH = "constructicon.substrate.executors.codex:CodexConversation._finish"
 RATE_LIMIT = "constructicon.substrate.executors.codex_protocol:rate_limit_of"
 ACCOUNT_RECORD = "constructicon.substrate.executors.codex_protocol:account_notice_faults"
 SPEND = "constructicon.substrate.executors.codex_protocol:spend_faults"
-SPEND_CHANGE = "constructicon.substrate.executors.codex_protocol:spend_change_faults"
+READBACK = "constructicon.substrate.executors.codex_protocol:readback_faults"
+NOTICE_STOP = "constructicon.substrate.executors.codex_protocol:notice_stop_faults"
 READING = "constructicon.substrate.executors.codex_protocol:spend_reading"
 BALANCE = "constructicon.substrate.executors.codex_protocol:_balance_zero"
 CONVERSATION = "constructicon.substrate.executors.codex:CodexConversation.__init__"
@@ -70,7 +71,6 @@ OWNED = "constructicon.substrate.executors.codex:CodexConversation._owned"
 JUDGE = "constructicon.substrate.executors.codex:CodexConversation._judge_identified"
 NOTICES = "constructicon.substrate.executors.codex:CodexConversation._notice_faults"
 SETTINGS = "constructicon.substrate.executors.codex_protocol:settings_notice_faults"
-NO_SPEND = "constructicon.substrate.executors.codex_protocol:_no_spend"
 CONFIGURED_PROVIDER = "constructicon.substrate.executors.codex:configured_provider"
 TURN_OF = "constructicon.substrate.executors.codex_protocol:_turn_of"
 CONFIGURED = "constructicon.substrate.executors.codex:configured_model"
@@ -713,44 +713,55 @@ MUTANTS = (
         "(ACCOUNT_NAMESPACE,)",
         STARTUP_TEST + "test_a_provider_auth_recovery_mid_turn_discards_it",
     ),
+    # --- the owner's operator_authorized bound (#78, 2026-10-01) ---
     (
-        "N4-6 purchased credits refuse",
+        "N4-6 a reached spend control starts no turn",
         SPEND,
-        "reading.has_credits is False and ",
-        "",
-        SPEND_TEST + "test_anything_but_proven_zero_credits_refuses[has-credits]",
+        "if reading is not None and reading.spend_control_reached is True:",
+        "if False:",
+        SPEND_TEST + "test_a_reached_spend_control_starts_no_turn",
     ),
     (
-        "N4-7 unlimited credits refuse",
-        SPEND,
-        "reading.unlimited is False\n        and ",
-        "",
-        SPEND_TEST + "test_anything_but_proven_zero_credits_refuses[unlimited]",
+        "N4-7 a malformed spend control is unreadable, never open",
+        READING,
+        "if stop is not None and type(stop) is not bool:",
+        "if False:",
+        SPEND_TEST + "test_a_malformed_spend_control_is_unreadable_never_open[string]",
     ),
     (
-        "N4-8 a non-zero balance refuses",
+        "N4-8 no credit state refuses a turn",
         SPEND,
-        "and reading.balance_zero is not False",
-        "",
-        SPEND_TEST + "test_anything_but_proven_zero_credits_refuses[cents]",
+        "faults = readback_faults(reading, expected)",
+        "faults = readback_faults(reading, expected) + (\n"
+        "        (SPEND_CONTROL_FAULT,) if reading is not None and reading.has_credits else ()\n"
+        "    )",
+        SPEND_TEST + "test_no_credit_state_refuses_a_turn[purchased]",
     ),
     (
-        "N4-9 only a zero decimal is zero",
+        "N4-9 only a zero decimal is published as zero",
         BALANCE,
         'return set(digits) == {"0"}',
         "return True",
-        SPEND_TEST + "test_anything_but_proven_zero_credits_refuses[negative]",
+        SPEND_TEST + "test_the_balance_is_published_as_measured_and_malformed_is_unknown[cents]",
+    ),
+    (
+        "N4-9b a malformed balance is published as unknown, not nonzero",
+        BALANCE,
+        "        return None\n    whole",
+        "        return False\n    whole",
+        SPEND_TEST + "test_the_balance_is_published_as_measured_and_malformed_is_unknown"
+        "[non-string]",
     ),
     (
         "N4-10 an unreadable readback refuses",
-        SPEND,
+        READBACK,
         "        return (SPEND_UNREADABLE_FAULT,)",
         "        return ()",
         SPEND_TEST + "test_an_unreadable_or_unidentified_codex_bucket_refuses",
     ),
     (
         "N4-11 the readback plan is compared",
-        SPEND,
+        READBACK,
         "if reading.plan is not None and not expected.accepts(reading.plan):",
         "if False:",
         SPEND_TEST + "test_another_readback_plan_refuses_and_names_only_a_short_literal",
@@ -770,11 +781,11 @@ MUTANTS = (
         SPEND_TEST + "test_the_headline_bucket_is_never_the_one_judged",
     ),
     (
-        "N4-14 a moved overage field refuses",
-        SPEND_CHANGE,
-        "if getattr(before, name) != getattr(after, name)",
-        "if False",
-        SPEND_TEST + "test_each_overage_field_that_moves_across_the_turn_refuses",
+        "N4-14 a completed turn is never second-guessed on spend",
+        CONVERSE,
+        "readback_faults(self.after_spend, self._expected)",
+        "spend_faults(self.after_spend, self._expected)",
+        STARTUP_TEST + "test_a_turn_that_draws_credits_or_reaches_the_control_is_kept",
     ),
     (
         "N4-15 the pre-turn readback is sent",
@@ -802,11 +813,11 @@ MUTANTS = (
         STARTUP_TEST + "test_the_startup_phase_sends_exactly_the_four_authorized_methods",
     ),
     (
-        "N4-18 the post-turn readback is judged against its baseline",
+        "N4-18 the post-turn readback is judged on its bucket and plan",
         CONVERSE,
-        "    self.faults += spend_change_faults(self.before_spend, self.after_spend)",
+        "    self.faults += readback_faults(self.after_spend, self._expected)",
         "    pass",
-        STARTUP_TEST + "test_a_post_turn_overage_change_discards_the_turn",
+        STARTUP_TEST + "test_a_post_turn_plan_change_discards_the_turn",
     ),
     (
         "N4-19 the published rate limit carries the post-turn reading",
@@ -862,25 +873,12 @@ MUTANTS = (
         "[provider]",
     ),
     (
-        "N4-26 a rate-limit update's spend is judged (SPEND-3)",
+        "N4-26 a rate-limit update's spend facts are never judged (#78)",
         ACCOUNT_RECORD,
-        "and _no_spend(snapshot)",
-        "",
-        SPEND_TEST + "test_a_rate_limit_update_showing_spend_refuses[purchased]",
-    ),
-    (
-        "N4-27 a notice's credits must prove zero purchased",
-        NO_SPEND,
-        'credits.get("hasCredits") is False and ',
-        "",
-        SPEND_TEST + "test_a_rate_limit_update_showing_spend_refuses[no-has-credits]",
-    ),
-    (
-        "N4-28 a notice reporting spend control refuses",
-        NO_SPEND,
-        'return snapshot.get("spendControlReached") is not True',
-        "return True",
-        SPEND_TEST + "test_a_rate_limit_update_showing_spend_refuses[spend-control]",
+        "expected.accepts(snapshot[PLAN_TYPE_KEY]))",
+        "expected.accepts(snapshot[PLAN_TYPE_KEY]))\n"
+        '            and snapshot.get("spendControlReached") is not True',
+        SPEND_TEST + "test_a_rate_limit_updates_spend_facts_are_never_judged[spend-control]",
     ),
     (
         "N4-29 one run binds one plan literal (SPEND-2, NOTICE-3)",
@@ -938,6 +936,38 @@ MUTANTS = (
         'refused = (ACCOUNT_NOTICE_FAULT.format(method=named_method(method)) + " during'
         ' the turn",)',
         SPEND_TEST + "test_the_notice_fault_claims_no_turn",
+    ),
+    # --- the connector's P1 on #115: a stop report before turn/start ---
+    (
+        "N4-37 a stop notice before turn/start starts no turn",
+        NOTICES,
+        "or (() if self._turn_requested else notice_stop_faults(record))",
+        "or ()",
+        STARTUP_TEST + "test_a_stop_notice_before_turn_start_starts_no_turn"
+        "[after_readback-reached]",
+    ),
+    (
+        "N4-38 a started turn is never second-guessed on a stop notice",
+        CORRELATE,
+        'self._turn_requested = self._turn_requested or method == "turn/start"',
+        "pass",
+        STARTUP_TEST + "test_a_stop_notice_after_turn_start_is_not_judged",
+    ),
+    (
+        "N4-39 the turn starts at turn/start, not thread/start",
+        CORRELATE,
+        'self._turn_requested or method == "turn/start"',
+        'self._turn_requested or method == "thread/start"',
+        STARTUP_TEST + "test_a_stop_notice_before_turn_start_starts_no_turn"
+        "[after_thread-reached]",
+    ),
+    (
+        "N4-40 a damaged stop flag in a notice is a report",
+        NOTICE_STOP,
+        "stop is None or stop is False",
+        "stop is not True",
+        SPEND_TEST + "test_a_notice_reports_the_spend_control_reached"
+        "_unless_null_absent_or_false[string]",
     ),
 )
 

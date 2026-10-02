@@ -3191,3 +3191,89 @@ Both P3s were fixed: the PEM separator, and the manifest.
 - The fixed removal is still valid, since no login has succeeded. It also removes the store.
 - S1 to S3 then run fresh, S3 with `--first-login`, once the old session directory `/home/m8-service/m8-n4-session` has been removed.
 - The controller is reinstalled at the same `C` (R15).
+
+### N4 session: S3 logged in, S4 refused on the spend bound (2026-10-01)
+
+At `92b956e` (#114), the launch set and the controller were reinstalled and verified, and S0 to S2 ran fresh ([#77](https://github.com/sushiHex/constructicon/issues/77#issuecomment-5922986780)). The runtime has 654 entries, and `unattributed` is exactly the CA bundle.
+
+Then ([#77](https://github.com/sushiHex/constructicon/issues/77#issuecomment-5943007632)):
+- **S3: the owner's device login succeeded.** The lane gave `faults: []`, and `check_evidence login` passed. The S3 timestamp was written.
+- **S4 refused, exactly as the bound required.** The plan was `pro`, exactly the four methods were sent, and the relay was clean. The readback showed `has_credits: true` and `balance_zero: false`.
+  - The faults were the credit fault and the incomplete gate.
+  - The owner reported the balance as a free OpenAI credit grant that expires at the end of 2026.
+- The store stays withdrawn and holds the credential; nothing beyond g1 is published.
+
+### The owner's `operator_authorized` bound (2026-10-01)
+
+The owner approved, verbatim, on [#78](https://github.com/sushiHex/constructicon/issues/78#issuecomment-5945414633):
+
+> I approve subscription_overage = operator_authorized for the Codex binding on my Pro account. The bound is my account's own settings (included usage, credit balance including purchased credits, automatic reload, any spend control), which I own; there may be no finite money ceiling. Constructicon does not enforce or claim to enforce a ceiling: it refuses to start a turn when the account reports its spend control reached, and surfaces the readback facts. This approval does not apply to any other executor.
+
+This is ADR 0021's approval "of subscription-linked overage and its bounds" for this binding (ADR 0021:249-250). It is the written record that N3c owner decision 2 deferred to N5 (`M8-N3c-state-review.md:716-723`). It is not N5's full authorization: model, permitted task data, and a fixed request/token budget remain, and READ and WRITE acceptance are authorized separately. The overages-`forbidden` profile stays forced unavailable.
+
+**The lane, as code.** A different owner bound is a new `PROTOCOL_REVISION` (the module's source), never a parameter, and no code branches on the profile literal.
+
+| Where | Before | Now |
+| --- | --- | --- |
+| Before a turn (`spend_faults`) | unreadable, other plan, or not proved zero credits refuses | unreadable, other plan, or `spend_control_reached` true refuses; credit state never does |
+| After the turn | `spend_faults` plus `spend_change_faults` (five fields unchanged) | `readback_faults`: unreadable or other plan only. A completed turn is never second-guessed on spend |
+| `account/rateLimits/updated` | credits must prove zero, the control must not be reached | plan always; until `turn/start` is written, a `spendControlReached` other than `null`, absent or `false` also refuses (`notice_stop_faults`). Credits are never judged |
+| `spendControlReached` present, non-null and not a boolean | read as unknown (`None`) | the reading is unreadable: damage is never "not reached". JSON `null` stays admissible |
+| Unparseable balance | published `balance_zero: false` | published as unknown (`None`) |
+| Runbook `check_evidence` | zero-credit predicate | `spend_control_reached` is exactly `false` or `null`, so damaged evidence refuses too |
+
+`spend_faults` previously never checked `spend_control_reached`; only the notice path did. That gap is closed.
+
+**Deviations from the accepted N4 design.** `M8-N4-state-review.md` keeps its bytes. Its section 2 predicate, change rule and SPEND-3 notice rule, with their tests and mutants, are superseded here by the owner's later decision.
+
+**Proof.**
+- `test_codex_spend.py`:
+  - every credit state passes;
+  - the balance is published as measured;
+  - a reached or malformed control refuses;
+  - the headline bucket is never judged;
+  - a completed turn's readback is judged only on its bucket and plan;
+  - a notice's spend facts are not judged.
+- `test_codex_startup.py`:
+  - a startup on an account holding credits completes;
+  - a reached control starts no thread and offers no WRITE tools;
+  - through the handle, a turn that draws credits and reaches the control succeeds with its output, and its outcome publishes both readbacks;
+  - through the handle, a post-turn plan change fails as unavailable with no output;
+  - a stop notice reported before `turn/start` (after `initialize`, after the readback reply, or after `thread/start`) starts no turn, and one ends a startup;
+  - a stop notice after `turn/start` is not judged.
+- `test_m8_operator_commands.py`: the runbook checker accepts actual lane evidence with credits. It refuses a reached control and the malformed values `1`, `0`, `"true"`, `{}` and `[]`.
+- Mutants N4-6/7/8/9/9b/10/11/14/18/26 were rewritten for the new rule, and N4-27 and N4-28 are retired with `_no_spend`. N4-37 to N4-40 cover the pre-turn stop notice: the notice is judged; the turn starts at `turn/start` and not at `thread/start`; and a damaged flag counts as a report. Locally the runner reported "121/121 mutants KILLED by assertion; 0 UNMEASURED".
+
+**Cross-review** (Codex `gpt-6-astra`, two passes before building).
+
+Adopted:
+- the approval states its bound explicitly;
+- the stop signal judges admission only;
+- malformed data is never read as open;
+- the full scope of rules, mutants, README and record.
+
+Rejected:
+- "A new post-login controller replacement procedure is needed." `M8-N4-host-runtime.md:770-773` already defines it: removal, then a fresh install. It does not touch the store.
+- "Publish readback telemetry on refused outcomes." This is pre-existing, and a refusal-contract change.
+- "Compare revision values in `check_evidence`." This is pre-existing. Both are recorded on #78.
+
+The one pass on the diff (`gpt-6-astra`, fix-then-ship) found four issues; all were fixed:
+- the runbook check accepted malformed stop values;
+- two outcome tests asserted less than their names claimed;
+- the mutant count was wrong (117, not 118);
+- the record did not say that JSON `null` stays admissible.
+
+The connector review on ready raised one P1, which was adopted. As first written, a `spendControlReached: true` notice that arrived after the clean readback but before `thread/start` was accepted, so a turn could start after the account had reported its control reached. The turn now counts as started when `turn/start` is written. Until then, such a notice refuses.
+
+**Limits.**
+- Nothing here bounds money. The account's settings do, and Constructicon neither reads nor enforces them.
+- An absent `spendControlReached` is not a reached control: the account's own enforcement is the owner's.
+- The readback is a snapshot: a turn may run past the plan limit, and the balance may go negative in flight (`research/m8-subscription-spend-bounds.md`, section 1a).
+
+**To resume** (separate authorization). These modules are controller-only, so the launch set is unchanged.
+1. Controller replacement at the new `C`: the fixed removal, then R17 to R19. There is no R16 checkpoint, because the first login has happened.
+2. Fetch `C` into the launch workspace and run `verify-launch` at `C`, so S0 holds both at one commit.
+3. S0, then S4 and S6a under fresh evidence names, then S5, S7, S8 and S9.
+4. S10 at least 24 hours after the recorded S3.
+
+The login and g1 stand.

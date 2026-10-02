@@ -19,8 +19,8 @@ from constructicon.substrate.executors.codex import CodexConversation
 from constructicon.substrate.executors.codex_protocol import (
     ACCOUNT_NOTICE_FAULT,
     CONTAINED_PYTHON_CATALOG,
-    CREDITS_FAULT,
     GATE_INCOMPLETE_FAULT,
+    SPEND_CONTROL_FAULT,
     SPEND_UNREADABLE_FAULT,
     ExpectedAccount,
     unavailable_outcome,
@@ -57,6 +57,7 @@ UNREADABLE = {"error": {"code": -32600, "message": "codex account authentication
 WITH_CREDITS = {"result": spend_result(credits={
     "hasCredits": True, "unlimited": False, "balance": "12.50",
 })}
+STOPPED = {"result": spend_result(spendControlReached=True)}
 
 
 def startup(*, expected=EXPECTED) -> CodexConversation:
@@ -87,13 +88,24 @@ async def test_the_startup_phase_sends_exactly_the_four_authorized_methods():
 
 
 @pytest.mark.parametrize("spend,fault", [
-    (UNREADABLE, SPEND_UNREADABLE_FAULT), (WITH_CREDITS, CREDITS_FAULT),
-], ids=["expired-or-error", "purchased-credits"])
+    (UNREADABLE, SPEND_UNREADABLE_FAULT), (STOPPED, SPEND_CONTROL_FAULT),
+], ids=["expired-or-error", "spend-control-reached"])
 async def test_a_refused_startup_readback_is_a_fault_and_never_a_thread(spend, fault):
     native = clean_native(spends=[spend])
     conversation = await run(startup(), native)
     assert native.methods == FOUR
     assert fault in conversation.faults and conversation.gate_completed is False
+
+
+async def test_a_startup_on_an_account_holding_credits_completes():
+    """N4's S4 readback (#78): the account's own settings bound overage."""
+
+    native = clean_native(spends=[WITH_CREDITS])
+    conversation = await run(startup(), native)
+    assert native.methods == FOUR
+    assert conversation.faults == () and conversation.gate_completed is True
+    assert conversation.before_spend.has_credits is True
+    assert conversation.before_spend.balance_zero is False
 
 
 async def test_a_startup_whose_readback_never_arrives_is_refused_not_completed():
@@ -174,8 +186,8 @@ async def test_the_handle_never_runs_the_startup_phase(
 
 
 @pytest.mark.parametrize("spend,fault", [
-    (UNREADABLE, SPEND_UNREADABLE_FAULT), (WITH_CREDITS, CREDITS_FAULT),
-], ids=["expired-or-error", "purchased-credits"])
+    (UNREADABLE, SPEND_UNREADABLE_FAULT), (STOPPED, SPEND_CONTROL_FAULT),
+], ids=["expired-or-error", "spend-control-reached"])
 async def test_a_refused_pre_turn_readback_never_sends_a_thread(spend, fault):
     """The scripted expired login: ``account/read`` clean, the readback not."""
 
@@ -191,7 +203,7 @@ async def test_a_refused_pre_turn_readback_never_sends_a_thread(spend, fault):
 
 async def test_a_refused_pre_turn_readback_never_offers_write_tools():
     native = write_native()
-    native.spends = [WITH_CREDITS]
+    native.spends = [STOPPED]
     calls: list[str] = []
 
     async def worker(program: str) -> str:
@@ -201,20 +213,69 @@ async def test_a_refused_pre_turn_readback_never_offers_write_tools():
     conversation = await run_write_conversation(native, worker)
     assert native.methods == FOUR
     assert b"dynamicTools" not in b"".join(native.raw_received)
-    assert calls == [] and CREDITS_FAULT in conversation.faults
+    assert calls == [] and SPEND_CONTROL_FAULT in conversation.faults
 
 
-async def test_a_post_turn_overage_change_discards_the_turn():
-    native = clean_native(spends=[{"result": spend_result()}, WITH_CREDITS])
+async def handle_outcome(native, tmp_path, binding):
+    handle = await materialized(bare_launcher(native), tmp_path, binding[1:])
+    return await handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
+
+
+async def test_a_turn_that_draws_credits_or_reaches_the_control_is_kept(
+    tmp_path, portable_binding, substituted_guard,
+):
+    """Carry-over is authorized (#78): a completed turn is never second-guessed."""
+
+    after = {"result": spend_result(spendControlReached=True, credits={
+        "hasCredits": True, "unlimited": False, "balance": "0.40",
+    })}
+    native = clean_native(spends=[WITH_CREDITS, after])
+    outcome = await handle_outcome(native, tmp_path, portable_binding)
+    assert outcome.status == "success" and native.methods == EIGHT
+    assert outcome.output is not None
+    published = outcome.rate_limit.detail
+    assert published["before.has_credits"] is True and published["before.balance_zero"] is False
+    assert published["after.spend_control_reached"] is True
+
+
+def stop_notice(stop=True):
+    return {"method": "account/rateLimits/updated",
+            "params": {"rateLimits": codex_bucket(spendControlReached=stop)}}
+
+
+@pytest.mark.parametrize("stop", [True, "true"], ids=["reached", "malformed"])
+@pytest.mark.parametrize("where", ["early", "after_readback", "after_thread"])
+async def test_a_stop_notice_before_turn_start_starts_no_turn(where, stop):
+    """A report after the clean readback but before ``turn/start`` still stops it (#78)."""
+
+    native = clean_native(**{where: [stop_notice(stop)]})
     conversation = await converse(native)
-    assert native.methods == EIGHT and conversation.gate_completed
-    assert "readback has credits changed across the turn" in conversation.faults
-    assert CREDITS_FAULT in conversation.faults
-    outcome = unavailable_outcome(
-        conversation.faults, conversation.observation, FINISHED, requested_model="gpt-5.6-sol",
-    )
+    assert SPEND_CONTROL_FAULT in conversation.faults
+    assert "turn/start" not in native.methods
+
+
+async def test_a_stop_notice_ends_a_startup_too():
+    conversation = await run(startup(), startup_native(trailing=[stop_notice()]))
+    assert SPEND_CONTROL_FAULT in conversation.faults
+
+
+async def test_a_stop_notice_after_turn_start_is_not_judged(
+    tmp_path, portable_binding, substituted_guard,
+):
+    native = clean_native(trailing=[stop_notice()])
+    outcome = await handle_outcome(native, tmp_path, portable_binding)
+    assert outcome.status == "success" and native.methods == EIGHT
+
+
+async def test_a_post_turn_plan_change_discards_the_turn(
+    tmp_path, portable_binding, substituted_guard,
+):
+    after = {"result": spend_result(planType="plus")}
+    native = clean_native(spends=[{"result": spend_result()}, after])
+    outcome = await handle_outcome(native, tmp_path, portable_binding)
+    assert native.methods == EIGHT
     assert outcome.status == "failure" and outcome.output is None
-    assert outcome.rate_limit is None  # a refusal publishes no readback
+    assert outcome.error.kind == "unavailable" and "'plus'" in outcome.error.detail
 
 
 async def test_a_post_turn_readback_that_never_arrives_is_a_refusal():
@@ -308,8 +369,6 @@ TRAILING_REFUSALS = {
                  "params": {"provider": "Amazon Bedrock"}},
     "plan-change": {"method": "account/rateLimits/updated",
                     "params": {"rateLimits": codex_bucket(planType="free")}},
-    "spend": {"method": "account/rateLimits/updated",
-              "params": {"rateLimits": codex_bucket(spendControlReached=True)}},
     "settings": {"method": "thread/settings/updated", "params": {
         "threadId": "t", "threadSettings": {"model": "gpt-5.6-sol",
                                             "modelProvider": "amazon-bedrock"}}},
@@ -341,7 +400,10 @@ async def test_a_refused_notice_before_the_readback_refuses_too(record):
 
 async def test_a_clean_trailing_notice_still_passes():
     notice = {"method": "account/rateLimits/updated", "params": {"rateLimits": codex_bucket()}}
-    native = startup_native(trailing=[notice, {"method": "warning"}])
+    spend = {"method": "account/rateLimits/updated", "params": {"rateLimits": codex_bucket(
+        spendControlReached=False, credits={"hasCredits": True, "unlimited": False, "balance": "1"},
+    )}}
+    native = startup_native(trailing=[notice, spend, {"method": "warning"}])
     conversation = await run(startup(), native)
     assert conversation.faults == () and conversation.gate_completed is True
     assert native.emitted[-1] == b'{"method": "warning"}\n', "the trailing records were sent"

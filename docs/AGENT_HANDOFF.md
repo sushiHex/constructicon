@@ -227,8 +227,13 @@ spend-bound research.
 
 The owner decisions were drafted on #77 and #78 and then made on 2026-09-23. N4
 is authorized in advance on #77, with Codex on the owner's ChatGPT Pro 20x.
-Under Pro, N5 needs `operator_authorized` overage with bounds the owner has not
-yet given (#78).
+Under Pro, N5 needs `operator_authorized` overage with bounds. The owner gave
+them on 2026-10-01
+([#78](https://github.com/sushiHex/constructicon/issues/78#issuecomment-5945414633)):
+the account's own settings bound spend, and Constructicon enforces no ceiling.
+It starts no turn while the account reports its spend control reached. This
+supersedes the zero-purchased-credit bound
+(`M8-implementation-record.md`, "The owner's `operator_authorized` bound").
 
 **Corrections worth carrying.** Business in-flight overshoot is unverified,
 not documented. Only the Enterprise source documents it, and the absence of a
