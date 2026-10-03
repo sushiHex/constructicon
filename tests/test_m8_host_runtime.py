@@ -1018,6 +1018,10 @@ class LaunchHost:
                     argv.append(str(self.workspace) + argument[3:-1])
                 elif argument.startswith("/"):
                     argv.append(str(self.root) + argument)
+                    target = Path(argv[-1])
+                    if tool == "/" + artifacts.RM and target.is_dir() and not target.is_symlink():
+                        # Root's removal ignores the read-only modes the operator's rm obeys.
+                        subprocess.run(["chmod", "-R", "u+w", argv[-1]], check=True)
                 else:
                     argv.append(argument)
             status = subprocess.run(argv, check=False, capture_output=True, timeout=30).returncode
