@@ -3277,3 +3277,101 @@ The connector review on ready raised one P1, which was adopted. As first written
 4. S10 at least 24 hours after the recorded S3.
 
 The login and g1 stand.
+
+### Launch-set replacement after the first login (2026-10-03)
+
+**What stopped the session**
+([#77](https://github.com/sushiHex/constructicon/issues/77#issuecomment-5961905462)).
+- The controller was replaced and verified at `1138564`.
+- Then `verify-launch` failed with `different: 3`, on `libssl.so.3`, `libcrypto.so.3` and `libexpat.so.1`.
+- `unattended-upgrade` had upgraded them on 2026-10-01, along with the kernel (6.8.0-139 to 142), which `m8-host-drift` reports.
+- The only launch-set replacement was the fixed removal, and it deletes `L` with the store, which holds the login.
+- Security updates stay enabled (`docs/AGENT_HANDOFF.md`, "Drift is visible rather than frozen"), so this would recur with every update.
+
+**The fix: the store is never in the removal's reach.** The new runbook
+`M8-N4-launch-replacement.md` has root retire only the launch profile and the five
+disposable entries (`m8_host_artifacts.DISPOSABLE`), then run R13's file
+commands into the kept `L`. Two read-only commands bracket root's removals.
+
+`judge-retire` proves, before the first write:
+- `L` is a real root-owned 0755 directory with nothing mounted at or beneath it (`mounts_beneath` reads `/proc/self/mountinfo`), so no removal under it can reach another file system;
+- the store is a real root-owned 0750 directory of the service group, never listed;
+- `L` holds no unnamed entry;
+- `rm`, `cat` and the parser are root's alone;
+- a loaded profile still has the root-owned file that unloading reads.
+
+It records the store's device, inode and group in `retire.json`.
+
+`verify-retired` requires:
+- `L` holds only that store;
+- no profile file is present;
+- no launch profile is loaded.
+
+`judge-launch` accepts an existing `L` only as that recorded state (`"replacement": true`). `verify-launch` holds a replacement to the same identity, and states `"replacement"`. The runbook requires `true`, so a workspace that lost `retire.json` cannot pass as a replacement.
+
+`loaded_among` now reads the whole profile list; it previously read a list truncated to 16 entries. Nothing in the store, lane, launcher or adapter source changed.
+
+**Proof.**
+- Linux fake-root tests:
+  - a drifted host is retired and reinstalled with the store's inode and a sentinel's bytes and inode unchanged;
+  - a partial retirement completes on a rerun;
+  - each of `judge-retire`'s eleven refusals, including mounts at and beneath `L`;
+  - an incomplete retirement and a still-loaded profile refuse;
+  - a substituted store (same name, mode, owner and group) is refused by `verify-retired`, `judge-launch` and `verify-launch`;
+  - a retirement record from another commit, of the wrong shape, or with no identity is refused.
+- The fake root runs real `rm`, `install` and `cp`, emulating only root's ownership and permission override. It runs the removals unconditionally. The conditional unload and the interruption table are shown by the runbook's own records on the host, not by these tests.
+- Portable tests:
+  - the runbook's LR4 and LR6 root commands match the tested sequences as text;
+  - no removal names `L` or the store, and no `install -d` appears;
+  - mountinfo is unescaped and matched only at or beneath the path;
+  - a launch profile past the record's bound still refuses.
+- Mutants:
+  - replacement: freshness split into two; kept-root membership; store identity in two places; the retirement's commit; the mount refusal; `L`'s mode; the store's owner, group and mode; `rm` custody; unnamed entries; the loaded profile's file; the retired profile;
+  - portable: whole-list reading; unescaping; the path boundary.
+
+**Cross-review** (Codex `gpt-6-astra`).
+
+The design pass proposed this option. It rejected the alternatives:
+- freezing updates and logging in again;
+- moving the store (an unproven migration);
+- a live swap;
+- a runtime built from pinned packages.
+
+The build-plan pass returned "build with changes". All of its findings were adopted:
+- **P1:** mount aliases in the removal's scope;
+- **P1:** a process scan presented as proof of quiescence (replaced by a controlled fresh boot and the store law's `reboot-anchor` refusal);
+- **P1:** the retirement's rerun semantics;
+- **P2:**
+  - preservation evidence;
+  - the D2 order;
+  - the exact R10 differences;
+  - tests and mutants;
+  - session continuity;
+  - the truncated profile list.
+- **P3:** no controller reinstall; LR8 verifies by content, and S0 now says so.
+
+S9 now runs the launch preflight and names M8-D2's reboot obligation.
+
+The one pass on the diff returned "fix-then-ship". Every finding was fixed:
+- **P1:** the fake root's `rm` obeyed read-only modes, so retirement tests failed in setup. CI showed it, and the harness now emulates root's override.
+- **P2:**
+  - a `grep` error read as "not loaded"; absence is now status 1 only;
+  - LR8 ran R17, which needs the controller absent; it is now an explicit block;
+  - recovery restaged into existing staging; it now rejudges it;
+  - `verify-launch` silently fell back without `retire.json`; it now states `replacement`;
+  - LR2 and S9 lacked D2's workspace and commit; LR2 now carries a block, which S9 cites.
+- **P3:** a malformed `retire.json` raised a traceback; it is now a refusal.
+
+**Limits.**
+- The store directory's identity is proved; the binding inside it is judged by the store law at the next maintenance.
+- Real root ownership, real mounts and real AppArmor removal are observed only by the host's records.
+- A hostile root, a concurrent administrator and another mount namespace are out of scope.
+- `M8-N4-host-runtime.md`'s claim that `cp --no-target-directory` refuses an existing destination is too strong. Its bytes are kept.
+
+**To resume** (owner authorization):
+1. LR0 to LR8 at the merge commit, with M8-D2 requalification and its baseline as LR2 needs them.
+2. Then the N4 session at S0. The refused S4's evidence is kept under new names.
+3. S4, S6a, S5, S7, S8 and S9.
+4. S10 at least 24 hours after the recorded S3.
+
+S3's login evidence stays historical; the transition is recorded on #77.

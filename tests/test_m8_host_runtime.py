@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -577,12 +578,41 @@ def test_both_launch_profiles_must_be_loaded_in_enforce_mode(
         artifacts.assess_launch(observed, table())
 
 
+def test_a_loaded_launch_profile_past_the_records_bound_still_refuses() -> None:
+    others = "".join(f"constructicon-m8-other{n} (enforce)\n" for n in range(20))
+    listing = KERNEL_LIST + others + "constructicon-m8-workload (enforce)\n"
+    assert len(artifacts.loaded_profiles(listing)) == 16
+    assert artifacts.loaded_among(listing, artifacts.LAUNCH_PROFILE_NAMES) == [
+        "constructicon-m8-workload (enforce)"
+    ]
+
+
+def test_mounts_are_read_unescaped_and_only_at_or_beneath_the_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    table = tmp_path / "mountinfo"
+    table.write_text(
+        "22 1 8:1 / / rw - ext4 /dev/sda1 rw\n"
+        "30 22 0:5 / /var/lib rw - tmpfs tmpfs rw\n"
+        "31 22 0:6 / /var/lib/constructicon-m8-launch2 rw - tmpfs tmpfs rw\n"
+        "32 22 0:7 / /var/lib/constructicon-m8-launch/a\\040b rw - tmpfs tmpfs rw\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(artifacts, "MOUNTINFO", table)
+    launch = Path(LAUNCH_PATH)
+    assert artifacts.mounts_beneath(launch) == [f"{LAUNCH_PATH}/a b"]
+    table.write_text(f"40 22 0:8 / {LAUNCH_PATH} rw - tmpfs tmpfs rw\n", encoding="utf-8")
+    assert artifacts.mounts_beneath(launch) == [LAUNCH_PATH]
+
+
 # --- the command record (portable) --------------------------------------------
 
 LAUNCH_COMMANDS = {
     "stage-launch": ("stage_launch", "staged"),
     "judge-launch": ("judge_launch", "ready"),
     "verify-launch": ("verify_launch", "installed"),
+    "judge-retire": ("judge_retire", "ready"),
+    "verify-retired": ("verify_retired", "retired"),
 }
 
 
@@ -605,7 +635,7 @@ def test_each_launch_command_reports_its_own_verdict(
     assert artifacts.main([command, "a" * 40, "/workspace"]) == int(failure)
     record = json.loads(capsys.readouterr().out)
     assert record[verdict] is (not failure)
-    assert set(record) & {"ready", "installed", "staged"} == {verdict}
+    assert set(record) & {"ready", "installed", "staged", "retired"} == {verdict}
     assert (record.get("observed") == {"launch": KERNEL_LIST}) == failure
 
 
@@ -710,6 +740,25 @@ def launch_sequence() -> list[list[str]]:
     ]
 
 
+def retire_sequence() -> list[list[str]]:
+    """The replacement runbook's root removals, in order: never ``L``, never the store."""
+
+    rm, parser = "/" + artifacts.RM, "/" + artifacts.PARSER
+    launch = [f"{LAUNCH_PATH}/{name}" for name in artifacts.DISPOSABLE]
+    return [
+        [parser, "-R", PROFILE_PATH],
+        [rm, "-f", PROFILE_PATH],
+        [rm, "-rf", "--one-file-system", *(p for p in launch if p.endswith(("runtime", "codex")))],
+        [rm, "-f", *(p for p in launch if not p.endswith(("runtime", "codex")))],
+    ]
+
+
+def replacement_sequence() -> list[list[str]]:
+    """R13 into the kept ``L``: every command but the two that create a directory."""
+
+    return [command for command in launch_sequence() if "-d" not in command]
+
+
 def runbook() -> str:
     text = DESIGN.read_text(encoding="utf-8")
     assert text.count("\n# Operator runbook (R8-R14)\n") == 1
@@ -756,6 +805,40 @@ def test_root_runs_only_named_stock_tools_in_the_launch_runbook() -> None:
         "/usr/sbin/apparmor_parser",
     }
     assert {"/" + tool for tool in artifacts.LAUNCH_ROOT_TOOLS} <= set(invoked)
+
+
+REPLACEMENT = REPOSITORY / "docs/plans/handoffs/M8-N4-launch-replacement.md"
+
+
+@pytest.mark.parametrize(
+    ("step", "sequence"), [("LR4", retire_sequence), ("LR6", replacement_sequence)]
+)
+def test_the_replacement_runbook_runs_exactly_the_tested_root_commands(
+    step: str, sequence: Callable[[], list[list[str]]]
+) -> None:
+    text = REPLACEMENT.read_text(encoding="utf-8")
+    section = text.split(f"## {step}.", 1)[1].split("\n## ", 1)[0]
+    block = section.split("```bash\n", 1)[1].split("```", 1)[0]
+    invoked = [
+        re.sub(r"\s*(;;|\\)?$", "", line.split("sudo ", 1)[1])
+        for line in block.splitlines()
+        if "sudo " in line and "apparmor/profiles" not in line
+    ]
+    assert invoked == [" ".join(command) for command in sequence()]
+
+
+def test_the_replacement_runbook_never_removes_the_launch_root_or_its_store() -> None:
+    code = "".join(re.findall(r"```bash\n(.*?)```", REPLACEMENT.read_text(encoding="utf-8"), re.S))
+    removals = [line for line in code.splitlines() if "/usr/bin/rm " in line]
+    assert removals, "the walk found no removal, so it proved nothing"
+    for line in removals:
+        targets = line.split("/usr/bin/rm ", 1)[1].split()
+        assert LAUNCH_PATH not in targets and f"{LAUNCH_PATH}/{artifacts.STORE}" not in targets
+    assert "install -d" not in code
+    assert set(re.findall(r"\bsudo\s+(/[^\s`]+)", code)) == {
+        "/usr/bin/cat", "/usr/sbin/apparmor_parser", "/usr/bin/rm", "/usr/bin/install",
+        "/usr/bin/cp", "/usr/bin/passwd",
+    }
 
 
 def test_the_runbook_proves_every_launch_blob_with_stock_git() -> None:
@@ -826,7 +909,7 @@ class LaunchHost:
         (self.root / artifacts.ABI).write_bytes(b"abi 4.0\n")
         (self.root / artifacts.BWRAP_SOURCE).write_bytes(FAKE_BWRAP)
         (self.root / artifacts.BWRAP_SOURCE).chmod(0o755)
-        for tool in (artifacts.INSTALL, artifacts.CAT, artifacts.CP):
+        for tool in (artifacts.INSTALL, artifacts.CAT, artifacts.CP, artifacts.RM):
             (self.root / tool).write_bytes(b"#!/bin/sh\nexit 99\n")
             (self.root / tool).chmod(0o755)
         self.parser(0)
@@ -874,6 +957,9 @@ class LaunchHost:
             return os.stat_result(fields)
 
         monkeypatch.setattr(artifacts.os, "lstat", observing)
+        self.mountinfo = tmp_path / "mountinfo"
+        self.mountinfo.write_text("22 1 8:1 / / rw - ext4 /dev/sda1 rw\n", encoding="utf-8")
+        monkeypatch.setattr(artifacts, "MOUNTINFO", self.mountinfo)
         monkeypatch.setattr(artifacts, "ROOT", self.root)
         monkeypatch.setattr(artifacts, "ROOT_UID", self.root_uid)
         monkeypatch.setattr(
@@ -887,26 +973,39 @@ class LaunchHost:
             "#!/bin/sh\n"
             f"printf '%s\\n' \"$*\" >> '{self.log}'\n"
             f"test {status} = 0 || exit {status}\n"
+            'if test "$1" = -R; then\n'
+            "  grep -v -e '^constructicon-m8-launch ' -e '^constructicon-m8-workload '"
+            f" '{self.kernel}' > '{self.kernel}.left'\n"
+            f"  exec mv '{self.kernel}.left' '{self.kernel}'\n"
+            "fi\n"
             "printf 'constructicon-m8-launch (enforce)\\nconstructicon-m8-workload (enforce)\\n'"
             f" >> '{self.kernel}'\n",
             encoding="utf-8",
         )
         parser.chmod(0o755)
 
+    def mount(self, path: Path) -> None:
+        """Something mounted at ``path``, as the kernel escapes it in mountinfo."""
+
+        point = str(path).replace(" ", "\\040")
+        with self.mountinfo.open("a", encoding="utf-8") as table:
+            table.write(f"99 22 0:5 / {point} rw - tmpfs tmpfs rw\n")
+
     def run(self, command: str, capsys: pytest.CaptureFixture[str]) -> tuple[int, dict]:
         feed(self.monkeypatch, self.kernel.read_text(encoding="utf-8"))
         status = artifacts.main([command, self.commit, str(self.workspace)])
         return status, json.loads(capsys.readouterr().out)
 
-    def install(self, steps: int | None = None) -> int:
-        """Root's R13 sequence, chained like ``&&``, minus the owner and group options."""
+    def install(self, steps: int | None = None, sequence: list[list[str]] | None = None) -> int:
+        """A root sequence (R13 by default), chained like ``&&``, minus owner and group options."""
 
         tools = {
             "/" + artifacts.INSTALL: shutil.which("install"),
             "/" + artifacts.CP: shutil.which("cp"),
+            "/" + artifacts.RM: shutil.which("rm"),
             "/" + artifacts.PARSER: str(self.root / artifacts.PARSER),
         }
-        for command in launch_sequence()[:steps]:
+        for command in (launch_sequence() if sequence is None else sequence)[:steps]:
             tool, *arguments = command
             for owner in (OWNER, STORE_OWNER):
                 for start in range(len(arguments) - 3):
@@ -919,6 +1018,10 @@ class LaunchHost:
                     argv.append(str(self.workspace) + argument[3:-1])
                 elif argument.startswith("/"):
                     argv.append(str(self.root) + argument)
+                    target = Path(argv[-1])
+                    if tool == "/" + artifacts.RM and target.is_dir() and not target.is_symlink():
+                        # Root's removal ignores the read-only modes the operator's rm obeys.
+                        subprocess.run(["chmod", "-R", "u+w", argv[-1]], check=True)
                 else:
                     argv.append(argument)
             status = subprocess.run(argv, check=False, capture_output=True, timeout=30).returncode
@@ -956,6 +1059,7 @@ def installed(host: LaunchHost, capsys: pytest.CaptureFixture[str]) -> dict:
     assert host.install() == 0
     status, record = host.run("verify-launch", capsys)
     assert status == 0 and record["installed"] is True, record
+    assert record["replacement"] is False
     return record
 
 
@@ -984,6 +1088,7 @@ def test_stage_judge_root_sequence_then_verify_accepts(
     assert launch_host.install() == 0
     status, verified = launch_host.run("verify-launch", capsys)
     assert status == 0 and verified["installed"] is True, verified
+    assert verified["replacement"] is False and judgement["replacement"] is False
     observed = verified["observed"]
     assert observed[LAUNCH_PATH + "/runtime"]["different"] == 0
     assert observed[LAUNCH_PATH + "/native-codex"]["different"] == 0
@@ -1296,6 +1401,205 @@ def test_verify_launch_refuses_drift_after_installation(
     status, record = launch_host.run("verify-launch", capsys)
     assert status == 1 and record["installed"] is False, record
     assert fault in record["failure"], record["failure"]
+
+
+# --- replacement after the first login: the store is kept (Linux) -------------
+
+SENTINEL = b"credential-free sentinel\n"
+
+
+def with_binding(host: LaunchHost, capsys: pytest.CaptureFixture[str]) -> Path:
+    """An installed launch set whose store holds a sentinel binding."""
+
+    installed(host, capsys)
+    sentinel = host.launch() / artifacts.STORE / "binding"
+    sentinel.write_bytes(SENTINEL)
+    return sentinel
+
+
+def retired(host: LaunchHost, capsys: pytest.CaptureFixture[str], steps: int | None = None) -> dict:
+    """``judge-retire``, its record saved as the runbook saves it, then root's removals."""
+
+    status, judgement = host.run("judge-retire", capsys)
+    assert status == 0 and judgement["ready"] is True, judgement
+    (host.workspace / artifacts.RETIREMENT).write_text(json.dumps(judgement), encoding="utf-8")
+    assert host.install(steps, retire_sequence()) == 0
+    return judgement
+
+
+def restaged(host: LaunchHost, capsys: pytest.CaptureFixture[str]) -> dict:
+    subprocess.run(["chmod", "-R", "u+w", str(host.staged())], check=True)
+    shutil.rmtree(host.staged())
+    staged(host, capsys)
+    status, record = host.run("judge-launch", capsys)
+    assert status == 0 and record["ready"] is True and record["replacement"] is True, record
+    return record
+
+
+def substitute_store(host: LaunchHost) -> None:
+    """The same name, mode, owner and group: only the identity differs."""
+
+    store = host.launch() / artifacts.STORE
+    # Made before the original goes, so the file system cannot reuse its inode.
+    other = store.with_name("other")
+    other.mkdir(mode=artifacts.STORE_MODE)
+    other.chmod(artifacts.STORE_MODE)
+    for child in store.iterdir():
+        child.unlink()
+    store.rmdir()
+    other.rename(store)
+
+
+@LINUX
+def test_a_replacement_keeps_the_store_and_what_it_holds(
+    launch_host: LaunchHost, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The accepting path: host drift, retirement, a fresh R13 into the kept ``L``."""
+
+    sentinel = with_binding(launch_host, capsys)
+    store = sentinel.parent
+    before = (os.stat(store).st_ino, os.stat(sentinel).st_ino)
+    # The host moved on, as an unattended upgrade moves it.
+    (launch_host.root / artifacts.LIBRARY / "encodings/utf_8.py").write_bytes(b"# new\n")
+    status, _ = launch_host.run("verify-launch", capsys)
+    assert status == 1
+    judgement = retired(launch_host, capsys)
+    status, record = launch_host.run("verify-retired", capsys)
+    assert status == 0 and record["retired"] is True, record
+    assert record["observed"][PROFILE_PATH] == {"state": "absent"}
+    restaged(launch_host, capsys)
+    assert launch_host.install(sequence=replacement_sequence()) == 0
+    status, verified = launch_host.run("verify-launch", capsys)
+    assert status == 0 and verified["installed"] is True, verified
+    assert verified["replacement"] is True
+    assert sentinel.read_bytes() == SENTINEL
+    assert (os.stat(store).st_ino, os.stat(sentinel).st_ino) == before
+    assert judgement["retained"]["ino"] == before[0]
+
+
+@LINUX
+def test_a_partial_retirement_completes_on_a_rerun(
+    launch_host: LaunchHost, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sentinel = with_binding(launch_host, capsys)
+    retired(launch_host, capsys, steps=3)
+    retired(launch_host, capsys)
+    status, record = launch_host.run("verify-retired", capsys)
+    assert status == 0 and record["retired"] is True, record
+    assert sentinel.read_bytes() == SENTINEL
+
+
+RETIREMENT_FAULTS = {
+    "mount beneath": "has mounts at or beneath it",
+    "launch mounted": "has mounts at or beneath it",
+    "launch mode": "is not a real root-owned 0o755 directory",
+    "store mode": "is not a real root-owned 0o750 directory",
+    "store owner": "is not a real root-owned 0o750 directory",
+    "store group": "is not a real root-owned 0o750 directory",
+    "store symlink": "is not a real root-owned 0o750 directory",
+    "unknown entry": "does not name",
+    "rm": "must be a regular file owned by root",
+    "profile gone while loaded": "constructicon-m8-launch",
+    "unsafe ancestor": "must be a real directory owned by root",
+}
+
+
+@LINUX
+@pytest.mark.parametrize("fault", list(RETIREMENT_FAULTS))
+def test_each_retirement_precondition_refuses(
+    fault: str, launch_host: LaunchHost, capsys: pytest.CaptureFixture[str]
+) -> None:
+    message = RETIREMENT_FAULTS[fault]
+    with_binding(launch_host, capsys)
+    launch = launch_host.launch()
+    store = launch / artifacts.STORE
+    if fault == "mount beneath":
+        launch_host.mount(launch / "runtime" / "usr")
+    elif fault == "launch mounted":
+        launch_host.mount(launch)
+    elif fault == "launch mode":
+        launch.chmod(0o775)
+    elif fault == "store mode":
+        store.chmod(0o755)
+    elif fault == "store owner":
+        launch_host.owners[store] = os.getuid() + 1
+    elif fault == "store group":
+        launch_host.gids[store] = os.getgid() + 1
+    elif fault == "store symlink":
+        (store / "binding").unlink()
+        store.rmdir()
+        store.symlink_to(launch_host.home)
+    elif fault == "unknown entry":
+        (launch / "extra").write_bytes(b"")
+    elif fault == "rm":
+        launch_host.owners[launch_host.root / artifacts.RM] = os.getuid() + 1
+    elif fault == "profile gone while loaded":
+        (launch_host.root / artifacts.LAUNCH_PROFILE_DESTINATION).unlink()
+    else:
+        (launch_host.root / "var/lib").chmod(0o775)
+    status, record = launch_host.run("judge-retire", capsys)
+    assert status == 1 and record["ready"] is False
+    assert message in record["failure"], record["failure"]
+
+
+@LINUX
+@pytest.mark.parametrize("steps", range(1, 4))
+def test_verify_retired_refuses_an_incomplete_retirement(
+    steps: int, launch_host: LaunchHost, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with_binding(launch_host, capsys)
+    retired(launch_host, capsys, steps=steps)
+    status, record = launch_host.run("verify-retired", capsys)
+    assert status == 1 and record["retired"] is False
+    assert "holds more than its store" in record["failure"], record["failure"]
+
+
+@LINUX
+def test_verify_retired_refuses_a_launch_profile_still_loaded(
+    launch_host: LaunchHost, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with_binding(launch_host, capsys)
+    retired(launch_host, capsys)
+    with launch_host.kernel.open("a", encoding="utf-8") as kernel:
+        kernel.write("constructicon-m8-workload (enforce)\n")
+    status, record = launch_host.run("verify-retired", capsys)
+    assert status == 1 and "still loaded" in record["failure"], record
+
+
+@LINUX
+@pytest.mark.parametrize("command", ["verify-retired", "judge-launch", "verify-launch"])
+def test_a_substituted_store_is_never_kept(
+    command: str, launch_host: LaunchHost, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with_binding(launch_host, capsys)
+    retired(launch_host, capsys)
+    if command == "verify-launch":
+        restaged(launch_host, capsys)
+        assert launch_host.install(sequence=replacement_sequence()) == 0
+    elif command == "judge-launch":
+        subprocess.run(["chmod", "-R", "u+w", str(launch_host.staged())], check=True)
+        shutil.rmtree(launch_host.staged())
+        staged(launch_host, capsys)
+    substitute_store(launch_host)
+    status, record = launch_host.run(command, capsys)
+    assert status == 1, record
+    assert "is not the store judge-retire found" in record["failure"], record["failure"]
+
+
+@LINUX
+def test_a_retirement_from_another_commit_is_never_kept(
+    launch_host: LaunchHost, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with_binding(launch_host, capsys)
+    retired(launch_host, capsys)
+    record_path = launch_host.workspace / artifacts.RETIREMENT
+    judgement = json.loads(record_path.read_text(encoding="utf-8"))
+    for forged in (
+        {**judgement, "commit": "f" * 40}, [judgement], {**judgement, "retained": None}
+    ):
+        record_path.write_text(json.dumps(forged), encoding="utf-8")
+        status, record = launch_host.run("verify-retired", capsys)
+        assert status == 1 and "not a ready retirement judgement" in record["failure"], record
 
 
 @LINUX
