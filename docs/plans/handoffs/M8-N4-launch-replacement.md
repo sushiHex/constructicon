@@ -52,7 +52,27 @@ maintenance later repairs the anchor.
 
 ## LR2. Host qualification on this boot
 
-- Run M8-D2's R4 `verify` line and its R5 probe on this boot, as `M8-D2-host-installation.md` requires after a reboot ("What `m8-host-drift` does not cover").
+Run M8-D2's R4 `verify` line and R5 probe on this boot, as
+`M8-D2-host-installation.md` requires after a reboot ("What `m8-host-drift`
+does not cover"). They run in D2's own workspace, at the commit the
+qualification set was installed at, and in a fresh shell:
+
+```bash
+D=<40-hex commit the qualification set was installed at>
+V="$HOME/m8-host"
+Y=(/usr/bin/python3 -I "$V/m8_host_artifacts.py")
+cat /proc/sys/kernel/random/boot_id
+test "${#D}" -eq 40 \
+  && sudo /usr/bin/cat /sys/kernel/security/apparmor/profiles > "$V/profiles-verify" \
+  && "${Y[@]}" verify "$D" "$V" < "$V/profiles-verify" > "$V/verify.json"
+echo "verify exit $?"; cat "$V/verify.json"
+cd / && test "${#D}" -eq 40 && sudo -u m8-probe env -i PATH=/usr/bin:/bin HOME=/home/m8-probe LANG=C.UTF-8 \
+  /usr/bin/python3 /opt/constructicon-m8-qualification/probe.py \
+  --commit "$D" --image local-hyperv/ubuntu-24.04.5 > "$V/qualification.json"
+echo "probe exit $?"; cat "$V/qualification.json"
+```
+
+- Both must pass as D2's R4 and R5 define.
 - If a fact the drift check covers changed (the kernel, for example), take the R6 baseline under its own authorization.
 - The bare `/usr/local/bin/m8-host-drift < /dev/null` must then exit 0 with no drift.
 - Do not reboot again before LR8 passes.
@@ -102,10 +122,11 @@ J=(/usr/bin/python3 -I "$W/m8_host_artifacts.py")
 test "${#C}" -eq 40 \
   && sudo /usr/bin/cat /sys/kernel/security/apparmor/profiles > "$W/profiles-retire" \
   && "${J[@]}" judge-retire "$C" "$W" < "$W/profiles-retire" > "$W/retire.json" \
-  && { ! grep -qE '^constructicon-m8-(launch|workload) ' "$W/profiles-retire" \
-       || sudo /usr/sbin/apparmor_parser -R /etc/apparmor.d/constructicon-m8-launch; } \
+  && { grep -qE '^constructicon-m8-(launch|workload) ' "$W/profiles-retire"; case $? in
+       0) sudo /usr/sbin/apparmor_parser -R /etc/apparmor.d/constructicon-m8-launch ;;
+       1) ;; *) false ;; esac; } \
   && sudo /usr/bin/cat /sys/kernel/security/apparmor/profiles > "$W/profiles-unloaded" \
-  && ! grep -qE '^constructicon-m8-(launch|workload) ' "$W/profiles-unloaded" \
+  && { grep -qE '^constructicon-m8-(launch|workload) ' "$W/profiles-unloaded"; test $? -eq 1; } \
   && sudo /usr/bin/rm -f /etc/apparmor.d/constructicon-m8-launch \
   && sudo /usr/bin/rm -rf --one-file-system /var/lib/constructicon-m8-launch/native-codex /var/lib/constructicon-m8-launch/runtime \
   && sudo /usr/bin/rm -f /var/lib/constructicon-m8-launch/bwrap /var/lib/constructicon-m8-launch/codex-models.json /var/lib/constructicon-m8-launch/runtime.json \
@@ -130,6 +151,9 @@ echo "verify exit $?"; cat "$W/retired.json"
 - neither launch profile is loaded.
 
 `verify-launch` later holds the replacement to the same identity.
+
+`grep` decides absence only by status 1. An error (status 2) stops the chain;
+it is never read as "not loaded".
 
 **Interruptions.** Every stopped state is unavailable, never half-active, because each launch checks its artifacts before a vendor process runs.
 
@@ -173,9 +197,14 @@ sudo /usr/bin/cat /sys/kernel/security/apparmor/profiles > "$W/profiles-verify" 
 echo "verify exit $?"; cat "$W/verify.json"
 ```
 
-`verify-launch` must exit 0 with `"installed": true`. A failed chain leaves
-residue that the judge refuses on a rerun. Recovery is LR4 again, which removes
-only disposable entries.
+`verify-launch` must exit 0 with `"installed": true` and `"replacement": true`.
+The second shows it held the store to `retire.json`; a workspace that lost
+that record cannot pass.
+
+A failed chain leaves residue that the judge refuses on a rerun. Recovery is
+LR4 again, which removes only disposable entries, then LR6 again with the same
+staging. The judge proves staging against the recomputed plan, so it is
+rejudged, never restaged.
 
 ## LR7. Probe
 
@@ -186,10 +215,42 @@ benign physical probe, including the
 
 ## LR8. Controller
 
-- The controller does not hold the store and changes only with its own inputs.
-- Run R17 in a fresh controller workspace at `C`, archiving the old one as LR3 does.
-- Then run only R18's final `verify-controller` line, then R19.
-- If `verify-controller` refuses, the controller replacement (its removal, then R17 to R19) needs its own authorization.
+The controller does not hold the store and changes only with its own inputs.
+Verify the installed one at `C` in a fresh workspace. This is R17 without its
+`test ! -e /opt/constructicon-m8-controller` (the controller is kept), then R18's
+final line. Run R19 after it.
+
+```bash
+umask 077
+O=<40-hex commit the old controller workspace was made at>
+C=<40-hex merge commit named in LR0>
+W="$HOME/m8-controller"
+U=https://github.com/sushiHex/constructicon.git
+E=(/usr/bin/env -i PATH=/usr/bin:/bin HOME=/nonexistent LANG=C.UTF-8 GIT_CONFIG_NOSYSTEM=1 GIT_GRAFT_FILE=/nonexistent)
+G=("${E[@]}" /usr/bin/git --no-replace-objects "--git-dir=$W/source.git")
+K=("${E[@]}" /usr/bin/curl -q --fail --location --proto =https --silent --show-error)
+J=(/usr/bin/python3 -I "$W/m8_host_artifacts.py")
+test ! -e "$HOME/m8-controller-$O" && /usr/bin/mv -n "$W" "$HOME/m8-controller-$O" \
+  && test "${#C}" -eq 40 && /usr/bin/mkdir "$W" "$W/wheels" \
+  && "${E[@]}" /usr/bin/git init -q --bare "$W/source.git" \
+  && "${G[@]}" fetch -q --no-tags "$U" +refs/heads/main:refs/heads/main \
+  && "${G[@]}" rev-parse refs/heads/main && "${E[@]}" /usr/bin/git ls-remote "$U" refs/heads/main \
+  && "${G[@]}" rev-list --first-parent refs/heads/main | grep -qxF "$C" && echo first-parent \
+  && "${G[@]}" ls-tree "$C" -- scripts/ci/m8_host_artifacts.py uv.lock \
+  && "${G[@]}" cat-file blob "$C:scripts/ci/m8_host_artifacts.py" > "$W/m8_host_artifacts.py" \
+  && "${J[@]}" controller-wheels "$C" "$W" < /dev/null > "$W/wheels.json" \
+  && /usr/bin/grep -o '"url": "https://files.pythonhosted.org/[^"]*"' "$W/wheels.json" \
+       | /usr/bin/cut -d'"' -f4 > "$W/wheels.txt" \
+  && test -s "$W/wheels.txt" \
+  && ( set -e; while read -r u; do "${K[@]}" --output "$W/wheels/${u##*/}" "$u"; done < "$W/wheels.txt" ) \
+  && sha256sum "$W/m8_host_artifacts.py" "$W"/wheels/*.whl && echo "LR8 fetched"
+"${J[@]}" verify-controller "$C" "$W" < /dev/null > "$W/verify.json"
+echo "verify exit $?"; cat "$W/verify.json"
+```
+
+`verify-controller` must exit 0 with `"installed": true` and `different: 0`.
+If it refuses, the controller replacement (its removal, then R17 to R19) needs
+its own authorization.
 
 Then the N4 session resumes at S0 at `C`.
 

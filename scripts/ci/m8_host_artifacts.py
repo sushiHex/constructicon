@@ -1040,8 +1040,9 @@ def retirement(commit: str, workspace: Path) -> dict[str, int]:
 
     found = json.loads(read_regular(workspace / RETIREMENT))
     require(
-        found.get("command") == "judge-retire" and found.get("commit") == commit
-        and found.get("ready") is True,
+        isinstance(found, dict) and found.get("command") == "judge-retire"
+        and found.get("commit") == commit and found.get("ready") is True
+        and isinstance(found.get("retained"), dict),
         f"{RETIREMENT} is not a ready retirement judgement at this commit",
     )
     return found["retained"]
@@ -1199,7 +1200,10 @@ def verify_launch(commit: str, root: Path, workspace: Path, listing: str, record
     assess_launch(record["observed"], launch_table(expected, blobs, values, gid))
     for destination in (LAUNCH, LAUNCH_PROFILE_DESTINATION):
         require_ancestors(root / destination, (ROOT_UID,), "root")
-    if not absent(workspace / RETIREMENT):
+    # Stated, never inferred: a replacement's runbook requires ``replacement: true``,
+    # so a workspace that lost its retirement record cannot pass as one.
+    record["replacement"] = not absent(workspace / RETIREMENT)
+    if record["replacement"]:
         require(
             retained(root, gid) == retirement(commit, workspace),
             f"/{LAUNCH}/{STORE} is not the store judge-retire found",

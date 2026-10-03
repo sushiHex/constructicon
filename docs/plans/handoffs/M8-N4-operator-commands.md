@@ -481,10 +481,10 @@ Stop-VM constructicon-m8
 Start-VM constructicon-m8
 ```
 
-A reboot is a requalification trigger. On this boot, before S9's script, rerun
-M8-D2's R4 `verify` line and R5 probe (`M8-D2-host-installation.md`, "What
-`m8-host-drift` does not cover"). The script then runs the launch preflight
-before any store operation.
+A reboot is a requalification trigger. On this boot, before S9's script, run
+M8-D2's R4 `verify` line and R5 probe in D2's own workspace and fresh shell
+(`M8-N4-launch-replacement.md`, LR2's block). The script then runs the launch
+preflight before any store operation.
 
 Run S9's bash script through a new, noninteractive SSH session. The common
 setup is loaded again, but S1 and provisioning are not repeated. Recompute

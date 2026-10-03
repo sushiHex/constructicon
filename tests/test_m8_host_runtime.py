@@ -820,7 +820,7 @@ def test_the_replacement_runbook_runs_exactly_the_tested_root_commands(
     section = text.split(f"## {step}.", 1)[1].split("\n## ", 1)[0]
     block = section.split("```bash\n", 1)[1].split("```", 1)[0]
     invoked = [
-        line.split("sudo ", 1)[1].rstrip(" \\").removesuffix("; }")
+        re.sub(r"\s*(;;|\\)?$", "", line.split("sudo ", 1)[1])
         for line in block.splitlines()
         if "sudo " in line and "apparmor/profiles" not in line
     ]
@@ -1059,6 +1059,7 @@ def installed(host: LaunchHost, capsys: pytest.CaptureFixture[str]) -> dict:
     assert host.install() == 0
     status, record = host.run("verify-launch", capsys)
     assert status == 0 and record["installed"] is True, record
+    assert record["replacement"] is False
     return record
 
 
@@ -1087,6 +1088,7 @@ def test_stage_judge_root_sequence_then_verify_accepts(
     assert launch_host.install() == 0
     status, verified = launch_host.run("verify-launch", capsys)
     assert status == 0 and verified["installed"] is True, verified
+    assert verified["replacement"] is False and judgement["replacement"] is False
     observed = verified["observed"]
     assert observed[LAUNCH_PATH + "/runtime"]["different"] == 0
     assert observed[LAUNCH_PATH + "/native-codex"]["different"] == 0
@@ -1469,6 +1471,7 @@ def test_a_replacement_keeps_the_store_and_what_it_holds(
     assert launch_host.install(sequence=replacement_sequence()) == 0
     status, verified = launch_host.run("verify-launch", capsys)
     assert status == 0 and verified["installed"] is True, verified
+    assert verified["replacement"] is True
     assert sentinel.read_bytes() == SENTINEL
     assert (os.stat(store).st_ino, os.stat(sentinel).st_ino) == before
     assert judgement["retained"]["ino"] == before[0]
@@ -1591,9 +1594,12 @@ def test_a_retirement_from_another_commit_is_never_kept(
     retired(launch_host, capsys)
     record_path = launch_host.workspace / artifacts.RETIREMENT
     judgement = json.loads(record_path.read_text(encoding="utf-8"))
-    record_path.write_text(json.dumps({**judgement, "commit": "f" * 40}), encoding="utf-8")
-    status, record = launch_host.run("verify-retired", capsys)
-    assert status == 1 and "not a ready retirement judgement" in record["failure"]
+    for forged in (
+        {**judgement, "commit": "f" * 40}, [judgement], {**judgement, "retained": None}
+    ):
+        record_path.write_text(json.dumps(forged), encoding="utf-8")
+        status, record = launch_host.run("verify-retired", capsys)
+        assert status == 1 and "not a ready retirement judgement" in record["failure"], record
 
 
 @LINUX

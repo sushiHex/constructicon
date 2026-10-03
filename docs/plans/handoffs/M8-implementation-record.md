@@ -3307,7 +3307,7 @@ It records the store's device, inode and group in `retire.json`.
 - no profile file is present;
 - no launch profile is loaded.
 
-`judge-launch` accepts an existing `L` only as that recorded state (`"replacement": true`). `verify-launch` holds a replacement to the same identity.
+`judge-launch` accepts an existing `L` only as that recorded state (`"replacement": true`). `verify-launch` holds a replacement to the same identity, and states `"replacement"`. The runbook requires `true`, so a workspace that lost `retire.json` cannot pass as a replacement.
 
 `loaded_among` now reads the whole profile list; it previously read a list truncated to 16 entries. Nothing in the store, lane, launcher or adapter source changed.
 
@@ -3318,9 +3318,10 @@ It records the store's device, inode and group in `retire.json`.
   - each of `judge-retire`'s eleven refusals, including mounts at and beneath `L`;
   - an incomplete retirement and a still-loaded profile refuse;
   - a substituted store (same name, mode, owner and group) is refused by `verify-retired`, `judge-launch` and `verify-launch`;
-  - a retirement from another commit is refused.
+  - a retirement record from another commit, of the wrong shape, or with no identity is refused.
+- The fake root runs real `rm`, `install` and `cp`, emulating only root's ownership and permission override. It runs the removals unconditionally. The conditional unload and the interruption table are shown by the runbook's own records on the host, not by these tests.
 - Portable tests:
-  - the runbook's LR4 and LR6 root commands are exactly the tested sequences;
+  - the runbook's LR4 and LR6 root commands match the tested sequences as text;
   - no removal names `L` or the store, and no `install -d` appears;
   - mountinfo is unescaped and matched only at or beneath the path;
   - a launch profile past the record's bound still refuses.
@@ -3350,6 +3351,16 @@ The build-plan pass returned "build with changes". All of its findings were adop
 - **P3:** no controller reinstall; LR8 verifies by content, and S0 now says so.
 
 S9 now runs the launch preflight and names M8-D2's reboot obligation.
+
+The one pass on the diff returned "fix-then-ship". Every finding was fixed:
+- **P1:** the fake root's `rm` obeyed read-only modes, so retirement tests failed in setup. CI showed it, and the harness now emulates root's override.
+- **P2:**
+  - a `grep` error read as "not loaded"; absence is now status 1 only;
+  - LR8 ran R17, which needs the controller absent; it is now an explicit block;
+  - recovery restaged into existing staging; it now rejudges it;
+  - `verify-launch` silently fell back without `retire.json`; it now states `replacement`;
+  - LR2 and S9 lacked D2's workspace and commit; LR2 now carries a block, which S9 cites.
+- **P3:** a malformed `retire.json` raised a traceback; it is now a refusal.
 
 **Limits.**
 - The store directory's identity is proved; the binding inside it is judged by the store law at the next maintenance.
