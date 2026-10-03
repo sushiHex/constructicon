@@ -1560,7 +1560,7 @@ def test_verify_retired_refuses_a_launch_profile_still_loaded(
     with launch_host.kernel.open("a", encoding="utf-8") as kernel:
         kernel.write("constructicon-m8-workload (enforce)\n")
     status, record = launch_host.run("verify-retired", capsys)
-    assert status == 1 and "still loaded" in record["failure"], record["failure"]
+    assert status == 1 and "still loaded" in record["failure"], record
 
 
 @LINUX
