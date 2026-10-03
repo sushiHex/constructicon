@@ -13,13 +13,18 @@ the commit and the operator's private workspace.
 
 A third set (``controller-wheels``, ``stage-controller``, ``judge-controller``,
 ``verify-controller``) is the service user's controller environment, in the
-same document's addendum. Only the two stagers write, and only through
-``materialize`` into a fresh staging directory in the workspace. Every judge proves each precondition of
+same document's addendum. After the first vendor login the launch set is
+replaced, never removed: ``judge-retire`` and ``verify-retired`` bracket root's
+removal of only its disposable entries, and the store is kept
+(docs/plans/handoffs/M8-N4-launch-replacement.md).
+
+Only the two stagers write, and only through ``materialize`` into a fresh
+staging directory in the workspace. Every judge proves each precondition of
 root's sequence. Every verifier recomputes from scratch against the blobs at
 the commit, the digests they pin and root-owned host files, never against the
 staged copies. They read the kernel's loaded-profile list from standard input,
-where root's ``cat`` saved it. The verdict (``ready``, ``installed`` or
-``staged``) stays false unless every fixed check passed, and the exit status
+where root's ``cat`` saved it. The verdict (``ready``, ``installed``,
+``retired`` or ``staged``) stays false unless every fixed check passed, and the exit status
 follows it.
 """
 
@@ -64,6 +69,8 @@ INSTALL = "usr/bin/install"
 CAT = "usr/bin/cat"
 # Every tool root runs in the runbook's R4, by these absolute paths.
 ROOT_TOOLS = (INSTALL, CAT, PARSER)
+RM = "usr/bin/rm"
+RETIRE_ROOT_TOOLS = (CAT, PARSER, RM)
 PROFILE_NAMES = ("constructicon-m8-bwrap", "constructicon-m8-payload")
 DIRECTORY = "opt/constructicon-m8-qualification"
 DIRECTORY_MODE = 0o755
@@ -88,6 +95,12 @@ LAUNCH_ENTRIES = (
     "bwrap", "codex-models.json", "native-codex", "operator-stores", "runtime", "runtime.json",
 )  # fmt: skip
 STORE_MODE = 0o750
+STORE = "operator-stores"
+DISPOSABLE = tuple(name for name in LAUNCH_ENTRIES if name != STORE)
+"""What a replacement removes. The store holds the vendor login, so it is never removed."""
+RETIREMENT = "retire.json"
+"""``judge-retire``'s record in the replacement workspace: the identity every later step keeps."""
+MOUNTINFO = Path("/proc/self/mountinfo")
 LAUNCH_PROFILE = "scripts/ci/constructicon-m8-launch.apparmor"
 LAUNCH_PROFILE_DESTINATION = "etc/apparmor.d/constructicon-m8-launch"
 LAUNCH_PROFILE_NAMES = ("constructicon-m8-launch", "constructicon-m8-workload")
@@ -170,7 +183,8 @@ PROOF_MODULES = (
 )
 VERDICTS = {
     "judge": "ready", "verify": "installed", "stage-launch": "staged",
-    "judge-launch": "ready", "verify-launch": "installed", "controller-wheels": "listed",
+    "judge-launch": "ready", "verify-launch": "installed", "judge-retire": "ready",
+    "verify-retired": "retired", "controller-wheels": "listed",
     "stage-controller": "staged", "judge-controller": "ready", "verify-controller": "installed",
 }  # fmt: skip
 # (name, kind, final mode, source); ``.`` is the tree's own root. A file's
@@ -321,7 +335,7 @@ def absent(path: Path) -> bool:
     return False
 
 
-def loaded_profiles(listing: str) -> list[str]:
+def ours(listing: str) -> list[str]:
     """The kernel's list as root's ``cat`` piped it; empty or malformed input proves nothing."""
 
     lines = listing.splitlines()
@@ -329,13 +343,30 @@ def loaded_profiles(listing: str) -> list[str]:
         bool(lines) and all(re.fullmatch(r"\S.* \([a-z]+\)", line) for line in lines),
         "the loaded-profile list is empty or not in the kernel's format",
     )
-    return [line for line in lines if line.startswith("constructicon-m8-")][:16]
+    return [line for line in lines if line.startswith("constructicon-m8-")]
+
+
+def loaded_profiles(listing: str) -> list[str]:
+    """Ours, bounded for a record. A refusal never reads this: see ``loaded_among``."""
+
+    return ours(listing)[:16]
 
 
 def loaded_among(listing: str, names: tuple[str, ...]) -> list[str]:
-    """Which of ``names`` the list shows loaded, in any mode."""
+    """Which of ``names`` the whole list shows loaded, in any mode."""
 
-    return [line for line in loaded_profiles(listing) if line.rsplit(" (", 1)[0] in names]
+    return [line for line in ours(listing) if line.rsplit(" (", 1)[0] in names]
+
+
+def mounts_beneath(path: Path) -> list[str]:
+    """Mount points at or beneath ``path`` in this mount namespace, unescaped."""
+
+    prefix = path.as_posix()
+    points = (
+        re.sub(r"\\([0-7]{3})", lambda octal: chr(int(octal[1], 8)), line.split(" ")[4])
+        for line in MOUNTINFO.read_text(encoding="utf-8").splitlines()
+    )
+    return [point for point in points if point == prefix or point.startswith(prefix + "/")]
 
 
 def judge(commit: str, root: Path, workspace: Path, listing: str, record: dict) -> None:
@@ -944,7 +975,7 @@ def judge_launch(commit: str, root: Path, workspace: Path, listing: str, record:
     """Every precondition of root's R13 sequence, before its first write."""
 
     blobs, values = launch_inputs(commit, workspace, record)
-    service_account(record)
+    gid = service_account(record)
     with open_vendor(workspace / TARBALL, values["codex_sha256"]) as archive:
         expected = launch_expectation(root, workspace, blobs, values, record, archive)
     staging = workspace / STAGING
@@ -965,12 +996,106 @@ def judge_launch(commit: str, root: Path, workspace: Path, listing: str, record:
         require_root_alone(root / path)
     bwrap = read_regular(root / BWRAP_SOURCE)
     require(sha256(bwrap) == values["bwrap_sha256"], "host bubblewrap is not the pinned build")
-    for destination in (LAUNCH, LAUNCH_PROFILE_DESTINATION):
-        require(absent(root / destination), f"/{destination} already exists; installation is fresh-only")
+    require(
+        absent(root / LAUNCH_PROFILE_DESTINATION),
+        f"/{LAUNCH_PROFILE_DESTINATION} already exists; installation is fresh-only",
+    )
+    record["replacement"] = not absent(root / LAUNCH)
+    if record["replacement"]:
+        require_kept(commit, root, workspace, gid)
     for destination in (LAUNCH, LAUNCH_PROFILE_DESTINATION):
         require_ancestors(root / destination, (ROOT_UID,), "root")
     require(not loaded_among(listing, LAUNCH_PROFILE_NAMES), "a launch profile is already loaded")
     record["ready"] = True
+
+
+def retained(root: Path, gid: int) -> dict[str, int]:
+    """The launch root a replacement keeps, and the identity it must keep.
+
+    ``L`` must be a real root-owned 0755 directory with nothing mounted at or
+    beneath it, so no removal inside it reaches another file system, and the
+    store a real root-owned 0750 directory of the service group. The store is
+    never listed: the operator cannot, and nothing here needs its contents.
+    """
+
+    launch = os.lstat(root / LAUNCH)
+    require(
+        stat.S_ISDIR(launch.st_mode) and launch.st_uid == ROOT_UID
+        and stat.S_IMODE(launch.st_mode) == LAUNCH_MODE,
+        f"/{LAUNCH} is not a real root-owned {LAUNCH_MODE:#o} directory",
+    )
+    mounted = mounts_beneath(root / LAUNCH)
+    require(not mounted, f"/{LAUNCH} has mounts at or beneath it: {mounted[:4]}")
+    store = os.lstat(root / LAUNCH / STORE)
+    require(
+        stat.S_ISDIR(store.st_mode) and store.st_uid == ROOT_UID and store.st_gid == gid
+        and stat.S_IMODE(store.st_mode) == STORE_MODE,
+        f"/{LAUNCH}/{STORE} is not a real root-owned {STORE_MODE:#o} directory of {SERVICE}",
+    )
+    return {"dev": store.st_dev, "ino": store.st_ino, "gid": gid}
+
+
+def retirement(commit: str, workspace: Path) -> dict[str, int]:
+    """What ``judge-retire`` found at this commit: the identity the replacement keeps."""
+
+    found = json.loads(read_regular(workspace / RETIREMENT))
+    require(
+        found.get("command") == "judge-retire" and found.get("commit") == commit
+        and found.get("ready") is True,
+        f"{RETIREMENT} is not a ready retirement judgement at this commit",
+    )
+    return found["retained"]
+
+
+def require_kept(commit: str, root: Path, workspace: Path, gid: int) -> None:
+    """A replacement's launch root holds exactly the store ``judge-retire`` found."""
+
+    require(
+        not absent(workspace / RETIREMENT), f"/{LAUNCH} already exists; installation is fresh-only"
+    )
+    require(os.listdir(root / LAUNCH) == [STORE], f"/{LAUNCH} holds more than its store")
+    require(
+        retained(root, gid) == retirement(commit, workspace),
+        f"/{LAUNCH}/{STORE} is not the store judge-retire found",
+    )
+
+
+def judge_retire(commit: str, root: Path, workspace: Path, listing: str, record: dict) -> None:
+    """Every precondition of root's retirement, before its first write.
+
+    The retirement removes the launch profile and the disposable entries only.
+    With nothing mounted beneath ``L``, those removals cannot reach the store.
+    """
+
+    launch_inputs(commit, workspace, record)
+    gid = service_account(record)
+    record["observed"] = observe_launch(root, listing)
+    for path in RETIRE_ROOT_TOOLS:
+        require_root_alone(root / path)
+    for destination in (LAUNCH, LAUNCH_PROFILE_DESTINATION):
+        require_ancestors(root / destination, (ROOT_UID,), "root")
+    kept = retained(root, gid)
+    unknown = sorted(set(os.listdir(root / LAUNCH)) - set(LAUNCH_ENTRIES))
+    require(not unknown, f"/{LAUNCH} holds entries the retirement does not name: {unknown[:4]}")
+    if loaded_among(listing, LAUNCH_PROFILE_NAMES):
+        # Unloading reads the installed profile, so it must still be there and root's.
+        require_root_alone(root / LAUNCH_PROFILE_DESTINATION)
+    record["retained"] = kept
+    record["ready"] = True
+
+
+def verify_retired(commit: str, root: Path, workspace: Path, listing: str, record: dict) -> None:
+    """Retirement left only the store it found: no disposable entry, no launch profile."""
+
+    launch_inputs(commit, workspace, record)
+    gid = service_account(record)
+    record["observed"] = observe_launch(root, listing)
+    require_kept(commit, root, workspace, gid)
+    require(
+        absent(root / LAUNCH_PROFILE_DESTINATION), f"/{LAUNCH_PROFILE_DESTINATION} still exists"
+    )
+    require(not loaded_among(listing, LAUNCH_PROFILE_NAMES), "a launch profile is still loaded")
+    record["retired"] = True
 
 
 def observe_launch(root: Path, listing: str, expected: dict | None = None) -> dict[str, object]:
@@ -1074,6 +1199,11 @@ def verify_launch(commit: str, root: Path, workspace: Path, listing: str, record
     assess_launch(record["observed"], launch_table(expected, blobs, values, gid))
     for destination in (LAUNCH, LAUNCH_PROFILE_DESTINATION):
         require_ancestors(root / destination, (ROOT_UID,), "root")
+    if not absent(workspace / RETIREMENT):
+        require(
+            retained(root, gid) == retirement(commit, workspace),
+            f"/{LAUNCH}/{STORE} is not the store judge-retire found",
+        )
     record["installed"] = True
 
 
@@ -1471,6 +1601,7 @@ def main(argv: list[str] | None = None) -> int:
         commands = {
             "judge": judge, "verify": verify, "stage-launch": stage_launch,
             "judge-launch": judge_launch, "verify-launch": verify_launch,
+            "judge-retire": judge_retire, "verify-retired": verify_retired,
             "controller-wheels": controller_wheels, "stage-controller": stage_controller,
             "judge-controller": judge_controller, "verify-controller": verify_controller,
         }  # fmt: skip
@@ -1478,9 +1609,9 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         record["failure"] = f"{type(exc).__name__}: {exc}"[:2048]
         observer = (
-            observe_launch if args.command.endswith("-launch")
+            observe if args.command in ("judge", "verify")
             else observe_controller if "controller" in args.command
-            else observe
+            else observe_launch
         )  # fmt: skip
         # A verifier that already observed keeps that record, with its tree differences.
         if "observed" not in record:

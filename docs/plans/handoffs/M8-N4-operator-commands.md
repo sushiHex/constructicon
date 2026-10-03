@@ -247,8 +247,9 @@ Confirm and record the links on #77 before touching the host: the written
 owner authorization for this exact session; N3c and #73 evidence; deletion of
 the `pre-m8-artifacts` checkpoint under its own authorization; the N4 PR
 merged at `C` with green checks; the launch runtime verified at `C`; and the
-controller separately installed and verified at the same `C` under its R15
-authorization. Obtain the existing passing `m8-host-drift` baseline record
+controller installed under its R15 authorization and verified at the same `C`.
+An earlier install whose content `verify-controller` accepts at `C` counts
+(`M8-N4-launch-replacement.md`, LR8). Obtain the existing passing `m8-host-drift` baseline record
 from #73/R6. Then run the host's bare no-drift check, whose invocation is
 recorded in the R2 host-interface evidence. Require status zero and the
 affirmative no-drift output. The command below checks the existing baseline;
@@ -480,6 +481,11 @@ Stop-VM constructicon-m8
 Start-VM constructicon-m8
 ```
 
+A reboot is a requalification trigger. On this boot, before S9's script, rerun
+M8-D2's R4 `verify` line and R5 probe (`M8-D2-host-installation.md`, "What
+`m8-host-drift` does not cover"). The script then runs the launch preflight
+before any store operation.
+
 Run S9's bash script through a new, noninteractive SSH session. The common
 setup is loaded again, but S1 and provisioning are not repeated. Recompute
 `Q` and `PLAN` from S4 and S6a's retained checked records. Require the bare
@@ -490,6 +496,8 @@ is checked, and no new descriptor is accepted from that call.
 
 ```bash
 /usr/local/bin/m8-host-drift < /dev/null
+"${SERVICE[@]}" "${LANE[@]}" preflight --launch-root "$L" < /dev/null | \
+  /usr/bin/grep -qF '"launch_ready": true'
 load_final_qualification
 binding_check "$W/g2.sealed.json" reboot-anchor -
 if PREANCHOR="$("${ROOT_STORE[@]}" publish --store-root "$R" --key "$K" \
