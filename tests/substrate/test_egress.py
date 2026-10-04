@@ -677,7 +677,9 @@ async def test_a_read_resumed_past_the_deadline_forwards_nothing(
     assert facts["observed"] == {"accepted": 1, "denied:deadline": 1}
 
 
-async def test_a_refusal_past_the_deadline_is_the_deadlines_even_while_stopping(tmp_path):
+async def test_a_refusal_past_the_deadline_is_the_deadlines_even_while_stopping(
+    tmp_path, controlled_loopback,
+):
     """The launcher shares the deadline and cancels the owner when it passes, so
     the deadline is judged first, whichever timer the loop ran first (#110)."""
     loop = asyncio.get_running_loop()
