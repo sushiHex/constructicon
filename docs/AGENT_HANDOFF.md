@@ -37,7 +37,7 @@ a slice merges, newest first. Nothing here authorizes work.
 - **The zone had no CA store.** The pinned client's default TLS found no roots, and the device login died before a code appeared.
 - **"Proved zero purchased credits" refused a free grant.** The readback cannot tell a grant from a purchase. The owner's bound now leaves spend to the account's own settings and starts no turn while its spend control is reached ([#78](https://github.com/sushiHex/constructicon/issues/78)).
 - **Automatic security updates drift the runtime snapshot**, and they stay enabled. The store lived inside the directory the fixed removal deletes, so every update would have cost a login. Now only disposable artifacts are retired (`M8-N4-launch-replacement.md`).
-- **Refresh is lazy.** A token valid for 69 hours triggered none, so one day after login was never going to measure it. At the pin, the 8-day rule first applies on 2026-10-10.
+- **Refresh is lazy.** A token valid for 69 hours triggered none, so one day after login was never going to measure it. At the pin, the client refreshes when the access token's own `exp` is within 5 minutes, or after a 401. The 8-day interval is only a fallback for a token with no `exp` ([research](../research/m8-codex-token-refresh.md)). The `exp` is unobserved, so when a run would measure refresh is unknown.
 - **A lane removes its own lane directory.** A retry needs a fresh name for its evidence file only.
 
 **What this does NOT establish.**

@@ -3405,7 +3405,7 @@ Each step is recorded on #77 with its evidence digests.
 ([#77](https://github.com/sushiHex/constructicon/issues/77#issuecomment-5984386980)).
 - About 69 hours after S3, the active g3 startup was clean, but refresh was *unmeasured*: no `auth.openai.com` connection and an unchanged credential.
 - The access token from the login was still valid, and the pinned client refreshes lazily.
-- At the pin, its 8-day rule first applies on 2026-10-10. A measuring run needs its own authorization and fresh evidence names.
+- At the pin, refresh is due when the access token's `exp` is within 5 minutes, or after a 401. The 8-day interval applies only to a token with no `exp` (`research/m8-codex-token-refresh.md`). The `exp` is unobserved, so the time a run would measure refresh is unknown. A measuring run needs its own authorization and fresh evidence names.
 
 **State.** g3 is active. The VM is running on boot `11911d42…`.
 `vendor_conformance_qualified` stays false until refresh is measured and the
