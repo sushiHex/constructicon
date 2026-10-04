@@ -337,8 +337,9 @@ Its credential-free half is merged:
   control reached, and publishes the readback facts.
 
 All of it is proved against hostile fixtures, with no login and no model
-request. On the private host the owner's device login has succeeded; the
-qualification steps resume next.
+request. On the private host, the owner's device login and every startup
+control have passed. Token refresh is not yet measured, and no model request
+has run.
 
 Still outstanding: provider-route conformance and the live adapters. None of
 this is yet a working subscription integration or a live coding-agent backend.
