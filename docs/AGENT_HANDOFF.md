@@ -15,6 +15,37 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## N4 — the owner-attended session on the private host
+
+**Merged, each with every check green on its final head:**
+- `29a5fa5` (#111): `verify-launch` observes the store without listing it.
+- `def8e73` (#112): the reviewed operator commands and session runbook.
+- `799da8d` (#113): the lane reads the installed `runtime.json`, and `preflight` exists.
+- `92b956e` (#114): the zone trusts the CA store that installation admitted.
+- `1138564` (#115): the owner's `operator_authorized` overage bound.
+- `88effe1` (#116): launch-set replacement that never touches the store.
+
+**On the host** ([#77](https://github.com/sushiHex/constructicon/issues/77)):
+- **S3:** the owner's device login succeeded on 2026-10-02.
+- **S0 to S9:** all passed at `88effe1` on 2026-10-03, including:
+  - the lock control and the denial and wrong-plan refusals;
+  - a clean restart with re-anchoring;
+  - g3 active.
+- **S10:** ran clean on 2026-10-04, about 69 hours after login, but refresh was *unmeasured*. No connection reached `auth.openai.com` and the credential did not change.
+
+**Corrections worth carrying.**
+- **The zone had no CA store.** The pinned client's default TLS found no roots, and the device login died before a code appeared.
+- **"Proved zero purchased credits" refused a free grant.** The readback cannot tell a grant from a purchase. The owner's bound now leaves spend to the account's own settings and starts no turn while its spend control is reached ([#78](https://github.com/sushiHex/constructicon/issues/78)).
+- **Automatic security updates drift the runtime snapshot**, and they stay enabled. The store lived inside the directory the fixed removal deletes, so every update would have cost a login. Now only disposable artifacts are retired (`M8-N4-launch-replacement.md`).
+- **Refresh is lazy.** A token valid for 69 hours triggered none, so one day after login was never going to measure it. At the pin, the client refreshes when the access token's own `exp` is within 5 minutes, or after a 401. The 8-day interval is only a fallback for a token with no `exp` ([research](../research/m8-codex-token-refresh.md)). The `exp` is unobserved, so when a run would measure refresh is unknown.
+- **A lane removes its own lane directory.** A retry needs a fresh name for its evidence file only.
+
+**What this does NOT establish.**
+- Refresh is unmeasured, so `vendor_conformance_qualified` stays false.
+- No model request has run. N5 needs its own authorization: model, task data, token budget, READ or WRITE.
+
+---
+
 ## N4 — credential-free startup lane and its host prerequisites
 
 **Merged on 2026-09-24 UTC, each with every check green on its final head:**

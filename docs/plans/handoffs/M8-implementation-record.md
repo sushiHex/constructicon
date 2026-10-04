@@ -3375,3 +3375,38 @@ The one pass on the diff returned "fix-then-ship". Every finding was fixed:
 4. S10 at least 24 hours after the recorded S3.
 
 S3's login evidence stays historical; the transition is recorded on #77.
+
+### N4 session: replacement, S0 to S10 (2026-10-03 and 2026-10-04)
+
+Each step is recorded on #77 with its evidence digests.
+
+**Launch replacement at `88effe1`**
+([#77](https://github.com/sushiHex/constructicon/issues/77#issuecomment-5972942853)).
+- **D2 on the new kernel.** It verified and the probe qualified on `6.8.0-142-generic`, and the drift baseline was recaptured.
+- **Retirement and reinstall.**
+  - `judge-retire` recorded the store as `{"dev": 64512, "ino": 1573540, "gid": 1002}`.
+  - `verify-retired` found only that store.
+  - The reinstall verified with `replacement: true`, and the runtime moved from `62ab0390…` to `f3445bcb…`.
+- **Preflight and controller.** Preflight passed, and the controller verified by content at `C`, so no reinstall.
+- **No login or credential operation ran.**
+
+**S0 to S9**
+([#77](https://github.com/sushiHex/constructicon/issues/77#issuecomment-5972977282)).
+- The refused S4 record was kept as `s4-refused-qualification.json`.
+- S4 and S6a qualified on `pro`, with the readback the #78 bound admits: credits present, the spend control not reached.
+- g2 was published and activated, and S8's active startup was clean.
+- S6b and S6c refused with exactly their expected faults.
+- **S9 restart.**
+  - D2 qualified again on the new boot.
+  - g2 refused on its stale anchor, and the publish before re-anchoring refused.
+  - Re-anchored qualification gave g3, activated, with a clean active startup.
+
+**S10, run early at the owner's request**
+([#77](https://github.com/sushiHex/constructicon/issues/77#issuecomment-5984386980)).
+- About 69 hours after S3, the active g3 startup was clean, but refresh was *unmeasured*: no `auth.openai.com` connection and an unchanged credential.
+- The access token from the login was still valid, and the pinned client refreshes lazily.
+- At the pin, refresh is due when the access token's `exp` is within 5 minutes, or after a 401. The 8-day interval applies only to a token with no `exp` (`research/m8-codex-token-refresh.md`). The `exp` is unobserved, so the time a run would measure refresh is unknown. A measuring run needs its own authorization and fresh evidence names.
+
+**State.** g3 is active. The VM is running on boot `11911d42…`.
+`vendor_conformance_qualified` stays false until refresh is measured and the
+owner records a qualified disposition.
