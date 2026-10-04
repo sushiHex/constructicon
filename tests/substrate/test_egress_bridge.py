@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import hashlib
 import os
 import signal
 import socket
@@ -128,13 +129,19 @@ def test_bytes_cross_unchanged_in_both_directions(upstream):
         sock.sendall(data)
         sock.shutdown(socket.SHUT_WR)
 
+    def summary(read: tuple[bytes, bool]) -> tuple[int, str, bool]:
+        # Length and digest, never the bytes: pytest diffs a 256 KiB operand for
+        # longer than the mutation harness allows (#110).
+        data, eof = read
+        return len(data), hashlib.sha256(data).hexdigest(), eof
+
     sender = threading.Thread(target=send, args=(client, outbound), daemon=True)
     sender.start()
-    assert read_to_eof(leaf) == (outbound, True)
+    assert summary(read_to_eof(leaf)) == summary((outbound, True))
     assert finished(sender)
     sender = threading.Thread(target=send, args=(leaf, inbound), daemon=True)
     sender.start()
-    assert read_to_eof(client) == (inbound, True)
+    assert summary(read_to_eof(client)) == summary((inbound, True))
     assert finished(sender)
     assert finished(thread), "the forwarder outlived both EOFs"
     assert upstream.dialled == 1

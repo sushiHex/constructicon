@@ -103,6 +103,8 @@ async def main():
 
     async def worker(source):
         if sys.argv[4] == "before-worker":
+            if epoch == 1:
+                print(json.dumps({"phase": "before-worker"}), flush=True)
             await asyncio.Event().wait()  # Regression: no heartbeat ever arrives.
         result = await acquired.resource.execute(
             TaskSpec(instruction=source), workspace=workspace.resource,

@@ -522,6 +522,18 @@ def pin_native(pid, start):
     return fd
 
 
+async def native_exit(fd):
+    """The pinned process's exit itself: a pidfd becomes readable when it exits."""
+
+    loop = asyncio.get_running_loop()
+    exited = loop.create_future()
+    loop.add_reader(fd, lambda: exited.done() or exited.set_result(None))
+    try:
+        await exited
+    finally:
+        loop.remove_reader(fd)
+
+
 def stop_native(fd):
     try:
         with suppress(ProcessLookupError):
@@ -600,9 +612,12 @@ async def test_driver_death_and_explicit_successor_reconciliation(
             item.lease.lease_id, item.lease.acquisition_epoch,
         )) for item in stale]
         heartbeat = paths[0].payload / "workspace" / "worker-live"
-        if active_worker:
+        if active_worker or first.pid is not None:
+            # Kill only once the native has answered every request and waits on
+            # the worker: a kill mid-handshake would time the native's own drain.
             line = await asyncio.wait_for(owner.stdout.readline(), 20)
-            assert json.loads(line) == {"phase": "active"}
+            assert json.loads(line) == {"phase": pause}
+        if active_worker:
             assert heartbeat.read_bytes()
         else:
             assert not heartbeat.exists()
@@ -611,13 +626,9 @@ async def test_driver_death_and_explicit_successor_reconciliation(
         # for the driver's exit must not credit a graceful Python finally.
         await asyncio.wait_for(owner.wait(), 5)
         assert owner.returncode == -signal.SIGKILL
-        if first.pid is not None:
+        if first.pidfd is not None:
             async with asyncio.timeout(5):
-                while True:
-                    state = process_state(first.pid)
-                    if state is None or state[1] != first.start or state[0] == "Z":
-                        break
-                    await asyncio.sleep(.02)
+                await native_exit(first.pidfd)
         if active_worker:
             stopped = heartbeat.read_bytes()
             await asyncio.sleep(.2)

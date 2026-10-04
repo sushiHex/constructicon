@@ -701,7 +701,7 @@ async def test_the_deadline_cuts_an_actively_streaming_client(
     assert connection.bytes > 0 and connection.eof_at is not None
     tick = time.get_clock_info("monotonic").resolution  # asyncio may fire one tick early
     assert deadline - tick <= connection.eof_at <= deadline + 1.0, (connection.eof_at, deadline)
-    assert relay.observed["accepted"] == 1 and relay.observed["denied:deadline"] == 1
+    assert dict(relay.observed) == {"accepted": 1, "denied:deadline": 1}
     assert result.timed_out
     write_evidence("n3b-deadline.json", {
         "schema_version": 1, "observed": dict(relay.observed),

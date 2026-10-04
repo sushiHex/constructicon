@@ -439,6 +439,27 @@ MUTANTS = (
         "if False:",
         E + "test_connect_parser_refusals[unterminated]",
     ),
+    # --- deterministic deadline attribution (#110) ---
+    (
+        "61 the deadline is judged before the stop",
+        RELAY + "_require_live",
+        'if loop.time() >= self._deadline:\n        raise EgressRefused("deadline")\n'
+        "    owner = self._owner\n"
+        "    if self._stopping or (owner is not None and owner.cancelling()):\n"
+        '        raise EgressRefused("stopped")',
+        "owner = self._owner\n"
+        "    if self._stopping or (owner is not None and owner.cancelling()):\n"
+        '        raise EgressRefused("stopped")\n'
+        '    if loop.time() >= self._deadline:\n        raise EgressRefused("deadline")',
+        E + "test_a_refusal_past_the_deadline_is_the_deadlines_even_while_stopping",
+    ),
+    (
+        "62 a read failing past the deadline is the deadline's cut",
+        RELAY + "_pump",
+        "            self._require_live(loop)\n            raise",
+        "            raise",
+        E + "test_a_read_reset_past_the_deadline_is_the_deadlines_cut",
+    ),
 )
 
 

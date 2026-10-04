@@ -560,11 +560,14 @@ class EgressRelay:
         self._directory.rmdir()
 
     def _require_live(self, loop: asyncio.AbstractEventLoop) -> None:
+        # The deadline is judged first. The launcher shares it and cancels the
+        # owner when it passes, so a refusal past it is always the deadline's,
+        # whichever timer the loop ran first (#110).
+        if loop.time() >= self._deadline:
+            raise EgressRefused("deadline")
         owner = self._owner
         if self._stopping or (owner is not None and owner.cancelling()):
             raise EgressRefused("stopped")
-        if loop.time() >= self._deadline:
-            raise EgressRefused("deadline")
 
     def _admit(self, loop: asyncio.AbstractEventLoop) -> None:
         """Liveness, then the owner's control check, synchronously."""
@@ -693,7 +696,13 @@ class EgressRelay:
         """
 
         while True:
-            data = await _receive(source, CHUNK_BYTES)
+            try:
+                data = await _receive(source, CHUNK_BYTES)
+            except OSError:
+                # A read that fails past the deadline was cut by it: the zone's
+                # kill resets a socket still holding unread bytes (#110).
+                self._require_live(loop)
+                raise
             # A queued wake-up runs before a timer expiring in the same
             # iteration, so the deadline and stop latch are rechecked here,
             # and control too: its loss latches stop before the send below.

@@ -187,10 +187,10 @@ MUTANTS = (
         "N4-L3 relayed is counted only after an upstream byte moved",
         RELAY + "_pump",
         # The runner dedents the method, so its body sits at four spaces.
-        "    while True:\n        data = await _receive(source, CHUNK_BYTES)",
+        "    while True:\n        try:\n",
         "    if relayed is not None:\n        self.destinations[relayed] += 1\n"
         "        relayed = None\n"
-        "    while True:\n        data = await _receive(source, CHUNK_BYTES)",
+        "    while True:\n        try:\n",
         E + "test_a_sealed_destination_is_counted_accepted_and_relayed_by_its_policy_name",
     ),
     (

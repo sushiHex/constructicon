@@ -677,6 +677,48 @@ async def test_a_read_resumed_past_the_deadline_forwards_nothing(
     assert facts["observed"] == {"accepted": 1, "denied:deadline": 1}
 
 
+async def test_a_refusal_past_the_deadline_is_the_deadlines_even_while_stopping(tmp_path):
+    """The launcher shares the deadline and cancels the owner when it passes, so
+    the deadline is judged first, whichever timer the loop ran first (#110)."""
+    loop = asyncio.get_running_loop()
+    relay = relay_for(tmp_path, 1, seconds=-1.0)
+    relay._stopping = True
+    with pytest.raises(EgressRefused) as refused:
+        relay._require_live(loop)
+    assert refused.value.reason == "deadline"
+
+
+async def test_a_read_reset_past_the_deadline_is_the_deadlines_cut(
+    tmp_path, listeners, peer, monkeypatch,
+):
+    """The zone's kill resets a socket still holding unread bytes; a read that
+    fails past the deadline is counted as the deadline's cut, not a reset (#110)."""
+    hello = real_hello()
+    relay = relay_for(tmp_path, peer.port, seconds=1.0)
+    deadline = relay._deadline
+
+    async def reset(sock, count):
+        data = await asyncio.get_running_loop().sock_recv(sock, count)
+        if b"after-deadline" in data:
+            time.sleep(max(0.0, deadline - time.monotonic()) + 0.05)
+            raise ConnectionResetError(errno.ECONNRESET, "reset by the zone's kill")
+        return data
+
+    monkeypatch.setattr(egress, "_receive", reset)
+
+    async def scenario(facts):
+        _, writer, facts["established"] = await established(listeners, peer, hello)
+        writer.write(b"after-deadline")
+        await writer.drain()
+        facts["cut"] = await until(lambda: peer.connections[0].eof, 3.0)
+        facts["observed"] = dict(relay.observed)
+        writer.close()
+
+    facts, failure = await drive(relay, scenario)
+    assert failure is None and facts["established"] and facts["cut"]
+    assert facts["observed"] == {"accepted": 1, "denied:deadline": 1}
+
+
 async def test_a_stream_timeout_before_the_deadline_is_a_reset(
     tmp_path, listeners, peer, monkeypatch,
 ):
