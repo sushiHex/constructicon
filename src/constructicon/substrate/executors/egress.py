@@ -698,9 +698,10 @@ class EgressRelay:
         while True:
             try:
                 data = await _receive(source, CHUNK_BYTES)
-            except OSError:
-                # A read that fails past the deadline was cut by it: the zone's
-                # kill resets a socket still holding unread bytes (#110).
+            except ConnectionError:
+                # A connection failing past the deadline was cut by it: the zone's
+                # kill resets a socket still holding unread bytes (#110). Any other
+                # OSError stays a relay failure.
                 self._require_live(loop)
                 raise
             # A queued wake-up runs before a timer expiring in the same

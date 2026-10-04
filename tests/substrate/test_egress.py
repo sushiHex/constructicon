@@ -721,6 +721,36 @@ async def test_a_read_reset_past_the_deadline_is_the_deadlines_cut(
     assert facts["observed"] == {"accepted": 1, "denied:deadline": 1}
 
 
+async def test_an_unexpected_read_error_past_the_deadline_stays_a_relay_failure(
+    tmp_path, listeners, peer, monkeypatch,
+):
+    """Only a connection failure is the deadline's cut. An I/O error is the relay
+    failing, and never becomes a denial, however late it arrives (#110)."""
+    hello = real_hello()
+    relay = relay_for(tmp_path, peer.port, seconds=1.0)
+    deadline = relay._deadline
+
+    async def broken(sock, count):
+        data = await asyncio.get_running_loop().sock_recv(sock, count)
+        if b"after-deadline" in data:
+            time.sleep(max(0.0, deadline - time.monotonic()) + 0.05)
+            raise OSError(errno.EIO, "the relay's own read failed")
+        return data
+
+    monkeypatch.setattr(egress, "_receive", broken)
+
+    async def scenario(facts):
+        _, writer, facts["established"] = await established(listeners, peer, hello)
+        writer.write(b"after-deadline")
+        await writer.drain()
+        facts["cut"] = await until(lambda: peer.connections[0].eof, 3.0)
+        writer.close()
+
+    facts, failure = await drive(relay, scenario)
+    assert facts["established"] and failure is not None
+    assert "denied:deadline" not in relay.observed
+
+
 async def test_a_stream_timeout_before_the_deadline_is_a_reset(
     tmp_path, listeners, peer, monkeypatch,
 ):

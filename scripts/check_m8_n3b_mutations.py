@@ -460,6 +460,13 @@ MUTANTS = (
         "            raise",
         E + "test_a_read_reset_past_the_deadline_is_the_deadlines_cut",
     ),
+    (
+        "63 only a connection failure past the deadline is its cut",
+        RELAY + "_pump",
+        "        except ConnectionError:",
+        "        except OSError:",
+        E + "test_an_unexpected_read_error_past_the_deadline_stays_a_relay_failure",
+    ),
 )
 
 

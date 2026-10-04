@@ -3424,9 +3424,9 @@ raised.
 - **Cause.** The launcher shares the relay's deadline and cancels the owner when it passes. So a refusal past the deadline could be counted `stopped` if the owner's cancellation was seen first. A read reset by the zone's kill, on a socket still holding unread bytes, was counted `reset`.
 - **Fix.**
   - `_require_live` now judges the deadline first.
-  - `_pump` judges a read that fails with an `OSError` by the same liveness, so a failure past the deadline is the deadline's cut.
+  - `_pump` judges a read that fails with a `ConnectionError` by the same liveness, so a reset past the deadline is the deadline's cut. Any other `OSError` stays a fatal relay failure.
   - The containment test asserts the whole `observed` count.
-  - Mutants 61 and 62 cover the two rules, and N4-L3 is re-anchored.
+  - Mutants 61, 62 and 63 cover the rules, including that only a `ConnectionError` is reclassified. N4-L3 is re-anchored.
 
 **Bridge mutant 1.**
 - **Cause.** It was not a hang. With `CI=true`, pytest diffed a 256 KiB byte operand, which took about 33 s per kill and once crossed the 60 s harness limit.
