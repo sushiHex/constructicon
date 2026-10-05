@@ -6,8 +6,8 @@ call. It builds on N4 at `88effe1`:
 - refresh is unmeasured ([#77](https://github.com/sushiHex/constructicon/issues/77)).
 
 A Codex (`gpt-6-astra`) review of the first draft returned "rework". Its
-findings are adopted below. Vendor facts are now read from the pinned source
-(`openai/codex` at `rust-v0.153.4`), not inferred.
+findings are adopted below. Vendor facts are read from the pinned source,
+never inferred.
 
 ## Authority
 
@@ -16,79 +16,89 @@ N5 (`M8-live-executors-rev3.md`, "N5"):
 - no unqualified production provider published and no conformance hash invented;
 - limits, unavailable telemetry and partial output reported truthfully.
 
-The owner's terms are on #78:
-- [2026-09-24](https://github.com/sushiHex/constructicon/issues/78#issuecomment-5807849388): the default catalog model at its lowest listed effort; one READ turn, then one WRITE turn, each in its own lane, with at most one retry after a diagnosed local failure; harmless repository-local fixtures; stop conditions.
-- [2026-10-01](https://github.com/sushiHex/constructicon/issues/78#issuecomment-5945414633): `operator_authorized` overage bounded by the account's own settings, carry-over authorized, and no turn started while the account reports its spend control reached.
+The owner's terms:
+- [#78, 2026-09-24](https://github.com/sushiHex/constructicon/issues/78#issuecomment-5807849388): the default catalog model at its lowest listed effort; one READ turn, then one WRITE turn, each in its own lane, with at most one retry after a diagnosed local failure; harmless repository-local fixtures; stop conditions.
+- [#78, 2026-10-01](https://github.com/sushiHex/constructicon/issues/78#issuecomment-5945414633): `operator_authorized` overage bounded by the account's own settings, carry-over authorized, no turn started while the account reports its spend control reached. This replaces the 2026-09-24 purchased-credit bound, $0 ceiling and baseline stop.
+- The working session, 2026-10-04: "we typically always want the latest installed and available", and "each version update should be as seamless as possible". This covers the vendor client as well as the model.
 
-The later decision replaces three rows of the earlier one: the purchased-credit
-bound, the $0 ceiling, and the stop on any change from the overage baseline.
+## The upgrade routine
 
-## Pinned facts
+Every vendor upgrade takes the same short path, so "latest" never means a migration.
 
-1. **The answer is in `turn/completed`.** At the pin, `emit_turn_completed_with_status` puts the turn's last agent message in `turn.items` with `itemsView: "summary"`. A turn with no message carries none, with `"notLoaded"` (`app-server/src/bespoke_event_handling.rs:1392-1416`).
-   - An agent message is `{type: "agentMessage", id, text, phase?, …}` (`app-server-protocol/src/protocol/v2/item.rs:250-261`).
-   - The pinned `Turn` has no `output`, `model` or `usage` (`v2/thread_data.rs:366-386`). Today's decoder reads exactly those three (`codex_protocol.py:1266-1269`), so a real turn would decode as a success with no output. The scripted fakes manufacture the three fields (`tests/substrate/test_codex_protocol.py:163`).
-2. **Usage is `thread/tokenUsage/updated`** (`v2/common.rs:1867`), carrying `{threadId, turnId, tokenUsage: {total, last, modelContextWindow}}` (`v2/thread.rs:1834-1880`).
-   - `total` is the thread's running sum. Each conversation opens one thread for one turn, so `total` is the turn's usage.
-   - The evidence allowlist admits only `turn/*`, `error`, `warning` and `configWarning` (`codex_protocol.py:568-569`), so today this notification is excluded.
-3. **A served model is emitted only on a reroute**, `model/rerouted` (`common.rs:1918`). Otherwise the served model is unknown, never the requested one.
-4. **Effort is not enforced.** The grants require an explicit listed effort (`native_operator.py:193-199`), but neither the turn request (`codex_protocol.py:467-488`) nor the sealed configuration (`codex_lane.py:572-584`) carries one. The pinned catalog lists `low`, `medium`, `high` and `xhigh` for `gpt-5.5`, with default `medium` (catalog `d7136a41…`).
-5. **No token ceiling and no request count are enforced.** Constructicon enforces one `turn/start` per conversation, a wall-clock deadline, cumulative input bytes and, for WRITE, eight bounded callbacks. The backend may make several model requests per turn (retries, tool continuations), and no evidence counts them.
-6. **Relay denials do not refuse a provider turn.** The handle returns the process result without judging the relay's counters (`codex.py:1703`). The lane's `check_evidence` does require `denied == {}`.
+1. **One pin record.** Version, release asset URL and sha256, and catalog commit and sha256 live in one reviewed file that the workflow, the installer and the lane all read. Today they are spread across `m8-containment.yml`, the docs and `PREPARE_MODEL`.
+2. **A bump tool.** It finds the newest stable release, checks the asset against the release's published `codex-package_SHA256SUMS`, hashes the catalog at the release's commit, rewrites the pin record, and opens a PR.
+3. **The real-binary proofs are the gate.** The containment, mediation and startup lanes run the pinned binary against scripted peers, so on a bump PR they are the compatibility check. A failing proof names what changed. A surface the proofs do not exercise is added to them before it is relied on.
+4. **No model literal.** The sealed model is the newest listed version of the owner's chosen family in the pinned catalog. Its effort is the lowest listed one. A bump moves both.
+5. **One host update session.** The store-keeping launch replacement (`M8-N4-launch-replacement.md`), a controller check, then startup requalification into the next generation. These are existing commands, with no re-login unless the vendor forces one.
+
+## Facts at the newest release, `rust-v0.160.0`
+
+The newest release is `rust-v0.160.0` (2026-10-01). Its tarball sha256 is
+`4fcc47ab…6b71`, matching its published `SHA256SUMS`. Its catalog is at
+`a956835d`, sha256 `fd219bd9…920b`. Where 0.160.0 differs from the current
+pin, `0.153.4`, the item says so; everything else is unchanged.
+
+1. **Startup now sends `account/updated` (new, and blocking).** Every authenticated connection now receives `account/updated {authMode, planType}` on `initialize` (`message_processor.rs:816-817`; `account_processor.rs:224-233`). Today every `account/updated` refuses (`codex_protocol.py:752-753`), so every startup and turn would refuse.
+2. **`account/read` now calls the network (new).** It calls `{chatgpt_base_url}/wham/accounts/check`. A 401 there triggers recovery, which can refresh the token (`account_processor/workspace_routing.rs:290-325`), and a failed check makes the read an error. The destination is `chatgpt.com`. The check may also name a different backend origin for some workspaces (`:427-468`); for this account that is unverified.
+3. **The answer is in `turn/completed`.** The turn's last `agentMessage` (`{type: "agentMessage", id, text, …}`) is in `turn.items`, with `itemsView: "summary"`; a turn with no message carries none (`bespoke_event_handling.rs:1321-1347`; `v2/item.rs:252-263`).
+   - The `Turn` has no `output`, `model` or `usage`.
+   - Today's decoder reads exactly those three (`codex_protocol.py:1266-1269`), so a real turn would decode as a success with no output. The fakes manufacture the three fields.
+4. **Usage is `thread/tokenUsage/updated`.** It carries `{threadId, turnId, tokenUsage: {total, last, modelContextWindow}}`. With one turn per thread, `total` is the turn's usage. The evidence allowlist excludes it today (`codex_protocol.py:568-569`).
+5. **A served model is emitted only on `model/rerouted`.** Otherwise it is unknown, never the requested one.
+6. **Effort is not enforced today.** Neither the turn request nor the sealed configuration carries it, though `model_reasoning_effort` exists at the pin.
+7. **The catalog's newest models per family.** `gpt-6.1-sol` (the default), `gpt-6-astra`, `gpt-6-luna` and `gpt-5.6-terra`. Each lists `low` as its lowest effort.
+8. **No token ceiling and no request count.** Constructicon enforces one `turn/start`, a wall-clock deadline, input bytes and, for WRITE, eight callbacks. The backend may make several requests per turn (5 stream and 4 request retries, tool continuations), and nothing counts them.
+9. **Relay denials do not refuse a provider turn.** The handle does not judge the relay's counters (`codex.py:1703`); the lane's evidence check does.
+10. **Unchanged from 0.153.4.** Device login, the refresh rules, the in-place `auth.json` save, `CODEX_CA_CERTIFICATE`, proxy handling, endpoints, the sealed config keys and the rate-limit readback. `webpki-roots` is in the build at both tags, so the trust claim's open question is answered: compiled-in roots exist alongside the store.
+11. **The package adds a voice host** (`codex-resources/voice/`). The vendor-tree digest changes. That it never runs without realtime methods is unverified.
 
 ## Design
 
 **Stage 0: credential-free, one PR.**
-- **Decoder.** Decode the pinned shape, correlated to this thread and turn:
-  - the answer is the `agentMessage` text in this turn's `turn/completed` items;
-  - usage is the last `thread/tokenUsage/updated` naming this thread and turn, admitted to the allowlist with bounded fields;
-  - the served model is reported only from a `model/rerouted` for this turn.
-- **Deferral.** Notifications that arrive before the `turn/start` reply names the turn are deferred with it, not excluded (`codex.py:568`).
-- **Fakes.** Rebuild the fakes to the pinned shape, with assertion-killed mutants:
-  - the old fields restored;
-  - another turn's message or usage taken;
-  - the requested model inferred as served;
-  - an early notification lost.
-- **Effort.** Seal `model_reasoning_effort = "low"`, and have the provider refuse grants whose effort differs from the configuration's, as it already does for the model.
-- **Evidence check.** `check_evidence` compares the recorded adapter, protocol, configuration and runtime identities with the installed ones, not only their presence.
-- **What it changes.** `PROTOCOL_REVISION`, `ADAPTER_REVISION` and the configuration digest change. The store and login do not.
+- **Routine.** The pin record and bump tool, moved to `rust-v0.160.0`.
+- **`account/updated`.** Admitted only when its `authMode` is `chatgpt` and its plan is the accepted one. That restates the readings, so it is not a mode change. Anything else still refuses (decision 1).
+- **Decoder.** Decode the pinned turn, correlated to this thread and turn:
+  - the answer from `turn/completed` items;
+  - usage from this turn's `thread/tokenUsage/updated`;
+  - the served model only from `model/rerouted`;
+  - notifications that arrive before the `turn/start` reply are deferred with it.
+  
+  The fakes are rebuilt to the pinned shape. Assertion-killed mutants cover: the old fields restored; another turn's evidence taken; the served model inferred; an early notification lost.
+- **Effort and model.** Seal the effort, derived from the catalog, and have the provider refuse grants whose model or effort differs from the configuration's.
+- **Evidence check.** `check_evidence` compares the recorded adapter, protocol, configuration and runtime identities with the installed ones.
 
-**Stage 1: requalify for the new configuration (N4 commands, no model call).**
-- Replace the controller (LR8 or R17 to R19), then verify the launch set and drift.
-- S1 into a fresh session directory, which produces the new `config.toml`. S1 never touches the store.
-- Under maintenance, S4 and S6a, then publish and activate the next generation (g4), then the active startup.
-- The old generation must refuse.
-- Old evidence stays historical; it qualified the old configuration only.
+**Stage 1: the first host update session (no model call).**
+- The store-keeping launch replacement at the new commit, and the controller check.
+- S1 into a fresh session directory, for the new configuration.
+- Under maintenance, S4 and S6a, then publish and activate g4, then the active startup, with the old generation refusing.
+- The `account/read` network check is observed here first. A backend origin other than `chatgpt.com` is a relay denial, so the session stops (decision 2).
 
 **Stage 2: the one READ turn.**
 - `codex_lane turn` runs under active custody with every lane guard:
   - binding checks before spawn and after quiescence;
   - the sealed model and effort, READ grants, no callbacks;
   - both readback gates, all account, provider and settings faults, correlation, and the EOF audit;
-  - the sealed relay policy, where any denial is a fault;
-  - one absolute deadline whose cancellation joins teardown before custody is released.
-- It sends one fixed task kept in code, a harmless instruction that needs no repository data, and records its digest.
+  - the sealed relay, where any denial is a fault;
+  - one absolute deadline whose cancellation joins teardown.
+- It sends one fixed, harmless task kept in code, and records its digest.
 - The evidence records:
-  - the decoded answer's presence and length, never its text if it could carry account data;
+  - whether an answer is present, and its length;
   - usage, and the served model or "unknown";
-  - readbacks before and after;
-  - relay counts and process facts;
+  - readbacks, relay counts and process facts;
   - the identities;
   - attempt accounting: intent recorded before dispatch, then "not dispatched", "possibly dispatched" or "completed".
 - The backend request count is recorded as unknown.
-- This turn **is** the one authorized READ. Its coverage is the lane, not the provider's leases; the record says so.
+- This is the one authorized READ, and its coverage is the lane's.
 
-**Stage 3: WRITE, designed separately.** The provider's `acquire` refuses while
-unavailability reasons stand (`codex.py:2021`), and clearing reasons that have
-not been earned is not allowed. WRITE needs either every prerequisite earned,
-or a narrow qualification-only entry that shares the real acquisition,
-materialization and cleanup without becoming a production provider. Either is
-its own reviewed design, after Stage 2's facts. It also needs the provider to
-judge relay denials (fact 6), and a credential-free WRITE, capture and gate
-smoke against the host's runtime Python.
+**Stage 3: WRITE, designed separately.** The provider refuses to acquire while
+unavailability reasons stand (`codex.py:2021`), and clearing unearned reasons
+is not allowed. WRITE needs either every prerequisite earned, or a narrow
+qualification-only entry that shares the real acquisition and cleanup without
+becoming a production provider. It also needs relay denials judged (fact 9)
+and a WRITE, capture and gate smoke against the host's runtime Python.
 
 **Refusal and retry.** Each of these refuses and is recorded:
-- an account or provider notice other than a plan-checked `account/rateLimits/updated`;
+- an account or provider notice other than the plan-checked `account/rateLimits/updated` and the matching `account/updated`;
 - a mode or plan change;
 - an unreadable readback;
 - the spend control reached before `turn/start`;
@@ -96,17 +106,14 @@ smoke against the host's runtime Python.
 - any other fault.
 
 Credit changes and a spend control reached after dispatch are authorized
-carry-over, not refusals. Only a diagnosed local failure with the turn **not
-dispatched** may be retried once. A possibly dispatched turn is never retried
-automatically, and a wrong answer is not a local failure.
+carry-over. Only a diagnosed local failure with the turn not dispatched may be
+retried once. A possibly dispatched turn is never retried automatically, and a
+wrong answer is not a local failure.
 
 ## Owner decisions
 
-1. **The merged N5 terms.** Confirm:
-   - `gpt-5.5` at `low`;
-   - one READ turn (Stage 2), then a separately designed and authorized WRITE turn;
-   - harmless repository-local fixtures;
-   - the 2026-10-01 overage bound in place of the 2026-09-24 credit rows;
-   - the budget as Constructicon can enforce it: one turn, a 600 s wall clock, and no token ceiling or request count.
-2. **The READ turn's coverage.** It runs through the lane's guards, not the provider's leases. Accept that as the READ deliverable, or require the provider path, which needs Stage 3's acquisition design first and adds no READ attempt?
-3. **Refresh unmeasured.** May N5 run while `vendor_conformance_qualified` is false? The READ turn may itself trigger and record the refresh N4 could not observe.
+1. **`account/updated` at 0.160.0.** Admit it only when it restates the readings (`authMode: chatgpt`, the accepted plan), and refuse it otherwise? This is ADR 0021's "observed mode change" read as a change, not as any notice.
+2. **A routed backend origin.** If `accounts/check` names a backend other than `chatgpt.com`, refuse it as a relay denial (recommended), or review it as a new sealed destination?
+3. **The family.** The model is derived from the catalog. Which family: `sol` (now `gpt-6.1-sol`, the catalog default), `astra` (`gpt-6-astra`), or another? The effort is the lowest listed, `low`.
+4. **The READ turn's coverage.** It runs through the lane's guards, not the provider's leases. Accept that as the READ deliverable, or require the provider path, which needs Stage 3's design first?
+5. **Refresh unmeasured.** May N5 run while `vendor_conformance_qualified` is false? Stage 1's `account/read` and the READ turn may themselves record a refresh.
