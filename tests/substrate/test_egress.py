@@ -721,6 +721,38 @@ async def test_a_read_reset_past_the_deadline_is_the_deadlines_cut(
     assert facts["observed"] == {"accepted": 1, "denied:deadline": 1}
 
 
+async def test_a_send_reset_past_the_deadline_is_the_deadlines_cut(
+    tmp_path, listeners, peer, monkeypatch,
+):
+    """A send can resume with the zone's reset after the deadline, before its
+    timer runs; it is the deadline's cut, as a read is (#110)."""
+    hello = real_hello()
+    relay = relay_for(tmp_path, peer.port, seconds=1.0)
+    deadline = relay._deadline
+    loop = asyncio.get_running_loop()
+    sendall = loop.sock_sendall
+
+    async def reset(sock, data):
+        if b"after-deadline" in data:
+            time.sleep(max(0.0, deadline - time.monotonic()) + 0.05)
+            raise ConnectionResetError(errno.ECONNRESET, "reset by the zone's kill")
+        return await sendall(sock, data)
+
+    monkeypatch.setattr(loop, "sock_sendall", reset)
+
+    async def scenario(facts):
+        _, writer, facts["established"] = await established(listeners, peer, hello)
+        writer.write(b"after-deadline")
+        await writer.drain()
+        facts["cut"] = await until(lambda: peer.connections[0].eof, 3.0)
+        facts["observed"] = dict(relay.observed)
+        writer.close()
+
+    facts, failure = await drive(relay, scenario)
+    assert failure is None and facts["established"] and facts["cut"]
+    assert facts["observed"] == {"accepted": 1, "denied:deadline": 1}
+
+
 async def test_an_unexpected_read_error_past_the_deadline_stays_a_relay_failure(
     tmp_path, listeners, peer, monkeypatch,
 ):

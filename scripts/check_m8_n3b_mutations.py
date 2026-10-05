@@ -454,18 +454,25 @@ MUTANTS = (
         E + "test_a_refusal_past_the_deadline_is_the_deadlines_even_while_stopping",
     ),
     (
-        "62 a read failing past the deadline is the deadline's cut",
-        RELAY + "_pump",
-        "            self._require_live(loop)\n            raise",
-        "            raise",
+        "62 a stream failing past the deadline is the deadline's cut",
+        RELAY + "_io",
+        "        self._require_live(loop)\n        raise",
+        "        raise",
         E + "test_a_read_reset_past_the_deadline_is_the_deadlines_cut",
     ),
     (
         "63 only a connection failure past the deadline is its cut",
-        RELAY + "_pump",
-        "        except ConnectionError:",
-        "        except OSError:",
+        RELAY + "_io",
+        "    except ConnectionError:",
+        "    except OSError:",
         E + "test_an_unexpected_read_error_past_the_deadline_stays_a_relay_failure",
+    ),
+    (
+        "64 a send is judged like a read",
+        RELAY + "_pump",
+        "await self._io(loop, loop.sock_sendall(destination, data))",
+        "await loop.sock_sendall(destination, data)",
+        E + "test_a_send_reset_past_the_deadline_is_the_deadlines_cut",
     ),
 )
 

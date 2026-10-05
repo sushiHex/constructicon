@@ -38,11 +38,11 @@ import string
 import struct
 import sys
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
-from typing import Any
+from typing import Any, TypeVar
 
 from constructicon.core.errors import ContractViolation
 from constructicon.core.identity import Digest, digest
@@ -67,6 +67,7 @@ _ECH = 0xFE0D
 _LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 _PORT = re.compile(r"[1-9][0-9]{0,4}")
 _LETTERS = frozenset(string.ascii_lowercase)
+T = TypeVar("T")
 
 
 class EgressRefused(Exception):
@@ -696,14 +697,7 @@ class EgressRelay:
         """
 
         while True:
-            try:
-                data = await _receive(source, CHUNK_BYTES)
-            except ConnectionError:
-                # A connection failing past the deadline was cut by it: the zone's
-                # kill resets a socket still holding unread bytes (#110). Any other
-                # OSError stays a relay failure.
-                self._require_live(loop)
-                raise
+            data = await self._io(loop, _receive(source, CHUNK_BYTES))
             # A queued wake-up runs before a timer expiring in the same
             # iteration, so the deadline and stop latch are rechecked here,
             # and control too: its loss latches stop before the send below.
@@ -716,7 +710,21 @@ class EgressRelay:
                     if exc.errno != errno.ENOTCONN:
                         raise
                 return
-            await loop.sock_sendall(destination, data)
+            await self._io(loop, loop.sock_sendall(destination, data))
             if relayed is not None:
                 self.destinations[relayed] += 1
                 relayed = None
+
+    async def _io(self, loop: asyncio.AbstractEventLoop, operation: Awaitable[T]) -> T:
+        """One stream read or send; a connection failure past the deadline is its cut.
+
+        The zone's kill resets a socket mid-read or mid-send, and the await can
+        resume after the deadline before its timer runs (#110). Any other
+        ``OSError`` stays a relay failure.
+        """
+
+        try:
+            return await operation
+        except ConnectionError:
+            self._require_live(loop)
+            raise
