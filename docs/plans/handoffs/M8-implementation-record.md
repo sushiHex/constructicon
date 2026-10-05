@@ -3439,6 +3439,8 @@ This is the first half of the upgrade routine (`M8-N5-state-review.md`). It chan
 **One record.** The workflow's acquisition step is the pin. `VENDOR_STEP` is its exact template, and `vendor_pin` parses it while `render_vendor_step` writes it, so each URL stays bound to its output file and to the digest check run on it. The version and the catalog commit are read from the URLs, never stored twice.
 - A pin anywhere else in the workflow is not the pin.
 - Another host, a query string, another output file, an unchecked download, two steps, no step, or a zero-padded version all refuse.
+- The step must end where the next step begins, so nothing can run after its last command, not even a condition.
+- YAML context, such as a disabled job or an anchored scalar, is deliberately not parsed by the stdlib-only host script. Instead, CI opens the package and the catalog it actually installed under the parsed pin's digests. A pin that names files CI never acquired fails CI, and a host reads pins only at commits whose checks passed.
 - `derive` now takes the two vendor digests from the step rather than from loose lines.
 
 **The host reads the pin from the commit.** A read-only command, `vendor-inputs C W`, proves the launch blobs at `C` and lists the package and catalog URLs and digests. The replacement runbook's LR3 now runs an **R11 variant**: R11's provenance steps, then `vendor-inputs`, then the downloads, checked against the listed digests. Frozen R11 named the old release by literal URLs. A test holds the variant equal to R11 apart from the stated differences.
@@ -3458,5 +3460,9 @@ This is the first half of the upgrade routine (`M8-N5-state-review.md`). It chan
 - an R11 variant with digest checks, not just new URLs;
 - independent parser oracles;
 - the CI host-archive check.
+
+The one pass on the diff returned fix-then-ship.
+- **P2, adopted.** The parser recognized a text match, not the executed step. It now requires the step boundary, and CI binds the pin to the files it installed.
+- **P3, recorded.** The R11 variant ends with `cat "$W/vendor.json"`, so the block exits 0 even after a failed listing. No download follows a failed listing. The runbook's verdict is the `R11 complete` line, never the block's exit status.
 
 The bump tool (deterministic release selection, Sigstore and checksum verification, atomic rewrite) is the next PR.

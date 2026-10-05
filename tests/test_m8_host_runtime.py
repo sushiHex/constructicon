@@ -121,7 +121,10 @@ def test_the_pin_outside_its_acquisition_step_is_ignored() -> None:
 
 @pytest.mark.parametrize(
     "fault",
-    ["another host", "query", "another output", "unchecked", "two steps", "no step", "zero padded"],
+    [
+        "another host", "query", "another output", "unchecked", "two steps", "no step",
+        "zero padded", "a command after", "a condition after",
+    ],
 )
 def test_a_pin_not_bound_to_its_acquisition_refuses(fault: str) -> None:
     step = artifacts.render_vendor_step(PIN_A)
@@ -135,6 +138,10 @@ def test_a_pin_not_bound_to_its_acquisition_refuses(fault: str) -> None:
         step = step.replace(" | sha256sum --check --strict", "", 1)
     elif fault == "zero padded":
         step = step.replace("rust-v0.153.4", "rust-v0.153.04")
+    elif fault == "a command after":
+        step += "          curl --output /tmp/other https://example.com/other\n"
+    elif fault == "a condition after":
+        step += "        if: false\n"
     steps = {"two steps": (step, step), "no step": ()}.get(fault, (step,))
     with pytest.raises(ValueError, match="exactly one vendor acquisition step"):
         artifacts.vendor_pin(workflow_with(*steps))
@@ -1804,11 +1811,15 @@ def test_the_host_planner_accepts_the_package_ci_installed(
 ) -> None:
     """The release CI unpacked with tar passes the host's archive rules, to the same tree.
 
-    A package the host would refuse is found here, before any host retires its old one.
+    A package the host would refuse is found here, before any host retires its old
+    one. Opening it and the installed catalog under the parsed pin's digests also
+    binds the pin to what CI actually acquired: a pin that names files CI never
+    installed fails here.
     """
 
-    from tests.vendor_pin import CODEX_SHA256
+    from tests.vendor_pin import CATALOG_SHA256, CODEX_SHA256
 
+    assert artifacts.hash_regular(ci_runtime / "codex-models.json") == CATALOG_SHA256
     with artifacts.open_vendor(ci_package, CODEX_SHA256) as archive:
         plan, digests = artifacts.vendor_plan(archive)
     expected = artifacts.expected_inventory(plan, lambda entry: digests[entry[0]])

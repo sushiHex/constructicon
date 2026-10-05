@@ -529,10 +529,18 @@ VENDOR_PATTERN = re.compile(
 def vendor_pin(workflow: bytes) -> dict[str, str]:
     """The pin from the workflow's one vendor acquisition step; zero or two refuse.
 
-    The version and the catalog's commit are read from their URLs, never stored twice.
+    The step must end where the next one begins, so nothing runs after its last
+    command, not even a condition. YAML context (a disabled job, an anchored
+    scalar) is not parsed here. CI binds the pin to what it actually installed
+    (``test_the_host_planner_accepts_the_package_ci_installed``), and a host
+    only reads a pin at a commit whose checks passed. The version and the
+    catalog's commit are read from their URLs, never stored twice.
     """
 
-    found = list(VENDOR_PATTERN.finditer(workflow))
+    found = [
+        match for match in VENDOR_PATTERN.finditer(workflow)
+        if workflow.startswith(b"      - name: ", match.end())
+    ]
     require(len(found) == 1, f"{WORKFLOW} does not hold exactly one vendor acquisition step")
     pin = {key: value.decode() for key, value in found[0].groupdict().items()}
     pin["version"] = pin["codex_url"].split("/rust-v", 1)[1].split("/", 1)[0]
