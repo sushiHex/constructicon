@@ -49,7 +49,7 @@ Decided on 2026-10-05 ([#78](https://github.com/sushiHex/constructicon/issues/78
 Every vendor upgrade takes the same short path.
 
 1. **One pin record.** Version, asset URL and sha256, and catalog commit and sha256 live in one reviewed file that the workflow, the installer and the lane all read.
-2. **A bump tool.** It finds the newest stable release, checks the asset against the release's published `SHA256SUMS`, hashes the catalog at the release's commit, rewrites the pin record, and opens a PR.
+2. **A bump tool** (`scripts/bump_codex_pin.py`). It finds the newest published stable release from the complete tag listing and refuses a downgrade. It checks the asset against the release's published `SHA256SUMS` and GitHub's asset digest, hashes the catalog at the commit the release tag peels to, and rewrites the pin record. Its report names the newest model per family and the recorded behaviour to re-observe. The PR it lands in runs the gates. From Stage 0b's first bump onward, CI also verifies the release workflow's Sigstore signature on the pinned package, bound to the catalog's commit; `rust-v0.153.4` publishes no package signature.
 3. **The real-binary proofs are the gate.** A failing proof names what changed. A surface the proofs do not exercise is added to them before it is relied on.
 4. **Model and effort from the catalog,** per decision 3.
 5. **One host update session.** The store-keeping launch replacement (`M8-N4-launch-replacement.md`), a controller check, then startup requalification into the next generation. There is no re-login unless the vendor forces one.

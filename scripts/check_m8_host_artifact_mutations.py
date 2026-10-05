@@ -277,6 +277,90 @@ LAUNCH_LINUX = (
      RUNTIME + "test_the_closure_plan_is_the_ci_rule"),
 )  # fmt: skip
 
+# The bump tool rewrites the pin these judges read (M8-N5-state-review.md). Two
+# checks are not mutated. The parse-back check: a step rendered from a valid pin
+# always parses back, so its removal is unobservable; it guards a future renderer
+# change. The 404 branch: without it an unreleased tag raises rather than being
+# skipped, a crash and not a wrong selection.
+BUMP = "scripts.bump_codex_pin:"
+BUMP_TESTS = "tests/test_bump_codex_pin.py::"
+SELECTION = BUMP_TESTS + "test_the_greatest_published_stable_release_is_chosen"
+REWRITE = BUMP_TESTS + "test_a_bump_rewrites_only_the_acquisition_step_to_the_verified_pin"
+FETCH = BUMP_TESTS + "test_a_fetch_is_https_bounded_and_unpaginated"
+BUMP_PORTABLE = (
+    ("a fetch is HTTPS", BUMP + "fetch", 'not url.startswith("https://")', "False", FETCH),
+    ("a fetch is bounded", BUMP + "fetch", "len(data) > limit", "False", FETCH),
+    ("a paginated listing refuses", BUMP + "fetch",
+     '\'rel="next"\' in (response.headers.get("Link") or "")', "False", FETCH),
+    ("a token goes to the GitHub API only", BUMP + "fetch",
+     'token and url.startswith("https://api.github.com/")', "token",
+     BUMP_TESTS + "test_a_token_goes_to_the_github_api_only"),
+    ("a token never follows a redirect", BUMP + "fetch", "request.add_unredirected_header(",
+     "request.add_header(", BUMP_TESTS + "test_a_token_goes_to_the_github_api_only"),
+    ("a redirect stays on HTTPS", BUMP + "HTTPSOnly.redirect_request",
+     'not newurl.startswith("https://")', "False",
+     BUMP_TESTS + "test_a_redirect_stays_on_https_and_never_carries_the_token"),
+    ("a stable tag matches whole", BUMP + "version_of", "STABLE_TAG.fullmatch(tag)",
+     "STABLE_TAG.match(tag)", SELECTION),
+    ("drafts are never chosen", BUMP + "published", 'release.get("draft") or ', "", SELECTION),
+    ("prereleases are never chosen", BUMP + "published", ' or release.get("prerelease")', "",
+     SELECTION),
+    ("the requested version is chosen", BUMP + "select",
+     "order = [version] if version in tags else []", "order = sorted(tags, reverse=True)",
+     SELECTION),
+    ("versions are ordered as numbers", BUMP + "select", "sorted(tags, reverse=True)",
+     "sorted(tags, key=str, reverse=True)", SELECTION),
+    ("only the greatest candidates are tried", BUMP + "select", "[:CANDIDATES]", "",
+     BUMP_TESTS + "test_only_the_ten_greatest_stable_tags_are_tried"),
+    ("an annotated tag is followed", BUMP + "peel", 'target["type"] == "commit"',
+     'target["type"] in ("commit", "tag")', BUMP_TESTS + "test_a_tag_peels_to_its_commit"),
+    ("a tag naming no commit refuses", BUMP + "peel", 'target["type"] != "tag"', "False",
+     BUMP_TESTS + "test_every_digest_and_the_peel_must_agree"),
+    ("the package is listed exactly once", BUMP + "package_digest", "len(listed) != 1",
+     "not listed", BUMP_TESTS + "test_every_digest_and_the_peel_must_agree"),
+    ("GitHub's digest must agree", BUMP + "package_digest",
+     'assets[ASSET].get("digest") != f"sha256:{listed[0]}"', "False",
+     BUMP_TESTS + "test_every_digest_and_the_peel_must_agree"),
+    ("the downloaded bytes must agree", BUMP + "package_digest",
+     'hashlib.sha256(get(url, LIMITS["package"])).hexdigest() != listed[0]', "False",
+     BUMP_TESTS + "test_every_digest_and_the_peel_must_agree"),
+    ("hidden models are not reported", BUMP + "newest", 'm.get("visibility") == "list"', "True",
+     REWRITE),
+    ("the newest family member is reported", BUMP + "newest", "top = max(", "top = min(",
+     REWRITE),
+    ("efforts are ranked by name", BUMP + "newest", "min(efforts, key=EFFORTS.index)",
+     "min(efforts)", REWRITE),
+    ("an unranked effort leaves the lowest unknown", BUMP + "newest",
+     "min(efforts, key=EFFORTS.index) if ranked else None",
+     "min(efforts & set(EFFORTS), key=EFFORTS.index) if efforts else None", REWRITE),
+    ("mixed line endings refuse", BUMP + "apply",
+     'original.count(b"\\n") != original.count(b"\\r\\n")', "False",
+     BUMP_TESTS + "test_mixed_line_endings_refuse"),
+    ("the step is rewritten only where it is the pin", BUMP + "apply",
+     "text.count(before) != 1", "before not in text",
+     BUMP_TESTS + "test_a_second_copy_of_the_step_outside_any_step_refuses"),
+    ("line endings are kept", BUMP + "apply",
+     'updated.replace(b"\\n", b"\\r\\n") if crlf else updated', "updated",
+     BUMP_TESTS + "test_line_endings_survive_a_bump"),
+    ("an edit made during the fetches is never overwritten", BUMP + "apply",
+     "workflow.read_bytes() != original", "False",
+     BUMP_TESTS + "test_an_edit_made_while_the_bump_fetches_is_never_overwritten"),
+    ("a refused write leaves no staging file", BUMP + "apply", "            os.unlink(staged)",
+     "            pass", BUMP_TESTS + "test_an_edit_made_while_the_bump_fetches_is_never_overwritten"),
+    ("a downgrade refuses", BUMP + "bump", "now < then", "False",
+     BUMP_TESTS + "test_a_downgrade_or_a_changed_pinned_version_refuses"),
+    ("the pinned version with other bytes refuses", BUMP + "bump",
+     "now == then and new != old", "False",
+     BUMP_TESTS + "test_a_downgrade_or_a_changed_pinned_version_refuses"),
+    ("the current pin's catalog is rechecked", BUMP + "bump",
+     'hashlib.sha256(old_catalog).hexdigest() != old["catalog_sha256"]', "False",
+     BUMP_TESTS + "test_a_current_pin_whose_catalog_moved_refuses"),
+    ("a dry run writes nothing", BUMP + "bump", "new != old and not dry_run", "new != old",
+     BUMP_TESTS + "test_a_dry_run_writes_nothing"),
+    ("an unchanged pin writes nothing", BUMP + "bump", "new != old and not dry_run",
+     "not dry_run", BUMP_TESTS + "test_the_pinned_release_unchanged_is_a_no_op"),
+)  # fmt: skip
+
 MUTANTS = (
     *(
         (label, MODULE + "prove", before, after, TESTS + test)
@@ -527,6 +611,7 @@ MUTANTS = (
     ),
     *LAUNCH_LINUX,
     *CONTROLLER_LINUX,
+    *BUMP_PORTABLE,
 )
 
 
