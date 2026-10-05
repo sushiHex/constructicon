@@ -82,7 +82,7 @@ echo "probe exit $?"; cat "$V/qualification.json"
 Archive the old launch workspace, then run R10 with three differences. Its
 destination checks move into `judge-retire`. The launch pair may still be
 loaded. The service account must already exist, so there is no `useradd`
-fallback. Then run R11 verbatim at `C`.
+fallback. Then run the R11 variant below at `C`.
 
 ```bash
 O=<40-hex commit the old launch workspace was installed at>
@@ -114,6 +114,49 @@ test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1 \
 The service account's uid and gid must be the ones the store was provisioned
 for. The judges hold the store's group to the service gid, and the store law
 holds the rest.
+
+**The R11 variant.** Frozen R11 names the vendor package and catalog by literal
+URLs, and its expected digests in prose. Those are the release it was written
+for. Here both come from the commit instead: `vendor-inputs` reads them from
+the workflow's one acquisition step at `C`, after stock git has proved and
+extracted the script, and the downloads are checked against them. Every other
+line is R11's, and a test holds the two equal apart from these differences:
+- `T` and `M` are not declared;
+- the listing and its four reads come after the script's extraction;
+- the digest check replaces R11's printed hashes.
+
+```bash
+umask 077
+C=<40-hex merge commit named in LR0>
+W="$HOME/m8-launch"
+U=https://github.com/sushiHex/constructicon.git
+E=(/usr/bin/env -i PATH=/usr/bin:/bin HOME=/nonexistent LANG=C.UTF-8 GIT_CONFIG_NOSYSTEM=1 GIT_GRAFT_FILE=/nonexistent)
+G=("${E[@]}" /usr/bin/git --no-replace-objects "--git-dir=$W/source.git")
+K=("${E[@]}" /usr/bin/curl -q --fail --location --proto =https --silent --show-error)
+test "${#C}" -eq 40 && /usr/bin/mkdir "$W" \
+  && "${E[@]}" /usr/bin/git init -q --bare "$W/source.git" \
+  && "${G[@]}" fetch -q --no-tags "$U" +refs/heads/main:refs/heads/main \
+  && "${G[@]}" rev-parse refs/heads/main && "${E[@]}" /usr/bin/git ls-remote "$U" refs/heads/main \
+  && "${G[@]}" rev-list --first-parent refs/heads/main | grep -qxF "$C" && echo first-parent \
+  && "${G[@]}" ls-tree "$C" -- scripts/ci/m8_host_artifacts.py scripts/ci/constructicon-m8-launch.apparmor \
+       src/constructicon/substrate/executors/_supervisor.py src/constructicon/substrate/executors/_egress_bridge.py \
+       src/constructicon/substrate/executors/linux.py .github/workflows/m8-containment.yml \
+  && "${G[@]}" cat-file blob "$C:scripts/ci/m8_host_artifacts.py" > "$W/m8_host_artifacts.py" \
+  && /usr/bin/python3 -I "$W/m8_host_artifacts.py" vendor-inputs "$C" "$W" < /dev/null > "$W/vendor.json" \
+  && V=(/usr/bin/python3 -I -c 'import json, sys; print(json.load(sys.stdin)["vendor"][sys.argv[1]][sys.argv[2]])') \
+  && T=$("${V[@]}" codex url < "$W/vendor.json") && TS=$("${V[@]}" codex sha256 < "$W/vendor.json") \
+  && M=$("${V[@]}" catalog url < "$W/vendor.json") && MS=$("${V[@]}" catalog sha256 < "$W/vendor.json") \
+  && "${K[@]}" --output "$W/codex.tar.gz" "$T" \
+  && "${K[@]}" --output "$W/codex-models.json" "$M" \
+  && printf '%s  %s\n%s  %s\n' "$TS" "$W/codex.tar.gz" "$MS" "$W/codex-models.json" | sha256sum --check --strict \
+  && sha256sum "$W/m8_host_artifacts.py" "$W/codex.tar.gz" "$W/codex-models.json" \
+  && echo "R11 complete"
+cat "$W/vendor.json"
+```
+
+It must print `R11 complete`. `vendor.json` records the commit, the derived
+values, and the pinned URLs and digests, and is posted with the R11 output. A
+failed listing stops the chain before any download.
 
 ## LR4. Retire (judge, then root)
 

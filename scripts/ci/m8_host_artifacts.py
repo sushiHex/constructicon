@@ -115,12 +115,35 @@ DERIVED: dict[str, tuple[str, bytes]] = {
     "bwrap_sha256": (LAUNCHER, rb'^BWRAP_SHA256 = "([0-9a-f]{64})"$'),
     "supervisor_path": (SUPERVISOR, rb'^NAMESPACE_SCRIPT = "(/usr/libexec/[a-z0-9.-]+)"$'),
     "bridge_path": (BRIDGE, rb'^BRIDGE_SCRIPT = "(/usr/libexec/[a-z0-9.-]+)"$'),
-    "codex_sha256": (
-        WORKFLOW, rb"printf '%s  %s\\n' ([0-9a-f]{64}) \"\$RUNNER_TEMP/codex\.tar\.gz\"",
-    ),
-    "catalog_sha256": (
-        WORKFLOW, rb"printf '%s  %s\\n' ([0-9a-f]{64}) \"\$RUNNER_TEMP/codex-models\.json\"",
-    ),
+}  # fmt: skip
+# The vendor pin: the one workflow step that acquires the package and its
+# catalog. Parsed and rendered from this template, so each URL stays bound to
+# its output file and to the digest check run on it; a pin found anywhere else
+# in the workflow is not the pin. Exactly one match, or nothing.
+VENDOR_STEP = """\
+      - name: Acquire the pinned native investigation artifact (no account)
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 2 --output "$RUNNER_TEMP/codex.tar.gz" \\
+            {codex_url}
+          printf '%s  %s\\n' {codex_sha256} "$RUNNER_TEMP/codex.tar.gz" | sha256sum --check --strict
+          sudo install -d -m 0755 /var/lib/constructicon-m8-launch/native-codex
+          sudo tar --no-same-owner -xzf "$RUNNER_TEMP/codex.tar.gz" -C /var/lib/constructicon-m8-launch/native-codex
+          sudo chmod -R go-w /var/lib/constructicon-m8-launch/native-codex
+          curl --fail --location --retry 2 --output "$RUNNER_TEMP/codex-models.json" \\
+            {catalog_url}
+          printf '%s  %s\\n' {catalog_sha256} "$RUNNER_TEMP/codex-models.json" | sha256sum --check --strict
+          sudo install -m 0444 "$RUNNER_TEMP/codex-models.json" /var/lib/constructicon-m8-launch/codex-models.json
+"""  # noqa: E501
+VENDOR_FIELDS = {
+    "codex_url": r"https://github\.com/openai/codex/releases/download/"
+                 r"rust-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)/"
+                 r"codex-package-x86_64-unknown-linux-musl\.tar\.gz",
+    "codex_sha256": r"[0-9a-f]{64}",
+    "catalog_url": r"https://raw\.githubusercontent\.com/openai/codex/[0-9a-f]{40}/"
+                   r"codex-rs/models-manager/models\.json",
+    "catalog_sha256": r"[0-9a-f]{64}",
 }  # fmt: skip
 SERVICE = "m8-service"
 CP = "usr/bin/cp"
@@ -183,7 +206,8 @@ PROOF_MODULES = (
 )
 VERDICTS = {
     "judge": "ready", "verify": "installed", "stage-launch": "staged",
-    "judge-launch": "ready", "verify-launch": "installed", "judge-retire": "ready",
+    "judge-launch": "ready", "verify-launch": "installed", "vendor-inputs": "listed",
+    "judge-retire": "ready",
     "verify-retired": "retired", "controller-wheels": "listed",
     "stage-controller": "staged", "judge-controller": "ready", "verify-controller": "installed",
 }  # fmt: skip
@@ -489,8 +513,47 @@ def derive(blobs: dict[str, bytes], record: dict) -> dict[str, str]:
         found = re.findall(pattern, blobs[path], re.MULTILINE)
         require(len(found) == 1, f"{path} does not name exactly one {key}")
         values[key] = found[0].decode()
+    values.update(vendor_pin(blobs[WORKFLOW]))
     record["derived"] = dict(values)
     return values
+
+
+VENDOR_PATTERN = re.compile(
+    "".join(
+        re.escape(piece) if index % 2 == 0 else f"(?P<{piece}>{VENDOR_FIELDS[piece]})"
+        for index, piece in enumerate(re.split(r"\{(\w+)\}", VENDOR_STEP))
+    ).encode(),
+)
+
+
+def vendor_pin(workflow: bytes) -> dict[str, str]:
+    """The pin from the workflow's one vendor acquisition step; zero or two refuse.
+
+    The step must end where the next one begins, so nothing runs after its last
+    command, not even a condition. YAML context (a disabled job, an anchored
+    scalar) is not parsed here. CI binds the pin to what it actually installed
+    (``test_the_host_planner_accepts_the_package_ci_installed``), and a host
+    only reads a pin at a commit whose checks passed. The version and the
+    catalog's commit are read from their URLs, never stored twice.
+    """
+
+    found = [
+        match for match in VENDOR_PATTERN.finditer(workflow)
+        if workflow.startswith(b"      - name: ", match.end())
+    ]
+    require(len(found) == 1, f"{WORKFLOW} does not hold exactly one vendor acquisition step")
+    pin = {key: value.decode() for key, value in found[0].groupdict().items()}
+    pin["version"] = pin["codex_url"].split("/rust-v", 1)[1].split("/", 1)[0]
+    pin["catalog_commit"] = pin["catalog_url"].split("/")[5]
+    return pin
+
+
+def render_vendor_step(pin: dict[str, str]) -> str:
+    """The acquisition step for a pin: the template ``vendor_pin`` parses, filled in."""
+
+    for key, pattern in VENDOR_FIELDS.items():
+        require(re.fullmatch(pattern, pin[key]) is not None, f"the pin's {key} is malformed")
+    return VENDOR_STEP.format(**{key: pin[key] for key in VENDOR_FIELDS})
 
 
 def lookup_service() -> tuple[int, int, str, list[str]]:
@@ -943,6 +1006,17 @@ def launch_inputs(commit: str, workspace: Path, record: dict) -> tuple[dict, dic
     require_custody(workspace)
     blobs = prove(commit, workspace / REPOSITORY, record, LAUNCH_BLOBS)
     return blobs, derive(blobs, record)
+
+
+def vendor_inputs(commit: str, root: Path, workspace: Path, listing: str, record: dict) -> None:
+    """Read-only: the pinned package and catalog at the commit, for the operator's curl."""
+
+    _, values = launch_inputs(commit, workspace, record)
+    record["vendor"] = {
+        name: {"url": values[f"{name}_url"], "sha256": values[f"{name}_sha256"]}
+        for name in ("codex", "catalog")
+    }
+    record["listed"] = True
 
 
 def stage_launch(commit: str, root: Path, workspace: Path, listing: str, record: dict) -> None:
@@ -1605,6 +1679,7 @@ def main(argv: list[str] | None = None) -> int:
         commands = {
             "judge": judge, "verify": verify, "stage-launch": stage_launch,
             "judge-launch": judge_launch, "verify-launch": verify_launch,
+            "vendor-inputs": vendor_inputs,
             "judge-retire": judge_retire, "verify-retired": verify_retired,
             "controller-wheels": controller_wheels, "stage-controller": stage_controller,
             "judge-controller": judge_controller, "verify-controller": verify_controller,

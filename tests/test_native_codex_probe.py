@@ -22,6 +22,7 @@ from tests.native_codex_probe import (
     run_probe,
 )
 from tests.substrate import test_native_codex_mediation as native_probe
+from tests.vendor_pin import VERSION
 
 
 def test_native_fixture_creates_private_config_before_first_cli(tmp_path, monkeypatch):
@@ -46,7 +47,7 @@ def test_native_fixture_creates_private_config_before_first_cli(tmp_path, monkey
         assert config.is_dir()
         assert not tuple(config.iterdir())
         calls.append(argv)
-        return b"codex-cli 0.153.4\n"
+        return f"codex-cli {VERSION}\n".encode()
 
     monkeypatch.setattr(native_probe, "subprocess", SimpleNamespace(check_output=check_output))
     native = native_probe.native.__wrapped__(tmp_path)

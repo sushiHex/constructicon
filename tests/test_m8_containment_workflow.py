@@ -78,6 +78,9 @@ PROOFS = {
         # Two named parity tests from one file: the host writer and the loader.
         "tests/test_m8_host_runtime.py tests/test_m8_host_runtime.py",
     ),
+    "Prove the host plans the package CI installed": (
+        "foundation", "tests/test_m8_host_runtime.py",
+    ),
     "Kill the native review-regression mutants": (
         "foundation",
         "scripts/check_m8_containment_mutations.py scripts/check_m8_capture_mutations.py "
