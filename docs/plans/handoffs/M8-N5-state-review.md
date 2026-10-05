@@ -1,8 +1,8 @@
 # M8 N5 state review: the first subscription turns
 
-Status: design, decided by the owner on 2026-10-05, except one open question
-(the budget, below). Nothing here authorizes a model call or a host action;
-each stage runs under its own authorization. It builds on N4 at `88effe1`:
+Status: design, decided by the owner on 2026-10-05, including the budget.
+Nothing here authorizes a model call or a host action; each stage runs under
+its own authorization. It builds on N4 at `88effe1`:
 - the binding passed every startup control on the private host, and g3 is active;
 - refresh is unmeasured ([#77](https://github.com/sushiHex/constructicon/issues/77)).
 
@@ -22,14 +22,27 @@ The owner's terms:
 - [#78, 2026-10-01](https://github.com/sushiHex/constructicon/issues/78#issuecomment-5945414633): `operator_authorized` overage bounded by the account's own settings, carry-over authorized, no turn started while the account reports its spend control reached.
 - 2026-10-04: "the latest installed and available", updated "as seamless as possible", for the client and the model.
 
-Decided on 2026-10-05:
+Decided on 2026-10-05 ([#78](https://github.com/sushiHex/constructicon/issues/78)):
 1. **`account/updated` is admitted on an exact match only** (Stage 0).
 2. **An unsealed backend stops the session.** A new destination is reviewed and sealed separately, never added from an account reply at runtime.
 3. **The model is the newest listed version of the chosen family, at its lowest listed effort.** This is a standing rule, so a pin bump moves it. The family is `sol`, which is `gpt-6.1-sol` at `low` today.
 4. **The READ turn runs through the real lease path,** not a lane. The qualification acquisition comes before it.
 5. **Refresh is measured before the READ turn.** A turn that triggers refresh cannot justify its own missing prerequisite.
 
-**Open:** M8 asks for a "fixed request/token budget". Constructicon can enforce one `turn/start` and a wall clock, and no token or request ceiling (fact 8). The owner either accepts that, with request and token counts recorded as unknown, or names another bound.
+6. **The budget is a fixed attempt budget.** M8 asks for a "fixed request/token budget". Constructicon enforces dispatch, time, byte and callback limits, and cannot enforce a token or request ceiling (fact 8). After Codex's recommendation, the owner accepted these terms:
+
+   > For N5 I accept the specified dispatch, deadline, byte and callback limits as the fixed attempt budget. Token usage is observational; backend request count is unknown. No hard token, backend-request or finite monetary ceiling is requested or claimed. My October 1 overage and carry-over decision remains applicable. READ and WRITE require their separate stage authorizations.
+
+   | Item | Bound |
+   |---|---|
+   | Dispatches | One READ `turn/start`, then one separately authorized WRITE `turn/start` |
+   | Retry | At most one more attempt across N5, only after a diagnosed local failure known not to have dispatched. A turn that may have dispatched uses up its stage's attempt |
+   | Time | READ 120 s; WRITE 300 s, shared by the exchange and its callbacks. These are proposed limits, not measured run times |
+   | Bytes and tools | The sealed cumulative input limit (1 MiB by default, confirmed from the recorded value); eight bounded WRITE callbacks; none for READ |
+   | Tokens | The vendor's usage recorded when it can be attributed to the turn, otherwise "unknown". Never zero, never "within budget" |
+   | Backend requests | Unknown |
+
+   M8's "stop for a different operator decision" applies to a requested hard spending bound that cannot be enforced. None is requested.
 
 ## The upgrade routine
 
@@ -94,7 +107,7 @@ The newest release is `rust-v0.160.0` (2026-10-01). Its tarball sha256 is
 **Stage 3: the one READ turn,** through Stage 1's acquisition, with a fixed harmless task.
 - The evidence records the accepted answer's length, usage, the served model or "unknown", the readbacks, relay counts, process facts and identities.
 - Attempt accounting: intent recorded before dispatch, then "not dispatched", "possibly dispatched" or "completed".
-- Request and token counts are unknown.
+- Usage is recorded when it can be attributed to the turn, otherwise "unknown". The backend request count is unknown. Both follow decision 6.
 
 **Stage 4: the WRITE turn,** through the same acquisition, with the real worker, capture and gate. Before it, a credential-free WRITE, capture and gate smoke runs against the host's runtime Python.
 
