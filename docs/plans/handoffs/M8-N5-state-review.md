@@ -104,12 +104,12 @@ The newest release is `rust-v0.160.0` (2026-10-01). Its tarball sha256 is
 - Under maintenance, S4 and S6a, then g4, the active startup, and the old generation refusing.
 - Then refresh: a no-model active startup on each authorized session until one measures it (an `auth.openai.com` connection, a changed credential, a clean readback). The token's expiry is unobserved, so the date is unknown.
 
-**Stage 3: the one READ turn,** through Stage 1's acquisition, with a fixed harmless task.
+**Stage 3: the one READ turn,** through Stage 1's acquisition path, with a fixed harmless task. Each invocation takes a fresh acquisition and records its own lease (`lease_id_for`: one per run, invocation and binding); a closed acquisition is never reused.
 - The evidence records the accepted answer's length, usage, the served model or "unknown", the readbacks, relay counts, process facts and identities.
 - Attempt accounting: intent recorded before dispatch, then "not dispatched", "possibly dispatched" or "completed".
 - Usage is recorded when it can be attributed to the turn, otherwise "unknown". The backend request count is unknown. Both follow decision 6.
 
-**Stage 4: the WRITE turn,** through the same acquisition, with the real worker, capture and gate. Before it, a credential-free WRITE, capture and gate smoke runs against the host's runtime Python.
+**Stage 4: the WRITE turn,** through the same acquisition path with its own fresh acquisition and lease, and with the real worker, capture and gate. Before it, a credential-free WRITE, capture and gate smoke runs against the host's runtime Python.
 
 **Refusal and retry.** Each of these refuses and is recorded:
 - an account or provider notice outside the two admitted forms (the plan-checked `account/rateLimits/updated` and the exact `account/updated`);
