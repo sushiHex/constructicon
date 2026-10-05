@@ -3431,3 +3431,32 @@ raised.
 **Bridge mutant 1.**
 - **Cause.** It was not a hang. With `CI=true`, pytest diffed a 256 KiB byte operand, which took about 33 s per kill and once crossed the 60 s harness limit.
 - **Fix.** The test compares length and SHA-256 instead of the bytes.
+
+### N5 Stage 0a: one vendor pin record
+
+This is the first half of the upgrade routine (`M8-N5-state-review.md`). It changes no behaviour at the current pin.
+
+**One record.** The workflow's acquisition step is the pin. `VENDOR_STEP` is its exact template, and `vendor_pin` parses it while `render_vendor_step` writes it, so each URL stays bound to its output file and to the digest check run on it. The version and the catalog commit are read from the URLs, never stored twice.
+- A pin anywhere else in the workflow is not the pin.
+- Another host, a query string, another output file, an unchecked download, two steps, no step, or a zero-padded version all refuse.
+- `derive` now takes the two vendor digests from the step rather than from loose lines.
+
+**The host reads the pin from the commit.** A read-only command, `vendor-inputs C W`, proves the launch blobs at `C` and lists the package and catalog URLs and digests. The replacement runbook's LR3 now runs an **R11 variant**: R11's provenance steps, then `vendor-inputs`, then the downloads, checked against the listed digests. Frozen R11 named the old release by literal URLs. A test holds the variant equal to R11 apart from the stated differences.
+
+**Tests read one helper.** `tests/vendor_pin.py` derives the version and digests from the workflow, replacing three hand copies. The parser's own oracle is two pins written out by hand, never derived. Recorded vendor behaviour (the models a fixture names, request shapes, efforts) stays recorded; it is re-observed on a bump, not derived.
+
+**The host's archive rules run in CI.** CI unpacks the package with `tar`, but the host plans it with stricter rules (no links, special modes or duplicates). The foundation lane now runs the actual downloaded package through `vendor_plan` and requires the planned tree to equal the one CI installed. A release the host would refuse is found before any host retires its old one.
+
+**Proof.**
+- Portable tests: the round trip, decoy and refusal cases, and the R11 variant.
+- Linux: `vendor-inputs`, and the CI parity test.
+- Four new mutants are killed: the step read exactly once, the version from the URL, the derived values including the pin, and malformed pins never rendered.
+
+**Cross-review.** Codex (`gpt-6-astra`) reviewed the plan before building, verdict "revise", with no P0. Adopted:
+- the canonical step binding;
+- one JSON output for `vendor-inputs`, built on the full launch-blob proof;
+- an R11 variant with digest checks, not just new URLs;
+- independent parser oracles;
+- the CI host-archive check.
+
+The bump tool (deterministic release selection, Sigstore and checksum verification, atomic rewrite) is the next PR.

@@ -67,19 +67,86 @@ def test_every_derived_value_is_read_from_its_one_reviewed_home() -> None:
     from constructicon.substrate.executors._egress_bridge import BRIDGE_SCRIPT
     from constructicon.substrate.executors._supervisor import NAMESPACE_SCRIPT
     from constructicon.substrate.executors.linux import BWRAP_SHA256
-    from tests.native_codex_probe import CATALOG_SHA256
 
     blobs = {path: checkout(path) for path in artifacts.LAUNCH_BLOBS}
     record: dict[str, object] = {}
     values = artifacts.derive(blobs, record)
+    pin = artifacts.vendor_pin(blobs[artifacts.WORKFLOW])
     assert values == {
         "bwrap_sha256": BWRAP_SHA256,
         "supervisor_path": NAMESPACE_SCRIPT,
         "bridge_path": BRIDGE_SCRIPT,
-        "codex_sha256": "a822187e1a2420c61c5926721bfbd878701ed95547c9bb0d4de4498a16ba1821",
-        "catalog_sha256": CATALOG_SHA256,
+        **pin,
     }
     assert record["derived"] == values
+    # The workflow's step is exactly the template filled with its own pin.
+    assert blobs[artifacts.WORKFLOW].count(artifacts.render_vendor_step(pin).encode()) == 1
+
+
+# Two pins written out by hand, never derived: the parser's independent oracle.
+PIN_A = {
+    "codex_url": "https://github.com/openai/codex/releases/download/rust-v0.153.4/"
+                 "codex-package-x86_64-unknown-linux-musl.tar.gz",
+    "codex_sha256": "a" * 64,
+    "catalog_url": "https://raw.githubusercontent.com/openai/codex/" + "3" * 40
+                   + "/codex-rs/models-manager/models.json",
+    "catalog_sha256": "c" * 64,
+}  # fmt: skip
+PIN_B = {
+    **PIN_A,
+    "codex_url": PIN_A["codex_url"].replace("rust-v0.153.4", "rust-v0.160.0"),
+    "catalog_url": PIN_A["catalog_url"].replace("3" * 40, "a" * 40),
+    "codex_sha256": "b" * 64,
+}
+
+
+def workflow_with(*steps: str) -> bytes:
+    head, tail = "name: m8\njobs:\n  lane:\n    steps:\n", "      - name: Next\n"
+    return (head + "".join(steps) + tail).encode()
+
+
+@pytest.mark.parametrize(
+    ("pin", "version", "commit"), [(PIN_A, "0.153.4", "3" * 40), (PIN_B, "0.160.0", "a" * 40)]
+)
+def test_a_rendered_pin_parses_back_to_itself(pin: dict, version: str, commit: str) -> None:
+    parsed = artifacts.vendor_pin(workflow_with(artifacts.render_vendor_step(pin)))
+    assert parsed == {**pin, "version": version, "catalog_commit": commit}
+
+
+def test_the_pin_outside_its_acquisition_step_is_ignored() -> None:
+    decoy = f"      - name: Notes\n        run: |\n          echo {PIN_B['codex_url']}\n"
+    parsed = artifacts.vendor_pin(workflow_with(decoy, artifacts.render_vendor_step(PIN_A)))
+    assert parsed["codex_url"] == PIN_A["codex_url"]
+
+
+@pytest.mark.parametrize(
+    "fault",
+    ["another host", "query", "another output", "unchecked", "two steps", "no step", "zero padded"],
+)
+def test_a_pin_not_bound_to_its_acquisition_refuses(fault: str) -> None:
+    step = artifacts.render_vendor_step(PIN_A)
+    if fault == "another host":
+        step = step.replace("https://github.com/", "https://example.com/")
+    elif fault == "query":
+        step = step.replace(".tar.gz\n", ".tar.gz?x=1\n", 1)
+    elif fault == "another output":
+        step = step.replace('--output "$RUNNER_TEMP/codex.tar.gz"', '--output "$RUNNER_TEMP/other"')
+    elif fault == "unchecked":
+        step = step.replace(" | sha256sum --check --strict", "", 1)
+    elif fault == "zero padded":
+        step = step.replace("rust-v0.153.4", "rust-v0.153.04")
+    steps = {"two steps": (step, step), "no step": ()}.get(fault, (step,))
+    with pytest.raises(ValueError, match="exactly one vendor acquisition step"):
+        artifacts.vendor_pin(workflow_with(*steps))
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [("codex_sha256", "A" * 64), ("codex_url", "http://github.com/x"), ("catalog_url", "")],
+)
+def test_a_malformed_pin_is_never_rendered(key: str, value: str) -> None:
+    with pytest.raises(ValueError, match=f"the pin's {key} is malformed"):
+        artifacts.render_vendor_step({**PIN_A, key: value})
 
 
 @pytest.mark.parametrize("key", list(artifacts.DERIVED))
@@ -611,6 +678,7 @@ LAUNCH_COMMANDS = {
     "stage-launch": ("stage_launch", "staged"),
     "judge-launch": ("judge_launch", "ready"),
     "verify-launch": ("verify_launch", "installed"),
+    "vendor-inputs": ("vendor_inputs", "listed"),
     "judge-retire": ("judge_retire", "ready"),
     "verify-retired": ("verify_retired", "retired"),
 }
@@ -635,7 +703,7 @@ def test_each_launch_command_reports_its_own_verdict(
     assert artifacts.main([command, "a" * 40, "/workspace"]) == int(failure)
     record = json.loads(capsys.readouterr().out)
     assert record[verdict] is (not failure)
-    assert set(record) & {"ready", "installed", "staged", "retired"} == {verdict}
+    assert set(record) & {"ready", "installed", "staged", "retired", "listed"} == {verdict}
     assert (record.get("observed") == {"launch": KERNEL_LIST}) == failure
 
 
@@ -827,6 +895,45 @@ def test_the_replacement_runbook_runs_exactly_the_tested_root_commands(
     assert invoked == [" ".join(command) for command in sequence()]
 
 
+def bash_block(section: str) -> list[str]:
+    return section.split("```bash\n", 1)[1].split("```", 1)[0].splitlines()
+
+
+def test_the_r11_variant_is_r11_with_its_pins_read_from_the_commit() -> None:
+    """Only the stated differences: no literal T and M, the listing, the digest check."""
+
+    r11 = bash_block(runbook().split("## R11", 1)[1].split("\n## ", 1)[0])
+    text = REPLACEMENT.read_text(encoding="utf-8")
+    variant = bash_block(text.split("**The R11 variant.**", 1)[1])
+    listing = [
+        '  && /usr/bin/python3 -I "$W/m8_host_artifacts.py" vendor-inputs "$C" "$W" < /dev/null'
+        ' > "$W/vendor.json" \\',
+        "  && V=(/usr/bin/python3 -I -c 'import json, sys; print(json.load(sys.stdin)"
+        '["vendor"][sys.argv[1]][sys.argv[2]])\') \\',
+        '  && T=$("${V[@]}" codex url < "$W/vendor.json")'
+        ' && TS=$("${V[@]}" codex sha256 < "$W/vendor.json") \\',
+        '  && M=$("${V[@]}" catalog url < "$W/vendor.json")'
+        ' && MS=$("${V[@]}" catalog sha256 < "$W/vendor.json") \\',
+    ]
+    check = (
+        "  && printf '%s  %s\\n%s  %s\\n' \"$TS\" \"$W/codex.tar.gz\" \"$MS\""
+        ' "$W/codex-models.json" | sha256sum --check --strict \\'
+    )
+    expected: list[str] = []
+    for line in r11:
+        if line.startswith(("T=", "M=")):
+            continue
+        if line.startswith("C="):
+            line = "C=<40-hex merge commit named in LR0>"
+        if line.startswith('  && sha256sum "$W/m8_host_artifacts.py"'):
+            expected.append(check)
+        expected.append(line)
+        if line.startswith('  && "${G[@]}" cat-file blob'):
+            expected.extend(listing)
+    expected.append('cat "$W/vendor.json"')
+    assert variant == expected
+
+
 def test_the_replacement_runbook_never_removes_the_launch_root_or_its_store() -> None:
     code = "".join(re.findall(r"```bash\n(.*?)```", REPLACEMENT.read_text(encoding="utf-8"), re.S))
     removals = [line for line in code.splitlines() if "/usr/bin/rm " in line]
@@ -869,10 +976,9 @@ def launch_blobs(archive: bytes, catalog: bytes = CATALOG_BYTES) -> dict[str, by
         artifacts.SUPERVISOR: b"# supervisor\n" + SUPERVISOR,
         artifacts.BRIDGE: b"# bridge\n" + BRIDGE,
         artifacts.LAUNCHER: f'BWRAP_SHA256 = "{sha256(FAKE_BWRAP)}"\n'.encode(),
-        artifacts.WORKFLOW: (
-            f"printf '%s  %s\\n' {sha256(archive)} \"$RUNNER_TEMP/codex.tar.gz\" | x\n"
-            f"printf '%s  %s\\n' {sha256(catalog)} \"$RUNNER_TEMP/codex-models.json\" | x\n"
-        ).encode(),
+        artifacts.WORKFLOW: workflow_with(artifacts.render_vendor_step(
+            {**PIN_A, "codex_sha256": sha256(archive), "catalog_sha256": sha256(catalog)}
+        )),
     }
 
 
@@ -1098,6 +1204,20 @@ def test_stage_judge_root_sequence_then_verify_accepts(
     assert (launch_host.launch() / "runtime/usr/bin/python3").readlink() == Path("python3.12")
     assert (launch_host.launch() / "runtime/usr/lib/x86_64-linux-gnu/libonly.so.1").exists()
     assert (launch_host.launch() / "native-codex/bin/codex").read_bytes() == b"\x7fELF codex\n"
+
+
+@LINUX
+def test_vendor_inputs_lists_the_pinned_package_and_catalog_and_writes_nothing(
+    launch_host: LaunchHost, capsys: pytest.CaptureFixture[str]
+) -> None:
+    before = sorted(path.name for path in launch_host.workspace.iterdir())
+    status, record = launch_host.run("vendor-inputs", capsys)
+    assert status == 0 and record["listed"] is True, record
+    assert record["vendor"] == {
+        "codex": {"url": PIN_A["codex_url"], "sha256": sha256(launch_host.archive)},
+        "catalog": {"url": PIN_A["catalog_url"], "sha256": sha256(CATALOG_BYTES)},
+    }
+    assert sorted(path.name for path in launch_host.workspace.iterdir()) == before
 
 
 @LINUX
@@ -1667,6 +1787,33 @@ def ci_runtime() -> Path:
             pytest.fail("the required Linux containment environment is missing")
         pytest.skip("CI's installed runtime exists only in the containment lanes")
     return Path(location)
+
+
+@pytest.fixture
+def ci_package() -> Path:
+    location = os.environ.get("M8_CODEX_TARBALL")
+    if not location or sys.platform != "linux":
+        if os.environ.get("M8_CONTAINMENT_REQUIRED"):
+            pytest.fail("the required Linux containment environment is missing")
+        pytest.skip("CI's downloaded package exists only in the containment lanes")
+    return Path(location)
+
+
+def test_the_host_planner_accepts_the_package_ci_installed(
+    ci_runtime: Path, ci_package: Path
+) -> None:
+    """The release CI unpacked with tar passes the host's archive rules, to the same tree.
+
+    A package the host would refuse is found here, before any host retires its old one.
+    """
+
+    from tests.vendor_pin import CODEX_SHA256
+
+    with artifacts.open_vendor(ci_package, CODEX_SHA256) as archive:
+        plan, digests = artifacts.vendor_plan(archive)
+    expected = artifacts.expected_inventory(plan, lambda entry: digests[entry[0]])
+    installed = artifacts.tree_inventory(ci_runtime / "native-codex")
+    assert artifacts.compare(installed, expected, 0) == []
 
 
 def checkout_plan() -> list[artifacts.Entry]:

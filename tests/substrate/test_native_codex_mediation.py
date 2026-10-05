@@ -39,6 +39,7 @@ from tests.native_provider import fake_provider as fake_provider
 from tests.substrate.test_contained_workspace import context
 from tests.substrate.test_contained_workspace import provider as provider
 from tests.substrate.test_linux_containment import launcher as launcher
+from tests.vendor_pin import VERSION
 
 WORKER = "import sys; exec(sys.stdin.read())"
 PROGRAM = (
@@ -76,7 +77,7 @@ def native(tmp_path):
     env = {"HOME": str(home), "CODEX_HOME": str(home / ".codex"),
            "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
     version = subprocess.check_output([binary, "--version"], env=env, cwd=tmp_path, timeout=15)
-    assert version.strip() == b"codex-cli 0.153.4"
+    assert version.strip() == f"codex-cli {VERSION}".encode()
     return Path(binary), env
 
 

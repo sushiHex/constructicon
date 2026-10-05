@@ -190,6 +190,17 @@ jobs:
             https://raw.githubusercontent.com/openai/codex/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/models-manager/models.json
           printf '%s  %s\n' d7136a413cfac1b5b1686d9e0dcc5c80ca05bebed5e9fc3911376561d0ef6ee8 "$RUNNER_TEMP/codex-models.json" | sha256sum --check --strict
           sudo install -m 0444 "$RUNNER_TEMP/codex-models.json" /var/lib/constructicon-m8-launch/codex-models.json
+      - name: Prove the host plans the package CI installed
+        if: matrix.lane == 'foundation'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # CI unpacks with tar; the host plans with its stricter archive rules.
+          # A release must pass both, identically, before any host retires its old one.
+          M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
+            M8_CODEX_TARBALL="$RUNNER_TEMP/codex.tar.gz" "$PWD/.venv/bin/python" -m pytest \
+            tests/test_m8_host_runtime.py::test_the_host_planner_accepts_the_package_ci_installed \
+            -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
       - name: Prove the N4 proxy bridge in the native zone
         if: matrix.lane == 'foundation'
         shell: bash
