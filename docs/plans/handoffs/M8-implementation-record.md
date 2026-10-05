@@ -3410,3 +3410,24 @@ Each step is recorded on #77 with its evidence digests.
 **State.** g3 is active. The VM is running on boot `11911d42…`.
 `vendor_conformance_qualified` stays false until refresh is measured and the
 owner records a qualified disposition.
+
+### CI timing flakes made deterministic (#110)
+
+Each fix makes the outcome depend on an event, not on timing. No bound was
+raised.
+
+**Driver-death wait** (`test_driver_death_and_explicit_successor_reconciliation[…-before-worker]`).
+- **Cause.** The test killed the driver as soon as the native had started, possibly mid-handshake. The native then ran its own graceful drain, which at the pin can take up to 30 s for in-flight requests (`app-server/src/lib.rs:1178-1187`), before exiting on EOF.
+- **Fix.** The owner now reports its `before-worker` pause, and the test kills only after that report, from the same idle state as `active`. It then waits on the pinned pidfd's exit event instead of polling `/proc`.
+
+**Deadline attribution** (`test_the_deadline_cuts_an_actively_streaming_client`).
+- **Cause.** The launcher shares the relay's deadline and cancels the owner when it passes. So a refusal past the deadline could be counted `stopped` if the owner's cancellation was seen first. A read reset by the zone's kill, on a socket still holding unread bytes, was counted `reset`.
+- **Fix.**
+  - `_require_live` now judges the deadline first.
+  - Every stream read and send goes through `_io`, which judges a `ConnectionError` by the same liveness. A reset past the deadline, mid-read or mid-send, is the deadline's cut, and any other `OSError` stays a fatal relay failure.
+  - The containment test asserts the whole `observed` count.
+  - Mutants 61 to 64 cover the rules: deadline first, reclassification, only a `ConnectionError`, and the send path. N4-L3 is re-anchored.
+
+**Bridge mutant 1.**
+- **Cause.** It was not a hang. With `CI=true`, pytest diffed a 256 KiB byte operand, which took about 33 s per kill and once crossed the 60 s harness limit.
+- **Fix.** The test compares length and SHA-256 instead of the bytes.
