@@ -197,7 +197,7 @@ def head(shape: str, host: str, port: int) -> bytes:
     """A CONNECT head as each pinned client family writes it (design, finding c)."""
     extra = {
         # hyper-util's tunnel with Codex's default user agent: lower-case name.
-        "reqwest": "user-agent: codex_cli_rs/0.153.4 (Linux 6.8.0; x86_64) unknown "
+        "reqwest": "user-agent: codex_cli_rs/0.160.1 (Linux 6.8.0; x86_64) unknown "
                    "(constructicon; 0)\r\n",
         "tungstenite": "Proxy-Connection: Keep-Alive\r\n",
     }[shape]
