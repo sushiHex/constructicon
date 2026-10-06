@@ -401,7 +401,7 @@ def sealed_configuration(*, plugins: bool) -> str:
         + ("" if plugins else "plugins = false\n")
         + "apps = false\nshell_tool = false\nunified_exec = false\n"
         "apply_patch_freeform = false\nview_image = false\nmulti_agent = false\n"
-        "code_mode = false\njs_repl = false\n"
+        "code_mode = false\njs_repl = false\ngoals = false\n"
     )
 
 
@@ -413,7 +413,10 @@ def test_the_production_configuration_is_the_reviewed_literal():
         "[analytics]\nenabled = false\n[features]\nplugins = false\n"
         "apps = false\nshell_tool = false\nunified_exec = false\n"
         "apply_patch_freeform = false\nview_image = false\nmulti_agent = false\n"
-        "code_mode = false\njs_repl = false\n"
+        # ``goals`` is on by default from rust-v0.160 (features ``Goals``, stable,
+        # default on): three built-in goal tools and automatic goal continuation,
+        # a tool surface and more requests than the fixed attempt budget allows.
+        "code_mode = false\njs_repl = false\ngoals = false\n"
     )
     assert production_configuration() == expected
     assert production_configuration(plugins=True) == expected.replace("plugins = false\n", "")

@@ -580,7 +580,7 @@ def production_configuration(*, plugins: bool = False) -> str:
         + ("" if plugins else "plugins = false\n")
         + "apps = false\nshell_tool = false\nunified_exec = false\n"
         "apply_patch_freeform = false\nview_image = false\nmulti_agent = false\n"
-        "code_mode = false\njs_repl = false\n"
+        "code_mode = false\njs_repl = false\ngoals = false\n"
     )
 
 

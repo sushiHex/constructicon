@@ -88,6 +88,7 @@ multi_agent = false
 code_mode = false
 js_repl = false
 apps = false
+goals = false
 '''
 
 
