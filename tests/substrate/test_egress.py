@@ -787,12 +787,17 @@ async def test_a_stream_timeout_before_the_deadline_is_a_reset(
     tmp_path, listeners, peer, monkeypatch,
 ):
     """ETIMEDOUT is a ``TimeoutError`` too; only the expired acquisition
-    deadline is a deadline denial."""
+    deadline is a deadline denial. The read fails after the established reply
+    and first hello reach their endpoints, regardless of loop scheduling."""
     timed_out = OSError(errno.ETIMEDOUT, os.strerror(errno.ETIMEDOUT))
     assert isinstance(timed_out, TimeoutError)
+    upstream_read_started = asyncio.Event()
+    release_timeout = asyncio.Event()
 
     async def upstream_times_out(sock, count):
         if sock.getpeername()[1] == peer.port:
+            upstream_read_started.set()
+            await release_timeout.wait()
             raise timed_out
         return await asyncio.get_running_loop().sock_recv(sock, count)
 
@@ -801,6 +806,9 @@ async def test_a_stream_timeout_before_the_deadline_is_a_reset(
 
     async def scenario(facts):
         _, writer, facts["established"] = await established(listeners, peer)
+        assert facts["established"], "the stream never established before the injected timeout"
+        await asyncio.wait_for(upstream_read_started.wait(), 5)
+        release_timeout.set()
         await until(lambda: relay.observed.total() > 1)
         facts["observed"] = dict(relay.observed)
         writer.close()
