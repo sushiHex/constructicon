@@ -87,7 +87,24 @@ def test_a_logged_turn_is_folded_from_the_turn_start_request_on():
     assert turn.usage == Usage(input_tokens=1, output_tokens=1)
 
 
-async def test_the_wire_drain_logs_to_eof_and_refuses_a_truncated_record():
+@pytest.mark.parametrize("damaged", [
+    b'{"method": "a"}',  # truncated at EOF
+    b'{"method": "a", "method": "b"}\n',  # a duplicate key the adapter refuses
+    b"{not json\n",
+])
+async def test_the_wire_drain_reads_as_strictly_as_before_the_terminal(damaged):
+    class Chunks:
+        def __init__(self, *chunks):
+            self.chunks = list(chunks)
+
+        async def read(self, maximum):
+            return self.chunks.pop(0) if self.chunks else b""
+
+    with pytest.raises(ProbeRefused):
+        await DuplexWire(Chunks(damaged), []).drain()
+
+
+async def test_the_wire_drain_logs_every_record_to_eof():
     class Chunks:
         def __init__(self, *chunks):
             self.chunks = list(chunks)
@@ -98,8 +115,6 @@ async def test_the_wire_drain_logs_to_eof_and_refuses_a_truncated_record():
     log = []
     await DuplexWire(Chunks(b'{"method": "a"}\n{"meth', b'od": "b"}\n'), log).drain()
     assert log == [{"received": {"method": "a"}}, {"received": {"method": "b"}}]
-    with pytest.raises(ProbeRefused, match="truncated"):
-        await DuplexWire(Chunks(b'{"method": "a"}'), []).drain()
 
 
 @pytest.fixture

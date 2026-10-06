@@ -649,6 +649,15 @@ def test_a_turn_that_never_completes_keeps_its_completed_messages_as_partial_tex
     assert outcome.output == "second"
 
 
+def test_an_empty_last_message_leaves_no_partial_text():
+    """The last completed message is the partial text, and an empty one is none."""
+    observation = folded([
+        record(item_completed(agent_message("stale"))),
+        record(item_completed(agent_message(""))),
+    ])
+    assert not observation.terminal and observation.output is None
+
+
 def test_a_terminal_answer_replaces_the_partial_text():
     observation = folded([
         record(item_completed(agent_message("draft"))), record(completed(answer="final")),

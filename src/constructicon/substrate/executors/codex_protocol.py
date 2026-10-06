@@ -1401,8 +1401,10 @@ def observe_turn(
                 usage = fact
             elif method == MODEL_REROUTED:
                 served_model = fact
-            elif fact:
-                partial = fact
+            else:
+                # The last completed message, even an empty one: its text is
+                # the partial text, and an empty text is none.
+                partial = fact or None
     return TurnObservation(
         # The terminal answer when there is one. A failed or interrupted turn
         # carries none (``bespoke_event_handling.rs:1579, 1614``), and a turn

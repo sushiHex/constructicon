@@ -3546,7 +3546,7 @@ This lands at the current pin, `rust-v0.153.4`. The decoder change fixes the cur
 
 **Proof.**
 - Unit tests cover the exact-match matrix, the notice and reading agreement cases (including the two-plan set), the answer and summary shapes, the READ and WRITE rules, partial text, evidence attribution and malformation, held order across a callback, the pre-send boundary (framed and straddling) and the drain.
-- Twenty-nine mutants (N5-1 to N5-28, and the re-anchored usage bound) are all killed.
+- Thirty mutants (N5-1 to N5-29, and the re-anchored usage bound) are all killed.
 
 **Cross-review.** Codex (`gpt-6-astra`) reviewed the design before the build. It raised three P1s and five P2s, with no P0. All were adopted after their premises were checked against source:
 - held evidence was released after a callback;
@@ -3564,5 +3564,9 @@ The one pass on the diff raised three P2s, with no P0 or P1. Each premise was ch
 - **Adopted.** A failed or interrupted turn erased the partial text seen before it. It now keeps it, as above.
 - **Adopted.** The record claimed a timeout publishes its partial text, but the adapter refuses such a turn and publishes none of it. The claim is corrected, and an adapter test now pins both halves.
 - **Adopted.** The lanes neither drained to EOF nor logged late records. Both now drain, and the probe's pre-reply limit is stated.
+
+The connector's review on ready raised two P2s, both adopted:
+- A later empty message left the older text as the partial text. The last completed message now decides, and an empty one leaves none.
+- The lane drain decoded with permissive `json.loads`, so a duplicate-key record after the terminal could pass the real-binary proof. It now reads through the probe's own strict reader.
 
 Recorded, as a design choice: `raw` carries an admitted record whole, so an `agentMessage`'s text, any extra fields it carries, and the existing `turn/` prefix (including `turn/diff/updated`) publish vendor payload. This is the module's documented limit on legitimate turn records.
