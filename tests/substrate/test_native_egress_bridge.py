@@ -396,9 +396,9 @@ def test_the_production_configuration_is_the_reviewed_literal():
         "[analytics]\nenabled = false\n[features]\nplugins = false\n"
         "apps = false\nshell_tool = false\nunified_exec = false\n"
         "apply_patch_freeform = false\nview_image = false\nmulti_agent = false\n"
-        # ``goals`` is on by default from rust-v0.160 (features ``Goals``, stable,
-        # default on): three built-in goal tools and automatic goal continuation,
-        # a tool surface and more requests than the fixed attempt budget allows.
+        # ``goals`` is stable and on by default at both pins; from rust-v0.160
+        # its three tools are visible on ephemeral threads too (``ext/goal``
+        # ``tools_visible``), so every request carried a built-in tool surface.
         "code_mode = false\njs_repl = false\ngoals = false\n"
     )
     assert production_configuration() == expected
@@ -406,6 +406,10 @@ def test_the_production_configuration_is_the_reviewed_literal():
     assert production_configuration(control=True) == expected.replace(
         "[analytics]\nenabled = false\n", "[analytics]\nenabled = true\n",
     )
+
+
+ANALYTICS_EXPORTER = "ab.chatgpt.com:443"
+"""The release build's default metrics endpoint (``core/src/otel_init.rs:68-77``)."""
 
 
 def decoy_policy() -> egress.EgressPolicy:
@@ -478,13 +482,16 @@ async def test_the_production_configuration_makes_no_startup_connection_at_all(
     assert clean["methods_sent"] == ["'initialize'", "'initialized'", "'account/read'"]
     assert clean["readback"] is None and clean["gate"]["completed"] is False
     assert clean["executable"]["path"] == "/opt/codex/bin/codex"
-    # The same-run positive control: the same refusal at the same point, so the
-    # same zone lifetime, and yet the analytics exporter's CONNECT, whose flush
-    # the process awaits before exiting, was seen and denied.
+    # The same-run positive control: the same refusal at the same point, and the
+    # analytics exporter's CONNECT, whose flush the process awaits before
+    # exiting, was seen and denied. Its own head is required, so another
+    # background connection cannot stand in for it.
     assert control["methods_sent"] == clean["methods_sent"]
     assert set(control["faults"]) == NO_LOGIN, control["faults"]
     assert control["relay"]["denied"].get("denied:destination", 0) >= 1, control["relay"]
-    assert control["heads"], "the control's exporter never reached the relay"
+    assert any(
+        head.startswith(f"CONNECT {ANALYTICS_EXPORTER} ") for head in control["heads"]
+    ), control["heads"]
     assert empty_auth.read_bytes() == EMPTY_AUTH
     write_evidence("n4-lane-startup.json", {
         "schema_version": 1, "credential_free_fixture": True, "model_requests": 0,
