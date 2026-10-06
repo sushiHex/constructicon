@@ -536,15 +536,17 @@ async def test_the_production_configuration_makes_no_startup_connection_at_all(
     clean, control = runs[False], runs[True]
     # Preserve the phase trace on an assertion failure, without any socket or
     # credential bytes. The scheduled CI lane is the only place this pin runs.
-    write_evidence("n4-lane-startup.json", {
+    evidence = {
         "schema_version": 1, "credential_free_fixture": True, "model_requests": 0,
         "vendor_conformance_qualified": False, "vendor_bound": True,
+        "assertions_passed": False,
         "executable": clean["executable"],
         "clean": {key: clean[key] for key in ("methods_sent", "relay", "heads", "faults",
                                                "phases", "phases_omitted")},
         "control": {key: control[key] for key in ("relay", "heads", "phases",
                                                    "phases_omitted")},
-    })
+    }
+    write_evidence("n4-lane-startup.json", evidence)
     # The fact this test exists for, independent of the verdict: the production
     # configuration made no connection at all. The bridge records every CONNECT
     # head and the relay every accepted or denied connection, whatever the
@@ -566,6 +568,8 @@ async def test_the_production_configuration_makes_no_startup_connection_at_all(
     assert control["relay"]["denied"].get("denied:destination", 0) >= 1, control["relay"]
     assert control["heads"], "the control's plugin sync never reached the relay"
     assert empty_auth.read_bytes() == EMPTY_AUTH
+    evidence["assertions_passed"] = True
+    write_evidence("n4-lane-startup.json", evidence)
 
 
 async def test_the_pinned_device_login_reaches_only_the_relay_and_keeps_nothing(
