@@ -26,7 +26,7 @@ from types import SimpleNamespace
 import pytest
 
 from constructicon.core.identity import Digest
-from constructicon.substrate.executors import egress, operator_store
+from constructicon.substrate.executors import codex, egress, operator_store
 from constructicon.substrate.executors._egress_bridge import PROXY_PORT
 from constructicon.substrate.executors.codex_lane import (
     LOGIN_ARGUMENTS,
@@ -447,7 +447,7 @@ def empty_auth(binding):
 
 
 async def test_the_production_configuration_makes_no_startup_connection_at_all(
-    binding, vendor_launcher, short_root, heads, empty_auth,
+    binding, vendor_launcher, short_root, heads, empty_auth, monkeypatch,
 ):
     """L2: zero denials, beside a same-step control that counts.
 
@@ -455,9 +455,66 @@ async def test_the_production_configuration_makes_no_startup_connection_at_all(
     catalog, so this also proves the bind (host-runtime interface item 1).
     """
     runs = {}
+    phase = ["startup"]
+    events: list[dict[str, object]] = []
+    omitted = [0]
+    clients: dict[int, int] = {}
+
+    def note(event: str, **detail: object) -> None:
+        if len(events) < 64:
+            events.append({"event": event, "phase": phase[0], **detail})
+        else:
+            omitted[0] += 1
+
+    receive = egress._receive
+    handle = egress.EgressRelay._handle
+    finish = codex.CodexConversation._finish
+    relay_exit = egress.EgressRelay.__aexit__
+
+    async def observed_handle(self, client):
+        clients[id(client)] = len(clients) + 1
+        note("accepted-socket", client=clients[id(client)])
+        try:
+            await handle(self, client)
+        finally:
+            note("handler-ended", client=clients[id(client)])
+
+    async def observed_receive(sock, count):
+        try:
+            data = await receive(sock, count)
+        except OSError as exc:
+            if sock.family == socket.AF_UNIX:
+                note("client-read-error", client=clients.get(id(sock)), error=type(exc).__name__)
+            raise
+        if sock.family == socket.AF_UNIX:
+            note("client-read", client=clients.get(id(sock)), bytes=len(data))
+        return data
+
+    async def observed_finish(self, io):
+        phase[0] = "protocol-drain"
+        note("protocol-drain-start")
+        try:
+            await finish(self, io)
+        finally:
+            phase[0] = "protocol-drain-complete"
+            note("protocol-drain-complete")
+
+    async def observed_relay_exit(self, kind, error, traceback):
+        phase[0] = "relay-exit"
+        note("relay-exit-start")
+        return await relay_exit(self, kind, error, traceback)
+
+    monkeypatch.setattr(egress, "_receive", observed_receive)
+    monkeypatch.setattr(egress.EgressRelay, "_handle", observed_handle)
+    monkeypatch.setattr(codex.CodexConversation, "_finish", observed_finish)
+    monkeypatch.setattr(egress.EgressRelay, "__aexit__", observed_relay_exit)
     executable = vendor_executable(vendor_launcher)
     for control in (False, True):
         heads.clear()
+        phase[0] = "startup"
+        events.clear()
+        omitted[0] = 0
+        clients.clear()
         async with active_custody(binding) as custody:
             runs[control] = await run_startup(
                 custody, vendor_launcher, decoy_policy(), executable=executable,
@@ -467,7 +524,22 @@ async def test_the_production_configuration_makes_no_startup_connection_at_all(
                 expect_denial=control,
             )
         runs[control]["heads"] = [head.split(b"\r\n", 1)[0].decode() for head in heads]
+        runs[control]["phases"] = list(events)
+        runs[control]["phases_omitted"] = omitted[0]
     clean, control = runs[False], runs[True]
+    # Preserve the phase trace on an assertion failure, without any socket or
+    # credential bytes. The scheduled CI lane is the only place this pin runs.
+    evidence = {
+        "schema_version": 1, "credential_free_fixture": True, "model_requests": 0,
+        "vendor_conformance_qualified": False, "vendor_bound": True,
+        "assertions_passed": False,
+        "executable": clean["executable"],
+        "clean": {key: clean[key] for key in ("methods_sent", "relay", "heads", "faults",
+                                               "phases", "phases_omitted")},
+        "control": {key: control[key] for key in ("relay", "heads", "phases",
+                                                   "phases_omitted")},
+    }
+    write_evidence("n4-lane-startup.json", evidence)
     # The fact this test exists for, independent of the verdict: the production
     # configuration made no connection at all. The bridge records every CONNECT
     # head and the relay every accepted or denied connection, whatever the
@@ -493,13 +565,8 @@ async def test_the_production_configuration_makes_no_startup_connection_at_all(
         head.startswith(f"CONNECT {ANALYTICS_EXPORTER} ") for head in control["heads"]
     ), control["heads"]
     assert empty_auth.read_bytes() == EMPTY_AUTH
-    write_evidence("n4-lane-startup.json", {
-        "schema_version": 1, "credential_free_fixture": True, "model_requests": 0,
-        "vendor_conformance_qualified": False, "vendor_bound": True,
-        "executable": clean["executable"],
-        "clean": {key: clean[key] for key in ("methods_sent", "relay", "heads", "faults")},
-        "control": {key: control[key] for key in ("relay", "heads")},
-    })
+    evidence["assertions_passed"] = True
+    write_evidence("n4-lane-startup.json", evidence)
 
 
 async def test_the_pinned_device_login_reaches_only_the_relay_and_keeps_nothing(

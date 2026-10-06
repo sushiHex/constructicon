@@ -15,6 +15,25 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #110 — stream timeout proof and startup EOF observation
+
+The portable stream-timeout test now releases its injected `ETIMEDOUT` only
+after the established reply, peer hello and upstream read have been observed.
+Its accepted/reset counts and deadline are unchanged. The first three #110
+timing flakes were fixed earlier in #118.
+
+The native startup proof now records bounded relay read lengths and the phase
+of each observed event. Its zero-denial assertion still applies. At the old
+`rust-v0.153.4` pin, an instrumented clean run had no relay connections; its
+plugins-on control had two zero-byte EOFs during protocol drain. That does not
+explain the earlier five EOFs in a clean run. PR #124 moved the pin to
+`rust-v0.160.1` and uses an analytics exporter as the positive control. This
+slice does not establish the cause of intermittent clean-run EOFs or vendor
+conformance at either pin. The exact observations and limits are in the
+[M8 implementation record](plans/handoffs/M8-implementation-record.md).
+
+---
+
 ## N4 — the owner-attended session on the private host
 
 **Merged, each with every check green on its final head:**

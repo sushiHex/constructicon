@@ -3432,6 +3432,70 @@ raised.
 - **Cause.** It was not a hang. With `CI=true`, pytest diffed a 256 KiB byte operand, which took about 33 s per kill and once crossed the 60 s harness limit.
 - **Fix.** The test compares length and SHA-256 instead of the bytes.
 
+### #110 follow-up: the two later flake reports
+
+The three fixes above merged in #118. Two additional failures were then
+reported on #110, on the same pinned `rust-v0.153.4` client.
+
+**A stream `ETIMEDOUT` before the relay deadline.** The portable test injected
+the upstream read error as soon as that read began. On a loaded Windows run,
+the relay could close the client before the test read its established reply or
+observed the first hello at the peer. The test now holds the injected error on
+an event until both establishment observations are affirmative and the upstream
+read has begun. It then releases the error and requires the same `accepted: 1,
+reset: 1` result. The acquisition deadline and every bound are unchanged.
+
+**Empty startup proxy connections.** One foundation run of the clean,
+plugins-off startup test recorded five `denied:eof` connections and no parsed
+CONNECT head. A bridge connection reaches the relay before the bridge reads
+any client byte, so an EOF count alone cannot say whether the pinned client
+sent a partial head or when it closed its local proxy socket. The zero-denial
+assertion remains in force. The test now preserves bounded, byte-free events
+for relay handler entry, client read lengths, protocol drain and relay exit,
+and marks the evidence `assertions_passed: false` until all assertions pass.
+This is diagnosis, not a correction or a passing N4-L2 claim.
+
+An exact-pin source check ruled out the identified candidates: plugin startup
+is gated by `plugins_enabled` (`app-server/src/message_processor.rs:525-543`,
+`core-plugins/src/manager.rs:2735-2745`); `--strict-config` prevents a default
+fallback (`app-server/src/lib.rs:540-563`); `account/read` with
+`refreshToken: false` is local
+(`app-server/src/request_processors/account_processor.rs:1108-1130`); the
+bound static catalog ignores online models refresh
+(`models-manager/src/manager.rs:556-565`); remote control waits for
+authentication (`app-server-transport/src/transport/remote_control/websocket.rs:579-650`);
+and Linux proxy route selection does not probe TCP
+(`http-client/src/outbound_proxy.rs:248-282,352-380,575-585`). It did not
+identify the caller of the five sockets. Green runs cannot settle whether
+that caller is intermittent, because this trace records only observed
+connections.
+
+The first instrumented [foundation run 37454996873](https://github.com/sushiHex/constructicon/actions/runs/37454996873)
+passed N4-L2 at head `fd0c3fe`. Its `n4-lane-startup.json` has
+`assertions_passed: true`. The clean run recorded no relay handler entry, no
+CONNECT head, no destination and no denial. In the same test, the plugins-on
+control recorded three 59-byte CONNECT heads and destination denials during
+`startup`, then two separate zero-byte client reads counted `denied:eof`
+during `protocol-drain`, before relay exit. These control observations show
+that an empty relay connection can occur during protocol drain. They do not
+establish when or why the clean run in #120 produced five such connections.
+The fourth flake remains unresolved; a green run is not a deterministic fix.
+PR #124 subsequently changed the current pin to `rust-v0.160.1` and changed
+this test's positive control from plugin sync to an analytics exporter. The
+`fd0c3fe` trace above is historical evidence at `rust-v0.153.4`; it does not
+qualify the new pin or identify the clean-run EOF caller there.
+
+**Verification.** On the instrumented head `fd0c3fe`, the ordinary `verify`,
+M8 runner qualification and all four M8 containment lanes passed. Locally on
+Windows with Python 3.11.15, `uv run --python 3.11 verify` passed ruff, strict
+mypy, the four import contracts and pytest (3,541 passed, 678 platform skips). A separate
+Python 3.13 attempt stopped at
+`test_every_structural_sqlite_channel_must_prove_its_exact_journal`: its
+pre-existing `_MailboxProxy.__getattr__` test double is not recognized by the
+runtime `Channel` protocol check on that interpreter. That test and the
+assembly code are unchanged by this slice; the 3.11 gate is the local result,
+not a claim that the 3.13 suite passed.
+
 ### N5 Stage 0a: one vendor pin record
 
 This is the first half of the upgrade routine (`M8-N5-state-review.md`). It changes no behaviour at the current pin.
