@@ -3469,6 +3469,8 @@ The one pass on the diff returned fix-then-ship.
 
 This is the second half of the upgrade routine. It changes no behaviour at the current pin.
 
+**Against the plan.** The routine's item 2 says the tool "opens a PR". It does not: it rewrites the pin and reports, and whoever runs it opens the PR, whose gates are the routine's item 3. Its checks go beyond the plan's `SHA256SUMS` alone, as below. The plan's bytes stay as decided.
+
 **`scripts/bump_codex_pin.py [--version X.Y.Z] [--dry-run]`.** A person or an agent runs it; CI never does. It is stdlib-only and writes nothing until every check passes.
 - **Selection.**
   - Candidates come from GitHub's complete tag listing (`git/matching-refs/tags/rust-v`, observed 2026-10-05 to return all 1418 tags on one unpaginated page). They do not come from the release list, which GitHub cuts at 1000.
@@ -3497,6 +3499,8 @@ This is the second half of the upgrade routine. It changes no behaviour at the c
 - **P2, adopted.** The 1000-release window could hide a greater stable release. The fix selects from the complete tag listing, and a paginated listing refuses.
 - **P3, adopted.** The first-listed effort is now the lowest-ranked effort, and mixed line endings refuse.
 - **Design choice, recorded.** If the upstream tag is moved or deleted after a bump, later CI refuses. This is fail-closed, at an availability cost.
+
+The connector's review on ready raised one P1, adopted: the first push edited the owner-decided `M8-N5-state-review.md`. Its bytes are restored, and this record carries the difference.
 
 **Proof.**
 - `tests/test_bump_codex_pin.py` runs the tool against a scripted GitHub keyed by exact URL; every expectation is written out by hand.
