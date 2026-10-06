@@ -613,10 +613,26 @@ def test_terminal_items_that_are_not_the_pinned_summary_are_damage(items):
     assert observation.first_error == "the terminal items are not the pinned summary"
 
 
-def test_a_failed_turn_keeps_its_last_message_only_as_the_output_of_a_partial():
-    observation = folded([record(completed(status="failed", answer="half"))])
+@pytest.mark.parametrize("status", ["failed", "interrupted"])
+def test_a_failed_turn_keeps_its_partial_text_only_as_the_output_of_a_partial(status):
+    """The vendor drops the last message on failure and interruption
+    (``bespoke_event_handling.rs:1579, 1614``), so the text seen before it
+    stays, and never as an answer."""
+    observation = observe_turn([
+        record(item_completed(agent_message("half"))),
+        record(completed(status=status, answer=None)),
+    ], thread_id=THREAD, turn_id=TURN, answer_required=True)
+    assert observation.output == "half"
+    assert observation.first_error == f"the turn reported status '{status}'"
     outcome = decode_turn(observation, Facts(), requested_model=None)
     assert outcome.status == "partial" and outcome.output == "half"
+
+
+def test_partial_text_never_satisfies_the_read_rule():
+    observation = observe_turn([
+        record(item_completed(agent_message("draft"))), record(completed(answer=None)),
+    ], thread_id=THREAD, turn_id=TURN, answer_required=True)
+    assert observation.first_error == "the completed turn carries no answer"
 
 
 def test_a_turn_that_never_completes_keeps_its_completed_messages_as_partial_text():

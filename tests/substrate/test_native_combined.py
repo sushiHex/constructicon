@@ -147,6 +147,7 @@ async def test_combined_native_dispatch_and_refusal(
                 })
         record["config"] = await wire.rpc("config/read", {"includeLayers": True})
         await wire.io.close_stdin()
+        await wire.drain()
 
     try:
         await workspace.materialize()

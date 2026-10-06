@@ -592,8 +592,9 @@ from the real binary by the placement and combined lanes.
 ``item/completed`` is admitted for ``agentMessage`` items only
 (:func:`is_turn_evidence`): it is how a turn that never completes still shows
 the text it produced (M8-N5-state-review.md, Stage 0). Every other item type
-stays out, so command output and file contents never reach ``raw`` through it,
-and streaming deltas stay out too: a completed message is the unit.
+stays out, so no command execution or file change item reaches ``raw`` through
+it; the message's own text is the vendor's, under the limit the module
+docstring states. Streaming deltas stay out too: a completed message is the unit.
 
 ``turn/`` is the one **prefix**, and it is earned rather than assumed: its
 terminal member ``turn/completed`` is attested from the real binary
@@ -1403,9 +1404,11 @@ def observe_turn(
             elif fact:
                 partial = fact
     return TurnObservation(
-        # Only a terminal record's answer is the turn's output; until then a
-        # completed message is the partial text a timeout keeps as an observation.
-        output=answer if terminal else partial,
+        # The terminal answer when there is one. A failed or interrupted turn
+        # carries none (``bespoke_event_handling.rs:1579, 1614``), and a turn
+        # may never complete, so the last completed message stays as partial
+        # text: an observation, which never satisfies the READ rule above.
+        output=answer if answer is not None else partial,
         served_model=served_model, usage=usage,
         # The pinned Turn carries no rate limits (thread_data.rs:366); the
         # conversation adds its readbacks, the only spend source (N4 section 2).

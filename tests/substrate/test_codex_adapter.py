@@ -84,7 +84,9 @@ from tests.substrate.test_codex_protocol import (
     MANAGED,
     THREAD,
     TURN,
+    agent_message,
     completed,
+    item_completed,
     rerouted,
     usage_update,
 )
@@ -941,18 +943,25 @@ async def test_a_turn_that_never_terminates_refuses_through_the_adapter():
     unreachable from here, and ``decode_turn``'s missing-terminal branch is dead
     from the adapter. The branch keeps its own direct test below; this one states
     the production outcome.
+
+    The text the turn showed before it stopped stays in the conversation's
+    observation, the evidence a lane records, and the refusal publishes none of
+    it: kept as an observation, never as a result (M8-N5-state-review.md, Stage 0).
     """
     native = clean_native(
-        records=[{"method": "item/started", "params": {"threadId": THREAD}}],
+        records=[{"method": "item/started", "params": {"threadId": THREAD}},
+                 item_completed(agent_message("partial"))],
         hangs_up_after_turn=True,
     )
     conversation = await converse(native)
     assert not conversation.observation.terminal
+    assert conversation.observation.output == "partial"
     assert conversation.faults, "the adapter cannot reach a faultless missing terminal"
     outcome = unavailable_outcome(
         conversation.faults, conversation.observation, FINISHED, requested_model=None,
     )
     assert outcome.status == "failure" and outcome.error.kind == "unavailable"
+    assert outcome.output is None and outcome.raw_reply is None
 
 
 async def test_a_composed_byte_scope_preamble_is_drained_and_never_transcribed():

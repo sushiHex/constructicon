@@ -3527,8 +3527,8 @@ This lands at the current pin, `rust-v0.153.4`. The decoder change fixes the cur
 - **Answer.** It is the text of the single `agentMessage` under `itemsView: "summary"` in this turn's `turn/completed`. `turn/completed` carries the last agent message, or no items under `"notLoaded"` (`bespoke_event_handling.rs:1398-1416`).
   - Any other items shape is damage.
   - An empty text is no answer.
-  - **The READ rule:** a READ conversation (no callback catalog) whose turn completes without an answer is damage, so it decodes as partial. A WRITE turn may complete without prose, because the vendor sets `completed` independently of the last message (`:1512-1514`).
-- **Partial text.** `item/completed` is admitted for `agentMessage` items only, which are text, never command output or file contents. A turn that never completes keeps its last completed message as an observation. A timeout publishes it as the failure's output and never as a success. Streaming deltas stay out.
+  - **The READ rule:** a READ conversation (no callback catalog) whose turn completes without an answer is damage, so it decodes as partial. A WRITE turn may complete without prose, because the vendor sets `completed` independently of the last message (`:1578-1580`).
+- **Partial text.** `item/completed` is admitted for `agentMessage` items only. Its text is the turn's own, not command output, though whatever the model writes is in it. The last completed message is kept as partial text when there is no terminal answer: when a turn never completes, or when it failed or was interrupted, since the vendor drops the last message then (`:1579, 1614`). It stays in the conversation's observation, the evidence a lane records. It never satisfies the READ rule. Through the adapter, a turn that never completes is refused, and the refusal publishes none of it. Streaming deltas stay out.
 - **Usage.** It comes from the last `thread/tokenUsage/updated` for this turn: `tokenUsage.total`, both counts required, non-negative, number-sized integers.
 - **Served model.** It is the last `model/rerouted` target, as a bounded model name. With no reroute it is unknown (`None`), never the requested model.
 - A usage, reroute or item record naming another thread or turn, or malformed, is damage. It never rewrites an earlier fact.
@@ -3538,7 +3538,7 @@ This lands at the current pin, `rust-v0.153.4`. The decoder change fixes the cur
 - **Pre-send records.** A record whose bytes were framed before `turn/start` was written is never held, whatever ids it carries.
 - **The drain.** The observation is now folded after the drain, so evidence the drain reads is judged like any other.
 
-**Real-binary proofs.** The placement lane (one fake response) and the combined lane (two, across a tool continuation) fold the pinned binary's logged turn exactly as the adapter does. Each fake response reports one input and one output token, so the assertions are:
+**Real-binary proofs.** The placement lane (one fake response) and the combined lane (two, across a tool continuation) fold every notification the lane's wire logged from `turn/start` on, now through a drain to EOF, as the adapter's fold does. One limit is pre-existing: the probe consumes notifications while it awaits the reply, so a completion before the reply would stall the lane, never pass it. Each fake response reports one input and one output token, so the assertions are:
 - answer `"fixture complete"`;
 - usage equal to the number of responses served, which proves both a zero baseline and accumulation (fact 4);
 - no served model;
@@ -3546,7 +3546,7 @@ This lands at the current pin, `rust-v0.153.4`. The decoder change fixes the cur
 
 **Proof.**
 - Unit tests cover the exact-match matrix, the notice and reading agreement cases (including the two-plan set), the answer and summary shapes, the READ and WRITE rules, partial text, evidence attribution and malformation, held order across a callback, the pre-send boundary (framed and straddling) and the drain.
-- Twenty-eight mutants (N5-1 to N5-27, and the re-anchored usage bound) are all killed.
+- Twenty-nine mutants (N5-1 to N5-28, and the re-anchored usage bound) are all killed.
 
 **Cross-review.** Codex (`gpt-6-astra`) reviewed the design before the build. It raised three P1s and five P2s, with no P0. All were adopted after their premises were checked against source:
 - held evidence was released after a callback;
@@ -3559,3 +3559,10 @@ This lands at the current pin, `rust-v0.153.4`. The decoder change fixes the cur
 - the lane proof used only the post-reply records.
 
 Recorded as a design choice: the vendor emits `model/rerouted` as the reroute target, and the source read does not prove that it names the model that finally served the answer. It is published as the served model per decision and fact 5.
+
+The one pass on the diff raised three P2s, with no P0 or P1. Each premise was checked before acting:
+- **Adopted.** A failed or interrupted turn erased the partial text seen before it. It now keeps it, as above.
+- **Adopted.** The record claimed a timeout publishes its partial text, but the adapter refuses such a turn and publishes none of it. The claim is corrected, and an adapter test now pins both halves.
+- **Adopted.** The lanes neither drained to EOF nor logged late records. Both now drain, and the probe's pre-reply limit is stated.
+
+Recorded, as a design choice: `raw` carries an admitted record whole, so an `agentMessage`'s text, any extra fields it carries, and the existing `turn/` prefix (including `turn/diff/updated`) publish vendor payload. This is the module's documented limit on legitimate turn records.

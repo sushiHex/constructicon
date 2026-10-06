@@ -20,6 +20,7 @@ from constructicon.core.workspace import acquisition_id_for
 from constructicon.substrate.executors.codex_protocol import encode_record, observe_turn
 from constructicon.substrate.executors.linux import ProcessExchangeError
 from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisition_guard
+from tests.native_codex_probe import ProbeRefused
 from tests.native_provider import provider_peer
 from tests.native_startup import MODELS, DuplexWire, configuration, initialize
 from tests.provider_placement import BOOTSTRAP, PLACEMENT_PROMPT, PlacementLauncher
@@ -31,10 +32,13 @@ from tests.substrate.test_native_startup import assert_outcome
 
 
 def logged_turn(wire_log, *, answer_required=False):
-    """The real binary's one turn, folded exactly as the adapter folds it.
+    """The real binary's one turn, folded as the adapter's fold does.
 
-    Every notification received after ``turn/start`` was sent, in arrival order,
-    so evidence that came before the reply is included as the adapter holds it.
+    Every notification the wire logged after ``turn/start`` was sent, through the
+    drain to EOF, in arrival order: evidence before the reply is included as the
+    adapter holds it, and evidence after completion as the adapter's drain folds
+    it. The probe still consumes notifications while it awaits the reply, so a
+    completion arriving before the reply would stall the lane, never pass it.
     """
     start = next(index for index, entry in enumerate(wire_log)
                  if entry.get("sent", {}).get("method") == "turn/start")
@@ -81,6 +85,21 @@ def test_a_logged_turn_is_folded_from_the_turn_start_request_on():
     assert turn.terminal and turn.first_error is None
     assert turn.output == "fixture complete"
     assert turn.usage == Usage(input_tokens=1, output_tokens=1)
+
+
+async def test_the_wire_drain_logs_to_eof_and_refuses_a_truncated_record():
+    class Chunks:
+        def __init__(self, *chunks):
+            self.chunks = list(chunks)
+
+        async def read(self, maximum):
+            return self.chunks.pop(0) if self.chunks else b""
+
+    log = []
+    await DuplexWire(Chunks(b'{"method": "a"}\n{"meth', b'od": "b"}\n'), log).drain()
+    assert log == [{"received": {"method": "a"}}, {"received": {"method": "b"}}]
+    with pytest.raises(ProbeRefused, match="truncated"):
+        await DuplexWire(Chunks(b'{"method": "a"}'), []).drain()
 
 
 @pytest.fixture
@@ -235,6 +254,7 @@ async def test_native_reaches_only_the_fixed_peer(placement_image, tmp_path):
                 assert message["params"]["turn"]["status"] == "completed"
                 observed["resident"] = descendants(os.getpid())
                 await wire.io.close_stdin()
+                await wire.drain()
                 return
 
     async with placement(placement_image) as (composed, peer, record):
