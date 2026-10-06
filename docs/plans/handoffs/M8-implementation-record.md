@@ -3570,3 +3570,43 @@ The connector's review on ready raised two P2s, both adopted:
 - The lane drain decoded with permissive `json.loads`, so a duplicate-key record after the terminal could pass the real-binary proof. It now reads through the probe's own strict reader.
 
 Recorded, as a design choice: `raw` carries an admitted record whole, so an `agentMessage`'s text, any extra fields it carries, and the existing `turn/` prefix (including `turn/diff/updated`) publish vendor payload. This is the module's documented limit on legitimate turn records.
+
+### N5 Stage 0b: the pin at rust-v0.160.1
+
+The upgrade routine's first real use. It moves the pin to the latest stable release, with the real-binary lanes as the gate.
+
+**The bump.** `scripts/bump_codex_pin.py` rewrote only the acquisition step:
+- package sha256 `34080156…21f0`;
+- catalog `fd219bd9…` at `d27764b8`, the commit the tag peels to.
+
+**The signature, in CI.** The foundation lane verifies the package's Sigstore bundle with cosign `v2.6.5`, itself pinned by sha256. It checks the release workflow's identity at the pinned tag, the GitHub Actions issuer, and `--certificate-github-workflow-sha` equal to the catalog commit.
+- The certificate's own workflow SHA (extension `1.3.6.1.4.1.57264.1.3`) is `d27764b8`. So the binding needs no live tag lookup, and a tag moved later cannot pass.
+- The bundle is the legacy format.
+- The first run printed `Verified OK`, which is the positive control.
+
+**Re-observed at the pin.** The lanes failed first, and each failure was traced to its cause before changing anything.
+- **`goals`.** The feature is on by default from 0.160: `Goals`, key `goals`, stable, default on, described as "persisted thread goals and automatic goal continuation" (`features/src/lib.rs:346, 1703-1707`).
+  - It adds three built-in tools, `get_goal`, `create_goal` and `update_goal`, to every model request. That caused every mediation and combined failure (99 of them).
+  - Every recipe that turns the other built-ins off now sets `goals = false`, the production configuration included. This is the existing rule applied, not a new decision: no built-in tool surface beyond the mediated one, and no requests beyond the fixed attempt budget.
+  - With it off, every recorded tool fixture is unchanged.
+  - Mutant N5-P1 holds it off in production.
+- **Sol's `spawn_agent` description.** Its model list follows the new catalog, and one guidance line was removed from the binary's text. That one string in `native_combined_sol_tools.json` and its pin are updated.
+- **The deadline's SIGTERM.** The native now exits 0 rather than 143. Its retries and its never-terminal turn are unchanged.
+- **`account/read`.** The reading now carries `workspaceRouting`, null in a fresh recipe. A non-null value can name another backend (fact 2). Judging it under decision 2 is the remaining Stage 0b work.
+- **The startup containment control.** The plugins-on control never ran the plugin sync with the empty-auth fixture:
+  - an empty `auth.json` loads as a ChatGPT auth with no tokens, so the remote plugin catalog counts as active (`core-plugins/src/manager.rs:743-764`);
+  - it raced unawaited background requests against shutdown, and at 0.160.1 it stopped connecting.
+
+  The control now turns analytics on and changes nothing else. The metrics exporter connects to `ab.chatgpt.com`, and the process awaits that flush before exiting on stdin EOF (`app-server/src/lib.rs:1356-1357`). Plugins stay off in both runs. Mutants N5-P2 and N5-P3 hold the single difference.
+- **No `account/updated` at startup without a login.** The no-login startup sent none, so fact 1 holds at most with a login. That is a question for the 0.160.1 audit, before the host session.
+- **`incomplete headers` is unchanged.** These are connections that send nothing, in tests that pass and start no model turn, with the same count at 0.153.4.
+
+**Proof.** The full real-binary gate passes at the pin: foundation, lifecycle, mediation and combined.
+
+**Not in this PR, the rest of Stage 0b:**
+- model and effort sealed from the catalog;
+- relay denials in the shared provider outcome;
+- the `check_evidence` identities;
+- the `account/read` recovery tests;
+- `workspaceRouting` under decision 2;
+- the real-binary controls for trust roots and the voice host.
