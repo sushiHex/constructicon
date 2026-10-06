@@ -3465,4 +3465,46 @@ The one pass on the diff returned fix-then-ship.
 - **P2, adopted.** The parser recognized a text match, not the executed step. It now requires the step boundary, and CI binds the pin to the files it installed.
 - **P3, recorded.** The R11 variant ends with `cat "$W/vendor.json"`, so the block exits 0 even after a failed listing. No download follows a failed listing. The runbook's verdict is the `R11 complete` line, never the block's exit status.
 
-The bump tool (deterministic release selection, Sigstore and checksum verification, atomic rewrite) is the next PR.
+### N5 Stage 0a: the bump tool
+
+This is the second half of the upgrade routine. It changes no behaviour at the current pin.
+
+**Against the plan.** The routine's item 2 says the tool "opens a PR". It does not: it rewrites the pin and reports, and whoever runs it opens the PR, whose gates are the routine's item 3. Its checks go beyond the plan's `SHA256SUMS` alone, as below. The plan's bytes stay as decided.
+
+**`scripts/bump_codex_pin.py [--version X.Y.Z] [--dry-run]`.** A person or an agent runs it; CI never does. It is stdlib-only and writes nothing until every check passes.
+- **Selection.**
+  - Candidates come from GitHub's complete tag listing (`git/matching-refs/tags/rust-v`, observed 2026-10-05 to return all 1418 tags on one unpaginated page). They do not come from the release list, which GitHub cuts at 1000.
+  - Only exact `rust-vX.Y.Z` tags count, and they are ordered as numbers.
+  - The greatest tag whose release is published and is neither a draft nor a prerelease is chosen, or exactly the requested one.
+  - At most the ten greatest are tried; past that the tool refuses rather than settling on an older release.
+- **No downgrade.** An older version refuses. The pinned version with different bytes refuses as something to investigate. The pinned version with the same bytes is a no-op.
+- **Two digests and the bytes.** The package must be listed exactly once in the release's `codex-package_SHA256SUMS`, GitHub's own asset digest must agree, and the downloaded bytes must hash to it. These are agreement checks within GitHub's trust domain, not publisher authentication; the signature is Stage 0b's.
+- **The catalog at the tag's commit.** The listed tag object is peeled through annotated tags (at most four) to a commit, and the catalog is hashed there. The current pin's catalog is re-fetched and must still match its digest.
+- **One rewrite.**
+  - Only the acquisition step changes, rendered by `render_vendor_step`. A second copy of the step anywhere refuses.
+  - The result must parse back to the new pin. Uniform line endings are kept, and mixed ones refuse.
+  - The bytes go to a private staging file. They replace the workflow atomically, and only if it still holds the bytes read at the start, so an edit made while the tool fetched is never overwritten. A write in the instant between that last comparison and the replace is not seen; the tool has no concurrent writer of its own.
+- **Fetches.**
+  - HTTPS on every hop, including redirects. Each fetch is bounded, and a paginated response refuses, because every listing must be complete.
+  - A token from the environment goes to `api.github.com` only, as an unredirected header. urllib copies ordinary headers onto a redirect to any host.
+- **Report.**
+  - Old and new pins.
+  - The newest listed model per family. Its lowest effort is ranked by name (`low` to `ultra`), never by list position, and is reported as unknown if the model lists an effort the ranking lacks.
+  - The recorded behaviour to re-observe: the native fixtures, request shapes, and the pinned facts in `M8-N5-state-review.md`.
+
+**Cross-review.** One Codex (`gpt-6-astra`) pass on the diff returned "request changes". Every premise was reproduced before acting.
+- **P1, adopted.** A redirect could carry the token to another host, and over HTTP. Confirmed in the stdlib's `redirect_request`. The fix is the unredirected header and the HTTPS-only redirect handler.
+- **P1, adopted.** The CI signature step drafted for this PR would have failed at the current pin. `rust-v0.153.4` publishes Sigstore bundles for its binaries but none for the package archive (its asset list, checked 2026-10-05). `0.158.0`, `0.159.0`, `0.160.0` and `0.160.1` do publish one. The step therefore moves to Stage 0b, in the same PR as the first bump, whose run is its positive control. There it also binds the certificate's own commit with `--certificate-github-workflow-sha` (present in cosign `v2.6.5`'s source), rather than the tag's current target.
+- **P2, adopted.** Two P2s concerned the write path: the compare-and-swap compared two reads taken inside `apply`, and the staging path was shared. The fix compares against the bytes read at the start and stages to a private file.
+- **P2, adopted.** The 1000-release window could hide a greater stable release. The fix selects from the complete tag listing, and a paginated listing refuses.
+- **P3, adopted.** The first-listed effort is now the lowest-ranked effort, and mixed line endings refuse.
+- **Design choice, recorded.** If the upstream tag is moved or deleted after a bump, later CI refuses. This is fail-closed, at an availability cost.
+
+The connector's review on ready raised one P1, adopted: the first push edited the owner-decided `M8-N5-state-review.md`. Its bytes are restored, and this record carries the difference.
+
+**Proof.**
+- `tests/test_bump_codex_pin.py` runs the tool against a scripted GitHub keyed by exact URL; every expectation is written out by hand.
+- Thirty-one mutants in `check_m8_host_artifact_mutations.py` are all killed. They cover every refusal, the selection rules, token scoping, HTTPS redirects, the bounds and pagination, the compare-and-swap and its cleanup, and the no-op.
+  - The parse-back check is not mutated: a step rendered from a valid pin always parses back.
+  - The 404 branch is not mutated either: without it, an unreleased tag crashes the tool rather than misselecting.
+- A dry run against the real GitHub on 2026-10-05 selected `rust-v0.160.1`: commit `d27764b8`, package sha256 `34080156…21f0`, and the catalog unchanged from 0.160.0 (`fd219bd9…`). The newest models were `gpt-6.1-sol` (the default), `gpt-6-astra`, `gpt-6-luna` and `gpt-5.6-terra`, each at `low`. Moving the pin is Stage 0b.
