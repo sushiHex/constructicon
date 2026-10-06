@@ -3480,6 +3480,10 @@ during `protocol-drain`, before relay exit. These control observations show
 that an empty relay connection can occur during protocol drain. They do not
 establish when or why the clean run in #120 produced five such connections.
 The fourth flake remains unresolved; a green run is not a deterministic fix.
+PR #124 subsequently changed the current pin to `rust-v0.160.1` and changed
+this test's positive control from plugin sync to an analytics exporter. The
+`fd0c3fe` trace above is historical evidence at `rust-v0.153.4`; it does not
+qualify the new pin or identify the clean-run EOF caller there.
 
 **Verification.** On the instrumented head `fd0c3fe`, the ordinary `verify`,
 M8 runner qualification and all four M8 containment lanes passed. Locally on
@@ -3568,3 +3572,119 @@ The connector's review on ready raised one P1, adopted: the first push edited th
   - The parse-back check is not mutated: a step rendered from a valid pin always parses back.
   - The 404 branch is not mutated either: without it, an unreleased tag crashes the tool rather than misselecting.
 - A dry run against the real GitHub on 2026-10-05 selected `rust-v0.160.1`: commit `d27764b8`, package sha256 `34080156…21f0`, and the catalog unchanged from 0.160.0 (`fd219bd9…`). The newest models were `gpt-6.1-sol` (the default), `gpt-6-astra`, `gpt-6-luna` and `gpt-5.6-terra`, each at `low`. Moving the pin is Stage 0b.
+
+### N5 Stage 0b: the protocol at the pinned shapes
+
+This lands at the current pin, `rust-v0.153.4`. The decoder change fixes the current pin too: today's decoder reads `turn.output`, `turn.model` and `turn.usage`, none of which the pinned `Turn` has (`v2/thread_data.rs:366-387`). A real turn would therefore have decoded as a success with no output. The shapes below were read at both `rust-v0.153.4` and `rust-v0.160.0` and are identical.
+
+**`account/updated`, exact match only (decision 1).**
+- `updated_plan` admits only `params` exactly `{"authMode": "chatgpt", "planType": <a plan the binding accepts>}`. Both keys are always serialized (`v2/account.rs:545-548`). The record carries no `result` or `error`.
+  - Anything else refuses, with the usual neutral notice fault: another or null key, another mode (including `chatgptAuthTokens`), or another plan.
+  - An id-bearing one, including `"id": null`, still refuses through `account_request_faults`.
+  - The envelope's top-level `emittedAtMs` (`common.rs:2048-2058`) is outside `params` and plays no part.
+- The adapter keeps the plan the first exact notice names (`_noticed_plan`). Every later notice must name that plan, and the first `account/read` reading must name it too. A notice therefore never narrows the expected account before the reading, so the rate-limit rule is unchanged.
+- Identical repeats pass anywhere: before the reading, before the `turn/start` reply, mid-turn and in the drain.
+- A contradiction is a fault, and faults are never removed, so it latches.
+- The reading-variant guard is narrowed accordingly. The reading gate (`account_faults`) still never reads a mode. The notice's own `authMode` is matched exactly, which decides nothing about the reading.
+
+**The decoder.** Everything comes from the pinned events, each correlated by the `threadId` and `turnId` it carries.
+- **Answer.** It is the text of the single `agentMessage` under `itemsView: "summary"` in this turn's `turn/completed`. `turn/completed` carries the last agent message, or no items under `"notLoaded"` (`bespoke_event_handling.rs:1398-1416`).
+  - Any other items shape is damage.
+  - An empty text is no answer.
+  - **The READ rule:** a READ conversation (no callback catalog) whose turn completes without an answer is damage, so it decodes as partial. A WRITE turn may complete without prose, because the vendor sets `completed` independently of the last message (`:1578-1580`).
+- **Partial text.** `item/completed` is admitted for `agentMessage` items only. Its text is the turn's own, not command output, though whatever the model writes is in it. The last completed message is kept as partial text when there is no terminal answer: when a turn never completes, or when it failed or was interrupted, since the vendor drops the last message then (`:1579, 1614`). It stays in the conversation's observation, the evidence a lane records. It never satisfies the READ rule. Through the adapter, a turn that never completes is refused, and the refusal publishes none of it. Streaming deltas stay out.
+- **Usage.** It comes from the last `thread/tokenUsage/updated` for this turn: `tokenUsage.total`, both counts required, non-negative, number-sized integers.
+- **Served model.** It is the last `model/rerouted` target, as a bounded model name. With no reroute it is unknown (`None`), never the requested model.
+- A usage, reroute or item record naming another thread or turn, or malformed, is damage. It never rewrites an earlier fact.
+
+**Ordering and completeness.**
+- **Held evidence.** Evidence read while the `turn/start` reply is outstanding is held in arrival order. It joins the transcript as soon as the reply names the turn, before any buffered callback runs, so a snapshot read during a callback stays the later one.
+- **Pre-send records.** A record whose bytes were framed before `turn/start` was written is never held, whatever ids it carries.
+- **The drain.** The observation is now folded after the drain, so evidence the drain reads is judged like any other.
+
+**Real-binary proofs.** The placement lane (one fake response) and the combined lane (two, across a tool continuation) fold every notification the lane's wire logged from `turn/start` on, now through a drain to EOF, as the adapter's fold does. One limit is pre-existing: the probe consumes notifications while it awaits the reply, so a completion before the reply would stall the lane, never pass it. Each fake response reports one input and one output token, so the assertions are:
+- answer `"fixture complete"`;
+- usage equal to the number of responses served, which proves both a zero baseline and accumulation (fact 4);
+- no served model;
+- no damage.
+
+**Proof.**
+- Unit tests cover the exact-match matrix, the notice and reading agreement cases (including the two-plan set), the answer and summary shapes, the READ and WRITE rules, partial text, evidence attribution and malformation, held order across a callback, the pre-send boundary (framed and straddling) and the drain.
+- Thirty mutants (N5-1 to N5-29, and the re-anchored usage bound) are all killed.
+
+**Cross-review.** Codex (`gpt-6-astra`) reviewed the design before the build. It raised three P1s and five P2s, with no P0. All were adopted after their premises were checked against source:
+- held evidence was released after a callback;
+- `total` as the turn's usage was unproved, and is now proved by the lanes above;
+- the timeout's partial text was missing;
+- the pre-send boundary was ignored;
+- the READ answer rule was applied to WRITE;
+- notice-first narrowing changed the rate-limit rule;
+- the drain was not folded;
+- the lane proof used only the post-reply records.
+
+Recorded as a design choice: the vendor emits `model/rerouted` as the reroute target, and the source read does not prove that it names the model that finally served the answer. It is published as the served model per decision and fact 5.
+
+The one pass on the diff raised three P2s, with no P0 or P1. Each premise was checked before acting:
+- **Adopted.** A failed or interrupted turn erased the partial text seen before it. It now keeps it, as above.
+- **Adopted.** The record claimed a timeout publishes its partial text, but the adapter refuses such a turn and publishes none of it. The claim is corrected, and an adapter test now pins both halves.
+- **Adopted.** The lanes neither drained to EOF nor logged late records. Both now drain, and the probe's pre-reply limit is stated.
+
+The connector's review on ready raised two P2s, both adopted:
+- A later empty message left the older text as the partial text. The last completed message now decides, and an empty one leaves none.
+- The lane drain decoded with permissive `json.loads`, so a duplicate-key record after the terminal could pass the real-binary proof. It now reads through the probe's own strict reader.
+
+Recorded, as a design choice: `raw` carries an admitted record whole, so an `agentMessage`'s text, any extra fields it carries, and the existing `turn/` prefix (including `turn/diff/updated`) publish vendor payload. This is the module's documented limit on legitimate turn records.
+
+### N5 Stage 0b: the pin at rust-v0.160.1
+
+The upgrade routine's first real use. It moves the pin to the latest stable release, with the real-binary lanes as the gate.
+
+**The bump.** `scripts/bump_codex_pin.py` rewrote only the acquisition step:
+- package sha256 `34080156…21f0`;
+- catalog `fd219bd9…` at `d27764b8`, the commit the tag peels to.
+
+**The signature, in CI.** The foundation lane verifies the package's Sigstore bundle with cosign `v2.6.5`, itself pinned by sha256. It checks the release workflow's identity at the pinned tag, the GitHub Actions issuer, and `--certificate-github-workflow-sha` equal to the catalog commit.
+- The certificate's own workflow SHA (extension `1.3.6.1.4.1.57264.1.3`) is `d27764b8`. So the binding needs no live tag lookup, and a tag moved later cannot pass.
+- The bundle is the legacy format.
+- The first run printed `Verified OK`, which is the positive control.
+
+**Re-observed at the pin.** The lanes failed first, and each failure was traced to its cause before changing anything.
+- **`goals`.** The feature is stable and on by default at both pins (`features/src/lib.rs:1545` at 0.153.4, `:1703-1707` at 0.160.1). What changed is visibility. At 0.153.4 its tools were visible only where they were available, on persisted threads (`ext/goal/src/runtime.rs:122`). At 0.160.1 they are visible on ephemeral threads too (`:126`), which ours are, while still unavailable there.
+  - So every model request now carried three built-in tools, `get_goal`, `create_goal` and `update_goal`. That caused every mediation and combined failure (99 of them).
+  - Automatic continuation still requires availability (`runtime.rs:425`), so it did not newly start on these threads.
+  - Every recipe that turns the other built-ins off now sets `goals = false`, the production configuration included. This is the existing rule applied, not a new decision: no built-in tool surface beyond the mediated one, and no requests beyond the fixed attempt budget.
+  - With it off, every recorded tool fixture is unchanged.
+  - Mutant N5-P1 holds it off in production.
+- **Sol's `spawn_agent` description.** Its model list follows the new catalog, and one guidance line was removed from the binary's text. That one string in `native_combined_sol_tools.json` and its pin are updated.
+  - Its source is independent of the failing test: run 37485328028, mediation artifact 11423161931, `codex-gpt-5.6-sol-contained_python-images-false-unchanged.json`, `requests[0].input[additional_tools].tools`.
+  - Only `spawn_agent`'s description was taken. The same file's `exec` description gained goal sections, which `goals = false` removes.
+  - The evidence handoff's provenance (`M8-combined-startup-evidence.md`) stays historical.
+- **The deadline's SIGTERM.** The native now exits 0 rather than 143. Its retries and its never-terminal turn are unchanged.
+- **`account/read`.** The reading now carries `workspaceRouting`, null in a fresh recipe. A non-null value can name another backend (fact 2). Judging it under decision 2 is the remaining Stage 0b work.
+- **The startup containment control.** The plugins-on control never ran the plugin sync with the empty-auth fixture:
+  - an empty `auth.json` loads as a ChatGPT auth with no tokens, so the remote plugin catalog counts as active (`core-plugins/src/manager.rs:743-764`);
+  - it raced unawaited background requests against shutdown, and at 0.160.1 it stopped connecting.
+
+  The control now turns analytics on and changes nothing else. The metrics exporter connects to `ab.chatgpt.com`, and the process awaits that flush before exiting on stdin EOF (`app-server/src/lib.rs:1356-1357`). Plugins stay off in both runs. The test requires that exporter's own `CONNECT ab.chatgpt.com:443`, so another background connection cannot stand in for it. Mutants N5-P2 and N5-P3 hold the single difference.
+- **No `account/updated` at startup without a login.** The no-login startup sent none, so fact 1 holds at most with a login. That is a question for the 0.160.1 audit, before the host session.
+- **`incomplete headers` is unchanged.** These are connections that send nothing, in tests that pass and start no model turn, with the same count at 0.153.4.
+
+**Proof.** The full real-binary gate passes at the pin: foundation, lifecycle, mediation and combined.
+
+**Cross-review.** One Codex (`gpt-6-astra`) pass on the diff raised one P2 and two P3s, with no P0 or P1. All three were adopted after checking against source:
+- the control named no host, and now requires the exporter's head;
+- the stated cause of the goal tools was wrong, as corrected above;
+- the golden's new provenance was missing, as above.
+
+The pass also found:
+- **The signature step.** No fail-open path, and the archive is bound to the installed tree by the host-plan parity test. Replaying the approved archive stays valid for a pin.
+- **New default-on features.** Between the pins these are `daemon_auto_start`, `unified_exec_tty`, `worktrees`, `system_proxy_fallback`, `write_stdin_approval`, `guardian_reuse_parent_compaction` and `realtime_conversation`. None adds a model-visible tool or a request path in this stdio recipe. The 0.160.1 audit gives each an explicit disposition.
+- **`windows.sandbox_private_desktop`.** It is the only removed configuration key, and it is absent from the Linux recipe.
+
+**Not in this PR, the rest of Stage 0b:**
+- model and effort sealed from the catalog;
+- relay denials in the shared provider outcome;
+- the `check_evidence` identities;
+- the `account/read` recovery tests;
+- `workspaceRouting` under decision 2;
+- the real-binary controls for trust roots and the voice host.

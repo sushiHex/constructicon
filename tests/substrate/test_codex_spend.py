@@ -28,6 +28,7 @@ from constructicon.substrate.executors.codex_protocol import (
     settings_notice_faults,
     spend_faults,
     spend_reading,
+    updated_plan,
 )
 from tests.substrate.test_codex_protocol import (
     ACCOUNT_ID,
@@ -236,8 +237,53 @@ def test_any_other_rate_limit_update_refuses(params):
     assert faults == (ACCOUNT_NOTICE_FAULT.format(method="'account/rateLimits/updated'"),)
 
 
+EXACT_UPDATE = {"authMode": "chatgpt", "planType": "pro"}
+
+
+@pytest.mark.parametrize(("expected", "plan"), [
+    (EXPECTED, "pro"), (QUALIFYING, "pro"), (QUALIFYING, "prolite"),
+])
+def test_an_exact_account_update_naming_an_accepted_plan_passes(expected, plan):
+    """Decision 1 of M8-N5-state-review.md: exactly ``{authMode, planType}``."""
+    update = notice("account/updated", {**EXACT_UPDATE, "planType": plan})
+    assert account_notice_faults(update, expected) == ()
+    assert updated_plan(update, expected) == plan
+    # The envelope's top-level timestamp (``common.rs:2048-2058``) is not params.
+    assert updated_plan({**update, "emittedAtMs": 1}, expected) == plan
+
+
+@pytest.mark.parametrize("update", [
+    notice("account/updated", {**EXACT_UPDATE, "planType": "plus"}),
+    notice("account/updated", {**EXACT_UPDATE, "planType": None}),
+    notice("account/updated", {**EXACT_UPDATE, "planType": ["pro"]}),
+    notice("account/updated", {**EXACT_UPDATE, "authMode": None}),
+    notice("account/updated", {**EXACT_UPDATE, "authMode": "chatgptAuthTokens"}),
+    notice("account/updated", {**EXACT_UPDATE, "authMode": "apikey"}),
+    notice("account/updated", {**EXACT_UPDATE, "authMode": "ChatGPT"}),
+    notice("account/updated", {"planType": "pro"}),
+    notice("account/updated", {"authMode": "chatgpt"}),
+    notice("account/updated", {**EXACT_UPDATE, "email": EMAIL}),
+    notice("account/updated", [EXACT_UPDATE]),
+    notice("account/updated", None),
+    {"method": "account/updated"},
+    {**notice("account/updated", EXACT_UPDATE), "result": {}},
+    {**notice("account/updated", EXACT_UPDATE), "error": {}},
+])
+def test_any_other_account_update_refuses(update):
+    assert account_notice_faults(update, QUALIFYING) == (
+        ACCOUNT_NOTICE_FAULT.format(method="'account/updated'"),
+    )
+    assert updated_plan(update, QUALIFYING) is None
+    assert EMAIL not in json.dumps(account_notice_faults(update, QUALIFYING))
+
+
+def test_an_exact_account_update_never_admits_any_other_method():
+    for method in ("account/login/completed", "account/rateLimits/updated", "account/x"):
+        assert updated_plan(notice(method, EXACT_UPDATE), EXPECTED) is None
+
+
 @pytest.mark.parametrize("method", [
-    "account/updated", "account/login/completed", "account/rateLimits/changed", "account/x",
+    "account/login/completed", "account/rateLimits/changed", "account/x",
     "modelProvider/authRecoveryStarted", "modelProvider/authRecoveryCompleted",
     "modelProvider/x",
 ])

@@ -388,23 +388,6 @@ def vendor_launcher(bridge_launcher):
     ))
 
 
-def sealed_configuration(*, plugins: bool) -> str:
-    """The production sealed configuration's shape (state review, section 1).
-
-    It names the bound catalog, so the client reading it proves the bind.
-    """
-    return (
-        f'model = "{MODELS[0]}"\nmodel_catalog_json = "{RUNTIME_CATALOG}"\n'
-        'cli_auth_credentials_store = "file"\nforced_login_method = "chatgpt"\n'
-        'check_for_update_on_startup = false\nweb_search = "disabled"\n'
-        "[analytics]\nenabled = false\n[features]\n"
-        + ("" if plugins else "plugins = false\n")
-        + "apps = false\nshell_tool = false\nunified_exec = false\n"
-        "apply_patch_freeform = false\nview_image = false\nmulti_agent = false\n"
-        "code_mode = false\njs_repl = false\n"
-    )
-
-
 def test_the_production_configuration_is_the_reviewed_literal():
     expected = (
         f'model = "{MODELS[0]}"\nmodel_catalog_json = "{RUNTIME_CATALOG}"\n'
@@ -413,10 +396,20 @@ def test_the_production_configuration_is_the_reviewed_literal():
         "[analytics]\nenabled = false\n[features]\nplugins = false\n"
         "apps = false\nshell_tool = false\nunified_exec = false\n"
         "apply_patch_freeform = false\nview_image = false\nmulti_agent = false\n"
-        "code_mode = false\njs_repl = false\n"
+        # ``goals`` is stable and on by default at both pins; from rust-v0.160
+        # its three tools are visible on ephemeral threads too (``ext/goal``
+        # ``tools_visible``), so every request carried a built-in tool surface.
+        "code_mode = false\njs_repl = false\ngoals = false\n"
     )
     assert production_configuration() == expected
-    assert production_configuration(plugins=True) == expected.replace("plugins = false\n", "")
+    # The containment control differs in exactly one value.
+    assert production_configuration(control=True) == expected.replace(
+        "[analytics]\nenabled = false\n", "[analytics]\nenabled = true\n",
+    )
+
+
+ANALYTICS_EXPORTER = "ab.chatgpt.com:443"
+"""The release build's default metrics endpoint (``core/src/otel_init.rs:68-77``)."""
 
 
 def decoy_policy() -> egress.EgressPolicy:
@@ -456,7 +449,7 @@ def empty_auth(binding):
 async def test_the_production_configuration_makes_no_startup_connection_at_all(
     binding, vendor_launcher, short_root, heads, empty_auth, monkeypatch,
 ):
-    """L2: zero denials with plugins off, beside a same-step control that counts.
+    """L2: zero denials, beside a same-step control that counts.
 
     The client runs from the launch set's bound vendor tree and reads the bound
     catalog, so this also proves the bind (host-runtime interface item 1).
@@ -516,23 +509,23 @@ async def test_the_production_configuration_makes_no_startup_connection_at_all(
     monkeypatch.setattr(codex.CodexConversation, "_finish", observed_finish)
     monkeypatch.setattr(egress.EgressRelay, "__aexit__", observed_relay_exit)
     executable = vendor_executable(vendor_launcher)
-    for plugins in (False, True):
+    for control in (False, True):
         heads.clear()
         phase[0] = "startup"
         events.clear()
         omitted[0] = 0
         clients.clear()
         async with active_custody(binding) as custody:
-            runs[plugins] = await run_startup(
+            runs[control] = await run_startup(
                 custody, vendor_launcher, decoy_policy(), executable=executable,
-                configuration=sealed_configuration(plugins=plugins),
+                configuration=production_configuration(control=control),
                 expected=ExpectedAccount(plan_type="pro", alternatives=("prolite",)),
-                lane_dir=short_root / f"lane-{int(plugins)}", deadline_s=30,
-                expect_denial=plugins,
+                lane_dir=short_root / f"lane-{int(control)}", deadline_s=30,
+                expect_denial=control,
             )
-        runs[plugins]["heads"] = [head.split(b"\r\n", 1)[0].decode() for head in heads]
-        runs[plugins]["phases"] = list(events)
-        runs[plugins]["phases_omitted"] = omitted[0]
+        runs[control]["heads"] = [head.split(b"\r\n", 1)[0].decode() for head in heads]
+        runs[control]["phases"] = list(events)
+        runs[control]["phases_omitted"] = omitted[0]
     clean, control = runs[False], runs[True]
     # Preserve the phase trace on an assertion failure, without any socket or
     # credential bytes. The scheduled CI lane is the only place this pin runs.
@@ -561,12 +554,16 @@ async def test_the_production_configuration_makes_no_startup_connection_at_all(
     assert clean["methods_sent"] == ["'initialize'", "'initialized'", "'account/read'"]
     assert clean["readback"] is None and clean["gate"]["completed"] is False
     assert clean["executable"]["path"] == "/opt/codex/bin/codex"
-    # The same-run positive control: the same refusal at the same point, so the
-    # same zone lifetime, and yet the plugin sync's CONNECT was seen and denied.
+    # The same-run positive control: the same refusal at the same point, and the
+    # analytics exporter's CONNECT, whose flush the process awaits before
+    # exiting, was seen and denied. Its own head is required, so another
+    # background connection cannot stand in for it.
     assert control["methods_sent"] == clean["methods_sent"]
     assert set(control["faults"]) == NO_LOGIN, control["faults"]
     assert control["relay"]["denied"].get("denied:destination", 0) >= 1, control["relay"]
-    assert control["heads"], "the control's plugin sync never reached the relay"
+    assert any(
+        head.startswith(f"CONNECT {ANALYTICS_EXPORTER} ") for head in control["heads"]
+    ), control["heads"]
     assert empty_auth.read_bytes() == EMPTY_AUTH
     evidence["assertions_passed"] = True
     write_evidence("n4-lane-startup.json", evidence)
@@ -587,7 +584,7 @@ async def test_the_pinned_device_login_reaches_only_the_relay_and_keeps_nothing(
         evidence = await run_login(
             custody, vendor_launcher, decoy_policy(),
             executable=vendor_executable(vendor_launcher),
-            configuration=sealed_configuration(plugins=False),
+            configuration=production_configuration(),
             lane_dir=short_root / "lane-login", deadline_s=60, out=out,
         )
     lines = [head.split(b"\r\n", 1)[0].decode() for head in heads]
@@ -695,7 +692,7 @@ async def device_login_to(peer: IssuerPeer, launcher, binding, root: Path) -> di
         custody = replace(held, kind="maintenance", detail={"test_only": True})
         launched = await launch(
             custody, launcher, policy, command, drain,
-            configuration=sealed_configuration(plugins=False), lane_dir=root, deadline_s=60,
+            configuration=production_configuration(), lane_dir=root, deadline_s=60,
         )
     assert await until(lambda: all(session["done"] for session in peer.sessions), 10)
     peer.close()

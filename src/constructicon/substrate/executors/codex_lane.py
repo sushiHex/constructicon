@@ -569,18 +569,24 @@ def _policy(path: Path) -> EgressPolicy:
     )
 
 
-def production_configuration(*, plugins: bool = False) -> str:
-    """The reviewed startup configuration, with a plugin-on containment control."""
+def production_configuration(*, control: bool = False) -> str:
+    """The reviewed startup configuration, or its containment control.
+
+    The control turns analytics on and changes nothing else. Its metrics
+    exporter connects to ``ab.chatgpt.com``, and the process awaits that flush
+    before it exits on stdin EOF, so the relay must see and deny it within the
+    same startup. The former plugins-on control raced shutdown and stopped
+    connecting at rust-v0.160.1.
+    """
 
     return (
         f'model = "{PREPARE_MODEL}"\nmodel_catalog_json = "{RUNTIME_CATALOG}"\n'
         'cli_auth_credentials_store = "file"\nforced_login_method = "chatgpt"\n'
         'check_for_update_on_startup = false\nweb_search = "disabled"\n'
-        "[analytics]\nenabled = false\n[features]\n"
-        + ("" if plugins else "plugins = false\n")
-        + "apps = false\nshell_tool = false\nunified_exec = false\n"
+        f"[analytics]\nenabled = {str(control).lower()}\n[features]\nplugins = false\n"
+        "apps = false\nshell_tool = false\nunified_exec = false\n"
         "apply_patch_freeform = false\nview_image = false\nmulti_agent = false\n"
-        "code_mode = false\njs_repl = false\n"
+        "code_mode = false\njs_repl = false\ngoals = false\n"
     )
 
 

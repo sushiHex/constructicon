@@ -240,7 +240,7 @@ async def test_the_relay_is_listening_during_the_exchange_and_gone_afterwards(
     before = loop.time()
     outcome = await outcome_of(handle)
     after = loop.time()
-    assert outcome.status == "success" and outcome.output == {"summary": "done"}
+    assert outcome.status == "success" and outcome.output == "done"
     # The relay's deadline is the exchange's own shared deadline.
     assert before + GRANTS.timeout_s <= relays[0]._deadline <= after + GRANTS.timeout_s
     assert facts == {"reply": ESTABLISHED, "forwarded": True, "judged": True}

@@ -28,7 +28,7 @@ from tests.test_native_provider import request_bytes, transact
     ("native_combined_tools.json",
      "5c4eb4222231029c8481fb5d0275ce9e6439ee73ff0bdb4446ae7de381645aa5"),
     ("native_combined_sol_tools.json",
-     "2af69894c7d1da46180c29ab5b0a6d996e6daad08d7f1a93d9f6de217a2a10b1"),
+     "06cf7dcf767a8f6b35a11191fa677690c796e03e35bbb637b64b708e0c496863"),
     ("native_combined_mcp_tools.json",
      "19d0ce92c181de4ef0a5256c3a256695c4207f2346f28a3bdba69002f2c800c5"),
     ("native_combined_context.json",

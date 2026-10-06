@@ -160,9 +160,47 @@ def record(value):
     return encode_record(value).removesuffix(b"\n")
 
 
-def completed(*, thread=THREAD, turn=TURN, status="completed", **fields):
+def agent_message(text, *, identifier="msg-1"):
+    """The pinned ``ThreadItem::AgentMessage``, its nullable fields serialized."""
+    return {"type": "agentMessage", "id": identifier, "text": text, "phase": None,
+            "memoryCitation": None, "delivery": None, "questions": None}
+
+
+def completed(*, thread=THREAD, turn=TURN, status="completed", answer="done", **fields):
+    """The pinned ``turn/completed``: the last agent message as the summary, or none."""
+    items = {"items": [agent_message(answer)], "itemsView": "summary"} if answer is not None \
+        else {"items": [], "itemsView": "notLoaded"}
     return {"method": "turn/completed", "params": {
-        "threadId": thread, "turn": {"id": turn, "status": status, **fields},
+        "threadId": thread, "turn": {
+            "id": turn, **items, "status": status, "error": None,
+            "startedAt": 1, "completedAt": 2, "durationMs": 1000, **fields,
+        },
+    }}
+
+
+def usage_update(*, input_tokens=7, output_tokens=3, thread=THREAD, turn=TURN):
+    """The pinned ``thread/tokenUsage/updated``; ``total`` is the thread's running sum."""
+    def breakdown(scale):
+        return {"totalTokens": (input_tokens + output_tokens) * scale,
+                "inputTokens": input_tokens * scale, "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0, "outputTokens": output_tokens * scale,
+                "reasoningOutputTokens": 0}
+    return {"method": "thread/tokenUsage/updated", "params": {
+        "threadId": thread, "turnId": turn,
+        "tokenUsage": {"total": breakdown(1), "last": breakdown(1), "modelContextWindow": None},
+    }}
+
+
+def rerouted(to_model, *, thread=THREAD, turn=TURN):
+    return {"method": "model/rerouted", "params": {
+        "threadId": thread, "turnId": turn, "fromModel": "gpt-6.1-sol", "toModel": to_model,
+        "reason": "highRiskCyberActivity",
+    }}
+
+
+def item_completed(item, *, thread=THREAD, turn=TURN):
+    return {"method": "item/completed", "params": {
+        "item": item, "threadId": thread, "turnId": turn, "completedAtMs": 1,
     }}
 
 
@@ -423,13 +461,18 @@ def test_the_gate_cannot_separate_the_chatgpt_credential_variants():
     managed session and an externally supplied one can be identical bytes. The
     gate says nothing about which is in use, and must not start guessing: the
     precise carrier is the deprecated operation this adapter excludes.
+
+    ``account/updated`` is another carrier: it states ``authMode`` itself, and
+    decision 1 of M8-N5-state-review.md admits it only as ``"chatgpt"``. That is
+    matching a notice's own claim exactly, not inferring one from the reading,
+    which still never reads a mode.
     """
     managed = account_reply(account=MANAGED)
     external = account_reply(account=dict(MANAGED))
     assert encode_record(managed) == encode_record(external)
     assert account_faults(managed, EXPECTED) == account_faults(external, EXPECTED) == ()
-    source = inspect.getsource(codex_protocol)
-    assert "getAuthStatus" not in source and "authMode" not in source
+    assert "getAuthStatus" not in inspect.getsource(codex_protocol)
+    assert "authMode" not in inspect.getsource(account_faults)
 
 
 def test_a_wire_value_reaches_a_public_detail_only_when_it_is_short_and_lexical():
@@ -498,7 +541,7 @@ def test_a_reading_that_differs_from_the_pre_turn_one_refuses(after, named):
 def test_a_clean_turn_reports_only_what_the_stream_emitted():
     observation = folded([
         record({"method": "turn/delta", "params": {"threadId": THREAD}}),
-        record(completed()),
+        record(completed(answer=None)),
     ])
     assert observation.terminal and observation.first_error is None
     assert observation.malformed_records == 0
@@ -509,14 +552,154 @@ def test_a_clean_turn_reports_only_what_the_stream_emitted():
     assert "turn/delta" in observation.raw
 
 
-def test_emitted_model_and_usage_are_carried_through():
+def test_the_answer_usage_and_reroute_come_from_the_pinned_events():
+    observation = folded([
+        record(usage_update(input_tokens=5, output_tokens=1)),
+        record(rerouted("gpt-6-sol")),
+        record(usage_update(input_tokens=11, output_tokens=3)),
+        record(completed(answer="the answer")),
+    ])
+    assert observation.output == "the answer" and observation.first_error is None
+    # The last total is the turn's; the last reroute is the served model.
+    assert observation.usage == Usage(input_tokens=11, output_tokens=3)
+    assert observation.served_model == "gpt-6-sol"
+
+
+def test_the_old_turn_fields_are_never_read():
+    """``Turn`` has no ``output``, ``model`` or ``usage`` (``v2/thread_data.rs:366``)."""
     observation = folded([record(completed(
-        model="gpt-5.6-sol", output={"summary": "done"},
+        answer=None, output={"summary": "done"}, model="gpt-5.6-sol",
         usage={"inputTokens": 11, "outputTokens": 3},
     ))])
-    assert observation.served_model == "gpt-5.6-sol"
-    assert observation.usage == Usage(input_tokens=11, output_tokens=3)
-    assert observation.output == {"summary": "done"}
+    assert observation.output is None and observation.served_model is None
+    assert observation.usage is None
+
+
+def test_no_reroute_means_the_served_model_is_unknown_never_the_requested_one():
+    observation = folded([record(usage_update()), record(completed())])
+    outcome = decode_turn(observation, Facts(), requested_model="gpt-6.1-sol")
+    assert outcome.status == "success" and outcome.served_model is None
+
+
+@pytest.mark.parametrize("required", [True, False])
+@pytest.mark.parametrize("answer", [None, ""])
+def test_a_completed_turn_without_an_answer_is_damage_only_where_one_is_required(
+    required, answer,
+):
+    """The READ rule: a completed turn answers with non-empty text. A WRITE turn
+    may complete without prose (``notLoaded``), and that is not damage."""
+    observation = observe_turn(
+        [record(completed(answer=answer))], thread_id=THREAD, turn_id=TURN,
+        answer_required=required,
+    )
+    assert observation.terminal and observation.output is None
+    assert (observation.first_error == "the completed turn carries no answer") is required
+
+
+@pytest.mark.parametrize("items", [
+    {"items": [agent_message("a"), agent_message("b")], "itemsView": "summary"},
+    {"items": [{"type": "userMessage", "id": "u", "content": []}], "itemsView": "summary"},
+    {"items": [{**agent_message("a"), "text": 7}], "itemsView": "summary"},
+    {"items": [agent_message("a")], "itemsView": "full"},
+    {"items": [agent_message("a")], "itemsView": "notLoaded"},
+    {"items": None, "itemsView": "summary"},
+    {"itemsView": "summary"},
+])
+def test_terminal_items_that_are_not_the_pinned_summary_are_damage(items):
+    turn = completed(answer=None)
+    turn["params"]["turn"].update(items)
+    observation = folded([record(turn)])
+    assert observation.terminal and observation.output is None
+    assert observation.first_error == "the terminal items are not the pinned summary"
+
+
+@pytest.mark.parametrize("status", ["failed", "interrupted"])
+def test_a_failed_turn_keeps_its_partial_text_only_as_the_output_of_a_partial(status):
+    """The vendor drops the last message on failure and interruption
+    (``bespoke_event_handling.rs:1579, 1614``), so the text seen before it
+    stays, and never as an answer."""
+    observation = observe_turn([
+        record(item_completed(agent_message("half"))),
+        record(completed(status=status, answer=None)),
+    ], thread_id=THREAD, turn_id=TURN, answer_required=True)
+    assert observation.output == "half"
+    assert observation.first_error == f"the turn reported status '{status}'"
+    outcome = decode_turn(observation, Facts(), requested_model=None)
+    assert outcome.status == "partial" and outcome.output == "half"
+
+
+def test_partial_text_never_satisfies_the_read_rule():
+    observation = observe_turn([
+        record(item_completed(agent_message("draft"))), record(completed(answer=None)),
+    ], thread_id=THREAD, turn_id=TURN, answer_required=True)
+    assert observation.first_error == "the completed turn carries no answer"
+
+
+def test_a_turn_that_never_completes_keeps_its_completed_messages_as_partial_text():
+    """M8-N5-state-review.md, Stage 0: a timeout keeps the partial text as an
+    observation, never as an accepted result."""
+    observation = folded([
+        record(item_completed(agent_message("first"))),
+        record(item_completed(agent_message(""))),
+        record(item_completed(agent_message("second"))),
+    ])
+    assert not observation.terminal and observation.output == "second"
+    outcome = decode_turn(observation, Facts(timed_out=True), requested_model=None)
+    assert outcome.status == "failure" and outcome.error.kind == "timeout"
+    assert outcome.output == "second"
+
+
+def test_an_empty_last_message_leaves_no_partial_text():
+    """The last completed message is the partial text, and an empty one is none."""
+    observation = folded([
+        record(item_completed(agent_message("stale"))),
+        record(item_completed(agent_message(""))),
+    ])
+    assert not observation.terminal and observation.output is None
+
+
+def test_a_terminal_answer_replaces_the_partial_text():
+    observation = folded([
+        record(item_completed(agent_message("draft"))), record(completed(answer="final")),
+    ])
+    assert observation.output == "final"
+
+
+def test_only_agent_message_items_are_evidence():
+    command = {"type": "commandExecution", "id": "c", "command": "cat secret",
+               "aggregatedOutput": EMAIL}
+    observation = folded([record(item_completed(command)), record(completed())])
+    assert EMAIL not in observation.raw and "[1 records withheld" in observation.raw
+    assert observation.first_error is None
+
+
+def usage_total(**total):
+    """A usage update whose ``total`` is exactly the given wire values."""
+    value = usage_update()
+    value["params"]["tokenUsage"]["total"] = total
+    return value
+
+
+@pytest.mark.parametrize("evidence", [
+    usage_update(turn="another-turn"), usage_update(thread="another-thread"),
+    rerouted("gpt-6-sol", turn="another-turn"),
+    item_completed(agent_message("x"), turn="another-turn"),
+    usage_total(inputTokens=-1, outputTokens=1), usage_total(inputTokens=True, outputTokens=1),
+    usage_total(inputTokens=10 ** 40, outputTokens=1), usage_total(inputTokens=1),
+    usage_total(inputTokens=1.0, outputTokens=1), usage_total(),
+    rerouted(""), rerouted("x" * 65), rerouted("gpt 6"), rerouted(None),
+    item_completed({"type": "agentMessage", "id": "m"}),
+])
+def test_evidence_that_is_not_this_turns_or_is_malformed_is_damage(evidence):
+    observation = folded([
+        record(usage_update(input_tokens=2, output_tokens=1)), record(rerouted("gpt-6-sol")),
+        record(evidence), record(completed()),
+    ])
+    assert observation.malformed_records == 1 and observation.first_error is not None
+    assert evidence["method"] in observation.first_error
+    # A bad snapshot never rewrites an earlier fact.
+    assert observation.usage == Usage(input_tokens=2, output_tokens=1)
+    assert observation.served_model == "gpt-6-sol"
 
 
 def test_a_turn_record_is_never_a_rate_limit_source():
@@ -548,11 +731,8 @@ def test_a_malformed_record_is_damage_a_later_success_cannot_promote():
 
 
 def test_two_terminal_records_are_contradictory_rather_than_last_wins():
-    observation = folded([
-        record(completed(output={"first": True})),
-        record(completed(output={"second": True})),
-    ])
-    assert observation.terminal and observation.output == {"first": True}
+    observation = folded([record(completed(answer="first")), record(completed(answer="second"))])
+    assert observation.terminal and observation.output == "first"
     assert "contradictory" in (observation.first_error or "")
 
 
@@ -932,14 +1112,15 @@ def test_no_planted_wire_string_escapes_a_refusal(name):
 
 def test_the_bounded_fields_are_the_whole_public_text_surface():
     """If a new text field appears on an outcome, this notices."""
-    observation = folded([record(completed(output={"summary": "done"}))])
+    observation = folded([record(rerouted("gpt-6-sol")), record(completed())])
     outcome = decode_turn(observation, Facts(bound_exceeded="record", stderr=b"e"),
                           requested_model="m")
     fields = {field for field, _ in strings_of(outcome.model_dump(mode="json"))}
     # ``output`` is the task result rather than a diagnostic, and ``status``,
-    # ``kind`` and ``requested_model`` are ours, not the wire's.
+    # ``kind`` and ``requested_model`` are ours, not the wire's. The served
+    # model is a bounded model name (``MODEL_CHARS``).
     assert fields <= set(FIELD_BOUNDS) | {
-        "status", "kind", "summary", "requested_model", "served_model",
+        "status", "kind", "output", "requested_model", "served_model",
     }, fields
 
 
@@ -1027,17 +1208,19 @@ def test_no_published_number_is_larger_than_a_number():
     is the same defect as a long string, in a different type.
     """
     huge = 10 ** 4200
-    observation = folded([record(completed(
-        usage={"inputTokens": huge, "outputTokens": 7},
-    ))])
+    observation = folded([
+        record(usage_update(input_tokens=2, output_tokens=7)),
+        record(usage_total(inputTokens=huge, outputTokens=7)), record(completed()),
+    ])
     window = {"usedPercent": huge, "windowDurationMins": 300, "resetsAt": 1}
     readback = spend_reading({"result": spend_result(primary=window, secondary=window)})
     observation = replace(observation, rate_limit=rate_limit_of(readback, readback))
     outcome = decode_turn(observation, Facts(), requested_model=None)
-    assert outcome.status == "success"
+    # The oversized snapshot is damage and never replaces the earlier total.
+    assert outcome.status == "partial"
     for field, number in numbers_of(outcome.model_dump(mode="json")):
         assert len(repr(number)) <= NUMBER_CHARS, (field, len(repr(number)))
-    assert outcome.usage == Usage(input_tokens=None, output_tokens=7)
+    assert outcome.usage == Usage(input_tokens=2, output_tokens=7)
     assert "before.primary_used_percent" not in outcome.rate_limit.detail
     assert outcome.rate_limit.detail["before.has_credits"] is False
 
