@@ -210,7 +210,10 @@ async def test_provider_failure_retries_until_the_owned_deadline(startup_launche
     assert not requests and not failures
     # This is the native projection, not the setup record echoing itself.
     assert observations["config"]["config"]["model_providers"]["probe"]["base_url"] == endpoint
-    assert_outcome(result, status=143, timed_out=True)
+    # The deadline's SIGTERM ends it: 0.153.4 died with 143, while 0.160.1 handles
+    # the signal and exits 0 (re-observed on the bump). Either way the launcher
+    # records the deadline, and no terminal turn was reported.
+    assert_outcome(result, status=0, timed_out=True)
     assert "turn" not in observations  # Native never reported a terminal turn.
     errors = [message["params"] for message in observations["turn_events"]
               if message.get("method") == "error"]

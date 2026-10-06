@@ -114,6 +114,7 @@ multi_agent = false
 code_mode = false
 js_repl = false
 apps = false
+goals = false
 '''
     config = Path(env["CODEX_HOME"])
     (config / "config.toml").write_text(configuration)

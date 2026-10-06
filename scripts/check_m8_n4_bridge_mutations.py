@@ -639,8 +639,32 @@ MUTANTS = (
     (
         "N4-P9 production config disables plugins",
         LANE + "production_configuration",
-        '"plugins = false\\n"',
-        '"plugins = true\\n"',
+        "[features]\\nplugins = false\\n",
+        "[features]\\nplugins = true\\n",
+        "tests/substrate/test_native_egress_bridge.py::"
+        "test_the_production_configuration_is_the_reviewed_literal",
+    ),
+    (
+        "N5-P1 production config disables goals and their continuation",
+        LANE + "production_configuration",
+        "goals = false\\n",
+        "goals = true\\n",
+        "tests/substrate/test_native_egress_bridge.py::"
+        "test_the_production_configuration_is_the_reviewed_literal",
+    ),
+    (
+        "N5-P2 the production config keeps analytics off",
+        LANE + "production_configuration",
+        "enabled = {str(control).lower()}",
+        "enabled = true",
+        "tests/substrate/test_native_egress_bridge.py::"
+        "test_the_production_configuration_is_the_reviewed_literal",
+    ),
+    (
+        "N5-P3 the control turns analytics on",
+        LANE + "production_configuration",
+        "enabled = {str(control).lower()}",
+        "enabled = false",
         "tests/substrate/test_native_egress_bridge.py::"
         "test_the_production_configuration_is_the_reviewed_literal",
     ),

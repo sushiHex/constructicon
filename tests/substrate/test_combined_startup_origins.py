@@ -162,7 +162,11 @@ async def test_fresh_recipe_has_no_external_startup_state(placement_image, tmp_p
     record = await measure(placement_image, tmp_path, model)
     assert record["config"]["config"]["model"] == model
     assert record["requirements"] == {"requirements": None}
-    assert record["account"] == {"account": None, "requiresOpenaiAuth": False}
+    # ``workspaceRouting`` is new at rust-v0.160 (re-observed on the bump), and a
+    # fresh recipe has none.
+    assert record["account"] == {
+        "account": None, "requiresOpenaiAuth": False, "workspaceRouting": None,
+    }
     assert not [skill for row in record["skills"]["data"] for skill in row["skills"]]
     assert not [hook for row in record["hooks"]["data"] for hook in row["hooks"]]
     assert not record["plugins"]["marketplaces"]
