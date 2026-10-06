@@ -31,6 +31,18 @@ class DuplexWire(Wire):
         if self.records is not None:
             self.records.append({"sent": value})
 
+    async def drain(self):
+        """Log every record still to come, to EOF, as the adapter's drain reads them.
+
+        After stdin is closed. Each record goes through the probe's own strict
+        reader, so a damaged, truncated or duplicate-key record raises exactly
+        as it would before the terminal record, and the log a lane folds is the
+        whole stream or a failure.
+        """
+        while raw := await self._readline():
+            self.pending[:0] = raw  # read it again, strictly and logged
+            await self.read()
+
     async def _readline(self):
         while b"\n" not in self.pending:
             if len(self.pending) >= RECORD_BYTES:

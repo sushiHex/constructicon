@@ -3508,3 +3508,65 @@ The connector's review on ready raised one P1, adopted: the first push edited th
   - The parse-back check is not mutated: a step rendered from a valid pin always parses back.
   - The 404 branch is not mutated either: without it, an unreleased tag crashes the tool rather than misselecting.
 - A dry run against the real GitHub on 2026-10-05 selected `rust-v0.160.1`: commit `d27764b8`, package sha256 `34080156…21f0`, and the catalog unchanged from 0.160.0 (`fd219bd9…`). The newest models were `gpt-6.1-sol` (the default), `gpt-6-astra`, `gpt-6-luna` and `gpt-5.6-terra`, each at `low`. Moving the pin is Stage 0b.
+
+### N5 Stage 0b: the protocol at the pinned shapes
+
+This lands at the current pin, `rust-v0.153.4`. The decoder change fixes the current pin too: today's decoder reads `turn.output`, `turn.model` and `turn.usage`, none of which the pinned `Turn` has (`v2/thread_data.rs:366-387`). A real turn would therefore have decoded as a success with no output. The shapes below were read at both `rust-v0.153.4` and `rust-v0.160.0` and are identical.
+
+**`account/updated`, exact match only (decision 1).**
+- `updated_plan` admits only `params` exactly `{"authMode": "chatgpt", "planType": <a plan the binding accepts>}`. Both keys are always serialized (`v2/account.rs:545-548`). The record carries no `result` or `error`.
+  - Anything else refuses, with the usual neutral notice fault: another or null key, another mode (including `chatgptAuthTokens`), or another plan.
+  - An id-bearing one, including `"id": null`, still refuses through `account_request_faults`.
+  - The envelope's top-level `emittedAtMs` (`common.rs:2048-2058`) is outside `params` and plays no part.
+- The adapter keeps the plan the first exact notice names (`_noticed_plan`). Every later notice must name that plan, and the first `account/read` reading must name it too. A notice therefore never narrows the expected account before the reading, so the rate-limit rule is unchanged.
+- Identical repeats pass anywhere: before the reading, before the `turn/start` reply, mid-turn and in the drain.
+- A contradiction is a fault, and faults are never removed, so it latches.
+- The reading-variant guard is narrowed accordingly. The reading gate (`account_faults`) still never reads a mode. The notice's own `authMode` is matched exactly, which decides nothing about the reading.
+
+**The decoder.** Everything comes from the pinned events, each correlated by the `threadId` and `turnId` it carries.
+- **Answer.** It is the text of the single `agentMessage` under `itemsView: "summary"` in this turn's `turn/completed`. `turn/completed` carries the last agent message, or no items under `"notLoaded"` (`bespoke_event_handling.rs:1398-1416`).
+  - Any other items shape is damage.
+  - An empty text is no answer.
+  - **The READ rule:** a READ conversation (no callback catalog) whose turn completes without an answer is damage, so it decodes as partial. A WRITE turn may complete without prose, because the vendor sets `completed` independently of the last message (`:1578-1580`).
+- **Partial text.** `item/completed` is admitted for `agentMessage` items only. Its text is the turn's own, not command output, though whatever the model writes is in it. The last completed message is kept as partial text when there is no terminal answer: when a turn never completes, or when it failed or was interrupted, since the vendor drops the last message then (`:1579, 1614`). It stays in the conversation's observation, the evidence a lane records. It never satisfies the READ rule. Through the adapter, a turn that never completes is refused, and the refusal publishes none of it. Streaming deltas stay out.
+- **Usage.** It comes from the last `thread/tokenUsage/updated` for this turn: `tokenUsage.total`, both counts required, non-negative, number-sized integers.
+- **Served model.** It is the last `model/rerouted` target, as a bounded model name. With no reroute it is unknown (`None`), never the requested model.
+- A usage, reroute or item record naming another thread or turn, or malformed, is damage. It never rewrites an earlier fact.
+
+**Ordering and completeness.**
+- **Held evidence.** Evidence read while the `turn/start` reply is outstanding is held in arrival order. It joins the transcript as soon as the reply names the turn, before any buffered callback runs, so a snapshot read during a callback stays the later one.
+- **Pre-send records.** A record whose bytes were framed before `turn/start` was written is never held, whatever ids it carries.
+- **The drain.** The observation is now folded after the drain, so evidence the drain reads is judged like any other.
+
+**Real-binary proofs.** The placement lane (one fake response) and the combined lane (two, across a tool continuation) fold every notification the lane's wire logged from `turn/start` on, now through a drain to EOF, as the adapter's fold does. One limit is pre-existing: the probe consumes notifications while it awaits the reply, so a completion before the reply would stall the lane, never pass it. Each fake response reports one input and one output token, so the assertions are:
+- answer `"fixture complete"`;
+- usage equal to the number of responses served, which proves both a zero baseline and accumulation (fact 4);
+- no served model;
+- no damage.
+
+**Proof.**
+- Unit tests cover the exact-match matrix, the notice and reading agreement cases (including the two-plan set), the answer and summary shapes, the READ and WRITE rules, partial text, evidence attribution and malformation, held order across a callback, the pre-send boundary (framed and straddling) and the drain.
+- Thirty mutants (N5-1 to N5-29, and the re-anchored usage bound) are all killed.
+
+**Cross-review.** Codex (`gpt-6-astra`) reviewed the design before the build. It raised three P1s and five P2s, with no P0. All were adopted after their premises were checked against source:
+- held evidence was released after a callback;
+- `total` as the turn's usage was unproved, and is now proved by the lanes above;
+- the timeout's partial text was missing;
+- the pre-send boundary was ignored;
+- the READ answer rule was applied to WRITE;
+- notice-first narrowing changed the rate-limit rule;
+- the drain was not folded;
+- the lane proof used only the post-reply records.
+
+Recorded as a design choice: the vendor emits `model/rerouted` as the reroute target, and the source read does not prove that it names the model that finally served the answer. It is published as the served model per decision and fact 5.
+
+The one pass on the diff raised three P2s, with no P0 or P1. Each premise was checked before acting:
+- **Adopted.** A failed or interrupted turn erased the partial text seen before it. It now keeps it, as above.
+- **Adopted.** The record claimed a timeout publishes its partial text, but the adapter refuses such a turn and publishes none of it. The claim is corrected, and an adapter test now pins both halves.
+- **Adopted.** The lanes neither drained to EOF nor logged late records. Both now drain, and the probe's pre-reply limit is stated.
+
+The connector's review on ready raised two P2s, both adopted:
+- A later empty message left the older text as the partial text. The last completed message now decides, and an empty one leaves none.
+- The lane drain decoded with permissive `json.loads`, so a duplicate-key record after the terminal could pass the real-binary proof. It now reads through the probe's own strict reader.
+
+Recorded, as a design choice: `raw` carries an admitted record whole, so an `agentMessage`'s text, any extra fields it carries, and the existing `turn/` prefix (including `turn/diff/updated`) publish vendor payload. This is the module's documented limit on legitimate turn records.

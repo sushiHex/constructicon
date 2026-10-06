@@ -86,6 +86,115 @@ STORE_ADAPTER = "tests/substrate/test_codex_store.py::"
 SPEND_TEST = "tests/substrate/test_codex_spend.py::"
 STARTUP_TEST = "tests/substrate/test_codex_startup.py::"
 MATRIX_TEST = "tests/substrate/test_codex_matrix.py::"
+WRITE_TEST = "tests/substrate/test_codex_write.py::"
+
+UPDATED = "constructicon.substrate.executors.codex_protocol:updated_plan"
+ANSWER = "constructicon.substrate.executors.codex_protocol:_answer"
+ATTRIBUTED = "constructicon.substrate.executors.codex_protocol:_attributed"
+REROUTED = "constructicon.substrate.executors.codex_protocol:_rerouted_to"
+EVIDENCE_DAMAGE = PROTOCOL + "test_evidence_that_is_not_this_turns_or_is_malformed_is_damage"
+CONTRADICTION = ADAPTER + "test_a_contradicting_account_update_refuses"
+N5_PROTOCOL = (
+    # --- N5 Stage 0: account/updated on an exact match only (decision 1) ---
+    ("N5-1 account/updated is admitted when exact", ACCOUNT_RECORD,
+     "return () if updated_plan(record, expected) is not None else refused", "return refused",
+     SPEND_TEST + "test_an_exact_account_update_naming_an_accepted_plan_passes"),
+    ("N5-2 account/updated has exactly two keys", UPDATED,
+     'set(params) != {"authMode", PLAN_TYPE_KEY}',
+     'not {"authMode", PLAN_TYPE_KEY} <= set(params)',
+     SPEND_TEST + "test_any_other_account_update_refuses"),
+    ("N5-3 account/updated names the chatgpt mode", UPDATED,
+     'or params["authMode"] != "chatgpt" ', "",
+     SPEND_TEST + "test_any_other_account_update_refuses"),
+    ("N5-4 account/updated carries no reply or error", UPDATED,
+     ' or "result" in record or "error" in record', "",
+     SPEND_TEST + "test_any_other_account_update_refuses"),
+    ("N5-5 account/updated names an accepted plan", UPDATED,
+     " or not expected.accepts(params[PLAN_TYPE_KEY])", "",
+     SPEND_TEST + "test_any_other_account_update_refuses"),
+    ("N5-6 notices agree with each other", NOTICES,
+     "if self._noticed_plan not in (None, plan):", "if False:",
+     CONTRADICTION + "[between-notices]"),
+    ("N5-7 the first reading agrees with the notices", CONVERSE,
+     "if self._noticed_plan not in (None, self.observed_plan):", "if False:",
+     CONTRADICTION + "[before-reading]"),
+    # --- N5 Stage 0: the decoder reads the pinned events ---
+    ("N5-8 the old turn fields stay unread", ANSWER,
+     '    view, items = turn.get("itemsView"), turn.get("items")',
+     '    if "output" in turn:\n        return turn["output"], True\n'
+     '    view, items = turn.get("itemsView"), turn.get("items")',
+     PROTOCOL + "test_the_old_turn_fields_are_never_read"),
+    ("N5-9 the summary holds exactly one item", ANSWER,
+     "len(items) == 1", "len(items) >= 1",
+     PROTOCOL + "test_terminal_items_that_are_not_the_pinned_summary_are_damage"),
+    ("N5-10 an empty answer is no answer", ANSWER,
+     "return text or None, True", "return text, True",
+     PROTOCOL + "test_a_completed_turn_without_an_answer_is_damage_only_where_one_is_required"),
+    ("N5-11 a READ turn requires an answer", OBSERVE,
+     "elif answer_required and completed and answer is None:", "elif False:",
+     PROTOCOL + "test_a_completed_turn_without_an_answer_is_damage_only_where_one_is_required"),
+    ("N5-12 the READ rule is the conversation's without a catalog", CALL,
+     "answer_required=not self._catalog,", "answer_required=False,",
+     ADAPTER + "test_a_read_turn_that_completes_without_an_answer_is_damage"),
+    ("N5-13 a WRITE turn may complete without prose", CALL,
+     "answer_required=not self._catalog,", "answer_required=True,",
+     WRITE_TEST + "test_a_write_turn_may_complete_without_prose"),
+    ("N5-14 another turn's evidence is damage", ATTRIBUTED,
+     ' or params.get("turnId") != turn_id', "", EVIDENCE_DAMAGE),
+    ("N5-15 another thread's evidence is damage", ATTRIBUTED,
+     'or params.get("threadId") != thread_id ', "", EVIDENCE_DAMAGE),
+    ("N5-16 malformed evidence never rewrites a fact", OBSERVE,
+     "if fact is None:", "if False:", EVIDENCE_DAMAGE),
+    ("N5-17 a usage count is non-negative", USAGE,
+     "count >= 0 and ", "", EVIDENCE_DAMAGE),
+    ("N5-18 a usage count is an integer, never a boolean", USAGE,
+     "type(count) is int", "isinstance(count, int)", EVIDENCE_DAMAGE),
+    ("N5-19 a reroute target is a bounded model name", REROUTED,
+     "set(model) <= MODEL_CHARS", "True", EVIDENCE_DAMAGE),
+    ("N5-20 the served model is never inferred", DECODE,
+     '"served_model": observation.served_model,',
+     '"served_model": observation.served_model or requested_model,',
+     PROTOCOL + "test_no_reroute_means_the_served_model_is_unknown_never_the_requested_one"),
+    ("N5-21 a turn that never completes keeps its partial text", OBSERVE,
+     "output=answer if answer is not None else partial,", "output=answer,",
+     PROTOCOL + "test_a_turn_that_never_completes_keeps_its_completed_messages_as_partial_text"),
+    ("N5-22 the terminal answer is the output", OBSERVE,
+     "output=answer if answer is not None else partial,", "output=partial or answer,",
+     PROTOCOL + "test_a_terminal_answer_replaces_the_partial_text"),
+    ("N5-29 an empty last message leaves no stale partial text", OBSERVE,
+     "partial = fact or None", "partial = fact or partial",
+     PROTOCOL + "test_an_empty_last_message_leaves_no_partial_text"),
+    ("N5-28 a failed turn keeps the text it showed", OBSERVE,
+     "output=answer if answer is not None else partial,",
+     "output=answer if terminal else partial,",
+     PROTOCOL + "test_a_failed_turn_keeps_its_partial_text_only_as_the_output_of_a_partial"),
+    ("N5-23 only agent message items are evidence", EVIDENCE_ALLOWLIST,
+     "return isinstance(item, Mapping) and item.get(\"type\") == AGENT_MESSAGE", "return True",
+     PROTOCOL + "test_only_agent_message_items_are_evidence"),
+    # --- N5 Stage 0: the turn's evidence, held and drained ---
+    ("N5-24 evidence before the turn/start reply is held", ABSORB,
+     "self._held.append(line)", "pass",
+     ADAPTER + "test_turn_evidence_before_the_turn_start_reply_is_held_for_the_turn"),
+    ("N5-25 bytes framed before turn/start was written are never held", ABSORB,
+     "self._turn_requested and not pre_send and", "self._turn_requested and",
+     ADAPTER + "test_evidence_read_before_turn_start_was_written_is_never_the_turns"
+     "[straddling]"),
+    ("N5-26 held evidence joins the transcript before any callback", CONVERSE,
+     "    self._transcript.extend(self._held)\n    self._held.clear()\n"
+     "    if self._deferred_request is not None and self._deferred is not None:\n"
+     '        self._refuse("the turn completed before its deferred callback was answered")\n'
+     "        return\n"
+     "    if not await self._claim_deferred_request(io):\n        return\n",
+     "    if self._deferred_request is not None and self._deferred is not None:\n"
+     '        self._refuse("the turn completed before its deferred callback was answered")\n'
+     "        return\n"
+     "    if not await self._claim_deferred_request(io):\n        return\n"
+     "    self._transcript.extend(self._held)\n    self._held.clear()\n",
+     WRITE_TEST + "test_held_evidence_keeps_its_order_across_a_buffered_callback"),
+    ("N5-27 the drain transcribes the turn's evidence", AUDIT,
+     "self._absorb(line, record)", "pass",
+     ADAPTER + "test_turn_evidence_in_the_drain_is_folded_too"),
+)  # fmt: skip
 
 ERROR_REPLY = PROTOCOL + "test_an_error_or_missing_result_refuses"
 NULL_ACCOUNT = PROTOCOL + "test_a_null_account_refuses_without_naming_a_cause"
@@ -532,8 +641,8 @@ MUTANTS = (
     (
         "a usage number's magnitude is bounded",
         USAGE,
-        "if type(item) is int and len(repr(item)) <= NUMBER_CHARS",
-        "if type(item) is int",
+        "count >= 0 and len(repr(count)) <= NUMBER_CHARS",
+        "count >= 0",
         PROTOCOL + "test_no_published_number_is_larger_than_a_number"
     ),
     (
@@ -969,6 +1078,7 @@ MUTANTS = (
         SPEND_TEST + "test_a_notice_reports_the_spend_control_reached"
         "_unless_null_absent_or_false[string]",
     ),
+    *N5_PROTOCOL,
 )
 
 LINUX_ONLY: frozenset[str] = frozenset()

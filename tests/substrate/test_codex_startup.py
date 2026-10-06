@@ -308,7 +308,7 @@ async def test_a_provider_auth_recovery_mid_turn_discards_it():
     recovery = {"method": "modelProvider/authRecoveryCompleted", "params": {
         "threadId": "t", "turnId": "u", "provider": "Amazon Bedrock", "message": EMAIL,
     }}
-    native = clean_native(records=[recovery, completed(output={"summary": "done"})])
+    native = clean_native(records=[recovery, completed(answer="done")])
     conversation = await converse(native)
     assert any("modelProvider/authRecoveryCompleted" in fault for fault in conversation.faults)
     assert not any("Bedrock" in fault or EMAIL in fault for fault in conversation.faults)
