@@ -30,7 +30,7 @@ import pytest
 from constructicon.api.system import Constructicon
 from constructicon.core.address import ExecutionPath, RunId, ScopePath
 from constructicon.core.errors import ContractViolation
-from constructicon.core.executor import ExecutorProvider, TaskSpec
+from constructicon.core.executor import ExecutorProvider, TaskSpec, Usage
 from constructicon.core.grants import EffectiveGrants, ModelSelection, Posture
 from constructicon.core.identity import digest
 from constructicon.core.manifest import CapabilityBinding, CapabilityLease
@@ -46,6 +46,7 @@ from constructicon.substrate.executors import codex, operator_store
 from constructicon.substrate.executors.codex import (
     ADAPTER_REVISION,
     UNQUALIFIED_PREREQUISITES,
+    UPDATED_FAULT,
     CodexConversation,
     CodexOperatorHandle,
     CodexOperatorProvider,
@@ -84,6 +85,8 @@ from tests.substrate.test_codex_protocol import (
     THREAD,
     TURN,
     completed,
+    rerouted,
+    usage_update,
 )
 
 CAPABILITY = "codex-operator"
@@ -150,7 +153,9 @@ class ScriptedNative:
                  read_fails=None, fails_on_nth_account=None, tail=b"", early=(),
                  after_thread=(), duplicate_last_reply=False, read_limit=None,
                  wedge=b"", reply_id=None, trailing=(), ends_after_initialize=False,
-                 spends=None, after_readback=()):
+                 spends=None, after_readback=(), before_turn_reply=()):
+        # Emitted after ``turn/start`` arrives and before its reply.
+        self.before_turn_reply = list(before_turn_reply)
         # ``read_fails`` models a transport the adapter does not expect: an
         # exception type no layer catches, which is how a conversation aborts
         # without recording anything.
@@ -270,6 +275,8 @@ class ScriptedNative:
             for value in self.after_thread:
                 self._emit(value)
         elif method == "turn/start":
+            for value in self.before_turn_reply:
+                self._emit(value)
             self._emit({"id": identifier, "result": {"turn": {"id": self.turn}}})
             for value in self.records:
                 self._emit(value)
@@ -472,9 +479,11 @@ def descriptor_of(provider, capability_id=CAPABILITY) -> CapabilityDescriptor:
     )
 
 
-def conversation_for(native, *, instruction="summarize the issue") -> CodexConversation:
+def conversation_for(
+    native, *, instruction="summarize the issue", expected=EXPECTED,
+) -> CodexConversation:
     return CodexConversation(
-        task=TaskSpec(instruction=instruction), grants=GRANTS, expected=EXPECTED,
+        task=TaskSpec(instruction=instruction), grants=GRANTS, expected=expected,
         input_limit=1024 * 1024,
     )
 
@@ -489,7 +498,7 @@ def clean_native(*, accounts=None, records=None, hangs_up_after_turn=False, **ov
     return ScriptedNative(
         accounts=[{"result": MANAGED_RESULT}, {"result": MANAGED_RESULT}]
         if accounts is None else accounts,
-        records=[completed(output={"summary": "done"}, model="gpt-5.6-sol")]
+        records=[completed(answer="done")]
         if records is None else records,
         hangs_up_after_turn=hangs_up_after_turn,
         **overrides,
@@ -746,8 +755,9 @@ async def test_a_clean_conversation_reads_the_mode_twice_around_one_turn():
         FINISHED,
         requested_model="gpt-5.6-sol",
     )
-    assert outcome.status == "success" and outcome.output == {"summary": "done"}
-    assert outcome.served_model == "gpt-5.6-sol"
+    assert outcome.status == "success" and outcome.output == "done"
+    # No ``model/rerouted``: the served model is unknown, never the requested one.
+    assert outcome.served_model is None
 
 
 async def test_the_initialize_bytes_never_request_the_experimental_capability():
@@ -849,7 +859,7 @@ async def test_an_account_email_in_the_stream_never_reaches_the_outcome():
 
 async def test_an_account_notification_mid_turn_discards_the_turn():
     """The only in-band signal for the window the two readings cannot cover."""
-    native = clean_native(records=[ACCOUNT_NOTICE, completed(output={"summary": "done"})])
+    native = clean_native(records=[ACCOUNT_NOTICE, completed(answer="done")])
     conversation = await converse(native)
     assert any("account/updated" in fault for fault in conversation.faults)
     outcome = unavailable_outcome(
@@ -869,7 +879,7 @@ async def test_an_account_notification_mid_turn_discards_the_turn():
 async def test_any_account_method_discards_the_turn_not_just_the_documented_one(method):
     """We hold an enumeration of account *requests*, never of notifications."""
     notice = {"method": method, "params": {"account": {"email": EMAIL, "planType": "pro"}}}
-    native = clean_native(records=[notice, completed(output={"summary": "done"})])
+    native = clean_native(records=[notice, completed(answer="done")])
     conversation = await converse(native)
     assert any(method in fault for fault in conversation.faults)
     assert EMAIL not in conversation.observation.raw
@@ -881,7 +891,7 @@ async def test_any_account_method_discards_the_turn_not_just_the_documented_one(
 
 
 async def test_an_account_notification_after_the_turn_also_discards_it():
-    native = clean_native(records=[completed(output={"summary": "done"}), ACCOUNT_NOTICE])
+    native = clean_native(records=[completed(answer="done"), ACCOUNT_NOTICE])
     conversation = await converse(native)
     assert conversation.observation.terminal
     assert any("account/updated" in fault for fault in conversation.faults)
@@ -905,10 +915,10 @@ async def test_a_notification_after_the_terminal_record_is_still_the_turns_evide
 async def test_a_second_terminal_record_after_the_turn_is_still_contradictory():
     """This branch is only reachable because transcription stays open."""
     native = clean_native(records=[
-        completed(output={"first": True}), completed(output={"second": True}),
+        completed(answer="first"), completed(answer="second"),
     ])
     conversation = await converse(native)
-    assert conversation.observation.output == {"first": True}
+    assert conversation.observation.output == "first"
     assert "contradictory" in (conversation.observation.first_error or "")
 
 
@@ -950,7 +960,7 @@ async def test_a_composed_byte_scope_preamble_is_drained_and_never_transcribed()
     announcements = [{"announce": "placement"}, {"announce": "bootstrap"}]
     native = ScriptedNative(
         accounts=[{"result": MANAGED_RESULT}, {"result": MANAGED_RESULT}],
-        records=[completed(output={"summary": "done"})],
+        records=[completed(answer="done")],
         preamble=announcements,
     )
     conversation = CodexConversation(
@@ -1057,7 +1067,7 @@ exhausts the stack on it and raises ``RecursionError``."""
 
 
 async def test_a_pathological_record_is_damage_rather_than_an_escape():
-    native = clean_native(records=[completed(output={"summary": "done"}), DEEP_RECORD])
+    native = clean_native(records=[completed(answer="done"), DEEP_RECORD])
     conversation = conversation_for(native)
     escaped = None
     try:
@@ -1072,7 +1082,7 @@ async def test_a_pathological_record_is_damage_rather_than_an_escape():
 
 
 async def test_a_pathological_record_inside_the_turn_is_counted_not_raised():
-    native = clean_native(records=[DEEP_RECORD, completed(output={"summary": "done"})])
+    native = clean_native(records=[DEEP_RECORD, completed(answer="done")])
     conversation = conversation_for(native)
     escaped = None
     try:
@@ -1244,7 +1254,7 @@ FILLER = {"method": "turn/delta", "params": {"index": 0, "text": "d" * 380}}
 
 def straddling_native(*, forge, filler):
     """A turn whose trailing records push a forged reply across a read boundary."""
-    records = [completed(output={"summary": "exfiltrated"})]
+    records = [completed(answer="exfiltrated")]
     records += [
         {"method": "turn/delta", "params": {"index": index, "text": "d" * 380}}
         for index in range(filler)
@@ -1294,7 +1304,7 @@ async def test_a_duplicate_reply_id_is_refused_even_during_the_drain_to_eof():
     ``__call__``'s ``finally`` runs before ``exchange`` returns.
     """
     native = clean_native(
-        records=[completed(output={"summary": "done"})], duplicate_last_reply=True,
+        records=[completed(answer="done")], duplicate_last_reply=True,
     )
     conversation = await converse(native)
     assert native.accounts_seen == 2 and conversation.gate_completed
@@ -1310,7 +1320,7 @@ async def test_a_half_framed_forgery_is_refused_with_no_genuine_reply_behind_it(
     """
     native = clean_native(
         accounts=[{"result": MANAGED_RESULT}],  # no second reply, ever
-        records=[completed(output={"summary": "exfiltrated"}), FORGED_GOOD_ACCOUNT],
+        records=[completed(answer="exfiltrated"), FORGED_GOOD_ACCOUNT],
         read_limit=48,  # forces the forgery to straddle a read
     )
     conversation = await converse(native)
@@ -1346,11 +1356,100 @@ async def test_a_turn_completed_before_it_was_named_is_deferred_not_refused():
     assumption and still fixes the hang, because the record is no longer
     discarded and then waited for.
     """
-    native = clean_native(early=[completed(output={"summary": "done"})], records=[])
+    native = clean_native(early=[completed(answer="done")], records=[])
     conversation = await converse(native)
     assert conversation.faults == (), conversation.faults
     assert conversation.observation.terminal
-    assert conversation.observation.output == {"summary": "done"}
+    assert conversation.observation.output == "done"
+
+
+async def test_turn_evidence_before_the_turn_start_reply_is_held_for_the_turn():
+    """Deferred with the reply (M8-N5-state-review.md, Stage 0), in arrival order."""
+    native = clean_native(before_turn_reply=[
+        usage_update(input_tokens=1, output_tokens=1), rerouted("gpt-6-sol"),
+        usage_update(input_tokens=4, output_tokens=2),
+    ])
+    conversation = await converse(native)
+    assert conversation.faults == (), conversation.faults
+    assert conversation.observation.usage == Usage(input_tokens=4, output_tokens=2)
+    assert conversation.observation.served_model == "gpt-6-sol"
+
+
+@pytest.mark.parametrize("read_limit", [None, 48], ids=["framed", "straddling"])
+async def test_evidence_read_before_turn_start_was_written_is_never_the_turns(read_limit):
+    """Framed before the request, or still being framed when it went out: either
+    way its bytes predate the turn, so its ids do not make it the turn's."""
+    native = clean_native(after_thread=[usage_update()], read_limit=read_limit)
+    conversation = await converse(native)
+    assert conversation.faults == (), conversation.faults
+    assert conversation.observation.usage is None
+    assert "1 records withheld from this turn" in conversation.observation.raw
+
+
+@pytest.mark.parametrize("answer", [None, ""])
+async def test_a_read_turn_that_completes_without_an_answer_is_damage(answer):
+    """The READ rule: a READ conversation (no callback catalog) requires text."""
+    conversation = await converse(clean_native(records=[completed(answer=answer)]))
+    assert conversation.faults == () and conversation.observation.terminal
+    assert conversation.observation.first_error == "the completed turn carries no answer"
+    outcome = decode_turn(conversation.observation, FINISHED, requested_model="gpt-5.6-sol")
+    assert outcome.status == "partial" and outcome.output is None
+
+
+async def test_turn_evidence_in_the_drain_is_folded_too():
+    native = clean_native(trailing=[usage_update(input_tokens=9, output_tokens=8)])
+    conversation = await converse(native)
+    assert conversation.faults == () and conversation.gate_completed
+    assert conversation.observation.usage == Usage(input_tokens=9, output_tokens=8)
+
+
+async def test_foreign_evidence_in_the_drain_is_damage():
+    native = clean_native(trailing=[usage_update(turn="another-turn")])
+    conversation = await converse(native)
+    assert conversation.observation.malformed_records == 1
+    assert "thread/tokenUsage/updated" in (conversation.observation.first_error or "")
+
+
+def exact_update(plan="pro"):
+    return {"method": "account/updated", "params": {"authMode": "chatgpt", "planType": plan}}
+
+
+QUALIFYING = ExpectedAccount(plan_type="pro", alternatives=("prolite",))
+
+
+async def test_an_exact_account_update_passes_before_during_and_after_the_turn():
+    """Identical repeats pass anywhere, including mid-turn and in the drain."""
+    native = clean_native(
+        early=[exact_update(), exact_update()], before_turn_reply=[exact_update()],
+        records=[exact_update(), completed()], trailing=[exact_update()],
+    )
+    conversation = await converse(native, expected=QUALIFYING)
+    assert conversation.faults == () and conversation.gate_completed
+    assert "account/updated" not in conversation.observation.raw
+
+
+@pytest.mark.parametrize("script", [
+    # A notice before the reading must agree with the literal the reading establishes.
+    {"early": [exact_update("prolite")]},
+    # Notices must agree with each other, before the reading too: the second is
+    # the reading's own literal, so only the notice rule refuses it.
+    {"early": [exact_update("prolite"), exact_update("pro")]},
+    {"early": [exact_update("pro"), exact_update("prolite")]},
+    # After the reading, only its literal.
+    {"records": [exact_update("prolite"), completed()]},
+    # A later match never clears a contradiction.
+    {"records": [exact_update("prolite"), exact_update("pro"), completed()]},
+    {"trailing": [exact_update("prolite")]},
+], ids=["before-reading", "between-notices", "between-notices-then-reading", "mid-turn",
+        "latched", "drain"])
+async def test_a_contradicting_account_update_refuses(script):
+    native = clean_native(**{"records": [completed()], **script})
+    conversation = await converse(native, expected=QUALIFYING)
+    assert UPDATED_FAULT in conversation.faults, conversation.faults
+    outcome = unavailable_outcome(
+        conversation.faults, conversation.observation, FINISHED, requested_model="gpt-5.6-sol",
+    )
+    assert outcome.status == "failure" and outcome.output is None
 
 
 async def test_two_completions_before_either_is_named_refuse():
@@ -1368,7 +1467,7 @@ async def test_a_native_request_in_the_drain_is_damage_not_a_refusal():
     the output degraded, the gate's authority did not, so the result is demoted.
     """
     native = clean_native(records=[
-        completed(output={"summary": "done"}),
+        completed(answer="done"),
         {"id": 900, "method": "item/tool/call", "params": {"tool": "shell"}},
     ])
     conversation = await converse(native)
@@ -1414,7 +1513,7 @@ async def test_a_twice_answered_id_is_refused_whatever_sits_between_the_replies(
     so damage first seen there reaches no field. The fault is the channel.
     """
     native = clean_native(
-        records=[completed(output={"summary": "done"})],
+        records=[completed(answer="done")],
         duplicate_last_reply=True, wedge=WEDGES[wedge],
     )
     conversation = await converse(native)
@@ -1584,8 +1683,8 @@ async def test_execute_drives_the_contained_launcher_to_a_success(
     launcher = bare_launcher(clean_native())
     handle = await materialized(launcher, tmp_path, portable_binding[1:])
     outcome = await handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
-    assert outcome.status == "success" and outcome.output == {"summary": "done"}
-    assert outcome.served_model == "gpt-5.6-sol" and outcome.requested_model == "gpt-5.6-sol"
+    assert outcome.status == "success" and outcome.output == "done"
+    assert outcome.served_model is None and outcome.requested_model == "gpt-5.6-sol"
     assert_launch(launcher)
 
 
@@ -1639,7 +1738,7 @@ async def test_a_failed_conversation_still_decodes_the_evidence_it_carried(
     assert outcome.status == "failure" and outcome.error.kind == "exit"
     assert outcome.error.exit_code == 1 and outcome.elapsed_s == 3.0
     # The salvage is the point: the evidence the error carried survives.
-    assert outcome.output == {"summary": "done"}
+    assert outcome.output == "done"
 
 
 async def test_an_aborted_conversation_refuses_rather_than_decoding_its_result(
@@ -1800,7 +1899,7 @@ async def test_a_reply_queued_before_its_request_cannot_answer_it():
     """
     native = clean_native(
         accounts=[{"result": MANAGED_RESULT}, {"result": SWITCHED_RESULT}],
-        records=[completed(output={"summary": "exfiltrated"}), FORGED_GOOD_ACCOUNT],
+        records=[completed(answer="exfiltrated"), FORGED_GOOD_ACCOUNT],
     )
     conversation = await converse(native)
     assert bytes(json.dumps(FORGED_GOOD_ACCOUNT), "utf-8") in b"".join(native.emitted)

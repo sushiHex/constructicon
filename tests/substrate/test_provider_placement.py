@@ -14,8 +14,10 @@ from pathlib import Path
 
 import pytest
 
+from constructicon.core.executor import Usage
 from constructicon.core.identity import Digest
 from constructicon.core.workspace import acquisition_id_for
+from constructicon.substrate.executors.codex_protocol import encode_record, observe_turn
 from constructicon.substrate.executors.linux import ProcessExchangeError
 from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisition_guard
 from tests.native_provider import provider_peer
@@ -26,6 +28,59 @@ from tests.substrate.test_linux_containment import launcher as launcher
 from tests.substrate.test_linux_duplex import exchange
 from tests.substrate.test_native_codex_mediation import write_evidence
 from tests.substrate.test_native_startup import assert_outcome
+
+
+def logged_turn(wire_log, *, answer_required=False):
+    """The real binary's one turn, folded exactly as the adapter folds it.
+
+    Every notification received after ``turn/start`` was sent, in arrival order,
+    so evidence that came before the reply is included as the adapter holds it.
+    """
+    start = next(index for index, entry in enumerate(wire_log)
+                 if entry.get("sent", {}).get("method") == "turn/start")
+    request = wire_log[start]["sent"]
+    later = [entry["received"] for entry in wire_log[start + 1:] if "received" in entry]
+    reply = next(value for value in later if value.get("id") == request["id"])
+    return observe_turn(
+        [encode_record(value) for value in later if "id" not in value],
+        thread_id=request["params"]["threadId"], turn_id=reply["result"]["turn"]["id"],
+        answer_required=answer_required,
+    )
+
+
+def assert_decoded_turn(observations, peer, *, answer=None):
+    """The decoder against the real binary: the answer, and usage from zero.
+
+    Each fake response reports one input and one output token
+    (``tests/native_provider.py``), so the thread's total must be exactly the
+    number of responses served: no baseline, and accumulation across a tool
+    continuation (M8-N5-state-review.md, fact 4).
+    """
+    turn = logged_turn(observations["wire"], answer_required=answer is not None)
+    assert turn.terminal and turn.first_error is None and turn.malformed_records == 0, turn
+    served = len(peer.requests)
+    assert turn.usage == Usage(input_tokens=served, output_tokens=served), turn.usage
+    assert turn.served_model is None
+    if answer is not None:
+        assert turn.output == answer
+
+
+def test_a_logged_turn_is_folded_from_the_turn_start_request_on():
+    """Portable: early evidence before the reply counts, earlier records do not."""
+    from tests.substrate.test_codex_protocol import completed, usage_update
+
+    log = [
+        {"received": usage_update(input_tokens=9, output_tokens=9, turn="turn-n2")},
+        {"sent": {"id": 5, "method": "turn/start", "params": {"threadId": "thread-n2"}}},
+        {"received": usage_update(input_tokens=1, output_tokens=1, turn="turn-n2")},
+        {"received": {"id": 5, "result": {"turn": {"id": "turn-n2"}}}},
+        {"received": {"id": 6, "method": "item/tool/call", "params": {}}},
+        {"received": completed(answer="fixture complete", thread="thread-n2", turn="turn-n2")},
+    ]
+    turn = logged_turn(log, answer_required=True)
+    assert turn.terminal and turn.first_error is None
+    assert turn.output == "fixture complete"
+    assert turn.usage == Usage(input_tokens=1, output_tokens=1)
 
 
 @pytest.fixture
@@ -187,6 +242,7 @@ async def test_native_reaches_only_the_fixed_peer(placement_image, tmp_path):
     assert_outcome(result)
     assert len(peer.requests) == peer.budget.connections == 1 and not peer.failures
     assert "fixture complete" in json.dumps(observations["records"])
+    assert_decoded_turn(observations, peer, answer="fixture complete")
     assert observations["placement"]["interfaces"] == ["lo"]
     assert observations["placement"]["routes"] == []
     assert observations["placement"]["identity"] == list(composed.endpoint_identity)

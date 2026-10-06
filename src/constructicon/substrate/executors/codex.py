@@ -97,6 +97,8 @@ from constructicon.core.workspace import (
 from constructicon.substrate._lifetime import finish_owned
 from constructicon.substrate.executors import codex_protocol
 from constructicon.substrate.executors.codex_protocol import (
+    ACCOUNT_NOTICE_FAULT,
+    ACCOUNT_UPDATED,
     ANSWERED_NOTHING_FAULT,
     CONTAINED_PYTHON_CATALOG,
     CONTAINED_PYTHON_TOOL,
@@ -125,6 +127,7 @@ from constructicon.substrate.executors.codex_protocol import (
     initialize_request,
     initialized_notification,
     is_terminal_record,
+    is_turn_evidence,
     named_method,
     notice_stop_faults,
     observe_turn,
@@ -140,6 +143,7 @@ from constructicon.substrate.executors.codex_protocol import (
     tool_call_response,
     turn_request,
     unavailable_outcome,
+    updated_plan,
 )
 from constructicon.substrate.executors.egress import (
     MAX_SOCKET_PATH_BYTES,
@@ -183,6 +187,10 @@ WORKER_ARGUMENTS = ("/usr/bin/python3", "-I", "-c", "import sys; exec(sys.stdin.
 
 WITHHELD_METHODS = 16
 """How many withheld method names to retain for reporting."""
+
+UPDATED_FAULT = ACCOUNT_NOTICE_FAULT.format(method=named_method(ACCOUNT_UPDATED))
+"""An ``account/updated`` that disagrees with an earlier one or with the first
+reading: the same neutral text as any refused notice, naming only the method."""
 
 CALLBACK_PENDING_RECORDS = 64
 CALLBACK_PENDING_BYTES = RECORD_BYTES
@@ -385,6 +393,12 @@ class CodexConversation:
         self._correlated: set[int] = set()
         self._deferred: bytes | None = None
         self._deferred_request: bytes | None = None
+        # Turn evidence read while the ``turn/start`` reply was outstanding, in
+        # arrival order; it joins the transcript once the reply names the turn.
+        self._held: list[bytes] = []
+        # The plan every ``account/updated`` names; it must agree with the first
+        # reading (M8-N5-state-review.md, decision 1).
+        self._noticed_plan: str | None = None
         self._pre_send_record = False
         self._excluded = 0
         self._server_requests: set[tuple[str, int | str]] = set()
@@ -438,11 +452,17 @@ class CodexConversation:
                 # in ``_converse`` already records one, so an unconditional form
                 # would only add noise to an already-explained refusal.
                 self._refuse(GATE_INCOMPLETE_FAULT)
-            self.observation = replace(observe_turn(
-                self._transcript, thread_id=self.thread_id, turn_id=self.turn_id,
-                transport_damage=self._stream.damage, excluded=self._excluded,
-            ), rate_limit=rate_limit_of(self.before_spend, self.after_spend))
-            await self._finish(io)
+            try:
+                await self._finish(io)
+            finally:
+                # Folded after the drain, so turn evidence the drain reads is
+                # judged like any other, and in a ``finally`` so no way out of the
+                # drain skips the fold.
+                self.observation = replace(observe_turn(
+                    self._transcript, thread_id=self.thread_id, turn_id=self.turn_id,
+                    transport_damage=self._stream.damage, excluded=self._excluded,
+                    answer_required=not self._catalog,
+                ), rate_limit=rate_limit_of(self.before_spend, self.after_spend))
 
     # -- transport ------------------------------------------------------------
 
@@ -542,13 +562,25 @@ class CodexConversation:
         return record
 
     def _notice_faults(self, record: Mapping[str, Any]) -> tuple[str, ...]:
-        """Every refusal an id-less record can carry, at every site that reads one."""
+        """Every refusal an id-less record can carry, at every site that reads one.
 
-        return account_notice_faults(record, self._expected) or settings_notice_faults(
+        An exact ``account/updated`` passes only while every one names the same
+        plan; the first reading must then name it too (:meth:`_converse`). A
+        contradiction is a fault, and faults are never removed, so it latches.
+        """
+
+        faults = account_notice_faults(record, self._expected) or settings_notice_faults(
             record, model=self._grants.model_selection.model or "", provider=self._provider,
         ) or (() if self._turn_requested else notice_stop_faults(record))
+        plan = None if faults else updated_plan(record, self._expected)
+        if plan is None:
+            return faults
+        if self._noticed_plan not in (None, plan):
+            return (UPDATED_FAULT,)
+        self._noticed_plan = plan
+        return ()
 
-    def _absorb(self, line: bytes, record: Mapping[str, Any]) -> bool:
+    def _absorb(self, line: bytes, record: Mapping[str, Any], *, pre_send: bool = False) -> bool:
         """Handle one id-less notification; ``False`` when it is a refusal.
 
         The single place notifications are classified. Both sites that can meet
@@ -593,6 +625,12 @@ class CodexConversation:
                 self._refuse("two turn completions arrived before either was named")
                 return False
             self._deferred = line
+            return True
+        if self._turn_requested and not pre_send and is_turn_evidence(record):
+            # Read after ``turn/start`` was written and before its reply: it may
+            # be this turn's, and the reply will say. Bytes framed before the
+            # request was written predate the turn and are excluded below.
+            self._held.append(line)
             return True
         self._excluded += 1
         if len(self.withheld_methods) < WITHHELD_METHODS:
@@ -712,7 +750,7 @@ class CodexConversation:
             if record is None:
                 return None
             if "id" not in record:
-                if not self._absorb(line, record):
+                if not self._absorb(line, record, pre_send=pre_send):
                     return None
                 continue
             if "method" in record:
@@ -1064,7 +1102,12 @@ class CodexConversation:
         if not isinstance(record, dict):
             return False
         if "id" not in record:
-            self.faults += self._notice_faults(record)
+            if self._collecting:
+                # The turn's own evidence still arrives here, so it is judged
+                # and transcribed like any other: the fold runs after the drain.
+                self._absorb(line, record)
+            else:
+                self.faults += self._notice_faults(record)
             return False
         if "method" in record and self._catalog:
             self._refuse("a native request arrived during the terminal drain")
@@ -1114,11 +1157,11 @@ class CodexConversation:
             # way out of the drain and not only the clean ones — an exception
             # leaving here used to route around it entirely.
             #
-            # The fault, not the observation, is the channel that reaches the
-            # outcome: ``__call__`` folds the observation *before* awaiting this,
-            # so damage first seen here reaches no field, while faults are read by
-            # the handle after ``exchange`` returns. Do not route this through
-            # ``transport_damage``; it would be silently dropped.
+            # The fault, not the observation, is the channel that refuses: an
+            # inconclusive drain discards the turn, which demotion alone would
+            # not. ``__call__`` folds the observation after this returns, so
+            # damage seen here also reaches its fields, but never in place of
+            # this fault.
             if inconclusive:
                 self._refuse(INCONCLUSIVE_DRAIN_FAULT)
 
@@ -1176,6 +1219,10 @@ class CodexConversation:
             self.faults += faults
             return
         self.observed_plan = account_plan(before)
+        if self._noticed_plan not in (None, self.observed_plan):
+            # A notice before the reading was held for exactly this comparison.
+            self._refuse(UPDATED_FAULT)
+            return
         if self.observed_plan is not None:
             # One literal per run (SPEND-2): qualification's alternatives only
             # select the first, so a later reading naming the other declared
@@ -1234,6 +1281,10 @@ class CodexConversation:
         if self.turn_id is None:
             self._refuse("the native client started no identified turn")
             return
+        # Before any callback can run, so evidence keeps its arrival order: a
+        # callback's own notifications are transcribed as they arrive.
+        self._transcript.extend(self._held)
+        self._held.clear()
         if self._deferred_request is not None and self._deferred is not None:
             self._refuse("the turn completed before its deferred callback was answered")
             return

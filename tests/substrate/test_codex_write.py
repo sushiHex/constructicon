@@ -13,7 +13,7 @@ import pytest
 
 from constructicon.core.address import ExecutionPath, ScopePath
 from constructicon.core.errors import ContractViolation
-from constructicon.core.executor import TaskSpec
+from constructicon.core.executor import TaskSpec, Usage
 from constructicon.core.grants import EffectiveGrants, Posture
 from constructicon.core.identity import digest
 from constructicon.core.native_operator import (
@@ -57,7 +57,7 @@ from tests.substrate.test_codex_adapter import (
     context,
 )
 from tests.substrate.test_codex_adapter import portable_binding as portable_binding
-from tests.substrate.test_codex_protocol import completed
+from tests.substrate.test_codex_protocol import completed, usage_update
 
 WRITE_GRANTS = EffectiveGrants(
     posture=Posture.WRITE,
@@ -161,7 +161,7 @@ class WriteNative(ScriptedNative):
             if self.callback_index < len(self.callbacks):
                 self._emit(self.callbacks[self.callback_index])
             else:
-                self._emit(completed(output={"summary": "done"}, model="gpt-5.6-sol"))
+                self._emit(completed(answer="done"))
             return
         super()._respond(raw)
 
@@ -352,7 +352,7 @@ async def test_parallel_exact_requests_are_held_and_effects_stay_sequential():
                 self.callback_responses.append(request)
                 self.callback_index += 1
                 if self.callback_index == len(self.callbacks):
-                    self._emit(completed(output={"summary": "done"}, model="gpt-5.6-sol"))
+                    self._emit(completed(answer="done"))
                 return
             ScriptedNative._respond(self, raw)
 
@@ -379,7 +379,7 @@ async def test_active_callback_refuses_terminal_or_bounded_pending_flood(
 ):
     callback = WriteNative._callback_for("active-request", "active-call", "active")
     if pending == "terminal":
-        trailing = [completed(output={"summary": "too early"})]
+        trailing = [completed(answer="too early")]
     elif pending == "notification-flood":
         trailing = [
             {"method": "warning", "params": {"index": index}}
@@ -490,7 +490,7 @@ async def test_unknown_pre_account_and_late_requests_never_dispatch():
         ),
         ScriptedNative(
             accounts=[{"result": MANAGED_RESULT}, {"result": MANAGED_RESULT}],
-            records=[completed(output={"summary": "early"}), callback],
+            records=[completed(answer="early"), callback],
         ),
     )
     for native in natives:
@@ -539,13 +539,80 @@ async def test_callback_can_be_buffered_before_the_turn_reply_without_early_effe
     assert calls == ["print('changed')"] and conversation.faults == ()
 
 
+async def test_held_evidence_keeps_its_order_across_a_buffered_callback():
+    """Evidence held before the reply joins the transcript before the callback
+    runs, so a later snapshot read during the callback stays the later one."""
+
+    class EvidenceAroundCallbackNative(WriteNative):
+        def _respond(self, raw: bytes) -> None:
+            request = json.loads(raw)
+            if request.get("method") == "turn/start":
+                self.received.append(request)
+                self._emit(usage_update(input_tokens=1, output_tokens=1))
+                self._emit(self._callback())
+                self._emit({"id": request["id"], "result": {"turn": {"id": self.turn}}})
+                return
+            if request.get("method") is None and request.get("id") == "server-1":
+                self.received.append(request)
+                self.callback_responses.append(request)
+                self._emit(completed(answer="done"))
+                return
+            super()._respond(raw)
+
+    native = EvidenceAroundCallbackNative("print('ok')", callback_before_turn_reply=True)
+
+    async def worker(program: str) -> str:
+        # Read by the adapter while the callback is still running.
+        native._emit(usage_update(input_tokens=2, output_tokens=2))
+        await asyncio.sleep(0)
+        return "done"
+
+    conversation = CodexConversation(
+        task=TaskSpec(instruction="change"), grants=WRITE_GRANTS, expected=EXPECTED,
+        input_limit=1024 * 1024, catalog=CONTAINED_PYTHON_CATALOG,
+        worker=worker, deadline=asyncio.get_running_loop().time() + 5,
+    )
+    await asyncio.wait_for(conversation(native), 5)
+    assert conversation.faults == (), conversation.faults
+    assert conversation.observation.usage == Usage(input_tokens=2, output_tokens=2)
+
+
+async def test_a_write_turn_may_complete_without_prose():
+    """``notLoaded`` is a well-formed completion, and the READ rule is off for WRITE."""
+
+    class SilentNative(WriteNative):
+        def _respond(self, raw: bytes) -> None:
+            request = json.loads(raw)
+            if request.get("method") is None and request.get("id") == "server-1":
+                self.received.append(request)
+                self.callback_responses.append(request)
+                self._emit(completed(answer=None))
+                return
+            super()._respond(raw)
+
+    native = SilentNative("print('ok')")
+
+    async def worker(program: str) -> str:
+        return "done"
+
+    conversation = CodexConversation(
+        task=TaskSpec(instruction="change"), grants=WRITE_GRANTS, expected=EXPECTED,
+        input_limit=1024 * 1024, catalog=CONTAINED_PYTHON_CATALOG,
+        worker=worker, deadline=asyncio.get_running_loop().time() + 5,
+    )
+    await asyncio.wait_for(conversation(native), 5)
+    assert conversation.faults == ()
+    assert conversation.observation.terminal and conversation.observation.first_error is None
+    assert conversation.observation.output is None
+
+
 async def test_callback_after_a_buffered_completion_is_never_dispatched():
     class TerminalFirstNative(WriteNative):
         def _respond(self, raw: bytes) -> None:
             request = json.loads(raw)
             if request.get("method") == "turn/start":
                 self.received.append(request)
-                self._emit(completed(output={"summary": "early"}, model="gpt-5.6-sol"))
+                self._emit(completed(answer="early"))
                 self._emit(self._callback())
                 self._emit({"id": request["id"], "result": {"turn": {"id": self.turn}}})
                 return
@@ -577,7 +644,7 @@ async def test_buffered_callback_and_completion_refuse_before_dispatch():
             if request.get("method") == "turn/start":
                 self.received.append(request)
                 self._emit(self._callback())
-                self._emit(completed(output={"summary": "early"}, model="gpt-5.6-sol"))
+                self._emit(completed(answer="early"))
                 self._emit({"id": request["id"], "result": {"turn": {"id": self.turn}}})
                 return
             super()._respond(raw)

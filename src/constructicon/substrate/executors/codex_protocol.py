@@ -44,8 +44,9 @@ and the fold below drops every id-bearing record. A server-initiated
 ``docs/plans/handoffs/M8-native-account-interface-preflight.md`` records, with
 pinned source links, that "Login responses and account notifications expose flow
 ids, auth mode, or plan type". So the fold drops the whole ``account/``
-namespace too, and the adapter refuses every such notification except the one
-plan-checked rate-limit update (:func:`account_notice_faults`). The spend
+namespace too, and the adapter refuses every such notification except two exact
+forms, the plan-checked rate-limit update and the sealed-plan ``account/updated``
+(:func:`account_notice_faults`). The spend
 readback's reply is id-bearing like the account reading's. Bytes that fail to parse
 cannot be classified at all, so none of them is published: what is published is
 their *count* and a reason drawn from a closed set of literals. The decoder's own
@@ -70,7 +71,7 @@ establishing what the pinned binary writes there is an N4 prerequisite.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
@@ -551,50 +552,62 @@ ACCOUNT_NAMESPACE = "account/"
 PROVIDER_NAMESPACE = "modelProvider/"
 RATE_LIMITS_UPDATED = "account/rateLimits/updated"
 RATE_LIMITS_READ = "account/rateLimits/read"
+ACCOUNT_UPDATED = "account/updated"
 """The account and provider-authentication notification surface, enumerated.
 
 The pinned generated ``ServerNotification.json`` holds exactly three
-``account/`` notifications (lines 7596-7610, 7616-7630, 8318-8332):
-``account/updated`` (the auth mode and ``planType``) and ``account/login/completed``
-both refuse; ``account/rateLimits/updated`` is emitted on every token-count
-event of a turn (``bespoke_event_handling.rs:1676-1701``) and is admitted only
-by :func:`account_notice_faults`'s plan rule. Every other member of either
-namespace still refuses, so an unknown future method fails closed. The
+``account/`` notifications (lines 7596-7610, 7616-7630, 8318-8332).
+``account/login/completed`` refuses. ``account/rateLimits/updated`` is emitted on
+every token-count event of a turn (``bespoke_event_handling.rs:1676-1701``) and is
+admitted only by its plan rule. ``account/updated`` is ``{authMode, planType}``,
+both keys always serialized (``v2/account.rs:545-548``), and is admitted only
+as the exact sealed form (:func:`updated_plan`, owner decision 1 of
+M8-N5-state-review.md). Every other member of either namespace
+still refuses, so an unknown future method fails closed. The
 ``modelProvider/`` pair (``common.rs:1920-1921``) names a provider and a
 recovery message: it is a provider-authentication event, refused rather than
 silently withheld (M8-N4-state-review.md, section 3).
 """
 
 TURN_EVIDENCE_PREFIXES = ("turn/",)
-TURN_EVIDENCE_METHODS = frozenset({"error", "warning", "configWarning"})
-"""What a turn transcript may carry: one earned prefix and three exact names.
+TOKEN_USAGE_UPDATED = "thread/tokenUsage/updated"
+MODEL_REROUTED = "model/rerouted"
+ITEM_COMPLETED = "item/completed"
+AGENT_MESSAGE = "agentMessage"
+TURN_EVIDENCE_METHODS = frozenset({
+    "error", "warning", "configWarning", TOKEN_USAGE_UPDATED, MODEL_REROUTED,
+})
+"""What a turn transcript may carry: one earned prefix, five exact names, and
+one exact name narrowed to one item type.
 
 ``error``, ``warning`` and ``configWarning`` are **names** — a closed
 enumeration, and each was observed from the pinned binary directly
 (``tests/substrate/test_native_startup.py`` asserts an ``error`` carrying
 ``threadId`` and ``turnId`` during a turn, and the bubblewrap ``warning``
-verbatim).
+verbatim). ``thread/tokenUsage/updated`` and ``model/rerouted`` carry this turn's
+usage and reroute target, each naming its ``threadId`` and ``turnId``
+(``v2/thread.rs:1834-1837``, ``v2/model.rs:157-162``); the usage one is attested
+from the real binary by the placement and combined lanes.
+
+``item/completed`` is admitted for ``agentMessage`` items only
+(:func:`is_turn_evidence`): it is how a turn that never completes still shows
+the text it produced (M8-N5-state-review.md, Stage 0). Every other item type
+stays out, so command output and file contents never reach ``raw`` through it,
+and streaming deltas stay out too: a completed message is the unit.
 
 ``turn/`` is the one **prefix**, and it is earned rather than assumed: its
 terminal member ``turn/completed`` is attested from the real binary
 (``tests/substrate/test_provider_placement.py``, ``test_native_startup.py``), and
-this module's turn projection — terminal detection, served model, usage — is
-defined in terms of that namespace's semantics. A prefix still admits
-members never observed, so this is the one place that residual is accepted, and
-it is frame admission inside a namespace that is the invocation's own by
-construction.
+it carries the turn's answer. A prefix still admits members never observed, so
+this is the one place that residual is accepted, and it is frame admission
+inside a namespace that is the invocation's own by construction.
 
-**``item/`` was considered and excluded**, deliberately, not by oversight. The
-only ``item/`` member this repository has ever seen is ``item/tool/call``
-(``tests/native_codex_probe.py``), and that is an **id-bearing request**, which
-this adapter refuses as damage by design. So the namespace has never been
-observed emitting a notification at all, and admitting it would be an assumption
-about an unobserved surface — the exact thing this allowlist exists to remove.
-``item/started`` and ``item/completed``, used in this repository's own tests, are
-invented names. Add ``item/`` back at N4 once a real stream has been observed and
-its methods can be named: a one-line change backed by evidence.
-``hook/started`` and ``hook/completed`` are attested but are session-start
-activity rather than turn evidence, so they stay out too.
+**The rest of ``item/`` stays excluded**, deliberately. Its one id-bearing
+member, ``item/tool/call`` (``tests/native_codex_probe.py``), is a request the
+callback path handles, never evidence, and admitting the whole namespace would
+publish every item type's payload. ``hook/started`` and ``hook/completed`` are
+attested but are session-start activity rather than turn evidence, so they stay
+out too.
 
 The cost is real and points the right way: an unattested notification is excluded
 from ``raw`` rather than published, and is not counted as malformed because it is
@@ -614,6 +627,10 @@ def is_turn_evidence(record: Mapping[str, Any]) -> bool:
     method = record.get("method")
     if not isinstance(method, str):
         return False
+    if method == ITEM_COMPLETED:
+        params = record.get("params")
+        item = params.get("item") if isinstance(params, Mapping) else None
+        return isinstance(item, Mapping) and item.get("type") == AGENT_MESSAGE
     return method in TURN_EVIDENCE_METHODS or method.startswith(TURN_EVIDENCE_PREFIXES)
 
 
@@ -723,12 +740,34 @@ class ExpectedAccount:
         return type(plan) is str and (plan == self.plan_type or plan in self.alternatives)
 
 
+def updated_plan(record: Mapping[str, Any], expected: ExpectedAccount) -> str | None:
+    """The plan an exact ``account/updated`` reports, or ``None`` if it is not exact.
+
+    Exact means ``params`` is ``{"authMode": "chatgpt", "planType": <plan>}`` with
+    no other, missing or null key, the plan a string the binding accepts, and
+    the record no reply or error. Which literal it may name beyond that is the
+    adapter's rule: it must agree with every other notice and with the first
+    reading.
+    """
+
+    params = record.get("params")
+    if (
+        record.get("method") != ACCOUNT_UPDATED or "result" in record or "error" in record
+        or not isinstance(params, Mapping) or set(params) != {"authMode", PLAN_TYPE_KEY}
+        or params["authMode"] != "chatgpt" or not expected.accepts(params[PLAN_TYPE_KEY])
+    ):
+        return None
+    plan: str = params[PLAN_TYPE_KEY]
+    return plan
+
+
 def account_notice_faults(record: Mapping[str, Any], expected: ExpectedAccount) -> tuple[str, ...]:
     """Why one id-less record ends the phase, or ``()`` when it may pass.
 
-    Only ``account/rateLimits/updated`` passes, and only with exactly the pinned
-    ``{rateLimits}`` params whose ``planType`` is absent, null or accepted: the
-    snapshot is documented as sparse ("Nullable account metadata ... does not
+    Two forms pass. ``account/updated`` passes only when :func:`updated_plan`
+    finds it exact. ``account/rateLimits/updated`` passes only with exactly the
+    pinned ``{rateLimits}`` params whose ``planType`` is absent, null or accepted:
+    the snapshot is documented as sparse ("Nullable account metadata ... does not
     clear a previously observed value", ``v2/account.rs:553-557``), while a
     present different plan is a plan change inside the window the readings
     bracket. Its spend facts are judged separately, by
@@ -739,6 +778,8 @@ def account_notice_faults(record: Mapping[str, Any], expected: ExpectedAccount) 
     if not isinstance(method, str):
         return ()
     refused = (ACCOUNT_NOTICE_FAULT.format(method=named_method(method)),)
+    if method == ACCOUNT_UPDATED:
+        return () if updated_plan(record, expected) is not None else refused
     if method == RATE_LIMITS_UPDATED:
         params = record.get("params")
         snapshot = params.get("rateLimits") if isinstance(params, Mapping) else None
@@ -1110,18 +1151,86 @@ def is_terminal_record(line: bytes, *, thread_id: str | None, turn_id: str | Non
     return _turn_of(record, thread_id=thread_id, turn_id=turn_id) is not None
 
 
-def _usage(value: Any) -> Usage | None:
-    if not isinstance(value, Mapping):
-        return None  # I4: an unemitted fact stays absent, never inferred.
-    fields = {
-        "input_tokens": value.get("inputTokens"),
-        "output_tokens": value.get("outputTokens"),
-    }
-    numbers = {
-        name: item for name, item in fields.items()
-        if type(item) is int and len(repr(item)) <= NUMBER_CHARS
-    }
-    return Usage(**numbers) if numbers else None
+def _answer(turn: Mapping[str, Any]) -> tuple[str | None, bool]:
+    """The completed turn's answer, and whether its items have the pinned shape.
+
+    ``turn/completed`` carries either the turn's last ``agentMessage`` alone
+    under ``itemsView: "summary"``, or no items under ``"notLoaded"``
+    (``bespoke_event_handling.rs:1398-1416``). An empty text is no answer.
+    """
+
+    view, items = turn.get("itemsView"), turn.get("items")
+    if view == "notLoaded" and items == []:
+        return None, True
+    if view == "summary" and isinstance(items, list) and len(items) == 1:
+        text = _message_text(items[0])
+        if text is not None:
+            return text or None, True
+    return None, False
+
+
+def _message_text(item: Any) -> str | None:
+    if isinstance(item, Mapping) and item.get("type") == AGENT_MESSAGE:
+        text = item.get("text")
+        return text if isinstance(text, str) else None
+    return None
+
+
+def _usage(params: Mapping[str, Any]) -> Usage | None:
+    """``tokenUsage.total``: the thread's cumulative counts, both or neither.
+
+    Each conversation starts its own thread and sends one ``turn/start``, so the
+    total is this turn's usage provided the thread starts from zero and
+    accumulates across a turn's requests; the placement and combined lanes check
+    both against the real binary.
+    """
+
+    usage = params.get("tokenUsage")
+    total = usage.get("total") if isinstance(usage, Mapping) else None
+    if not isinstance(total, Mapping):
+        return None
+    counts = total.get("inputTokens"), total.get("outputTokens")
+    if not all(
+        type(count) is int and count >= 0 and len(repr(count)) <= NUMBER_CHARS
+        for count in counts
+    ):
+        return None
+    return Usage(input_tokens=counts[0], output_tokens=counts[1])
+
+
+MODEL_CHARS = NAMEABLE_ALPHABET | frozenset("._-")
+
+
+def _rerouted_to(params: Mapping[str, Any]) -> str | None:
+    """The reroute target, when it is a bounded model name."""
+
+    model = params.get("toModel")
+    if isinstance(model, str) and 0 < len(model) <= NAMEABLE_METHOD and set(model) <= MODEL_CHARS:
+        return model
+    return None
+
+
+ATTRIBUTED: dict[str, Callable[[Mapping[str, Any]], Any]] = {
+    TOKEN_USAGE_UPDATED: _usage,
+    MODEL_REROUTED: _rerouted_to,
+    ITEM_COMPLETED: lambda params: _message_text(params.get("item")),
+}
+"""The evidence that names its own ``threadId`` and ``turnId``, and what each yields.
+
+Any of these naming another invocation, or yielding nothing, is damage, as a
+foreign terminal record is: a fact is attributed only by the ids it carries."""
+
+
+def _attributed(
+    record: Mapping[str, Any], *, thread_id: str | None, turn_id: str | None,
+) -> Any:
+    params = record.get("params")
+    if (
+        thread_id is None or turn_id is None or not isinstance(params, Mapping)
+        or params.get("threadId") != thread_id or params.get("turnId") != turn_id
+    ):
+        return None
+    return ATTRIBUTED[record["method"]](params)
 
 
 NUMBER_CHARS = 32
@@ -1185,13 +1294,21 @@ def _bounded_transcript(kept: Sequence[str], unclassified: int) -> str:
 
 def observe_turn(
     records: Sequence[bytes], *, thread_id: str | None, turn_id: str | None,
-    transport_damage: str | None = None, excluded: int = 0,
+    transport_damage: str | None = None, excluded: int = 0, answer_required: bool = False,
 ) -> TurnObservation:
     """Fold one turn's records into a truthful observation.
 
     Damage is sticky: a later terminal record never promotes an earlier
     malformed one, and a second terminal record is contradictory rather than
-    last-wins. Every field a record did not emit stays ``None`` (I4).
+    last-wins. Every field a record did not emit stays ``None`` (I4): the answer
+    is the terminal record's ``agentMessage`` text, usage the last
+    ``thread/tokenUsage/updated`` total, and the served model the last
+    ``model/rerouted`` target, each only for this thread and turn; no reroute
+    means the served model is unknown, never the requested one.
+
+    ``answer_required`` is the READ rule (M8-N5-state-review.md, Stage 0): a
+    completed turn with no answer text is damage. A WRITE turn may complete
+    without prose, so its caller leaves the rule off.
 
     A record carrying an ``id`` is a reply or a native request. This slice
     authorizes no callback, so such a record is damage and is dropped *before*
@@ -1216,7 +1333,8 @@ def observe_turn(
     be true.
     """
 
-    output: Any = None
+    answer: str | None = None
+    partial: str | None = None
     served_model: str | None = None
     usage: Usage | None = None
     terminal = False
@@ -1259,16 +1377,36 @@ def observe_turn(
                 first_error = first_error or "contradictory terminal turn records"
                 continue
             terminal = True
-            if turn.get("status") != "completed":
+            completed = turn.get("status") == "completed"
+            if not completed:
                 first_error = first_error or (
                     f"the turn reported status {named_value(turn.get('status'))}"
                 )
-            output = turn.get("output")
-            model = turn.get("model")
-            served_model = model if isinstance(model, str) else None
-            usage = _usage(turn.get("usage"))
+            answer, shaped = _answer(turn)
+            if not shaped:
+                first_error = first_error or "the terminal items are not the pinned summary"
+            elif answer_required and completed and answer is None:
+                first_error = first_error or "the completed turn carries no answer"
+            continue
+        method = record["method"]
+        if method in ATTRIBUTED:
+            fact = _attributed(record, thread_id=thread_id, turn_id=turn_id)
+            if fact is None:
+                malformed += 1
+                first_error = first_error or (
+                    f"{named_method(method)} is not well-formed evidence of this turn"
+                )
+            elif method == TOKEN_USAGE_UPDATED:
+                usage = fact
+            elif method == MODEL_REROUTED:
+                served_model = fact
+            elif fact:
+                partial = fact
     return TurnObservation(
-        output=output, served_model=served_model, usage=usage,
+        # Only a terminal record's answer is the turn's output; until then a
+        # completed message is the partial text a timeout keeps as an observation.
+        output=answer if terminal else partial,
+        served_model=served_model, usage=usage,
         # The pinned Turn carries no rate limits (thread_data.rs:366); the
         # conversation adds its readbacks, the only spend source (N4 section 2).
         rate_limit=None,

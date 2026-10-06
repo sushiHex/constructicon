@@ -227,7 +227,7 @@ async def test_the_pinned_rate_limit_notification_no_longer_discards_a_turn(plan
     if plan is not None:
         snapshot["planType"] = plan
     notice = {"method": "account/rateLimits/updated", "params": {"rateLimits": snapshot}}
-    native = clean_native(records=[notice, completed(output={"summary": "done"})])
+    native = clean_native(records=[notice, completed(answer="done")])
     conversation = await converse(native)
     assert conversation.faults == () and conversation.gate_completed
     assert "account/rateLimits/updated" not in conversation.observation.raw
@@ -236,7 +236,7 @@ async def test_the_pinned_rate_limit_notification_no_longer_discards_a_turn(plan
 async def test_a_plan_change_inside_the_rate_limit_notification_discards_the_turn():
     notice = {"method": "account/rateLimits/updated",
               "params": {"rateLimits": {"planType": "plus"}}}
-    native = clean_native(records=[notice, completed(output={"summary": "done"})])
+    native = clean_native(records=[notice, completed(answer="done")])
     conversation = await converse(native)
     assert any("account/rateLimits/updated" in fault for fault in conversation.faults)
     outcome = unavailable_outcome(
@@ -272,7 +272,7 @@ async def test_a_limit_reached_turn_is_not_success_and_asks_for_nothing_more(
     tmp_path, portable_binding, substituted_guard, status,
 ):
     record = (
-        completed(output={"summary": "done"}, model="gpt-5.6-sol")
+        completed(answer="done")
         if status == "completed" else limit_reached()
     )
     native = GenerousNative(

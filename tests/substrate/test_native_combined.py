@@ -23,7 +23,7 @@ from tests.substrate.test_contained_workspace import provider as provider
 from tests.substrate.test_linux_containment import launcher as launcher
 from tests.substrate.test_native_codex_mediation import PROGRAM, WORKER
 from tests.substrate.test_native_startup import assert_outcome
-from tests.substrate.test_provider_placement import observe, placement
+from tests.substrate.test_provider_placement import assert_decoded_turn, observe, placement
 from tests.substrate.test_provider_placement import placement_image as placement_image
 
 
@@ -164,6 +164,7 @@ async def test_combined_native_dispatch_and_refusal(
             )
         assert_outcome(result)
         assert len(peer.requests) == 2 and not peer.failures
+        assert_decoded_turn(observations, peer, answer="fixture complete")
         assert_native_identity(observations["protocol"], peer.requests)
         for ordinal, request in enumerate(peer.requests, 1):
             scenario(request, ordinal)
