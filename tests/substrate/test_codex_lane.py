@@ -38,7 +38,7 @@ from constructicon.substrate.executors.codex_lane import (
     write_evidence,
 )
 from constructicon.substrate.executors.codex_protocol import ExpectedAccount
-from constructicon.substrate.executors.egress import EgressDestination, EgressPolicy
+from constructicon.substrate.executors.egress import EgressDestination, EgressPolicy, EgressRelay
 from constructicon.substrate.executors.linux import ProcessExchangeError, ProcessResult
 from constructicon.substrate.executors.operator_store import BindingCheck
 from tests.operator_store_world import StoreWorld
@@ -53,7 +53,7 @@ POLICY = EgressPolicy((
     EgressDestination("auth.openai.com", 443, "8.8.8.8"),
     EgressDestination("chatgpt.com", 443, "8.8.4.4"),
 ), 8)
-EXECUTABLE = Executable("/opt/codex/bin/codex", "a" * 64)
+EXECUTABLE = Executable("/opt/codex/bin/codex", "a" * 64, "c" * 64)
 REGULAR = (stat.S_IFREG | 0o600, 1, 1000)
 FOUR = [f"'{method}'" for method in EIGHT[:4]]
 
@@ -63,6 +63,7 @@ class FakeRelay:
 
     instances: ClassVar[list[FakeRelay]] = []
     closes = True
+    denied = EgressRelay.denied  # the real reading of the counters
 
     def __init__(self, policy, directory, deadline, check):
         self.directory = directory
@@ -301,7 +302,10 @@ async def test_a_clean_startup_records_the_four_methods_and_nothing_identifying(
     assert evidence["faults"] == [] and evidence["refresh"] == "unmeasured"
     assert evidence["vendor_identity"] == "unverified"
     assert evidence["vendor_conformance_qualified"] is False
-    assert evidence["executable"] == {"path": EXECUTABLE.path, "sha256": EXECUTABLE.sha256}
+    assert evidence["executable"] == {
+        "path": EXECUTABLE.path, "sha256": EXECUTABLE.sha256,
+        "catalog_sha256": EXECUTABLE.catalog_sha256,
+    }
     (command, _, _), = lane.mounts
     assert command == ("/opt/codex/bin/codex", "app-server", "--strict-config", "--stdio")
     text = json.dumps(evidence)
@@ -637,7 +641,8 @@ def test_prepare_creates_four_parseable_reviewed_inputs_from_one_pin_each(
     assert out.joinpath("config.toml").read_text(encoding="utf-8") == (
         codex_lane.production_configuration()
     )
-    assert codex_lane.configured_model(out.joinpath("config.toml").read_text()) == "gpt-5.5"
+    assert codex_lane.configured_model(out.joinpath("config.toml").read_text()) == "gpt-6.1-sol"
+    assert codex_lane.configured_effort(out.joinpath("config.toml").read_text()) == "low"
     assert codex_lane.configured_provider(out.joinpath("config.toml").read_text()) == "openai"
     login = codex_lane._policy(out / "login-policy.json")
     startup = codex_lane._policy(out / "startup-policy.json")
@@ -829,16 +834,18 @@ def test_prepare_artifact_refuses_a_zero_write_before_retry(tmp_path, monkeypatc
     assert calls == [1]
 
 
-@pytest.mark.parametrize("fault", ["model", "provider"])
+@pytest.mark.parametrize("fault", ["model", "effort", "provider"])
 def test_prepare_refuses_a_configuration_outside_the_reviewed_route(
     tmp_path, monkeypatch, fault,
 ):
     calls = prepare_world(monkeypatch)
     original = codex_lane.production_configuration()
-    configuration = (
-        original.replace('model = "gpt-5.5"', 'model = "wrong"')
-        if fault == "model" else 'model_provider = "other"\n' + original
-    )
+    configuration = {
+        "model": original.replace('model = "gpt-6.1-sol"', 'model = "wrong"'),
+        "effort": original.replace('_effort = "low"', '_effort = "high"'),
+        "provider": 'model_provider = "other"\n' + original,
+    }[fault]
+    assert configuration != original
     monkeypatch.setattr(codex_lane, "production_configuration", lambda: configuration)
     out = tmp_path / "s1"
     with pytest.raises(ContractViolation, match="production startup configuration"):
@@ -1052,11 +1059,13 @@ def test_the_executable_is_the_bound_vendor_client_hashed_from_its_source(tmp_pa
     tree = tmp_path / "native-codex"
     (tree / "bin").mkdir(parents=True)
     (tree / "bin" / "codex").write_bytes(b"pinned client")
+    (tmp_path / "codex-models.json").write_bytes(b"pinned catalog")
     launcher = replace(bare_launcher(clean_native()), vendor=linux.NativeVendor(
         tree, tmp_path / "codex-models.json",
     ))
     assert codex_lane.vendor_executable(launcher) == Executable(
         "/opt/codex/bin/codex", hashlib.sha256(b"pinned client").hexdigest(),
+        hashlib.sha256(b"pinned catalog").hexdigest(),
     )
     assert codex_lane.RUNTIME_BINARY == linux.VENDOR_MOUNT + "/bin/codex"
     assert codex_lane.RUNTIME_CATALOG == linux.CATALOG_MOUNT == "/opt/codex-models.json"
@@ -1103,6 +1112,7 @@ def preflight_launcher(tmp_path: Path, policy_sha256: str) -> _Checked:
     tree = tmp_path / "native-codex"
     (tree / "bin").mkdir(parents=True)
     (tree / "bin" / "codex").write_bytes(b"pinned client")
+    (tmp_path / "codex-models.json").write_bytes(b"pinned catalog")
     base = bare_launcher(clean_native())
     return _Checked(
         runtime_root=base.runtime_root, expected_runtime=base.expected_runtime,

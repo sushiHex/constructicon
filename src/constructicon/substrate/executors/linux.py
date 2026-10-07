@@ -155,13 +155,19 @@ TRUST_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
 Installation admits it with the rest of the image, so ``runtime_digest`` pins
 its bytes and every launch rechecks them. ``CODEX_CA_CERTIFICATE`` names it to
 the vendor:
-- the client's HTTP stack then switches to rustls and adds these roots;
+- the client's HTTP stack then switches to rustls and adds these roots, and
+  reqwest adds the compiled-in Mozilla roots and the native roots beside them
+  (``http-client/src/custom_ca.rs:296-330``, reqwest ``client.rs:683-702`` at
+  rust-v0.160.1);
 - its websocket stack layers them over the native roots, which it finds at this
-  same standard path (``http-client/src/custom_ca.rs`` at the pin).
+  same standard path.
 
-A CA in this file is therefore what the client needs. That this file is all it
-trusts is not proved: the HTTP stack may also compile in roots. Without this
-store, the pinned client's default TLS found no roots in the zone (#77, S3)."""
+A CA in this file is therefore what the client needs, and it is not all it
+trusts: setting the variable widens trust rather than narrowing it, and a TLS
+protocol-version fallback trusts the Mozilla set too. So trust roots are not a
+containment control here. The egress relay is: every connection must reach a
+sealed, address-pinned destination. Without this store, the pinned client's
+default TLS found no roots in the zone (#77, S3)."""
 
 
 def _require_root_fixed(info: os.stat_result, *, kind: int) -> None:

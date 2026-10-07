@@ -15,6 +15,7 @@ discard is proved in the production binding rather than in a pure function.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import stat
@@ -96,7 +97,7 @@ BINARY = "/usr/bin/codex"
 # Nothing here touches the filesystem: only the Linux acquisition guard creates
 # anything under this root, and that path runs in the native lane only.
 ACQUISITION_ROOT = Path(tempfile.gettempdir()).resolve() / "constructicon-codex-acquisitions"
-CONFIGURATION = 'model = "gpt-5.6-sol"\n'
+CONFIGURATION = 'model = "gpt-5.6-sol"\nmodel_reasoning_effort = "low"\n'
 PLAN = "pro"
 EXPECTED = ExpectedAccount(plan_type=PLAN)
 MANAGED_RESULT = {"account": MANAGED, "requiresOpenaiAuth": True}
@@ -573,6 +574,10 @@ def test_the_adapter_revision_follows_this_module_and_the_protocol():
     launcher = bare_launcher()
     identity = identity_for(launcher)
     assert identity.adapter_revision == ADAPTER_REVISION
+    # The whole module, so a module-level rule the classes call is covered too.
+    assert digest("codex-operator-adapter", 2, inspect.getsource(codex)) == ADAPTER_REVISION
+    for rule in (codex.relay_faults, codex.configured_effort, codex._configured):
+        assert inspect.getsource(rule) in inspect.getsource(codex)
     assert identity.decoder_revision == identity.callback_protocol_revision
     assert identity.profile == codex_profile()
 
@@ -1148,8 +1153,14 @@ def test_the_configuration_must_name_a_model_from_the_profiles_inventory():
     ("this is not = = toml\n", "TOML"),
     ('effort = "low"\n', "top-level model"),
     ("model = 7\n", "top-level model"),
-], ids=["not-toml", "no-model", "not-a-string"])
+    ('model = "gpt-5.6-sol"\n', "top-level model_reasoning_effort"),
+    ('model = "gpt-5.6-sol"\nmodel_reasoning_effort = 1\n', "top-level model_reasoning_effort"),
+    ('model = "gpt-5.6-sol"\nmodel_reasoning_effort = "ultra"\n', "does not accept"),
+], ids=["not-toml", "no-model", "not-a-string", "no-effort", "effort-not-a-string",
+        "effort-not-accepted"])
 def test_an_unusable_configuration_is_refused_at_construction(configuration, expected):
+    """The effort is sealed as the model is: the vendor's per-model default is
+    what runs when none is named, and no grant can state it."""
     with pytest.raises(ContractViolation, match=expected):
         provider_with(configuration)
 
@@ -1174,10 +1185,15 @@ def test_the_provider_reads_the_model_the_configuration_actually_names():
     assert provider_with(CONFIGURATION).configured_model == "gpt-5.6-sol"
 
 
+@pytest.mark.parametrize(("update", "fault"), [
+    ({"model_selection": ModelSelection(kind="explicit", model="gpt-5.5")}, "different model"),
+    ({"effort": "medium"}, "different effort"),
+    ({"effort": None}, "different effort"),
+], ids=["model", "effort", "no-effort"])
 async def test_a_grant_that_disagrees_with_the_configuration_is_refused(
-    tmp_path, portable_binding, substituted_guard,
+    tmp_path, portable_binding, substituted_guard, update, fault,
 ):
-    """The turn sends no model, so the configuration decides what runs (I4).
+    """The turn sends neither model nor effort, so the configuration decides both (I4).
 
     The substituted guard is here so that removing the check reaches the launcher
     and fails by assertion, rather than erroring on a platform the guard refuses.
@@ -1187,16 +1203,14 @@ async def test_a_grant_that_disagrees_with_the_configuration_is_refused(
         CONFIGURATION, profile=two_model_profile(), launcher=launcher, root=tmp_path,
         binding=portable_binding[1:],
     )
-    other = GRANTS.model_copy(
-        update={"model_selection": ModelSelection(kind="explicit", model="gpt-5.5")},
-    )
+    other = GRANTS.model_copy(update=update)
     acquired = await provider.acquire(context(grants=other))
     await acquired.materialize()
     outcome = await acquired.resource.execute(
         TaskSpec(instruction="x"), workspace=None, grants=other,
     )
     assert outcome.status == "failure" and outcome.error.kind == "unavailable"
-    assert "different model" in outcome.error.detail
+    assert fault in outcome.error.detail
     assert not launcher.commands
 
 

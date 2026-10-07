@@ -574,6 +574,8 @@ TOKEN_USAGE_UPDATED = "thread/tokenUsage/updated"
 MODEL_REROUTED = "model/rerouted"
 ITEM_COMPLETED = "item/completed"
 AGENT_MESSAGE = "agentMessage"
+CONTEXT_COMPACTION = "contextCompaction"
+EVIDENCE_ITEMS = frozenset({AGENT_MESSAGE, CONTEXT_COMPACTION})
 TURN_EVIDENCE_METHODS = frozenset({
     "error", "warning", "configWarning", TOKEN_USAGE_UPDATED, MODEL_REROUTED,
 })
@@ -589,9 +591,10 @@ usage and reroute target, each naming its ``threadId`` and ``turnId``
 (``v2/thread.rs:1834-1837``, ``v2/model.rs:157-162``); the usage one is attested
 from the real binary by the placement and combined lanes.
 
-``item/completed`` is admitted for ``agentMessage`` items only
-(:func:`is_turn_evidence`): it is how a turn that never completes still shows
-the text it produced (M8-N5-state-review.md, Stage 0). Every other item type
+``item/completed`` is admitted for two item types only (:func:`is_turn_evidence`).
+``agentMessage`` is how a turn that never completes still shows the text it
+produced (M8-N5-state-review.md, Stage 0); ``contextCompaction``, whose payload
+is only an id, is how the fold knows a total is incomplete. Every other item type
 stays out, so no command execution or file change item reaches ``raw`` through
 it; the message's own text is the vendor's, under the limit the module
 docstring states. Streaming deltas stay out too: a completed message is the unit.
@@ -631,7 +634,7 @@ def is_turn_evidence(record: Mapping[str, Any]) -> bool:
     if method == ITEM_COMPLETED:
         params = record.get("params")
         item = params.get("item") if isinstance(params, Mapping) else None
-        return isinstance(item, Mapping) and item.get("type") == AGENT_MESSAGE
+        return isinstance(item, Mapping) and item.get("type") in EVIDENCE_ITEMS
     return method in TURN_EVIDENCE_METHODS or method.startswith(TURN_EVIDENCE_PREFIXES)
 
 
@@ -905,7 +908,33 @@ def account_faults(reply: Any, expected: ExpectedAccount) -> tuple[str, ...]:
             f"account plan {named_value(plan)} is not the expected "
             f"{expected.plan_type!r}"
         )
-    return tuple(faults)
+    return tuple(faults) + routing_faults(result)
+
+
+SEALED_BACKEND = "https://chatgpt.com"
+ROUTING_OVERRIDES = frozenset({"NO_CONSTRAINT", "us", "us_cr"})
+UNSEALED_BACKEND_FAULT = "the account routes model turns to a backend this binding has not sealed"
+
+
+def routing_faults(result: Mapping[str, Any]) -> tuple[str, ...]:
+    """Decision 2 of M8-N5-state-review.md: an unsealed backend stops the session.
+
+    A reading's ``workspaceRouting`` moves model turns to its ``backendOrigin``
+    (``account_processor/workspace_routing.rs`` at the pin). Absent or null keeps
+    them on the sealed backend, and so does that origin named exactly; its
+    residency override adds a header on the same host. Any other origin is a
+    new destination, which is reviewed and sealed separately, never admitted
+    from a reply. The origin is not named in the fault: it is vendor content.
+    """
+
+    routing = result.get("workspaceRouting")
+    override = routing.get("accountRoutingOverride") if isinstance(routing, Mapping) else None
+    if routing is None or (
+        isinstance(routing, Mapping) and routing.get("backendOrigin") == SEALED_BACKEND
+        and isinstance(override, str) and override in ROUTING_OVERRIDES
+    ):
+        return ()
+    return (UNSEALED_BACKEND_FAULT,)
 
 
 def account_plan(reply: Any) -> str | None:
@@ -1177,6 +1206,20 @@ def _message_text(item: Any) -> str | None:
     return None
 
 
+COMPACTED = object()
+"""A ``contextCompaction`` item: its payload is only an id, and its fact is that
+the turn's usage total is no longer complete."""
+
+
+def _completed_item(item: Any) -> Any:
+    """A completed item's fact: a compaction only in its pinned shape, with an id
+    (``v2/item.rs:426-428``); anything else malformed is damage, never a clean fact."""
+    if isinstance(item, Mapping) and item.get("type") == CONTEXT_COMPACTION:
+        identifier = item.get("id")
+        return COMPACTED if isinstance(identifier, str) and identifier else None
+    return _message_text(item)
+
+
 def _usage(params: Mapping[str, Any]) -> Usage | None:
     """``tokenUsage.total``: the thread's cumulative counts, both or neither.
 
@@ -1190,13 +1233,29 @@ def _usage(params: Mapping[str, Any]) -> Usage | None:
     total = usage.get("total") if isinstance(usage, Mapping) else None
     if not isinstance(total, Mapping):
         return None
-    counts = total.get("inputTokens"), total.get("outputTokens")
+    counts = total.get("inputTokens"), total.get("outputTokens"), total.get("totalTokens")
     if not all(
         type(count) is int and count >= 0 and len(repr(count)) <= NUMBER_CHARS
         for count in counts
     ):
         return None
+    if counts[0] == 0:
+        return UNMEASURED
     return Usage(input_tokens=counts[0], output_tokens=counts[1])
+
+
+UNMEASURED = Usage()
+"""A total that is not a measurement, so the turn's usage is unknown.
+
+Every model request has input, so a measured total has input tokens. The pinned
+client publishes two totals without any:
+- on ``context_length_exceeded`` it replaces the accumulated total with
+  ``{totalTokens: <context window>}`` and every other count zero
+  (``protocol.rs:2316``, ``fill_to_context_window``);
+- with no prior usage it initializes a zero total (``session/mod.rs:4861``).
+
+Neither is damage, it is the vendor's report, so the fold publishes no usage
+rather than a false zero."""
 
 
 MODEL_CHARS = NAMEABLE_ALPHABET | frozenset("._-")
@@ -1214,7 +1273,7 @@ def _rerouted_to(params: Mapping[str, Any]) -> str | None:
 ATTRIBUTED: dict[str, Callable[[Mapping[str, Any]], Any]] = {
     TOKEN_USAGE_UPDATED: _usage,
     MODEL_REROUTED: _rerouted_to,
-    ITEM_COMPLETED: lambda params: _message_text(params.get("item")),
+    ITEM_COMPLETED: lambda params: _completed_item(params.get("item")),
 }
 """The evidence that names its own ``threadId`` and ``turnId``, and what each yields.
 
@@ -1336,6 +1395,7 @@ def observe_turn(
 
     answer: str | None = None
     partial: str | None = None
+    compacted = False
     served_model: str | None = None
     usage: Usage | None = None
     terminal = False
@@ -1398,9 +1458,11 @@ def observe_turn(
                     f"{named_method(method)} is not well-formed evidence of this turn"
                 )
             elif method == TOKEN_USAGE_UPDATED:
-                usage = fact
+                usage = None if fact is UNMEASURED else fact
             elif method == MODEL_REROUTED:
                 served_model = fact
+            elif fact is COMPACTED:
+                compacted = True
             else:
                 # The last completed message, even an empty one: its text is
                 # the partial text, and an empty text is none.
@@ -1411,7 +1473,9 @@ def observe_turn(
         # may never complete, so the last completed message stays as partial
         # text: an observation, which never satisfies the READ rule above.
         output=answer if answer is not None else partial,
-        served_model=served_model, usage=usage,
+        # A compaction leaves the total incomplete: its own request's usage is
+        # not added (``compact_remote_v2.rs:319``), so the turn's is unknown.
+        served_model=served_model, usage=None if compacted else usage,
         # The pinned Turn carries no rate limits (thread_data.rs:366); the
         # conversation adds its readbacks, the only spend source (N4 section 2).
         rate_limit=None,

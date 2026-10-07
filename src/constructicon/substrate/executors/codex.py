@@ -60,6 +60,7 @@ import asyncio
 import inspect
 import math
 import os
+import sys
 import tomllib
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, suppress
@@ -188,6 +189,16 @@ WORKER_ARGUMENTS = ("/usr/bin/python3", "-I", "-c", "import sys; exec(sys.stdin.
 WITHHELD_METHODS = 16
 """How many withheld method names to retain for reporting."""
 
+RELAY_DENIAL_FAULT = "the egress relay denied a connection"
+"""Public and fixed: the relay's reason literals stay evidence (``EgressRelay.denied``)."""
+
+
+def relay_faults(denied: Mapping[str, int]) -> tuple[str, ...]:
+    """Any relay denial is one refusal of the turn's result."""
+
+    return (RELAY_DENIAL_FAULT,) if denied else ()
+
+
 UPDATED_FAULT = ACCOUNT_NOTICE_FAULT.format(method=named_method(ACCOUNT_UPDATED))
 """An ``account/updated`` that disagrees with an earlier one or with the first
 reading: the same neutral text as any refused notice, naming only the method."""
@@ -251,6 +262,21 @@ def configured_model(configuration: str) -> str:
     The shape is the pinned client's ``--strict-config`` TOML with a top-level
     ``model`` key, which is what every fixture in this repository supplies.
     """
+    return _configured(configuration, "model")
+
+
+def configured_effort(configuration: str) -> str:
+    """The effort the sealed configuration names, ``model_reasoning_effort``.
+
+    The turn sends no effort either, so the configuration decides it. One that
+    names none leaves the vendor's per-model default in force (Luna and Terra
+    default to ``medium``), which no grant can state, so it is required exactly
+    as the model is (M8-N5-state-review.md, decision 3).
+    """
+    return _configured(configuration, "model_reasoning_effort")
+
+
+def _configured(configuration: str, key: str) -> str:
     try:
         parsed = tomllib.loads(configuration)
     except RecursionError as exc:
@@ -261,10 +287,10 @@ def configured_model(configuration: str) -> str:
         raise ContractViolation(f"the sealed configuration is {DAMAGE_NESTING}") from exc
     except (tomllib.TOMLDecodeError, ValueError) as exc:
         raise ContractViolation(f"the sealed configuration is not valid TOML: {exc}") from exc
-    model = parsed.get("model")
-    if not isinstance(model, str) or not model.strip():
-        raise ContractViolation("the sealed configuration must name a top-level model")
-    return model
+    value = parsed.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ContractViolation(f"the sealed configuration must name a top-level {key}")
+    return value
 
 
 def callback_catalog_digest(catalog: Sequence[str]) -> Digest:
@@ -1431,6 +1457,8 @@ class CodexOperatorHandle:
         self.initial_check: BindingCheck | None = None
         self.launch_check: BindingCheck | None = None
         self.terminal_check: BindingCheck | None = None
+        # The relay's denials, by fixed reason, however the exchange ended.
+        self.relay_denied: dict[str, int] = {}
 
     @property
     def profile(self) -> NativeOperatorExecutorProfileV3:
@@ -1587,6 +1615,12 @@ class CodexOperatorHandle:
             faults += (
                 "the sealed configuration names a different model than this grant selects",
             )
+        if grants.effort != self.provider.configured_effort:
+            # Likewise for effort: the configuration decides it, so a grant
+            # naming another, or none, would publish a choice that never ran.
+            faults += (
+                "the sealed configuration names a different effort than this grant selects",
+            )
         if faults:
             return ExecutorFailure(error=ExecutorError(
                 kind="unavailable", detail=bounded_detail("; ".join(faults)),
@@ -1725,9 +1759,12 @@ class CodexOperatorHandle:
                 result,
                 requested_model=requested,
             )
-        if conversation.faults:
+        # A relay denial refuses here, beside the conversation's own faults, so a
+        # successful answer cannot mask one (M8-N5-state-review.md, Stage 0).
+        faults = conversation.faults + relay_faults(self.relay_denied)
+        if faults:
             return unavailable_outcome(
-                conversation.faults, conversation.observation, result, requested_model=requested,
+                faults, conversation.observation, result, requested_model=requested,
             )
         return decode_turn(conversation.observation, result, requested_model=requested)
 
@@ -1751,12 +1788,16 @@ class CodexOperatorHandle:
             )
         # A close latched after this task was created allocates nothing.
         self._check_control()
-        async with EgressRelay(policy, self.paths.payload, deadline, self._check_control) as egress:
-            return await launcher.exchange(
-                command, workspace=None, posture=posture, guard_fds=guard_fds,
-                conversation=conversation, timeout_s=timeout_s,
-                native_store=replace(native_store, egress=egress),
-            )
+        relay = EgressRelay(policy, self.paths.payload, deadline, self._check_control)
+        try:
+            async with relay as egress:
+                return await launcher.exchange(
+                    command, workspace=None, posture=posture, guard_fds=guard_fds,
+                    conversation=conversation, timeout_s=timeout_s,
+                    native_store=replace(native_store, egress=egress),
+                )
+        finally:
+            self.relay_denied = relay.denied
 
     async def _run_worker(
         self, program: str, *, workspace: ContainedWriteWorkspace,
@@ -2040,6 +2081,11 @@ class CodexOperatorProvider:
             raise ContractViolation(
                 "the sealed configuration names a model outside the profile's inventory"
             )
+        self.configured_effort = configured_effort(configuration)
+        if self.configured_effort not in profile.accepted_efforts:
+            raise ContractViolation(
+                "the sealed configuration names an effort the profile does not accept"
+            )
         self.launcher = launcher
         self.profile = profile
         self.catalog = resolved_catalog
@@ -2152,8 +2198,11 @@ class CodexOperatorProvider:
         return LeaseReconciliation(reaped=tuple(reference for _, reference, _ in pending))
 
 
-ADAPTER_REVISION = digest("codex-operator-adapter", 1, {
-    member.__name__: inspect.getsource(member)
-    for member in (CodexConversation, CodexOperatorHandle, CodexOperatorProvider)
-})
-"""Derived from this adapter's actual bodies, not a manual version."""
+ADAPTER_REVISION = digest(
+    "codex-operator-adapter", 2, inspect.getsource(sys.modules[__name__]),
+)
+"""Derived from this whole module's source, not a manual version.
+
+Version 1 hashed the three class bodies only, so a module-level rule the classes
+call (``relay_faults``, ``configured_effort``) could change without changing the
+identity the evidence checker compares."""

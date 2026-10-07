@@ -35,6 +35,7 @@ from constructicon.substrate.executors.codex_protocol import (
     READ_WINDOW,
     RECORD_BYTES,
     TRANSCRIPT_CHARS,
+    UNSEALED_BACKEND_FAULT,
     ExpectedAccount,
     RecordDamaged,
     RecordStream,
@@ -441,6 +442,45 @@ def test_a_missing_plan_fact_refuses():
     assert account_faults(reply, EXPECTED) == (NO_PLAN_FAULT,)
 
 
+def routed(routing):
+    reply = account_reply(account=MANAGED)
+    reply["result"]["workspaceRouting"] = routing
+    return reply
+
+
+@pytest.mark.parametrize("routing", [
+    None,
+    {"chatgptAccountId": ACCOUNT_ID, "backendOrigin": "https://chatgpt.com",
+     "accountRoutingOverride": "NO_CONSTRAINT"},
+    {"chatgptAccountId": ACCOUNT_ID, "backendOrigin": "https://chatgpt.com",
+     "accountRoutingOverride": "us_cr"},
+], ids=["absent", "sealed", "sealed-with-residency"])
+def test_a_reading_routed_to_the_sealed_backend_passes(routing):
+    assert account_faults(routed(routing), EXPECTED) == ()
+
+
+@pytest.mark.parametrize("routing", [
+    {"chatgptAccountId": ACCOUNT_ID, "backendOrigin": "https://eu.chatgpt.example",
+     "accountRoutingOverride": "NO_CONSTRAINT"},
+    {"chatgptAccountId": ACCOUNT_ID, "backendOrigin": "https://chatgpt.com/",
+     "accountRoutingOverride": "NO_CONSTRAINT"},
+    {"chatgptAccountId": ACCOUNT_ID, "backendOrigin": "http://chatgpt.com",
+     "accountRoutingOverride": "NO_CONSTRAINT"},
+    {"chatgptAccountId": ACCOUNT_ID, "backendOrigin": "https://chatgpt.com",
+     "accountRoutingOverride": "elsewhere"},
+    {"chatgptAccountId": ACCOUNT_ID, "backendOrigin": "https://chatgpt.com"},
+    {"chatgptAccountId": ACCOUNT_ID, "backendOrigin": "https://chatgpt.com",
+     "accountRoutingOverride": []},
+    "https://chatgpt.com",
+], ids=["other-origin", "trailing-slash", "plain-http", "unknown-override", "no-override",
+        "unhashable-override", "not-an-object"])
+def test_a_reading_routed_anywhere_else_stops_the_session(routing):
+    """Decision 2: an unsealed backend stops the session; the origin is never named."""
+    faults = account_faults(routed(routing), EXPECTED)
+    assert faults == (UNSEALED_BACKEND_FAULT,)
+    assert "example" not in faults[0] and ACCOUNT_ID not in faults[0]
+
+
 def test_a_different_plan_refuses():
     reply = account_reply(account={**MANAGED, PLAN_TYPE_KEY: "free"})
     faults = account_faults(reply, EXPECTED)
@@ -575,6 +615,67 @@ def test_the_old_turn_fields_are_never_read():
     assert observation.usage is None
 
 
+def test_a_synthesized_total_makes_the_usage_unknown_not_zero():
+    """``fill_to_context_window`` (``protocol.rs:2316``) replaces the measured total
+    with the context window and every other count zero: a report, not damage."""
+    observation = folded([
+        record(usage_update(input_tokens=11, output_tokens=3)),
+        record(usage_total(totalTokens=272000, inputTokens=0, cachedInputTokens=0,
+                           cacheWriteInputTokens=0, outputTokens=0, reasoningOutputTokens=0)),
+        record(completed(status="failed", answer=None)),
+    ])
+    assert observation.usage is None
+    assert observation.malformed_records == 0
+    assert observation.first_error == "the turn reported status 'failed'"
+
+
+def test_an_initialized_zero_total_is_no_measurement():
+    """With no prior usage the client initializes a zero total
+    (``session/mod.rs:4861``): every model request has input, so no input is no
+    measurement, and the usage is unknown rather than a false zero."""
+    observation = folded([
+        record(usage_total(totalTokens=0, inputTokens=0, outputTokens=0)), record(completed()),
+    ])
+    assert observation.usage is None and observation.malformed_records == 0
+
+
+def test_a_compaction_makes_the_turns_usage_unknown():
+    """A compaction's own request is not added to the total
+    (``compact_remote_v2.rs:319``), so every later total is incomplete too."""
+    observation = folded([
+        record(usage_update(input_tokens=11, output_tokens=3)),
+        record(item_completed({"type": "contextCompaction", "id": "c1"})),
+        record(usage_update(input_tokens=20, output_tokens=5)),
+        record(completed()),
+    ])
+    assert observation.usage is None and observation.first_error is None
+    assert '"contextCompaction"' in observation.raw
+
+
+@pytest.mark.parametrize("item", [
+    {"type": "contextCompaction"}, {"type": "contextCompaction", "id": ""},
+    {"type": "contextCompaction", "id": 7},
+], ids=["no-id", "empty-id", "non-string-id"])
+def test_a_malformed_compaction_is_damage_and_clears_nothing(item):
+    observation = folded([
+        record(usage_update(input_tokens=11, output_tokens=3)),
+        record(item_completed(item)), record(completed()),
+    ])
+    assert observation.usage == Usage(input_tokens=11, output_tokens=3)
+    assert observation.malformed_records == 1
+    assert "item/completed" in (observation.first_error or "")
+
+
+def test_another_turns_compaction_is_damage_not_this_turns_fact():
+    observation = folded([
+        record(usage_update(input_tokens=11, output_tokens=3)),
+        record(item_completed({"type": "contextCompaction", "id": "c1"}, turn="another-turn")),
+        record(completed()),
+    ])
+    assert observation.usage == Usage(input_tokens=11, output_tokens=3)
+    assert observation.malformed_records == 1
+
+
 def test_no_reroute_means_the_served_model_is_unknown_never_the_requested_one():
     observation = folded([record(usage_update()), record(completed())])
     outcome = decode_turn(observation, Facts(), requested_model="gpt-6.1-sol")
@@ -684,9 +785,13 @@ def usage_total(**total):
     usage_update(turn="another-turn"), usage_update(thread="another-thread"),
     rerouted("gpt-6-sol", turn="another-turn"),
     item_completed(agent_message("x"), turn="another-turn"),
-    usage_total(inputTokens=-1, outputTokens=1), usage_total(inputTokens=True, outputTokens=1),
-    usage_total(inputTokens=10 ** 40, outputTokens=1), usage_total(inputTokens=1),
-    usage_total(inputTokens=1.0, outputTokens=1), usage_total(),
+    # Each malformed total is wrong in exactly one count, so each check is load-bearing.
+    usage_total(inputTokens=-1, outputTokens=1, totalTokens=1),
+    usage_total(inputTokens=True, outputTokens=1, totalTokens=2),
+    usage_total(inputTokens=10 ** 40, outputTokens=1, totalTokens=2),
+    usage_total(inputTokens=1, totalTokens=1),
+    usage_total(inputTokens=1.0, outputTokens=1, totalTokens=2), usage_total(),
+    usage_total(inputTokens=1, outputTokens=1),
     rerouted(""), rerouted("x" * 65), rerouted("gpt 6"), rerouted(None),
     item_completed({"type": "agentMessage", "id": "m"}),
 ])
@@ -1210,7 +1315,7 @@ def test_no_published_number_is_larger_than_a_number():
     huge = 10 ** 4200
     observation = folded([
         record(usage_update(input_tokens=2, output_tokens=7)),
-        record(usage_total(inputTokens=huge, outputTokens=7)), record(completed()),
+        record(usage_total(inputTokens=huge, outputTokens=7, totalTokens=7)), record(completed()),
     ])
     window = {"usedPercent": huge, "windowDurationMins": 300, "resetsAt": 1}
     readback = spend_reading({"result": spend_result(primary=window, secondary=window)})

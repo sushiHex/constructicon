@@ -73,7 +73,6 @@ NOTICES = "constructicon.substrate.executors.codex:CodexConversation._notice_fau
 SETTINGS = "constructicon.substrate.executors.codex_protocol:settings_notice_faults"
 CONFIGURED_PROVIDER = "constructicon.substrate.executors.codex:configured_provider"
 TURN_OF = "constructicon.substrate.executors.codex_protocol:_turn_of"
-CONFIGURED = "constructicon.substrate.executors.codex:configured_model"
 USAGE = "constructicon.substrate.executors.codex_protocol:_usage"
 NUMBER = "constructicon.substrate.executors.codex_protocol:_number"
 NAMEABLE = "constructicon.substrate.executors.codex_protocol:_nameable"
@@ -89,6 +88,15 @@ MATRIX_TEST = "tests/substrate/test_codex_matrix.py::"
 WRITE_TEST = "tests/substrate/test_codex_write.py::"
 
 UPDATED = "constructicon.substrate.executors.codex_protocol:updated_plan"
+EFFORT = "constructicon.substrate.executors.codex:configured_effort"
+ROUTING = "constructicon.substrate.executors.codex_protocol:routing_faults"
+COMPLETED_ITEM = "constructicon.substrate.executors.codex_protocol:_completed_item"
+UNSEALED = PROTOCOL + "test_a_reading_routed_anywhere_else_stops_the_session"
+EXCHANGE = "constructicon.substrate.executors.codex:CodexOperatorHandle._exchange"
+RELAY_FAULTS = "constructicon.substrate.executors.codex:relay_faults"
+EGRESS_REFUSED = (
+    "tests/substrate/test_codex_egress.py::test_no_private_locator_reaches_the_outcome[refused]"
+)
 ANSWER = "constructicon.substrate.executors.codex_protocol:_answer"
 ATTRIBUTED = "constructicon.substrate.executors.codex_protocol:_attributed"
 REROUTED = "constructicon.substrate.executors.codex_protocol:_rerouted_to"
@@ -168,8 +176,8 @@ N5_PROTOCOL = (
      "output=answer if answer is not None else partial,",
      "output=answer if terminal else partial,",
      PROTOCOL + "test_a_failed_turn_keeps_its_partial_text_only_as_the_output_of_a_partial"),
-    ("N5-23 only agent message items are evidence", EVIDENCE_ALLOWLIST,
-     "return isinstance(item, Mapping) and item.get(\"type\") == AGENT_MESSAGE", "return True",
+    ("N5-23 only the two admitted item types are evidence", EVIDENCE_ALLOWLIST,
+     "return isinstance(item, Mapping) and item.get(\"type\") in EVIDENCE_ITEMS", "return True",
      PROTOCOL + "test_only_agent_message_items_are_evidence"),
     # --- N5 Stage 0: the turn's evidence, held and drained ---
     ("N5-24 evidence before the turn/start reply is held", ABSORB,
@@ -194,6 +202,50 @@ N5_PROTOCOL = (
     ("N5-27 the drain transcribes the turn's evidence", AUDIT,
      "self._absorb(line, record)", "pass",
      ADAPTER + "test_turn_evidence_in_the_drain_is_folded_too"),
+    # --- N5 Stage 0b: the sealed effort, and relay denials in the provider ---
+    ("N5-30 the sealed configuration must name an effort", EFFORT,
+     'return _configured(configuration, "model_reasoning_effort")', 'return "low"',
+     ADAPTER + "test_an_unusable_configuration_is_refused_at_construction[no-effort]"),
+    ("N5-31 the sealed effort is one the profile accepts", CONSTRUCTOR,
+     "if self.configured_effort not in profile.accepted_efforts:", "if False:",
+     ADAPTER + "test_an_unusable_configuration_is_refused_at_construction[effort-not-accepted]"),
+    ("N5-32 a grant's effort must be the sealed one", EXECUTE,
+     "if grants.effort != self.provider.configured_effort:", "if False:",
+     ADAPTER + "test_a_grant_that_disagrees_with_the_configuration_is_refused[effort]"),
+    ("N5-33 a relay denial refuses the turn", BINDING,
+     "faults = conversation.faults + relay_faults(self.relay_denied)",
+     "faults = conversation.faults", EGRESS_REFUSED),
+    ("N5-34 the relay's denials are read however the exchange ends", EXCHANGE,
+     "self.relay_denied = relay.denied", "pass", EGRESS_REFUSED),
+    ("N5-35 any denial is a refusal", RELAY_FAULTS,
+     "return (RELAY_DENIAL_FAULT,) if denied else ()", "return ()", EGRESS_REFUSED),
+    # --- N5 Stage 0b: an unsealed backend stops the session (decision 2) ---
+    ("N5-36 every reading's routing is judged", GATE,
+     "return tuple(faults) + routing_faults(result)", "return tuple(faults)", UNSEALED),
+    ("N5-37 the routed origin must be the sealed one", ROUTING,
+     'routing.get("backendOrigin") == SEALED_BACKEND', "True",
+     UNSEALED + "[other-origin]"),
+    # The override's ``isinstance`` guard is not mutated: without it an
+    # unhashable override raises instead of refusing, a crash, not a pass.
+    ("N5-38 the residency override must be a known literal", ROUTING,
+     " and isinstance(override, str) and override in ROUTING_OVERRIDES", "",
+     UNSEALED + "[unknown-override]"),
+    # --- N5 Stage 0b: a total with no input is no measurement; compaction ---
+    ("N5-39 a filled total makes the usage unknown", USAGE,
+     "if counts[0] == 0:", "if False:",
+     PROTOCOL + "test_a_synthesized_total_makes_the_usage_unknown_not_zero"),
+    ("N5-40 an initialized zero total is no measurement", USAGE,
+     "if counts[0] == 0:", "if counts[0] == 0 and counts[2]:",
+     PROTOCOL + "test_an_initialized_zero_total_is_no_measurement"),
+    ("N5-41 a compaction makes the turn's usage unknown", OBSERVE,
+     "usage=None if compacted else usage,", "usage=usage,",
+     PROTOCOL + "test_a_compaction_makes_the_turns_usage_unknown"),
+    ("N5-43 only a compaction in its pinned shape is one", COMPLETED_ITEM,
+     "COMPACTED if isinstance(identifier, str) and identifier else None", "COMPACTED",
+     PROTOCOL + "test_a_malformed_compaction_is_damage_and_clears_nothing"),
+    ("N5-42 a compaction item is evidence", EVIDENCE_ALLOWLIST,
+     "EVIDENCE_ITEMS", "{AGENT_MESSAGE}",
+     PROTOCOL + "test_a_compaction_makes_the_turns_usage_unknown"),
 )  # fmt: skip
 
 ERROR_REPLY = PROTOCOL + "test_an_error_or_missing_result_refuses"
@@ -476,8 +528,9 @@ MUTANTS = (
     (
         "the adapter discards a refused turn",
         BINDING,
-        "if conversation.faults:",
-        "if False:",
+        # Dedented: the method body sits at four spaces.
+        "    if faults:\n        return unavailable_outcome(",
+        "    if False:\n        return unavailable_outcome(",
         ADAPTER + "test_execute_discards_a_turn_whose_pre_acceptance_reading_faults",
     ),
     (
@@ -682,7 +735,7 @@ MUTANTS = (
     ),
     (
         "a nested configuration refuses as a contract violation",
-        CONFIGURED,
+        "constructicon.substrate.executors.codex:_configured",
         'raise ContractViolation(f"the sealed configuration is {DAMAGE_NESTING}") from exc',
         "raise",
         ADAPTER + "test_a_deeply_nested_configuration_refuses_as_a_contract_violation",

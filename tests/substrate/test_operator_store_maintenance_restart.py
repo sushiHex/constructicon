@@ -152,7 +152,8 @@ assert {path.name for path in root.iterdir()} == {
 assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in root.iterdir())
 config = (root / 'config.toml').read_text(encoding='utf-8')
 assert config == codex_lane.production_configuration()
-assert codex_lane.configured_model(config) == 'gpt-5.5'
+assert codex_lane.configured_model(config) == 'gpt-6.1-sol'
+assert codex_lane.configured_effort(config) == 'low'
 login = codex_lane._policy(root / 'login-policy.json')
 startup = codex_lane._policy(root / 'startup-policy.json')
 auth = EgressDestination('auth.openai.com', 443, '8.8.8.8')

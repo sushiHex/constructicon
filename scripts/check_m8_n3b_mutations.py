@@ -225,8 +225,8 @@ MUTANTS = (
     (
         "30 a close latched after the task is created allocates nothing",
         CODEX + "CodexOperatorHandle._exchange",
-        "self._check_control()\n    async with EgressRelay",
-        "async with EgressRelay",
+        "self._check_control()\n    relay = EgressRelay",
+        "relay = EgressRelay",
         C + "test_a_close_latched_after_the_task_is_created_allocates_nothing",
     ),
     (
