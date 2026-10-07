@@ -487,9 +487,7 @@ NO_LOGIN = frozenset({
     # An empty ``auth.json`` makes ``account/read`` the pinned client's error
     # reply, so ``account_faults`` (codex_protocol.py) sees no result object
     # and returns only this one fault before any other check can run.
-    NO_ACCOUNT_FAULT,
     NO_RESULT_FAULT,
-    UNSEALED_BACKEND_FAULT,
     # No module constant names these three: they are the ``checks`` tuple
     # inline in ``codex_lane.run_startup`` (codex_lane.py lines 411-414),
     # copied verbatim from there rather than retyped from memory. With the

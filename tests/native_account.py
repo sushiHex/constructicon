@@ -14,6 +14,7 @@ import json
 import socket
 import ssl
 import threading
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -176,10 +177,13 @@ class AccountPeer:
         self.lock = threading.Lock()
         threading.Thread(target=self._serve, daemon=True).start()
 
-    def _select(self, tls: ssl.SSLObject, name: str | None, _context: ssl.SSLContext) -> Any:
+    def _select(self, tls: ssl.SSLSocket, name: str | None, _context: ssl.SSLContext) -> Any:
+        """The SNI callback: a server socket keeps no ``server_hostname``, so the
+        name the client sent is recorded here, on its socket."""
         if name not in self.contexts:
             return ssl.ALERT_DESCRIPTION_UNRECOGNIZED_NAME
         tls.context = self.contexts[name]
+        tls.fixture_sni = name  # type: ignore[attr-defined]
         return None
 
     def _serve(self) -> None:
@@ -195,7 +199,7 @@ class AccountPeer:
     def _session(self, raw: socket.socket, session: dict[str, Any]) -> None:
         try:
             with self.context.wrap_socket(raw, server_side=True) as tls:
-                session["sni"] = tls.server_hostname
+                session["sni"] = getattr(tls, "fixture_sni", None)
                 head = b""
                 while b"\r\n\r\n" not in head and (chunk := tls.recv(8192)):
                     head += chunk
@@ -232,4 +236,8 @@ class AccountPeer:
         return self.script.log
 
     def close(self) -> None:
+        """Release the port now: on Linux, closing a listener does not wake an
+        ``accept`` blocked in another thread, which keeps it bound; a shutdown does."""
+        with suppress(OSError):
+            self.server.shutdown(socket.SHUT_RDWR)
         self.server.close()
