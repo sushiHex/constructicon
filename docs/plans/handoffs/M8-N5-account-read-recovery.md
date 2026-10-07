@@ -117,14 +117,18 @@ reload, its check 401 again, then one refresh with the old refresh token.
 |---|---|---|---|
 | clean | the new bearer's check 200, then usage 200 and reset credits 404, concurrent; `refresh: measured` | none | 1 + 5, no denial |
 | refused refresh | only old-bearer checks: the refusal is cached, so the adapter's reading retries the checks and never the refresh | unauthorized (401) | 1 + 6, no denial |
-| still unauthorized | the adapter's reading recovers again, refreshing with the new refresh token, until the relay's bound refuses its ninth connection | discovery failed | 2 + 6, `connection_bound` denied once |
+| still unauthorized | the adapter's reading recovers again, refreshing with the new refresh token; in the measured run it went on until the relay's bound refused a ninth connection | discovery failed (or unauthorized, by schedule) | 2 + 6, `connection_bound` denied once in that run |
+| bounded | the same answers under a three-connection bound: the fixed opening fills it, and the first discovery's check with the refreshed token is refused, whatever the other callers do | discovery failed or unauthorized | 1 + 2, `connection_bound` required |
 | account changed | nothing: the account is compared before any check with the new tokens | account changed | 1 + 2, no denial |
 | unsealed backend | the new bearer's check 200; the adapter refuses the routing | none | 1 + 3, no denial |
 
 The still-unauthorized case is the one measured outcome the design did not
-predict: two full recoveries spend production's eight connections, and the
-relay refuses the next. The egress bound holds against a client that keeps
-retrying, and that case now requires the bound's denial.
+predict: two full recoveries spent production's eight connections, and the
+relay refused the next. Whether a run reaches the ninth attempt depends on how
+the vendor's discovery callers race, so that case claims only its verdict and
+that the bound is never exceeded. The `bounded` case proves the refusal
+deterministically: a three-connection bound is exactly the recovery's fixed
+opening, and the first discovery still owes one more check.
 
 ### What could pass vacuously, and the guard
 
@@ -222,3 +226,18 @@ cannot make the persisted-token checks pass; the stdout wrapper returns the
 bytes it read; the sysctl's scope and the new leaf weaken no containment
 proof (the zone's network namespace keeps its own threshold, and only the CA
 enters the runtime bundle).
+
+### The connector's review on ready
+
+Two findings, both introduced and adopted:
+
+- **P1: the bound proof had become optional.** After the diff review made the
+  still-unauthorized case schedule-tolerant, a run whose callers stopped
+  before a ninth attempt passed without exercising the bound, while this
+  document claimed the case required it. A sixth case, `bounded`, now proves
+  the refusal deterministically under a three-connection bound, and the
+  still-unauthorized case claims only its verdict and that the bound is never
+  exceeded.
+- **P2: evidence was published before its assertions.** Each case's evidence
+  is now written first with `assertions_passed: false` and rewritten as true
+  only after every assertion holds, as the N4 startup evidence is.

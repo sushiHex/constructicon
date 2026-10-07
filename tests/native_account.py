@@ -30,7 +30,8 @@ RESET_CREDITS = "/backend-api/wham/rate-limit-reset-credits"
 TOKEN = "/oauth/token"
 
 ACCOUNT_ID, USER_ID, OTHER_USER_ID = "acct-fixture", "user-fixture", "user-other"
-CASES = ("clean", "refused", "unauthorized", "changed", "unsealed")
+CASES = ("clean", "refused", "unauthorized", "bounded", "changed", "unsealed")
+"""``bounded`` answers as ``unauthorized`` does, under a smaller egress bound."""
 
 
 def _segment(value: dict[str, Any]) -> str:
@@ -161,7 +162,7 @@ class Script:
             return 404, None
         fresh = entry["bearer"] in ("new", "other") and entry["account"] == "fixture"
         if path == CHECK:
-            if not fresh or self.case == "unauthorized":
+            if not fresh or self.case in ("unauthorized", "bounded"):
                 return 401, {"detail": "fixture unauthorized"}
             origin = "https://elsewhere.invalid" if self.case == "unsealed" else "https://chatgpt.com"
             return 200, _account(origin)

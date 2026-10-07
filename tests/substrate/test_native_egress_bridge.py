@@ -825,12 +825,12 @@ async def test_the_zone_trust_store_decides_what_the_device_login_trusts(
 # --- account/read recovery (M8-N5-account-read-recovery.md) ---------------------
 
 
-def account_policy() -> egress.EgressPolicy:
-    """Production's shape, eight connections: both hosts at 443, pinned to the fake."""
+def account_policy(connections: int) -> egress.EgressPolicy:
+    """Production's shape, both hosts at 443 pinned to the fake, under a bound."""
     return egress.EgressPolicy(tuple(
         egress.EgressDestination(host, 443, CONTROLLED)
         for host in (native_account.BACKEND, native_account.ISSUER)
-    ), 8)
+    ), connections)
 
 
 @pytest.fixture
@@ -877,6 +877,11 @@ STOPPED = NO_LOGIN - {NO_RESULT_FAULT}
 """The lane's three faults for a gate that stopped at ``account/read``."""
 
 
+BOUNDED_CONNECTIONS = 3
+"""The ``bounded`` case's egress bound: exactly the recovery's fixed opening, two
+checks and one refresh, so the next connection any caller attempts is refused."""
+
+
 @pytest.mark.parametrize("case", native_account.CASES)
 async def test_account_read_recovers_from_a_401_exactly_as_its_case_allows(
     binding, trust_launcher, short_root, fixture_credential, monkeypatch, case,
@@ -884,7 +889,8 @@ async def test_account_read_recovers_from_a_401_exactly_as_its_case_allows(
     """Production's startup lane, configuration, command and egress bound, with
     only the destinations faked: a 401, then a refresh, then a clean or refused
     reading, while the store, the credential's mode, the sealed configuration and
-    the egress policy hold."""
+    the egress policy hold. ``bounded`` alone narrows the bound, to prove it
+    refuses deterministically."""
 
     credential, seeded = fixture_credential
     stdout: list[bytes] = []
@@ -896,13 +902,13 @@ async def test_account_read_recovers_from_a_401_exactly_as_its_case_allows(
         return data
 
     monkeypatch.setattr(codex_lane.RecordingIO, "read", recording)
-    store = credential.parent
     inode = credential.stat().st_ino
+    policy = account_policy(BOUNDED_CONNECTIONS if case == "bounded" else 8)
     peer = native_account.AccountPeer(case, Path(os.environ["M8_TRUST_PKI"]))
     try:
         async with active_custody(binding) as custody:
             run = await run_startup(
-                custody, trust_launcher, account_policy(),
+                custody, trust_launcher, policy,
                 executable=vendor_executable(trust_launcher),
                 configuration=production_configuration(),
                 expected=ExpectedAccount(plan_type="pro"),
@@ -912,16 +918,26 @@ async def test_account_read_recovers_from_a_401_exactly_as_its_case_allows(
     finally:
         peer.close()
     errors = vendor_errors(stdout)
-    log = peer.log
-    posts = [entry for entry in log if entry["path"] == native_account.TOKEN]
-    write_evidence(f"n5-account-{case}.json", {
+    # Published unproved first, and marked proved only once every assertion holds.
+    evidence = {
         "schema_version": 1, "credential_free_fixture": True,
-        "vendor_conformance_qualified": False, "case": case,
+        "vendor_conformance_qualified": False, "case": case, "assertions_passed": False,
+        "connections": policy.connections,
         "methods_sent": run["methods_sent"], "faults": run["faults"], "gate": run["gate"],
         "refresh": run["refresh"], "relay": run["relay"], "credential": run["credential"],
-        "requests": log, "sessions": peer.sessions, "vendor_errors": errors,
-    })
+        "requests": peer.log, "sessions": peer.sessions, "vendor_errors": errors,
+    }
+    write_evidence(f"n5-account-{case}.json", evidence)
+    judge(case, run, peer, errors, policy, credential, seeded, inode)
+    evidence["assertions_passed"] = True
+    write_evidence(f"n5-account-{case}.json", evidence)
 
+
+def judge(case, run, peer, errors, policy, credential, seeded, inode) -> None:
+    """Every assertion of one recovery case; it returns only if all hold."""
+
+    log = peer.log
+    posts = [entry for entry in log if entry["path"] == native_account.TOKEN]
     # Every case: the egress, the sessions, the store, the credential's mode and identity.
     hosts = {f"{host}:443" for host in (native_account.BACKEND, native_account.ISSUER)}
     accepted = sum(count for key, count in run["relay"]["destinations"].items()
@@ -929,6 +945,7 @@ async def test_account_read_recovers_from_a_401_exactly_as_its_case_allows(
     denied = set(run["relay"]["denied"])
     assert {key.split(":", 1)[1] for key in run["relay"]["destinations"]} <= hosts, run["relay"]
     assert run["relay"]["closed"] is True, run["relay"]
+    assert denied <= {"denied:connection_bound"} and accepted <= policy.connections, run["relay"]
     # Each accepted connection is one answered session and one logged request:
     # a failed, unanswered or unlogged session cannot stand in for an answer.
     assert all(s["answered"] and s["alert"] is None and s["error"] is None
@@ -937,7 +954,7 @@ async def test_account_read_recovers_from_a_401_exactly_as_its_case_allows(
     assert {s["sni"] for s in peer.sessions} <= {native_account.BACKEND, native_account.ISSUER}
     assert all(entry["account"] == "fixture" for entry in log if entry["bearer"]), log
     assert all(entry["grant"] for entry in posts), log
-    assert sorted(os.listdir(store)) == ["auth.json"]
+    assert sorted(os.listdir(credential.parent)) == ["auth.json"]
     assert credential.stat().st_ino == inode and run["credential"]["regular_0600"], run
     stored = json.loads(credential.read_bytes())["tokens"]
     assert stored["account_id"] == native_account.ACCOUNT_ID
@@ -974,20 +991,22 @@ async def test_account_read_recovers_from_a_401_exactly_as_its_case_allows(
             (STOPPED | {NO_RESULT_FAULT}, [UNAUTHORIZED]), (STOPPED | {NO_ACCOUNT_FAULT}, []),
         ), (run["faults"], errors)
         assert credential.read_bytes() == seeded
-    elif case == "unauthorized":
+    elif case in ("unauthorized", "bounded"):
         # Refreshes keep succeeding and checks keep failing, each recovery
         # starting from the old or the refreshed token, until a reading gives up
-        # or the relay's bound refuses a connection: the bound holds either way.
-        assert posts[0]["refresh_token"] == "old", steps
+        # or the relay's bound refuses a connection.
         assert {post["refresh_token"] for post in posts} <= {"old", "new"}, steps
         assert all(s[2] == 401 for s in after if s[0] == "check"), steps
-        assert denied <= {"denied:connection_bound"}, run["relay"]
-        assert accepted <= account_policy().connections, run["relay"]
-        assert not denied or accepted == account_policy().connections, run["relay"]
         assert set(run["faults"]) == STOPPED | {NO_RESULT_FAULT} | (
             {DENIAL_FAULT} if denied else set()), run["faults"]
         assert errors in ([UNAUTHORIZED], [DISCOVERY_FAILED]), errors
         assert held == ("new", "new")
+        if case == "bounded":
+            # The fixed opening fills the bound, and the first discovery still
+            # owes its check with the refreshed token: that connection is refused,
+            # whatever the other callers do.
+            assert after == [] and accepted == policy.connections, steps
+            assert denied == {"denied:connection_bound"}, run["relay"]
     elif case == "changed":
         # Fail-closed by intent: the account check refuses before any check with
         # the other user's tokens, which stay persisted. A reading that instead
