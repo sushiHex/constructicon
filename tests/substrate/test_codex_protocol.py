@@ -652,6 +652,20 @@ def test_a_compaction_makes_the_turns_usage_unknown():
     assert '"contextCompaction"' in observation.raw
 
 
+@pytest.mark.parametrize("item", [
+    {"type": "contextCompaction"}, {"type": "contextCompaction", "id": ""},
+    {"type": "contextCompaction", "id": 7},
+], ids=["no-id", "empty-id", "non-string-id"])
+def test_a_malformed_compaction_is_damage_and_clears_nothing(item):
+    observation = folded([
+        record(usage_update(input_tokens=11, output_tokens=3)),
+        record(item_completed(item)), record(completed()),
+    ])
+    assert observation.usage == Usage(input_tokens=11, output_tokens=3)
+    assert observation.malformed_records == 1
+    assert "item/completed" in (observation.first_error or "")
+
+
 def test_another_turns_compaction_is_damage_not_this_turns_fact():
     observation = folded([
         record(usage_update(input_tokens=11, output_tokens=3)),

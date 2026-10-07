@@ -1212,8 +1212,11 @@ the turn's usage total is no longer complete."""
 
 
 def _completed_item(item: Any) -> Any:
+    """A completed item's fact: a compaction only in its pinned shape, with an id
+    (``v2/item.rs:426-428``); anything else malformed is damage, never a clean fact."""
     if isinstance(item, Mapping) and item.get("type") == CONTEXT_COMPACTION:
-        return COMPACTED
+        identifier = item.get("id")
+        return COMPACTED if isinstance(identifier, str) and identifier else None
     return _message_text(item)
 
 

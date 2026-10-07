@@ -3787,3 +3787,5 @@ Evidence from another controller, runtime, vendor client or catalog never passes
 - **P2, recorded above as the open item before Stage 3.** The native `apply_patch` tool survives the recipe.
 
 The pass also checked and rejected four attacks: the sealed effort is what runs, a relay denial cannot be bypassed, routing equivalence holds, and `system_proxy_fallback` is accepted.
+
+The connector's review on ready raised one P2, adopted: a `contextCompaction` item without its pinned `id` was taken as proven compaction and cleared valid usage. Only the pinned shape (`v2/item.rs:426-428`) counts now; anything else is damage and clears nothing (mutant N5-43).

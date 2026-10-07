@@ -90,6 +90,7 @@ WRITE_TEST = "tests/substrate/test_codex_write.py::"
 UPDATED = "constructicon.substrate.executors.codex_protocol:updated_plan"
 EFFORT = "constructicon.substrate.executors.codex:configured_effort"
 ROUTING = "constructicon.substrate.executors.codex_protocol:routing_faults"
+COMPLETED_ITEM = "constructicon.substrate.executors.codex_protocol:_completed_item"
 UNSEALED = PROTOCOL + "test_a_reading_routed_anywhere_else_stops_the_session"
 EXCHANGE = "constructicon.substrate.executors.codex:CodexOperatorHandle._exchange"
 RELAY_FAULTS = "constructicon.substrate.executors.codex:relay_faults"
@@ -239,6 +240,9 @@ N5_PROTOCOL = (
     ("N5-41 a compaction makes the turn's usage unknown", OBSERVE,
      "usage=None if compacted else usage,", "usage=usage,",
      PROTOCOL + "test_a_compaction_makes_the_turns_usage_unknown"),
+    ("N5-43 only a compaction in its pinned shape is one", COMPLETED_ITEM,
+     "COMPACTED if isinstance(identifier, str) and identifier else None", "COMPACTED",
+     PROTOCOL + "test_a_malformed_compaction_is_damage_and_clears_nothing"),
     ("N5-42 a compaction item is evidence", EVIDENCE_ALLOWLIST,
      "EVIDENCE_ITEMS", "{AGENT_MESSAGE}",
      PROTOCOL + "test_a_compaction_makes_the_turns_usage_unknown"),
