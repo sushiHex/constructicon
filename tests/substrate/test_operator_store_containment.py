@@ -78,11 +78,12 @@ def native_mount(binding, held, *, before_spawn=None, egress=None, configuration
 
 
 def normalized(argv):
-    """A launch's arguments with only the two per-launch descriptor numbers erased."""
+    """A launch's arguments with only its per-launch descriptor numbers erased."""
 
     values = list(argv)
-    for flag in ("--ro-bind-data", "--bind-fd"):
-        values[values.index(flag) + 1] = "<fd>"
+    for index, value in enumerate(argv[:-1]):
+        if value in ("--ro-bind-data", "--bind-fd"):
+            values[index + 1] = "<fd>"
     return tuple(values)
 
 
