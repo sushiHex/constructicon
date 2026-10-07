@@ -44,7 +44,6 @@ from constructicon.substrate.executors.codex_lane import (
     vendor_executable,
 )
 from constructicon.substrate.executors.codex_protocol import (
-    NO_ACCOUNT_FAULT,
     NO_RESULT_FAULT,
     UNSEALED_BACKEND_FAULT,
     ExpectedAccount,
@@ -861,6 +860,18 @@ def vendor_errors(stdout: list[bytes]) -> list[str]:
 
 UNAUTHORIZED = "workspace routing discovery unauthorized (401)"
 ACCOUNT_CHANGED = "account changed during workspace routing discovery"
+DISCOVERY_FAILED = "workspace routing discovery failed"
+"""The vendor's messages (``workspace_routing.rs:66-71`` at rust-v0.160.1)."""
+
+
+def step(entry: dict) -> tuple[str, str | None, int]:
+    """One logged request as (endpoint, token class, status); no token value."""
+    endpoint = entry["path"].rsplit("/", 1)[-1].removeprefix("rate-limit-")
+    kind = "refresh_token" if endpoint == "token" else "bearer"
+    return endpoint, entry.get(kind), entry["status"]
+
+
+OLD_CHECK = ("check", "old", 401)
 
 
 @pytest.mark.parametrize("case", native_account.CASES)
@@ -926,40 +937,46 @@ async def test_account_read_recovers_from_a_401_exactly_as_its_case_allows(
     assert {s["sni"] for s in peer.sessions} <= {native_account.BACKEND, native_account.ISSUER}
     assert sorted(os.listdir(store)) == ["auth.json"]
     assert credential.stat().st_ino == inode and run["credential"]["regular_0600"], run
-    old_checks = [entry for entry in log if entry["path"] == native_account.CHECK
-                  and entry["bearer"] == "old"]
-    assert old_checks and all(entry["status"] == 401 for entry in old_checks), log
     stored = json.loads(credential.read_bytes())["tokens"]
     assert stored["account_id"] == native_account.ACCOUNT_ID
+    # Every case opens as the pin's recovery does: the old bearer's check 401,
+    # the reload, its check 401 again, then one refresh with the old token.
+    steps = [step(entry) for entry in log]
+    assert steps[:3] == [OLD_CHECK, OLD_CHECK, ("token", "old", 401 if case == "refused" else 200)]
 
     if case == "clean":
         assert run["faults"] == [], run["faults"]
         assert run["methods_sent"] == [named_method(method) for method in STARTUP_METHODS]
         assert run["gate"] == {"completed": True, "plan": "pro"} and run["refresh"] == "measured"
-        assert len(posts) == 1 and posts[0]["refresh_token"] == "old", log
-        first = log.index(posts[0])
-        assert [entry["bearer"] for entry in log[:first]] == ["old", "old"], log
-        assert {entry["bearer"] for entry in log[first + 1:]} == {"new"}, log
-        assert [e["path"] for e in log if e["path"] == native_account.USAGE] == [
-            native_account.USAGE], log
+        # Then the new bearer's check, and the readback's two requests, concurrent.
+        assert steps[3] == ("check", "new", 200) and len(steps) == 6, steps
+        assert sorted(steps[4:]) == [("reset-credits", "new", 404), ("usage", "new", 200)]
         assert (stored["access_token"], stored["refresh_token"]) == (
             native_account.NEW.access, native_account.NEW.refresh)
         return
     assert run["methods_sent"] == [named_method(method) for method in STARTUP_METHODS[:3]], run
     assert run["gate"]["completed"] is False and run["readback"] is None, run
+    assert NO_RESULT_FAULT in run["faults"] or UNSEALED_BACKEND_FAULT in run["faults"], run
     if case == "refused":
-        assert NO_RESULT_FAULT in run["faults"] or NO_ACCOUNT_FAULT in run["faults"], run
-        assert set(errors) <= {UNAUTHORIZED}, errors
-        assert len(posts) == 1 and credential.read_bytes() == seeded
+        # A refused refresh is cached: the adapter's own reading retries only the
+        # checks, every one with the old bearer, and the file is untouched.
+        assert set(steps[3:]) == {OLD_CHECK} and len(posts) == 1, steps
+        assert errors == [UNAUTHORIZED] and credential.read_bytes() == seeded
     elif case == "unauthorized":
-        assert NO_RESULT_FAULT in run["faults"] and UNAUTHORIZED in errors, (run, errors)
-        assert posts and stored["access_token"] == native_account.NEW.access
+        # The adapter's reading recovers again, refreshing with the new token,
+        # until the relay's bound refuses its ninth connection.
+        assert [post["refresh_token"] for post in posts] == ["old", "new"], steps
+        assert errors == [DISCOVERY_FAILED], errors
+        assert stored["access_token"] == native_account.NEW.access
     elif case == "changed":
-        assert NO_RESULT_FAULT in run["faults"] and ACCOUNT_CHANGED in errors, (run, errors)
-        assert posts and stored["access_token"] == native_account.OTHER.access
+        # The account is compared before any check with the new tokens, which
+        # stay persisted: the refusal does not roll them back.
+        assert len(steps) == 3 and errors == [ACCOUNT_CHANGED], (steps, errors)
+        assert stored["access_token"] == native_account.OTHER.access
     else:
+        assert steps[3:] == [("check", "new", 200)] and errors == [], (steps, errors)
         assert UNSEALED_BACKEND_FAULT in run["faults"], run["faults"]
-        assert len(posts) == 1 and stored["access_token"] == native_account.NEW.access
+        assert stored["access_token"] == native_account.NEW.access
 
 
 def test_no_evidence_file_contains_key_material():

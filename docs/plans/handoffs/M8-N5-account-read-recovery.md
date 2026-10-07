@@ -2,6 +2,9 @@
 
 Status: design, independently reviewed once (Codex `gpt-6-sol`, job
 `job_63e271332db7`) and amended; see [Review disposition](#review-disposition).
+Implemented and measured on the real binary; see
+[Measured on the real binary](#measured-on-the-real-binary) and the
+[M8 implementation record](M8-implementation-record.md#n5-stage-0b-accountread-recovery).
 Credential-free: every host is a fake behind the relay with a throwaway CA;
 nothing here contacts OpenAI, qualifies a destination or makes the provider
 available.
@@ -99,12 +102,29 @@ new bearer are the case.
 | account changed | new tokens for another user | the account | stops at `account/read` refused as an account change; the new tokens persisted in place |
 | unsealed backend | new tokens | origin `https://elsewhere.invalid`, override valid | stops at `account/read` with exactly `UNSEALED_BACKEND_FAULT` |
 
-Every case also asserts: no relay denial; only the two sealed destinations
-accepted; every TLS session complete, without an alert; the store directory
-holding only `auth.json`; the credential one regular 0600 file on the same
-inode; the zone's configuration production's. Exact request counts are
-measured on the first real-binary run and then pinned, as the native tool
-inventory's were.
+Every case also asserts: only the two sealed destinations accepted; every TLS
+session complete, without an alert; the store directory holding only
+`auth.json`; the credential one regular 0600 file on the same inode; the
+zone's configuration production's. Request sequences were measured on the
+real binary and then pinned, as the native tool inventory's were.
+
+### Measured on the real binary
+
+Every case opens with the pin's recovery: the old bearer's check 401, the
+reload, its check 401 again, then one refresh with the old refresh token.
+
+| Case | Then | Vendor error | Relay |
+|---|---|---|---|
+| clean | the new bearer's check 200, then usage 200 and reset credits 404, concurrent; `refresh: measured` | none | 1 + 5, no denial |
+| refused refresh | only old-bearer checks: the refusal is cached, so the adapter's reading retries the checks and never the refresh | unauthorized (401) | 1 + 6, no denial |
+| still unauthorized | the adapter's reading recovers again, refreshing with the new refresh token, until the relay's bound refuses its ninth connection | discovery failed | 2 + 6, `connection_bound` denied once |
+| account changed | nothing: the account is compared before any check with the new tokens | account changed | 1 + 2, no denial |
+| unsealed backend | the new bearer's check 200; the adapter refuses the routing | none | 1 + 3, no denial |
+
+The still-unauthorized case is the one measured outcome the design did not
+predict: two full recoveries spend production's eight connections, and the
+relay refuses the next. The egress bound holds against a client that keeps
+retrying, and that case now requires the bound's denial.
 
 ### What could pass vacuously, and the guard
 

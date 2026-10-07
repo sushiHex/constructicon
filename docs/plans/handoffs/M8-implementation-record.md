@@ -3819,3 +3819,13 @@ Design: [M8-N5-native-tool-inventory.md](M8-N5-native-tool-inventory.md), review
 - **Verified by CI, not by review:** `--ro-bind-data` onto the runtime image's empty `CATALOG_MOUNT` works; the vendored startup lanes start from it under `--strict-config`.
 
 The connector's review on ready raised one P2, adopted: the evidence gained a required field under the same `schema_version`, as #125's `catalog_sha256` had. `LANE_SCHEMA` is now 3, and `check_evidence`, which accepts only the current version, refuses earlier evidence by its version.
+
+### N5 Stage 0b: `account/read` recovery
+
+Design: [M8-N5-account-read-recovery.md](M8-N5-account-read-recovery.md), reviewed once by Codex (`gpt-6-sol`, job `job_63e271332db7`) before it was built. This closes the plan's Stage 0 item: "a 401, then refresh, then a clean or refused reading", with store, mode, configuration and egress restrictions holding (`M8-N5-state-review.md:85`). No production code changed.
+
+**How.** The production startup lane, `run_startup`, drives the real binary with production's configuration, command, URLs and eight-connection bound. Only the destinations are fakes: one HTTPS server at `127.0.0.1:443` serves `chatgpt.com` and `auth.openai.com` by SNI from the trust fixture's throwaway CA, which gained a `chatgpt.com` leaf. The store's credential is a fixture (unsigned id_token, far expiry), restored after. The fake logs each token only by class, and the evidence scan fails on any fixture token. The foundation lane's bridge step lowers `ip_unprivileged_port_start` to 443 for that step only, on the disposable runner.
+
+**Measured** (the design's table): a clean recovery reaches all four methods with no fault and `refresh: measured`; a refused refresh is cached and leaves the file byte-identical; an account change refuses before any new-bearer check, with the new tokens already persisted; an unsealed backend is refused by `routing_faults`. Unpredicted: when the check stays 401 after a good refresh, the adapter's reading recovers again with the new refresh token until the relay's bound refuses the ninth connection. That case now requires the bound's denial.
+
+**Cross-review.** The design pass's adopted points are in the design's disposition; the largest was the composition: one fake at production's port 443 replaced an exec shim, a configuration override and a widened connection bound, so the proof speaks for production's own URLs and bound.
