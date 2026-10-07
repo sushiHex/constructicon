@@ -175,8 +175,8 @@ N5_PROTOCOL = (
      "output=answer if answer is not None else partial,",
      "output=answer if terminal else partial,",
      PROTOCOL + "test_a_failed_turn_keeps_its_partial_text_only_as_the_output_of_a_partial"),
-    ("N5-23 only agent message items are evidence", EVIDENCE_ALLOWLIST,
-     "return isinstance(item, Mapping) and item.get(\"type\") == AGENT_MESSAGE", "return True",
+    ("N5-23 only the two admitted item types are evidence", EVIDENCE_ALLOWLIST,
+     "return isinstance(item, Mapping) and item.get(\"type\") in EVIDENCE_ITEMS", "return True",
      PROTOCOL + "test_only_agent_message_items_are_evidence"),
     # --- N5 Stage 0: the turn's evidence, held and drained ---
     ("N5-24 evidence before the turn/start reply is held", ABSORB,
