@@ -42,9 +42,9 @@ from tests.substrate.test_codex_matrix import EIGHT
 from tests.substrate.test_codex_protocol import (
     ACCOUNT_ID,
     EMAIL,
-    MANAGED,
     codex_bucket,
     completed,
+    managed,
     spend_result,
 )
 from tests.substrate.test_codex_write import run_write_conversation, write_native
@@ -319,7 +319,7 @@ async def test_a_provider_auth_recovery_mid_turn_discards_it():
 
 @pytest.mark.parametrize("plan", ["pro", "prolite"])
 async def test_qualification_records_whichever_declared_literal_the_account_reports(plan):
-    account = {"result": {"account": {**MANAGED, "planType": plan}, "requiresOpenaiAuth": True}}
+    account = {"result": managed(planType=plan)}
     native = clean_native(accounts=[account], spends=[{"result": spend_result(planType=plan)}])
     conversation = await run(
         startup(expected=ExpectedAccount(plan_type="pro", alternatives=("prolite",))), native,
@@ -331,7 +331,7 @@ QUALIFYING = ExpectedAccount(plan_type="pro", alternatives=("prolite",))
 
 
 def with_plan(plan):
-    return {"result": {"account": {**MANAGED, "planType": plan}, "requiresOpenaiAuth": True}}
+    return {"result": managed(planType=plan)}
 
 
 async def test_one_run_binds_one_plan_literal_for_every_later_observation():
@@ -508,7 +508,7 @@ async def test_a_settings_update_for_the_sealed_provider_passes_a_configured_ses
 
 
 async def test_qualification_refuses_an_undeclared_plan_and_records_none():
-    account = {"result": {"account": {**MANAGED, "planType": "plus"}, "requiresOpenaiAuth": True}}
+    account = {"result": managed(planType="plus")}
     native = clean_native(accounts=[account])
     conversation = await run(
         startup(expected=ExpectedAccount(plan_type="pro", alternatives=("prolite",))), native,

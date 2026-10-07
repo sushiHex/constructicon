@@ -118,6 +118,7 @@ from constructicon.substrate.executors.codex_protocol import (
     TurnObservation,
     account_change_faults,
     account_faults,
+    account_identity,
     account_notice_faults,
     account_plan,
     account_read_request,
@@ -448,6 +449,7 @@ class CodexConversation:
         self.before_spend: SpendReading | None = None
         self.after_spend: SpendReading | None = None
         self.observed_plan: str | None = None
+        self.observed_account: Digest | None = None
 
     async def __call__(self, io: ProcessIO) -> None:
         if self._entered:
@@ -1239,6 +1241,8 @@ class CodexConversation:
         before = await self._account(io)
         if before is None:
             return
+        # Recorded even for a refused reading, so its evidence names the account judged.
+        self.observed_account = account_identity(before)
         faults = account_faults(before, self._expected)
         if faults:
             # A refused pre-turn reading never sends a turn.
@@ -1252,9 +1256,11 @@ class CodexConversation:
         if self.observed_plan is not None:
             # One literal per run (SPEND-2): qualification's alternatives only
             # select the first, so a later reading naming the other declared
-            # literal is a plan change, as orchestrator decision 1 says.
+            # literal is a plan change, as orchestrator decision 1 says. The
+            # account is sealed beside it: the after-turn reading must name it.
             self._expected = replace(
                 self._expected, plan_type=self.observed_plan, alternatives=(),
+                identity=self.observed_account,
             )
 
         # The spend readback: the owner's N5 bound, and the first request that
@@ -2086,6 +2092,10 @@ class CodexOperatorProvider:
             raise ContractViolation(
                 "the sealed configuration names an effort the profile does not accept"
             )
+        if expected_account.identity is None or expected_account.alternatives:
+            # Production assembly takes the seal from the generation's qualification
+            # evidence (M8-N5-account-identity.md); trust on first use is qualification's.
+            raise ContractViolation("an operator provider requires the account its binding sealed")
         self.launcher = launcher
         self.profile = profile
         self.catalog = resolved_catalog

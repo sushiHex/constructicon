@@ -51,6 +51,10 @@ ACCOUNT_RECORD = "constructicon.substrate.executors.codex_protocol:account_notic
 SPEND = "constructicon.substrate.executors.codex_protocol:spend_faults"
 READBACK = "constructicon.substrate.executors.codex_protocol:readback_faults"
 NOTICE_STOP = "constructicon.substrate.executors.codex_protocol:notice_stop_faults"
+IDENTITY = "constructicon.substrate.executors.codex_protocol:account_identity"
+SEAL = "constructicon.substrate.executors.codex_protocol:ExpectedAccount.seal"
+
+PROVIDER_INIT = "constructicon.substrate.executors.codex:CodexOperatorProvider.__init__"
 READING = "constructicon.substrate.executors.codex_protocol:spend_reading"
 BALANCE = "constructicon.substrate.executors.codex_protocol:_balance_zero"
 CONVERSATION = "constructicon.substrate.executors.codex:CodexConversation.__init__"
@@ -246,6 +250,31 @@ N5_PROTOCOL = (
     ("N5-42 a compaction item is evidence", EVIDENCE_ALLOWLIST,
      "EVIDENCE_ITEMS", "{AGENT_MESSAGE}",
      PROTOCOL + "test_a_compaction_makes_the_turns_usage_unknown"),
+    # The sealed account identity (M8-N5-account-identity.md).
+    ("N5-A1 an account the wire does not name refuses", GATE,
+     "faults.append(NO_IDENTITY_FAULT)", "pass",
+     PROTOCOL + "test_an_account_the_wire_does_not_name_refuses"),
+    ("N5-A2 another account than the sealed one refuses", GATE,
+     "elif expected.identity is not None and identity != expected.identity:", "elif False:",
+     PROTOCOL + "test_another_account_than_the_sealed_one_refuses"),
+    ("N5-A3 the identity needs the workspace", IDENTITY,
+     "and isinstance(workspace, str) and workspace", "",
+     PROTOCOL + "test_an_account_the_wire_does_not_name_refuses"),
+    ("N5-A4 the identity needs the login", IDENTITY,
+     "isinstance(email, str) and email and ", "",
+     PROTOCOL + "test_an_account_the_wire_does_not_name_refuses"),
+    ("N5-A6 only a sealed account has a seal", SEAL,
+     "if self.identity is None or self.alternatives:", "if False:",
+     PROTOCOL + "test_only_a_sealed_account_has_a_seal[qualifying]"),
+    ("N5-A7 the run seals the first reading's account", CONVERSE,
+     "identity=self.observed_account,", "",
+     ADAPTER + "test_another_login_after_the_turn_is_refused_whoever_sealed_the_first"),
+    ("N5-A8 a refused reading's account is still recorded", CONVERSE,
+     "self.observed_account = account_identity(before)", "self.observed_account = None",
+     ADAPTER + "test_a_sealed_account_refuses_another_login_before_any_turn"),
+    ("N5-A9 a provider requires the sealed account", PROVIDER_INIT,
+     "if expected_account.identity is None or expected_account.alternatives:", "if False:",
+     ADAPTER + "test_an_operator_provider_requires_the_account_its_binding_sealed"),
 )  # fmt: skip
 
 ERROR_REPLY = PROTOCOL + "test_an_error_or_missing_result_refuses"

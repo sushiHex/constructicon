@@ -394,6 +394,13 @@ MUTANTS = (
         T + "test_a_clean_startup_records_the_four_methods_and_nothing_identifying",
     ),
     (
+        "N5-L4 the evidence records the account the first reading named",
+        LANE + "run_startup",
+        "else conversation.observed_account.root},",
+        "else None},",
+        T + "test_a_clean_startup_records_the_four_methods_and_nothing_identifying",
+    ),
+    (
         "N5-L3 the seal's digest is the seal's, not the source's",
         LANE + "vendor_executable",
         "hashlib.sha256(sealed_catalog(catalog)).hexdigest())",

@@ -44,7 +44,13 @@ from constructicon.substrate.executors.operator_store import BindingCheck
 from tests.operator_store_world import StoreWorld
 from tests.substrate.test_codex_adapter import bare_launcher, clean_native
 from tests.substrate.test_codex_matrix import EIGHT
-from tests.substrate.test_codex_protocol import ACCOUNT_ID, EMAIL, spend_result
+from tests.substrate.test_codex_protocol import (
+    ACCOUNT_ID,
+    EMAIL,
+    IDENTITY,
+    managed,
+    spend_result,
+)
 
 CONFIGURATION = 'model = "gpt-5.6-sol"\n'
 CODE = b"Enter this one-time code ABCD-1234 at https://auth.openai.com/codex/device\n"
@@ -288,16 +294,20 @@ async def startup(tmp_path, native=None, *, lane=None, **kwargs):
     return lane, evidence
 
 
+def gate(completed: bool, plan: str | None) -> dict:
+    """The evidence's gate: the account is the one the first reading named, even
+    when that reading was refused."""
+    return {"completed": completed, "plan": plan, "account": IDENTITY.root}
+
+
 def startup_native(**overrides):
-    return clean_native(accounts=[{"result": {"account": {
-        "type": "chatgpt", "email": EMAIL, "planType": "pro",
-    }, "requiresOpenaiAuth": True}}], **overrides)
+    return clean_native(accounts=[{"result": managed(planType="pro")}], **overrides)
 
 
 async def test_a_clean_startup_records_the_four_methods_and_nothing_identifying(tmp_path):
     lane, evidence = await startup(tmp_path, startup_native())
     assert evidence["methods_sent"] == FOUR
-    assert evidence["gate"] == {"completed": True, "plan": "pro"}
+    assert evidence["gate"] == gate(True, "pro")
     assert evidence["readback"]["has_credits"] is False
     assert evidence["faults"] == [] and evidence["refresh"] == "unmeasured"
     assert evidence["vendor_identity"] == "unverified"
@@ -418,11 +428,9 @@ async def test_a_declared_control_denial_must_occur(tmp_path, denied):
 
 
 async def test_an_undeclared_plan_is_a_fault_and_is_not_recorded_as_the_plan(tmp_path):
-    native = clean_native(accounts=[{"result": {"account": {
-        "type": "chatgpt", "email": EMAIL, "planType": "plus",
-    }, "requiresOpenaiAuth": True}}])
+    native = clean_native(accounts=[{"result": managed(planType="plus")}])
     _, evidence = await startup(tmp_path, native)
-    assert evidence["faults"] and evidence["gate"] == {"completed": False, "plan": None}
+    assert evidence["faults"] and evidence["gate"] == gate(False, None)
     assert evidence["readback"] is None and evidence["methods_sent"] == FOUR[:3]
 
 
@@ -433,9 +441,7 @@ def plan_native(plan: str):
     """A clean native whose reported plan is ``plan`` in both the gate and the readback."""
 
     return clean_native(
-        accounts=[{"result": {"account": {
-            "type": "chatgpt", "email": EMAIL, "planType": plan,
-        }, "requiresOpenaiAuth": True}}],
+        accounts=[{"result": managed(planType=plan)}],
         spends=[{"result": spend_result(planType=plan)}],
     )
 
@@ -452,12 +458,12 @@ def qualification_expected() -> ExpectedAccount:
 @pytest.mark.parametrize("plan", ["pro", "prolite"])
 async def test_qualification_accepts_either_approved_plan_literal(tmp_path, plan):
     _, evidence = await startup(tmp_path, plan_native(plan), expected=qualification_expected())
-    assert evidence["faults"] == [] and evidence["gate"] == {"completed": True, "plan": plan}
+    assert evidence["faults"] == [] and evidence["gate"] == gate(True, plan)
 
 
 async def test_qualification_refuses_a_plan_outside_the_approved_pair(tmp_path):
     _, evidence = await startup(tmp_path, plan_native("plus"), expected=qualification_expected())
-    assert evidence["gate"] == {"completed": False, "plan": None} and evidence["faults"]
+    assert evidence["gate"] == gate(False, None) and evidence["faults"]
 
 
 async def test_active_custody_accepts_only_the_recorded_literal_with_no_alternatives(tmp_path):
@@ -465,10 +471,10 @@ async def test_active_custody_accepts_only_the_recorded_literal_with_no_alternat
 
     recorded = ExpectedAccount(plan_type="prolite")
     _, matched = await startup(tmp_path, plan_native("prolite"), expected=recorded)
-    assert matched["faults"] == [] and matched["gate"] == {"completed": True, "plan": "prolite"}
+    assert matched["faults"] == [] and matched["gate"] == gate(True, "prolite")
 
     _, other = await startup(tmp_path, plan_native("pro"), expected=recorded)
-    assert other["gate"] == {"completed": False, "plan": None} and other["faults"]
+    assert other["gate"] == gate(False, None) and other["faults"]
 
 
 async def test_the_hold_runs_inside_the_live_exchange(tmp_path):
@@ -930,15 +936,27 @@ def test_the_command_line_never_runs_a_login_under_the_active_selection(tmp_path
     assert seen["events"] == []
 
 
-def test_a_maintenance_lane_refuses_an_operator_supplied_expected(tmp_path, monkeypatch):
-    """P1 fix: qualification binds {pro, prolite} itself; no flag may narrow or widen it."""
+def test_a_maintenance_lane_refuses_an_operator_supplied_expected(
+    tmp_path, monkeypatch, capsys,
+):
+    """P1 fix: qualification binds {pro, prolite} itself; no flag may narrow or widen it.
+    The seal is well formed, so the custody rule, not the seal's grammar, refuses it."""
 
     seen = main_world(monkeypatch)
+    sealed = ExpectedAccount(plan_type="pro", identity=IDENTITY).seal
     with pytest.raises(SystemExit):
         codex_lane.main(lane_command(
-            tmp_path, "--lock-fd=7", "--floor=3", "--expected", "pro", lane="startup",
+            tmp_path, "--lock-fd=7", "--floor=3", "--expected", sealed, lane="startup",
         ))
+    assert "--expected is refused" in capsys.readouterr().err
     assert seen["events"] == []
+
+
+def test_a_malformed_seal_is_refused_before_anything_runs(tmp_path, monkeypatch, capsys):
+    seen = main_world(monkeypatch)
+    with pytest.raises(SystemExit):
+        codex_lane.main(lane_command(tmp_path, "--expected", "pro", lane="startup"))
+    assert "--expected" in capsys.readouterr().err and seen["events"] == []
 
 
 def test_an_active_lane_requires_expected(tmp_path, monkeypatch):

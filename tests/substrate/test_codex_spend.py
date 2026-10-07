@@ -35,8 +35,8 @@ from tests.substrate.test_codex_protocol import (
     CLEAN_SPEND,
     EMAIL,
     EXPECTED,
-    MANAGED,
     codex_bucket,
+    managed,
     spend_result,
 )
 
@@ -382,20 +382,20 @@ def test_other_notifications_are_not_settings_updates():
 
 @pytest.mark.parametrize("plan", ["pro", "prolite"])
 def test_qualification_accepts_either_declared_literal(plan):
-    reply = {"result": {"account": {**MANAGED, "planType": plan}, "requiresOpenaiAuth": True}}
+    reply = {"result": managed(planType=plan)}
     assert account_faults(reply, QUALIFYING) == ()
     assert spend_faults(spend_reading({"result": spend_result(planType=plan)}), QUALIFYING) == ()
 
 
 @pytest.mark.parametrize("plan", ["plus", "free", "team", ["pro"]])
 def test_qualification_refuses_every_other_plan(plan):
-    reply = {"result": {"account": {**MANAGED, "planType": plan}, "requiresOpenaiAuth": True}}
+    reply = {"result": managed(planType=plan)}
     assert account_faults(reply, QUALIFYING)
 
 
 def test_a_production_binding_accepts_only_its_recorded_literal():
     recorded = ExpectedAccount(plan_type="prolite")
-    reply = {"result": {"account": {**MANAGED, "planType": "pro"}, "requiresOpenaiAuth": True}}
+    reply = {"result": managed(planType="pro")}
     assert account_faults(reply, recorded)
     assert not recorded.accepts("pro") and recorded.accepts("prolite")
 

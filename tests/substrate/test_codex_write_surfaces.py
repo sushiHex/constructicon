@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -9,6 +10,7 @@ from constructicon.core.executor import TaskSpec
 from constructicon.substrate.executors.codex import CodexConversation
 from constructicon.substrate.executors.codex_protocol import (
     CONTAINED_PYTHON_CATALOG,
+    account_identity,
     decode_turn,
     unavailable_outcome,
 )
@@ -34,8 +36,10 @@ async def test_callback_and_account_frames_do_not_escape_any_public_outcome_fiel
         calls.append(source)
         return "private-worker-response-marker"
 
+    # The marked email is the account now, so the run is sealed for it.
+    marked = replace(EXPECTED, identity=account_identity(native.accounts[0]))
     conversation = CodexConversation(
-        task=TaskSpec(instruction="bounded WRITE"), grants=WRITE_GRANTS, expected=EXPECTED,
+        task=TaskSpec(instruction="bounded WRITE"), grants=WRITE_GRANTS, expected=marked,
         input_limit=1024 * 1024, catalog=CONTAINED_PYTHON_CATALOG,
         worker=worker, deadline=asyncio.get_running_loop().time() + 5,
     )

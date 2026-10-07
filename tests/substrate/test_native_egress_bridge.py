@@ -44,6 +44,7 @@ from constructicon.substrate.executors.codex_lane import (
     vendor_executable,
 )
 from constructicon.substrate.executors.codex_protocol import (
+    IDENTITY_FAULT,
     NO_ACCOUNT_FAULT,
     NO_RESULT_FAULT,
     UNSEALED_BACKEND_FAULT,
@@ -873,6 +874,8 @@ def step(entry: dict) -> tuple[str, str | None, int]:
 
 
 OLD_CHECK = ("check", "old", 401)
+FIXTURE = native_account.FIXTURE_ACCOUNT.identity.root
+"""The identity the fixture credential's account has: what every reading names."""
 STOPPED = NO_LOGIN - {NO_RESULT_FAULT}
 """The lane's three faults for a gate that stopped at ``account/read``."""
 
@@ -911,7 +914,8 @@ async def test_account_read_recovers_from_a_401_exactly_as_its_case_allows(
                 custody, trust_launcher, policy,
                 executable=vendor_executable(trust_launcher),
                 configuration=production_configuration(),
-                expected=ExpectedAccount(plan_type="pro"),
+                expected=native_account.STRANGER_ACCOUNT if case == "stranger"
+                else native_account.FIXTURE_ACCOUNT,
                 lane_dir=short_root / f"acct-{case}", deadline_s=45,
             )
         assert await until(lambda: all(session["done"] for session in peer.sessions), 10)
@@ -971,7 +975,8 @@ def judge(case, run, peer, errors, policy, credential, seeded, inode) -> None:
     if case == "clean":
         assert run["faults"] == [], run["faults"]
         assert run["methods_sent"] == [named_method(method) for method in STARTUP_METHODS]
-        assert run["gate"] == {"completed": True, "plan": "pro"} and run["refresh"] == "measured"
+        assert run["gate"] == {"completed": True, "plan": "pro", "account": FIXTURE} and (
+            run["refresh"] == "measured")
         assert not denied and len(posts) == 1, run["relay"]
         # Only the new bearer from here: its checks, and the readback's two requests.
         checks = [s for s in after if s[0] == "check"]
@@ -1007,6 +1012,15 @@ def judge(case, run, peer, errors, policy, credential, seeded, inode) -> None:
             # whatever the other callers do.
             assert after == [] and accepted == policy.connections, steps
             assert denied == {"denied:connection_bound"}, run["relay"]
+    elif case == "stranger":
+        # The binding was sealed for another login, and the store holds this one:
+        # the clean recovery completes, and our identity check refuses the account
+        # the reading names, which is recorded as judged (M8-N5-account-identity.md).
+        assert not denied and len(posts) == 1 and errors == [], (steps, errors)
+        assert after and set(after) == {("check", "new", 200)}, steps
+        assert set(run["faults"]) == STOPPED | {IDENTITY_FAULT}, run["faults"]
+        assert run["gate"] == {"completed": False, "plan": None, "account": FIXTURE}
+        assert held == ("new", "new")
     elif case == "changed":
         # Fail-closed by intent: the account check refuses before any check with
         # the other user's tokens, which stay persisted. A reading that instead

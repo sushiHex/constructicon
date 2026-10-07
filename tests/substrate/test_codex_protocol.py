@@ -24,8 +24,10 @@ from constructicon.substrate.executors.codex_protocol import (
     DETAIL_CHARS,
     EVIDENCE_BYTES,
     FIRST_ERROR_CHARS,
+    IDENTITY_FAULT,
     NAMEABLE_VALUE,
     NO_ACCOUNT_FAULT,
+    NO_IDENTITY_FAULT,
     NO_PLAN_FAULT,
     NO_RESULT_FAULT,
     NUMBER_CHARS,
@@ -42,6 +44,7 @@ from constructicon.substrate.executors.codex_protocol import (
     TurnObservation,
     account_change_faults,
     account_faults,
+    account_identity,
     account_notice_faults,
     account_read_request,
     decode_turn,
@@ -65,9 +68,21 @@ from constructicon.substrate.executors.codex_protocol import (
 THREAD = "thread-n2"
 TURN = "turn-n2"
 EMAIL = "operator@example.invalid"
-MANAGED = {ACCOUNT_TYPE_KEY: "chatgpt", "email": EMAIL, PLAN_TYPE_KEY: "pro"}
-EXPECTED = ExpectedAccount(plan_type="pro")
 ACCOUNT_ID = "acct-planted-identity"
+MANAGED = {ACCOUNT_TYPE_KEY: "chatgpt", "email": EMAIL, PLAN_TYPE_KEY: "pro"}
+ROUTING = {"chatgptAccountId": ACCOUNT_ID, "backendOrigin": "https://chatgpt.com",
+           "accountRoutingOverride": "NO_CONSTRAINT"}
+"""The pinned ``WorkspaceRouting``: with the email, it names the account."""
+
+
+def managed(**account):
+    """A clean managed reading's result: the account, its workspace, OpenAI auth."""
+    return {"account": {**MANAGED, **account}, "requiresOpenaiAuth": True,
+            "workspaceRouting": ROUTING}
+
+
+IDENTITY = account_identity({"result": managed()})
+EXPECTED = ExpectedAccount(plan_type="pro", identity=IDENTITY)
 
 
 def codex_bucket(**changes):
@@ -150,8 +165,8 @@ class Facts:
         return self._facts[5]
 
 
-def account_reply(identifier=1, *, account=None, flag=True, present=True):
-    result = {"requiresOpenaiAuth": flag}
+def account_reply(identifier=1, *, account=None, flag=True, present=True, routing=ROUTING):
+    result = {"requiresOpenaiAuth": flag, "workspaceRouting": routing}
     if present:
         result["account"] = account
     return {"id": identifier, "result": result}
@@ -438,8 +453,67 @@ def test_a_null_account_and_a_provider_override_are_both_named():
 
 
 def test_a_missing_plan_fact_refuses():
-    reply = account_reply(account={ACCOUNT_TYPE_KEY: "chatgpt"})
+    reply = account_reply(account={ACCOUNT_TYPE_KEY: "chatgpt", "email": EMAIL})
     assert account_faults(reply, EXPECTED) == (NO_PLAN_FAULT,)
+
+
+@pytest.mark.parametrize("change", [
+    {"email": None}, {"email": ""}, {"email": 7}, {"routing": None},
+    {"routing": {**ROUTING, "chatgptAccountId": ""}},
+    {"routing": {**ROUTING, "chatgptAccountId": 7}},
+], ids=["null-email", "empty-email", "non-string-email", "no-routing", "empty-workspace",
+        "non-string-workspace"])
+def test_an_account_the_wire_does_not_name_refuses(change):
+    """Fail-closed: nothing identifies the login and workspace, so nothing binds."""
+    routing = change.pop("routing", ROUTING)
+    reply = account_reply(account={**MANAGED, **change}, routing=routing)
+    assert account_identity(reply) is None
+    faults = account_faults(reply, EXPECTED)
+    assert faults[:1] == (NO_IDENTITY_FAULT,), faults
+    assert EMAIL not in " ".join(faults) and ACCOUNT_ID not in " ".join(faults)
+
+
+@pytest.mark.parametrize("change", [
+    {"email": "another@example.invalid"},
+    {"routing": {**ROUTING, "chatgptAccountId": "acct-other"}},
+], ids=["another-login", "another-workspace"])
+def test_another_account_than_the_sealed_one_refuses(change):
+    routing = change.pop("routing", ROUTING)
+    reply = account_reply(account={**MANAGED, **change}, routing=routing)
+    assert account_identity(reply) not in (None, IDENTITY)
+    assert account_faults(reply, EXPECTED) == (IDENTITY_FAULT,)
+    # Qualification seals whichever account it first reads.
+    assert account_faults(reply, ExpectedAccount(plan_type="pro")) == ()
+
+
+def test_the_identity_is_a_digest_of_both_facts_and_names_neither():
+    reply = account_reply(account=MANAGED)
+    identity = account_identity(reply)
+    assert identity == IDENTITY and EMAIL not in identity.root and ACCOUNT_ID not in identity.root
+    assert identity == account_identity(account_reply(7, account=dict(MANAGED)))
+
+
+def test_the_seal_is_one_token_and_reads_back_exactly():
+    assert ExpectedAccount.from_seal(EXPECTED.seal) == EXPECTED
+    assert EXPECTED.seal == f"pro/{IDENTITY.root}"
+
+
+@pytest.mark.parametrize("token", [
+    "pro", f"/{'0' * 64}", "pro/", "pro/sha256:" + "0" * 63, "pro/sha256:" + "G" * 64,
+    f"pro/{'x'}/sha256:{'0' * 64}", f"pro/md5:{'0' * 64}",
+], ids=["no-identity", "no-plan", "empty-identity", "short", "not-hex", "two-slashes", "md5"])
+def test_a_malformed_seal_is_refused(token):
+    with pytest.raises(ValueError):
+        ExpectedAccount.from_seal(token)
+
+
+@pytest.mark.parametrize("expected", [
+    ExpectedAccount(plan_type="pro"),
+    ExpectedAccount(plan_type="pro", alternatives=("prolite",), identity=IDENTITY),
+], ids=["unsealed", "qualifying"])
+def test_only_a_sealed_account_has_a_seal(expected):
+    with pytest.raises(ValueError, match="only a sealed account"):
+        _ = expected.seal
 
 
 def routed(routing):
@@ -449,12 +523,11 @@ def routed(routing):
 
 
 @pytest.mark.parametrize("routing", [
-    None,
     {"chatgptAccountId": ACCOUNT_ID, "backendOrigin": "https://chatgpt.com",
      "accountRoutingOverride": "NO_CONSTRAINT"},
     {"chatgptAccountId": ACCOUNT_ID, "backendOrigin": "https://chatgpt.com",
      "accountRoutingOverride": "us_cr"},
-], ids=["absent", "sealed", "sealed-with-residency"])
+], ids=["sealed", "sealed-with-residency"])
 def test_a_reading_routed_to_the_sealed_backend_passes(routing):
     assert account_faults(routed(routing), EXPECTED) == ()
 
@@ -475,10 +548,12 @@ def test_a_reading_routed_to_the_sealed_backend_passes(routing):
 ], ids=["other-origin", "trailing-slash", "plain-http", "unknown-override", "no-override",
         "unhashable-override", "not-an-object"])
 def test_a_reading_routed_anywhere_else_stops_the_session(routing):
-    """Decision 2: an unsealed backend stops the session; the origin is never named."""
+    """Decision 2: an unsealed backend stops the session; the origin is never named.
+    A routing that is no object also names no workspace, so nothing binds either."""
     faults = account_faults(routed(routing), EXPECTED)
-    assert faults == (UNSEALED_BACKEND_FAULT,)
-    assert "example" not in faults[0] and ACCOUNT_ID not in faults[0]
+    assert faults == ((NO_IDENTITY_FAULT,) if isinstance(routing, str) else ()) + (
+        UNSEALED_BACKEND_FAULT,)
+    assert all("example" not in fault and ACCOUNT_ID not in fault for fault in faults)
 
 
 def test_a_different_plan_refuses():
