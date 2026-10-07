@@ -300,8 +300,8 @@ def account_read_request(request_id: int) -> dict[str, Any]:
 def rate_limits_read_request(request_id: int) -> dict[str, Any]:
     """The spend readback: the pinned request has no params at all.
 
-    ``common.rs:1234-1238`` declares ``params`` as an omitted unit, and the
-    wire test at ``:3014-3030`` serializes exactly ``{"id", "method"}``. It is
+    At rust-v0.160.1 ``common.rs:1309-1313`` declares ``params`` optional and
+    skipped when absent, so the vendor's defaults apply. It is
     also the first request that exercises the credential: the handler calls
     ``AuthManager::auth()``, which may refresh (M8-N4-state-review.md, Inputs 5-6).
     """

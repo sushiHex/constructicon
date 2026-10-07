@@ -29,11 +29,12 @@ import pytest
 from constructicon.core.grants import Posture
 from constructicon.core.identity import Digest
 from constructicon.core.workspace import acquisition_id_for
-from constructicon.substrate.executors import codex, egress, operator_store
+from constructicon.substrate.executors import codex, codex_lane, egress, operator_store
 from constructicon.substrate.executors._egress_bridge import PROXY_PORT
 from constructicon.substrate.executors.codex_lane import (
     LOGIN_ARGUMENTS,
     RUNTIME_CATALOG,
+    STARTUP_METHODS,
     active_custody,
     launch,
     production_configuration,
@@ -42,7 +43,9 @@ from constructicon.substrate.executors.codex_lane import (
     vendor_executable,
 )
 from constructicon.substrate.executors.codex_protocol import (
+    NO_ACCOUNT_FAULT,
     NO_RESULT_FAULT,
+    UNSEALED_BACKEND_FAULT,
     ExpectedAccount,
 )
 from constructicon.substrate.executors.egress import identity_digests
@@ -54,6 +57,7 @@ from constructicon.substrate.executors.linux import (
     sealed_catalog,
 )
 from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisition_guard
+from tests import native_account
 from tests.native_startup import (
     BOOTSTRAP,
     MODELS,
@@ -483,7 +487,9 @@ NO_LOGIN = frozenset({
     # An empty ``auth.json`` makes ``account/read`` the pinned client's error
     # reply, so ``account_faults`` (codex_protocol.py) sees no result object
     # and returns only this one fault before any other check can run.
+    NO_ACCOUNT_FAULT,
     NO_RESULT_FAULT,
+    UNSEALED_BACKEND_FAULT,
     # No module constant names these three: they are the ``checks`` tuple
     # inline in ``codex_lane.run_startup`` (codex_lane.py lines 411-414),
     # copied verbatim from there rather than retyped from memory. With the
@@ -816,6 +822,136 @@ async def test_the_zone_trust_store_decides_what_the_device_login_trusts(
     })
 
 
+# --- account/read recovery (M8-N5-account-read-recovery.md) ---------------------
+
+
+def account_policy() -> egress.EgressPolicy:
+    """Production's shape, eight connections: both hosts at 443, pinned to the fake."""
+    return egress.EgressPolicy(tuple(
+        egress.EgressDestination(host, 443, CONTROLLED)
+        for host in (native_account.BACKEND, native_account.ISSUER)
+    ), 8)
+
+
+@pytest.fixture
+def fixture_credential(binding):
+    """The store's credential swapped for the recovery fixture, its bytes restored after."""
+    credential = Path(binding.root) / operator_store._bundle_token("n3a-fixture") / "store" / (
+        "auth.json")
+    original, seeded = credential.read_bytes(), native_account.credential()
+    credential.write_bytes(seeded)
+    try:
+        yield credential, seeded
+    finally:
+        credential.write_bytes(original)
+
+
+def vendor_errors(stdout: list[bytes]) -> list[str]:
+    """The vendor's JSON-RPC error messages, which carry no token, in order."""
+    messages = []
+    for line in b"".join(stdout).splitlines():
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(record, dict) and isinstance(record.get("error"), dict):
+            messages.append(str(record["error"].get("message"))[:200])
+    return messages
+
+
+UNAUTHORIZED = "workspace routing discovery unauthorized (401)"
+ACCOUNT_CHANGED = "account changed during workspace routing discovery"
+
+
+@pytest.mark.parametrize("case", native_account.CASES)
+async def test_account_read_recovers_from_a_401_exactly_as_its_case_allows(
+    binding, trust_launcher, short_root, fixture_credential, monkeypatch, case,
+):
+    """Production's startup lane, configuration, command and egress bound, with
+    only the destinations faked: a 401, then a refresh, then a clean or refused
+    reading, while the store, the credential's mode, the sealed configuration and
+    the egress policy hold."""
+
+    credential, seeded = fixture_credential
+    stdout: list[bytes] = []
+    read = codex_lane.RecordingIO.read
+
+    async def recording(self, maximum=8192):
+        data = await read(self, maximum)
+        stdout.append(data)
+        return data
+
+    monkeypatch.setattr(codex_lane.RecordingIO, "read", recording)
+    store = credential.parent
+    inode = credential.stat().st_ino
+    peer = native_account.AccountPeer(case, Path(os.environ["M8_TRUST_PKI"]))
+    try:
+        async with active_custody(binding) as custody:
+            run = await run_startup(
+                custody, trust_launcher, account_policy(),
+                executable=vendor_executable(trust_launcher),
+                configuration=production_configuration(),
+                expected=ExpectedAccount(plan_type="pro"),
+                lane_dir=short_root / f"acct-{case}", deadline_s=45,
+            )
+        assert await until(lambda: all(session["done"] for session in peer.sessions), 10)
+    finally:
+        peer.close()
+    errors = vendor_errors(stdout)
+    log = peer.log
+    posts = [entry for entry in log if entry["path"] == native_account.TOKEN]
+    write_evidence(f"n5-account-{case}.json", {
+        "schema_version": 1, "credential_free_fixture": True,
+        "vendor_conformance_qualified": False, "case": case,
+        "methods_sent": run["methods_sent"], "faults": run["faults"], "gate": run["gate"],
+        "refresh": run["refresh"], "relay": run["relay"], "credential": run["credential"],
+        "requests": log, "sessions": peer.sessions, "vendor_errors": errors,
+    })
+
+    # Every case: the egress, the store, the credential's mode and identity hold.
+    assert not run["relay"]["denied"], run["relay"]
+    hosts = {f"{host}:443" for host in (native_account.BACKEND, native_account.ISSUER)}
+    assert {key.split(":", 1)[1] for key in run["relay"]["destinations"]} <= hosts, run["relay"]
+    assert all(s["alert"] is None and s["error"] is None for s in peer.sessions), peer.sessions
+    assert {s["sni"] for s in peer.sessions} <= {native_account.BACKEND, native_account.ISSUER}
+    assert sorted(os.listdir(store)) == ["auth.json"]
+    assert credential.stat().st_ino == inode and run["credential"]["regular_0600"], run
+    old_checks = [entry for entry in log if entry["path"] == native_account.CHECK
+                  and entry["bearer"] == "old"]
+    assert old_checks and all(entry["status"] == 401 for entry in old_checks), log
+    stored = json.loads(credential.read_bytes())["tokens"]
+    assert stored["account_id"] == native_account.ACCOUNT_ID
+
+    if case == "clean":
+        assert run["faults"] == [], run["faults"]
+        assert run["methods_sent"] == list(STARTUP_METHODS)
+        assert run["gate"] == {"completed": True, "plan": "pro"} and run["refresh"] == "measured"
+        assert len(posts) == 1 and posts[0]["refresh_token"] == "old", log
+        first = log.index(posts[0])
+        assert [entry["bearer"] for entry in log[:first]] == ["old", "old"], log
+        assert {entry["bearer"] for entry in log[first + 1:]} == {"new"}, log
+        assert [e["path"] for e in log if e["path"] == native_account.USAGE] == [
+            native_account.USAGE], log
+        assert (stored["access_token"], stored["refresh_token"]) == (
+            native_account.NEW.access, native_account.NEW.refresh)
+        return
+    assert "account/rateLimits/read" not in run["methods_sent"], run["methods_sent"]
+    assert run["gate"]["completed"] is False and run["readback"] is None, run
+    if case == "refused":
+        assert NO_RESULT_FAULT in run["faults"] or NO_ACCOUNT_FAULT in run["faults"], run
+        assert set(errors) <= {UNAUTHORIZED}, errors
+        assert len(posts) == 1 and credential.read_bytes() == seeded
+    elif case == "unauthorized":
+        assert NO_RESULT_FAULT in run["faults"] and UNAUTHORIZED in errors, (run, errors)
+        assert posts and stored["access_token"] == native_account.NEW.access
+    elif case == "changed":
+        assert NO_RESULT_FAULT in run["faults"] and ACCOUNT_CHANGED in errors, (run, errors)
+        assert posts and stored["access_token"] == native_account.OTHER.access
+    else:
+        assert UNSEALED_BACKEND_FAULT in run["faults"], run["faults"]
+        assert len(posts) == 1 and stored["access_token"] == native_account.NEW.access
+
+
 def test_no_evidence_file_contains_key_material():
     directory = os.environ.get("M8_EVIDENCE_DIRECTORY")
     if not directory:
@@ -832,6 +968,14 @@ def test_no_evidence_file_contains_key_material():
             "n4-lane-login.json", "n4-lane-startup.json", "n4-lane-trust.json",
             "n4-pinned-client.json",
         ]
-    for path in files:
+    accounts = sorted(Path(directory).glob("n5-account-*.json"))
+    if os.environ.get("M8_BRIDGE_REQUIRED"):
+        assert [path.name for path in accounts] == sorted(
+            f"n5-account-{case}.json" for case in native_account.CASES)
+    tokens = [getattr(generation, kind)
+              for generation in (native_account.OLD, native_account.NEW, native_account.OTHER)
+              for kind in ("access", "refresh")]
+    for path in files + accounts:
         text = path.read_text()
         assert "-----BEGIN" not in text and "PRIVATE KEY" not in text, path.name
+        assert not any(token in text for token in tokens), path.name
