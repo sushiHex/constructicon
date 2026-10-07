@@ -936,15 +936,27 @@ def test_the_command_line_never_runs_a_login_under_the_active_selection(tmp_path
     assert seen["events"] == []
 
 
-def test_a_maintenance_lane_refuses_an_operator_supplied_expected(tmp_path, monkeypatch):
-    """P1 fix: qualification binds {pro, prolite} itself; no flag may narrow or widen it."""
+def test_a_maintenance_lane_refuses_an_operator_supplied_expected(
+    tmp_path, monkeypatch, capsys,
+):
+    """P1 fix: qualification binds {pro, prolite} itself; no flag may narrow or widen it.
+    The seal is well formed, so the custody rule, not the seal's grammar, refuses it."""
 
     seen = main_world(monkeypatch)
+    sealed = ExpectedAccount(plan_type="pro", identity=IDENTITY).seal
     with pytest.raises(SystemExit):
         codex_lane.main(lane_command(
-            tmp_path, "--lock-fd=7", "--floor=3", "--expected", "pro", lane="startup",
+            tmp_path, "--lock-fd=7", "--floor=3", "--expected", sealed, lane="startup",
         ))
+    assert "--expected is refused" in capsys.readouterr().err
     assert seen["events"] == []
+
+
+def test_a_malformed_seal_is_refused_before_anything_runs(tmp_path, monkeypatch, capsys):
+    seen = main_world(monkeypatch)
+    with pytest.raises(SystemExit):
+        codex_lane.main(lane_command(tmp_path, "--expected", "pro", lane="startup"))
+    assert "--expected" in capsys.readouterr().err and seen["events"] == []
 
 
 def test_an_active_lane_requires_expected(tmp_path, monkeypatch):

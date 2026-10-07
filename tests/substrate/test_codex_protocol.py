@@ -553,7 +553,7 @@ def test_a_reading_routed_anywhere_else_stops_the_session(routing):
     faults = account_faults(routed(routing), EXPECTED)
     assert faults == ((NO_IDENTITY_FAULT,) if isinstance(routing, str) else ()) + (
         UNSEALED_BACKEND_FAULT,)
-    assert "example" not in faults[0] and ACCOUNT_ID not in faults[0]
+    assert all("example" not in fault and ACCOUNT_ID not in fault for fault in faults)
 
 
 def test_a_different_plan_refuses():

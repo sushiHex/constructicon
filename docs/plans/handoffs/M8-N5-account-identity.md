@@ -68,8 +68,10 @@ still shows the account it judged. `LANE_SCHEMA` becomes 4.
 qualification evidence to every later check, and it stays one value.
 
 - `ExpectedAccount.seal` renders `<plan>/<identity>`, and
-  `ExpectedAccount.from_seal` parses exactly that grammar: one slash, a known
-  plan literal, a canonical digest.
+  `ExpectedAccount.from_seal` parses exactly that grammar: a non-empty plan
+  literal with no slash, one slash, a canonical digest. The lane accepts any
+  plan literal, so S6c can send `plus`. `check_evidence` additionally requires
+  a qualification plan.
 - The lane's `--expected` takes the token.
 - `check_evidence` compares the plan and the account with it, and accepts `-`
   only for the first qualification and a login.
@@ -128,3 +130,26 @@ Rejected:
 - **Sampling between readings.** A switch between the two readings that
   switches back is invisible to any wire check. The readings bracket every
   turn, and that bracket is the contract.
+
+### Review of the diff
+
+One Codex pass on the built diff (`gpt-6-sol`, job `job_e93bd3067e45`). Adopted:
+
+- **The design overstated the seal's grammar.** "A known plan literal" was
+  wrong: the lane must accept S6c's `plus`. The text now says what the code
+  enforces, and that `check_evidence` restricts the plan.
+- **The maintenance-custody test no longer tested custody.** Its malformed
+  `--expected pro` failed at argument parsing first, so the custody guard went
+  untested. CI agreed independently: mutant N4-L42 survived. The test now
+  passes a well-formed seal and asserts the custody refusal's own message. A
+  separate test covers a malformed seal.
+- **One routing assertion read only the first fault.** It now reads every
+  fault.
+
+Recorded, pre-existing: **S6b's expected shape is stale at rust-v0.160.1.**
+S6b removes `chatgpt.com` from the policy, and the runbook expects
+`account/read` to pass and the readback to be denied. At this pin,
+`account/read` itself calls `chatgpt.com` (`workspace_routing.rs:295-325`), so
+S6b stops at the third method. The host session (Stage 2) must re-derive S6b's
+shape before running it; #127's `bounded` case is the measured precedent
+("workspace routing discovery failed").
