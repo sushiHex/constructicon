@@ -153,3 +153,11 @@ S6b removes `chatgpt.com` from the policy, and the runbook expects
 S6b stops at the third method. The host session (Stage 2) must re-derive S6b's
 shape before running it; #127's `bounded` case is the measured precedent
 ("workspace routing discovery failed").
+
+### The connector's review on ready
+
+One P2, adopted: `check_evidence` let `qualify` take `-` both for S4 (the first
+qualification) and for S9 (a requalification), so a requalification could seal
+another account unchecked. The first qualification now has its own mode,
+`initial`, and only it and a login take `-`; `qualify` always compares with the
+prior seal.

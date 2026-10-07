@@ -82,7 +82,7 @@ mode, name, custody, expected, policy_name, directory, launch_root = sys.argv[1:
 def require(value):
     if not value: raise ValueError("lane evidence lacks an affirmative required fact")
 seal = None if expected == "-" else ExpectedAccount.from_seal(expected)
-require(seal is not None or mode in ("login", "qualify"))
+require((seal is None) == (mode in ("login", "initial")))
 require(seal is None or seal.plan_type in QUALIFICATION_PLANS)
 path = Path(name)
 info = path.stat()
@@ -156,14 +156,14 @@ else:
         require(set(e["faults"]) == required_faults and len(e["faults"]) == len(required_faults))
         require(set(e["relay"]["denied"]) == {"denied:destination"} and e["relay"]["denied"]["denied:destination"] >= 1)
     else:
-        require(mode in ("qualify", "hold", "active", "refresh") and e["faults"] == [])
+        require(mode in ("initial", "qualify", "hold", "active", "refresh") and e["faults"] == [])
         require(e["methods_sent"] == methods and e["gate"]["completed"] is True)
         require(e["gate"]["plan"] in QUALIFICATION_PLANS and account is not None)
         require(seal is None or (e["gate"]["plan"], account) == (seal.plan_type, seal.identity.root))
         require(type(e["readback"]) is dict and set(e["readback"]) == set(SPEND_FIELDS) | set(USAGE_FIELDS))
         require(e["readback"]["spend_control_reached"] is False or e["readback"]["spend_control_reached"] is None)
         require(e["relay"]["denied"] == {})
-        require(custody == ("maintenance" if mode in ("qualify", "hold") else "active"))
+        require(custody == ("maintenance" if mode in ("initial", "qualify", "hold") else "active"))
         if mode == "refresh":
             require(e["refresh"] == "measured" and e["credential"]["mtime_changed"] is True)
             require(e["relay"]["destinations"].get("accepted:auth.openai.com:443", 0) > 0)
@@ -244,7 +244,7 @@ async def check():
 asyncio.run(check())' "$R" "$K" "$1" "$2" "$3" < /dev/null | /usr/bin/grep -qxF "$2"
 }
 load_s4_plan() {
-  check_evidence qualify "$W/s4-qualification.json" maintenance - "$W/startup-policy.json" > /dev/null
+  check_evidence initial "$W/s4-qualification.json" maintenance - "$W/startup-policy.json" > /dev/null
   S4_SEAL="$(read_seal "$W/s4-qualification.json")"
 }
 load_final_qualification() {
@@ -369,7 +369,7 @@ The checked evidence contains the observed plan and a judged spend readback.
   "${LANE[@]}" startup --launch-root "$L" \
   --configuration "$W/config.toml" --policy "$W/startup-policy.json" \
   --lane-dir "$W/s4-lane" --evidence "$W/s4-qualification.json" < /dev/null
-check_evidence qualify "$W/s4-qualification.json" maintenance - "$W/startup-policy.json" > /dev/null
+check_evidence initial "$W/s4-qualification.json" maintenance - "$W/startup-policy.json" > /dev/null
 S4_SEAL="$(read_seal "$W/s4-qualification.json")"
 ```
 

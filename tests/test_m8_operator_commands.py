@@ -143,7 +143,7 @@ def test_each_ssh_step_reloads_setup_and_retained_evidence() -> None:
     assert 'test ! -e "$W"' not in document
     assert "load_s4_plan() {" in document
     assert "load_final_qualification() {" in document
-    assert 'check_evidence qualify "$W/s4-qualification.json"' in document
+    assert 'check_evidence initial "$W/s4-qualification.json"' in document
     assert 'check_evidence hold "$W/s6a-qualification.json"' in document
     steps = {
         "### S6a.": "load_s4_plan",
@@ -343,9 +343,17 @@ async def test_documented_evidence_checker_accepts_actual_clean_qualification(
     )
     path = directory / "qualification.json"
     revision = write_evidence(path, evidence)
-    result = _check_evidence("qualify", path, "maintenance", "-", policy, directory)
+    result = _check_evidence("initial", path, "maintenance", "-", policy, directory)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == str(revision)
+    # Only the first qualification is unsealed: a requalification compares the
+    # account with the prior seal, and the first one has none to compare with.
+    requalified = _check_evidence("qualify", path, "maintenance", seal(plan), policy, directory)
+    assert requalified.returncode == 0, requalified.stderr
+    for mode, expected in (("qualify", "-"), ("initial", seal(plan)),
+                           ("qualify", seal(plan, OTHER_ACCOUNT))):
+        refused = _check_evidence(mode, path, "maintenance", expected, policy, directory)
+        assert refused.returncode != 0, (mode, expected)
 
 
 async def test_documented_checker_refuses_missing_completion_and_new_fault(
@@ -355,14 +363,14 @@ async def test_documented_checker_refuses_missing_completion_and_new_fault(
     _, evidence = await fake_lane.startup(directory, fake_lane.startup_native())
     path = directory / "clean.json"
     write_evidence(path, evidence)
-    assert _check_evidence("qualify", path, "maintenance", "-", policy, directory).returncode == 0
+    assert _check_evidence("initial", path, "maintenance", "-", policy, directory).returncode == 0
     raw = json.loads(path.read_text(encoding="utf-8"))
     path.write_text(json.dumps({key: value for key, value in raw.items() if key != "completed"}),
                     encoding="utf-8")
-    assert _check_evidence("qualify", path, "maintenance", "-", policy, directory).returncode != 0
+    assert _check_evidence("initial", path, "maintenance", "-", policy, directory).returncode != 0
     raw["faults"] = ["unexpected fault"]
     path.write_text(json.dumps(raw), encoding="utf-8")
-    assert _check_evidence("qualify", path, "maintenance", "-", policy, directory).returncode != 0
+    assert _check_evidence("initial", path, "maintenance", "-", policy, directory).returncode != 0
 
 
 async def test_documented_checker_refuses_evidence_of_an_earlier_schema(
@@ -373,12 +381,12 @@ async def test_documented_checker_refuses_evidence_of_an_earlier_schema(
     _, evidence = await fake_lane.startup(directory, fake_lane.startup_native())
     path = directory / "clean.json"
     write_evidence(path, evidence)
-    assert _check_evidence("qualify", path, "maintenance", "-", policy, directory).returncode == 0
+    assert _check_evidence("initial", path, "maintenance", "-", policy, directory).returncode == 0
     raw = json.loads(path.read_text(encoding="utf-8"))
     assert raw["schema_version"] == codex_lane.LANE_SCHEMA == 4
     raw["schema_version"] = 2
     path.write_text(json.dumps(raw), encoding="utf-8")
-    assert _check_evidence("qualify", path, "maintenance", "-", policy, directory).returncode != 0
+    assert _check_evidence("initial", path, "maintenance", "-", policy, directory).returncode != 0
 
 
 @pytest.mark.parametrize("field", [
@@ -395,12 +403,12 @@ async def test_documented_checker_refuses_an_identity_that_is_not_the_installed_
     _, evidence = await fake_lane.startup(directory, fake_lane.startup_native())
     path = directory / "clean.json"
     write_evidence(path, evidence)
-    assert _check_evidence("qualify", path, "maintenance", "-", policy, directory).returncode == 0
+    assert _check_evidence("initial", path, "maintenance", "-", policy, directory).returncode == 0
     raw = json.loads(path.read_text(encoding="utf-8"))
     record, _, key = field.rpartition(".")
     (raw[record] if record else raw)[key] = "0" * 64
     path.write_text(json.dumps(raw), encoding="utf-8")
-    assert _check_evidence("qualify", path, "maintenance", "-", policy, directory).returncode != 0
+    assert _check_evidence("initial", path, "maintenance", "-", policy, directory).returncode != 0
 
 
 async def test_documented_checker_accepts_credits_and_refuses_a_reached_spend_control(
@@ -417,14 +425,14 @@ async def test_documented_checker_accepts_credits_and_refuses_a_reached_spend_co
     )
     path = directory / "credits.json"
     write_evidence(path, evidence)
-    result = _check_evidence("qualify", path, "maintenance", "-", policy, directory)
+    result = _check_evidence("initial", path, "maintenance", "-", policy, directory)
     assert result.returncode == 0, result.stderr
     raw = json.loads(path.read_text(encoding="utf-8"))
     assert raw["readback"]["has_credits"] is True
     for reached in (True, 1, 0, "true", {}, []):
         raw["readback"]["spend_control_reached"] = reached
         path.write_text(json.dumps(raw), encoding="utf-8")
-        refused = _check_evidence("qualify", path, "maintenance", "-", policy, directory)
+        refused = _check_evidence("initial", path, "maintenance", "-", policy, directory)
         assert refused.returncode != 0, reached
 
 
