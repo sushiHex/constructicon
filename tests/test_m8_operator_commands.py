@@ -512,16 +512,19 @@ async def test_documented_checker_accepts_actual_wrong_plan_refusal(
     assert _check_evidence("active", path, "active", seal(plan), policy, directory).returncode != 0
 
 
-async def test_documented_checker_accepts_actual_readback_denial_refusal(
+async def test_documented_checker_accepts_actual_unrouted_account_denial(
     evidence_world: tuple[Path, Path],
 ) -> None:
+    """S6b at rust-v0.160.1: without chatgpt.com, account/read's own workspace
+    check is denied, so the reading is the vendor's error and the run stops at the
+    third method (the account-recovery lane's ``unrouted`` case, on the real binary)."""
     directory, policy = evidence_world
 
     def denied(lane: fake_lane.Lane) -> None:
         fake_lane.FakeRelay.instances[-1].observed["denied:destination"] += 1
 
     native = fake_lane.plan_native("pro")
-    native.spends = [{"error": {"code": -32000, "message": "denied by fake relay"}}]
+    native.accounts = [{"error": {"code": -32603, "message": "workspace routing discovery failed"}}]
     lane = _active_lane(directory, native, during=denied)
     _, evidence = await fake_lane.startup(
         directory, lane=lane, expected=ExpectedAccount(plan_type="pro", identity=IDENTITY),
@@ -534,6 +537,16 @@ async def test_documented_checker_accepts_actual_readback_denial_refusal(
     assert result.returncode == 0, (result.stderr, evidence["faults"])
     assert result.stdout.strip() == str(revision)
     assert _check_evidence("active", path, "active", seal("pro"), policy, directory).returncode != 0
+    # Nothing may have been refreshed or reached: a rewritten credential, or any
+    # accepted connection, refuses the denial however clean the rest is.
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    for changed in (
+        {**raw, "credential": {**raw["credential"], "mtime_changed": True}},
+        {**raw, "relay": {**raw["relay"], "destinations": {"accepted:auth.openai.com:443": 1}}},
+    ):
+        path.write_text(json.dumps(changed), encoding="utf-8")
+        refused = _check_evidence("denial", path, "active", seal("pro"), policy, directory)
+        assert refused.returncode != 0, changed
 
 
 async def test_documented_checker_accepts_actual_maintenance_hold(

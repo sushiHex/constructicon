@@ -60,9 +60,11 @@ same content digest as `EvidenceFile.publish`, only after a closed-schema and
 affirmative-fact check, and only when the recorded identities are the installed
 ones: the adapter and protocol revisions the controller's, the configuration
 digest the session's, and the runtime digest, vendor client and catalog the
-launch set's (`runtime.json`, `native-codex/bin/codex`, `codex-models.json`). `MODE` is `login`, `qualify`, `hold`, `active`,
-`denial`, `wrongplan`, or `refresh`. `EXPECTED` is `-` until the plan has been
-observed, then the closed `pro`/`prolite` literal. The refusal modes require
+launch set's (`runtime.json`, `native-codex/bin/codex`, `codex-models.json`). `MODE` is `login`, `initial` (the
+first qualification), `qualify`, `hold`, `active`, `denial`, `wrongplan`, or
+`refresh`. `EXPECTED` is `-` for a login and for `initial`, and otherwise the
+account seal `<plan>/<identity>` that `read_seal` reads from qualification
+evidence (M8-N5-account-identity.md). The refusal modes require
 their exact expected faults; any additional fault stops the session. The
 checker reads no credential and emits no identity or transcript content.
 
@@ -74,7 +76,7 @@ from pathlib import Path
 sys.path.insert(0, "/opt/constructicon-m8-controller")
 from constructicon.core.identity import Digest, canonical_json, digest
 from constructicon.substrate.executors.codex_lane import (EVIDENCE_DOMAIN, LANE_SCHEMA, LOGIN_FIELDS, STARTUP_FIELDS, STARTUP_METHODS, QUALIFICATION_PLANS, configuration_digest, _policy)
-from constructicon.substrate.executors.codex_protocol import SPEND_FIELDS, USAGE_FIELDS, SPEND_UNREADABLE_FAULT, ExpectedAccount, named_method, named_value
+from constructicon.substrate.executors.codex_protocol import SPEND_FIELDS, USAGE_FIELDS, NO_RESULT_FAULT, ExpectedAccount, named_method, named_value
 from constructicon.substrate.executors.egress import identity_digests
 from constructicon.substrate.executors.linux import sealed_catalog
 from constructicon.substrate.executors.codex import ADAPTER_REVISION, PROTOCOL_REVISION
@@ -151,10 +153,14 @@ else:
         require(e["relay"]["denied"] == {})
     elif mode == "denial":
         require(custody == "active" and seal is not None)
-        require(e["methods_sent"] == methods and e["gate"] == {"completed": False, "plan": seal.plan_type, "account": seal.identity.root} and e["readback"] is None)
-        required_faults = {SPEND_UNREADABLE_FAULT, "the startup gate did not complete", "no spend readback was judged"}
+        # At rust-v0.160.1 account/read itself checks the workspace at chatgpt.com,
+        # so without it the reading fails at the relay (M8-N5-account-read-recovery.md).
+        require(e["methods_sent"] == methods[:3] and e["gate"] == {"completed": False, "plan": None, "account": None} and e["readback"] is None)
+        required_faults = {NO_RESULT_FAULT, "the startup gate did not complete", "the startup did not send exactly the four authorized methods", "no spend readback was judged"}
         require(set(e["faults"]) == required_faults and len(e["faults"]) == len(required_faults))
         require(set(e["relay"]["denied"]) == {"denied:destination"} and e["relay"]["denied"]["denied:destination"] >= 1)
+        # Nothing was refreshed: the credential is the one the run started with.
+        require(e["credential"]["mtime_changed"] is False and e["relay"]["destinations"] == {})
     else:
         require(mode in ("initial", "qualify", "hold", "active", "refresh") and e["faults"] == [])
         require(e["methods_sent"] == methods and e["gate"]["completed"] is True)
@@ -490,7 +496,9 @@ check_evidence wrongplan "$W/s6c-plan-refusal.json" active "$SEAL" "$W/startup-p
 binding_check "$W/g1.sealed.json" stale-generation "$W/g2.sealed.json"
 ```
 
-S6b's policy removes `chatgpt.com`, so the rate-limit readback is denied.
+S6b's policy removes `chatgpt.com`. At rust-v0.160.1 `account/read` itself checks the
+workspace there, so the reading is denied at the relay and the run stops at
+the third method; the account-recovery lane's `unrouted` case measures this.
 S6c sends the sealed identity with the plan `plus`, so the observed approved
 plan alone refuses at the account gate. Both methods lists are checked using
 the producer's

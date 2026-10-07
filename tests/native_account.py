@@ -33,9 +33,12 @@ TOKEN = "/oauth/token"
 
 ACCOUNT_ID, USER_ID, OTHER_USER_ID = "acct-fixture", "user-fixture", "user-other"
 EMAIL = "fixture@example.invalid"
-CASES = ("clean", "refused", "unauthorized", "bounded", "changed", "unsealed", "stranger")
+CASES = (
+    "clean", "refused", "unauthorized", "bounded", "changed", "unsealed", "stranger", "unrouted",
+)
 """``bounded`` answers as ``unauthorized`` does, under a smaller egress bound;
-``stranger`` as ``clean`` does, for a binding sealed to another login."""
+``stranger`` as ``clean`` does, for a binding sealed to another login; ``unrouted``
+as ``clean`` does, behind a policy without ``chatgpt.com``, so nothing reaches it."""
 
 
 def _segment(value: dict[str, Any]) -> str:
