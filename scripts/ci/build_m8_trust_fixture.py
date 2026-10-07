@@ -20,7 +20,7 @@ from pathlib import Path
 
 from constructicon.substrate.executors.linux import TRUST_BUNDLE, runtime_digest, runtime_inventory
 
-LEAVES = {"issuer": "auth.openai.com", "stranger": "stranger.invalid"}
+LEAVES = {"issuer": "auth.openai.com", "backend": "chatgpt.com", "stranger": "stranger.invalid"}
 
 
 def openssl(directory: Path, *arguments: str) -> None:

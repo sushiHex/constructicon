@@ -29,11 +29,13 @@ import pytest
 from constructicon.core.grants import Posture
 from constructicon.core.identity import Digest
 from constructicon.core.workspace import acquisition_id_for
-from constructicon.substrate.executors import codex, egress, operator_store
+from constructicon.substrate.executors import codex, codex_lane, egress, operator_store
 from constructicon.substrate.executors._egress_bridge import PROXY_PORT
 from constructicon.substrate.executors.codex_lane import (
+    DENIAL_FAULT,
     LOGIN_ARGUMENTS,
     RUNTIME_CATALOG,
+    STARTUP_METHODS,
     active_custody,
     launch,
     production_configuration,
@@ -42,8 +44,11 @@ from constructicon.substrate.executors.codex_lane import (
     vendor_executable,
 )
 from constructicon.substrate.executors.codex_protocol import (
+    NO_ACCOUNT_FAULT,
     NO_RESULT_FAULT,
+    UNSEALED_BACKEND_FAULT,
     ExpectedAccount,
+    named_method,
 )
 from constructicon.substrate.executors.egress import identity_digests
 from constructicon.substrate.executors.linux import (
@@ -54,6 +59,7 @@ from constructicon.substrate.executors.linux import (
     sealed_catalog,
 )
 from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisition_guard
+from tests import native_account
 from tests.native_startup import (
     BOOTSTRAP,
     MODELS,
@@ -816,6 +822,206 @@ async def test_the_zone_trust_store_decides_what_the_device_login_trusts(
     })
 
 
+# --- account/read recovery (M8-N5-account-read-recovery.md) ---------------------
+
+
+def account_policy(connections: int) -> egress.EgressPolicy:
+    """Production's shape, both hosts at 443 pinned to the fake, under a bound."""
+    return egress.EgressPolicy(tuple(
+        egress.EgressDestination(host, 443, CONTROLLED)
+        for host in (native_account.BACKEND, native_account.ISSUER)
+    ), connections)
+
+
+@pytest.fixture
+def fixture_credential(binding):
+    """The store's credential swapped for the recovery fixture, its bytes restored after."""
+    credential = Path(binding.root) / operator_store._bundle_token("n3a-fixture") / "store" / (
+        "auth.json")
+    original, seeded = credential.read_bytes(), native_account.credential()
+    credential.write_bytes(seeded)
+    try:
+        yield credential, seeded
+    finally:
+        credential.write_bytes(original)
+
+
+def vendor_errors(stdout: list[bytes]) -> list[str]:
+    """The vendor's JSON-RPC error messages, which carry no token, in order."""
+    messages = []
+    for line in b"".join(stdout).splitlines():
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(record, dict) and isinstance(record.get("error"), dict):
+            messages.append(str(record["error"].get("message"))[:200])
+    return messages
+
+
+UNAUTHORIZED = "workspace routing discovery unauthorized (401)"
+ACCOUNT_CHANGED = "account changed during workspace routing discovery"
+DISCOVERY_FAILED = "workspace routing discovery failed"
+"""The vendor's messages (``workspace_routing.rs:66-71`` at rust-v0.160.1)."""
+
+
+def step(entry: dict) -> tuple[str, str | None, int]:
+    """One logged request as (endpoint, token class, status); no token value."""
+    endpoint = entry["path"].rsplit("/", 1)[-1].removeprefix("rate-limit-")
+    kind = "refresh_token" if endpoint == "token" else "bearer"
+    return endpoint, entry.get(kind), entry["status"]
+
+
+OLD_CHECK = ("check", "old", 401)
+STOPPED = NO_LOGIN - {NO_RESULT_FAULT}
+"""The lane's three faults for a gate that stopped at ``account/read``."""
+
+
+BOUNDED_CONNECTIONS = 3
+"""The ``bounded`` case's egress bound: exactly the recovery's fixed opening, two
+checks and one refresh, so the next connection any caller attempts is refused."""
+
+
+@pytest.mark.parametrize("case", native_account.CASES)
+async def test_account_read_recovers_from_a_401_exactly_as_its_case_allows(
+    binding, trust_launcher, short_root, fixture_credential, monkeypatch, case,
+):
+    """Production's startup lane, configuration, command and egress bound, with
+    only the destinations faked: a 401, then a refresh, then a clean or refused
+    reading, while the store, the credential's mode, the sealed configuration and
+    the egress policy hold. ``bounded`` alone narrows the bound, to prove it
+    refuses deterministically."""
+
+    credential, seeded = fixture_credential
+    stdout: list[bytes] = []
+    read = codex_lane.RecordingIO.read
+
+    async def recording(self, maximum=8192):
+        data = await read(self, maximum)
+        stdout.append(data)
+        return data
+
+    monkeypatch.setattr(codex_lane.RecordingIO, "read", recording)
+    inode = credential.stat().st_ino
+    policy = account_policy(BOUNDED_CONNECTIONS if case == "bounded" else 8)
+    peer = native_account.AccountPeer(case, Path(os.environ["M8_TRUST_PKI"]))
+    try:
+        async with active_custody(binding) as custody:
+            run = await run_startup(
+                custody, trust_launcher, policy,
+                executable=vendor_executable(trust_launcher),
+                configuration=production_configuration(),
+                expected=ExpectedAccount(plan_type="pro"),
+                lane_dir=short_root / f"acct-{case}", deadline_s=45,
+            )
+        assert await until(lambda: all(session["done"] for session in peer.sessions), 10)
+    finally:
+        peer.close()
+    errors = vendor_errors(stdout)
+    # Published unproved first, and marked proved only once every assertion holds.
+    evidence = {
+        "schema_version": 1, "credential_free_fixture": True,
+        "vendor_conformance_qualified": False, "case": case, "assertions_passed": False,
+        "connections": policy.connections,
+        "methods_sent": run["methods_sent"], "faults": run["faults"], "gate": run["gate"],
+        "refresh": run["refresh"], "relay": run["relay"], "credential": run["credential"],
+        "requests": peer.log, "sessions": peer.sessions, "vendor_errors": errors,
+    }
+    write_evidence(f"n5-account-{case}.json", evidence)
+    judge(case, run, peer, errors, policy, credential, seeded, inode)
+    evidence["assertions_passed"] = True
+    write_evidence(f"n5-account-{case}.json", evidence)
+
+
+def judge(case, run, peer, errors, policy, credential, seeded, inode) -> None:
+    """Every assertion of one recovery case; it returns only if all hold."""
+
+    log = peer.log
+    posts = [entry for entry in log if entry["path"] == native_account.TOKEN]
+    # Every case: the egress, the sessions, the store, the credential's mode and identity.
+    hosts = {f"{host}:443" for host in (native_account.BACKEND, native_account.ISSUER)}
+    accepted = sum(count for key, count in run["relay"]["destinations"].items()
+                   if key.startswith("accepted:"))
+    denied = set(run["relay"]["denied"])
+    assert {key.split(":", 1)[1] for key in run["relay"]["destinations"]} <= hosts, run["relay"]
+    assert run["relay"]["closed"] is True, run["relay"]
+    assert denied <= {"denied:connection_bound"} and accepted <= policy.connections, run["relay"]
+    # Each accepted connection is one answered session and one logged request:
+    # a failed, unanswered or unlogged session cannot stand in for an answer.
+    assert all(s["answered"] and s["alert"] is None and s["error"] is None
+               for s in peer.sessions), peer.sessions
+    assert len(peer.sessions) == len(log) == accepted, (peer.sessions, accepted)
+    assert {s["sni"] for s in peer.sessions} <= {native_account.BACKEND, native_account.ISSUER}
+    assert all(entry["account"] == "fixture" for entry in log if entry["bearer"]), log
+    assert all(entry["grant"] for entry in posts), log
+    assert sorted(os.listdir(credential.parent)) == ["auth.json"]
+    assert credential.stat().st_ino == inode and run["credential"]["regular_0600"], run
+    stored = json.loads(credential.read_bytes())["tokens"]
+    assert stored["account_id"] == native_account.ACCOUNT_ID
+    held = (native_account.classify(stored["access_token"], "access"),
+            native_account.classify(stored["refresh_token"], "refresh"))
+    # Every case opens as the pin's recovery does: the old bearer's check 401,
+    # the reload, its check 401 again, then one refresh with the old token. What
+    # follows races among the vendor's three discovery callers, so it is asserted
+    # by meaning, not by schedule.
+    steps = [step(entry) for entry in log]
+    assert steps[:3] == [OLD_CHECK, OLD_CHECK, ("token", "old", 401 if case == "refused" else 200)]
+    after = steps[3:]
+
+    if case == "clean":
+        assert run["faults"] == [], run["faults"]
+        assert run["methods_sent"] == [named_method(method) for method in STARTUP_METHODS]
+        assert run["gate"] == {"completed": True, "plan": "pro"} and run["refresh"] == "measured"
+        assert not denied and len(posts) == 1, run["relay"]
+        # Only the new bearer from here: its checks, and the readback's two requests.
+        checks = [s for s in after if s[0] == "check"]
+        assert checks and set(checks) == {("check", "new", 200)}, steps
+        assert sorted(s for s in after if s[0] != "check") == [
+            ("reset-credits", "new", 404), ("usage", "new", 200)], steps
+        assert held == ("new", "new")
+        return
+    assert run["methods_sent"] == [named_method(method) for method in STARTUP_METHODS[:3]], run
+    assert run["gate"]["completed"] is False and run["readback"] is None, run
+    if case == "refused":
+        # The refusal is cached and the file untouched. The adapter's reading
+        # either recovers to the cached failure, an error, or starts after it and
+        # is answered with no account: both are refusals, and nothing else is.
+        assert not denied and len(posts) == 1 and set(after) <= {OLD_CHECK}, steps
+        assert (set(run["faults"]), errors) in (
+            (STOPPED | {NO_RESULT_FAULT}, [UNAUTHORIZED]), (STOPPED | {NO_ACCOUNT_FAULT}, []),
+        ), (run["faults"], errors)
+        assert credential.read_bytes() == seeded
+    elif case in ("unauthorized", "bounded"):
+        # Refreshes keep succeeding and checks keep failing, each recovery
+        # starting from the old or the refreshed token, until a reading gives up
+        # or the relay's bound refuses a connection.
+        assert {post["refresh_token"] for post in posts} <= {"old", "new"}, steps
+        assert all(s[2] == 401 for s in after if s[0] == "check"), steps
+        assert set(run["faults"]) == STOPPED | {NO_RESULT_FAULT} | (
+            {DENIAL_FAULT} if denied else set()), run["faults"]
+        assert errors in ([UNAUTHORIZED], [DISCOVERY_FAILED]), errors
+        assert held == ("new", "new")
+        if case == "bounded":
+            # The fixed opening fills the bound, and the first discovery still
+            # owes its check with the refreshed token: that connection is refused,
+            # whatever the other callers do.
+            assert after == [] and accepted == policy.connections, steps
+            assert denied == {"denied:connection_bound"}, run["relay"]
+    elif case == "changed":
+        # Fail-closed by intent: the account check refuses before any check with
+        # the other user's tokens, which stay persisted. A reading that instead
+        # accepted the other user would be the pre-existing continuity gap the
+        # design records, and must fail this test rather than pass it.
+        assert not denied and len(posts) == 1 and after == [], steps
+        assert set(run["faults"]) == STOPPED | {NO_RESULT_FAULT} and errors == [ACCOUNT_CHANGED]
+        assert held == ("other", "other")
+    else:
+        assert not denied and len(posts) == 1, run["relay"]
+        assert after and set(after) == {("check", "new", 200)} and errors == [], (steps, errors)
+        assert set(run["faults"]) == STOPPED | {UNSEALED_BACKEND_FAULT}, run["faults"]
+        assert held == ("new", "new")
+
+
 def test_no_evidence_file_contains_key_material():
     directory = os.environ.get("M8_EVIDENCE_DIRECTORY")
     if not directory:
@@ -832,6 +1038,12 @@ def test_no_evidence_file_contains_key_material():
             "n4-lane-login.json", "n4-lane-startup.json", "n4-lane-trust.json",
             "n4-pinned-client.json",
         ]
-    for path in files:
+    accounts = sorted(Path(directory).glob("n5-account-*.json"))
+    if os.environ.get("M8_BRIDGE_REQUIRED"):
+        assert [path.name for path in accounts] == sorted(
+            f"n5-account-{case}.json" for case in native_account.CASES)
+    tokens = native_account.fixture_tokens()
+    for path in files + accounts:
         text = path.read_text()
         assert "-----BEGIN" not in text and "PRIVATE KEY" not in text, path.name
+        assert not any(token in text for token in tokens), path.name

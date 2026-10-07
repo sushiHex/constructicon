@@ -127,7 +127,7 @@ LOGIN_DEADLINE_S = 960.0
 the relay and the client's own start."""
 STARTUP_DEADLINE_S = 120.0
 REFRESH_DESTINATION = "auth.openai.com:443"
-"""Where a proactive refresh goes (``login/src/auth/manager.rs:197``)."""
+"""Where a refresh goes (``login/src/auth/manager.rs:212`` at rust-v0.160.1)."""
 DENIAL_FAULT = "the relay denied a connection in a lane expected to be clean"
 EVIDENCE_DOMAIN = "codex-authenticated-startup-evidence"
 LANE_GRANTS = EffectiveGrants(
