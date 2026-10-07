@@ -53,7 +53,7 @@ POLICY = EgressPolicy((
     EgressDestination("auth.openai.com", 443, "8.8.8.8"),
     EgressDestination("chatgpt.com", 443, "8.8.4.4"),
 ), 8)
-EXECUTABLE = Executable("/opt/codex/bin/codex", "a" * 64)
+EXECUTABLE = Executable("/opt/codex/bin/codex", "a" * 64, "c" * 64)
 REGULAR = (stat.S_IFREG | 0o600, 1, 1000)
 FOUR = [f"'{method}'" for method in EIGHT[:4]]
 
@@ -302,7 +302,10 @@ async def test_a_clean_startup_records_the_four_methods_and_nothing_identifying(
     assert evidence["faults"] == [] and evidence["refresh"] == "unmeasured"
     assert evidence["vendor_identity"] == "unverified"
     assert evidence["vendor_conformance_qualified"] is False
-    assert evidence["executable"] == {"path": EXECUTABLE.path, "sha256": EXECUTABLE.sha256}
+    assert evidence["executable"] == {
+        "path": EXECUTABLE.path, "sha256": EXECUTABLE.sha256,
+        "catalog_sha256": EXECUTABLE.catalog_sha256,
+    }
     (command, _, _), = lane.mounts
     assert command == ("/opt/codex/bin/codex", "app-server", "--strict-config", "--stdio")
     text = json.dumps(evidence)
@@ -1056,11 +1059,13 @@ def test_the_executable_is_the_bound_vendor_client_hashed_from_its_source(tmp_pa
     tree = tmp_path / "native-codex"
     (tree / "bin").mkdir(parents=True)
     (tree / "bin" / "codex").write_bytes(b"pinned client")
+    (tmp_path / "codex-models.json").write_bytes(b"pinned catalog")
     launcher = replace(bare_launcher(clean_native()), vendor=linux.NativeVendor(
         tree, tmp_path / "codex-models.json",
     ))
     assert codex_lane.vendor_executable(launcher) == Executable(
         "/opt/codex/bin/codex", hashlib.sha256(b"pinned client").hexdigest(),
+        hashlib.sha256(b"pinned catalog").hexdigest(),
     )
     assert codex_lane.RUNTIME_BINARY == linux.VENDOR_MOUNT + "/bin/codex"
     assert codex_lane.RUNTIME_CATALOG == linux.CATALOG_MOUNT == "/opt/codex-models.json"
@@ -1107,6 +1112,7 @@ def preflight_launcher(tmp_path: Path, policy_sha256: str) -> _Checked:
     tree = tmp_path / "native-codex"
     (tree / "bin").mkdir(parents=True)
     (tree / "bin" / "codex").write_bytes(b"pinned client")
+    (tmp_path / "codex-models.json").write_bytes(b"pinned catalog")
     base = bare_launcher(clean_native())
     return _Checked(
         runtime_root=base.runtime_root, expected_runtime=base.expected_runtime,

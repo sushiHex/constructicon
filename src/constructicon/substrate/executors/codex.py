@@ -60,6 +60,7 @@ import asyncio
 import inspect
 import math
 import os
+import sys
 import tomllib
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, suppress
@@ -2197,8 +2198,11 @@ class CodexOperatorProvider:
         return LeaseReconciliation(reaped=tuple(reference for _, reference, _ in pending))
 
 
-ADAPTER_REVISION = digest("codex-operator-adapter", 1, {
-    member.__name__: inspect.getsource(member)
-    for member in (CodexConversation, CodexOperatorHandle, CodexOperatorProvider)
-})
-"""Derived from this adapter's actual bodies, not a manual version."""
+ADAPTER_REVISION = digest(
+    "codex-operator-adapter", 2, inspect.getsource(sys.modules[__name__]),
+)
+"""Derived from this whole module's source, not a manual version.
+
+Version 1 hashed the three class bodies only, so a module-level rule the classes
+call (``relay_faults``, ``configured_effort``) could change without changing the
+identity the evidence checker compares."""

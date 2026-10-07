@@ -57,9 +57,10 @@ LANE=("${PY[@]}" "$LANE_MODULE")
 The following shell functions check the completed producer records as the
 service user. `check_evidence MODE FILE CUSTODY EXPECTED POLICY` prints the
 same content digest as `EvidenceFile.publish`, only after a closed-schema and
-affirmative-fact check, and only when the recorded adapter, protocol,
-configuration and runtime identities are the installed controller's, the
-session's configuration and the launch set's `runtime.json`. `MODE` is `login`, `qualify`, `hold`, `active`,
+affirmative-fact check, and only when the recorded identities are the installed
+ones: the adapter and protocol revisions the controller's, the configuration
+digest the session's, and the runtime digest, vendor client and catalog the
+launch set's (`runtime.json`, `native-codex/bin/codex`, `codex-models.json`). `MODE` is `login`, `qualify`, `hold`, `active`,
 `denial`, `wrongplan`, or `refresh`. `EXPECTED` is `-` until the plan has been
 observed, then the closed `pro`/`prolite` literal. The refusal modes require
 their exact expected faults; any additional fault stops the session. The
@@ -68,7 +69,7 @@ checker reads no credential and emits no identity or transcript content.
 ```bash
 check_evidence() {
   test "$#" -eq 5
-  "${SERVICE[@]}" /usr/bin/python3 -I -S -B -c 'import json, stat, sys
+  "${SERVICE[@]}" /usr/bin/python3 -I -S -B -c 'import hashlib, json, stat, sys
 from pathlib import Path
 sys.path.insert(0, "/opt/constructicon-m8-controller")
 from constructicon.core.identity import canonical_json, digest
@@ -104,6 +105,10 @@ require(e["configuration_digest"] == str(configuration_digest(config)))
 require(e["adapter_revision"] == str(ADAPTER_REVISION) and e["protocol_revision"] == str(PROTOCOL_REVISION))
 installed = json.loads((Path(launch_root) / "runtime.json").read_text(encoding="utf-8"))
 require(e["runtime_digest"] == installed["runtime_digest"])
+def sha256(file): return hashlib.sha256((Path(launch_root) / file).read_bytes()).hexdigest()
+x = e["executable"]
+require(type(x) is dict and set(x) == {"path", "sha256", "catalog_sha256"})
+require(x["sha256"] == sha256("native-codex/bin/codex") and x["catalog_sha256"] == sha256("codex-models.json"))
 policy = _policy(Path(policy_name))
 require(e["egress"] == {key: str(value) for key, value in identity_digests(policy).items()})
 require(type(e["relay"]) is dict and set(e["relay"]) == {"destinations", "denied", "closed"})

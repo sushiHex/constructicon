@@ -73,7 +73,6 @@ NOTICES = "constructicon.substrate.executors.codex:CodexConversation._notice_fau
 SETTINGS = "constructicon.substrate.executors.codex_protocol:settings_notice_faults"
 CONFIGURED_PROVIDER = "constructicon.substrate.executors.codex:configured_provider"
 TURN_OF = "constructicon.substrate.executors.codex_protocol:_turn_of"
-CONFIGURED = "constructicon.substrate.executors.codex:configured_model"
 USAGE = "constructicon.substrate.executors.codex_protocol:_usage"
 NUMBER = "constructicon.substrate.executors.codex_protocol:_number"
 NAMEABLE = "constructicon.substrate.executors.codex_protocol:_nameable"
@@ -225,16 +224,24 @@ N5_PROTOCOL = (
     ("N5-37 the routed origin must be the sealed one", ROUTING,
      'routing.get("backendOrigin") == SEALED_BACKEND', "True",
      UNSEALED + "[other-origin]"),
+    # The override's ``isinstance`` guard is not mutated: without it an
+    # unhashable override raises instead of refusing, a crash, not a pass.
     ("N5-38 the residency override must be a known literal", ROUTING,
-     ' and routing.get("accountRoutingOverride") in ROUTING_OVERRIDES', "",
+     " and isinstance(override, str) and override in ROUTING_OVERRIDES", "",
      UNSEALED + "[unknown-override]"),
-    # --- N5 Stage 0b: a synthesized total is no measurement ---
+    # --- N5 Stage 0b: a total with no input is no measurement; compaction ---
     ("N5-39 a filled total makes the usage unknown", USAGE,
-     "if counts[:2] == (0, 0) and counts[2]:", "if False:",
+     "if counts[0] == 0:", "if False:",
      PROTOCOL + "test_a_synthesized_total_makes_the_usage_unknown_not_zero"),
-    ("N5-40 a measured zero stays a measurement", USAGE,
-     "if counts[:2] == (0, 0) and counts[2]:", "if counts[:2] == (0, 0):",
-     PROTOCOL + "test_a_measured_total_of_nothing_is_still_a_measurement"),
+    ("N5-40 an initialized zero total is no measurement", USAGE,
+     "if counts[0] == 0:", "if counts[0] == 0 and counts[2]:",
+     PROTOCOL + "test_an_initialized_zero_total_is_no_measurement"),
+    ("N5-41 a compaction makes the turn's usage unknown", OBSERVE,
+     "usage=None if compacted else usage,", "usage=usage,",
+     PROTOCOL + "test_a_compaction_makes_the_turns_usage_unknown"),
+    ("N5-42 a compaction item is evidence", EVIDENCE_ALLOWLIST,
+     "EVIDENCE_ITEMS", "{AGENT_MESSAGE}",
+     PROTOCOL + "test_a_compaction_makes_the_turns_usage_unknown"),
 )  # fmt: skip
 
 ERROR_REPLY = PROTOCOL + "test_an_error_or_missing_result_refuses"
@@ -517,8 +524,9 @@ MUTANTS = (
     (
         "the adapter discards a refused turn",
         BINDING,
-        "if conversation.faults:",
-        "if False:",
+        # Dedented: the method body sits at four spaces.
+        "    if faults:\n        return unavailable_outcome(",
+        "    if False:\n        return unavailable_outcome(",
         ADAPTER + "test_execute_discards_a_turn_whose_pre_acceptance_reading_faults",
     ),
     (
@@ -723,7 +731,7 @@ MUTANTS = (
     ),
     (
         "a nested configuration refuses as a contract violation",
-        CONFIGURED,
+        "constructicon.substrate.executors.codex:_configured",
         'raise ContractViolation(f"the sealed configuration is {DAMAGE_NESTING}") from exc',
         "raise",
         ADAPTER + "test_a_deeply_nested_configuration_refuses_as_a_contract_violation",

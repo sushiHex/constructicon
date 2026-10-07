@@ -186,19 +186,24 @@ async def active_custody(store: BindingStore) -> AsyncIterator[Custody]:
 
 @dataclass(frozen=True)
 class Executable:
-    """The in-zone client that receives the credential, by path and content."""
+    """The in-zone client that receives the credential, by path and content, and
+    the content of the catalog it reads, which decides the sealed model."""
 
     path: str
     sha256: str
+    catalog_sha256: str
 
 
 def vendor_executable(launcher: LinuxLauncher) -> Executable:
-    """The bound vendor tree's client, hashed from the launch set it is bound from."""
+    """The bound vendor client and catalog, hashed from the launch set they are bound from."""
 
     if launcher.vendor is None:
         raise ContractViolation("an N4 lane runs only the bound vendor client")
-    with (launcher.vendor.tree / "bin" / "codex").open("rb") as stream:
-        return Executable(RUNTIME_BINARY, hashlib.file_digest(stream, "sha256").hexdigest())
+    digests = []
+    for path in (launcher.vendor.tree / "bin" / "codex", launcher.vendor.catalog):
+        with path.open("rb") as stream:
+            digests.append(hashlib.file_digest(stream, "sha256").hexdigest())
+    return Executable(RUNTIME_BINARY, *digests)
 
 
 class RecordingIO:
@@ -329,7 +334,8 @@ def _base(lane: str, custody: Custody, launcher: LinuxLauncher, policy: EgressPo
         "protocol_revision": str(PROTOCOL_REVISION),
         "launch_revision": str(launcher.revision),
         "runtime_digest": str(launcher.expected_runtime),
-        "executable": {"path": executable.path, "sha256": executable.sha256},
+        "executable": {"path": executable.path, "sha256": executable.sha256,
+                       "catalog_sha256": executable.catalog_sha256},
         "configuration_digest": str(configuration_digest(configuration)),
         "egress": {key: str(value) for key, value in identity_digests(policy).items()},
         "relay": {"destinations": launched.destinations, "denied": launched.denied,

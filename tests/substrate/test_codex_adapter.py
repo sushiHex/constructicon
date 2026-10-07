@@ -15,6 +15,7 @@ discard is proved in the production binding rather than in a pure function.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import stat
@@ -573,6 +574,10 @@ def test_the_adapter_revision_follows_this_module_and_the_protocol():
     launcher = bare_launcher()
     identity = identity_for(launcher)
     assert identity.adapter_revision == ADAPTER_REVISION
+    # The whole module, so a module-level rule the classes call is covered too.
+    assert digest("codex-operator-adapter", 2, inspect.getsource(codex)) == ADAPTER_REVISION
+    for rule in (codex.relay_faults, codex.configured_effort, codex._configured):
+        assert inspect.getsource(rule) in inspect.getsource(codex)
     assert identity.decoder_revision == identity.callback_protocol_revision
     assert identity.profile == codex_profile()
 

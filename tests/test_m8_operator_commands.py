@@ -7,6 +7,7 @@ touch a host path, invoke a vendor binary, resolve DNS, or require Linux.
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
 import re
@@ -302,9 +303,18 @@ def evidence_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Pat
 
     monkeypatch.setattr(codex_lane, "sealed_data_fd", sealed)
     (tmp_path / "config.toml").write_text(fake_lane.CONFIGURATION, encoding="utf-8")
+    # The launch set the checker compares against: the fake lane's runtime digest,
+    # and a vendor client and catalog whose hashes the lane then records.
     (tmp_path / "runtime.json").write_text(json.dumps({
         "runtime_digest": str(fake_lane.bare_launcher().expected_runtime),
     }), encoding="utf-8")
+    (tmp_path / "native-codex" / "bin").mkdir(parents=True)
+    (tmp_path / "native-codex" / "bin" / "codex").write_bytes(b"installed client")
+    (tmp_path / "codex-models.json").write_bytes(b"installed catalog")
+    monkeypatch.setattr(fake_lane, "EXECUTABLE", replace(
+        fake_lane.EXECUTABLE, sha256=hashlib.sha256(b"installed client").hexdigest(),
+        catalog_sha256=hashlib.sha256(b"installed catalog").hexdigest(),
+    ))
     policy = tmp_path / "startup-policy.json"
     policy.write_text(json.dumps({
         "destinations": [
@@ -347,19 +357,23 @@ async def test_documented_checker_refuses_missing_completion_and_new_fault(
     assert _check_evidence("qualify", path, "maintenance", "-", policy, directory).returncode != 0
 
 
-@pytest.mark.parametrize("field", ["adapter_revision", "protocol_revision", "runtime_digest"])
+@pytest.mark.parametrize("field", [
+    "adapter_revision", "protocol_revision", "runtime_digest", "executable", "catalog_sha256",
+])
 async def test_documented_checker_refuses_an_identity_that_is_not_the_installed_one(
     evidence_world: tuple[Path, Path], field: str,
 ) -> None:
-    """M8-N5-state-review.md, Stage 0: evidence from another adapter, protocol or
-    runtime than the installed one never passes, however clean its facts."""
+    """M8-N5-state-review.md, Stage 0: evidence from another adapter, protocol,
+    runtime, vendor client or catalog than the installed one never passes,
+    however clean its facts."""
     directory, policy = evidence_world
     _, evidence = await fake_lane.startup(directory, fake_lane.startup_native())
     path = directory / "clean.json"
     write_evidence(path, evidence)
     assert _check_evidence("qualify", path, "maintenance", "-", policy, directory).returncode == 0
     raw = json.loads(path.read_text(encoding="utf-8"))
-    raw[field] = "sha256:" + "0" * 64
+    other = "0" * 64
+    raw[field] = {**raw[field], "sha256": other} if field == "executable" else other
     path.write_text(json.dumps(raw), encoding="utf-8")
     assert _check_evidence("qualify", path, "maintenance", "-", policy, directory).returncode != 0
 

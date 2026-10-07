@@ -3715,9 +3715,13 @@ Every vendor fact below was read at rust-v0.160.1 (`d27764b8`).
 **Identities in `check_evidence`.** The runbook's checker compares each lane record against what is installed:
 - its adapter and protocol revisions, against the installed controller's own constants;
 - its runtime digest, against the launch set's `runtime.json`;
+- its vendor client's sha256, against the launch set's `native-codex/bin/codex`;
+- its catalog's sha256, against the launch set's `codex-models.json`;
 - its configuration digest, as before.
 
-Evidence from another build never passes, however clean its facts.
+The catalog's digest is new evidence, carried inside the existing `executable` record, so the frozen N4 schema's top-level keys are unchanged. `ADAPTER_REVISION` now hashes the whole module (version 2). Version 1 hashed three class bodies, so a module-level rule they call could change without changing it.
+
+Evidence from another controller, runtime, vendor client or catalog never passes, however clean its facts. The launch revision is not compared: it records the vendor tree by path, not by content, so the two digests above are what bind the vendor.
 
 **An unsealed backend stops the session (decision 2).**
 - An `account/read` reading's `workspaceRouting` moves model turns to its `backendOrigin`. It leaves account checks and rate limits on `chatgpt_base_url`, and the client checks no allowlist (`account_processor/workspace_routing.rs`).
@@ -3727,10 +3731,12 @@ Evidence from another build never passes, however clean its facts.
 - The fault names no origin.
 - The relay would deny such a destination anyway. This refuses before any turn.
 
-**Synthesized usage (fact 4).**
-- The pinned client synthesizes a total in one place only. `fill_to_context_window` (`protocol.rs:2316`) runs on `context_length_exceeded`, and it replaces the accumulated total with `{totalTokens: <context window>}` and every other count zero.
-- A total with tokens but neither input nor output is therefore a fill, not a measurement, and the fold reports the turn's usage as unknown, never zero. It is not damage.
-- A measured total of zero stays a measurement.
+**Unmeasured and incomplete usage (fact 4).**
+- Every model request has input, so a measured total has input tokens. The pinned client publishes two totals without any:
+  - `fill_to_context_window` (`protocol.rs:2316`), on `context_length_exceeded`, replaces the accumulated total with `{totalTokens: <context window>}` and every other count zero;
+  - with no prior usage it initializes a zero total (`session/mod.rs:4861`).
+- A total with no input tokens is therefore no measurement, and the fold reports the turn's usage as unknown, never zero. It is not damage.
+- A compaction leaves the total incomplete: its own request's usage is not added (`compact_remote_v2.rs:319`). Both compaction paths emit a `contextCompaction` item, whose payload is only an id. `item/completed` now admits that item type too, and once this turn's compaction is seen its usage is unknown.
 
 **The provider's retries stay at the vendor defaults (owner decision, 2026-10-06, #78).**
 - Production sets neither `request_max_retries` nor `stream_max_retries`.
@@ -3746,7 +3752,14 @@ Evidence from another build never passes, however clean its facts.
   - `unified_exec_tty` and `write_stdin_approval` need the shell tools, which are off;
   - `guardian_reuse_parent_compaction` acts only when approvals are reviewed, never under `never`;
   - `realtime_conversation` is read only by the TUI. The real gate is the experimental-API opt-in, and this client sends no `thread/realtime/*` request.
-- `js_repl` and `apply_patch_freeform` are now removed features, so setting them is a no-op, still accepted by `--strict-config`. They stay as recorded intent.
+- `js_repl` and `apply_patch_freeform` are now removed features, so setting them is a no-op, still accepted by `--strict-config` (`features/src/lib.rs:606, 615`). They stay as recorded intent.
+
+**Open before the READ turn: the native tool inventory.**
+- Removing `apply_patch_freeform` does not remove the native `apply_patch` tool. Its handler is registered whenever an execution environment exists and the model advertises the tool (`core/src/tools/spec_plan.rs:1269`), without consulting `shell_tool` or the removed flag.
+- The pinned catalog's `gpt-6.1-sol` advertises it (`models-manager/models.json:182`), and the default local environment is selected (`exec-server/src/environment_provider.rs:83`).
+- So a production turn would offer an unmediated native tool. It writes only inside the native zone, so this is not a containment escape, but ADR 0020 requires tools to be mediated, so it is a tool surface the recipe does not account for.
+- The lanes restrict it with a transformed catalog. Production uses the pinned catalog as is.
+- Resolving this, and proving the production tool inventory with a pinned-binary request capture, comes before Stage 3.
 
 **The voice host.** The package's `codex-resources/voice/bin/codex-voice-host` is spawned only by the TUI. Neither app-server nor core references it, and `thread/realtime/start` opens connections but spawns no helper. This is proved from source, not from a real-binary control.
 
@@ -3759,7 +3772,18 @@ Evidence from another build never passes, however clean its facts.
 **Proof.**
 - Unit tests for each rule.
 - Mutants killed:
-  - N5-30 to N5-40 (effort, relay denial, routing, synthesized usage);
+  - N5-30 to N5-42 (effort, relay denial, routing, unmeasured usage, compaction);
   - N5-P4 and N5-P5 (the prepared effort, the proxy fallback);
   - the catalog rule's five, now in `codex_catalog`.
+- Mutants re-anchored where the rule moved: the refused-turn discard, the nested configuration, and the usage bounds, whose fixtures are now malformed in exactly one count each.
+- The routing override's `isinstance` guard is not mutated: without it an unhashable override raises, a crash rather than a pass.
 - The foundation lane checks the sealed literals against the installed catalog.
+
+**Cross-review.** One Codex (`gpt-6-astra`) pass on the diff raised one P1, three P2s and one P3. Every premise was checked against source.
+- **P1, adopted.** The adapter revision did not cover the new module-level rules.
+- **P2, adopted.** Compaction and initialized zero totals could publish incomplete or false usage.
+- **P2, adopted.** The identity claim overstated what was compared. The vendor client and catalog are now compared.
+- **P3, adopted.** A malformed routing override raised instead of refusing.
+- **P2, recorded above as the open item before Stage 3.** The native `apply_patch` tool survives the recipe.
+
+The pass also checked and rejected four attacks: the sealed effort is what runs, a relay denial cannot be bypassed, routing equivalence holds, and `system_proxy_fallback` is accepted.
