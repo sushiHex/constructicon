@@ -432,6 +432,7 @@ jobs:
             ${{ env.M8_EVIDENCE }}/n3b-*.json
             ${{ env.M8_EVIDENCE }}/n3c-*.json
             ${{ env.M8_EVIDENCE }}/n4-*.json
+            ${{ env.M8_EVIDENCE }}/n5-*.json
           if-no-files-found: error
           retention-days: 7
       - name: Report bounded launch-policy denials

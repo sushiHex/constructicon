@@ -32,6 +32,7 @@ from constructicon.core.workspace import acquisition_id_for
 from constructicon.substrate.executors import codex, codex_lane, egress, operator_store
 from constructicon.substrate.executors._egress_bridge import PROXY_PORT
 from constructicon.substrate.executors.codex_lane import (
+    DENIAL_FAULT,
     LOGIN_ARGUMENTS,
     RUNTIME_CATALOG,
     STARTUP_METHODS,
@@ -47,6 +48,7 @@ from constructicon.substrate.executors.codex_protocol import (
     NO_RESULT_FAULT,
     UNSEALED_BACKEND_FAULT,
     ExpectedAccount,
+    named_method,
 )
 from constructicon.substrate.executors.egress import identity_digests
 from constructicon.substrate.executors.linux import (
@@ -907,8 +909,18 @@ async def test_account_read_recovers_from_a_401_exactly_as_its_case_allows(
     })
 
     # Every case: the egress, the store, the credential's mode and identity hold.
-    assert not run["relay"]["denied"], run["relay"]
     hosts = {f"{host}:443" for host in (native_account.BACKEND, native_account.ISSUER)}
+    accepted = sum(count for key, count in run["relay"]["destinations"].items()
+                   if key.startswith("accepted:"))
+    if case == "unauthorized":
+        # Measured: two full recoveries spend production's eight connections
+        # (six checks, two refreshes) and the relay refuses the next one. The
+        # egress bound holds against a client that keeps retrying.
+        assert accepted == account_policy().connections, run["relay"]
+        assert set(run["relay"]["denied"]) == {"denied:connection_bound"}, run["relay"]
+        assert DENIAL_FAULT in run["faults"], run["faults"]
+    else:
+        assert not run["relay"]["denied"], run["relay"]
     assert {key.split(":", 1)[1] for key in run["relay"]["destinations"]} <= hosts, run["relay"]
     assert all(s["alert"] is None and s["error"] is None for s in peer.sessions), peer.sessions
     assert {s["sni"] for s in peer.sessions} <= {native_account.BACKEND, native_account.ISSUER}
@@ -922,7 +934,7 @@ async def test_account_read_recovers_from_a_401_exactly_as_its_case_allows(
 
     if case == "clean":
         assert run["faults"] == [], run["faults"]
-        assert run["methods_sent"] == list(STARTUP_METHODS)
+        assert run["methods_sent"] == [named_method(method) for method in STARTUP_METHODS]
         assert run["gate"] == {"completed": True, "plan": "pro"} and run["refresh"] == "measured"
         assert len(posts) == 1 and posts[0]["refresh_token"] == "old", log
         first = log.index(posts[0])
@@ -933,7 +945,7 @@ async def test_account_read_recovers_from_a_401_exactly_as_its_case_allows(
         assert (stored["access_token"], stored["refresh_token"]) == (
             native_account.NEW.access, native_account.NEW.refresh)
         return
-    assert "account/rateLimits/read" not in run["methods_sent"], run["methods_sent"]
+    assert run["methods_sent"] == [named_method(method) for method in STARTUP_METHODS[:3]], run
     assert run["gate"]["completed"] is False and run["readback"] is None, run
     if case == "refused":
         assert NO_RESULT_FAULT in run["faults"] or NO_ACCOUNT_FAULT in run["faults"], run
