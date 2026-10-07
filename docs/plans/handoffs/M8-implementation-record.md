@@ -3817,3 +3817,5 @@ Design: [M8-N5-native-tool-inventory.md](M8-N5-native-tool-inventory.md), review
 - **Recorded, pre-existing: `check_evidence` does not compare `launch_revision`** with the installed launcher's. It recomputes the seal's digest from the launch set, which the zone test now ties to what is mounted.
 - **Recorded: no environment-only layer case.** The environment layer is shown holding `apply_patch` with the catalog layer also removed; alone it removes nothing the sealed catalog leaves.
 - **Verified by CI, not by review:** `--ro-bind-data` onto the runtime image's empty `CATALOG_MOUNT` works; the vendored startup lanes start from it under `--strict-config`.
+
+The connector's review on ready raised one P2, adopted: the evidence gained a required field under the same `schema_version`, as #125's `catalog_sha256` had. `LANE_SCHEMA` is now 3, and `check_evidence`, which accepts only the current version, refuses earlier evidence by its version.

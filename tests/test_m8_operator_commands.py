@@ -362,6 +362,22 @@ async def test_documented_checker_refuses_missing_completion_and_new_fault(
     assert _check_evidence("qualify", path, "maintenance", "-", policy, directory).returncode != 0
 
 
+async def test_documented_checker_refuses_evidence_of_an_earlier_schema(
+    evidence_world: tuple[Path, Path],
+) -> None:
+    """A shape change bumps the version, and the checker reads only the current one."""
+    directory, policy = evidence_world
+    _, evidence = await fake_lane.startup(directory, fake_lane.startup_native())
+    path = directory / "clean.json"
+    write_evidence(path, evidence)
+    assert _check_evidence("qualify", path, "maintenance", "-", policy, directory).returncode == 0
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert raw["schema_version"] == codex_lane.LANE_SCHEMA == 3
+    raw["schema_version"] = 2
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    assert _check_evidence("qualify", path, "maintenance", "-", policy, directory).returncode != 0
+
+
 @pytest.mark.parametrize("field", [
     "adapter_revision", "protocol_revision", "runtime_digest",
     "executable.sha256", "executable.catalog_sha256", "executable.sealed_catalog_sha256",

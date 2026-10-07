@@ -98,7 +98,10 @@ from constructicon.substrate.executors.operator_store import (
     inherit_maintenance,
 )
 
-LANE_SCHEMA = 2
+LANE_SCHEMA = 3
+"""The lane evidence's closed shape. 3 adds the installed catalog's digest and its
+seal's beside the client's (``executable``); ``check_evidence`` accepts only the
+current version, so evidence of an earlier shape is refused by its version."""
 LOGIN_ARGUMENTS = ("login", "--device-auth")
 STARTUP_ARGUMENTS = ("app-server", "--strict-config", "--stdio")
 STARTUP_METHODS = ("initialize", "initialized", "account/read", "account/rateLimits/read")
