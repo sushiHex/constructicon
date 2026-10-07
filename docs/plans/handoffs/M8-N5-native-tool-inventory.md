@@ -2,6 +2,8 @@
 
 Status: design, independently reviewed once (Codex `gpt-6-sol`, job
 `job_1e39d303f2d5`) and amended; see [Review disposition](#review-disposition).
+Implemented with its proof on the real binary; results are in the
+[M8 implementation record](M8-implementation-record.md#n5-stage-0b-the-native-tool-inventory).
 Credential-free; nothing here qualifies a destination, runs a subscription turn
 or makes the provider available.
 Base: `c8769af`. Branch: `feat/n5-native-inventory`.
@@ -185,11 +187,11 @@ mode.
 4. **Each layer holds its own tools.** Offered names equal a closed golden per
    case:
 
-   | Case | Shows |
+   | Case | Measured: what returns |
    |---|---|
-   | without the sealed catalog | code mode, `clock`, collaboration and `request_user_input_async` return, without `apply_patch` |
-   | without the catalog or the environment file | `apply_patch` returns too: the environment layer held it alone |
-   | without the configuration's tool controls | `request_user_input` and image generation return |
+   | without the sealed catalog | code mode's `exec` and `wait`, `clock__curr_time` inside `exec`, `request_user_input_async`; not `apply_patch`, and not collaboration, which `[agents] enabled = false` holds too |
+   | without the catalog or the environment file | the same and `apply_patch` inside `exec`: the environment layer held it alone |
+   | without the configuration's tool controls | `request_user_input` and `image_gen.imagegen` |
 
 The real-launcher startup lanes start with the new configuration, sealed
 catalog and environment file at their production paths, which proves strict

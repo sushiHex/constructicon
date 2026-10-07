@@ -1,7 +1,33 @@
 {
   "sealed": {
     "read": [],
-    "write": []
+    "write": [
+      {
+        "description": "",
+        "name": "functions",
+        "tools": [
+          {
+            "description": "Run Python in the invocation's isolated contained worker.",
+            "name": "contained_python",
+            "parameters": {
+              "additionalProperties": false,
+              "properties": {
+                "program": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "program"
+              ],
+              "type": "object"
+            },
+            "strict": false,
+            "type": "function"
+          }
+        ],
+        "type": "namespace"
+      }
+    ]
   },
   "catalog": [
     "functions.exec",

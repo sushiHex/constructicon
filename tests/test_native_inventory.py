@@ -1,6 +1,8 @@
 """The inventory reader and the probe recipe, portably."""
 
+import json
 import tomllib
+from pathlib import Path
 
 import pytest
 
@@ -8,6 +10,10 @@ from constructicon.substrate.executors.codex_lane import (
     RUNTIME_CATALOG,
     TOOL_CONTROLS,
     production_configuration,
+)
+from constructicon.substrate.executors.codex_protocol import (
+    CONTAINED_PYTHON_TOOL,
+    thread_start_request,
 )
 from constructicon.substrate.executors.linux import ENVIRONMENTS_MOUNT, NATIVE_ENVIRONMENTS
 from tests.native_inventory import (
@@ -81,6 +87,23 @@ def test_each_layer_is_removed_alone():
 
     without_environment, environment_files = parsed("environment")
     assert without_environment == sealed and environment_files == {}
+
+
+def test_the_measured_write_offer_is_the_adapters_declaration():
+    """The golden the lane compares against is the adapter's own tool, as the
+    vendor frames it: one ``functions`` namespace, nothing else."""
+
+    golden = json.loads(Path(__file__).with_name("fixtures").joinpath(
+        "native_production_inventory.json").read_text())["sealed"]
+    (declared,) = thread_start_request(0, cwd="/tmp", dynamic_tools=(CONTAINED_PYTHON_TOOL,))[
+        "params"]["dynamicTools"]
+    assert golden["read"] == []
+    assert golden["write"] == [{"type": "namespace", "name": "functions", "description": "",
+                                "tools": [{
+                                    "type": "function", "name": declared["name"],
+                                    "description": declared["description"],
+                                    "parameters": declared["inputSchema"], "strict": False,
+                                }]}]
 
 
 def test_an_unknown_layer_is_refused():

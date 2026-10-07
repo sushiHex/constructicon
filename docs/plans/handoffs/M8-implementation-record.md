@@ -3789,3 +3789,24 @@ Evidence from another controller, runtime, vendor client or catalog never passes
 The pass also checked and rejected four attacks: the sealed effort is what runs, a relay denial cannot be bypassed, routing equivalence holds, and `system_proxy_fallback` is accepted.
 
 The connector's review on ready raised one P2, adopted: a `contextCompaction` item without its pinned `id` was taken as proven compaction and cleared valid usage. Only the pinned shape (`v2/item.rs:426-428`) counts now; anything else is damage and clears nothing (mutant N5-43).
+
+### N5 Stage 0b: the native tool inventory
+
+Design: [M8-N5-native-tool-inventory.md](M8-N5-native-tool-inventory.md), reviewed once by Codex (`gpt-6-sol`, job `job_1e39d303f2d5`) before it was built. This closes the open item above.
+
+**Finding, measured.** The placement lane ran the production configuration, swapped only for its provider and catalog path, against the real rust-v0.160.1 binary. The first request offered `gpt-6.1-sol` fourteen native tools (CI run 37614544749), and in WRITE the admitted callback only nested inside code mode's `exec`. The pinned catalog's tool selectors outrank the configuration, and two more tools are on by default.
+
+**What changed.**
+- **The sealed catalog.** `linux.sealed_catalog` closes four tool selectors in every entry. The launcher seals it per launch from the installed catalog, after the probe's custody check, and binds it with `--ro-bind-data` at `CATALOG_MOUNT`. The launch set keeps the vendor's pinned bytes; the host installation, planner, `verify-launch` and bump tool are unchanged.
+- **No execution environment.** The launcher also binds `environments.toml` (`include_local = false`) into `CODEX_HOME`. Both sealed files are a launcher-owned `NativeLayout`, never a caller's choice.
+- **The configuration.** `TOOL_CONTROLS` pins the default-on gates the other layers leave (`image_generation`, `sleep_tool`, `multi_agent_v2`, `[agents]`, `request_user_input`) and makes tool-name collisions fatal: dispatch is by name and never checks the offer (`core/src/tools/registry.rs:551-573`), and the first registration wins a collision. `apply_patch_freeform` and `js_repl`, removed features, are gone from the configuration.
+- **Evidence.** `executable.sealed_catalog_sha256` beside the source's digest; `check_evidence` recomputes it from the launch set.
+
+**Proof, on the real binary** (placement lane, `tests/substrate/test_provider_placement.py`):
+- Sealed, READ offers nothing; WRITE offers exactly the adapter's `contained_python` declaration in one `functions` namespace, compared as sent. The WRITE callback round trip completes without an environment.
+- The model's call to each of 18 known native names comes back `unsupported call`, with nothing reaching the client.
+- Each layer removed alone lets back exactly what it held. The catalog layer holds code mode, `clock`, and the asynchronous user-input tool. The environment layer alone holds `apply_patch`. The configuration holds `request_user_input` and image generation. `[agents] enabled = false` also holds collaboration without the catalog layer, which the design had not predicted.
+- The real-zone layout test sees the environment file at its exact bytes, read-only.
+- Mutants N5-L1 to N5-L3 and N5-I1 to N5-I9 are killed; two N3a mutants were re-anchored.
+
+**Not proved here.** Later requests after a remote compaction, which the probe provider cannot perform, and a hidden tool under a name not yet known. Both are recorded in the design under "What the lane cannot see".

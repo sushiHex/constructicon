@@ -378,9 +378,10 @@ async def test_a_sealed_write_turn_offers_only_the_callback_and_it_answers(
     assert tool_inventory(requests[0]) == ["functions.contained_python"]
     assert callbacks == ["print('fixture')"] and len(requests) == 2
     (output,) = call_outputs(requests[1])
-    # One text item is sent as a plain string (``core/src/tools/context.rs:584-588``).
-    assert output == {"type": "function_call_output", "call_id": "call_probe",
-                      "output": CALLBACK_OUTPUT}
+    # One text item is sent as a plain string (``core/src/tools/context.rs:584-588``);
+    # the item's own ``id`` is the vendor's.
+    assert {key: value for key, value in output.items() if key != "id"} == {
+        "type": "function_call_output", "call_id": "call_probe", "output": CALLBACK_OUTPUT}
 
 
 @pytest.mark.parametrize("without", [
