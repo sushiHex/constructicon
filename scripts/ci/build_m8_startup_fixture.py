@@ -7,7 +7,11 @@ import shutil
 import sys
 from pathlib import Path
 
-from constructicon.substrate.executors.linux import runtime_digest, runtime_inventory
+from constructicon.substrate.executors.linux import (
+    runtime_digest,
+    runtime_inventory,
+    sealed_catalog,
+)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.native_codex_probe import CATALOG_SHA256, catalog_for
@@ -38,6 +42,8 @@ def main():
         # The positive control uses the unchanged pinned catalog. Keep it in the
         # immutable fixture, not a setup RPC that exceeds the existing bound.
         (payload / "source-catalog.json").write_bytes(raw_catalog)
+        # The catalog production's zone reads, made by production's own seal.
+        (payload / "sealed-catalog.json").write_bytes(sealed_catalog(raw_catalog))
         for name in ("_provider_transport.py", "_provider_bridge.py", "_provider_bootstrap.py"):
             shutil.copyfile(Path("tests/substrate") / name, payload / name)
         (payload / "provider.sock").touch()  # Only this immutable leaf is overmounted.

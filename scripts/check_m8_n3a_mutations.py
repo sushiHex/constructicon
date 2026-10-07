@@ -57,9 +57,9 @@ MUTANTS = (
     (
         "native store layout is present",
         LAUNCHER + "LinuxLauncher.argv",
-        "if native_store is not None:",
+        "if native_store is not None and layout is not None:",
         "if False:",
-        TEST + "test_the_native_layout_binds_two_descriptors_into_a_disposable_codex_home",
+        TEST + "test_the_native_layout_binds_its_descriptors_into_a_disposable_codex_home",
     ),
     (
         "the credential is bound by its descriptor, never a path",
@@ -458,7 +458,7 @@ MUTANTS = (
     (
         "L13 a mount descriptor can never double as a guard",
         LAUNCHER + "LinuxLauncher._run",
-        "if set(native_store.mount_fds) & set(guard_fds):",
+        "if set(mount_fds) & set(guard_fds):",
         "if False:",
         TEST + "test_a_mount_descriptor_that_is_also_a_guard_never_reaches_the_check",
     ),

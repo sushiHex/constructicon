@@ -397,15 +397,21 @@ def test_the_production_configuration_is_the_reviewed_literal():
         'cli_auth_credentials_store = "file"\nforced_login_method = "chatgpt"\n'
         'check_for_update_on_startup = false\nweb_search = "disabled"\n'
         "[analytics]\nenabled = false\n[features]\nplugins = false\n"
-        "apps = false\nshell_tool = false\nunified_exec = false\n"
-        "apply_patch_freeform = false\nview_image = false\nmulti_agent = false\n"
+        "apps = false\nshell_tool = false\nunified_exec = false\nview_image = false\n"
         # ``goals`` is stable and on by default at both pins; from rust-v0.160
         # its three tools are visible on ephemeral threads too (``ext/goal``
         # ``tools_visible``), so every request carried a built-in tool surface.
-        "code_mode = false\njs_repl = false\ngoals = false\n"
+        "multi_agent = false\ncode_mode = false\ngoals = false\n"
         # Default-on since rust-v0.160: it re-sends the account GETs through the
         # system proxy after a 5 s timeout, so their count and timing drift.
         "system_proxy_fallback = false\n"
+        # The configuration's share of the tool inventory: the default-on gates
+        # the sealed catalog and the absent environment leave, collisions fatal,
+        # collaboration off over any catalog (M8-N5-native-tool-inventory.md).
+        "image_generation = false\nsleep_tool = false\nmulti_agent_v2 = false\n"
+        "[features.tool_registry]\nerror_on_tool_collisions = true\n"
+        "[agents]\nenabled = false\n"
+        "[tools.experimental_request_user_input]\nenabled = false\n"
     )
     assert production_configuration() == expected
     # The containment control differs in exactly one value.

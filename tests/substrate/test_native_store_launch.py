@@ -23,9 +23,13 @@ def platform_facts(monkeypatch):
         **vars(os), "getuid": lambda: 1000, "getgid": lambda: 1000,
         "set_blocking": lambda fd, blocking: None, "read": empty_nonblocking_pipe,
     }))
+    # A memfd needs Linux; the layout's own content is pinned in test_native_layout.
+    monkeypatch.setattr(linux.NativeLayout, "seal", classmethod(
+        lambda cls, vendor: cls(os.open(os.devnull, os.O_RDONLY), None)))
 
 
-CONFIGURATION_FD, CREDENTIAL_FD = 741, 742
+CONFIGURATION_FD, CREDENTIAL_FD, ENVIRONMENTS_FD = 741, 742, 743
+LAYOUT = linux.NativeLayout(environments_fd=ENVIRONMENTS_FD, catalog_fd=None)
 
 
 def mount(check, lock_fd=731, *, configuration_fd=CONFIGURATION_FD, credential_fd=CREDENTIAL_FD):
@@ -51,20 +55,23 @@ def launcher(tmp_path):
     )
 
 
-def test_the_native_layout_binds_two_descriptors_into_a_disposable_codex_home(
+def test_the_native_layout_binds_its_descriptors_into_a_disposable_codex_home(
     tmp_path, monkeypatch,
 ):
-    """M8-N4-state-review.md, section 1: two host objects, both by descriptor."""
+    """M8-N4-state-review.md, section 1: two host objects, both by descriptor,
+    beside the launcher's own sealed environment file (M8-N5-native-tool-inventory.md)."""
 
     monkeypatch.setattr(linux, "sys", SimpleNamespace(platform="linux"))
     argv = launcher(tmp_path).argv(
         ("/usr/bin/python3",), workspace=None, posture=Posture.READ, native_store=mount(positive),
+        layout=LAYOUT,
     )
     assert "/tmp/home/.codex" in argv, "the native layout is missing"
     start = argv.index("/tmp/home/.codex") - 1
-    assert argv[start:start + 14] == [
+    assert argv[start:start + 17] == [
         "--dir", "/tmp/home/.codex",
         "--ro-bind-data", str(CONFIGURATION_FD), "/tmp/home/.codex/config.toml",
+        "--ro-bind-data", str(ENVIRONMENTS_FD), "/tmp/home/.codex/environments.toml",
         "--bind-fd", str(CREDENTIAL_FD), "/tmp/home/.codex/auth.json",
         "--setenv", "CODEX_HOME", "/tmp/home/.codex",
         # The zone's one trust store, admitted with the runtime image (#77, S3).
@@ -72,7 +79,7 @@ def test_the_native_layout_binds_two_descriptors_into_a_disposable_codex_home(
     ]
     # No path-based store mount remains, and the home itself stays disposable.
     assert "--bind" not in argv and "/vendor-store" not in argv
-    assert argv.count("--bind-fd") == 1 and argv.count("--ro-bind-data") == 1
+    assert argv.count("--bind-fd") == 1 and argv.count("--ro-bind-data") == 2
     assert argv[argv.index("HOME") + 1] == "/tmp/home"
     assert argv.index("--tmpfs") < start, "the codex home must sit inside the fresh tmpfs"
     assert "--unshare-net" in argv
@@ -179,7 +186,7 @@ async def test_a_native_mount_without_its_retained_lock_never_reaches_the_check(
             await launcher(tmp_path)._run(
                 ("/usr/bin/python3",), workspace=None, posture=Posture.READ,
                 guard_fds=(guard.fileno(),), deadline=asyncio.get_running_loop().time() + 5,
-                native_store=mount(verify, guard.fileno() + 999),
+                native_store=mount(verify, guard.fileno() + 999), layout=LAYOUT,
             )
         except (ContractViolation, OSError) as exc:
             caught = exc
@@ -210,7 +217,7 @@ async def test_a_mount_descriptor_that_is_also_a_guard_never_reaches_the_check(
             await launcher(tmp_path)._run(
                 ("/usr/bin/python3",), workspace=None, posture=Posture.READ,
                 guard_fds=(guard.fileno(), guard.fileno() + 1),
-                deadline=asyncio.get_running_loop().time() + 5, native_store=store,
+                deadline=asyncio.get_running_loop().time() + 5, native_store=store, layout=LAYOUT,
             )
         except (ContractViolation, OSError) as exc:
             caught = exc
@@ -235,15 +242,16 @@ async def test_the_supervisor_alone_is_told_which_descriptors_bwrap_receives(
             ("/usr/bin/python3",), workspace=None, posture=Posture.READ,
             guard_fds=(guard.fileno(),), deadline=asyncio.get_running_loop().time() + 5,
             native_store=mount(positive, guard.fileno()) if native else None,
+            layout=LAYOUT if native else None,
         )
     ((args, kwargs),) = spawned
-    marker = f"--mount-fds={CONFIGURATION_FD},{CREDENTIAL_FD}"
+    marker = f"--mount-fds={CONFIGURATION_FD},{CREDENTIAL_FD},{ENVIRONMENTS_FD}"
     if native:
         # The flag follows the report descriptor and precedes bwrap's own argv.
         report = next(index for index, item in enumerate(args) if item.startswith("--report-fd="))
         assert args[report + 1] == marker
         assert args[report + 2].endswith("bwrap")
-        assert {CONFIGURATION_FD, CREDENTIAL_FD} <= set(kwargs["pass_fds"])
+        assert {CONFIGURATION_FD, CREDENTIAL_FD, ENVIRONMENTS_FD} <= set(kwargs["pass_fds"])
     else:
         assert not any(str(item).startswith("--mount-fds=") for item in args)
         assert CONFIGURATION_FD not in kwargs["pass_fds"]

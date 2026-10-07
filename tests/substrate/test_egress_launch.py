@@ -13,6 +13,7 @@ from constructicon.core.identity import digest
 from constructicon.substrate.executors import egress, linux
 from constructicon.substrate.executors._egress_bridge import BRIDGE_SCRIPT
 from constructicon.substrate.executors.egress import EgressSocket
+from tests.substrate.test_native_store_launch import LAYOUT
 
 IDENTITY = (41, 97)
 SOCKET_MODE = stat.S_IFSOCK | 0o755
@@ -65,7 +66,7 @@ def mount(tmp_path, socket=None):
 def argv(tmp_path, socket=None, workspace=None):
     return launcher(tmp_path).argv(
         ("/usr/bin/python3",), workspace=workspace, posture=Posture.READ,
-        native_store=mount(tmp_path, socket),
+        native_store=mount(tmp_path, socket), layout=LAYOUT,
     )
 
 

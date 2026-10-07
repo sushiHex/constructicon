@@ -29,6 +29,7 @@ from constructicon.core.identity import digest
 from constructicon.substrate.executors import codex_lane, operator_store
 from constructicon.substrate.executors.codex_lane import write_evidence
 from constructicon.substrate.executors.codex_protocol import ExpectedAccount
+from constructicon.substrate.executors.linux import sealed_catalog
 from tests.operator_store_world import StoreWorld
 from tests.substrate import test_codex_lane as fake_lane
 from tests.substrate.test_codex_protocol import spend_result
@@ -288,6 +289,9 @@ def _check_evidence(
     )
 
 
+INSTALLED_CATALOG = b'{"models": [{"slug": "gpt-6.1-sol", "tool_mode": "code_mode_only"}]}'
+
+
 @pytest.fixture
 def evidence_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     """The production lane's scripted peer, relay and sealed data with no vendor."""
@@ -310,10 +314,11 @@ def evidence_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Pat
     }), encoding="utf-8")
     (tmp_path / "native-codex" / "bin").mkdir(parents=True)
     (tmp_path / "native-codex" / "bin" / "codex").write_bytes(b"installed client")
-    (tmp_path / "codex-models.json").write_bytes(b"installed catalog")
+    (tmp_path / "codex-models.json").write_bytes(INSTALLED_CATALOG)
     monkeypatch.setattr(fake_lane, "EXECUTABLE", replace(
         fake_lane.EXECUTABLE, sha256=hashlib.sha256(b"installed client").hexdigest(),
-        catalog_sha256=hashlib.sha256(b"installed catalog").hexdigest(),
+        catalog_sha256=hashlib.sha256(INSTALLED_CATALOG).hexdigest(),
+        sealed_catalog_sha256=hashlib.sha256(sealed_catalog(INSTALLED_CATALOG)).hexdigest(),
     ))
     policy = tmp_path / "startup-policy.json"
     policy.write_text(json.dumps({
@@ -358,22 +363,23 @@ async def test_documented_checker_refuses_missing_completion_and_new_fault(
 
 
 @pytest.mark.parametrize("field", [
-    "adapter_revision", "protocol_revision", "runtime_digest", "executable", "catalog_sha256",
+    "adapter_revision", "protocol_revision", "runtime_digest",
+    "executable.sha256", "executable.catalog_sha256", "executable.sealed_catalog_sha256",
 ])
 async def test_documented_checker_refuses_an_identity_that_is_not_the_installed_one(
     evidence_world: tuple[Path, Path], field: str,
 ) -> None:
     """M8-N5-state-review.md, Stage 0: evidence from another adapter, protocol,
-    runtime, vendor client or catalog than the installed one never passes,
-    however clean its facts."""
+    runtime, vendor client, catalog or catalog seal than the installed one never
+    passes, however clean its facts."""
     directory, policy = evidence_world
     _, evidence = await fake_lane.startup(directory, fake_lane.startup_native())
     path = directory / "clean.json"
     write_evidence(path, evidence)
     assert _check_evidence("qualify", path, "maintenance", "-", policy, directory).returncode == 0
     raw = json.loads(path.read_text(encoding="utf-8"))
-    other = "0" * 64
-    raw[field] = {**raw[field], "sha256": other} if field == "executable" else other
+    record, _, key = field.rpartition(".")
+    (raw[record] if record else raw)[key] = "0" * 64
     path.write_text(json.dumps(raw), encoding="utf-8")
     assert _check_evidence("qualify", path, "maintenance", "-", policy, directory).returncode != 0
 
