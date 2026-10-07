@@ -35,6 +35,7 @@ from constructicon.substrate.executors.codex_protocol import (
     READ_WINDOW,
     RECORD_BYTES,
     TRANSCRIPT_CHARS,
+    UNSEALED_BACKEND_FAULT,
     ExpectedAccount,
     RecordDamaged,
     RecordStream,
@@ -441,6 +442,43 @@ def test_a_missing_plan_fact_refuses():
     assert account_faults(reply, EXPECTED) == (NO_PLAN_FAULT,)
 
 
+def routed(routing):
+    reply = account_reply(account=MANAGED)
+    reply["result"]["workspaceRouting"] = routing
+    return reply
+
+
+@pytest.mark.parametrize("routing", [
+    None,
+    {"chatgptAccountId": ACCOUNT_ID, "backendOrigin": "https://chatgpt.com",
+     "accountRoutingOverride": "NO_CONSTRAINT"},
+    {"chatgptAccountId": ACCOUNT_ID, "backendOrigin": "https://chatgpt.com",
+     "accountRoutingOverride": "us_cr"},
+], ids=["absent", "sealed", "sealed-with-residency"])
+def test_a_reading_routed_to_the_sealed_backend_passes(routing):
+    assert account_faults(routed(routing), EXPECTED) == ()
+
+
+@pytest.mark.parametrize("routing", [
+    {"chatgptAccountId": ACCOUNT_ID, "backendOrigin": "https://eu.chatgpt.example",
+     "accountRoutingOverride": "NO_CONSTRAINT"},
+    {"chatgptAccountId": ACCOUNT_ID, "backendOrigin": "https://chatgpt.com/",
+     "accountRoutingOverride": "NO_CONSTRAINT"},
+    {"chatgptAccountId": ACCOUNT_ID, "backendOrigin": "http://chatgpt.com",
+     "accountRoutingOverride": "NO_CONSTRAINT"},
+    {"chatgptAccountId": ACCOUNT_ID, "backendOrigin": "https://chatgpt.com",
+     "accountRoutingOverride": "elsewhere"},
+    {"chatgptAccountId": ACCOUNT_ID, "backendOrigin": "https://chatgpt.com"},
+    "https://chatgpt.com",
+], ids=["other-origin", "trailing-slash", "plain-http", "unknown-override", "no-override",
+        "not-an-object"])
+def test_a_reading_routed_anywhere_else_stops_the_session(routing):
+    """Decision 2: an unsealed backend stops the session; the origin is never named."""
+    faults = account_faults(routed(routing), EXPECTED)
+    assert faults == (UNSEALED_BACKEND_FAULT,)
+    assert "example" not in faults[0] and ACCOUNT_ID not in faults[0]
+
+
 def test_a_different_plan_refuses():
     reply = account_reply(account={**MANAGED, PLAN_TYPE_KEY: "free"})
     faults = account_faults(reply, EXPECTED)
@@ -573,6 +611,27 @@ def test_the_old_turn_fields_are_never_read():
     ))])
     assert observation.output is None and observation.served_model is None
     assert observation.usage is None
+
+
+def test_a_synthesized_total_makes_the_usage_unknown_not_zero():
+    """``fill_to_context_window`` (``protocol.rs:2316``) replaces the measured total
+    with the context window and every other count zero: a report, not damage."""
+    observation = folded([
+        record(usage_update(input_tokens=11, output_tokens=3)),
+        record(usage_total(totalTokens=272000, inputTokens=0, cachedInputTokens=0,
+                           cacheWriteInputTokens=0, outputTokens=0, reasoningOutputTokens=0)),
+        record(completed(status="failed", answer=None)),
+    ])
+    assert observation.usage is None
+    assert observation.malformed_records == 0
+    assert observation.first_error == "the turn reported status 'failed'"
+
+
+def test_a_measured_total_of_nothing_is_still_a_measurement():
+    observation = folded([
+        record(usage_total(totalTokens=0, inputTokens=0, outputTokens=0)), record(completed()),
+    ])
+    assert observation.usage == Usage(input_tokens=0, output_tokens=0)
 
 
 def test_no_reroute_means_the_served_model_is_unknown_never_the_requested_one():

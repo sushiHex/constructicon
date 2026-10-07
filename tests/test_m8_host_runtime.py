@@ -1827,6 +1827,26 @@ def test_the_host_planner_accepts_the_package_ci_installed(
     assert artifacts.compare(installed, expected, 0) == []
 
 
+def test_the_sealed_model_and_effort_are_the_installed_catalogs_choice(ci_runtime: Path) -> None:
+    """Decision 3 is a standing rule, so the sealed literals must follow the pin.
+
+    A bump whose catalog moves the newest ``sol`` or its lowest effort fails here
+    until ``PREPARE_MODEL`` and ``PREPARE_EFFORT`` move with it.
+    """
+
+    from constructicon.substrate.executors.codex_catalog import catalog_choice
+    from constructicon.substrate.executors.codex_lane import (
+        PREPARE_EFFORT,
+        PREPARE_FAMILY,
+        PREPARE_MODEL,
+    )
+    from tests.vendor_pin import CATALOG_SHA256
+
+    catalog = ci_runtime / "codex-models.json"
+    assert artifacts.hash_regular(catalog) == CATALOG_SHA256
+    assert catalog_choice(catalog.read_bytes(), PREPARE_FAMILY) == (PREPARE_MODEL, PREPARE_EFFORT)
+
+
 def checkout_plan() -> list[artifacts.Entry]:
     from constructicon.substrate.executors import _egress_bridge, _supervisor
 

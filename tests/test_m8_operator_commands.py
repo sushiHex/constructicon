@@ -279,7 +279,9 @@ def _check_evidence(
         [
             sys.executable, "-I", "-S", "-B", "-c", entry,
             str(ROOT / "src"), sysconfig.get_paths()["purelib"],
-            mode, str(path), custody, expected, str(policy), str(directory),
+            # The session directory doubles as the launch root: the fixture
+            # installs its ``runtime.json`` there.
+            mode, str(path), custody, expected, str(policy), str(directory), str(directory),
         ],
         input=_evidence_program(), capture_output=True, text=True, timeout=30, check=False,
     )
@@ -300,6 +302,9 @@ def evidence_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Pat
 
     monkeypatch.setattr(codex_lane, "sealed_data_fd", sealed)
     (tmp_path / "config.toml").write_text(fake_lane.CONFIGURATION, encoding="utf-8")
+    (tmp_path / "runtime.json").write_text(json.dumps({
+        "runtime_digest": str(fake_lane.bare_launcher().expected_runtime),
+    }), encoding="utf-8")
     policy = tmp_path / "startup-policy.json"
     policy.write_text(json.dumps({
         "destinations": [
@@ -338,6 +343,23 @@ async def test_documented_checker_refuses_missing_completion_and_new_fault(
                     encoding="utf-8")
     assert _check_evidence("qualify", path, "maintenance", "-", policy, directory).returncode != 0
     raw["faults"] = ["unexpected fault"]
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    assert _check_evidence("qualify", path, "maintenance", "-", policy, directory).returncode != 0
+
+
+@pytest.mark.parametrize("field", ["adapter_revision", "protocol_revision", "runtime_digest"])
+async def test_documented_checker_refuses_an_identity_that_is_not_the_installed_one(
+    evidence_world: tuple[Path, Path], field: str,
+) -> None:
+    """M8-N5-state-review.md, Stage 0: evidence from another adapter, protocol or
+    runtime than the installed one never passes, however clean its facts."""
+    directory, policy = evidence_world
+    _, evidence = await fake_lane.startup(directory, fake_lane.startup_native())
+    path = directory / "clean.json"
+    write_evidence(path, evidence)
+    assert _check_evidence("qualify", path, "maintenance", "-", policy, directory).returncode == 0
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw[field] = "sha256:" + "0" * 64
     path.write_text(json.dumps(raw), encoding="utf-8")
     assert _check_evidence("qualify", path, "maintenance", "-", policy, directory).returncode != 0
 

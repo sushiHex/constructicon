@@ -221,7 +221,8 @@ jobs:
           # A release must pass both, identically, before any host retires its old one.
           M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
             M8_CODEX_TARBALL="$RUNNER_TEMP/codex.tar.gz" "$PWD/.venv/bin/python" -m pytest \
-            tests/test_m8_host_runtime.py::test_the_host_planner_accepts_the_package_ci_installed \
+            tests/test_m8_host_runtime.py \
+            -k "test_the_host_planner_accepts_the_package_ci_installed or test_the_sealed_model_and_effort_are_the_installed_catalogs_choice" \
             -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
       - name: Prove the N4 proxy bridge in the native zone
         if: matrix.lane == 'foundation'

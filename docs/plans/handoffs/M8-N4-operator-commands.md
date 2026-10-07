@@ -57,7 +57,9 @@ LANE=("${PY[@]}" "$LANE_MODULE")
 The following shell functions check the completed producer records as the
 service user. `check_evidence MODE FILE CUSTODY EXPECTED POLICY` prints the
 same content digest as `EvidenceFile.publish`, only after a closed-schema and
-affirmative-fact check. `MODE` is `login`, `qualify`, `hold`, `active`,
+affirmative-fact check, and only when the recorded adapter, protocol,
+configuration and runtime identities are the installed controller's, the
+session's configuration and the launch set's `runtime.json`. `MODE` is `login`, `qualify`, `hold`, `active`,
 `denial`, `wrongplan`, or `refresh`. `EXPECTED` is `-` until the plan has been
 observed, then the closed `pro`/`prolite` literal. The refusal modes require
 their exact expected faults; any additional fault stops the session. The
@@ -73,7 +75,8 @@ from constructicon.core.identity import canonical_json, digest
 from constructicon.substrate.executors.codex_lane import (EVIDENCE_DOMAIN, LANE_SCHEMA, LOGIN_FIELDS, STARTUP_FIELDS, STARTUP_METHODS, QUALIFICATION_PLANS, configuration_digest, _policy)
 from constructicon.substrate.executors.codex_protocol import SPEND_FIELDS, USAGE_FIELDS, SPEND_UNREADABLE_FAULT, named_method, named_value
 from constructicon.substrate.executors.egress import identity_digests
-mode, name, custody, expected, policy_name, directory = sys.argv[1:]
+from constructicon.substrate.executors.codex import ADAPTER_REVISION, PROTOCOL_REVISION
+mode, name, custody, expected, policy_name, directory, launch_root = sys.argv[1:]
 def require(value):
     if not value: raise ValueError("lane evidence lacks an affirmative required fact")
 path = Path(name)
@@ -98,6 +101,9 @@ require(type(e["custody"]) is dict and e["custody"].get("kind") == custody)
 require(set(e["custody"]) == ({"kind", "generation_floor"} if custody == "maintenance" else {"kind", "binding_digest"}))
 config = (Path(directory) / "config.toml").read_text(encoding="utf-8")
 require(e["configuration_digest"] == str(configuration_digest(config)))
+require(e["adapter_revision"] == str(ADAPTER_REVISION) and e["protocol_revision"] == str(PROTOCOL_REVISION))
+installed = json.loads((Path(launch_root) / "runtime.json").read_text(encoding="utf-8"))
+require(e["runtime_digest"] == installed["runtime_digest"])
 policy = _policy(Path(policy_name))
 require(e["egress"] == {key: str(value) for key, value in identity_digests(policy).items()})
 require(type(e["relay"]) is dict and set(e["relay"]) == {"destinations", "denied", "closed"})
@@ -147,7 +153,7 @@ else:
             require(e["refresh"] == "measured" and e["credential"]["mtime_changed"] is True)
             require(e["relay"]["destinations"].get("accepted:auth.openai.com:443", 0) > 0)
 print(digest(EVIDENCE_DOMAIN, 1, json.loads(canonical_json(e))))' \
-    "$1" "$2" "$3" "$4" "$5" "$W" < /dev/null
+    "$1" "$2" "$3" "$4" "$5" "$W" "$L" < /dev/null
 }
 check_sealed() {
   test "$#" -eq 2

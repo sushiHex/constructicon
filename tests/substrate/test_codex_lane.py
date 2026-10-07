@@ -38,7 +38,7 @@ from constructicon.substrate.executors.codex_lane import (
     write_evidence,
 )
 from constructicon.substrate.executors.codex_protocol import ExpectedAccount
-from constructicon.substrate.executors.egress import EgressDestination, EgressPolicy
+from constructicon.substrate.executors.egress import EgressDestination, EgressPolicy, EgressRelay
 from constructicon.substrate.executors.linux import ProcessExchangeError, ProcessResult
 from constructicon.substrate.executors.operator_store import BindingCheck
 from tests.operator_store_world import StoreWorld
@@ -63,6 +63,7 @@ class FakeRelay:
 
     instances: ClassVar[list[FakeRelay]] = []
     closes = True
+    denied = EgressRelay.denied  # the real reading of the counters
 
     def __init__(self, policy, directory, deadline, check):
         self.directory = directory
@@ -637,7 +638,8 @@ def test_prepare_creates_four_parseable_reviewed_inputs_from_one_pin_each(
     assert out.joinpath("config.toml").read_text(encoding="utf-8") == (
         codex_lane.production_configuration()
     )
-    assert codex_lane.configured_model(out.joinpath("config.toml").read_text()) == "gpt-5.5"
+    assert codex_lane.configured_model(out.joinpath("config.toml").read_text()) == "gpt-6.1-sol"
+    assert codex_lane.configured_effort(out.joinpath("config.toml").read_text()) == "low"
     assert codex_lane.configured_provider(out.joinpath("config.toml").read_text()) == "openai"
     login = codex_lane._policy(out / "login-policy.json")
     startup = codex_lane._policy(out / "startup-policy.json")
@@ -829,16 +831,18 @@ def test_prepare_artifact_refuses_a_zero_write_before_retry(tmp_path, monkeypatc
     assert calls == [1]
 
 
-@pytest.mark.parametrize("fault", ["model", "provider"])
+@pytest.mark.parametrize("fault", ["model", "effort", "provider"])
 def test_prepare_refuses_a_configuration_outside_the_reviewed_route(
     tmp_path, monkeypatch, fault,
 ):
     calls = prepare_world(monkeypatch)
     original = codex_lane.production_configuration()
-    configuration = (
-        original.replace('model = "gpt-5.5"', 'model = "wrong"')
-        if fault == "model" else 'model_provider = "other"\n' + original
-    )
+    configuration = {
+        "model": original.replace('model = "gpt-6.1-sol"', 'model = "wrong"'),
+        "effort": original.replace('_effort = "low"', '_effort = "high"'),
+        "provider": 'model_provider = "other"\n' + original,
+    }[fault]
+    assert configuration != original
     monkeypatch.setattr(codex_lane, "production_configuration", lambda: configuration)
     out = tmp_path / "s1"
     with pytest.raises(ContractViolation, match="production startup configuration"):

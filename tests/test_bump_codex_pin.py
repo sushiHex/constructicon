@@ -152,7 +152,10 @@ def test_a_bump_rewrites_only_the_acquisition_step_to_the_verified_pin(workflow:
         "default": "gpt-6.1-sol",
         "astra": {"model": "gpt-6-astra", "lowest_effort": "low"},
         "sol": {"model": "gpt-6.1-sol", "lowest_effort": "low"},
-        "luna": {"model": "gpt-6-luna", "lowest_effort": None},
+        # An effort the ranking does not know might be lower, and a family with
+        # no listed model has no choice: both refuse rather than guess.
+        "luna": {"refused": "'gpt-6-luna' lists no ranked lowest effort"},
+        "terra": {"refused": "the catalog lists no 'terra' model"},
     }
     assert report["re_observe"] == list(bump.RECORDED)
     assert sorted(workflow.parent.iterdir()) == [workflow]

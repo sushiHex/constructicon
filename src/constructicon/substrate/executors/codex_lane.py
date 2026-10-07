@@ -61,6 +61,7 @@ from constructicon.substrate.executors.codex import (
     PROTOCOL_REVISION,
     CodexConversation,
     configuration_digest,
+    configured_effort,
     configured_model,
     configured_provider,
 )
@@ -107,8 +108,13 @@ orchestrator decision 1); the operator cannot narrow or widen this with a flag."
 RUNTIME_BINARY = VENDOR_MOUNT + "/bin/codex"
 RUNTIME_CATALOG = CATALOG_MOUNT
 """In-zone paths of the bound vendor tree's client and the bound model catalog."""
-PREPARE_MODEL = "gpt-5.5"
-"""The reviewed production fixture's model for the N4 startup configuration."""
+PREPARE_FAMILY = "sol"
+PREPARE_MODEL = "gpt-6.1-sol"
+PREPARE_EFFORT = "low"
+"""The sealed model and effort: the pinned catalog's newest ``sol`` at its lowest
+effort (M8-N5-state-review.md, decision 3; ``codex_catalog.catalog_choice``). CI
+checks these literals against the catalog it installed, so a bump that moves the
+choice must move them."""
 PREPARE_CONNECTIONS = 8
 """A fixed per-lane relay bound, matching the reviewed N4 bridge fixture."""
 LOGIN_DEADLINE_S = 960.0
@@ -269,8 +275,7 @@ async def launch(
         return Launched(
             result=result, exchange_failed=exchange_failed,
             destinations=dict(relay.destinations),
-            denied={key: value for key, value in relay.observed.items()
-                    if key.startswith("denied:")},
+            denied=relay.denied,
             relay_closed=relay.closed is True,
             credential={
                 "present": links == 1,
@@ -580,13 +585,14 @@ def production_configuration(*, control: bool = False) -> str:
     """
 
     return (
-        f'model = "{PREPARE_MODEL}"\nmodel_catalog_json = "{RUNTIME_CATALOG}"\n'
+        f'model = "{PREPARE_MODEL}"\nmodel_reasoning_effort = "{PREPARE_EFFORT}"\n'
+        f'model_catalog_json = "{RUNTIME_CATALOG}"\n'
         'cli_auth_credentials_store = "file"\nforced_login_method = "chatgpt"\n'
         'check_for_update_on_startup = false\nweb_search = "disabled"\n'
         f"[analytics]\nenabled = {str(control).lower()}\n[features]\nplugins = false\n"
         "apps = false\nshell_tool = false\nunified_exec = false\n"
         "apply_patch_freeform = false\nview_image = false\nmulti_agent = false\n"
-        "code_mode = false\njs_repl = false\ngoals = false\n"
+        "code_mode = false\njs_repl = false\ngoals = false\nsystem_proxy_fallback = false\n"
     )
 
 
@@ -648,6 +654,7 @@ def prepare(out: Path) -> None:
     configuration = production_configuration()
     if (
         configured_model(configuration) != PREPARE_MODEL
+        or configured_effort(configuration) != PREPARE_EFFORT
         or configured_provider(configuration) != "openai"
     ):
         raise ContractViolation("the production startup configuration is invalid")

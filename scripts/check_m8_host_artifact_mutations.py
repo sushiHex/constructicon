@@ -283,6 +283,7 @@ LAUNCH_LINUX = (
 # change. The 404 branch: without it an unreleased tag raises rather than being
 # skipped, a crash and not a wrong selection.
 BUMP = "scripts.bump_codex_pin:"
+CATALOG = "constructicon.substrate.executors.codex_catalog:catalog_choice"
 BUMP_TESTS = "tests/test_bump_codex_pin.py::"
 SELECTION = BUMP_TESTS + "test_the_greatest_published_stable_release_is_chosen"
 REWRITE = BUMP_TESTS + "test_a_bump_rewrites_only_the_acquisition_step_to_the_verified_pin"
@@ -324,15 +325,15 @@ BUMP_PORTABLE = (
     ("the downloaded bytes must agree", BUMP + "package_digest",
      'hashlib.sha256(get(url, LIMITS["package"])).hexdigest() != listed[0]', "False",
      BUMP_TESTS + "test_every_digest_and_the_peel_must_agree"),
-    ("hidden models are not reported", BUMP + "newest", 'm.get("visibility") == "list"', "True",
+    # Decision 3's rule lives in ``codex_catalog``; the bump report is one reader.
+    ("hidden models are never chosen", CATALOG, 'model.get("visibility") == "list" and ', "",
      REWRITE),
-    ("the newest family member is reported", BUMP + "newest", "top = max(", "top = min(",
-     REWRITE),
-    ("efforts are ranked by name", BUMP + "newest", "min(efforts, key=EFFORTS.index)",
+    ("the newest family member is chosen", CATALOG, "newest = max(", "newest = min(", REWRITE),
+    ("efforts are ranked by name", CATALOG, "min(efforts, key=EFFORTS.index)",
      "min(efforts)", REWRITE),
-    ("an unranked effort leaves the lowest unknown", BUMP + "newest",
-     "min(efforts, key=EFFORTS.index) if ranked else None",
-     "min(efforts & set(EFFORTS), key=EFFORTS.index) if efforts else None", REWRITE),
+    ("an unranked effort refuses", CATALOG,
+     "if not efforts or not efforts <= set(EFFORTS):", "if not efforts:", REWRITE),
+    ("a family with no listed model refuses", CATALOG, "if not models:", "if False:", REWRITE),
     ("mixed line endings refuse", BUMP + "apply",
      'original.count(b"\\n") != original.count(b"\\r\\n")', "False",
      BUMP_TESTS + "test_mixed_line_endings_refuse"),

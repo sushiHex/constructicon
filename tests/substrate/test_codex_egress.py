@@ -26,6 +26,7 @@ from constructicon.core.identity import digest
 from constructicon.core.native_operator import NativeEgressIdentityV1
 from constructicon.substrate.executors import codex, egress
 from constructicon.substrate.executors.codex import (
+    RELAY_DENIAL_FAULT,
     UNQUALIFIED_PREREQUISITES,
     CodexOperatorProvider,
     launch_identity,
@@ -474,11 +475,19 @@ async def test_no_private_locator_reaches_the_outcome(
         handle.paths.payload.mkdir(parents=True)
     outcome = await outcome_of(handle)
     if case in ("accepted", "refused"):
-        assert outcome.status == "success", "a denial must not be fatal to the turn"
         assert facts["judged"] and facts["forwarded"] == (case == "accepted")
         assert relays[0].observed == (
             {"accepted": 1} if case == "accepted" else {"denied:destination": 1}
         )
+        if case == "accepted":
+            assert outcome.status == "success"
+        else:
+            # A denial refuses the turn's result, however the turn itself went
+            # (M8-N5-state-review.md, Stage 0); its reason stays evidence.
+            assert outcome.status == "failure" and outcome.error.kind == "unavailable"
+            assert outcome.error.detail == RELAY_DENIAL_FAULT
+            assert outcome.output is None and outcome.raw_reply is None
+            assert handle.relay_denied == {"denied:destination": 1}
     else:
         assert outcome.status == "failure" and outcome.error.kind == "unavailable"
         assert outcome.output is None and outcome.raw_reply is None

@@ -10,9 +10,10 @@ GitHub's asset digest and the downloaded bytes. The tag is peeled to its commit
 and the catalog is hashed there. Then the workflow's one acquisition step is
 rewritten, only if the workflow is still the one read at the start.
 
-The report names what a bump cannot derive: the catalog's newest model per
-family, and the recorded vendor behaviour to re-observe before relying on it.
-Stdlib only, and no file is written until every check has passed.
+The report names decision 3's choice per family, the rule CI then holds the
+sealed configuration to, and the recorded vendor behaviour to re-observe before
+relying on it. Stdlib and this package only, and no file is written until every
+check has passed.
 """
 
 from __future__ import annotations
@@ -29,6 +30,8 @@ import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 
+from constructicon.substrate.executors.codex_catalog import catalog_choice
+
 sys.path.insert(0, str(Path(__file__).resolve().parent / "ci"))
 import m8_host_artifacts as artifacts
 
@@ -42,7 +45,6 @@ LIMITS = {
     "refs": 16 << 20, "api": 1 << 20, "sums": 1 << 20, "package": 512 << 20, "catalog": 8 << 20,
 }  # fmt: skip
 FAMILIES = ("astra", "sol", "luna", "terra")
-EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
 RECORDED = (
     "tests/native_startup.py MODELS (models the native fixtures name)",
     "tests/native_combined.py efforts and request shapes",
@@ -161,22 +163,21 @@ def package_digest(release: dict, get: Fetch) -> tuple[str, str]:
 
 
 def newest(catalog: bytes) -> dict[str, object]:
-    """The catalog's default, and per family its newest listed model and lowest effort.
+    """The catalog's default, and per family decision 3's choice or why it refuses.
 
-    Efforts are ranked by name, never by list position. An effort the ranking does
-    not know might be lower, so the lowest is then reported as unknown.
+    The choice is the one rule the sealed configuration is checked against
+    (``codex_catalog.catalog_choice``), so this report and CI cannot disagree.
     """
 
     models = [m for m in json.loads(catalog)["models"] if m.get("visibility") == "list"]
     report: dict[str, object] = {"default": min(models, key=lambda m: m["priority"])["slug"]}
     for family in FAMILIES:
-        members = [m for m in models if m["slug"].endswith(f"-{family}")]
-        if members:
-            top = max(members, key=lambda m: [int(p) for p in re.findall(r"\d+", m["slug"])])
-            efforts = {level["effort"] for level in top.get("supported_reasoning_levels", [])}
-            ranked = efforts and efforts <= set(EFFORTS)
-            lowest = min(efforts, key=EFFORTS.index) if ranked else None
-            report[family] = {"model": top["slug"], "lowest_effort": lowest}
+        try:
+            model, effort = catalog_choice(catalog, family)
+        except ValueError as refusal:
+            report[family] = {"refused": str(refusal)}
+        else:
+            report[family] = {"model": model, "lowest_effort": effort}
     return report
 
 

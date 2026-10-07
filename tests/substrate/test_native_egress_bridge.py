@@ -390,7 +390,10 @@ def vendor_launcher(bridge_launcher):
 
 def test_the_production_configuration_is_the_reviewed_literal():
     expected = (
-        f'model = "{MODELS[0]}"\nmodel_catalog_json = "{RUNTIME_CATALOG}"\n'
+        # Decision 3: the pinned catalog's newest ``sol`` at its lowest effort; CI
+        # checks both against the catalog it installed.
+        'model = "gpt-6.1-sol"\nmodel_reasoning_effort = "low"\n'
+        f'model_catalog_json = "{RUNTIME_CATALOG}"\n'
         'cli_auth_credentials_store = "file"\nforced_login_method = "chatgpt"\n'
         'check_for_update_on_startup = false\nweb_search = "disabled"\n'
         "[analytics]\nenabled = false\n[features]\nplugins = false\n"
@@ -400,6 +403,9 @@ def test_the_production_configuration_is_the_reviewed_literal():
         # its three tools are visible on ephemeral threads too (``ext/goal``
         # ``tools_visible``), so every request carried a built-in tool surface.
         "code_mode = false\njs_repl = false\ngoals = false\n"
+        # Default-on since rust-v0.160: it re-sends the account GETs through the
+        # system proxy after a 5 s timeout, so their count and timing drift.
+        "system_proxy_fallback = false\n"
     )
     assert production_configuration() == expected
     # The containment control differs in exactly one value.

@@ -653,6 +653,14 @@ MUTANTS = (
         "test_the_production_configuration_is_the_reviewed_literal",
     ),
     (
+        "N5-P5 production config disables the system-proxy fallback",
+        LANE + "production_configuration",
+        "system_proxy_fallback = false\\n",
+        "system_proxy_fallback = true\\n",
+        "tests/substrate/test_native_egress_bridge.py::"
+        "test_the_production_configuration_is_the_reviewed_literal",
+    ),
+    (
         "N5-P2 the production config keeps analytics off",
         LANE + "production_configuration",
         "enabled = {str(control).lower()}",
@@ -716,6 +724,13 @@ MUTANTS = (
         "configured_model(configuration) != PREPARE_MODEL",
         "False",
         T + "test_prepare_refuses_a_configuration_outside_the_reviewed_route[model]",
+    ),
+    (
+        "N5-P4 preparation pins the sealed effort",
+        LANE + "prepare",
+        "configured_effort(configuration) != PREPARE_EFFORT",
+        "False",
+        T + "test_prepare_refuses_a_configuration_outside_the_reviewed_route[effort]",
     ),
     (
         "N4-P17 preparation pins the OpenAI provider",

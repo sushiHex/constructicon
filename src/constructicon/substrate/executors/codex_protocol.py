@@ -905,7 +905,32 @@ def account_faults(reply: Any, expected: ExpectedAccount) -> tuple[str, ...]:
             f"account plan {named_value(plan)} is not the expected "
             f"{expected.plan_type!r}"
         )
-    return tuple(faults)
+    return tuple(faults) + routing_faults(result)
+
+
+SEALED_BACKEND = "https://chatgpt.com"
+ROUTING_OVERRIDES = frozenset({"NO_CONSTRAINT", "us", "us_cr"})
+UNSEALED_BACKEND_FAULT = "the account routes model turns to a backend this binding has not sealed"
+
+
+def routing_faults(result: Mapping[str, Any]) -> tuple[str, ...]:
+    """Decision 2 of M8-N5-state-review.md: an unsealed backend stops the session.
+
+    A reading's ``workspaceRouting`` moves model turns to its ``backendOrigin``
+    (``account_processor/workspace_routing.rs`` at the pin). Absent or null keeps
+    them on the sealed backend, and so does that origin named exactly; its
+    residency override adds a header on the same host. Any other origin is a
+    new destination, which is reviewed and sealed separately, never admitted
+    from a reply. The origin is not named in the fault: it is vendor content.
+    """
+
+    routing = result.get("workspaceRouting")
+    if routing is None or (
+        isinstance(routing, Mapping) and routing.get("backendOrigin") == SEALED_BACKEND
+        and routing.get("accountRoutingOverride") in ROUTING_OVERRIDES
+    ):
+        return ()
+    return (UNSEALED_BACKEND_FAULT,)
 
 
 def account_plan(reply: Any) -> str | None:
@@ -1190,13 +1215,25 @@ def _usage(params: Mapping[str, Any]) -> Usage | None:
     total = usage.get("total") if isinstance(usage, Mapping) else None
     if not isinstance(total, Mapping):
         return None
-    counts = total.get("inputTokens"), total.get("outputTokens")
+    counts = total.get("inputTokens"), total.get("outputTokens"), total.get("totalTokens")
     if not all(
         type(count) is int and count >= 0 and len(repr(count)) <= NUMBER_CHARS
         for count in counts
     ):
         return None
+    if counts[:2] == (0, 0) and counts[2]:
+        return SYNTHESIZED
     return Usage(input_tokens=counts[0], output_tokens=counts[1])
+
+
+SYNTHESIZED = Usage()
+"""A total the vendor filled rather than measured, so the turn's usage is unknown.
+
+On ``context_length_exceeded`` the pinned client replaces the accumulated total
+with ``{totalTokens: <context window>}`` and every other count zero
+(``protocol.rs:2316``, ``fill_to_context_window``). No measured total has
+tokens but neither input nor output. It is not damage, it is the vendor's
+report, so the fold publishes no usage rather than a false zero."""
 
 
 MODEL_CHARS = NAMEABLE_ALPHABET | frozenset("._-")
@@ -1398,7 +1435,7 @@ def observe_turn(
                     f"{named_method(method)} is not well-formed evidence of this turn"
                 )
             elif method == TOKEN_USAGE_UPDATED:
-                usage = fact
+                usage = None if fact is SYNTHESIZED else fact
             elif method == MODEL_REROUTED:
                 served_model = fact
             else:

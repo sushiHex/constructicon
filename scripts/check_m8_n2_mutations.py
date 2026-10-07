@@ -89,6 +89,14 @@ MATRIX_TEST = "tests/substrate/test_codex_matrix.py::"
 WRITE_TEST = "tests/substrate/test_codex_write.py::"
 
 UPDATED = "constructicon.substrate.executors.codex_protocol:updated_plan"
+EFFORT = "constructicon.substrate.executors.codex:configured_effort"
+ROUTING = "constructicon.substrate.executors.codex_protocol:routing_faults"
+UNSEALED = PROTOCOL + "test_a_reading_routed_anywhere_else_stops_the_session"
+EXCHANGE = "constructicon.substrate.executors.codex:CodexOperatorHandle._exchange"
+RELAY_FAULTS = "constructicon.substrate.executors.codex:relay_faults"
+EGRESS_REFUSED = (
+    "tests/substrate/test_codex_egress.py::test_no_private_locator_reaches_the_outcome[refused]"
+)
 ANSWER = "constructicon.substrate.executors.codex_protocol:_answer"
 ATTRIBUTED = "constructicon.substrate.executors.codex_protocol:_attributed"
 REROUTED = "constructicon.substrate.executors.codex_protocol:_rerouted_to"
@@ -194,6 +202,39 @@ N5_PROTOCOL = (
     ("N5-27 the drain transcribes the turn's evidence", AUDIT,
      "self._absorb(line, record)", "pass",
      ADAPTER + "test_turn_evidence_in_the_drain_is_folded_too"),
+    # --- N5 Stage 0b: the sealed effort, and relay denials in the provider ---
+    ("N5-30 the sealed configuration must name an effort", EFFORT,
+     'return _configured(configuration, "model_reasoning_effort")', 'return "low"',
+     ADAPTER + "test_an_unusable_configuration_is_refused_at_construction[no-effort]"),
+    ("N5-31 the sealed effort is one the profile accepts", CONSTRUCTOR,
+     "if self.configured_effort not in profile.accepted_efforts:", "if False:",
+     ADAPTER + "test_an_unusable_configuration_is_refused_at_construction[effort-not-accepted]"),
+    ("N5-32 a grant's effort must be the sealed one", EXECUTE,
+     "if grants.effort != self.provider.configured_effort:", "if False:",
+     ADAPTER + "test_a_grant_that_disagrees_with_the_configuration_is_refused[effort]"),
+    ("N5-33 a relay denial refuses the turn", BINDING,
+     "faults = conversation.faults + relay_faults(self.relay_denied)",
+     "faults = conversation.faults", EGRESS_REFUSED),
+    ("N5-34 the relay's denials are read however the exchange ends", EXCHANGE,
+     "self.relay_denied = relay.denied", "pass", EGRESS_REFUSED),
+    ("N5-35 any denial is a refusal", RELAY_FAULTS,
+     "return (RELAY_DENIAL_FAULT,) if denied else ()", "return ()", EGRESS_REFUSED),
+    # --- N5 Stage 0b: an unsealed backend stops the session (decision 2) ---
+    ("N5-36 every reading's routing is judged", GATE,
+     "return tuple(faults) + routing_faults(result)", "return tuple(faults)", UNSEALED),
+    ("N5-37 the routed origin must be the sealed one", ROUTING,
+     'routing.get("backendOrigin") == SEALED_BACKEND', "True",
+     UNSEALED + "[other-origin]"),
+    ("N5-38 the residency override must be a known literal", ROUTING,
+     ' and routing.get("accountRoutingOverride") in ROUTING_OVERRIDES', "",
+     UNSEALED + "[unknown-override]"),
+    # --- N5 Stage 0b: a synthesized total is no measurement ---
+    ("N5-39 a filled total makes the usage unknown", USAGE,
+     "if counts[:2] == (0, 0) and counts[2]:", "if False:",
+     PROTOCOL + "test_a_synthesized_total_makes_the_usage_unknown_not_zero"),
+    ("N5-40 a measured zero stays a measurement", USAGE,
+     "if counts[:2] == (0, 0) and counts[2]:", "if counts[:2] == (0, 0):",
+     PROTOCOL + "test_a_measured_total_of_nothing_is_still_a_measurement"),
 )  # fmt: skip
 
 ERROR_REPLY = PROTOCOL + "test_an_error_or_missing_result_refuses"

@@ -481,6 +481,12 @@ class EgressRelay:
         self._handlers: list[asyncio.Task[None]] = []
         self._clients: list[socket.socket] = []
 
+    @property
+    def denied(self) -> dict[str, int]:
+        """Every denial so far, by its fixed reason; empty when none occurred."""
+
+        return {key: count for key, count in self.observed.items() if key.startswith("denied:")}
+
     async def __aenter__(self) -> EgressSocket:
         if self._owner is not None:
             raise ContractViolation("a native egress relay is entered once")

@@ -3688,3 +3688,78 @@ The pass also found:
 - the `account/read` recovery tests;
 - `workspaceRouting` under decision 2;
 - the real-binary controls for trust roots and the voice host.
+
+### N5 Stage 0b: the rules at the pin
+
+Every vendor fact below was read at rust-v0.160.1 (`d27764b8`).
+
+**The sealed model and effort (decision 3).**
+- The production configuration names `model = "gpt-6.1-sol"` and `model_reasoning_effort = "low"`. These are the pinned catalog's newest `sol` at its lowest listed effort.
+- One pure rule, `codex_catalog.catalog_choice`, states the choice:
+  - "newest" orders by the numbers in the slug;
+  - efforts are ranked by name, never by their order in the catalog;
+  - a family with no listed model, or an effort outside the ranking, refuses.
+- A foundation test holds `PREPARE_MODEL` and `PREPARE_EFFORT` to that rule over the catalog CI installed. A bump that moves the choice must move them.
+- The bump tool's report reads the same rule.
+- The turn sends no effort, so the configuration decides it. The provider now:
+  - requires the configuration to name one the profile accepts;
+  - refuses a grant whose effort differs, or that names none.
+
+  This matters because Luna and Terra default to `medium`, so an unnamed effort would be the vendor's choice, not the grant's.
+
+**Relay denials in the provider (fact 9).**
+- `EgressRelay.denied` is the one reading of the relay's counters. The lane and the provider both use it.
+- The provider reads it however the exchange ends and refuses the turn's result on any denial, beside the conversation's own faults. A successful answer can no longer mask one.
+- The public fault is fixed text. The reason literals stay evidence. This reverses N4's "a denial must not be fatal to the turn", as the N5 design requires.
+
+**Identities in `check_evidence`.** The runbook's checker compares each lane record against what is installed:
+- its adapter and protocol revisions, against the installed controller's own constants;
+- its runtime digest, against the launch set's `runtime.json`;
+- its configuration digest, as before.
+
+Evidence from another build never passes, however clean its facts.
+
+**An unsealed backend stops the session (decision 2).**
+- An `account/read` reading's `workspaceRouting` moves model turns to its `backendOrigin`. It leaves account checks and rate limits on `chatgpt_base_url`, and the client checks no allowlist (`account_processor/workspace_routing.rs`).
+- Every reading now refuses unless the routing is one of:
+  - absent or null;
+  - exactly `https://chatgpt.com` with a known residency override (`NO_CONSTRAINT`, `us`, `us_cr`). The override only adds a header on the same host.
+- The fault names no origin.
+- The relay would deny such a destination anyway. This refuses before any turn.
+
+**Synthesized usage (fact 4).**
+- The pinned client synthesizes a total in one place only. `fill_to_context_window` (`protocol.rs:2316`) runs on `context_length_exceeded`, and it replaces the accumulated total with `{totalTokens: <context window>}` and every other count zero.
+- A total with tokens but neither input nor output is therefore a fill, not a measurement, and the fold reports the turn's usage as unknown, never zero. It is not damage.
+- A measured total of zero stays a measurement.
+
+**The provider's retries stay at the vendor defaults (owner decision, 2026-10-06, #78).**
+- Production sets neither `request_max_retries` nor `stream_max_retries`.
+- A built-in provider cannot be overridden from config, Bedrock aside: `merge_configured_model_providers` only inserts (`model-provider-info/src/lib.rs:691-726`). So `[model_providers.openai] request_max_retries = 0` would be silently ignored.
+- The defaults are 4 request and 5 stream retries, with a 200 ms base delay. A 429 is never retried; 5xx and transport errors are (`:64-65, 448-453`).
+- These retries happen within one `turn/start`, not across dispatches, and stay bounded by the stage deadlines.
+- The backend request count is unknown, with this budget stated. No bound is claimed that is not in force.
+
+**The seven features newly on by default since rust-v0.153.4.**
+- **Disabled: `system_proxy_fallback`.** It wraps the account and config-bundle GETs in a 5 s timeout and re-sends them through the system proxy, so their count and timing drift. Production sets it `false`.
+- **Left on, because none of them can connect, spawn, add a tool or add a request in this stdio recipe:**
+  - `daemon_auto_start` and `worktrees` are read only by the TUI or `codex exec`;
+  - `unified_exec_tty` and `write_stdin_approval` need the shell tools, which are off;
+  - `guardian_reuse_parent_compaction` acts only when approvals are reviewed, never under `never`;
+  - `realtime_conversation` is read only by the TUI. The real gate is the experimental-API opt-in, and this client sends no `thread/realtime/*` request.
+- `js_repl` and `apply_patch_freeform` are now removed features, so setting them is a no-op, still accepted by `--strict-config`. They stay as recorded intent.
+
+**The voice host.** The package's `codex-resources/voice/bin/codex-voice-host` is spawned only by the TUI. Neither app-server nor core references it, and `thread/realtime/start` opens connections but spawns no helper. This is proved from source, not from a real-binary control.
+
+**Trust roots.**
+- The zone sets `CODEX_CA_CERTIFICATE`; without it the client's default TLS found no roots (#77, S3).
+- That switches the HTTP stack to rustls, which adds the zone bundle and also the compiled-in Mozilla roots and the native roots (`http-client/src/custom_ca.rs:296-330`, reqwest `client.rs:683-702`). A TLS protocol-version fallback trusts the Mozilla set too.
+- So the variable widens trust rather than narrowing it. Trust roots are not a containment control here. The egress relay is: every connection must reach a sealed, address-pinned destination.
+- `linux.py`'s `TRUST_BUNDLE` now states this as proved, replacing "not proved".
+
+**Proof.**
+- Unit tests for each rule.
+- Mutants killed:
+  - N5-30 to N5-40 (effort, relay denial, routing, synthesized usage);
+  - N5-P4 and N5-P5 (the prepared effort, the proxy fallback);
+  - the catalog rule's five, now in `codex_catalog`.
+- The foundation lane checks the sealed literals against the installed catalog.
