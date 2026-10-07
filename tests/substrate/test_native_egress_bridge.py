@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import errno
 import gzip
+import hashlib
 import io
 import json
 import os
@@ -25,7 +26,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from constructicon.core.grants import Posture
 from constructicon.core.identity import Digest
+from constructicon.core.workspace import acquisition_id_for
 from constructicon.substrate.executors import codex, egress, operator_store
 from constructicon.substrate.executors._egress_bridge import PROXY_PORT
 from constructicon.substrate.executors.codex_lane import (
@@ -43,7 +46,14 @@ from constructicon.substrate.executors.codex_protocol import (
     ExpectedAccount,
 )
 from constructicon.substrate.executors.egress import identity_digests
-from constructicon.substrate.executors.linux import NativeVendor
+from constructicon.substrate.executors.linux import (
+    CATALOG_MOUNT,
+    ENVIRONMENTS_MOUNT,
+    NATIVE_ENVIRONMENTS,
+    NativeVendor,
+    sealed_catalog,
+)
+from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisition_guard
 from tests.native_startup import (
     BOOTSTRAP,
     MODELS,
@@ -68,6 +78,7 @@ from tests.substrate.test_native_egress_containment import controlled_peers as c
 from tests.substrate.test_native_egress_containment import pki as pki
 from tests.substrate.test_native_egress_containment import short_root as short_root
 from tests.substrate.test_operator_store_containment import binding as binding
+from tests.substrate.test_operator_store_containment import collect, hold, native_mount
 
 PROXY = f"http://127.0.0.1:{PROXY_PORT}"
 ZONE_ENVIRONMENT = {
@@ -386,6 +397,45 @@ def vendor_launcher(bridge_launcher):
     return replace(bridge_launcher, vendor=NativeVendor(
         launch / "native-codex", launch / "codex-models.json",
     ))
+
+
+ZONE_FILES = r"""
+import hashlib, json
+print(json.dumps({path: hashlib.sha256(open(path, 'rb').read()).hexdigest()
+                  for path in PATHS}), flush=True)
+"""
+
+
+async def test_a_vendored_native_zone_reads_the_seal_never_the_installed_catalog(
+    binding, vendor_launcher, tmp_path,
+):
+    """Production's own launch path, not a fixture (M8-N5-native-tool-inventory.md):
+    the zone's catalog is the launcher's seal of the launch set's catalog, the
+    digest the lane evidence records, and its environment file is the launcher's.
+    The placement lane proves what those bytes offer the model."""
+
+    paths = (CATALOG_MOUNT, ENVIRONMENTS_MOUNT)
+    source = ZONE_FILES.replace("PATHS", repr(paths))
+    held = await hold(binding)
+    try:
+        async with acquisition_guard(AcquisitionPaths(
+            tmp_path, acquisition_id_for("n5-seal-proof", 1),
+        )) as guard:
+            with native_mount(binding, held) as mount:
+                result = await vendor_launcher.exchange(
+                    ("/usr/bin/python3", "-I", "-c", source), workspace=None,
+                    posture=Posture.READ, guard_fds=(guard, held.lock_fd), timeout_s=10,
+                    conversation=collect, native_store=mount,
+                )
+    finally:
+        binding.close_held(held)
+    assert result.returncode == result.payload_returncode == 0, result
+    seen = json.loads(result.stdout)
+    installed = vendor_launcher.vendor.catalog.read_bytes()
+    assert seen[CATALOG_MOUNT] == hashlib.sha256(sealed_catalog(installed)).hexdigest()
+    assert seen[CATALOG_MOUNT] == vendor_executable(vendor_launcher).sealed_catalog_sha256
+    assert seen[CATALOG_MOUNT] != hashlib.sha256(installed).hexdigest()
+    assert seen[ENVIRONMENTS_MOUNT] == hashlib.sha256(NATIVE_ENVIRONMENTS).hexdigest()
 
 
 def test_the_production_configuration_is_the_reviewed_literal():

@@ -34,7 +34,8 @@ PROOFS = {
     ),
     "Prove the N4 proxy bridge in the native zone": (
         "foundation",
-        "tests/substrate/test_native_egress_bridge.py scripts/check_m8_n4_bridge_mutations.py",
+        "tests/substrate/test_native_egress_bridge.py scripts/check_m8_n4_bridge_mutations.py "
+        "scripts/check_m8_n5_inventory_mutations.py",
     ),
     "Prove bounded native startup without a provider route": (
         "lifecycle",

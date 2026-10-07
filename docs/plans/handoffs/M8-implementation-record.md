@@ -3810,3 +3810,10 @@ Design: [M8-N5-native-tool-inventory.md](M8-N5-native-tool-inventory.md), review
 - Mutants N5-L1 to N5-L3 and N5-I1 to N5-I9 are killed; two N3a mutants were re-anchored.
 
 **Not proved here.** Later requests after a remote compaction, which the probe provider cannot perform, and a hidden tool under a name not yet known. Both are recorded in the design under "What the lane cannot see".
+
+**Cross-review of the diff.** One Codex pass (`gpt-6-sol`, job `job_37134cdd5a1e`). Every premise was checked against the code.
+- **Adopted: the lanes never observed production's own seal.** The placement lane offers the model the image's baked seal, and the real-launcher lanes make no model request, so a `_launch` mounting the raw catalog would have passed every lane. A real-zone test now runs production's launch path with the launch set's vendor and checks the zone's catalog is exactly the seal (the digest the evidence records, never the installed bytes) and its environment file is the launcher's. Mutants N5-Z1 and N5-Z2, in the new in-zone inventory `check_m8_n5_inventory_mutations.py`, are its counterexamples. Together with the placement lane, both halves now meet at the same bytes: production mounts `sealed_catalog(installed)`, and those bytes offer nothing native.
+- **Recorded as a design choice: `argv` trusts the layout it is given.** It checks presence, not origin. The boundary is `exchange`, which seals the layout itself; no production caller reaches `argv` or `_run` with its own, and the review found none.
+- **Recorded, pre-existing: `check_evidence` does not compare `launch_revision`** with the installed launcher's. It recomputes the seal's digest from the launch set, which the zone test now ties to what is mounted.
+- **Recorded: no environment-only layer case.** The environment layer is shown holding `apply_patch` with the catalog layer also removed; alone it removes nothing the sealed catalog leaves.
+- **Verified by CI, not by review:** `--ro-bind-data` onto the runtime image's empty `CATALOG_MOUNT` works; the vendored startup lanes start from it under `--strict-config`.

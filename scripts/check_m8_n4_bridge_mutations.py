@@ -575,7 +575,7 @@ MUTANTS = (
         LAUNCHER + "LinuxLauncher.argv",
         '"--ro-bind", str(self.vendor.tree), VENDOR_MOUNT,',
         '"--bind", str(self.vendor.tree), VENDOR_MOUNT,',
-        V + "test_a_native_launch_binds_the_vendor_tree_and_catalog_read_only",
+        V + "test_a_native_launch_binds_the_vendor_tree_and_its_sealed_catalog_read_only",
     ),
     (
         "N4-V18 a native launch names the zone's trust store to the vendor",
@@ -583,7 +583,7 @@ MUTANTS = (
         '"--setenv", "CODEX_CA_CERTIFICATE", TRUST_BUNDLE,',
         "",
         "tests/substrate/test_native_store_launch.py::"
-        "test_the_native_layout_binds_two_descriptors_into_a_disposable_codex_home",
+        "test_the_native_layout_binds_its_descriptors_into_a_disposable_codex_home",
     ),
     (
         "N4-V13 the launch revision names the bound tree",

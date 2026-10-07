@@ -101,7 +101,7 @@ def test_native_store_and_worker_workspace_are_mutually_exclusive(tmp_path, monk
     try:
         launcher(tmp_path).argv(
             ("/usr/bin/python3",), workspace=tmp_path / "workspace", posture=Posture.READ,
-            native_store=mount(positive),
+            native_store=mount(positive), layout=LAYOUT,
         )
     except ContractViolation as exc:
         caught = exc

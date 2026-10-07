@@ -254,6 +254,15 @@ jobs:
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_native_egress_bridge.py \
               -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           uv run python scripts/check_m8_n4_bridge_mutations.py
+          # Production's own launch path, so these run in the zone the test above used.
+          sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
+            M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
+            M8_OPERATOR_STORE_REQUIRED=1 \
+            M8_OPERATOR_STORE_ROOT=/var/lib/constructicon-m8-launch/operator-stores \
+            M8_EGRESS_REQUIRED=1 M8_BRIDGE_REQUIRED=1 \
+            M8_BRIDGE_ROOT=/var/lib/constructicon-m8-launch/bridge-runtime \
+            PYTEST_ADDOPTS=-pno:cacheprovider \
+            "$PWD/.venv/bin/python" scripts/check_m8_n5_inventory_mutations.py
       - name: Prove bounded native startup without a provider route
         if: matrix.lane == 'lifecycle'
         shell: bash
