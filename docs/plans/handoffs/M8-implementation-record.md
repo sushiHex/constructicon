@@ -3845,3 +3845,10 @@ Design: [M8-N5-account-identity.md](M8-N5-account-identity.md), reviewed once by
 **Not proved here.** The production binding: Stage 3's assembly must take the seal from the generation's qualification evidence, checked against its sealed digest. A switch that only the vendor's hidden user id would show, or one made and undone between the two readings of a run.
 
 **Cross-review of the diff** (`gpt-6-sol`): three introduced findings adopted (the design's seal grammar wording; a custody test that argparse had hollowed out, which CI's mutant N4-L42 also caught; one routing assertion). One pre-existing item recorded for Stage 2: the runbook's S6b expects `account/read` to pass without `chatgpt.com`, but at rust-v0.160.1 `account/read` itself calls it, so S6b must be re-derived before the host session.
+
+### N5: S6b's shape at rust-v0.160.1
+
+The runbook's S6b removes `chatgpt.com` from the startup policy and expected `account/read` to pass and the rate-limit readback to be denied. At rust-v0.160.1 `account/read` itself checks the workspace at `chatgpt.com` (`app-server/src/request_processors/account_processor/workspace_routing.rs:295-325`), so the reading is denied at the relay and the run stops at the third method. Recorded by #128's diff review; fixed here before the Stage 2 host session would have tripped on it.
+
+- **Measured on the real binary.** A new `unrouted` case in the account-recovery lane runs S6b's exact policy with its declared denial. `account/read` is denied (`denied:destination`), no request reaches either host, the vendor reports "workspace routing discovery failed", nothing is refreshed, and the run stops at the third method with exactly the lane's stopped-gate faults and `NO_RESULT_FAULT`.
+- **The checker and runbook.** `check_evidence`'s `denial` mode now requires that shape: three methods, `gate` `{completed: false, plan: null, account: null}`, no readback, and that exact fault set with the destination denial. Its test scripts the vendor's error reading. The runbook says why, and its mode list now names `initial` and the account seal.

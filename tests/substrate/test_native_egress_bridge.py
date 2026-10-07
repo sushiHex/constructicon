@@ -826,12 +826,22 @@ async def test_the_zone_trust_store_decides_what_the_device_login_trusts(
 # --- account/read recovery (M8-N5-account-read-recovery.md) ---------------------
 
 
-def account_policy(connections: int) -> egress.EgressPolicy:
-    """Production's shape, both hosts at 443 pinned to the fake, under a bound."""
+def account_policy(connections: int, hosts=(native_account.BACKEND, native_account.ISSUER),
+                   ) -> egress.EgressPolicy:
+    """Production's shape, the hosts at 443 pinned to the fake, under a bound."""
     return egress.EgressPolicy(tuple(
-        egress.EgressDestination(host, 443, CONTROLLED)
-        for host in (native_account.BACKEND, native_account.ISSUER)
+        egress.EgressDestination(host, 443, CONTROLLED) for host in hosts
     ), connections)
+
+
+def case_policy(case: str) -> egress.EgressPolicy:
+    """``bounded`` narrows the bound; ``unrouted`` is the runbook's S6b policy,
+    which removes ``chatgpt.com``; every other case is production's."""
+    if case == "bounded":
+        return account_policy(BOUNDED_CONNECTIONS)
+    if case == "unrouted":
+        return account_policy(8, hosts=(native_account.ISSUER,))
+    return account_policy(8)
 
 
 @pytest.fixture
@@ -906,7 +916,7 @@ async def test_account_read_recovers_from_a_401_exactly_as_its_case_allows(
 
     monkeypatch.setattr(codex_lane.RecordingIO, "read", recording)
     inode = credential.stat().st_ino
-    policy = account_policy(BOUNDED_CONNECTIONS if case == "bounded" else 8)
+    policy = case_policy(case)
     peer = native_account.AccountPeer(case, Path(os.environ["M8_TRUST_PKI"]))
     try:
         async with active_custody(binding) as custody:
@@ -917,6 +927,7 @@ async def test_account_read_recovers_from_a_401_exactly_as_its_case_allows(
                 expected=native_account.STRANGER_ACCOUNT if case == "stranger"
                 else native_account.FIXTURE_ACCOUNT,
                 lane_dir=short_root / f"acct-{case}", deadline_s=45,
+                expect_denial=case == "unrouted",
             )
         assert await until(lambda: all(session["done"] for session in peer.sessions), 10)
     finally:
@@ -949,7 +960,7 @@ def judge(case, run, peer, errors, policy, credential, seeded, inode) -> None:
     denied = set(run["relay"]["denied"])
     assert {key.split(":", 1)[1] for key in run["relay"]["destinations"]} <= hosts, run["relay"]
     assert run["relay"]["closed"] is True, run["relay"]
-    assert denied <= {"denied:connection_bound"} and accepted <= policy.connections, run["relay"]
+    assert accepted <= policy.connections, run["relay"]
     # Each accepted connection is one answered session and one logged request:
     # a failed, unanswered or unlogged session cannot stand in for an answer.
     assert all(s["answered"] and s["alert"] is None and s["error"] is None
@@ -964,6 +975,19 @@ def judge(case, run, peer, errors, policy, credential, seeded, inode) -> None:
     assert stored["account_id"] == native_account.ACCOUNT_ID
     held = (native_account.classify(stored["access_token"], "access"),
             native_account.classify(stored["refresh_token"], "refresh"))
+    if case == "unrouted":
+        # The runbook's S6b: without chatgpt.com, account/read's own workspace
+        # check is denied at the relay. The reading fails before any request
+        # reaches a host, nothing is refreshed, and no readback is judged.
+        assert log == [] and peer.sessions == [], log
+        assert set(run["relay"]["denied"]) == {"denied:destination"}, run["relay"]
+        assert run["methods_sent"] == [named_method(method) for method in STARTUP_METHODS[:3]]
+        assert set(run["faults"]) == STOPPED | {NO_RESULT_FAULT}, run["faults"]
+        assert run["gate"] == {"completed": False, "plan": None, "account": None}, run["gate"]
+        assert run["readback"] is None and errors == [DISCOVERY_FAILED], errors
+        assert credential.read_bytes() == seeded
+        return
+    assert denied <= {"denied:connection_bound"}, run["relay"]
     # Every case opens as the pin's recovery does: the old bearer's check 401,
     # the reload, its check 401 again, then one refresh with the old token. What
     # follows races among the vendor's three discovery callers, so it is asserted
