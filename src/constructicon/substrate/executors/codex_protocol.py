@@ -88,7 +88,7 @@ from constructicon.core.executor import (
     Usage,
 )
 from constructicon.core.grants import EffectiveGrants
-from constructicon.core.identity import parse_json_value
+from constructicon.core.identity import Digest, digest, parse_json_value
 
 READ_WINDOW = 8192
 """The launcher's hard per-read ceiling; ``read`` accepts only 1 through this."""
@@ -726,22 +726,73 @@ class ExpectedAccount:
     literal it observes becomes the sole ``plan_type`` of every later run
     (M8-N4-state-review.md, orchestrator decision 1). Production assembly
     passes none.
+
+    ``identity`` is the account itself (``account_identity``). It is ``None``
+    for qualification alone: its first reading's identity is then sealed for the
+    run, beside its plan, and becomes every later run's (M8-N5-account-identity.md).
     """
 
     plan_type: str
     account_type: Literal["chatgpt"] = "chatgpt"
     alternatives: tuple[str, ...] = ()
+    identity: Digest | None = None
 
     def __post_init__(self) -> None:
-        if not self.plan_type.strip():
+        if not self.plan_type.strip() or "/" in self.plan_type:
             raise ValueError("an expected account requires the plan recorded at provisioning")
         if type(self.alternatives) is not tuple or not all(
             type(item) is str and item.strip() for item in self.alternatives
         ):
             raise ValueError("expected plan alternatives are non-empty literals")
+        if self.identity is not None and type(self.identity) is not Digest:
+            raise ValueError("an expected account's identity is a digest")
 
     def accepts(self, plan: Any) -> bool:
         return type(plan) is str and (plan == self.plan_type or plan in self.alternatives)
+
+    @property
+    def seal(self) -> str:
+        """The one token the runbook carries: ``<plan>/<identity>``."""
+        if self.identity is None or self.alternatives:
+            raise ValueError("only a sealed account, one plan and its identity, has a seal")
+        return f"{self.plan_type}/{self.identity.root}"
+
+    @classmethod
+    def from_seal(cls, token: str) -> ExpectedAccount:
+        """Exactly the grammar ``seal`` renders: a plan, one slash, a canonical digest.
+
+        Each half validates itself: the plan refuses an empty literal, and the
+        digest refuses anything but ``sha256:`` and 64 lowercase hex, so a token
+        with no slash or a second one cannot parse.
+        """
+        plan, _, identity = token.partition("/")
+        return cls(plan_type=plan, identity=Digest(identity))
+
+
+ACCOUNT_IDENTITY_DOMAIN = "codex-account-identity"
+NO_IDENTITY_FAULT = "the reading names no login and workspace to bind"
+IDENTITY_FAULT = "the account is not the one this binding sealed"
+
+
+def account_identity(reply: Any) -> Digest | None:
+    """The account a reading names, as a digest, or ``None`` if it names none.
+
+    The wire names an account by two facts only: ``account.email``, the login,
+    and ``workspaceRouting.chatgptAccountId``, the workspace (``v2/account.rs``
+    ``:29-36``, ``:557-571`` at rust-v0.160.1). The vendor's internal user id is
+    not on the wire. Neither value is kept: reversing the digest means guessing
+    both the email and the workspace id.
+    """
+
+    result = _result_object(reply)
+    if result is None:
+        return None
+    account, routing = result.get("account"), result.get("workspaceRouting")
+    email = account.get("email") if isinstance(account, Mapping) else None
+    workspace = routing.get("chatgptAccountId") if isinstance(routing, Mapping) else None
+    if not (isinstance(email, str) and email and isinstance(workspace, str) and workspace):
+        return None
+    return digest(ACCOUNT_IDENTITY_DOMAIN, 1, {"email": email, "workspace": workspace})
 
 
 def updated_plan(record: Mapping[str, Any], expected: ExpectedAccount) -> str | None:
@@ -891,6 +942,14 @@ def account_faults(reply: Any, expected: ExpectedAccount) -> tuple[str, ...]:
     faults: list[str] = []
     if known is None:
         faults.append(NO_ACCOUNT_FAULT)
+    if known is not None and known.get(ACCOUNT_TYPE_KEY) == expected.account_type:
+        # Judged only for the expected kind of account: NO_ACCOUNT_FAULT and the
+        # type fault refuse the rest.
+        identity = account_identity(reply)
+        if identity is None:
+            faults.append(NO_IDENTITY_FAULT)
+        elif expected.identity is not None and identity != expected.identity:
+            faults.append(IDENTITY_FAULT)
     if known is not None and known.get(ACCOUNT_TYPE_KEY) != expected.account_type:
         faults.append(
             f"account type {named_value(known.get(ACCOUNT_TYPE_KEY))} is not the "

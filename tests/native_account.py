@@ -20,6 +20,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from constructicon.substrate.executors.codex_protocol import ExpectedAccount, account_identity
+
 BACKEND, ISSUER = "chatgpt.com", "auth.openai.com"
 LEAVES = {BACKEND: "backend", ISSUER: "issuer"}
 """The trust fixture's leaf for each host (``scripts/ci/build_m8_trust_fixture.py``)."""
@@ -30,8 +32,10 @@ RESET_CREDITS = "/backend-api/wham/rate-limit-reset-credits"
 TOKEN = "/oauth/token"
 
 ACCOUNT_ID, USER_ID, OTHER_USER_ID = "acct-fixture", "user-fixture", "user-other"
-CASES = ("clean", "refused", "unauthorized", "bounded", "changed", "unsealed")
-"""``bounded`` answers as ``unauthorized`` does, under a smaller egress bound."""
+EMAIL = "fixture@example.invalid"
+CASES = ("clean", "refused", "unauthorized", "bounded", "changed", "unsealed", "stranger")
+"""``bounded`` answers as ``unauthorized`` does, under a smaller egress bound;
+``stranger`` as ``clean`` does, for a binding sealed to another login."""
 
 
 def _segment(value: dict[str, Any]) -> str:
@@ -51,7 +55,7 @@ proactive-refresh window, so a generation's token is the same string each time."
 
 
 def id_token(user: str = USER_ID) -> str:
-    return jwt({"email": "fixture@example.invalid", "exp": EXPIRY,
+    return jwt({"email": EMAIL, "exp": EXPIRY,
                 "https://api.openai.com/auth": {
                     "chatgpt_plan_type": "pro", "chatgpt_user_id": user,
                     "chatgpt_account_id": ACCOUNT_ID}})
@@ -74,6 +78,18 @@ class Tokens:
 
 
 OLD, NEW, OTHER = Tokens("old"), Tokens("new"), Tokens("other", OTHER_USER_ID)
+
+
+def sealed(email: str) -> ExpectedAccount:
+    """A binding sealed to ``email`` in the fixture's workspace, built as production
+    builds the identity it compares (``account_identity``)."""
+
+    identity = account_identity({"result": {
+        "account": {"email": email}, "workspaceRouting": {"chatgptAccountId": ACCOUNT_ID}}})
+    return ExpectedAccount(plan_type="pro", identity=identity)
+
+
+FIXTURE_ACCOUNT, STRANGER_ACCOUNT = sealed(EMAIL), sealed("stranger@example.invalid")
 
 
 def fixture_tokens() -> list[str]:

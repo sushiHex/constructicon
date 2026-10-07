@@ -28,11 +28,14 @@ from constructicon.core.errors import ContractViolation
 from constructicon.core.identity import digest
 from constructicon.substrate.executors import codex_lane, operator_store
 from constructicon.substrate.executors.codex_lane import write_evidence
-from constructicon.substrate.executors.codex_protocol import ExpectedAccount
+from constructicon.substrate.executors.codex_protocol import (
+    ACCOUNT_IDENTITY_DOMAIN,
+    ExpectedAccount,
+)
 from constructicon.substrate.executors.linux import sealed_catalog
 from tests.operator_store_world import StoreWorld
 from tests.substrate import test_codex_lane as fake_lane
-from tests.substrate.test_codex_protocol import spend_result
+from tests.substrate.test_codex_protocol import IDENTITY, spend_result
 
 ROOT = Path(__file__).parents[1]
 RUNBOOK = ROOT / "docs" / "plans" / "handoffs" / "M8-N4-operator-commands.md"
@@ -372,7 +375,7 @@ async def test_documented_checker_refuses_evidence_of_an_earlier_schema(
     write_evidence(path, evidence)
     assert _check_evidence("qualify", path, "maintenance", "-", policy, directory).returncode == 0
     raw = json.loads(path.read_text(encoding="utf-8"))
-    assert raw["schema_version"] == codex_lane.LANE_SCHEMA == 3
+    assert raw["schema_version"] == codex_lane.LANE_SCHEMA == 4
     raw["schema_version"] = 2
     path.write_text(json.dumps(raw), encoding="utf-8")
     assert _check_evidence("qualify", path, "maintenance", "-", policy, directory).returncode != 0
@@ -437,6 +440,14 @@ def _active_lane(directory: Path, native: object, *, during=None, writes=None) -
     return lane
 
 
+def seal(plan: str, identity=IDENTITY) -> str:
+    """The token the runbook carries for this plan and the fake's account."""
+    return ExpectedAccount(plan_type=plan, identity=identity).seal
+
+
+OTHER_ACCOUNT = digest(ACCOUNT_IDENTITY_DOMAIN, 1, {"email": "x@example.invalid", "workspace": "y"})
+
+
 @pytest.mark.parametrize("plan", ["pro", "prolite"])
 async def test_documented_checker_accepts_actual_active_startup(
     evidence_world: tuple[Path, Path], plan: str,
@@ -444,16 +455,22 @@ async def test_documented_checker_accepts_actual_active_startup(
     directory, policy = evidence_world
     lane = _active_lane(directory, fake_lane.plan_native(plan))
     _, evidence = await fake_lane.startup(
-        directory, lane=lane, expected=ExpectedAccount(plan_type=plan),
+        directory, lane=lane, expected=ExpectedAccount(plan_type=plan, identity=IDENTITY),
     )
     path = directory / "active.json"
     revision = write_evidence(path, evidence)
-    result = _check_evidence("active", path, "active", plan, policy, directory)
+    result = _check_evidence("active", path, "active", seal(plan), policy, directory)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == str(revision)
     assert _check_evidence("active", path, "active", "wrong", policy, directory).returncode != 0
-    assert _check_evidence("active", path, "maintenance", plan, policy, directory).returncode != 0
-    assert _check_evidence("qualify", path, "active", plan, policy, directory).returncode != 0
+    # The account, not just the plan: another account's seal, or none, never passes.
+    for mode, custody, expected in (
+        ("active", "maintenance", seal(plan)), ("qualify", "active", seal(plan)),
+        ("active", "active", seal(plan, OTHER_ACCOUNT)), ("active", "active", "-"),
+        ("active", "active", plan),
+    ):
+        refused = _check_evidence(mode, path, custody, expected, policy, directory)
+        assert refused.returncode != 0, (mode, custody, expected)
 
 
 async def test_documented_checker_accepts_actual_login_record(
@@ -476,15 +493,15 @@ async def test_documented_checker_accepts_actual_wrong_plan_refusal(
     directory, policy = evidence_world
     lane = _active_lane(directory, fake_lane.plan_native(plan))
     _, evidence = await fake_lane.startup(
-        directory, lane=lane, expected=ExpectedAccount(plan_type="plus"),
+        directory, lane=lane, expected=ExpectedAccount(plan_type="plus", identity=IDENTITY),
     )
     assert evidence["faults"], "the scripted peer did not produce a refusal"
     path = directory / "wrongplan.json"
     revision = write_evidence(path, evidence)
-    result = _check_evidence("wrongplan", path, "active", plan, policy, directory)
+    result = _check_evidence("wrongplan", path, "active", seal(plan), policy, directory)
     assert result.returncode == 0, (result.stderr, evidence["faults"])
     assert result.stdout.strip() == str(revision)
-    assert _check_evidence("active", path, "active", plan, policy, directory).returncode != 0
+    assert _check_evidence("active", path, "active", seal(plan), policy, directory).returncode != 0
 
 
 async def test_documented_checker_accepts_actual_readback_denial_refusal(
@@ -499,16 +516,16 @@ async def test_documented_checker_accepts_actual_readback_denial_refusal(
     native.spends = [{"error": {"code": -32000, "message": "denied by fake relay"}}]
     lane = _active_lane(directory, native, during=denied)
     _, evidence = await fake_lane.startup(
-        directory, lane=lane, expected=ExpectedAccount(plan_type="pro"),
+        directory, lane=lane, expected=ExpectedAccount(plan_type="pro", identity=IDENTITY),
         expect_denial=True,
     )
     assert evidence["faults"], "the scripted peer did not produce a refusal"
     path = directory / "denial.json"
     revision = write_evidence(path, evidence)
-    result = _check_evidence("denial", path, "active", "pro", policy, directory)
+    result = _check_evidence("denial", path, "active", seal("pro"), policy, directory)
     assert result.returncode == 0, (result.stderr, evidence["faults"])
     assert result.stdout.strip() == str(revision)
-    assert _check_evidence("active", path, "active", "pro", policy, directory).returncode != 0
+    assert _check_evidence("active", path, "active", seal("pro"), policy, directory).returncode != 0
 
 
 async def test_documented_checker_accepts_actual_maintenance_hold(
@@ -531,9 +548,11 @@ async def test_documented_checker_accepts_actual_maintenance_hold(
     assert observed == [90] and evidence["faults"] == []
     path = directory / "hold.json"
     revision = write_evidence(path, evidence)
-    result = _check_evidence("hold", path, "maintenance", "-", policy, directory)
+    result = _check_evidence("hold", path, "maintenance", seal("pro"), policy, directory)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == str(revision)
+    # Only the first qualification and a login are checked without a seal.
+    assert _check_evidence("hold", path, "maintenance", "-", policy, directory).returncode != 0
 
 
 async def test_documented_checker_accepts_actual_measured_refresh_shape(
@@ -546,11 +565,11 @@ async def test_documented_checker_accepts_actual_measured_refresh_shape(
 
     lane = _active_lane(directory, fake_lane.plan_native("pro"), during=refresh, writes=True)
     _, evidence = await fake_lane.startup(
-        directory, lane=lane, expected=ExpectedAccount(plan_type="pro"),
+        directory, lane=lane, expected=ExpectedAccount(plan_type="pro", identity=IDENTITY),
     )
     assert evidence["refresh"] == "measured" and evidence["faults"] == []
     path = directory / "refresh.json"
     revision = write_evidence(path, evidence)
-    result = _check_evidence("refresh", path, "active", "pro", policy, directory)
+    result = _check_evidence("refresh", path, "active", seal("pro"), policy, directory)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == str(revision)

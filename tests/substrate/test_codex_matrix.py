@@ -54,6 +54,7 @@ from tests.substrate.test_codex_adapter import (
 from tests.substrate.test_codex_adapter import portable_binding as portable_binding
 from tests.substrate.test_codex_adapter import substituted_guard as substituted_guard
 from tests.substrate.test_codex_protocol import (
+    IDENTITY,
     PLANTED,
     assert_published_surfaces_are_bounded,
     completed,
@@ -92,7 +93,7 @@ def overage_provider(posture, overage, plan, *, binding=None):
             authenticated_startup_conformance_revision=digest("test-codex-startup", 1, "x"),
             subscription_mode_conformance_revision=digest("test-codex-mode", 1, "x"),
         ),
-        expected_account=ExpectedAccount(plan_type=plan), binary=BINARY,
+        expected_account=ExpectedAccount(plan_type=plan, identity=IDENTITY), binary=BINARY,
         configuration=CONFIGURATION, catalog=catalog,
         acquisition_root=ACQUISITION_ROOT if binding is None else binding[2],
         unavailable_reasons=(),

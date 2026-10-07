@@ -72,15 +72,18 @@ check_evidence() {
   "${SERVICE[@]}" /usr/bin/python3 -I -S -B -c 'import hashlib, json, stat, sys
 from pathlib import Path
 sys.path.insert(0, "/opt/constructicon-m8-controller")
-from constructicon.core.identity import canonical_json, digest
+from constructicon.core.identity import Digest, canonical_json, digest
 from constructicon.substrate.executors.codex_lane import (EVIDENCE_DOMAIN, LANE_SCHEMA, LOGIN_FIELDS, STARTUP_FIELDS, STARTUP_METHODS, QUALIFICATION_PLANS, configuration_digest, _policy)
-from constructicon.substrate.executors.codex_protocol import SPEND_FIELDS, USAGE_FIELDS, SPEND_UNREADABLE_FAULT, named_method, named_value
+from constructicon.substrate.executors.codex_protocol import SPEND_FIELDS, USAGE_FIELDS, SPEND_UNREADABLE_FAULT, ExpectedAccount, named_method, named_value
 from constructicon.substrate.executors.egress import identity_digests
 from constructicon.substrate.executors.linux import sealed_catalog
 from constructicon.substrate.executors.codex import ADAPTER_REVISION, PROTOCOL_REVISION
 mode, name, custody, expected, policy_name, directory, launch_root = sys.argv[1:]
 def require(value):
     if not value: raise ValueError("lane evidence lacks an affirmative required fact")
+seal = None if expected == "-" else ExpectedAccount.from_seal(expected)
+require(seal is not None or mode in ("login", "qualify"))
+require(seal is None or seal.plan_type in QUALIFICATION_PLANS)
 path = Path(name)
 info = path.stat()
 require(stat.S_ISREG(info.st_mode) and info.st_size <= 1048576 and info.st_size > 0)
@@ -133,27 +136,30 @@ if login:
 else:
     methods = [named_method(item) for item in STARTUP_METHODS]
     require(type(e["methods_sent"]) is list and type(e["withheld_methods"]) is list)
-    require(type(e["gate"]) is dict and set(e["gate"]) == {"completed", "plan"})
+    require(type(e["gate"]) is dict and set(e["gate"]) == {"completed", "plan", "account"})
+    account = e["gate"]["account"]
+    require(account is None or Digest(account).root == account)
     require(e["observation"] == {"malformed_records": 0, "first_error": False})
     require(e["refresh"] in ("measured", "unmeasured"))
     require(e["hold_s"] == (90 if mode == "hold" else 0))
     if mode == "wrongplan":
-        require(custody == "active" and expected in QUALIFICATION_PLANS)
-        require(e["methods_sent"] == methods[:3] and e["gate"] == {"completed": False, "plan": None} and e["readback"] is None)
-        wrong_plan = "account plan " + named_value(expected) + " is not the expected " + repr("plus")
+        require(custody == "active" and seal is not None)
+        require(e["methods_sent"] == methods[:3] and e["gate"] == {"completed": False, "plan": None, "account": seal.identity.root} and e["readback"] is None)
+        wrong_plan = "account plan " + named_value(seal.plan_type) + " is not the expected " + repr("plus")
         required_faults = {wrong_plan, "the startup gate did not complete", "the startup did not send exactly the four authorized methods", "no spend readback was judged"}
         require(set(e["faults"]) == required_faults and len(e["faults"]) == len(required_faults))
         require(e["relay"]["denied"] == {})
     elif mode == "denial":
-        require(custody == "active" and expected in QUALIFICATION_PLANS)
-        require(e["methods_sent"] == methods and e["gate"] == {"completed": False, "plan": expected} and e["readback"] is None)
+        require(custody == "active" and seal is not None)
+        require(e["methods_sent"] == methods and e["gate"] == {"completed": False, "plan": seal.plan_type, "account": seal.identity.root} and e["readback"] is None)
         required_faults = {SPEND_UNREADABLE_FAULT, "the startup gate did not complete", "no spend readback was judged"}
         require(set(e["faults"]) == required_faults and len(e["faults"]) == len(required_faults))
         require(set(e["relay"]["denied"]) == {"denied:destination"} and e["relay"]["denied"]["denied:destination"] >= 1)
     else:
         require(mode in ("qualify", "hold", "active", "refresh") and e["faults"] == [])
         require(e["methods_sent"] == methods and e["gate"]["completed"] is True)
-        require(e["gate"]["plan"] in QUALIFICATION_PLANS and (expected == "-" or e["gate"]["plan"] == expected))
+        require(e["gate"]["plan"] in QUALIFICATION_PLANS and account is not None)
+        require(seal is None or (e["gate"]["plan"], account) == (seal.plan_type, seal.identity.root))
         require(type(e["readback"]) is dict and set(e["readback"]) == set(SPEND_FIELDS) | set(USAGE_FIELDS))
         require(e["readback"]["spend_control_reached"] is False or e["readback"]["spend_control_reached"] is None)
         require(e["relay"]["denied"] == {})
@@ -183,15 +189,17 @@ save_sealed() {
   test "$#" -eq 1
   "${SERVICE[@]}" /bin/sh -c 'set -Ceu; umask 077; cat >"$1"' sh "$1"
 }
-read_plan() {
+read_seal() {
   test "$#" -eq 1
   "${SERVICE[@]}" /usr/bin/python3 -I -S -B -c 'import json, sys
 from pathlib import Path
 sys.path.insert(0, "/opt/constructicon-m8-controller")
+from constructicon.core.identity import Digest
 from constructicon.substrate.executors.codex_lane import QUALIFICATION_PLANS
-plan = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["gate"]["plan"]
-if plan not in QUALIFICATION_PLANS: raise ValueError("qualification has no approved plan literal")
-print(plan)' "$1" < /dev/null
+from constructicon.substrate.executors.codex_protocol import ExpectedAccount
+gate = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["gate"]
+if gate["plan"] not in QUALIFICATION_PLANS: raise ValueError("qualification has no approved plan literal")
+print(ExpectedAccount(plan_type=gate["plan"], identity=Digest(gate["account"])).seal)' "$1" < /dev/null
 }
 binding_check() {
   test "$#" -eq 3
@@ -237,14 +245,14 @@ asyncio.run(check())' "$R" "$K" "$1" "$2" "$3" < /dev/null | /usr/bin/grep -qxF 
 }
 load_s4_plan() {
   check_evidence qualify "$W/s4-qualification.json" maintenance - "$W/startup-policy.json" > /dev/null
-  S4_PLAN="$(read_plan "$W/s4-qualification.json")"
+  S4_SEAL="$(read_seal "$W/s4-qualification.json")"
 }
 load_final_qualification() {
   load_s4_plan
-  Q="$(check_evidence hold "$W/s6a-qualification.json" maintenance "$S4_PLAN" "$W/startup-policy.json")"
+  Q="$(check_evidence hold "$W/s6a-qualification.json" maintenance "$S4_SEAL" "$W/startup-policy.json")"
   test "${Q#sha256:}" != "$Q" && test "${#Q}" -eq 71
-  PLAN="$(read_plan "$W/s6a-qualification.json")"
-  test "$PLAN" = "$S4_PLAN"
+  SEAL="$(read_seal "$W/s6a-qualification.json")"
+  test "$SEAL" = "$S4_SEAL"
 }
 ```
 
@@ -362,7 +370,7 @@ The checked evidence contains the observed plan and a judged spend readback.
   --configuration "$W/config.toml" --policy "$W/startup-policy.json" \
   --lane-dir "$W/s4-lane" --evidence "$W/s4-qualification.json" < /dev/null
 check_evidence qualify "$W/s4-qualification.json" maintenance - "$W/startup-policy.json" > /dev/null
-S4_PLAN="$(read_plan "$W/s4-qualification.json")"
+S4_SEAL="$(read_seal "$W/s4-qualification.json")"
 ```
 
 ### S6a. Maintenance-lock positive control
@@ -408,7 +416,7 @@ fi
 printf '%s\n' "$SECOND" | /usr/bin/tail -n 1 | \
   /usr/bin/grep -qxF 'constructicon.core.errors.ContractViolation: native store retained lock is held'
 wait "$H"
-check_evidence hold "$W/s6a-qualification.json" maintenance "$S4_PLAN" "$W/startup-policy.json" > /dev/null
+check_evidence hold "$W/s6a-qualification.json" maintenance "$S4_SEAL" "$W/startup-policy.json" > /dev/null
 ```
 
 The probe observes a held lock, not its owner. The first lane's completed
@@ -445,17 +453,18 @@ binding_check "$W/g1.sealed.json" stale-generation "$W/g2.sealed.json"
 
 ### S8. Active startup and S6b/S6c refusals
 
-The active startup uses the exact observed `PLAN` and the S1 policy. Then
+The active startup uses the exact observed `SEAL`, the plan and account
+qualification sealed (M8-N5-account-identity.md), and the S1 policy. Then
 run the two separately declared refusals. A refusal passes only if its
 completed evidence has the specific faults and facts checked below.
 
 ```bash
 load_final_qualification
 "${SERVICE[@]}" "${LANE[@]}" startup --custody active --store-root "$R" --key "$K" \
-  --sealed "$W/g2.sealed.json" --expected "$PLAN" --launch-root "$L" \
+  --sealed "$W/g2.sealed.json" --expected "$SEAL" --launch-root "$L" \
   --configuration "$W/config.toml" --policy "$W/startup-policy.json" \
   --lane-dir "$W/s8-lane" --evidence "$W/s8-active.json" < /dev/null
-check_evidence active "$W/s8-active.json" active "$PLAN" "$W/startup-policy.json" > /dev/null
+check_evidence active "$W/s8-active.json" active "$SEAL" "$W/startup-policy.json" > /dev/null
 "${SERVICE[@]}" /usr/bin/python3 -I -S -B -c 'import json, os, sys
 from pathlib import Path
 p = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
@@ -467,23 +476,24 @@ with open(sys.argv[2], "x", encoding="utf-8") as stream:
     json.dump(p, stream, sort_keys=True); stream.write("\n"); stream.flush(); os.fsync(stream.fileno())' \
   "$W/startup-policy.json" "$W/s6b-no-chatgpt-policy.json" < /dev/null
 if "${SERVICE[@]}" "${LANE[@]}" startup --custody active --store-root "$R" --key "$K" \
-  --sealed "$W/g2.sealed.json" --expected "$PLAN" --launch-root "$L" \
+  --sealed "$W/g2.sealed.json" --expected "$SEAL" --launch-root "$L" \
   --configuration "$W/config.toml" --policy "$W/s6b-no-chatgpt-policy.json" \
   --lane-dir "$W/s6b-lane" --evidence "$W/s6b-denial.json" --expect-denial \
   < /dev/null; then echo 'S6b unexpectedly accepted' >&2; exit 1; else test "$?" -eq 1; fi
-check_evidence denial "$W/s6b-denial.json" active "$PLAN" "$W/s6b-no-chatgpt-policy.json" > /dev/null
+check_evidence denial "$W/s6b-denial.json" active "$SEAL" "$W/s6b-no-chatgpt-policy.json" > /dev/null
 if "${SERVICE[@]}" "${LANE[@]}" startup --custody active --store-root "$R" --key "$K" \
-  --sealed "$W/g2.sealed.json" --expected plus --launch-root "$L" \
+  --sealed "$W/g2.sealed.json" --expected "plus/${SEAL#*/}" --launch-root "$L" \
   --configuration "$W/config.toml" --policy "$W/startup-policy.json" \
   --lane-dir "$W/s6c-lane" --evidence "$W/s6c-plan-refusal.json" \
   < /dev/null; then echo 'S6c unexpectedly accepted' >&2; exit 1; else test "$?" -eq 1; fi
-check_evidence wrongplan "$W/s6c-plan-refusal.json" active "$PLAN" "$W/startup-policy.json" > /dev/null
+check_evidence wrongplan "$W/s6c-plan-refusal.json" active "$SEAL" "$W/startup-policy.json" > /dev/null
 binding_check "$W/g1.sealed.json" stale-generation "$W/g2.sealed.json"
 ```
 
 S6b's policy removes `chatgpt.com`, so the rate-limit readback is denied.
-S6c sends `--expected plus`, so the observed approved plan refuses at the
-account gate. Both methods lists are checked using the producer's
+S6c sends the sealed identity with the plan `plus`, so the observed approved
+plan alone refuses at the account gate. Both methods lists are checked using
+the producer's
 `named_method` representation. Neither path sends `thread/start`.
 
 ### S9. Restart
@@ -503,7 +513,7 @@ preflight before any store operation.
 
 Run S9's bash script through a new, noninteractive SSH session. The common
 setup is loaded again, but S1 and provisioning are not repeated. Recompute
-`Q` and `PLAN` from S4 and S6a's retained checked records. Require the bare
+`Q` and `SEAL` from S4 and S6a's retained checked records. Require the bare
 host drift check again before any store or lane operation. Before maintenance,
 the old binding must refuse for the specific boot-bound anchor reason.
 Root's publish helper must also refuse before re-anchoring; its failure output
@@ -525,7 +535,7 @@ printf '%s\n' "$PREANCHOR" | /usr/bin/tail -n 1 | \
   "${LANE[@]}" startup --launch-root "$L" \
   --configuration "$W/config.toml" --policy "$W/startup-policy.json" \
   --lane-dir "$W/s9-lane" --evidence "$W/s9-qualification.json" < /dev/null
-Q3="$(check_evidence qualify "$W/s9-qualification.json" maintenance "$PLAN" "$W/startup-policy.json")"
+Q3="$(check_evidence qualify "$W/s9-qualification.json" maintenance "$SEAL" "$W/startup-policy.json")"
 test "${Q3#sha256:}" != "$Q3" && test "${#Q3}" -eq 71
 "${ROOT_STORE[@]}" publish --store-root "$R" --key "$K" --generation 3 \
   --qualification-evidence-digest "$Q3" --service m8-service --wait 0 \
@@ -537,10 +547,10 @@ check_sealed "$W/g3.sealed.json" "$Q3"
 binding_check "$W/g3.sealed.json" accepted -
 binding_check "$W/g2.sealed.json" stale-generation "$W/g3.sealed.json"
 "${SERVICE[@]}" "${LANE[@]}" startup --custody active --store-root "$R" --key "$K" \
-  --sealed "$W/g3.sealed.json" --expected "$PLAN" --launch-root "$L" \
+  --sealed "$W/g3.sealed.json" --expected "$SEAL" --launch-root "$L" \
   --configuration "$W/config.toml" --policy "$W/startup-policy.json" \
   --lane-dir "$W/s9-active-lane" --evidence "$W/s9-active.json" < /dev/null
-check_evidence active "$W/s9-active.json" active "$PLAN" "$W/startup-policy.json" > /dev/null
+check_evidence active "$W/s9-active.json" active "$SEAL" "$W/startup-policy.json" > /dev/null
 ```
 
 The S9 readback and relay record show whether S1's fixed pins still served
@@ -551,7 +561,7 @@ the readback is a failed qualification, not a cue to change policy in place.
 
 At least 24 hours after the S3 timestamp, within the same authorization, run
 S10's bash script through a new, noninteractive SSH session. The common setup
-is loaded again; `PLAN` and `S4_PLAN` are recomputed from the retained checked
+is loaded again; `SEAL` and `S4_SEAL` are recomputed from the retained checked
 S4/S6a records. Require the bare host drift check again before the startup.
 Run one active g3 startup. The time check deliberately starts from the timestamp
 written after S3's affirmative login, so it cannot overstate elapsed time.
@@ -570,10 +580,10 @@ since = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
 if datetime.now(UTC) - since < timedelta(hours=24): raise ValueError("24 hours have not elapsed")
 print("refresh-time-met")' "$W/s3-completed-at.utc" < /dev/null | /usr/bin/grep -qxF refresh-time-met
 "${SERVICE[@]}" "${LANE[@]}" startup --custody active --store-root "$R" --key "$K" \
-  --sealed "$W/g3.sealed.json" --expected "$PLAN" --launch-root "$L" \
+  --sealed "$W/g3.sealed.json" --expected "$SEAL" --launch-root "$L" \
   --configuration "$W/config.toml" --policy "$W/startup-policy.json" \
   --lane-dir "$W/s10-lane" --evidence "$W/s10-refresh.json" < /dev/null
-check_evidence refresh "$W/s10-refresh.json" active "$PLAN" "$W/startup-policy.json" > /dev/null
+check_evidence refresh "$W/s10-refresh.json" active "$SEAL" "$W/startup-policy.json" > /dev/null
 ```
 
 If the last checker refuses, retain the completed evidence as *unmeasured*.

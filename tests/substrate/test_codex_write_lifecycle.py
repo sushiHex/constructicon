@@ -50,6 +50,7 @@ from tests.substrate.test_codex_adapter import (
     codex_profile,
     context,
 )
+from tests.substrate.test_codex_protocol import managed
 
 CALL_ID = "write-call-1"
 REQUEST_ID = "write-request-1"
@@ -86,10 +87,8 @@ async def test_lost_callback_response_never_replays_the_spent_write_call():
 
     native = ResponseLossNative(
         accounts=[
-            {"result": {"account": {"type": "chatgpt", "planType": "pro"},
-                        "requiresOpenaiAuth": True}},
-            {"result": {"account": {"type": "chatgpt", "planType": "pro"},
-                        "requiresOpenaiAuth": True}},
+            {"result": managed()},
+            {"result": managed()},
         ],
         records=[CALL],
     )
@@ -121,8 +120,7 @@ async def test_native_eof_cancels_a_callback_that_is_still_running():
     """A dead native peer may not leave its owned WRITE worker running."""
 
     native = ScriptedNative(
-        accounts=[{"result": {"account": {"type": "chatgpt", "planType": "pro"},
-                              "requiresOpenaiAuth": True}}],
+        accounts=[{"result": managed()}],
         records=[CALL], hangs_up_after_turn=True,
     )
     started, cancelled = asyncio.Event(), asyncio.Event()
@@ -163,8 +161,7 @@ async def test_native_eof_preserves_a_callback_cleanup_failure():
     """Cancellation joins must not turn a worker cleanup failure into silence."""
 
     native = ScriptedNative(
-        accounts=[{"result": {"account": {"type": "chatgpt", "planType": "pro"},
-                              "requiresOpenaiAuth": True}}],
+        accounts=[{"result": managed()}],
         records=[CALL], hangs_up_after_turn=True,
     )
 
@@ -188,8 +185,7 @@ async def test_callback_cleanup_failure_keeps_outer_cancellation():
     """A cleanup fault augments cancellation; it must not replace it."""
 
     native = ScriptedNative(
-        accounts=[{"result": {"account": {"type": "chatgpt", "planType": "pro"},
-                              "requiresOpenaiAuth": True}}],
+        accounts=[{"result": managed()}],
         records=[CALL],
     )
     started = asyncio.Event()
@@ -305,10 +301,8 @@ async def test_close_joins_worker_before_workspace_exit_and_uses_remaining_deadl
     grants = _write_grants(timeout_s=30)
     native = ScriptedNative(
         accounts=[
-            {"result": {"account": {"type": "chatgpt", "planType": "pro"},
-                        "requiresOpenaiAuth": True}},
-            {"result": {"account": {"type": "chatgpt", "planType": "pro"},
-                        "requiresOpenaiAuth": True}},
+            {"result": managed()},
+            {"result": managed()},
         ],
         records=[CALL],
     )

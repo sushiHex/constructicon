@@ -98,9 +98,10 @@ from constructicon.substrate.executors.operator_store import (
     inherit_maintenance,
 )
 
-LANE_SCHEMA = 3
-"""The lane evidence's closed shape. 3 adds the installed catalog's digest and its
-seal's beside the client's (``executable``); ``check_evidence`` accepts only the
+LANE_SCHEMA = 4
+"""The lane evidence's closed shape. 3 added the installed catalog's digest and its
+seal's beside the client's (``executable``); 4 adds the account the first reading
+named (``gate.account``, a digest). ``check_evidence`` accepts only the
 current version, so evidence of an earlier shape is refused by its version."""
 LOGIN_ARGUMENTS = ("login", "--device-auth")
 STARTUP_ARGUMENTS = ("app-server", "--strict-config", "--stdio")
@@ -458,7 +459,9 @@ async def run_startup(
         **_base("startup", custody, launcher, policy, executable, configuration, launched),
         "methods_sent": methods,
         "withheld_methods": list(conversation.withheld_methods),
-        "gate": {"completed": conversation.gate_completed, "plan": conversation.observed_plan},
+        "gate": {"completed": conversation.gate_completed, "plan": conversation.observed_plan,
+                 "account": None if conversation.observed_account is None
+                 else conversation.observed_account.root},
         "readback": None if reading is None else {
             name: getattr(reading, name) for name in (*SPEND_FIELDS, *USAGE_FIELDS)
         },
@@ -735,7 +738,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lane-dir", type=Path, required=True)
     parser.add_argument("--evidence", type=Path, required=True)
     parser.add_argument("--first-login", action="store_true")
-    parser.add_argument("--expected")
+    parser.add_argument("--expected", type=ExpectedAccount.from_seal, metavar="PLAN/IDENTITY",
+                        help="the account seal: the plan and identity qualification sealed")
     parser.add_argument("--expect-denial", action="store_true")
     parser.add_argument("--hold", type=float, default=0.0)
     parser.add_argument("--deadline", type=float)
@@ -779,7 +783,7 @@ def main(argv: list[str] | None = None) -> int:
                     plan_type=QUALIFICATION_PLANS[0], alternatives=QUALIFICATION_PLANS[1:],
                 )
                 if options.custody == "maintenance"
-                else ExpectedAccount(plan_type=options.expected)
+                else options.expected
             )
             return await run_startup(
                 custody, launcher, policy, executable=executable,

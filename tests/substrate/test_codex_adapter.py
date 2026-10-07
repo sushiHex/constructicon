@@ -56,10 +56,12 @@ from constructicon.substrate.executors.codex import (
 from constructicon.substrate.executors.codex_protocol import (
     DAMAGE_NESTING,
     GATE_INCOMPLETE_FAULT,
+    IDENTITY_FAULT,
     NO_ACCOUNT_FAULT,
     RECORD_BYTES,
     ExpectedAccount,
     account_faults,
+    account_identity,
     decode_turn,
     unavailable_outcome,
 )
@@ -82,12 +84,13 @@ from tests.substrate.test_codex_protocol import (
     ACCOUNT_NOTICE,
     CLEAN_SPEND,
     EMAIL,
-    MANAGED,
+    IDENTITY,
     THREAD,
     TURN,
     agent_message,
     completed,
     item_completed,
+    managed,
     rerouted,
     usage_update,
 )
@@ -99,8 +102,8 @@ BINARY = "/usr/bin/codex"
 ACQUISITION_ROOT = Path(tempfile.gettempdir()).resolve() / "constructicon-codex-acquisitions"
 CONFIGURATION = 'model = "gpt-5.6-sol"\nmodel_reasoning_effort = "low"\n'
 PLAN = "pro"
-EXPECTED = ExpectedAccount(plan_type=PLAN)
-MANAGED_RESULT = {"account": MANAGED, "requiresOpenaiAuth": True}
+EXPECTED = ExpectedAccount(plan_type=PLAN, identity=IDENTITY)
+MANAGED_RESULT = managed()
 EMPTY_RESULT = {"account": None, "requiresOpenaiAuth": False}
 FINISHED = ProcessResult(0, b"", b"", 2.0, payload_returncode=0)
 
@@ -802,7 +805,7 @@ async def test_a_pre_acceptance_gate_fault_discards_a_successful_turn():
 
 
 async def test_a_pre_acceptance_reading_that_merely_changed_discards_the_turn():
-    changed = {"account": {**MANAGED, "planType": "free"}, "requiresOpenaiAuth": True}
+    changed = managed(planType="free")
     native = clean_native(accounts=[{"result": MANAGED_RESULT}, {"result": changed}])
     conversation = await converse(native)
     assert conversation.observation.terminal
@@ -1911,6 +1914,47 @@ async def test_a_switched_account_after_the_turn_refuses_when_nobody_forges():
     assert native.accounts_seen == 2
     assert conversation.observation.terminal and conversation.gate_completed
     assert any("apiKey" in fault for fault in conversation.faults)
+
+
+ANOTHER_LOGIN = managed(email="another-login@example.invalid")
+"""Another ``pro`` ChatGPT login: the type and plan alone cannot tell it apart."""
+
+
+@pytest.mark.parametrize("expected", [
+    EXPECTED, ExpectedAccount(plan_type=PLAN), ExpectedAccount(
+        plan_type=PLAN, alternatives=("prolite",)),
+], ids=["sealed", "qualifying-plan", "qualifying-alternatives"])
+async def test_another_login_after_the_turn_is_refused_whoever_sealed_the_first(expected):
+    """The account is sealed beside the plan by the first reading, so the
+    after-turn reading must name it too, even in qualification."""
+    native = clean_native(accounts=[{"result": MANAGED_RESULT}, {"result": ANOTHER_LOGIN}])
+    conversation = await converse(native, expected=expected)
+    assert native.accounts_seen == 2 and conversation.gate_completed
+    assert conversation.observed_account == IDENTITY
+    assert IDENTITY_FAULT in conversation.faults
+
+
+async def test_a_sealed_account_refuses_another_login_before_any_turn():
+    native = clean_native(accounts=[{"result": ANOTHER_LOGIN}])
+    conversation = await converse(native)
+    assert conversation.faults == (IDENTITY_FAULT,) and not conversation.gate_completed
+    # Recorded although refused, so evidence names the account judged.
+    assert conversation.observed_account == account_identity({"result": ANOTHER_LOGIN})
+    assert native.accounts_seen == 1 and conversation.thread_id is None
+
+
+@pytest.mark.parametrize("expected", [
+    ExpectedAccount(plan_type=PLAN), ExpectedAccount(plan_type=PLAN, alternatives=("prolite",),
+                                                     identity=IDENTITY),
+], ids=["unsealed", "qualifying"])
+def test_an_operator_provider_requires_the_account_its_binding_sealed(expected):
+    with pytest.raises(ContractViolation, match="the account its binding sealed"):
+        CodexOperatorProvider(
+            launcher=bare_launcher(), profile=codex_profile(),
+            identity=identity_for(bare_launcher(), codex_profile(), None),
+            expected_account=expected, binary=BINARY, configuration=CONFIGURATION,
+            catalog=(), acquisition_root=ACQUISITION_ROOT,
+        )
 
 
 async def test_a_reply_queued_before_its_request_cannot_answer_it():
