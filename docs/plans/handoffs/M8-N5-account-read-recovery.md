@@ -183,3 +183,42 @@ invariants every case holds, not with new adverse controls. The credential's
 mode and the read-only sealed configuration already have adverse controls in
 the N3a and N4 lanes (`test_operator_store_containment.py`,
 `test_operator_store_persistence.py`).
+
+### Review of the diff
+
+One Codex pass on the built diff (`gpt-6-astra`, job `job_e1bfbfce1231`; a
+first attempt on `gpt-6-sol` failed at capacity). Every finding was checked
+against the code; all four were introduced here and adopted:
+
+- **Measured schedules had become invariants.** Three vendor callers race for
+  discovery: the constructor's, the initialization notice's and the adapter's
+  reading. After the common opening (two old-bearer 401s, one refresh), each
+  case is now asserted by meaning: a refused case may read as the cached error
+  or as no account; the still-unauthorized case may give up with
+  "unauthorized" or "discovery failed", with or without reaching the bound.
+- **Refusal cases accepted unrelated failures.** Each case now requires its
+  exact fault set, so a timeout, a failed custody check or an unclosed relay
+  fails it.
+- **The fake could fail open.** An unexpected exception left a session done
+  with no error, a truncated body or malformed JSON drew a 200. A session now
+  counts only once its whole answer is sent; any failure is recorded; the
+  framing and the refresh body are validated; and the sessions, the log and
+  the relay's accepted connections must agree in number.
+- **Token hygiene.** The account header and grant type were copied verbatim,
+  the evidence scan missed id tokens, and failure messages could print token
+  values. Headers are classified like tokens, the scan covers every fixture
+  token, and stored tokens are compared by class.
+
+Recorded, pre-existing: **account continuity is not pinned.**
+`ExpectedAccount` binds the account type and plan, not the user. The vendor's
+account check protects one in-flight discovery, so a switch completed before
+the adapter's reading could present another `pro` user as a clean reading.
+The account-change case stays strict by intent: if that schedule ever
+occurs, the test fails and shows it. Pinning the user belongs to Stage 2's
+binding work.
+
+Rejected after checking: the store restore runs after the assertions, so it
+cannot make the persisted-token checks pass; the stdout wrapper returns the
+bytes it read; the sysctl's scope and the new leaf weaken no containment
+proof (the zone's network namespace keeps its own threshold, and only the CA
+enters the runtime bundle).

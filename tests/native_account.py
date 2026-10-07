@@ -75,6 +75,14 @@ class Tokens:
 OLD, NEW, OTHER = Tokens("old"), Tokens("new"), Tokens("other", OTHER_USER_ID)
 
 
+def fixture_tokens() -> list[str]:
+    """Every token the fakes or the credential carry, id tokens included: none may
+    appear in evidence."""
+
+    return [id_token(USER_ID), id_token(OTHER_USER_ID)] + [
+        getattr(tokens, kind) for tokens in (OLD, NEW, OTHER) for kind in ("access", "refresh")]
+
+
 def credential() -> bytes:
     """The store's fixture ``auth.json``: the pin's minimal ChatGPT shape, with the
     ``tokens.account_id`` and recent ``last_refresh`` the check requires."""
@@ -118,10 +126,13 @@ class Script:
     def respond(self, host: str, method: str, path: str, headers: dict[str, str],
                 body: bytes) -> tuple[int, Any]:
         bearer = headers.get("authorization", "")
+        account = headers.get("chatgpt-account-id")
         entry: dict[str, Any] = {
             "host": host, "method": method, "path": path,
             "bearer": classify(bearer.removeprefix("Bearer ") if bearer else None, "access"),
-            "account": headers.get("chatgpt-account-id"),
+            # Classified like a token: a value is never copied into the log.
+            "account": None if account is None else (
+                "fixture" if account == ACCOUNT_ID else "other"),
         }
         status, answer = self._answer(host, method, path, entry, body)
         entry["status"] = status
@@ -134,9 +145,13 @@ class Script:
             try:
                 request = json.loads(body)
             except ValueError:
-                request = {}
-            entry["refresh_token"] = classify(request.get("refresh_token"), "refresh")
-            entry["grant_type"] = request.get("grant_type")
+                request = None
+            token = request.get("refresh_token") if isinstance(request, dict) else None
+            entry["refresh_token"] = classify(token if isinstance(token, str) else None, "refresh")
+            entry["grant"] = isinstance(request, dict) and (
+                request.get("grant_type") == "refresh_token")
+            if not entry["grant"] or entry["refresh_token"] is None:
+                return 400, {"error": "invalid_request"}
             if self.case == "refused":
                 return 401, {"error": "invalid_grant"}
             issued = OTHER if self.case == "changed" else NEW
@@ -144,7 +159,7 @@ class Script:
                          "refresh_token": issued.refresh}
         if host != BACKEND or method != "GET":
             return 404, None
-        fresh = entry["bearer"] in ("new", "other") and entry["account"] == ACCOUNT_ID
+        fresh = entry["bearer"] in ("new", "other") and entry["account"] == "fixture"
         if path == CHECK:
             if not fresh or self.case == "unauthorized":
                 return 401, {"detail": "fixture unauthorized"}
@@ -158,9 +173,10 @@ class Script:
 class AccountPeer:
     """The fake ``chatgpt.com`` and ``auth.openai.com`` at ``127.0.0.1:443``.
 
-    Each session records its SNI, then its one request in the script's log, or the
-    TLS alert the client sent, or the error that ended it, so a reset or a
-    deadline can never pass as an answer.
+    Each session records its SNI and, only once its whole answer is sent,
+    ``answered``; otherwise the TLS alert the client sent or the error that ended
+    it. Any failure is recorded, never swallowed, so a reset, a deadline, a
+    truncated request or a fault in the fake can never pass as an answer.
     """
 
     def __init__(self, case: str, pki: Path, *, port: int = 443) -> None:
@@ -192,7 +208,8 @@ class AccountPeer:
                 raw, _ = self.server.accept()
             except OSError:
                 return
-            session: dict[str, Any] = {"done": False, "sni": None, "alert": None, "error": None}
+            session: dict[str, Any] = {"done": False, "answered": False, "sni": None,
+                                       "alert": None, "error": None}
             self.sessions.append(session)
             threading.Thread(target=self._session, args=(raw, session), daemon=True).start()
 
@@ -213,6 +230,8 @@ class AccountPeer:
                 length = int(headers.get("content-length", "0"))
                 while len(body) < length and (chunk := tls.recv(8192)):
                     body += chunk
+                if len(body) != length:
+                    raise ValueError("the request body is not its declared length")
                 host = headers.get("host", "").split(":", 1)[0]
                 if host != session["sni"]:
                     raise ValueError("the request's host is not the session's name")
@@ -223,9 +242,10 @@ class AccountPeer:
                     f"HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\n"
                     f"Content-Length: {len(payload)}\r\nConnection: close\r\n\r\n".encode()
                     + payload)
+                session["answered"] = True
         except ssl.SSLError as exc:
             session["alert"] = exc.reason
-        except (OSError, ValueError) as exc:
+        except Exception as exc:
             session["error"] = type(exc).__name__
         finally:
             raw.close()

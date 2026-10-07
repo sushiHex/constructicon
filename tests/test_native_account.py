@@ -21,6 +21,7 @@ from tests.native_account import (
     Script,
     classify,
     credential,
+    fixture_tokens,
 )
 
 
@@ -53,7 +54,7 @@ def test_the_old_bearer_is_always_refused(case):
     script = Script(case)
     assert check(script, OLD)[0] == 401
     assert script.log == [{"host": BACKEND, "method": "GET", "path": CHECK, "bearer": "old",
-                           "account": ACCOUNT_ID, "status": 401}]
+                           "account": "fixture", "status": 401}]
 
 
 def test_clean_issues_the_same_accounts_new_tokens_and_then_answers_them():
@@ -69,8 +70,8 @@ def test_clean_issues_the_same_accounts_new_tokens_and_then_answers_them():
         "authorization": f"Bearer {NEW.access}", "chatgpt-account-id": ACCOUNT_ID}, b"")
     assert usage == (200, {"plan_type": "pro"})
     assert script.respond(BACKEND, "GET", RESET_CREDITS, {}, b"")[0] == 404
-    assert script.log[0]["refresh_token"] == "old" and script.log[0]["grant_type"] == (
-        "refresh_token")
+    assert script.log[0]["refresh_token"] == "old" and script.log[0]["grant"] is (
+        True)
 
 
 def test_each_failing_case_fails_where_the_design_says():
@@ -98,6 +99,30 @@ def test_the_log_names_tokens_only_by_class():
     for token in (OLD.access, OLD.refresh, NEW.access, NEW.refresh):
         assert token not in text
     assert [entry["bearer"] for entry in script.log] == [None, "new", "unknown"]
+
+
+@pytest.mark.parametrize("body", [
+    b"null", b"{not json", b"[]", b'{"grant_type": "refresh_token"}',
+    b'{"grant_type": "password", "refresh_token": "refresh-old"}',
+    b'{"grant_type": "refresh_token", "refresh_token": 7}',
+], ids=["null", "malformed", "list", "no-token", "wrong-grant", "non-string-token"])
+def test_a_malformed_refresh_request_is_refused_and_logged(body):
+    script = Script("clean")
+    assert script.respond(ISSUER, "POST", TOKEN, {}, body) == (400, {"error": "invalid_request"})
+    (entry,) = script.log
+    assert entry["status"] == 400 and (entry["grant"] is False or entry["refresh_token"] is None)
+
+
+def test_no_header_value_is_copied_into_the_log():
+    script = Script("clean")
+    for value in fixture_tokens():
+        script.respond(BACKEND, "GET", CHECK, {
+            "authorization": f"Bearer {value}", "chatgpt-account-id": value}, b"")
+        script.respond(ISSUER, "POST", TOKEN, {}, json.dumps({
+            "grant_type": value, "refresh_token": value}).encode())
+    text = json.dumps(script.log)
+    assert not any(value in text for value in fixture_tokens())
+    assert {entry["account"] for entry in script.log if entry["host"] == BACKEND} == {"other"}
 
 
 def test_an_unexpected_request_is_logged_and_refused():

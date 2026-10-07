@@ -44,6 +44,7 @@ from constructicon.substrate.executors.codex_lane import (
     vendor_executable,
 )
 from constructicon.substrate.executors.codex_protocol import (
+    NO_ACCOUNT_FAULT,
     NO_RESULT_FAULT,
     UNSEALED_BACKEND_FAULT,
     ExpectedAccount,
@@ -872,6 +873,8 @@ def step(entry: dict) -> tuple[str, str | None, int]:
 
 
 OLD_CHECK = ("check", "old", 401)
+STOPPED = NO_LOGIN - {NO_RESULT_FAULT}
+"""The lane's three faults for a gate that stopped at ``account/read``."""
 
 
 @pytest.mark.parametrize("case", native_account.CASES)
@@ -919,64 +922,85 @@ async def test_account_read_recovers_from_a_401_exactly_as_its_case_allows(
         "requests": log, "sessions": peer.sessions, "vendor_errors": errors,
     })
 
-    # Every case: the egress, the store, the credential's mode and identity hold.
+    # Every case: the egress, the sessions, the store, the credential's mode and identity.
     hosts = {f"{host}:443" for host in (native_account.BACKEND, native_account.ISSUER)}
     accepted = sum(count for key, count in run["relay"]["destinations"].items()
                    if key.startswith("accepted:"))
-    if case == "unauthorized":
-        # Measured: two full recoveries spend production's eight connections
-        # (six checks, two refreshes) and the relay refuses the next one. The
-        # egress bound holds against a client that keeps retrying.
-        assert accepted == account_policy().connections, run["relay"]
-        assert set(run["relay"]["denied"]) == {"denied:connection_bound"}, run["relay"]
-        assert DENIAL_FAULT in run["faults"], run["faults"]
-    else:
-        assert not run["relay"]["denied"], run["relay"]
+    denied = set(run["relay"]["denied"])
     assert {key.split(":", 1)[1] for key in run["relay"]["destinations"]} <= hosts, run["relay"]
-    assert all(s["alert"] is None and s["error"] is None for s in peer.sessions), peer.sessions
+    assert run["relay"]["closed"] is True, run["relay"]
+    # Each accepted connection is one answered session and one logged request:
+    # a failed, unanswered or unlogged session cannot stand in for an answer.
+    assert all(s["answered"] and s["alert"] is None and s["error"] is None
+               for s in peer.sessions), peer.sessions
+    assert len(peer.sessions) == len(log) == accepted, (peer.sessions, accepted)
     assert {s["sni"] for s in peer.sessions} <= {native_account.BACKEND, native_account.ISSUER}
+    assert all(entry["account"] == "fixture" for entry in log if entry["bearer"]), log
+    assert all(entry["grant"] for entry in posts), log
     assert sorted(os.listdir(store)) == ["auth.json"]
     assert credential.stat().st_ino == inode and run["credential"]["regular_0600"], run
     stored = json.loads(credential.read_bytes())["tokens"]
     assert stored["account_id"] == native_account.ACCOUNT_ID
+    held = (native_account.classify(stored["access_token"], "access"),
+            native_account.classify(stored["refresh_token"], "refresh"))
     # Every case opens as the pin's recovery does: the old bearer's check 401,
-    # the reload, its check 401 again, then one refresh with the old token.
+    # the reload, its check 401 again, then one refresh with the old token. What
+    # follows races among the vendor's three discovery callers, so it is asserted
+    # by meaning, not by schedule.
     steps = [step(entry) for entry in log]
     assert steps[:3] == [OLD_CHECK, OLD_CHECK, ("token", "old", 401 if case == "refused" else 200)]
+    after = steps[3:]
 
     if case == "clean":
         assert run["faults"] == [], run["faults"]
         assert run["methods_sent"] == [named_method(method) for method in STARTUP_METHODS]
         assert run["gate"] == {"completed": True, "plan": "pro"} and run["refresh"] == "measured"
-        # Then the new bearer's check, and the readback's two requests, concurrent.
-        assert steps[3] == ("check", "new", 200) and len(steps) == 6, steps
-        assert sorted(steps[4:]) == [("reset-credits", "new", 404), ("usage", "new", 200)]
-        assert (stored["access_token"], stored["refresh_token"]) == (
-            native_account.NEW.access, native_account.NEW.refresh)
+        assert not denied and len(posts) == 1, run["relay"]
+        # Only the new bearer from here: its checks, and the readback's two requests.
+        checks = [s for s in after if s[0] == "check"]
+        assert checks and set(checks) == {("check", "new", 200)}, steps
+        assert sorted(s for s in after if s[0] != "check") == [
+            ("reset-credits", "new", 404), ("usage", "new", 200)], steps
+        assert held == ("new", "new")
         return
     assert run["methods_sent"] == [named_method(method) for method in STARTUP_METHODS[:3]], run
     assert run["gate"]["completed"] is False and run["readback"] is None, run
-    assert NO_RESULT_FAULT in run["faults"] or UNSEALED_BACKEND_FAULT in run["faults"], run
     if case == "refused":
-        # A refused refresh is cached: the adapter's own reading retries only the
-        # checks, every one with the old bearer, and the file is untouched.
-        assert set(steps[3:]) == {OLD_CHECK} and len(posts) == 1, steps
-        assert errors == [UNAUTHORIZED] and credential.read_bytes() == seeded
+        # The refusal is cached and the file untouched. The adapter's reading
+        # either recovers to the cached failure, an error, or starts after it and
+        # is answered with no account: both are refusals, and nothing else is.
+        assert not denied and len(posts) == 1 and set(after) <= {OLD_CHECK}, steps
+        assert (set(run["faults"]), errors) in (
+            (STOPPED | {NO_RESULT_FAULT}, [UNAUTHORIZED]), (STOPPED | {NO_ACCOUNT_FAULT}, []),
+        ), (run["faults"], errors)
+        assert credential.read_bytes() == seeded
     elif case == "unauthorized":
-        # The adapter's reading recovers again, refreshing with the new token,
-        # until the relay's bound refuses its ninth connection.
-        assert [post["refresh_token"] for post in posts] == ["old", "new"], steps
-        assert errors == [DISCOVERY_FAILED], errors
-        assert stored["access_token"] == native_account.NEW.access
+        # Refreshes keep succeeding and checks keep failing, each recovery
+        # starting from the old or the refreshed token, until a reading gives up
+        # or the relay's bound refuses a connection: the bound holds either way.
+        assert posts[0]["refresh_token"] == "old", steps
+        assert {post["refresh_token"] for post in posts} <= {"old", "new"}, steps
+        assert all(s[2] == 401 for s in after if s[0] == "check"), steps
+        assert denied <= {"denied:connection_bound"}, run["relay"]
+        assert accepted <= account_policy().connections, run["relay"]
+        assert not denied or accepted == account_policy().connections, run["relay"]
+        assert set(run["faults"]) == STOPPED | {NO_RESULT_FAULT} | (
+            {DENIAL_FAULT} if denied else set()), run["faults"]
+        assert errors in ([UNAUTHORIZED], [DISCOVERY_FAILED]), errors
+        assert held == ("new", "new")
     elif case == "changed":
-        # The account is compared before any check with the new tokens, which
-        # stay persisted: the refusal does not roll them back.
-        assert len(steps) == 3 and errors == [ACCOUNT_CHANGED], (steps, errors)
-        assert stored["access_token"] == native_account.OTHER.access
+        # Fail-closed by intent: the account check refuses before any check with
+        # the other user's tokens, which stay persisted. A reading that instead
+        # accepted the other user would be the pre-existing continuity gap the
+        # design records, and must fail this test rather than pass it.
+        assert not denied and len(posts) == 1 and after == [], steps
+        assert set(run["faults"]) == STOPPED | {NO_RESULT_FAULT} and errors == [ACCOUNT_CHANGED]
+        assert held == ("other", "other")
     else:
-        assert steps[3:] == [("check", "new", 200)] and errors == [], (steps, errors)
-        assert UNSEALED_BACKEND_FAULT in run["faults"], run["faults"]
-        assert stored["access_token"] == native_account.NEW.access
+        assert not denied and len(posts) == 1, run["relay"]
+        assert after and set(after) == {("check", "new", 200)} and errors == [], (steps, errors)
+        assert set(run["faults"]) == STOPPED | {UNSEALED_BACKEND_FAULT}, run["faults"]
+        assert held == ("new", "new")
 
 
 def test_no_evidence_file_contains_key_material():
@@ -999,9 +1023,7 @@ def test_no_evidence_file_contains_key_material():
     if os.environ.get("M8_BRIDGE_REQUIRED"):
         assert [path.name for path in accounts] == sorted(
             f"n5-account-{case}.json" for case in native_account.CASES)
-    tokens = [getattr(generation, kind)
-              for generation in (native_account.OLD, native_account.NEW, native_account.OTHER)
-              for kind in ("access", "refresh")]
+    tokens = native_account.fixture_tokens()
     for path in files + accounts:
         text = path.read_text()
         assert "-----BEGIN" not in text and "PRIVATE KEY" not in text, path.name
