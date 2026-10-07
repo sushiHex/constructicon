@@ -17,10 +17,20 @@ import pytest
 from constructicon.core.executor import Usage
 from constructicon.core.identity import Digest
 from constructicon.core.workspace import acquisition_id_for
-from constructicon.substrate.executors.codex_protocol import encode_record, observe_turn
+from constructicon.substrate.executors.codex import CLIENT_NAME, CLIENT_VERSION, NATIVE_CWD
+from constructicon.substrate.executors.codex_lane import PREPARE_MODEL
+from constructicon.substrate.executors.codex_protocol import (
+    CONTAINED_PYTHON_TOOL,
+    encode_record,
+    initialize_request,
+    initialized_notification,
+    observe_turn,
+    thread_start_request,
+)
 from constructicon.substrate.executors.linux import ProcessExchangeError
 from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisition_guard
 from tests.native_codex_probe import ProbeRefused
+from tests.native_inventory import probe_recipe, tool_inventory
 from tests.native_provider import provider_peer
 from tests.native_startup import MODELS, DuplexWire, configuration, initialize
 from tests.provider_placement import BOOTSTRAP, PLACEMENT_PROMPT, PlacementLauncher
@@ -286,6 +296,49 @@ async def test_native_reaches_only_the_fixed_peer(placement_image, tmp_path):
     assert len(bridge_fds) == 5 and bridge_fds["0"] == bridge_fds["1"] == "/dev/null"
     assert observations["resident"]
     assert all(birth(pid) != started for pid, started in observations["resident"].items())
+
+
+@pytest.mark.parametrize("mode", ["read", "write"])
+async def test_the_production_recipe_offers_the_model_exactly_its_inventory(
+    placement_image, tmp_path, mode,
+):
+    """What a production turn offers ``gpt-6.1-sol``, measured on the real binary.
+
+    The configuration is production's with only its provider and catalog path
+    swapped (``tests/native_inventory.py``); initialize, the thread and the turn
+    are the adapter's own requests for the mode.
+    """
+
+    write = mode == "write"
+
+    async def turn(wire, observed):
+        observed["placement"] = (await wire.read())["placement"]
+        observed["bootstrap"] = await wire.read()
+        opened = initialize_request(0, client=CLIENT_NAME, version=CLIENT_VERSION,
+                                    experimental_api=write)
+        await wire.rpc("initialize", opened["params"])
+        await wire.send(initialized_notification())
+        thread = await wire.rpc("thread/start", thread_start_request(
+            0, cwd=NATIVE_CWD, dynamic_tools=(CONTAINED_PYTHON_TOOL,) if write else (),
+        )["params"])
+        await wire.rpc("turn/start", {
+            "threadId": thread["thread"]["id"],
+            "input": [{"type": "text", "text": PLACEMENT_PROMPT}],
+        })
+        while (message := await wire.read()).get("method") != "turn/completed":
+            assert "id" not in message, "the inventory turn authorizes no tool execution"
+        await wire.io.close_stdin()
+        await wire.drain()
+
+    async with placement(placement_image, model=PREPARE_MODEL) as (composed, peer, record):
+        _observations, result = await observe(
+            composed, peer, tmp_path, record=record, query=turn, config=probe_recipe(),
+        )
+    assert_outcome(result)
+    assert len(peer.requests) == 1 and not peer.failures
+    golden = json.loads(Path(__file__).parents[1].joinpath(
+        "fixtures", "native_production_inventory.json").read_text())
+    assert tool_inventory(peer.requests[0]) == golden[mode]
 
 
 async def test_actual_mount_mismatch_refuses_before_native_exec(placement_image, tmp_path):
