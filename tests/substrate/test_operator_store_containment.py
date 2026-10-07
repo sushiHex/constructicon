@@ -13,7 +13,11 @@ import pytest
 from constructicon.core.grants import Posture
 from constructicon.core.native_operator import NativeOperatorStoreIdentityV1
 from constructicon.core.workspace import acquisition_id_for
-from constructicon.substrate.executors.linux import NativeStoreMount, sealed_data_fd
+from constructicon.substrate.executors.linux import (
+    NATIVE_ENVIRONMENTS,
+    NativeStoreMount,
+    sealed_data_fd,
+)
 from constructicon.substrate.executors.operator_store import BindingStore
 from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisition_guard
 from tests.substrate.test_linux_containment import launcher as launcher
@@ -74,11 +78,12 @@ def native_mount(binding, held, *, before_spawn=None, egress=None, configuration
 
 
 def normalized(argv):
-    """A launch's arguments with only the two per-launch descriptor numbers erased."""
+    """A launch's arguments with only its per-launch descriptor numbers erased."""
 
     values = list(argv)
-    for flag in ("--ro-bind-data", "--bind-fd"):
-        values[values.index(flag) + 1] = "<fd>"
+    for index, value in enumerate(argv[:-1]):
+        if value in ("--ro-bind-data", "--bind-fd"):
+            values[index + 1] = "<fd>"
     return tuple(values)
 
 
@@ -116,6 +121,9 @@ facts['unlink_errno'] = errno_of(lambda: credential.unlink())
 staged.unlink()
 facts['config'] = config.read_bytes() == CONFIGURATION
 facts['config_write_errno'] = errno_of(lambda: config.write_bytes(b'model = "decoy"\n'))
+environments = home / 'environments.toml'
+facts['environments'] = environments.read_bytes() == ENVIRONMENTS
+facts['environments_write_errno'] = errno_of(lambda: environments.write_bytes(b''))
 facts['home_entries'] = sorted(os.listdir(home))
 facts['codex_home'] = os.environ.get('CODEX_HOME')
 facts['home'] = os.environ.get('HOME')
@@ -137,16 +145,18 @@ print(json.dumps(facts), flush=True)
 """
 
 
-async def test_the_native_layout_binds_only_the_credential_and_the_sealed_configuration(
+async def test_the_native_layout_binds_only_the_credential_and_the_sealed_files(
     binding, launcher, tmp_path,
 ):
-    """L1 (M8-N4-state-review.md): two host objects in a disposable home."""
+    """L1 (M8-N4-state-review.md): two host objects in a disposable home, beside
+    the launcher's sealed environment file (M8-N5-native-tool-inventory.md)."""
 
     held = await hold(binding)
     paths = AcquisitionPaths(tmp_path, acquisition_id_for("n4-layout-proof", 1))
     source = (
         LAYOUT.replace("PRIVATE_PARENT", repr(str(held.store_path.parent)))
         .replace("CREDENTIAL", repr(CREDENTIAL)).replace("CONFIGURATION", repr(CONFIGURATION))
+        .replace("ENVIRONMENTS", repr(NATIVE_ENVIRONMENTS))
     )
     host_credential = held.store_path / "auth.json"
     inode = host_credential.stat().st_ino
@@ -165,7 +175,9 @@ async def test_the_native_layout_binds_only_the_credential_and_the_sealed_config
             assert facts["rename_errno"] == errno.EBUSY, facts
             assert facts["unlink_errno"] == errno.EBUSY, facts
             assert facts["config"] is True and facts["config_write_errno"] in denied, facts
-            assert facts["home_entries"] == ["auth.json", "config.toml"], facts
+            assert facts["environments"] is True, facts
+            assert facts["environments_write_errno"] in denied, facts
+            assert facts["home_entries"] == ["auth.json", "config.toml", "environments.toml"], facts
             assert facts["codex_home"] == "/tmp/home/.codex" and facts["home"] == "/tmp/home"
             assert facts["store_absent"] and facts["private_parent_absent"], facts
             assert facts["workspace_absent"] and facts["private_fds"] == [], facts

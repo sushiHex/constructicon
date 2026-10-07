@@ -22,6 +22,7 @@ E = "tests/substrate/test_egress.py::"
 T = "tests/substrate/test_codex_lane.py::"
 V = "tests/substrate/test_native_vendor.py::"
 VENDOR = LAUNCHER + "NativeVendor.check"
+SEALED = "tests/substrate/test_native_layout.py::"
 
 MUTANTS = (
     (
@@ -381,9 +382,66 @@ MUTANTS = (
     (
         "N5-L1 the evidence records the catalog it read",
         LANE + "_base",
-        '"catalog_sha256": executable.catalog_sha256},',
-        '"catalog_sha256": ""},',
+        '"catalog_sha256": executable.catalog_sha256,',
+        '"catalog_sha256": "",',
         T + "test_a_clean_startup_records_the_four_methods_and_nothing_identifying",
+    ),
+    (
+        "N5-L2 the evidence records the catalog's seal",
+        LANE + "_base",
+        '"sealed_catalog_sha256": executable.sealed_catalog_sha256},',
+        '"sealed_catalog_sha256": ""},',
+        T + "test_a_clean_startup_records_the_four_methods_and_nothing_identifying",
+    ),
+    (
+        "N5-L3 the seal's digest is the seal's, not the source's",
+        LANE + "vendor_executable",
+        "hashlib.sha256(sealed_catalog(catalog)).hexdigest())",
+        "hashlib.sha256(catalog).hexdigest())",
+        T + "test_the_executable_is_the_bound_vendor_client_hashed_from_its_source",
+    ),
+    *((
+        f"N5-I{index} the sealed catalog closes {field}",
+        LAUNCHER + "sealed_catalog",
+        before, after,
+        SEALED + "test_the_sealed_catalog_closes_exactly_the_tool_selectors_of_every_entry",
+    ) for index, (field, before, after) in enumerate((
+        ("apply_patch_tool_type", "apply_patch_tool_type=None,",
+         'apply_patch_tool_type="freeform",'),
+        ("tool_mode", 'tool_mode="direct"', 'tool_mode="code_mode_only"'),
+        ("multi_agent_version", "multi_agent_version=None,", 'multi_agent_version="v2",'),
+        ("experimental_supported_tools", "experimental_supported_tools=[]",
+         'experimental_supported_tools=["clock"]'),
+        ("every entry", 'for entry in catalog["models"]:', 'for entry in catalog["models"][:1]:'),
+    ), start=1)),
+    (
+        "N5-I6 the zone receives the environment file",
+        LAUNCHER + "LinuxLauncher.argv",
+        '"--ro-bind-data", str(layout.environments_fd), ENVIRONMENTS_MOUNT,',
+        "",
+        "tests/substrate/test_native_store_launch.py::"
+        "test_the_native_layout_binds_its_descriptors_into_a_disposable_codex_home",
+    ),
+    (
+        "N5-I7 the zone receives the seal, never the installed catalog",
+        LAUNCHER + "LinuxLauncher.argv",
+        '"--ro-bind-data", str(layout.catalog_fd), CATALOG_MOUNT,',
+        '"--ro-bind", str(self.vendor.catalog), CATALOG_MOUNT,',
+        V + "test_a_native_launch_binds_the_vendor_tree_and_its_sealed_catalog_read_only",
+    ),
+    (
+        "N5-I8 a native launch takes exactly the launcher's layout",
+        LAUNCHER + "LinuxLauncher.argv",
+        "raise ContractViolation(\"a native store launches with exactly the launcher's layout\")",
+        "pass",
+        V + "test_a_native_launch_takes_exactly_the_launchers_layout",
+    ),
+    (
+        "N5-I9 a refused seal leaks no descriptor",
+        LAUNCHER + "NativeLayout.seal",
+        "os.close(environments)",
+        "pass",
+        SEALED + "test_a_catalog_that_cannot_be_sealed_refuses_the_launch_and_leaks_nothing",
     ),
     (
         "N4-L35 a lane runs only the bound vendor client",
@@ -517,7 +575,7 @@ MUTANTS = (
         LAUNCHER + "LinuxLauncher.argv",
         '"--ro-bind", str(self.vendor.tree), VENDOR_MOUNT,',
         '"--bind", str(self.vendor.tree), VENDOR_MOUNT,',
-        V + "test_a_native_launch_binds_the_vendor_tree_and_catalog_read_only",
+        V + "test_a_native_launch_binds_the_vendor_tree_and_its_sealed_catalog_read_only",
     ),
     (
         "N4-V18 a native launch names the zone's trust store to the vendor",
@@ -525,7 +583,7 @@ MUTANTS = (
         '"--setenv", "CODEX_CA_CERTIFICATE", TRUST_BUNDLE,',
         "",
         "tests/substrate/test_native_store_launch.py::"
-        "test_the_native_layout_binds_two_descriptors_into_a_disposable_codex_home",
+        "test_the_native_layout_binds_its_descriptors_into_a_disposable_codex_home",
     ),
     (
         "N4-V13 the launch revision names the bound tree",

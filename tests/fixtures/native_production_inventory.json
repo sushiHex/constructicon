@@ -1,0 +1,49 @@
+{
+  "sealed": {
+    "read": [],
+    "write": [
+      {
+        "description": "",
+        "name": "functions",
+        "tools": [
+          {
+            "description": "Run Python in the invocation's isolated contained worker.",
+            "name": "contained_python",
+            "parameters": {
+              "additionalProperties": false,
+              "properties": {
+                "program": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "program"
+              ],
+              "type": "object"
+            },
+            "strict": false,
+            "type": "function"
+          }
+        ],
+        "type": "namespace"
+      }
+    ]
+  },
+  "catalog": [
+    "functions.exec",
+    "functions.exec>clock__curr_time",
+    "functions.request_user_input_async",
+    "functions.wait"
+  ],
+  "catalog+environment": [
+    "functions.exec",
+    "functions.exec>apply_patch",
+    "functions.exec>clock__curr_time",
+    "functions.request_user_input_async",
+    "functions.wait"
+  ],
+  "controls": [
+    "functions.request_user_input",
+    "image_gen.imagegen"
+  ]
+}

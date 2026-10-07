@@ -19,7 +19,7 @@ PUBLICATION_TEST = "tests/substrate/test_operator_store_publication.py::"
 PUBLISH_FAULT_TEST = "tests/substrate/test_operator_store_publish_faults.py::"
 METADATA_TEST = "tests/substrate/test_operator_store_metadata.py::"
 CREDENTIAL_TEST = "tests/substrate/test_operator_store_credential.py::"
-LAYOUT_TEST = TEST + "test_the_native_layout_binds_two_descriptors_into_a_disposable_codex_home"
+LAYOUT_TEST = TEST + "test_the_native_layout_binds_its_descriptors_into_a_disposable_codex_home"
 
 MUTANTS = (
     (
@@ -57,30 +57,30 @@ MUTANTS = (
     (
         "native store layout is present",
         LAUNCHER + "LinuxLauncher.argv",
-        "if native_store is not None:",
+        "if native_store is not None and layout is not None:",
         "if False:",
-        TEST + "test_the_native_layout_binds_two_descriptors_into_a_disposable_codex_home",
+        TEST + "test_the_native_layout_binds_its_descriptors_into_a_disposable_codex_home",
     ),
     (
         "the credential is bound by its descriptor, never a path",
         LAUNCHER + "LinuxLauncher.argv",
         '"--bind-fd", str(native_store.credential_fd)',
         '"--bind", str(native_store.credential_fd)',
-        TEST + "test_the_native_layout_binds_two_descriptors_into_a_disposable_codex_home",
+        TEST + "test_the_native_layout_binds_its_descriptors_into_a_disposable_codex_home",
     ),
     (
         "native store does not replace disposable HOME",
         LAUNCHER + "LinuxLauncher.argv",
         '"--setenv", "HOME", "/tmp/home"',
         '"--setenv", "HOME", "/tmp/home/.codex"',
-        TEST + "test_the_native_layout_binds_two_descriptors_into_a_disposable_codex_home",
+        TEST + "test_the_native_layout_binds_its_descriptors_into_a_disposable_codex_home",
     ),
     (
         "native store launch keeps networking unshared",
         LAUNCHER + "LinuxLauncher.argv",
         '"--unshare-net"',
         '"--share-net"',
-        TEST + "test_the_native_layout_binds_two_descriptors_into_a_disposable_codex_home",
+        TEST + "test_the_native_layout_binds_its_descriptors_into_a_disposable_codex_home",
     ),
     (
         "native layout descriptors are distinct",
@@ -458,7 +458,7 @@ MUTANTS = (
     (
         "L13 a mount descriptor can never double as a guard",
         LAUNCHER + "LinuxLauncher._run",
-        "if set(native_store.mount_fds) & set(guard_fds):",
+        "if set(mount_fds) & set(guard_fds):",
         "if False:",
         TEST + "test_a_mount_descriptor_that_is_also_a_guard_never_reaches_the_check",
     ),

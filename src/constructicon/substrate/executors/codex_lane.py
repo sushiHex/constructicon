@@ -87,6 +87,7 @@ from constructicon.substrate.executors.linux import (
     NativeVendor,
     ProcessExchangeError,
     ProcessResult,
+    sealed_catalog,
     sealed_data_fd,
 )
 from constructicon.substrate.executors.operator_store import (
@@ -97,7 +98,10 @@ from constructicon.substrate.executors.operator_store import (
     inherit_maintenance,
 )
 
-LANE_SCHEMA = 2
+LANE_SCHEMA = 3
+"""The lane evidence's closed shape. 3 adds the installed catalog's digest and its
+seal's beside the client's (``executable``); ``check_evidence`` accepts only the
+current version, so evidence of an earlier shape is refused by its version."""
 LOGIN_ARGUMENTS = ("login", "--device-auth")
 STARTUP_ARGUMENTS = ("app-server", "--strict-config", "--stdio")
 STARTUP_METHODS = ("initialize", "initialized", "account/read", "account/rateLimits/read")
@@ -186,12 +190,14 @@ async def active_custody(store: BindingStore) -> AsyncIterator[Custody]:
 
 @dataclass(frozen=True)
 class Executable:
-    """The in-zone client that receives the credential, by path and content, and
-    the content of the catalog it reads, which decides the sealed model."""
+    """The in-zone client that receives the credential, by path and content; the
+    content of the installed catalog, which decides the sealed model; and of its
+    seal, the catalog the client reads (``sealed_catalog``)."""
 
     path: str
     sha256: str
     catalog_sha256: str
+    sealed_catalog_sha256: str
 
 
 def vendor_executable(launcher: LinuxLauncher) -> Executable:
@@ -199,11 +205,11 @@ def vendor_executable(launcher: LinuxLauncher) -> Executable:
 
     if launcher.vendor is None:
         raise ContractViolation("an N4 lane runs only the bound vendor client")
-    digests = []
-    for path in (launcher.vendor.tree / "bin" / "codex", launcher.vendor.catalog):
-        with path.open("rb") as stream:
-            digests.append(hashlib.file_digest(stream, "sha256").hexdigest())
-    return Executable(RUNTIME_BINARY, *digests)
+    with (launcher.vendor.tree / "bin" / "codex").open("rb") as stream:
+        binary = hashlib.file_digest(stream, "sha256").hexdigest()
+    catalog = launcher.vendor.catalog.read_bytes()
+    return Executable(RUNTIME_BINARY, binary, hashlib.sha256(catalog).hexdigest(),
+                      hashlib.sha256(sealed_catalog(catalog)).hexdigest())
 
 
 class RecordingIO:
@@ -335,7 +341,8 @@ def _base(lane: str, custody: Custody, launcher: LinuxLauncher, policy: EgressPo
         "launch_revision": str(launcher.revision),
         "runtime_digest": str(launcher.expected_runtime),
         "executable": {"path": executable.path, "sha256": executable.sha256,
-                       "catalog_sha256": executable.catalog_sha256},
+                       "catalog_sha256": executable.catalog_sha256,
+                       "sealed_catalog_sha256": executable.sealed_catalog_sha256},
         "configuration_digest": str(configuration_digest(configuration)),
         "egress": {key: str(value) for key, value in identity_digests(policy).items()},
         "relay": {"destinations": launched.destinations, "denied": launched.denied,
@@ -596,10 +603,24 @@ def production_configuration(*, control: bool = False) -> str:
         'cli_auth_credentials_store = "file"\nforced_login_method = "chatgpt"\n'
         'check_for_update_on_startup = false\nweb_search = "disabled"\n'
         f"[analytics]\nenabled = {str(control).lower()}\n[features]\nplugins = false\n"
-        "apps = false\nshell_tool = false\nunified_exec = false\n"
-        "apply_patch_freeform = false\nview_image = false\nmulti_agent = false\n"
-        "code_mode = false\njs_repl = false\ngoals = false\nsystem_proxy_fallback = false\n"
+        "apps = false\nshell_tool = false\nunified_exec = false\nview_image = false\n"
+        "multi_agent = false\ncode_mode = false\ngoals = false\nsystem_proxy_fallback = false\n"
+        + TOOL_CONTROLS
     )
+
+
+TOOL_CONTROLS = (
+    "image_generation = false\nsleep_tool = false\nmulti_agent_v2 = false\n"
+    "[features.tool_registry]\nerror_on_tool_collisions = true\n"
+    "[agents]\nenabled = false\n"
+    "[tools.experimental_request_user_input]\nenabled = false\n"
+)
+"""The configuration's share of the native tool inventory (M8-N5-native-tool-inventory.md).
+
+It continues ``[features]``: every default-on gate of a tool the sealed catalog
+and the absent environment leave, and collisions fail the turn, since dispatch
+is by name and the first registration would own ``contained_python``.
+``[agents] enabled = false`` holds collaboration off over any catalog."""
 
 
 def _pin(host: str) -> tuple[EgressDestination, dict[str, str]]:

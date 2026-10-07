@@ -76,6 +76,7 @@ from constructicon.core.identity import canonical_json, digest
 from constructicon.substrate.executors.codex_lane import (EVIDENCE_DOMAIN, LANE_SCHEMA, LOGIN_FIELDS, STARTUP_FIELDS, STARTUP_METHODS, QUALIFICATION_PLANS, configuration_digest, _policy)
 from constructicon.substrate.executors.codex_protocol import SPEND_FIELDS, USAGE_FIELDS, SPEND_UNREADABLE_FAULT, named_method, named_value
 from constructicon.substrate.executors.egress import identity_digests
+from constructicon.substrate.executors.linux import sealed_catalog
 from constructicon.substrate.executors.codex import ADAPTER_REVISION, PROTOCOL_REVISION
 mode, name, custody, expected, policy_name, directory, launch_root = sys.argv[1:]
 def require(value):
@@ -105,10 +106,13 @@ require(e["configuration_digest"] == str(configuration_digest(config)))
 require(e["adapter_revision"] == str(ADAPTER_REVISION) and e["protocol_revision"] == str(PROTOCOL_REVISION))
 installed = json.loads((Path(launch_root) / "runtime.json").read_text(encoding="utf-8"))
 require(e["runtime_digest"] == installed["runtime_digest"])
-def sha256(file): return hashlib.sha256((Path(launch_root) / file).read_bytes()).hexdigest()
+def launch_set(file): return (Path(launch_root) / file).read_bytes()
+def sha256(content): return hashlib.sha256(content).hexdigest()
 x = e["executable"]
-require(type(x) is dict and set(x) == {"path", "sha256", "catalog_sha256"})
-require(x["sha256"] == sha256("native-codex/bin/codex") and x["catalog_sha256"] == sha256("codex-models.json"))
+require(type(x) is dict and set(x) == {"path", "sha256", "catalog_sha256", "sealed_catalog_sha256"})
+catalog = launch_set("codex-models.json")
+require(x["sha256"] == sha256(launch_set("native-codex/bin/codex")) and x["catalog_sha256"] == sha256(catalog))
+require(x["sealed_catalog_sha256"] == sha256(sealed_catalog(catalog)))
 policy = _policy(Path(policy_name))
 require(e["egress"] == {key: str(value) for key, value in identity_digests(policy).items()})
 require(type(e["relay"]) is dict and set(e["relay"]) == {"destinations", "denied", "closed"})

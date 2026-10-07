@@ -17,10 +17,22 @@ import pytest
 from constructicon.core.executor import Usage
 from constructicon.core.identity import Digest
 from constructicon.core.workspace import acquisition_id_for
-from constructicon.substrate.executors.codex_protocol import encode_record, observe_turn
+from constructicon.substrate.executors.codex import CLIENT_NAME, CLIENT_VERSION, NATIVE_CWD
+from constructicon.substrate.executors.codex_lane import PREPARE_MODEL
+from constructicon.substrate.executors.codex_protocol import (
+    CONTAINED_PYTHON_TOOL,
+    encode_record,
+    initialize_request,
+    initialized_notification,
+    observe_turn,
+    parse_tool_call,
+    thread_start_request,
+    tool_call_response,
+)
 from constructicon.substrate.executors.linux import ProcessExchangeError
 from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisition_guard
 from tests.native_codex_probe import ProbeRefused
+from tests.native_inventory import offered_tools, probe_setup, tool_inventory
 from tests.native_provider import provider_peer
 from tests.native_startup import MODELS, DuplexWire, configuration, initialize
 from tests.provider_placement import BOOTSTRAP, PLACEMENT_PROMPT, PlacementLauncher
@@ -286,6 +298,138 @@ async def test_native_reaches_only_the_fixed_peer(placement_image, tmp_path):
     assert len(bridge_fds) == 5 and bridge_fds["0"] == bridge_fds["1"] == "/dev/null"
     assert observations["resident"]
     assert all(birth(pid) != started for pid, started in observations["resident"].items())
+
+
+INVENTORY = json.loads(Path(__file__).parents[1].joinpath(
+    "fixtures", "native_production_inventory.json").read_text())
+"""Measured on the real binary (M8-N5-native-tool-inventory.md): the sealed offer
+as sent, and the names each removed layer lets back in."""
+
+CALLBACK_OUTPUT = "contained fixture output"
+
+
+async def inventory_turn(image, tmp_path, *, without=(), write=False, tool=None, arguments=None,
+                         namespace=None):
+    """One production turn of the mode at ``gpt-6.1-sol``, its layers less ``without``.
+
+    Initialize, the thread and the turn are the adapter's own requests. A
+    callback is answered as the adapter answers it; any other server request
+    fails the lane, since nothing else may reach the client.
+    """
+
+    config, files = probe_setup(*without)
+    callbacks = []
+
+    async def turn(wire, observed):
+        observed["placement"] = (await wire.read())["placement"]
+        observed["bootstrap"] = await wire.read()
+        opened = initialize_request(0, client=CLIENT_NAME, version=CLIENT_VERSION,
+                                    experimental_api=write)
+        await wire.rpc("initialize", opened["params"])
+        await wire.send(initialized_notification())
+        thread = await wire.rpc("thread/start", thread_start_request(
+            0, cwd=NATIVE_CWD, dynamic_tools=(CONTAINED_PYTHON_TOOL,) if write else (),
+        )["params"])
+        started = await wire.rpc("turn/start", {
+            "threadId": thread["thread"]["id"],
+            "input": [{"type": "text", "text": PLACEMENT_PROMPT}],
+        })
+        while (message := await wire.read()).get("method") != "turn/completed":
+            if "id" in message:
+                call = parse_tool_call(message, thread_id=thread["thread"]["id"],
+                                       turn_id=started["turn"]["id"])
+                callbacks.append(call.program)
+                await wire.send(tool_call_response(call, CALLBACK_OUTPUT))
+        assert message["params"]["turn"]["status"] == "completed", message
+        await wire.io.close_stdin()
+        await wire.drain()
+
+    async with placement(image, model=PREPARE_MODEL, tool=tool, arguments=arguments,
+                         namespace=namespace) as (composed, peer, record):
+        _observations, result = await observe(
+            composed, peer, tmp_path, record=record, query=turn, config=config, files=files,
+        )
+    assert_outcome(result)
+    assert not peer.failures
+    return peer.requests, callbacks
+
+
+def call_outputs(request):
+    return [item for item in request["input"]
+            if item.get("type") in {"function_call_output", "custom_tool_call_output"}]
+
+
+async def test_a_sealed_read_turn_offers_the_model_nothing(placement_image, tmp_path):
+    requests, callbacks = await inventory_turn(placement_image, tmp_path)
+    assert len(requests) == 1 and not callbacks
+    assert offered_tools(requests[0]) == INVENTORY["sealed"]["read"] == []
+
+
+async def test_a_sealed_write_turn_offers_only_the_callback_and_it_answers(
+    placement_image, tmp_path,
+):
+    """The offer as sent, then the callback round trip without an environment."""
+
+    requests, callbacks = await inventory_turn(
+        placement_image, tmp_path, write=True, tool="contained_python",
+        arguments={"program": "print('fixture')"},
+    )
+    assert offered_tools(requests[0]) == INVENTORY["sealed"]["write"]
+    assert tool_inventory(requests[0]) == ["functions.contained_python"]
+    assert callbacks == ["print('fixture')"] and len(requests) == 2
+    (output,) = call_outputs(requests[1])
+    # One text item is sent as a plain string (``core/src/tools/context.rs:584-588``);
+    # the item's own ``id`` is the vendor's.
+    assert {key: value for key, value in output.items() if key != "id"} == {
+        "type": "function_call_output", "call_id": "call_probe", "output": CALLBACK_OUTPUT}
+
+
+@pytest.mark.parametrize("without", [
+    ("catalog",), ("catalog", "environment"), ("controls",),
+], ids="+".join)
+async def test_each_layer_holds_its_own_native_tools(placement_image, tmp_path, without):
+    """Each layer removed alone lets back exactly what it held: a positive control
+    for every layer, so the sealed offer cannot pass vacuously."""
+
+    requests, _ = await inventory_turn(placement_image, tmp_path, without=without)
+    assert tool_inventory(requests[0]) == INVENTORY["+".join(without)]
+
+
+REFUSED = [
+    # (tool, namespace, arguments, refusal): every name the unsealed recipe
+    # offered, and every environment-backed tool.
+    ("exec", None, {"code": "text('inert fixture')"}, "unsupported custom tool call: exec"),
+    ("apply_patch", None, {"patch": "*** Begin Patch\n*** End Patch\n"},
+     "unsupported custom tool call: apply_patch"),
+    *((name, None, {}, f"unsupported call: {name}") for name in (
+        "wait", "request_user_input", "request_user_input_async", "exec_command",
+        "write_stdin", "view_image", "request_permissions",
+    )),
+    *((name, namespace, {}, f"unsupported call: {namespace}{name}") for namespace, name in (
+        ("clock", "curr_time"), ("clock", "sleep"), ("image_gen", "imagegen"),
+        ("collaboration", "spawn_agent"), ("collaboration", "send_message"),
+        ("collaboration", "followup_task"), ("collaboration", "wait_agent"),
+        ("collaboration", "interrupt_agent"), ("collaboration", "list_agents"),
+    )),
+]
+
+
+@pytest.mark.parametrize("tool,namespace,arguments,refusal", REFUSED,
+                         ids=[f"{namespace or 'functions'}.{tool}"
+                              for tool, namespace, _, _ in REFUSED])
+async def test_a_sealed_turn_refuses_every_known_native_name(
+    placement_image, tmp_path, tool, namespace, arguments, refusal,
+):
+    """Dispatch is by name and never checks the offer (``registry.rs:551-573``),
+    so an unoffered name must also be unregistered: the model's call comes back
+    refused, and nothing reaches the client."""
+
+    requests, callbacks = await inventory_turn(
+        placement_image, tmp_path, tool=tool, namespace=namespace, arguments=arguments,
+    )
+    assert not callbacks and len(requests) == 2
+    (output,) = call_outputs(requests[1])
+    assert output["output"] == refusal
 
 
 async def test_actual_mount_mismatch_refuses_before_native_exec(placement_image, tmp_path):

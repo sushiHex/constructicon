@@ -143,11 +143,37 @@ NATIVE_HOME = "/tmp/home/.codex"
 
 VENDOR_MOUNT = "/opt/codex"
 CATALOG_MOUNT = "/opt/codex-models.json"
-"""Where the launch set's vendor tree and model catalog appear in the zone.
+"""Where the launch set's vendor tree and sealed model catalog appear in the zone.
 
-The runtime image carries only the two empty mount points; the content is
-bound read-only from the launch set (M8-N4-state-review.md, host-runtime
-interface item 1)."""
+The runtime image carries only the two empty mount points; the tree is bound
+read-only from the launch set (M8-N4-state-review.md, host-runtime interface
+item 1), and the catalog is the launcher's seal of the launch set's catalog
+(``sealed_catalog``)."""
+
+ENVIRONMENTS_MOUNT = f"{NATIVE_HOME}/environments.toml"
+NATIVE_ENVIRONMENTS = b"include_local = false\n"
+"""No execution environment: with no default and no local one, the vendor's
+default is ``Disabled`` (``exec-server/src/environment_toml.rs:236-248``), so
+no environment-backed tool registers."""
+
+
+def sealed_catalog(source: bytes) -> bytes:
+    """The catalog the zone receives: every entry's tool selectors closed.
+
+    At rust-v0.160.1 these four fields outrank the configuration
+    (M8-N5-native-tool-inventory.md): a patch tool whenever an environment
+    exists, code mode's ``exec`` and ``wait``, the collaboration tools, and the
+    ``clock`` and asynchronous user-input tools. ``tool_mode`` is spelled out,
+    since a missing or unknown value falls back to the feature flags. Nothing
+    else changes in any entry, so a pin bump that moves the sealed choice stays
+    covered and no model's identity or instructions move.
+    """
+
+    catalog = json.loads(source)
+    for entry in catalog["models"]:
+        entry.update(apply_patch_tool_type=None, tool_mode="direct",
+                     multi_agent_version=None, experimental_supported_tools=[])
+    return (json.dumps(catalog, sort_keys=True) + "\n").encode()
 
 TRUST_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
 """The zone's one trust store: the runtime image's copy of the host bundle.
@@ -323,6 +349,44 @@ def sealed_data_fd(data: bytes) -> int:
     return fd
 
 
+@dataclass(frozen=True)
+class NativeLayout:
+    """The launcher's own native data for one launch, by sealed descriptor.
+
+    Its content is fixed here, never chosen by a caller: no execution
+    environment, and the launch set's catalog with its tool selectors closed.
+    Together with the configuration they leave the model only the admitted
+    callback (M8-N5-native-tool-inventory.md). The catalog is read after the
+    probe's custody check, from the one file custody admitted.
+    """
+
+    environments_fd: int
+    catalog_fd: int | None
+
+    @classmethod
+    def seal(cls, vendor: NativeVendor | None) -> NativeLayout:
+        environments = sealed_data_fd(NATIVE_ENVIRONMENTS)
+        try:
+            if vendor is None:
+                return cls(environments, None)
+            try:
+                catalog = sealed_catalog(vendor.catalog.read_bytes())
+            except (ValueError, KeyError, TypeError, AttributeError) as exc:
+                raise ContractViolation("the launch set's catalog cannot be sealed") from exc
+            return cls(environments, sealed_data_fd(catalog))
+        except BaseException:
+            os.close(environments)
+            raise
+
+    @property
+    def mount_fds(self) -> tuple[int, ...]:
+        return tuple(fd for fd in (self.environments_fd, self.catalog_fd) if fd is not None)
+
+    def close(self) -> None:
+        for fd in self.mount_fds:
+            os.close(fd)
+
+
 class ProcessExchangeError(Exception):
     """A failed conversation with captured evidence after completed teardown."""
 
@@ -487,7 +551,7 @@ class LinuxLauncher:
 
     def argv(
         self, command: tuple[str, ...], *, workspace: Path | None, posture: Posture,
-        native_store: NativeStoreMount | None = None,
+        native_store: NativeStoreMount | None = None, layout: NativeLayout | None = None,
     ) -> list[str]:
         if sys.platform != "linux":
             raise ContractViolation("contained command construction requires Linux")
@@ -495,6 +559,10 @@ class LinuxLauncher:
             raise ContractViolation("contained command requires a fixed absolute executable")
         if native_store is not None and workspace is not None:
             raise ContractViolation("a native store and worker workspace cannot share a namespace")
+        if (native_store is None) != (layout is None) or (
+            layout is not None and (layout.catalog_fd is None) != (self.vendor is None)
+        ):
+            raise ContractViolation("a native store launches with exactly the launcher's layout")
         args = [
             str(self.bubblewrap), "--unshare-user", "--unshare-pid", "--unshare-ipc",
             "--unshare-uts", "--unshare-net", "--new-session", "--die-with-parent",
@@ -509,19 +577,20 @@ class LinuxLauncher:
                 "--ro-bind" if posture is Posture.READ else "--bind",
                 str(workspace), "/workspace",
             ]
-        if native_store is not None:
+        if native_store is not None and layout is not None:
             args += [
                 "--dir", NATIVE_HOME,
                 "--ro-bind-data", str(native_store.configuration_fd), f"{NATIVE_HOME}/config.toml",
+                "--ro-bind-data", str(layout.environments_fd), ENVIRONMENTS_MOUNT,
                 "--bind-fd", str(native_store.credential_fd), f"{NATIVE_HOME}/{CREDENTIAL_FILE}",
                 "--setenv", "CODEX_HOME", NATIVE_HOME,
                 "--setenv", "CODEX_CA_CERTIFICATE", TRUST_BUNDLE,
             ]
-            if self.vendor is not None:
+            if self.vendor is not None and layout.catalog_fd is not None:
                 # Checked in ``check_artifacts`` on this launch's probe.
                 args += [
                     "--ro-bind", str(self.vendor.tree), VENDOR_MOUNT,
-                    "--ro-bind", str(self.vendor.catalog), CATALOG_MOUNT,
+                    "--ro-bind-data", str(layout.catalog_fd), CATALOG_MOUNT,
                 ]
             if native_store.egress is not None:
                 native_store.egress.require_current()
@@ -579,15 +648,20 @@ class LinuxLauncher:
                 await self.probe(deadline=deadline)
         except TimeoutError:
             return ProcessResult(125, b"", b"", time.monotonic() - started, timed_out=True)
+        # After the probe's custody check, so the catalog sealed is the one checked.
+        layout = None if native_store is None else NativeLayout.seal(self.vendor)
         try:
             result = await self._run(
                 command, workspace=workspace, posture=posture, guard_fds=guard_fds,
                 stdin=stdin, deadline=deadline, input_limit=input_limit, conversation=conversation,
-                native_store=native_store,
+                native_store=native_store, layout=layout,
             )
         except ProcessExchangeError as exc:
             exc.result = replace(exc.result, elapsed_s=time.monotonic() - started)
             raise
+        finally:
+            if layout is not None:
+                layout.close()
         return replace(result, elapsed_s=time.monotonic() - started)
 
     async def probe(self, *, deadline: float | None = None) -> None:
@@ -638,7 +712,7 @@ class LinuxLauncher:
         self, command: tuple[str, ...], *, workspace: Path | None, posture: Posture,
         guard_fds: tuple[int, ...], stdin: bytes = b"", deadline: float,
         input_limit: int | None = None, conversation: Conversation | None = None,
-        native_store: NativeStoreMount | None = None,
+        native_store: NativeStoreMount | None = None, layout: NativeLayout | None = None,
     ) -> ProcessResult:
         if sys.platform != "linux":
             raise ContractViolation("contained process ownership requires Linux")
@@ -648,17 +722,19 @@ class LinuxLauncher:
             return ProcessResult(125, b"", b"", 0, timed_out=True)
         args = self.argv(
             command, workspace=workspace, posture=posture, native_store=native_store,
+            layout=layout,
         )
+        # Only bubblewrap consumes these; the supervisor passes them through.
+        mount_fds = (() if native_store is None or layout is None
+                     else native_store.mount_fds + layout.mount_fds)
         if native_store is not None:
             if native_store.lock_fd not in guard_fds:
                 raise ContractViolation("the native store requires its retained supervisor guard")
-            if set(native_store.mount_fds) & set(guard_fds):
+            if set(mount_fds) & set(guard_fds):
                 raise ContractViolation("a native mount descriptor cannot also be a guard")
             checked = native_store.before_spawn()
             if not isinstance(checked, BindingCheck):
                 raise ContractViolation("the native store did not complete its binding check")
-        # Only bubblewrap consumes these; the supervisor passes them through.
-        mount_fds = native_store.mount_fds if native_store is not None else ()
         mount_argument = (
             (f"--mount-fds={','.join(str(fd) for fd in mount_fds)}",) if mount_fds else ()
         )

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import errno
 import gzip
+import hashlib
 import io
 import json
 import os
@@ -25,7 +26,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from constructicon.core.grants import Posture
 from constructicon.core.identity import Digest
+from constructicon.core.workspace import acquisition_id_for
 from constructicon.substrate.executors import codex, egress, operator_store
 from constructicon.substrate.executors._egress_bridge import PROXY_PORT
 from constructicon.substrate.executors.codex_lane import (
@@ -43,7 +46,14 @@ from constructicon.substrate.executors.codex_protocol import (
     ExpectedAccount,
 )
 from constructicon.substrate.executors.egress import identity_digests
-from constructicon.substrate.executors.linux import NativeVendor
+from constructicon.substrate.executors.linux import (
+    CATALOG_MOUNT,
+    ENVIRONMENTS_MOUNT,
+    NATIVE_ENVIRONMENTS,
+    NativeVendor,
+    sealed_catalog,
+)
+from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisition_guard
 from tests.native_startup import (
     BOOTSTRAP,
     MODELS,
@@ -68,6 +78,7 @@ from tests.substrate.test_native_egress_containment import controlled_peers as c
 from tests.substrate.test_native_egress_containment import pki as pki
 from tests.substrate.test_native_egress_containment import short_root as short_root
 from tests.substrate.test_operator_store_containment import binding as binding
+from tests.substrate.test_operator_store_containment import collect, hold, native_mount
 
 PROXY = f"http://127.0.0.1:{PROXY_PORT}"
 ZONE_ENVIRONMENT = {
@@ -388,6 +399,45 @@ def vendor_launcher(bridge_launcher):
     ))
 
 
+ZONE_FILES = r"""
+import hashlib, json
+print(json.dumps({path: hashlib.sha256(open(path, 'rb').read()).hexdigest()
+                  for path in PATHS}), flush=True)
+"""
+
+
+async def test_a_vendored_native_zone_reads_the_seal_never_the_installed_catalog(
+    binding, vendor_launcher, tmp_path,
+):
+    """Production's own launch path, not a fixture (M8-N5-native-tool-inventory.md):
+    the zone's catalog is the launcher's seal of the launch set's catalog, the
+    digest the lane evidence records, and its environment file is the launcher's.
+    The placement lane proves what those bytes offer the model."""
+
+    paths = (CATALOG_MOUNT, ENVIRONMENTS_MOUNT)
+    source = ZONE_FILES.replace("PATHS", repr(paths))
+    held = await hold(binding)
+    try:
+        async with acquisition_guard(AcquisitionPaths(
+            tmp_path, acquisition_id_for("n5-seal-proof", 1),
+        )) as guard:
+            with native_mount(binding, held) as mount:
+                result = await vendor_launcher.exchange(
+                    ("/usr/bin/python3", "-I", "-c", source), workspace=None,
+                    posture=Posture.READ, guard_fds=(guard, held.lock_fd), timeout_s=10,
+                    conversation=collect, native_store=mount,
+                )
+    finally:
+        binding.close_held(held)
+    assert result.returncode == result.payload_returncode == 0, result
+    seen = json.loads(result.stdout)
+    installed = vendor_launcher.vendor.catalog.read_bytes()
+    assert seen[CATALOG_MOUNT] == hashlib.sha256(sealed_catalog(installed)).hexdigest()
+    assert seen[CATALOG_MOUNT] == vendor_executable(vendor_launcher).sealed_catalog_sha256
+    assert seen[CATALOG_MOUNT] != hashlib.sha256(installed).hexdigest()
+    assert seen[ENVIRONMENTS_MOUNT] == hashlib.sha256(NATIVE_ENVIRONMENTS).hexdigest()
+
+
 def test_the_production_configuration_is_the_reviewed_literal():
     expected = (
         # Decision 3: the pinned catalog's newest ``sol`` at its lowest effort; CI
@@ -397,15 +447,21 @@ def test_the_production_configuration_is_the_reviewed_literal():
         'cli_auth_credentials_store = "file"\nforced_login_method = "chatgpt"\n'
         'check_for_update_on_startup = false\nweb_search = "disabled"\n'
         "[analytics]\nenabled = false\n[features]\nplugins = false\n"
-        "apps = false\nshell_tool = false\nunified_exec = false\n"
-        "apply_patch_freeform = false\nview_image = false\nmulti_agent = false\n"
+        "apps = false\nshell_tool = false\nunified_exec = false\nview_image = false\n"
         # ``goals`` is stable and on by default at both pins; from rust-v0.160
         # its three tools are visible on ephemeral threads too (``ext/goal``
         # ``tools_visible``), so every request carried a built-in tool surface.
-        "code_mode = false\njs_repl = false\ngoals = false\n"
+        "multi_agent = false\ncode_mode = false\ngoals = false\n"
         # Default-on since rust-v0.160: it re-sends the account GETs through the
         # system proxy after a 5 s timeout, so their count and timing drift.
         "system_proxy_fallback = false\n"
+        # The configuration's share of the tool inventory: the default-on gates
+        # the sealed catalog and the absent environment leave, collisions fatal,
+        # collaboration off over any catalog (M8-N5-native-tool-inventory.md).
+        "image_generation = false\nsleep_tool = false\nmulti_agent_v2 = false\n"
+        "[features.tool_registry]\nerror_on_tool_collisions = true\n"
+        "[agents]\nenabled = false\n"
+        "[tools.experimental_request_user_input]\nenabled = false\n"
     )
     assert production_configuration() == expected
     # The containment control differs in exactly one value.

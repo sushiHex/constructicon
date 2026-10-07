@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import stat
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,7 +19,9 @@ from constructicon.core.errors import ContractViolation
 from constructicon.core.grants import Posture
 from constructicon.core.identity import digest
 from constructicon.substrate.executors import linux
-from tests.substrate.test_native_store_launch import mount, positive
+from tests.substrate.test_native_store_launch import LAYOUT, mount, positive
+
+CATALOG_FD = 744
 
 
 class Host:
@@ -108,19 +111,44 @@ def on_linux(monkeypatch):
     monkeypatch.setattr(linux.os, "getgid", lambda: 1000, raising=False)
 
 
-def test_a_native_launch_binds_the_vendor_tree_and_catalog_read_only(tmp_path, on_linux):
+def test_a_native_launch_binds_the_vendor_tree_and_its_sealed_catalog_read_only(
+    tmp_path, on_linux,
+):
     vendor = linux.NativeVendor(tmp_path / "native-codex", tmp_path / "codex-models.json")
     argv = launcher(tmp_path, vendor).argv(
         ("/opt/codex/bin/codex",), workspace=None, posture=Posture.READ,
-        native_store=mount(positive),
+        native_store=mount(positive), layout=replace(LAYOUT, catalog_fd=CATALOG_FD),
     )
     start = argv.index(linux.VENDOR_MOUNT) - 2
     assert argv[start:start + 6] == [
         "--ro-bind", str(vendor.tree), "/opt/codex",
-        "--ro-bind", str(vendor.catalog), "/opt/codex-models.json",
+        "--ro-bind-data", str(CATALOG_FD), "/opt/codex-models.json",
     ]
     assert argv.index("CODEX_HOME") < start < argv.index("--chdir")
+    # The installed catalog never reaches the zone; only its seal does.
+    assert str(vendor.catalog) not in argv
     assert argv.count(str(vendor.tree)) == 1 and "--bind" not in argv
+
+
+@pytest.mark.parametrize("vendored,layout", [
+    (False, None), (True, None), (False, "with-catalog"), (True, "without-catalog"),
+], ids=["no-layout", "vendor-no-layout", "catalog-without-vendor", "vendor-without-catalog"])
+def test_a_native_launch_takes_exactly_the_launchers_layout(tmp_path, on_linux, vendored, layout):
+    vendor = linux.NativeVendor(tmp_path / "native-codex", tmp_path / "codex-models.json")
+    chosen = {None: None, "with-catalog": replace(LAYOUT, catalog_fd=CATALOG_FD),
+              "without-catalog": LAYOUT}[layout]
+    with pytest.raises(ContractViolation, match="exactly the launcher's layout"):
+        launcher(tmp_path, vendor if vendored else None).argv(
+            ("/opt/codex/bin/codex",), workspace=None, posture=Posture.READ,
+            native_store=mount(positive), layout=chosen,
+        )
+
+
+def test_a_worker_launch_takes_no_layout(tmp_path, on_linux):
+    with pytest.raises(ContractViolation, match="exactly the launcher's layout"):
+        launcher(tmp_path).argv(
+            ("/usr/bin/git",), workspace=tmp_path, posture=Posture.READ, layout=LAYOUT,
+        )
 
 
 def test_a_worker_launch_never_sees_the_vendor(tmp_path, on_linux):
@@ -134,6 +162,7 @@ def test_a_worker_launch_never_sees_the_vendor(tmp_path, on_linux):
 def test_no_vendor_means_no_bind(tmp_path, on_linux):
     argv = launcher(tmp_path).argv(
         ("/usr/bin/python3",), workspace=None, posture=Posture.READ, native_store=mount(positive),
+        layout=LAYOUT,
     )
     assert linux.VENDOR_MOUNT not in argv and linux.CATALOG_MOUNT not in argv
 

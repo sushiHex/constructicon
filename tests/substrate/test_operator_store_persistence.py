@@ -24,7 +24,7 @@ from constructicon.core.grants import Posture
 from constructicon.core.workspace import acquisition_id_for
 from constructicon.substrate.executors import operator_store
 from constructicon.substrate.executors.egress import EgressRelay
-from constructicon.substrate.executors.linux import LinuxLauncher
+from constructicon.substrate.executors.linux import NATIVE_ENVIRONMENTS, LinuxLauncher
 from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisition_guard
 from tests.substrate.test_egress import controlled_loopback as controlled_loopback
 from tests.substrate.test_egress import refuse_resolution
@@ -162,20 +162,28 @@ if plan['mode'] == 'plant':
         config_errno = 0
     except OSError as exc:
         config_errno = exc.errno
+    try:
+        (home / 'environments.toml').write_text('include_local = true\n')
+        environments_errno = 0
+    except OSError as exc:
+        environments_errno = exc.errno
     (home / 'hooks.json').write_text('{"startup": ["/tmp/home/.codex/helper"]}\n')
     (home / 'helper').write_text(plan['helper'])
     (home / 'helper').chmod(0o700)
     print(json.dumps({'planted': (home / 'helper').is_file(),
-                      'config_errno': config_errno}), flush=True)
+                      'config_errno': config_errno,
+                      'environments_errno': environments_errno}), flush=True)
 else:
     survivors = sorted(name for name in ('hooks.json', 'helper') if (home / name).exists())
     config = (home / 'config.toml').read_bytes()
+    environments = (home / 'environments.toml').read_text()
     helper = plan.pop('helper')
     ran = subprocess.run(['/usr/bin/python3', '-I', '-c', helper], input=json.dumps(plan),
                          capture_output=True, text=True, timeout=60)
     lines = ran.stdout.splitlines()
     print(json.dumps({'returncode': ran.returncode, 'lines': lines[:1],
                       'survivors': survivors, 'config': config.decode(),
+                      'environments': environments,
                       'home_entries': sorted(p.name for p in home.iterdir()),
                       'facts': json.loads(lines[-1]) if len(lines) > 1 else None}), flush=True)
 """
@@ -295,12 +303,14 @@ async def test_home_content_widens_neither_the_next_launch_nor_the_zone(
 
     denied_writes = {errno.EROFS, errno.EACCES, errno.EPERM}
     assert planted["planted"] is True and planted["config_errno"] in denied_writes, planted
+    assert planted["environments_errno"] in denied_writes, planted
     # Each exchange also runs its mount-free probe through argv; compare the launches.
     native = [normalized(argv) for argv in recorded if "CODEX_HOME" in argv]
     assert len(native) == 2 and native[0] == native[1], "home content changed the launch"
     assert probed["survivors"] == [], "planted home content survived the acquisition"
     assert probed["config"] == CONFIGURATION.decode(), "the sealed configuration changed"
-    assert probed["home_entries"] == ["auth.json", "config.toml"], probed
+    assert probed["environments"] == NATIVE_ENVIRONMENTS.decode(), "the environment file changed"
+    assert probed["home_entries"] == ["auth.json", "config.toml", "environments.toml"], probed
     assert sorted(os.listdir(store)) == before == ["auth.json"], "the zone reached the store"
     assert resolved == [("control.invalid", 443)], "the relay resolved a name"
     assert probed["returncode"] == 0 and probed["lines"] == ["helper ran"], probed
