@@ -537,6 +537,16 @@ async def test_documented_checker_accepts_actual_unrouted_account_denial(
     assert result.returncode == 0, (result.stderr, evidence["faults"])
     assert result.stdout.strip() == str(revision)
     assert _check_evidence("active", path, "active", seal("pro"), policy, directory).returncode != 0
+    # Nothing may have been refreshed or reached: a rewritten credential, or any
+    # accepted connection, refuses the denial however clean the rest is.
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    for changed in (
+        {**raw, "credential": {**raw["credential"], "mtime_changed": True}},
+        {**raw, "relay": {**raw["relay"], "destinations": {"accepted:auth.openai.com:443": 1}}},
+    ):
+        path.write_text(json.dumps(changed), encoding="utf-8")
+        refused = _check_evidence("denial", path, "active", seal("pro"), policy, directory)
+        assert refused.returncode != 0, changed
 
 
 async def test_documented_checker_accepts_actual_maintenance_hold(

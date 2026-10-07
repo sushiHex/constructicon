@@ -159,6 +159,8 @@ else:
         required_faults = {NO_RESULT_FAULT, "the startup gate did not complete", "the startup did not send exactly the four authorized methods", "no spend readback was judged"}
         require(set(e["faults"]) == required_faults and len(e["faults"]) == len(required_faults))
         require(set(e["relay"]["denied"]) == {"denied:destination"} and e["relay"]["denied"]["denied:destination"] >= 1)
+        # Nothing was refreshed: the credential is the one the run started with.
+        require(e["credential"]["mtime_changed"] is False and e["relay"]["destinations"] == {})
     else:
         require(mode in ("initial", "qualify", "hold", "active", "refresh") and e["faults"] == [])
         require(e["methods_sent"] == methods and e["gate"]["completed"] is True)

@@ -979,7 +979,12 @@ def judge(case, run, peer, errors, policy, credential, seeded, inode) -> None:
         # The runbook's S6b: without chatgpt.com, account/read's own workspace
         # check is denied at the relay. The reading fails before any request
         # reaches a host, nothing is refreshed, and no readback is judged.
+        # The relay is the only path to either host, and it records every
+        # connection synchronously within the run: none was accepted, so the
+        # fake's empty log is evidence, not a race against its accept thread.
+        assert run["relay"]["destinations"] == {}, run["relay"]
         assert log == [] and peer.sessions == [], log
+        assert run["credential"]["mtime_changed"] is False, run["credential"]
         assert set(run["relay"]["denied"]) == {"denied:destination"}, run["relay"]
         assert run["methods_sent"] == [named_method(method) for method in STARTUP_METHODS[:3]]
         assert set(run["faults"]) == STOPPED | {NO_RESULT_FAULT}, run["faults"]
