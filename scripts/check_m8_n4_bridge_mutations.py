@@ -374,8 +374,15 @@ MUTANTS = (
     (
         "N4-L34 the evidence records the client it ran (CC-3)",
         LANE + "_base",
-        '"sha256": executable.sha256},',
-        '"sha256": ""},',
+        '"sha256": executable.sha256,',
+        '"sha256": "",',
+        T + "test_a_clean_startup_records_the_four_methods_and_nothing_identifying",
+    ),
+    (
+        "N5-L1 the evidence records the catalog it read",
+        LANE + "_base",
+        '"catalog_sha256": executable.catalog_sha256},',
+        '"catalog_sha256": ""},',
         T + "test_a_clean_startup_records_the_four_methods_and_nothing_identifying",
     ),
     (
