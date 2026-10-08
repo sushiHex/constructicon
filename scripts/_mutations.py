@@ -16,6 +16,29 @@ import time
 from pathlib import Path
 
 
+def mutated(target: str, before: str, after: str):
+    """The function a mutant names and its mutated tree, or why there is none.
+
+    ``before`` must occur exactly once in the dedented source. The harness and
+    tests/test_mutation_inventories.py share this, so a refactor that moves a
+    target fails the suite instead of surfacing only when the inventory runs.
+    """
+    module_name, attribute = target.split(":")
+    function = importlib.import_module(module_name)
+    for part in attribute.split("."):
+        function = getattr(function, part)
+    if isinstance(function, property):
+        function = function.fget
+    if inspect.ismethod(function):
+        function = function.__func__
+    source = textwrap.dedent(inspect.getsource(function))
+    if source.count(before) != 1:
+        raise RuntimeError(f"mutation must match exactly once: {target}")
+    tree = ast.parse(source.replace(before, after, 1))
+    tree.body[0].decorator_list = []
+    return function, tree
+
+
 def run(mutants) -> int:
     if len(sys.argv) == 2:
         import pytest
@@ -40,19 +63,7 @@ def run(mutants) -> int:
                     self.errors += 1
 
         _, target, before, after, test = mutants[int(sys.argv[1])]
-        module_name, attribute = target.split(":")
-        function = importlib.import_module(module_name)
-        for part in attribute.split("."):
-            function = getattr(function, part)
-        if isinstance(function, property):
-            function = function.fget
-        if inspect.ismethod(function):
-            function = function.__func__
-        source = textwrap.dedent(inspect.getsource(function))
-        if source.count(before) != 1:
-            raise RuntimeError(f"mutation must match exactly once: {target}")
-        tree = ast.parse(source.replace(before, after, 1))
-        tree.body[0].decorator_list = []
+        function, tree = mutated(target, before, after)
         namespace = dict(function.__globals__)
         exec(compile(tree, function.__code__.co_filename, "exec"), namespace)
         function.__code__ = namespace[function.__name__].__code__

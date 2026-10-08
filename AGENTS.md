@@ -104,8 +104,11 @@ real and passes a green gate, so it is yours to check by hand.
   `tests/test_m8_runner_qualification.py` exercises `scripts.ci.qualify_m8_runner`
   directly and reads its source and policy bytes. So a script a test imports is
   covered by that test; a script no test imports has only its mutation
-  inventory, and the inventories themselves are neither linted, type-checked
-  nor collected.
+  inventory. The inventories are neither linted nor type-checked, but
+  `tests/test_mutation_inventories.py` holds each to exactly one place in CI,
+  each mutant's target to text that occurs exactly once, and each killing
+  test to one that still collects. A refactor that moves a target fails the
+  suite.
 - **Workflows never execute locally.** A change to `.github/workflows/` is
   tested only by CI, so the PR's own run is the first execution.
 - **Never `ruff format` a pre-existing file.** The repository is not

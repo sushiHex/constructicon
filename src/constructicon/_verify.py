@@ -1,8 +1,9 @@
 """One verification command (I7): ``uv run verify``.
 
-Runs exactly what CI runs — lint, types, the layer contract, and the full
-credential-free test suite — so a contributor (agent first) self-certifies
-locally what CI will check.
+Runs lint, types, the layer contract, and the full credential-free test
+suite, so a contributor (agent first) self-certifies locally what CI will
+check. CI also runs the mutation inventories and the provisioned Linux
+lanes; the suite holds every inventory to CI and to live code.
 """
 
 from __future__ import annotations

@@ -323,7 +323,7 @@ async def test_a_loss_found_while_closing_relinquishes_the_siblings_not_yet_clos
     running = await world.start(run_id, {"executor": "retaining", "z": "sibling"})
     await outcome(running)
 
-    assert executor.closes == ["release"]
+    assert executor.closes == ["release"] and executor.relinquished == []
     assert sibling.closes == [] and sibling.relinquished == [sibling.handles[0].key]
     assert world.held() == [False, False]
     assert world.rows(run_id) == [("active", None), ("active", None)]
