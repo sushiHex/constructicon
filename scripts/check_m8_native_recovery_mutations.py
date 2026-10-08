@@ -92,6 +92,21 @@ MUTANTS = (
      "constructicon.runtime.walker:Walker._close_acquired",
      "failure := await self._relinquish_acquired(rest)", "failure := None",
      CUSTODY + "test_a_loss_found_while_closing_relinquishes_the_siblings_not_yet_closed"),
+    ("a lost record answer is settled against durable state",
+     "constructicon.runtime.walker:Walker._acquire_invocation_capability",
+     "if recorded:", "if False:",
+     "tests/runtime/test_leases.py::"
+     "test_a_lost_answer_after_the_lease_commit_closes_the_recorded_row"),
+    ("a late record answer affirms ownership before disposal",
+     "constructicon.runtime.walker:Walker._acquire_invocation_capability",
+     "self._journal.heartbeat(lease, ttl_s=self._lease_ttl_s)", "None",
+     "tests/runtime/test_leases.py::"
+     "test_a_late_answer_after_a_successor_claimed_leaves_the_row_to_it"),
+    ("an unsettled record outcome keeps the local discard",
+     "constructicon.runtime.walker:Walker._acquire_invocation_capability",
+     "recorded = False", "raise",
+     "tests/runtime/test_leases.py::"
+     "test_a_failed_settling_read_still_discards_the_acquisition_locally"),
 )
 
 if __name__ == "__main__":
