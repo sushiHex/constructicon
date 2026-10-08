@@ -6,12 +6,14 @@ store, with the guard substituted (Linux proves the real flock separately).
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from constructicon.api import qualification
 from constructicon.api.qualification import (
     EXECUTOR,
     SCOPE,
@@ -23,6 +25,7 @@ from constructicon.core.identity import digest
 from constructicon.core.manifest import source_graph_hash_for
 from constructicon.core.qualification import QualificationAuthorization
 from constructicon.core.run import RunStatus
+from constructicon.runtime.walker import DEFAULT_LEASE_TTL_S
 from constructicon.substrate.executors.codex import (
     UNQUALIFIED_PREREQUISITES,
     CodexOperatorProvider,
@@ -82,6 +85,24 @@ def rows(granted) -> list[tuple[int, str, str | None]]:
         (row.acquisition_epoch, row.state, row.disposition)
         for row in journal.capability_leases(granted.run_id)
     ]
+
+
+def after_materialization(qualified: CodexOperatorProvider, then) -> None:
+    """Materialize for real, then hand the live acquisition's context to ``then``."""
+    acquire = qualified.acquire
+
+    async def acquire_then(context):
+        acquisition = await acquire(context)
+        real = acquisition.materialize
+        assert real is not None
+
+        async def materialize_then():
+            await real()
+            await then(context)
+
+        return replace(acquisition, materialize=materialize_then)
+
+    qualified.acquire = acquire_then
 
 
 def dying_after_materialization(qualified: CodexOperatorProvider) -> None:
@@ -161,6 +182,106 @@ async def test_a_successor_reconciles_and_acquires_only_within_the_budget(
     assert status is outcome
     assert rows(granted) == expected
     assert all(handle.dispatch is False for handle in successor.handles)
+
+
+async def test_a_lost_lease_record_answer_closes_the_qualification_row(
+    tmp_path, portable_binding, substituted_guard, clock, monkeypatch
+):
+    """Lease recording: the row commits, its answer is lost; settled against
+    the journal, it is closed under the fence (#131), and the run fails."""
+
+    class AnswerLost(SqliteJournal):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            armed = [True]
+
+            def probe(name: str) -> None:
+                if name == "lease.after_record_commit" and armed:
+                    armed.pop()
+                    raise ConnectionError("the commit's answer was lost")
+
+            self.fault_probe = probe
+
+    monkeypatch.setattr(qualification, "SqliteJournal", AnswerLost)
+    granted = authorization(tmp_path, portable_binding, clock)
+    qualified = provider(tmp_path, portable_binding, granted)
+
+    status = await qualify(provider=qualified, grants=GRANTS, timeout_s=30, now_fn=clock.now)
+
+    assert status is RunStatus.FAILED
+    assert rows(granted) == [(1, "closed", "discarded")]
+    assert [handle.dispatch for handle in qualified.handles] == [False]
+
+
+async def test_a_cancellation_mid_materialization_discards_and_cancels(
+    tmp_path, portable_binding, substituted_guard, clock
+):
+    granted = authorization(tmp_path, portable_binding, clock)
+    qualified = provider(tmp_path, portable_binding, granted)
+
+    async def cancel(context):
+        SqliteJournal(granted.journal, now_fn=clock.now).request_cancel(granted.run_id)
+        context.check_control()
+
+    after_materialization(qualified, cancel)
+    status = await qualify(provider=qualified, grants=GRANTS, timeout_s=30, now_fn=clock.now)
+
+    assert status is RunStatus.CANCELLED
+    assert rows(granted) == [(1, "closed", "discarded")]
+    (handle,) = qualified.handles
+    assert handle._store_lock is None and handle._guard_owner is None
+
+
+async def test_an_ownership_loss_relinquishes_and_a_successor_completes(
+    tmp_path, portable_binding, substituted_guard, clock
+):
+    """Loss of ownership mid-materialization: the loser relinquishes its custody
+    and closes nothing (#130); the successor reconciles and, within a budget of
+    three (the thief's claim spends one), acquires again and completes."""
+    granted = authorization(tmp_path, portable_binding, clock, max_epoch=3)
+    loser = provider(tmp_path, portable_binding, granted)
+
+    async def lose(context):
+        thief = SqliteJournal(granted.journal, now_fn=clock.now)
+        clock.advance(DEFAULT_LEASE_TTL_S + 1)
+        thief.claim_run(granted.run_id, owner_id="thief", ttl_s=DEFAULT_LEASE_TTL_S)
+        while True:  # the heartbeat latches the loss; control then observes it
+            context.check_control()
+            await asyncio.sleep(0.1)
+
+    after_materialization(loser, lose)
+    with pytest.raises(TimeoutError):
+        await qualify(provider=loser, grants=GRANTS, timeout_s=20, now_fn=clock.now)
+    (handle,) = loser.handles
+    assert handle.closed and handle._store_lock is None and handle._guard_owner is None
+    assert not portable_binding[2].is_closed(handle.paths), "the loser disposed durably"
+    assert rows(granted) == [(1, "active", None)]
+
+    # The budget counts ownership claims: the thief's claim spent epoch 2, so
+    # this successor claims epoch 3, which a budget of three admits.
+    clock.advance(DEFAULT_LEASE_TTL_S + 1)
+    successor = provider(tmp_path, portable_binding, granted)
+    status = await qualify(provider=successor, grants=GRANTS, timeout_s=30, now_fn=clock.now)
+    assert status is RunStatus.SUCCEEDED
+    assert rows(granted) == [(1, "closed", "discarded"), (3, "closed", "released")]
+
+
+async def test_a_journal_holding_another_run_is_refused_before_recovery(
+    tmp_path, portable_binding, clock
+):
+    """The journal is the qualification's alone: its RunHost would resume
+    whatever the journal holds, so a foreign run refuses the whole entry."""
+    first = authorization(tmp_path, portable_binding, clock)
+    assert await qualify(
+        provider=provider(tmp_path, portable_binding, first), grants=GRANTS,
+        timeout_s=30, now_fn=clock.now,
+    ) in (RunStatus.SUCCEEDED, RunStatus.FAILED)
+    second = authorization(tmp_path, portable_binding, clock, idempotency_key="another")
+    with pytest.raises(ContractViolation, match="not this qualification's"):
+        await qualify(
+            provider=provider(tmp_path, portable_binding, second), grants=GRANTS,
+            timeout_s=30, now_fn=clock.now,
+        )
 
 
 async def test_an_unauthorized_provider_or_invocation_is_refused_before_any_journal(

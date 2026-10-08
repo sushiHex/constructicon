@@ -340,11 +340,14 @@ def _admitted_unavailability(
     A provider holding a verified qualification authorization for exactly this
     graph omits its own published reasons here, and nowhere else: describe()
     still publishes them, and an absent or incoherent provider is never cleared.
+    Never under a resolution lock: a reproduced or counterfactual admission can
+    keep the authored graph while resolving different code.
     """
     provider = comp.capabilities.get(capability_id)
     reasons = descriptor.executor_unavailability(provider)
     if (
         reasons
+        and comp.resolution_lock is None
         and descriptor.executor_incoherence(provider) is None
         and isinstance(provider, QualificationAuthorizing)
         and provider.authorizes_admission(

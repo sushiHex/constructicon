@@ -60,7 +60,7 @@ async def test_the_authorized_run_takes_the_real_guard_and_store_and_never_dispa
     assert rows(granted) == [(1, "closed", "released")]
 
 
-async def test_a_successor_recovers_from_real_process_death_within_the_budget(
+async def test_a_successor_reconciles_real_process_death_and_mints_nothing_beyond_the_budget(
     authorizations,
 ):
     """The owner dies by _exit holding the flock guard and the store lock; the
@@ -85,25 +85,34 @@ async def test_a_successor_recovers_from_real_process_death_within_the_budget(
     assert successor.handles == []
 
 
-@pytest.mark.parametrize(
-    "variant",
-    ["runtime-owned.json", "world-readable.json", "../qualification-writable/accepted.json"],
-    ids=["owner", "mode", "parent"],
-)
+
+
+# Root prepares one unsealed variant per reader check in CI, each otherwise a
+# byte-identical copy of the accepted authorization, so each refusal is that
+# check's alone; the accepted file itself is the positive control.
+VARIANTS = {
+    "owner": "qualification/runtime-owned.json",
+    "mode": "qualification/world-readable.json",
+    "links": "qualification/hardlinked.json",
+    "size": "qualification/oversized.json",
+    "leaf-symlink": "qualification/linked.json",
+    "ancestor-owner": "qualification-writable/accepted.json",
+    "ancestor-mode": "qualification-open/accepted.json",
+    "ancestor-symlink": "qualification-alias/accepted.json",
+}
+
+
+def test_the_reader_accepts_the_sealed_authorization(authorizations):
+    granted = read_authorization(authorizations / "accepted.json")
+    assert granted.authorization_id == "ci-twin-accepted"
+
+
+@pytest.mark.parametrize("variant", sorted(VARIANTS))
 def test_the_reader_refuses_each_file_the_owner_did_not_seal(authorizations, variant):
-    """Root prepared one variant per check (CI), each otherwise identical, so
-    every refusal is that check's alone."""
-    path = (authorizations / variant).resolve()
-    assert path.is_file()
+    path = authorizations.parent / VARIANTS[variant]
+    assert os.path.lexists(path)
     with pytest.raises(ContractViolation, match="unavailable"):
         read_authorization(path)
-
-
-def test_the_reader_follows_no_symlink(authorizations, tmp_path):
-    link = tmp_path / "link.json"
-    link.symlink_to(authorizations / "accepted.json")
-    with pytest.raises(ContractViolation, match="unavailable"):
-        read_authorization(link)
 
 
 async def qualify_once(provider, *, timeout_s: float = 60) -> RunStatus:

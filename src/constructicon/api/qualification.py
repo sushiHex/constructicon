@@ -125,6 +125,10 @@ async def qualify(
         )
     _require_coherent(authorization)
     journal = SqliteJournal(Path(authorization.journal), now_fn=now_fn)
+    # The journal is this qualification's alone. Checked before any recovery
+    # starts: the RunHost resumes every recoverable run in the journal it opens.
+    if any(record.run_id != authorization.run_id for record in journal.run_records(limit=2)):
+        raise ContractViolation("the journal holds runs that are not this qualification's")
     capability = authorization.capability_id
     system = Constructicon(
         journal=journal,
@@ -146,8 +150,8 @@ async def qualify(
         scopes=frozenset({READ_SCOPE, ADMIN_SCOPE}),
     )
     control = ControlPlane(system=system, store=journal)
-    await control.startup()
     try:
+        await control.startup()
         await _bootstrap(control, actor)
         submitted = await control.runs_start(
             actor,

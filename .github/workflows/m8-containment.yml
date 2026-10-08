@@ -164,12 +164,24 @@ jobs:
             sudo chmod 0640 "$target"
           done < "$RUNNER_TEMP/m8-qualification-pins.txt"
           # One unsealed variant per reader check, each otherwise identical.
-          accepted="$launch/qualification/accepted.json"
-          sudo install -o m8-service -g m8-service -m 0640 "$accepted" "$launch/qualification/runtime-owned.json"
-          sudo install -o root -g m8-service -m 0644 "$accepted" "$launch/qualification/world-readable.json"
+          q="$launch/qualification"
+          accepted="$q/accepted.json"
+          sealed() { sudo install -o root -g m8-service -m 0640 "$@"; }
+          sudo install -o m8-service -g m8-service -m 0640 "$accepted" "$q/runtime-owned.json"
+          sudo install -o root -g m8-service -m 0644 "$accepted" "$q/world-readable.json"
+          sealed "$accepted" "$q/linked-copy.json"
+          sudo ln "$q/linked-copy.json" "$q/hardlinked.json"
+          head -c 9000 /dev/zero | tr '\0' ' ' | sudo tee "$RUNNER_TEMP/padding" > /dev/null
+          sudo sh -c "cat '$accepted' '$RUNNER_TEMP/padding' > '$RUNNER_TEMP/oversized.json'"
+          sealed "$RUNNER_TEMP/oversized.json" "$q/oversized.json"
+          sudo ln -s accepted.json "$q/linked.json"
           sudo install -d -o m8-service -g m8-service -m 0755 "$launch/qualification-writable"
-          sudo install -o root -g m8-service -m 0640 "$accepted" "$launch/qualification-writable/accepted.json"
-          stat -c '%a %U %G %n' "$launch/qualification"/*.json "$launch/qualification-writable"/*.json
+          sealed "$accepted" "$launch/qualification-writable/accepted.json"
+          sudo install -d -o root -g root -m 0757 "$launch/qualification-open"
+          sealed "$accepted" "$launch/qualification-open/accepted.json"
+          sudo ln -s qualification "$launch/qualification-alias"
+          stat -c '%a %h %U %G %N' "$q"/*.json "$launch"/qualification-*/accepted.json \
+            "$launch/qualification-alias"
           as_service M8_QUALIFICATION_REQUIRED=1 M8_QUALIFICATION_AUTHORIZATIONS="$launch/qualification" \
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_qualification_linux.py \
               -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
