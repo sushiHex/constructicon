@@ -290,11 +290,14 @@ def test_a_session_configuration_other_than_production_is_refused(host):
 def test_an_unprepared_state_directory_is_refused_before_it_is_touched(host, tmp_path):
     bare = tmp_path / "unprepared"
     bare.mkdir()
-    with pytest.raises(ContractViolation, match="not this host's prepared state"):
+    # Any refusal is caught, so that "untouched" is asserted before its kind.
+    with pytest.raises(Exception) as refused:
         codex_host.operator_provider(
             codex_host.HostSession(**{**host.__dict__, "state": bare}),
         )
     assert list(bare.iterdir()) == []
+    assert refused.type is ContractViolation
+    assert "not this host's prepared state" in str(refused.value)
 
 
 def test_mint_prints_the_pins_of_this_host(host, capsys):
