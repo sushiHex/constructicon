@@ -57,7 +57,7 @@ MUTANTS = (
      CODEX_TEST + "test_an_ordinary_provider_still_dispatches_and_still_refuses_unavailable"),
     ("a qualification handle is minted without dispatch",
      CODEX + "CodexOperatorProvider.acquire",
-     "dispatch=qualification is None,", "dispatch=True,",
+     "dispatch=qualification is None or qualification.dispatches,", "dispatch=True,",
      CODEX_TEST + "test_the_authorized_acquisition_materializes_and_never_dispatches"),
     ("execute refuses a qualification handle first",
      CODEX + "CodexOperatorHandle.execute", "if not self.dispatch:", "if False:",
