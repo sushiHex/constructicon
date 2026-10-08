@@ -7,6 +7,9 @@ store, with the guard substituted (Linux proves the real flock separately).
 from __future__ import annotations
 
 import asyncio
+import inspect
+import json
+import re
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -16,6 +19,7 @@ import pytest
 from constructicon.api import qualification
 from constructicon.api.qualification import (
     EXECUTOR,
+    FIXED,
     SCOPE,
     qualification_graph,
     qualify,
@@ -40,6 +44,7 @@ from tests.substrate.test_codex_adapter import (
     EXPECTED,
     GRANTS,
     bare_launcher,
+    clean_native,
     codex_profile,
     identity_for,
 )
@@ -339,3 +344,96 @@ def test_the_fixed_graph_is_one_executor_node_without_loops():
     (node,) = graph.nodes
     assert (graph.name, node.id) == tuple(SCOPE.segments)
     assert node.body.bind == {EXECUTOR: CAPABILITY} and node.body.version
+
+
+def read_stage(tmp_path: Path, binding, journal: str = "read.sqlite"):
+    """A read authorization over a scripted native client that answers once."""
+    plain = provider(tmp_path, binding)
+    granted = QualificationAuthorization(
+        authorization_id="ci-read",
+        stage="qualification-read",
+        actor_id="operator:qualification",
+        idempotency_key="stage3",
+        scope=FIXED["qualification-read"].scope,
+        binding=EXECUTOR,
+        source_graph_hash=source_graph_hash_for(
+            qualification_graph(CAPABILITY, "qualification-read"),
+        ),
+        capability_id=CAPABILITY,
+        revision=plain.identity.revision,
+        operator_binding_digest=plain.identity.store.operator_binding_digest,
+        journal=str(tmp_path / journal),
+        max_epoch=1,
+        not_after=datetime.now(UTC) + timedelta(hours=2),
+        grants=GRANTS,
+        attempt_record=str(tmp_path / "stage3.attempt"),
+    )
+    reader = provider(tmp_path, binding, granted)
+    reader.launcher = bare_launcher(clean_native())
+    return reader, granted
+
+
+async def test_the_read_run_dispatches_exactly_one_turn_and_records_it(
+    tmp_path, portable_binding, substituted_guard, clock
+):
+    reader, granted = read_stage(tmp_path, portable_binding)
+    status = await qualify(provider=reader, grants=GRANTS, timeout_s=30, now_fn=clock.now)
+    assert status is RunStatus.SUCCEEDED
+    (handle,) = reader.handles
+    assert handle.dispatch is True and handle.executed
+    assert rows(granted) == [(1, "closed", "released")]
+    record = json.loads(Path(granted.attempt_record).read_text(encoding="utf-8"))
+    assert (record["phase"], record["dispatch"]) == ("outcome", "completed")
+
+
+async def test_a_reset_journal_cannot_spend_the_read_turn_again(
+    tmp_path, portable_binding, substituted_guard, clock
+):
+    """The record, not the journal, spends the turn (S3-1)."""
+    reader, _ = read_stage(tmp_path, portable_binding)
+    await qualify(provider=reader, grants=GRANTS, timeout_s=30, now_fn=clock.now)
+    again, _ = read_stage(tmp_path, portable_binding, journal="reset.sqlite")
+    status = await qualify(provider=again, grants=GRANTS, timeout_s=30, now_fn=clock.now)
+    assert status is RunStatus.FAILED and again.handles == []
+
+
+def test_the_read_graph_pins_its_task_literal_in_the_node_source():
+    """S3-3: the literal is inside the node, so the graph hash covers it."""
+    source = inspect.getsource(qualification.qualification_read_node)
+    (literal,) = re.findall(r'TaskSpec\(instruction="([^"]*)"\)', source)
+    assert len(literal.encode("utf-8")) < 200
+    graphs = {
+        stage: source_graph_hash_for(qualification_graph(CAPABILITY, stage)) for stage in FIXED
+    }
+    assert len(set(graphs.values())) == len(FIXED)
+
+
+@pytest.mark.parametrize(
+    ("stage", "record"),
+    [("qualification-read", []), ("qualification-no-dispatch", ["--attempt-record", "/x"])],
+    ids=["read-without-record", "no-dispatch-with-record"],
+)
+def test_mint_requires_the_record_exactly_for_the_read_stage(
+    tmp_path, stage, record, capsys, monkeypatch,
+):
+    flags = [
+        "--session", "s", "--store-key", "k", "--sealed", "g", "--qualification", "q",
+        "--state", "t", "--authorization-id", "a", "--actor", "o", "--key", "k",
+        "--journal", "/j",
+    ]
+    # The parser refuses first; minting at all is the failure.
+    monkeypatch.setattr(qualification, "mint", lambda _: pytest.fail("minted"))
+    with pytest.raises(SystemExit) as stopped:
+        qualification.main(["mint", *flags, "--stage", stage, *record])
+    assert stopped.value.code == 2 and "--attempt-record" in capsys.readouterr().err
+
+
+async def test_a_read_authorization_with_a_relative_record_is_not_this_qualification(
+    tmp_path, portable_binding, substituted_guard, clock, monkeypatch,
+):
+    monkeypatch.chdir(tmp_path)  # a mutant without the check writes here, not the repo
+    reader, granted = read_stage(tmp_path, portable_binding)
+    reader.qualification = granted.model_copy(update={"attempt_record": "stage3.attempt"})
+    with pytest.raises(ContractViolation, match="does not name this qualification"):
+        await qualify(provider=reader, grants=GRANTS, timeout_s=30, now_fn=clock.now)
+    assert not Path(granted.journal).exists()

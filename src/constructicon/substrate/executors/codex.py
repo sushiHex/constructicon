@@ -74,6 +74,7 @@ from constructicon.core.executor import (
     ExecutorError,
     ExecutorFailure,
     ExecutorOutcome,
+    ExecutorSuccess,
     TaskSpec,
 )
 from constructicon.core.grants import EffectiveGrants, Posture
@@ -99,6 +100,7 @@ from constructicon.core.workspace import (
 )
 from constructicon.substrate._lifetime import finish_owned
 from constructicon.substrate.executors import codex_protocol
+from constructicon.substrate.executors.attempt_record import AttemptRecord, Dispatch
 from constructicon.substrate.executors.codex_protocol import (
     ACCOUNT_NOTICE_FAULT,
     ACCOUNT_UPDATED,
@@ -367,6 +369,7 @@ class CodexConversation:
         worker: Callable[[str], Awaitable[str]] | None = None,
         deadline: float | None = None, startup_only: bool = False,
         provider: str = OPENAI_PROVIDER, pause: Callable[[], Awaitable[None]] | None = None,
+        before_turn: Callable[[], str | None] | None = None,
     ) -> None:
         if type(startup_only) is not bool:
             raise ContractViolation("the startup-only selector must be boolean")
@@ -417,6 +420,11 @@ class CodexConversation:
         self._transcript: list[bytes] = []
         self._collecting = False
         self._turn_requested = False
+        # The last word before `turn/start` is written: a refusal, never a raise.
+        self._before_turn = before_turn
+        # True once `turn/start` was written whole to the native client. Before
+        # that, nothing was dispatched, whatever else failed.
+        self.turn_written = False
         self._spent = 0
         self._allocated: set[int] = set()
         self._correlated: set[int] = set()
@@ -765,11 +773,17 @@ class CodexConversation:
         method = payload["method"]
         if not self._drain_before(method):
             return None
+        if method == "turn/start" and self._before_turn is not None and (
+            refusal := self._before_turn()
+        ) is not None:
+            self._refuse(refusal)
+            return None
         # The turn starts when its request is written: a notice before then
         # may still stop it (#78), and none after it may.
         self._turn_requested = self._turn_requested or method == "turn/start"
         if not await self._send(io, payload):
             return None
+        self.turn_written = self.turn_written or method == "turn/start"
         while True:
             line = await self._read(io)
             if line is None:
@@ -1446,14 +1460,17 @@ class CodexOperatorHandle:
 
     def __init__(
         self, provider: CodexOperatorProvider, context: LeaseContext, paths: AcquisitionPaths,
-        *, dispatch: bool = True,
+        *, dispatch: bool = True, attempt: AttemptRecord | None = None,
     ) -> None:
         self.provider = provider
         self.context = context
         self.paths = paths
-        # False for a qualification acquisition: the whole lifecycle runs, and
+        # False for a no-dispatch qualification: the whole lifecycle runs, and
         # execute refuses before anything else. Fixed at acquire, never changed.
         self.dispatch = dispatch
+        # A read qualification's one attempt record, reserved at acquire.
+        self.attempt = attempt
+        self._conversation: CodexConversation | None = None
         self.entered = False
         self.ready = False
         self.closed = False
@@ -1470,8 +1487,12 @@ class CodexOperatorHandle:
         self.initial_check: BindingCheck | None = None
         self.launch_check: BindingCheck | None = None
         self.terminal_check: BindingCheck | None = None
-        # The relay's denials, by fixed reason, however the exchange ended.
+        # The relay's denials, by fixed reason, and its accepted connections, by
+        # sealed destination, however the exchange ended.
         self.relay_denied: dict[str, int] = {}
+        self.relay_destinations: dict[str, int] = {}
+        # The launched process's result, once the exchange returned one.
+        self.process: ProcessResult | None = None
 
     @property
     def profile(self) -> NativeOperatorExecutorProfileV3:
@@ -1640,7 +1661,78 @@ class CodexOperatorHandle:
             return ExecutorFailure(error=ExecutorError(
                 kind="unavailable", detail=bounded_detail("; ".join(faults)),
             ))
-        return await self._converse(task, grants, write_workspace)
+        if self.attempt is None:
+            return await self._converse(task, grants, write_workspace)
+        outcome: ExecutorOutcome | None = None
+        try:
+            outcome = await self._converse(task, grants, write_workspace)
+            return outcome
+        finally:
+            self._settle_attempt(outcome)
+
+    def _intend(self) -> str | None:
+        """The record's intent, the last word before `turn/start` is written."""
+        qualification = self.provider.qualification
+        if qualification is not None and datetime.now(UTC) >= qualification.not_after:
+            return "qualification refuses an expired authorization"
+        if self.attempt is None:
+            return "a read qualification requires its attempt record"
+        return self.attempt.intend()
+
+    def _settle_attempt(self, outcome: ExecutorOutcome | None) -> None:
+        """Classify the one attempt from facts, never from hope.
+
+        Before `turn/start` was written whole, nothing was dispatched, whatever
+        else failed. After it, only an accepted answer is completed.
+        """
+        if self.attempt is None:
+            return
+        written = self._conversation is not None and self._conversation.turn_written
+        dispatch: Dispatch = (
+            "not dispatched" if not written
+            else "completed" if isinstance(outcome, ExecutorSuccess)
+            else "possibly dispatched"
+        )
+        with suppress(OSError):
+            # A record left at its intent already reads as possibly dispatched.
+            self.attempt.complete(dispatch, self._attempt_facts(outcome))
+
+    def _attempt_facts(self, outcome: ExecutorOutcome | None) -> dict[str, Any]:
+        """Stage 3's evidence (M8-N5-state-review.md): bounded facts, never text.
+
+        The accepted answer's length, usage or "unknown", the served model or
+        "unknown", the readbacks, relay counts, process facts and identities.
+        """
+        reply = None if outcome is None else outcome.raw_reply
+        usage = None if outcome is None else outcome.usage
+        readbacks = None if outcome is None else outcome.rate_limit
+        process = self.process
+        identity = self.provider.identity
+        return {
+            "status": None if outcome is None else outcome.status,
+            "answer_bytes": None if reply is None else len(reply.encode("utf-8")),
+            "usage": "unknown" if usage is None else usage.model_dump(mode="json"),
+            "served_model": (outcome and outcome.served_model) or "unknown",
+            "readbacks": None if readbacks is None else readbacks.detail,
+            "relay": {
+                "destinations": dict(self.relay_destinations),
+                "denied": dict(self.relay_denied),
+            },
+            "process": None if process is None else {
+                "returncode": process.returncode,
+                "payload_returncode": process.payload_returncode,
+                "timed_out": process.timed_out,
+                "bound_exceeded": process.bound_exceeded is not None,
+                "elapsed_s": round(process.elapsed_s, 3),
+                "stderr_bytes": len(process.stderr),
+            },
+            "identities": {
+                "adapter_revision": str(ADAPTER_REVISION),
+                "capability_revision": identity.revision,
+                "operator_binding_digest": str(identity.store.operator_binding_digest),
+                "qualification": str(identity.store.subscription_mode_adapter_revision),
+            },
+        }
 
     def _validated_workspace(
         self, workspace: ContainedWriteWorkspace, grants: EffectiveGrants,
@@ -1702,7 +1794,9 @@ class CodexOperatorHandle:
             catalog=provider.catalog, worker=worker,
             deadline=deadline if worker is not None else None,
             provider=configured_provider(provider.configuration),
+            before_turn=self._intend if self.attempt is not None else None,
         )
+        self._conversation = conversation
 
         def before_spawn() -> BindingCheck:
             # LinuxLauncher invokes this after its probe and immediately before
@@ -1759,6 +1853,7 @@ class CodexOperatorHandle:
             for fd in mount_fds:
                 with suppress(OSError):
                     os.close(fd)
+        self.process = result
         requested = grants.model_selection.model
         try:
             self._check_control()
@@ -1813,6 +1908,7 @@ class CodexOperatorHandle:
                 )
         finally:
             self.relay_denied = relay.denied
+            self.relay_destinations = dict(relay.destinations)
 
     async def _run_worker(
         self, program: str, *, workspace: ContainedWriteWorkspace,
@@ -2197,15 +2293,26 @@ class CodexOperatorProvider:
             capability_id=context.binding.capability_id,
             revision=context.binding.revision,
             operator_binding_digest=self.identity.store.operator_binding_digest,
+            grants=context.binding.effective_grants,
             epoch=context.run_lease.epoch,
             now=datetime.now(UTC),
         )):
             raise ContractViolation("; ".join(faults))
         logical = lease_id_for(context.run_lease.run_id, context.path, context.binding.binding)
         acquisition = acquisition_id_for(logical, context.run_lease.epoch)
+        attempt = None
+        if qualification is not None and qualification.attempt_record is not None:
+            # Reserved before any handle exists: a second acquisition, even
+            # after a journal reset, finds the record and refuses.
+            attempt = AttemptRecord.reserve(Path(qualification.attempt_record), {
+                "authorization_id": qualification.authorization_id,
+                "run_id": context.run_lease.run_id,
+                "epoch": context.run_lease.epoch,
+                "acquisition_id": acquisition,
+            })
         handle = CodexOperatorHandle(
             self, context, AcquisitionPaths(self._acquisition_root, acquisition),
-            dispatch=qualification is None,
+            dispatch=qualification is None or qualification.dispatches, attempt=attempt,
         )
         self.handles.append(handle)
         return AcquiredCapability(

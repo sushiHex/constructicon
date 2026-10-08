@@ -293,6 +293,7 @@ def flags(host) -> list[str]:
 
 MINT = [
     "--authorization-id", "twin", "--actor", "operator:twin", "--key", "stage1",
+    "--stage", "qualification-no-dispatch",
 ]
 
 
@@ -393,3 +394,18 @@ def test_the_documented_module_entry_mints_the_importable_graph(host, capsys):
     )
     entry = json.loads(completed.stdout)
     assert entry["source_graph_hash"] == in_process["source_graph_hash"]
+
+
+def test_mint_pins_the_read_stage_grants_and_record(host, capsys):
+    from constructicon.api import qualification
+
+    record = host.state / "stage3.attempt"
+    assert qualification.main([
+        "mint", *flags(host), "--authorization-id", "twin-read", "--actor", "operator:twin",
+        "--key", "stage3", "--stage", "qualification-read", "--attempt-record", str(record),
+        "--journal", str(host.state / "read.sqlite"),
+    ]) == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["stage"] == "qualification-read" and printed["max_epoch"] == 1
+    assert printed["attempt_record"] == str(record)
+    assert printed["grants"] == codex_host.READ_GRANTS.model_dump(mode="json")

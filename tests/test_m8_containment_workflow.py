@@ -49,7 +49,8 @@ PROOFS = {
     "Prove journal-owned native fixture recovery": (
         "lifecycle",
         "tests/substrate/test_native_recovery.py tests/test_native_lifecycle.py "
-        "scripts/check_m8_native_recovery_mutations.py scripts/check_m8_n5_stage1_mutations.py",
+        "scripts/check_m8_native_recovery_mutations.py scripts/check_m8_n5_stage1_mutations.py "
+        "scripts/check_m8_n5_read_mutations.py",
     ),
     "Prove N5 Stage 1 qualification on the real store and guard": (
         "foundation",

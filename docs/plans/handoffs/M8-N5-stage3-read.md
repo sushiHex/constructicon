@@ -1,10 +1,10 @@
 # M8 N5 Stage 3: the one READ turn
 
 Status:
-- **Part A (this PR), implemented:** the production host assembly and the host
-  commands.
-- **Part B, the next PR:** the read authorization, the attempt record, gated
-  dispatch and the read graph.
+- **Part A, merged:** the production host assembly and the host commands.
+- **Part B (this PR), implemented:** the read authorization, the attempt
+  record, gated dispatch, the read graph and the session runbook
+  (`M8-N5-read-session.md`).
 
 Both merge before Stage 2 runs, and `codex.py` is frozen after part B (decision
 S3-4).
@@ -126,17 +126,72 @@ same controller tree, which R19's import check covers.
   review found open nested shapes, permissive booleans and a linked
   `closure.git`. All are fixed.
 
-## Part B: the read stage (next PR)
+## Part B: the read stage
 
-The design is as reviewed, with Fable's deltas:
-- the two-phase record (S3-1);
-- a `turn_written` fact, set after the write returns, so an input-budget refusal
-  after intent is proven not dispatched;
-- a `before_turn` callback that returns a refusal and never raises, because the
-  conversation does not hold the handle;
-- the loader re-running the checks (done in part A);
-- bounded dispatch facts in the completed record;
-- the task literal inside the node (S3-3);
-- the law cited as ADR 0021:122-124 ("No exactly-once model computation or
-  charge is claimed"), not I13, for why a turn is leased computation and not an
-  effect.
+A turn is leased computation, not an effect: ADR 0021:122-124 claims no
+exactly-once model computation or charge. So the turn is not journaled as an
+effect. One record per authorization accounts for it instead (S3-1).
+
+**The read authorization** (`core/qualification.py`). The stage
+`qualification-read` pins three more things than Stage 1's:
+- the grants, which acquisition requires exactly;
+- the attempt record's path, which the entry requires to be absolute;
+- exactly one epoch.
+
+A no-dispatch authorization pins neither grants nor a record.
+
+**The attempt record** (`substrate/executors/attempt_record.py`). Every write
+creates a file exclusively and makes it durable (the file, then its directory):
+1. **`acquired`.** Reserved at `acquire`, before any handle exists. A second
+   acquisition, even after a journal reset, finds it and refuses.
+2. **`intent`.** Written by the conversation's `before_turn`, the last word
+   before `turn/start` is written. It returns a refusal and never raises,
+   because the conversation does not hold the handle. An authorization that
+   expired by then refuses here.
+3. **The outcome,** classified from facts:
+   - `not dispatched` unless `turn/start` was written whole (`turn_written`, set
+     after the write returns), so an input-budget refusal after intent is
+     proven not dispatched;
+   - otherwise `completed` only for an accepted answer, and `possibly
+     dispatched` for anything else.
+
+   The facts are Stage 3's evidence list, bounded and never text: the
+   answer's length, usage or "unknown", the served model or "unknown", the
+   readbacks, relay counts, process facts and identities. A record that never
+   reaches its outcome still reads correctly: at `acquired` nothing was
+   dispatched, and at `intent` the turn possibly was.
+
+**Gated dispatch** (`codex.py`). A read authorization's handle may dispatch.
+Its `execute` settles the record however the turn ends, including on
+cancellation. Without a read authorization nothing changes: Stage 1's handles
+never dispatch, and an unqualified provider is unavailable.
+
+**The read graph** (`api/qualification.py`). The graph is one node,
+`qualification_read_node`. Its task is a literal under 200 bytes, so the
+node's source digest pins it (S3-3). It returns only the answer's length.
+`mint --stage qualification-read --attempt-record PATH` pins the READ grants;
+the parser requires the record for, and only for, the read stage.
+
+**The session** (`M8-N5-read-session.md`):
+- T0 to T2: the authorization, the host as Stage 2 left it, and fresh state
+  under a path that fits the egress socket bound;
+- T3 and T4: the service mints and root installs;
+- T5: the one `run`, whose verdict is read from the record;
+- T6: one retry, only after a diagnosed local failure with nothing
+  dispatched, under entirely new names.
+
+**Proof.**
+- **Portable:**
+  - the authorization's shape and grant pin;
+  - the record's phases and exclusive reservation;
+  - an intent that cannot be written refuses;
+  - one completed turn with the evidence fields and no answer text;
+  - a spent attempt refusing a later acquisition;
+  - expiry before the turn: not dispatched;
+  - an input-budget refusal after intent: not dispatched;
+  - a failure after the turn was written: possibly dispatched;
+  - the entry end to end, including a reset journal that cannot spend the turn
+    again;
+  - the runbook's blocks, flags and programs, run against synthetic records.
+- **Mutants:** thirteen in `check_m8_n5_read_mutations.py`, run in the
+  lifecycle lane. Two checks have none; the script says why.

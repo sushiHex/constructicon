@@ -390,6 +390,7 @@ jobs:
               tests/test_native_lifecycle.py -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           uv run python scripts/check_m8_native_recovery_mutations.py
           uv run python scripts/check_m8_n5_stage1_mutations.py
+          uv run python scripts/check_m8_n5_read_mutations.py
       - name: Measure combined native startup and mediation
         if: matrix.lane == 'combined'
         shell: bash
