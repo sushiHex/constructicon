@@ -1948,11 +1948,35 @@ async def test_relinquishment_joins_work_and_frees_custody_but_commits_no_closur
     assert closure.is_closed(handle.paths)
 
 
+async def test_relinquishment_failures_survive_the_callers_cancellation(
+    tmp_path, portable_binding, substituted_guard, monkeypatch,
+):
+    """Cancelling the relinquishing caller must not swallow a release failure."""
+    provider, acquired, running = await in_flight(tmp_path, portable_binding)
+    handle = acquired.resource
+    release_custody = handle._release_custody
+
+    async def failing_release(**owners):
+        await release_custody(**owners)
+        return [OSError("the store lock would not close")]
+
+    monkeypatch.setattr(handle, "_release_custody", failing_release)
+    relinquishing = asyncio.create_task(provider.relinquish(acquired))
+    await asyncio.sleep(0)
+    relinquishing.cancel()
+    (outcome,) = await asyncio.gather(relinquishing, return_exceptions=True)
+    assert isinstance(outcome, OSError) and "would not close" in str(outcome), outcome
+    with pytest.raises(asyncio.CancelledError):
+        await running
+
+
 @LINUX
 async def test_a_successor_waits_on_a_live_losers_real_guard_until_it_relinquishes(
     tmp_path, portable_binding,
 ):
     """The real flock, not the substitution: the control proves exclusion."""
+    import fcntl
+
     _, store, closure = portable_binding
     provider, acquired, running = await in_flight(tmp_path, portable_binding)
     successor = provider_for(
@@ -1961,7 +1985,18 @@ async def test_a_successor_waits_on_a_live_losers_real_guard_until_it_relinquish
     reconciling = asyncio.create_task(
         successor.reconcile(context(epoch=2), (stale_row(acquired),)),
     )
-    await asyncio.sleep(0.2)
+    paths = acquired.resource.paths
+    # Affirmative contention, not elapsed time: the successor has committed
+    # closure and is now at the guard, which the live loser still holds.
+    async with asyncio.timeout(5):
+        while not closure.is_closed(paths):
+            await asyncio.sleep(0.01)
+    probe = os.open(paths.guard, os.O_RDWR)
+    try:
+        with pytest.raises(BlockingIOError):
+            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        os.close(probe)
     assert not reconciling.done(), "the successor did not wait on the live guard"
 
     await provider.relinquish(acquired)

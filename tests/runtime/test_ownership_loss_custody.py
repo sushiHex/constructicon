@@ -5,8 +5,8 @@ codex provider's handle keeps an exclusive acquisition guard until close, and
 the walker never closes after ownership loss: disposition is the successor's.
 While the losing process lives, the successor's reconciliation then waits on
 that guard forever. This double retains exclusive custody exactly so, without
-Linux: materialization takes a process-local lock that only close releases,
-and reconciliation must take it before disposing.
+Linux: materialization takes a process-local lock that only close or
+relinquishment releases, and reconciliation must take it before disposing.
 """
 
 from __future__ import annotations
@@ -36,6 +36,8 @@ from tests.executorworld import (
     FakeExecutorProvider,
     register_component,
 )
+
+Hook = Callable[["RetainingHandle"], Awaitable[None]]
 
 
 @dataclass
@@ -79,7 +81,11 @@ class RetainingProvider(FakeExecutorProvider):
     def __init__(self, *, ledger: AllocationLedger, custody: Custody) -> None:
         super().__init__(ledger=ledger)
         self.custody = custody
-        self.before_execute: Callable[[RetainingHandle], Awaitable[None]] | None = None
+        self.before_execute: Hook | None = None
+        self.before_close: Hook | None = None
+        self.before_relinquish: Hook | None = None
+        self.closes: list[str] = []
+        self.relinquished: list[str] = []
 
     async def acquire(self, context: LeaseContext) -> AcquiredCapability:
         acquisition = await super().acquire(context)
@@ -90,11 +96,17 @@ class RetainingProvider(FakeExecutorProvider):
     async def close(
         self, acquisition: AcquiredCapability, disposition: Disposition
     ) -> LeaseClosure:
+        if self.before_close is not None:
+            await self.before_close(acquisition.resource)
+        self.closes.append(disposition)
         closure = await super().close(acquisition, disposition)
         acquisition.resource.release()
         return closure
 
     async def relinquish(self, acquisition: AcquiredCapability) -> None:
+        if self.before_relinquish is not None:
+            await self.before_relinquish(acquisition.resource)
+        self.relinquished.append(acquisition.resource_ref)
         acquisition.resource.release()
 
     async def reconcile(
@@ -107,84 +119,207 @@ class RetainingProvider(FakeExecutorProvider):
         return await super().reconcile(context, stale)
 
 
-def _system(journal, owner: str, provider: FakeExecutorProvider) -> Constructicon:
-    return Constructicon(
-        journal=journal,
-        owner_id=owner,
-        capabilities={"retaining": provider},
-        catalog={"retaining": provider.descriptor("retaining")},
-        lease_ttl_s=LEASE_TTL_S,
-    )
+@dataclass
+class World:
+    """A losing worker with one or two retaining bindings, and a clock to lose by."""
+
+    journal: object
+    clock: object
+    ledger: AllocationLedger = field(default_factory=AllocationLedger)
+    custody: Custody = field(default_factory=Custody)
+    providers: dict[str, RetainingProvider] = field(default_factory=dict)
+
+    def provider(self, key: str) -> RetainingProvider:
+        return self.providers.setdefault(
+            key, RetainingProvider(ledger=self.ledger, custody=self.custody)
+        )
+
+    def system(self, owner: str, providers: dict[str, RetainingProvider]) -> Constructicon:
+        return Constructicon(
+            journal=self.journal,
+            owner_id=owner,
+            capabilities=providers,
+            catalog={key: value.descriptor(key) for key, value in providers.items()},
+            lease_ttl_s=LEASE_TTL_S,
+        )
+
+    latched: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def start(self, run_id: RunId, bindings: dict[str, str]):
+        providers = {key: self.provider(key) for key in bindings.values()}
+        system = self.system("loser", providers)
+        system._walker._heartbeat_interval_s = 0.001
+        heartbeat = self.journal.heartbeat
+
+        def observe(*args, **kwargs):
+            try:
+                return heartbeat(*args, **kwargs)
+            except OwnershipLost:
+                self.latched.set()
+                raise
+
+        self.journal.heartbeat = observe
+        graph = await register_component(system, self.journal, bindings=bindings)
+        return asyncio.create_task(system._start_direct(graph, INPUTS, run_id=run_id))
+
+    def lose(self, run_id: RunId):
+        self.clock.advance(LEASE_TTL_S + 1)
+        return self.journal.claim_run(run_id, owner_id="successor", ttl_s=LEASE_TTL_S)
+
+    def held(self) -> list[bool]:
+        return [
+            self.custody.lock(handle.key).locked()
+            for provider in self.providers.values()
+            for handle in provider.handles
+        ]
+
+    def rows(self, run_id: RunId) -> list[tuple[str, str | None]]:
+        return [
+            (row.state, row.disposition) for row in self.journal.capability_leases(run_id)
+        ]
+
+    async def succeed(self, run_id: RunId, winner) -> None:
+        """The successor's recovery completes: nothing is left to wait on."""
+        self.journal.release_run(winner)
+        fresh = {
+            key: RetainingProvider(ledger=self.ledger, custody=self.custody)
+            for key in self.providers
+        }
+        result = await asyncio.wait_for(
+            self.system("successor", fresh)._resume_direct(run_id), 5
+        )
+        assert result.status is RunStatus.SUCCEEDED
+        assert self.ledger.resources == set()
+
+
+@pytest.fixture
+def world(journal, clock) -> World:
+    return World(journal=journal, clock=clock)
+
+
+async def outcome(running: asyncio.Task) -> OwnershipLost:
+    """The run's exception, asserted to be the loss. Collected, not propagated,
+    so a mutant that lets a cancellation escape fails here as an assertion."""
+    (result,) = await asyncio.wait_for(asyncio.gather(running, return_exceptions=True), 5)
+    assert isinstance(result, OwnershipLost), repr(result)
+    return result
+
+
+async def lose_mid_call(world: World, provider: RetainingProvider, run_id: RunId):
+    """Hold the executor mid-call until a successor has claimed the run."""
+    held, claimed = asyncio.Event(), asyncio.Event()
+
+    async def hold(handle):
+        held.set()
+        await claimed.wait()
+        assert handle.context.check_control is not None
+        handle.context.check_control()
+
+    provider.before_execute = hold
+    return held, claimed
 
 
 @pytest.mark.parametrize("observation", ["checked", "cancelled"])
 async def test_a_live_loser_releases_custody_so_its_successor_can_reconcile(
-    journal, clock, monkeypatch, observation
+    world, observation
 ):
-    """Both ways a loss reaches the walker: the handle's own control check
-    raises it, or the heartbeat latches it and cancels the invocation."""
-    ledger, custody = AllocationLedger(), Custody()
-    loser = RetainingProvider(ledger=ledger, custody=custody)
-    system = _system(journal, "loser", loser)
-    system._walker._heartbeat_interval_s = 0.001
-    graph = await register_component(system, journal, bindings={"executor": "retaining"})
-
-    held = asyncio.Event()
-    lost = asyncio.Event()
-    observed: list[OwnershipLost] = []
-    closes: list[str] = []
-    heartbeat = journal.heartbeat
-    close = loser.close
-
-    def observe_heartbeat(*args, **kwargs):
-        try:
-            return heartbeat(*args, **kwargs)
-        except OwnershipLost as exc:
-            observed.append(exc)
-            lost.set()
-            raise
-
-    async def observe_close(acquisition, disposition):
-        closes.append(disposition)
-        return await close(acquisition, disposition)
-
-    async def hold_until_lost(handle):
-        # Materialized: the handle holds custody, and loses ownership mid-call.
-        held.set()
-        if observation == "cancelled":
+    """Both ways a loss reaches the walker mid-call: the handle's own control
+    check raises it, or a cancellation arrives after the heartbeat latched it."""
+    run_id = RunId(f"live-loser-{observation}")
+    executor = world.provider("retaining")
+    held, claimed = await lose_mid_call(world, executor, run_id)
+    if observation == "cancelled":
+        async def hold_through_cancellation(handle):
+            held.set()
             await asyncio.Event().wait()
-        await lost.wait()
-        assert handle.context.check_control is not None
-        handle.context.check_control()
 
-    monkeypatch.setattr(journal, "heartbeat", observe_heartbeat)
-    monkeypatch.setattr(loser, "close", observe_close)
-    loser.before_execute = hold_until_lost
-    run_id = RunId("live-loser-custody")
-    running = asyncio.create_task(system._start_direct(graph, INPUTS, run_id=run_id))
+        executor.before_execute = hold_through_cancellation
+    running = await world.start(run_id, {"executor": "retaining"})
 
     await asyncio.wait_for(held.wait(), 5)
-    (handle,) = loser.handles
-    lock = custody.lock(handle.key)
-    assert lock.locked()
-    clock.advance(LEASE_TTL_S + 1)
-    winner = journal.claim_run(run_id, owner_id="successor", ttl_s=LEASE_TTL_S)
-    with pytest.raises(OwnershipLost) as caught:
-        await asyncio.wait_for(running, 5)
-    assert caught.value is observed[0]
+    assert world.held() == [True]
+    winner = world.lose(run_id)
+    if observation == "cancelled":
+        # The heartbeat latches the loss; then the shutdown arrives.
+        await asyncio.wait_for(world.latched.wait(), 5)
+        running.cancel()
+    else:
+        claimed.set()
+    await outcome(running)
 
     # The loser is alive and has returned. It wrote nothing durable and closed
     # nothing: disposition is the successor's. But it holds no custody either.
-    assert closes == []
-    assert [(row.state, row.disposition) for row in journal.capability_leases(run_id)] == [
-        ("active", None),
-    ]
-    assert not lock.locked()
+    assert executor.closes == []
+    assert world.rows(run_id) == [("active", None)]
+    assert world.held() == [False]
+    await world.succeed(run_id, winner)
 
-    journal.release_run(winner)
-    successor = RetainingProvider(ledger=ledger, custody=custody)
-    recovered = _system(journal, "successor", successor)
-    result = await asyncio.wait_for(recovered._resume_direct(run_id), 5)
-    assert result.status is RunStatus.SUCCEEDED
-    assert successor.reconciled == [handle.key]
-    assert ledger.resources == set()
+
+async def test_one_failed_relinquishment_strands_no_sibling_and_the_loss_stays_primary(
+    world,
+):
+    run_id = RunId("live-loser-failed-sibling")
+    executor = world.provider("retaining")
+    sibling = world.provider("sibling")
+    held, claimed = await lose_mid_call(world, executor, run_id)
+
+    async def fail(handle):
+        raise OSError("this custody would not release")
+
+    executor.before_relinquish = fail
+    running = await world.start(run_id, {"executor": "retaining", "z": "sibling"})
+    await asyncio.wait_for(held.wait(), 5)
+    world.lose(run_id)
+    claimed.set()
+    loss = await outcome(running)
+
+    assert isinstance(loss.__cause__, OSError)
+    assert sibling.relinquished == [sibling.handles[0].key]
+    assert world.held() == [True, False]
+
+
+async def test_a_cancellation_during_relinquishment_leaves_the_loss_primary(world):
+    run_id = RunId("live-loser-cancelled-relinquishment")
+    executor = world.provider("retaining")
+    held, claimed = await lose_mid_call(world, executor, run_id)
+    relinquishing, finish = asyncio.Event(), asyncio.Event()
+
+    async def slow(handle):
+        relinquishing.set()
+        await finish.wait()
+
+    executor.before_relinquish = slow
+    running = await world.start(run_id, {"executor": "retaining"})
+    await asyncio.wait_for(held.wait(), 5)
+    winner = world.lose(run_id)
+    claimed.set()
+    await asyncio.wait_for(relinquishing.wait(), 5)
+    running.cancel()
+    await asyncio.sleep(0)
+    finish.set()
+    await outcome(running)
+
+    assert world.held() == [False]
+    await world.succeed(run_id, winner)
+
+
+async def test_a_loss_found_while_closing_relinquishes_the_siblings_not_yet_closed(world):
+    """Ownership loss first detected by a fenced row transition in ordinary close."""
+    run_id = RunId("live-loser-found-in-close")
+    executor = world.provider("retaining")
+    sibling = world.provider("sibling")
+    winners = []
+
+    async def lose_before_the_row_closes(handle):
+        if not winners:
+            winners.append(world.lose(run_id))
+
+    executor.before_close = lose_before_the_row_closes
+    running = await world.start(run_id, {"executor": "retaining", "z": "sibling"})
+    await outcome(running)
+
+    assert executor.closes == ["release"]
+    assert sibling.closes == [] and sibling.relinquished == [sibling.handles[0].key]
+    assert world.held() == [False, False]
+    assert world.rows(run_id) == [("active", None), ("active", None)]
+    await world.succeed(run_id, winners[0])

@@ -28,9 +28,21 @@ Local relinquishment is kept separate from durable disposition.
   protocol with one method, `relinquish(acquisition)`. It must stop and join
   the acquisition's work and release what this process holds, writing nothing
   durable.
-- **The walker** relinquishes recorded acquisitions on both loss paths, in
-  one joined batch like close, and then re-raises the loss unchanged. A
-  provider without the protocol keeps its legacy behaviour.
+- **The walker** relinquishes recorded acquisitions wherever it finds a loss:
+  - the two loss paths in `_invoke` (an observed loss, and a latched loss that
+    a cancellation delivers);
+  - ordinary close, when a fenced row transition finds the run lost. The
+    siblings not yet closed are then relinquished, not closed.
+
+  The hand-off itself must not fail differently from the loss it serves:
+  - every acquisition is attempted even after one fails;
+  - the batch is joined through cancellation without surfacing it, so the
+    loss stays primary, as on the latched path;
+  - failures become the loss's `__cause__`, the precedent being
+    `raise lost from cleanup` in `_acquire_invocation_capability`.
+
+  With nothing to relinquish there is no `await` at all, so a provider
+  without the protocol keeps its legacy loss path exactly.
 - **The codex handle** splits its cleanup into two parts:
   - **Durable:** the closure commit, in close only.
   - **Local:** join the materialization, exchange and worker tasks, then
@@ -38,36 +50,50 @@ Local relinquishment is kept separate from durable disposition.
     and loss never release twice.
 
   `relinquish` runs only the local part. It never commits closure; the
-  successor's reconciliation does.
+  successor's reconciliation does. Its release failures surface even when
+  its own caller is cancelled while joining.
 
 ## Proof
 
-**`tests/runtime/test_ownership_loss_custody.py`.** A retaining double holds
-exclusive, process-local custody exactly as the codex handle does. A
-materialization that succeeds retains it; one that fails releases its own. The
-loss comes mid-call, after materialization, in both forms: the handle's own
-control check raises it, or the heartbeat latches it and cancels.
+Every new test below was first shown failing against the code it guards.
 
-On `main` the loser returns holding custody, and the successor's recovery
-times out on it. With the fix:
-- the loser closes nothing and leaves its row `active`;
-- it holds no custody once it returns;
-- the successor reconciles and the run succeeds.
+**`tests/runtime/test_ownership_loss_custody.py`.** A retaining double holds
+exclusive, process-local custody exactly as the codex handle does: a
+materialization that succeeds retains it, and one that fails releases its own.
+- **The seam, on both paths.** The loss arrives mid-call, after
+  materialization. Either the handle's own control check raises it, or the
+  heartbeat latches it (observed affirmatively) and a shutdown cancellation
+  delivers it. On `main` the loser returns holding custody, and the
+  successor's recovery times out. With the fix, the loser closes nothing,
+  leaves its row `active` and holds nothing, and the successor's recovery
+  succeeds.
+- **One failed relinquishment.** The failing sibling does not strand the
+  other. The loss stays primary, with the failure as its `__cause__`.
+- **A cancellation during relinquishment.** The loss stays primary and the
+  custody is released.
+- **A loss first found by close's fenced row transition.** The sibling not
+  yet closed is relinquished, not closed, and both rows stay `active` for the
+  successor.
 
 The existing ledger-fake loss test, whose provider has no `relinquish`, is
 unchanged.
 
-**`tests/substrate/test_codex_adapter.py`**, two tests:
+**`tests/substrate/test_codex_adapter.py`.**
 - **Portable.** Relinquishment cancels the in-flight exchange and releases the
-  store lock and guard, commits no closure, and refuses later execution. A
-  successor then reconciles.
-- **Linux, with the real `flock` guard.** The successor's reconciliation is
-  first shown waiting on the live loser's guard (the control), then completes
-  once the loser relinquishes.
+  store lock and guard. It commits no closure and refuses later execution, and
+  a successor then reconciles.
+- **The release's failures** surface even when the relinquishing caller is
+  cancelled.
+- **Linux, with the real `flock`.** The control is affirmative contention, not
+  elapsed time. The successor has committed closure, and a non-blocking
+  `flock` on the guard is refused while the live loser holds it. The
+  successor's reconciliation completes once the loser relinquishes.
 
-**Mutants.** Four new mutants, all killed:
-- `check_m8_native_recovery_mutations`: both walker relinquish calls.
-- `check_m8_n3a_mutations`: the handle releasing custody, and the handle
-  committing no closure.
+**Mutants.** Nine new or re-anchored mutants, all killed:
+- `check_m8_native_recovery_mutations`: the observed-loss and latched-loss
+  relinquish calls, per-acquisition failure collection, cancellation
+  absorption, and close-path relinquishment.
+- `check_m8_n3a_mutations`: the handle releasing custody, committing no
+  closure, and surfacing failures through a cancelled caller.
 
-Three existing anchors follow the moved code.
+Two existing anchors (n2 close, n3a cleanup join) follow the moved code.

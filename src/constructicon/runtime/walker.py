@@ -1058,34 +1058,63 @@ class Walker:
             return
 
         async def close_all() -> None:
-            for capability, acquisition in acquired:
+            for index, (capability, acquisition) in enumerate(acquired):
                 closure = await capability.close(acquisition, disposition)
-                self._journal.transition_capability_lease(
-                    lease,
-                    lease_id=acquisition.lease_id,
-                    acquisition_epoch=lease.epoch,
-                    expected=frozenset({"active"}),
-                    target="closed",
-                    disposition=closure.disposition,
-                )
+                try:
+                    self._journal.transition_capability_lease(
+                        lease,
+                        lease_id=acquisition.lease_id,
+                        acquisition_epoch=lease.epoch,
+                        expected=frozenset({"active"}),
+                        target="closed",
+                        disposition=closure.disposition,
+                    )
+                except OwnershipLost as loss:
+                    # A successor owns the remaining rows: relinquish, not close.
+                    rest = acquired[index + 1:]
+                    if (failure := await self._relinquish_acquired(rest)) is not None:
+                        raise loss from failure
+                    raise
 
         await self._finish_cleanup(close_all())
 
     @staticmethod
     async def _relinquish_acquired(
         acquired: list[tuple[LeasedCapability, AcquiredCapability]],
-    ) -> None:
+    ) -> Exception | None:
         """After ownership loss: free local custody; disposition is the successor's.
 
-        One joined batch, like close: a cancellation must not abandon siblings.
+        Every acquisition is attempted even after one fails, and the batch is
+        joined through cancellation without surfacing it: the loss stays the
+        primary exception, as on the latched path. Failures are returned for
+        the caller to chain as the loss's cause. With nothing to relinquish
+        there is no await, so a legacy provider's loss path is unchanged.
         """
+        relinquishing = [
+            (capability, acquisition)
+            for capability, acquisition in acquired
+            if isinstance(capability, RelinquishingCapability)
+        ]
+        if not relinquishing:
+            return None
 
-        async def relinquish_all() -> None:
-            for capability, acquisition in acquired:
-                if isinstance(capability, RelinquishingCapability):
+        async def relinquish_all() -> list[Exception]:
+            errors: list[Exception] = []
+            for capability, acquisition in relinquishing:
+                try:
                     await capability.relinquish(acquisition)
+                except Exception as exc:
+                    errors.append(exc)
+            return errors
 
-        await Walker._finish_cleanup(relinquish_all())
+        batch = asyncio.ensure_future(relinquish_all())
+        while not batch.done():
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.shield(batch)
+        errors = batch.result()
+        if len(errors) > 1:
+            return ExceptionGroup("ownership-loss relinquishment failed", errors)
+        return errors[0] if errors else None
 
     @staticmethod
     async def _discard_unrecorded_acquisition(
@@ -1703,8 +1732,9 @@ class Walker:
                     outputs=envelopes,
                 ),
             )
-        except OwnershipLost:
-            await self._relinquish_acquired(acquired)
+        except OwnershipLost as loss:
+            if (failure := await self._relinquish_acquired(acquired)) is not None:
+                raise loss from failure
             raise
         except CheckpointConflict:
             # The current run lease still owns every acquisition recorded
@@ -1714,8 +1744,7 @@ class Walker:
             raise
         except (_CancelRequested, asyncio.CancelledError):
             if lost:
-                await self._relinquish_acquired(acquired)
-                raise lost[0] from None
+                raise lost[0] from await self._relinquish_acquired(acquired)
             await self._close_acquired(lease, acquired, "discard")
             raise
         except Exception:

@@ -1896,11 +1896,17 @@ class CodexOperatorHandle:
         successor, whose reconciliation waits on exactly the guard released here.
         """
         self.closed = True
-        errors = await finish_owned(self._release_local())
-        if len(errors) == 1:
-            raise errors[0]
-        if errors:
-            raise BaseExceptionGroup("codex acquisition relinquishment failed", errors)
+        release = self._release_local()
+        try:
+            await finish_owned(release)
+        finally:
+            # finish_owned joins the release even when this caller is
+            # cancelled meanwhile; its failures must still surface.
+            errors = release.result()
+            if len(errors) == 1:
+                raise errors[0]
+            if errors:
+                raise BaseExceptionGroup("codex acquisition relinquishment failed", errors)
 
     async def _cleanup_owned(self) -> None:
         errors: list[BaseException] = []
