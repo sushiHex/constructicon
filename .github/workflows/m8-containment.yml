@@ -260,6 +260,23 @@ jobs:
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             --certificate-github-workflow-sha "$CODEX_PIN_CATALOG_COMMIT" \
             "$RUNNER_TEMP/codex.tar.gz"
+      - name: Prove the production host assembly from the installed launch set
+        if: matrix.lane == 'foundation'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The real runtime, vendor and catalog, assembled as the service with
+          # a synthetic generation: construction reads no store, and no vendor
+          # process starts. The host session runs it against the real one.
+          sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
+            M8_OPERATOR_STORE_ROOT=/var/lib/constructicon-m8-launch/operator-stores \
+            M8_HOST_ASSEMBLY_REQUIRED=1 \
+            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_codex_host.py \
+              -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
+          sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
+            M8_OPERATOR_STORE_ROOT=/var/lib/constructicon-m8-launch/operator-stores \
+            M8_HOST_ASSEMBLY_REQUIRED=1 \
+            "$PWD/.venv/bin/python" scripts/check_m8_n5_host_mutations.py
       - name: Prove the host plans the package CI installed
         if: matrix.lane == 'foundation'
         shell: bash

@@ -12,9 +12,11 @@ again after a crash replays the same command and recovers the same run.
 
 from __future__ import annotations
 
+import argparse
 import asyncio
+import json
 from collections.abc import Callable, Mapping
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +45,8 @@ from constructicon.runtime.context import NodeContext
 from constructicon.runtime.registry import CapabilityDescriptor, source_digest_for
 from constructicon.sdk.types import DefinitionBundle
 from constructicon.substrate.executors.codex import CodexOperatorProvider
+from constructicon.substrate.executors.codex_host import READ_GRANTS, HostSession, operator_provider
+from constructicon.substrate.executors.qualification import read_authorization
 from constructicon.substrate.journal.sqlite import SqliteJournal
 
 GRAPH_NAME = "constructicon-qualification"
@@ -224,3 +228,88 @@ async def _bootstrap(control: ControlPlane, actor: AuthenticatedActor) -> None:
     )
     if not isinstance(promoted, PromotionCommandResult):
         raise ContractViolation(f"the qualification component was not promoted: {promoted!r}")
+
+
+# --- the host commands --------------------------------------------------------
+
+CAPABILITY = "codex-operator"
+"""The capability id a host qualification binds; the graph is pinned with it."""
+
+
+def _host_session(arguments: argparse.Namespace) -> HostSession:
+    return HostSession(
+        session=arguments.session,
+        store_key=arguments.store_key,
+        sealed=arguments.sealed,
+        qualification=arguments.qualification,
+        state=arguments.state,
+    )
+
+
+def mint(arguments: argparse.Namespace) -> QualificationAuthorization:
+    """The pins of a no-dispatch authorization, computed from this host.
+
+    Minting is computation, not authority: root reviews the printed record and
+    installs it (`0640 root:<service group>`), and only then may it run.
+    """
+    provider = operator_provider(_host_session(arguments))
+    return QualificationAuthorization(
+        authorization_id=arguments.authorization_id,
+        stage="qualification-no-dispatch",
+        actor_id=arguments.actor,
+        idempotency_key=arguments.key,
+        scope=SCOPE,
+        binding=EXECUTOR,
+        source_graph_hash=source_graph_hash_for(qualification_graph(CAPABILITY)),
+        capability_id=CAPABILITY,
+        revision=provider.identity.revision,
+        operator_binding_digest=provider.identity.store.operator_binding_digest,
+        journal=str(arguments.journal),
+        max_epoch=1,
+        not_after=utc_now() + timedelta(hours=arguments.hours),
+    )
+
+
+async def run(arguments: argparse.Namespace) -> RunStatus:
+    """The installed authorization, the production provider, and the entry."""
+    provider = operator_provider(
+        _host_session(arguments), read_authorization(arguments.authorization),
+    )
+    return await qualify(provider=provider, grants=READ_GRANTS, timeout_s=arguments.timeout)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """``mint`` prints an authorization's pins; ``run`` runs an installed one."""
+    parser = argparse.ArgumentParser(prog="constructicon.api.qualification")
+    commands = parser.add_subparsers(dest="command", required=True)
+    for name in ("mint", "run"):
+        command = commands.add_parser(name)
+        command.add_argument("--session", type=Path, required=True)
+        command.add_argument("--store-key", required=True)
+        command.add_argument("--sealed", type=Path, required=True)
+        command.add_argument("--qualification", type=Path, required=True)
+        command.add_argument("--state", type=Path, required=True)
+        if name == "mint":
+            command.add_argument("--authorization-id", required=True)
+            command.add_argument("--actor", required=True)
+            command.add_argument("--key", required=True)
+            command.add_argument("--journal", type=Path, required=True)
+            command.add_argument("--hours", type=float, choices=(1.0, 2.0, 4.0, 8.0), default=4.0)
+        else:
+            command.add_argument("--authorization", type=Path, required=True)
+            command.add_argument("--timeout", type=float, default=600.0)
+    arguments = parser.parse_args(argv)
+    if arguments.command == "mint":
+        print(mint(arguments).model_dump_json())
+        return 0
+    status = asyncio.run(run(arguments))
+    print(json.dumps({"status": status.value}))
+    return 0 if status is RunStatus.SUCCEEDED else 1
+
+
+if __name__ == "__main__":
+    # Run as the importable module, never as ``__main__``: the graph names each
+    # node by its module, which must be the one the registry imports cold.
+    from constructicon.api import qualification
+
+    raise SystemExit(qualification.main())

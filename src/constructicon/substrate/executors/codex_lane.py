@@ -332,11 +332,12 @@ def launch_faults(launched: Launched) -> list[str]:
     return [fault for holds, fault in checks if not holds]
 
 
-def _base(lane: str, custody: Custody, launcher: LinuxLauncher, policy: EgressPolicy,
-          executable: Executable, configuration: str, launched: Launched) -> dict[str, Any]:
+def launch_facts(launcher: LinuxLauncher, policy: EgressPolicy, executable: Executable,
+                 configuration: str) -> dict[str, Any]:
+    """What a lane record names as the artifacts it ran: one producer for the
+    record and for anything that must later prove those are still installed."""
+
     return {
-        "schema_version": LANE_SCHEMA, "lane": lane,
-        "custody": {"kind": custody.kind, **dict(custody.detail)},
         "adapter_revision": str(ADAPTER_REVISION),
         "protocol_revision": str(PROTOCOL_REVISION),
         "launch_revision": str(launcher.revision),
@@ -346,6 +347,15 @@ def _base(lane: str, custody: Custody, launcher: LinuxLauncher, policy: EgressPo
                        "sealed_catalog_sha256": executable.sealed_catalog_sha256},
         "configuration_digest": str(configuration_digest(configuration)),
         "egress": {key: str(value) for key, value in identity_digests(policy).items()},
+    }
+
+
+def _base(lane: str, custody: Custody, launcher: LinuxLauncher, policy: EgressPolicy,
+          executable: Executable, configuration: str, launched: Launched) -> dict[str, Any]:
+    return {
+        "schema_version": LANE_SCHEMA, "lane": lane,
+        "custody": {"kind": custody.kind, **dict(custody.detail)},
+        **launch_facts(launcher, policy, executable, configuration),
         "relay": {"destinations": launched.destinations, "denied": launched.denied,
                   "closed": launched.relay_closed},
         "credential": dict(launched.credential),

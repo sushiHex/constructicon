@@ -84,6 +84,10 @@ PROOFS = {
         # Two named parity tests from one file: the host writer and the loader.
         "tests/test_m8_host_runtime.py tests/test_m8_host_runtime.py",
     ),
+    "Prove the production host assembly from the installed launch set": (
+        "foundation",
+        "tests/substrate/test_codex_host.py scripts/check_m8_n5_host_mutations.py",
+    ),
     "Prove the host plans the package CI installed": (
         "foundation", "tests/test_m8_host_runtime.py",
     ),
