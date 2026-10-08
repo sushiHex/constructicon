@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import json
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,7 @@ from constructicon.core.control import (
 )
 from constructicon.core.envelope import utc_now
 from constructicon.core.errors import ContractViolation
+from constructicon.core.executor import ExecutorSuccess, TaskSpec
 from constructicon.core.grants import EffectiveGrants
 from constructicon.core.graph import Graph, GraphNode, Ref
 from constructicon.core.identity import Digest, digest
@@ -41,10 +43,10 @@ from constructicon.core.manifest import parse_manifest_json, source_graph_hash_f
 from constructicon.core.ports import Port
 from constructicon.core.qualification import QualificationAuthorization
 from constructicon.core.run import RunStatus
-from constructicon.runtime.context import NodeContext
+from constructicon.runtime.context import NodeContext, NodeImpl
 from constructicon.runtime.registry import CapabilityDescriptor, source_digest_for
 from constructicon.sdk.types import DefinitionBundle
-from constructicon.substrate.executors.codex import CodexOperatorProvider
+from constructicon.substrate.executors.codex import CodexOperatorHandle, CodexOperatorProvider
 from constructicon.substrate.executors.codex_host import READ_GRANTS, HostSession, operator_provider
 from constructicon.substrate.executors.qualification import read_authorization
 from constructicon.substrate.journal.sqlite import SqliteJournal
@@ -67,15 +69,59 @@ async def qualification_node(ctx: NodeContext, inputs: Mapping[str, Any]) -> Map
     return {REPORT.name: {"materialized": True}}
 
 
-def qualification_definition() -> ComponentDef:
+async def qualification_read_node(
+    ctx: NodeContext, inputs: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    """Stage 3's one READ turn, over the fixed harmless task.
+
+    The task is a literal here so the node's source digest pins it (S3-3).
+    Only bounded facts leave: the attempt record holds the dispatch class, and
+    the answer's text is never returned.
+    """
+    executor = ctx.capability(EXECUTOR)
+    if not isinstance(executor, CodexOperatorHandle):
+        raise ContractViolation("the READ qualification binds the codex operator only")
+    task = TaskSpec(instruction="Reply with the single word: ready")
+    outcome = await executor.execute(task, workspace=None, grants=ctx.grants)
+    answer = outcome.output
+    if not isinstance(outcome, ExecutorSuccess) or not isinstance(answer, str) or not answer:
+        raise ContractViolation(f"the READ turn ended {outcome.status}")
+    return {REPORT.name: {"answer_bytes": len(answer.encode("utf-8"))}}
+
+
+@dataclass(frozen=True)
+class _Fixed:
+    """One stage's fixed graph: its name, its one node, and that node's body."""
+
+    graph: str
+    node: str
+    component: str
+    body: NodeImpl
+
+    @property
+    def scope(self) -> ScopePath:
+        return ScopePath(segments=(self.graph, self.node))
+
+
+FIXED = {
+    "qualification-no-dispatch": _Fixed(GRAPH_NAME, NODE_ID, COMPONENT, qualification_node),
+    "qualification-read": _Fixed(
+        "constructicon-qualification-read", "read", "constructicon.qualification/read",
+        qualification_read_node,
+    ),
+}
+
+
+def qualification_definition(stage: str = "qualification-no-dispatch") -> ComponentDef:
+    body = FIXED[stage].body
     return ComponentDef(
-        name=COMPONENT,
+        name=FIXED[stage].component,
         role="node",
         capability_requirements=(CapabilityRequirement(alias=EXECUTOR, kind="executor"),),
         body=PythonRef(
             package="constructicon",
-            module=qualification_node.__module__,
-            qualname=qualification_node.__qualname__,
+            module=body.__module__,
+            qualname=body.__qualname__,
             contract_hash=digest(
                 "component-contract",
                 1,
@@ -84,23 +130,25 @@ def qualification_definition() -> ComponentDef:
                     "outputs": [REPORT.model_dump(mode="json")],
                 },
             ),
-            source_digest=source_digest_for(qualification_node),
+            source_digest=source_digest_for(body),
         ),
         inputs=(REQUEST,),
         outputs=(REPORT,),
     )
 
 
-def qualification_graph(capability_id: str) -> Graph:
+def qualification_graph(
+    capability_id: str, stage: str = "qualification-no-dispatch",
+) -> Graph:
     """One node, one executor binding, no loop, an explicit version."""
-    definition = qualification_definition()
+    definition = qualification_definition(stage)
     return Graph(
-        name=GRAPH_NAME,
+        name=FIXED[stage].graph,
         inputs=(REQUEST,),
         outputs=(REPORT,),
         nodes=(
             GraphNode(
-                id=NODE_ID,
+                id=FIXED[stage].node,
                 body=Ref(
                     component=definition.name,
                     version=str(definition.content_hash()),
@@ -153,10 +201,10 @@ async def qualify(
     control = ControlPlane(system=system, store=journal)
     try:
         await control.startup()
-        await _bootstrap(control, actor)
+        await _bootstrap(control, actor, authorization.stage)
         submitted = await control.runs_start(
             actor,
-            proposal=qualification_graph(capability),
+            proposal=qualification_graph(capability, authorization.stage),
             inputs={REQUEST.name: {"authorization": authorization.authorization_id}},
             idempotency_key=authorization.idempotency_key,
         )
@@ -199,23 +247,26 @@ def _stored_graph(journal: SqliteJournal, run_id: RunId) -> Digest | None:
 
 def _require_coherent(authorization: QualificationAuthorization) -> None:
     """An authorization for anything but this entry's own fixed invocation is not ours."""
-    graph = source_graph_hash_for(qualification_graph(authorization.capability_id))
+    graph = source_graph_hash_for(
+        qualification_graph(authorization.capability_id, authorization.stage),
+    )
     if (
-        authorization.scope != SCOPE
+        authorization.scope != FIXED[authorization.stage].scope
         or authorization.binding != EXECUTOR
         or authorization.source_graph_hash != graph
         or not Path(authorization.journal).is_absolute()
+        or (authorization.dispatches and not Path(authorization.attempt_record or "").is_absolute())
     ):
         raise ContractViolation("the authorization does not name this qualification")
 
 
-async def _bootstrap(control: ControlPlane, actor: AuthenticatedActor) -> None:
+async def _bootstrap(control: ControlPlane, actor: AuthenticatedActor, stage: str) -> None:
     """Register and promote the fixed component, idempotently per version."""
-    definition = qualification_definition()
+    definition = qualification_definition(stage)
     version = str(definition.content_hash())
     registered = await control.registry_register(
         actor,
-        definition=DefinitionBundle(definition, qualification_node),
+        definition=DefinitionBundle(definition, FIXED[stage].body),
         idempotency_key=f"qualification-register-{version}",
     )
     if not isinstance(registered, RegistrationCommandResult):
@@ -247,26 +298,31 @@ def _host_session(arguments: argparse.Namespace) -> HostSession:
 
 
 def mint(arguments: argparse.Namespace) -> QualificationAuthorization:
-    """The pins of a no-dispatch authorization, computed from this host.
+    """The pins of an authorization for one stage, computed from this host.
 
     Minting is computation, not authority: root reviews the printed record and
-    installs it (`0640 root:<service group>`), and only then may it run.
+    installs it (`0640 root:<service group>`), and only then may it run. A read
+    authorization also pins the READ grants and its attempt record.
     """
+    stage = arguments.stage
     provider = operator_provider(_host_session(arguments))
+    read = stage == "qualification-read"
     return QualificationAuthorization(
         authorization_id=arguments.authorization_id,
-        stage="qualification-no-dispatch",
+        stage=stage,
         actor_id=arguments.actor,
         idempotency_key=arguments.key,
-        scope=SCOPE,
+        scope=FIXED[stage].scope,
         binding=EXECUTOR,
-        source_graph_hash=source_graph_hash_for(qualification_graph(CAPABILITY)),
+        source_graph_hash=source_graph_hash_for(qualification_graph(CAPABILITY, stage)),
         capability_id=CAPABILITY,
         revision=provider.identity.revision,
         operator_binding_digest=provider.identity.store.operator_binding_digest,
         journal=str(arguments.journal),
         max_epoch=1,
         not_after=utc_now() + timedelta(hours=arguments.hours),
+        grants=READ_GRANTS if read else None,
+        attempt_record=str(arguments.attempt_record) if read else None,
     )
 
 
@@ -291,6 +347,8 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--state", type=Path, required=True)
         if name == "mint":
             command.add_argument("--authorization-id", required=True)
+            command.add_argument("--stage", choices=sorted(FIXED), required=True)
+            command.add_argument("--attempt-record", type=Path)
             command.add_argument("--actor", required=True)
             command.add_argument("--key", required=True)
             command.add_argument("--journal", type=Path, required=True)
@@ -300,6 +358,8 @@ def main(argv: list[str] | None = None) -> int:
             command.add_argument("--timeout", type=float, default=600.0)
     arguments = parser.parse_args(argv)
     if arguments.command == "mint":
+        if (arguments.stage == "qualification-read") != (arguments.attempt_record is not None):
+            parser.error("--attempt-record is required by, and only by, the read stage")
         print(mint(arguments).model_dump_json())
         return 0
     status = asyncio.run(run(arguments))

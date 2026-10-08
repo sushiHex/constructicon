@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from constructicon.core.address import ExecutionPath, ScopePath
 from constructicon.core.control import command_id_for, run_id_for_command
+from constructicon.core.grants import EffectiveGrants, ModelSelection, Posture
 from constructicon.core.identity import digest
 from constructicon.core.qualification import QualificationAuthorization
 
@@ -16,6 +17,10 @@ NOW = datetime(2026, 10, 8, 12, tzinfo=UTC)
 GRAPH = digest("test-graph", 1, "qualification")
 BINDING = digest("test-binding", 1, "store")
 SCOPE = ScopePath(segments=("qualification", "qualify"))
+GRANTS = EffectiveGrants(
+    posture=Posture.READ, model_selection=ModelSelection(kind="explicit", model="m"),
+    effort="low", allowed_tools=(), env_allowlist=(), network="allow", timeout_s=120,
+)
 
 
 def authorization(**changes) -> QualificationAuthorization:
@@ -47,6 +52,7 @@ def acquisition(**changes) -> dict:
         "capability_id": "codex-operator",
         "revision": "rev-1",
         "operator_binding_digest": BINDING,
+        "grants": GRANTS,
         "epoch": 1,
         "now": NOW,
         **changes,
@@ -114,3 +120,49 @@ def test_admission_is_timeless_and_names_graph_capability_and_revision():
 def test_the_shape_is_closed(change):
     with pytest.raises(ValidationError):
         authorization(**change)
+
+
+def read(**changes) -> QualificationAuthorization:
+    return authorization(**{
+        "stage": "qualification-read", "grants": GRANTS,
+        "attempt_record": "/var/lib/constructicon/stage3.attempt", **changes,
+    })
+
+
+def test_a_read_authorization_pins_grants_a_record_and_one_epoch():
+    granted = read()
+    assert granted.dispatches and not authorization().dispatches
+    assert granted.acquisition_faults(**acquisition(run_id=granted.run_id)) == ()
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"grants": None},
+        {"attempt_record": None},
+        {"attempt_record": ""},
+        {"max_epoch": 2},
+    ],
+    ids=["no-grants", "no-record", "empty-record", "two-epochs"],
+)
+def test_a_read_authorization_missing_any_pin_is_refused(change):
+    with pytest.raises(ValidationError, match="a read authorization pins"):
+        read(**change)
+
+
+@pytest.mark.parametrize(
+    "change", [{"grants": GRANTS}, {"attempt_record": "/var/lib/x.attempt"}],
+)
+def test_a_no_dispatch_authorization_pins_neither(change):
+    with pytest.raises(ValidationError, match="pins no grants or attempt record"):
+        authorization(**change)
+
+
+def test_a_read_acquisition_under_other_grants_is_refused():
+    granted = read()
+    other = GRANTS.model_copy(update={"timeout_s": 300})
+    assert granted.acquisition_faults(
+        **acquisition(run_id=granted.run_id, grants=other)
+    ) == ("qualification refuses other grants",)
+    # The no-dispatch stage pins no grants, so any are its admission's concern.
+    assert authorization().acquisition_faults(**acquisition(grants=other)) == ()
