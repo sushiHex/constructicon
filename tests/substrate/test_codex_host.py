@@ -67,7 +67,11 @@ def evidence(installed=INSTALLED, **changes) -> dict:
         "methods_sent": [named_method(item) for item in codex_lane.STARTUP_METHODS],
         "withheld_methods": [],
         "gate": {"completed": True, "plan": "pro", "account": str(ACCOUNT)},
-        "readback": {"spend_control_reached": False},
+        "readback": {
+            "has_credits": True, "unlimited": False, "balance_zero": False,
+            "spend_control_reached": False, "rate_limit_reached": False,
+            "primary_used_percent": 3, "secondary_used_percent": 1,
+        },
         "observation": {"malformed_records": 0, "first_error": False},
         "refresh": "unmeasured",
         "hold_s": 0,
@@ -104,14 +108,32 @@ def test_evidence_the_generation_did_not_seal_is_refused(tmp_path):
         codex_host.sealed_account(other, path, INSTALLED)
 
 
-def test_a_sealed_record_that_is_not_closed_is_refused(tmp_path):
-    for record in (evidence(extra=True), {k: v for k, v in evidence().items() if k != "refresh"}):
-        path = written(tmp_path, record)
-        with pytest.raises(ContractViolation, match="not a closed startup record"):
-            codex_host.sealed_account(sealed_by(record, native_store()), path, INSTALLED)
-
-
 PASSING = evidence()
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        evidence(extra=True),
+        {key: value for key, value in PASSING.items() if key != "refresh"},
+        evidence(readback=None),
+        evidence(custody={"kind": "active", "binding_digest": str(ACCOUNT)}),
+        evidence(gate={**PASSING["gate"], "extra": None}),
+        evidence(process={
+            key: value for key, value in PASSING["process"].items() if key != "elapsed_s"
+        }),
+        evidence(readback={"spend_control_reached": False}),
+    ],
+    ids=[
+        "extra", "missing", "no-readback", "active-custody", "gate-extra", "process-missing",
+        "readback-partial",
+    ],
+)
+def test_a_sealed_record_that_is_not_closed_is_refused(tmp_path, record):
+    """Every nested object closed, as `check_evidence` closes it."""
+    path = written(tmp_path, record)
+    with pytest.raises(ContractViolation, match="not a closed startup record"):
+        codex_host.sealed_account(sealed_by(record, native_store()), path, INSTALLED)
 
 
 @pytest.mark.parametrize(
@@ -122,26 +144,30 @@ PASSING = evidence()
         {"lane": "login"},
         {"faults": ["a fault"]},
         {"vendor_conformance_qualified": True},
-        {"custody": {"kind": "active", "binding_digest": str(ACCOUNT)}},
+        {"vendor_identity": "verified"},
+        {"custody": {"kind": "active", "generation_floor": 3}},
         {"methods_sent": []},
         {"observation": {"malformed_records": 1, "first_error": True}},
+        {"observation": {"malformed_records": False, "first_error": False}},
         {"gate": {"completed": False, "plan": "pro", "account": str(ACCOUNT)}},
         {"gate": {"completed": True, "plan": "plus", "account": str(ACCOUNT)}},
         {"gate": {"completed": True, "plan": "pro", "account": None}},
         {"gate": {"completed": True, "plan": "pro", "account": "not-a-digest"}},
-        {"readback": {"spend_control_reached": True}},
-        {"readback": None},
+        {"readback": {**PASSING["readback"], "spend_control_reached": True}},
+        {"readback": {**PASSING["readback"], "spend_control_reached": 0}},
         {"process": {**PASSING["process"], "timed_out": True}},
         {"process": {**PASSING["process"], "returncode": 1}},
+        {"process": {**PASSING["process"], "returncode": False}},
+        {"process": {**PASSING["process"], "bound_exceeded": None}},
         {"relay": {**PASSING["relay"], "closed": False}},
         {"relay": {**PASSING["relay"], "denied": {"denied:destination": 1}}},
         {"credential": {**PASSING["credential"], "checked": False}},
     ],
     ids=[
-        "incomplete", "schema", "lane", "faults", "conformance", "custody", "methods",
-        "observation", "gate", "plan", "account", "malformed-account", "spend", "no-readback",
-        "timed-out",
-        "returncode", "relay-open", "relay-denied", "credential",
+        "incomplete", "schema", "lane", "faults", "conformance", "vendor-identity", "custody",
+        "methods", "observation", "observation-bool", "gate", "plan", "account",
+        "malformed-account", "spend", "spend-zero", "timed-out", "returncode",
+        "returncode-bool", "bound-none", "relay-open", "relay-denied", "credential",
     ],
 )
 def test_a_sealed_record_that_is_not_a_passing_startup_is_refused(tmp_path, change):
@@ -298,6 +324,46 @@ def test_an_unprepared_state_directory_is_refused_before_it_is_touched(host, tmp
     assert list(bare.iterdir()) == []
     assert refused.type is ContractViolation
     assert "not this host's prepared state" in str(refused.value)
+
+
+def _bare(path: Path) -> None:
+    subprocess.run(
+        ["git", "init", "--bare", "-q", str(path)],
+        stdin=subprocess.DEVNULL, check=True, capture_output=True,
+    )
+
+
+def _tree(root: Path) -> list[str]:
+    return sorted(str(path.relative_to(root)) for path in root.rglob("*"))
+
+
+@pytest.mark.parametrize("linked", ["state", "authority"])
+def test_a_link_in_the_state_is_refused_before_anything_is_touched(host, tmp_path, linked):
+    """A prepared state reached through a link, or a `closure.git` linking to
+    another bare repository: nothing behind either link may be written."""
+    real = Path(tempfile.mkdtemp(prefix="h", dir="/tmp"))
+    state = real.with_name(real.name + "l") if linked == "state" else real
+    try:
+        if linked == "state":
+            _bare(real / "closure.git")
+            state.symlink_to(real)
+            watched = real
+        else:
+            watched = tmp_path / "other.git"
+            _bare(watched)
+            (real / "closure.git").symlink_to(watched)
+        before = _tree(watched)
+        with pytest.raises(Exception) as refused:
+            codex_host.operator_provider(
+                codex_host.HostSession(**{**host.__dict__, "state": state}),
+            )
+        assert _tree(watched) == before
+        assert refused.type is ContractViolation
+        assert "not this host's prepared state" in str(refused.value)
+    finally:
+        if state != real:
+            state.unlink()
+        shutil.rmtree(real)
 
 
 def test_mint_prints_the_pins_of_this_host(host, capsys):

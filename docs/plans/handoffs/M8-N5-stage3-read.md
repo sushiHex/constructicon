@@ -60,16 +60,18 @@ It adds:
   without trusting that the runbook was followed:
   - the evidence is exactly the one sealed (its digest is both store
     revisions), read as one bounded, regular, duplicate-free object;
-  - it is a closed startup record, passing by every affirmative fact the lane
-    records (process, relay, credential, methods, gate, spend, observation);
+  - it is a closed startup record, every nested object closed as
+    `check_evidence` closes it, passing by every affirmative fact the lane
+    records, with strict booleans and integer zeros;
   - the artifacts it names are this host's `codex_lane.launch_facts`, the same
     producer the lane writes them with, so an older qualification cannot vouch
     for changed artifacts.
 - **The conformance revisions from `Q` (S3-2).**
 - **Two state paths, both service-owned under one short directory:** a bare
   `closure.git` (the closure authority) and `acquisitions`. The host-session
-  runbook creates them. The directory is checked (absolute, canonical,
-  prepared) before the closure authority, which installs hooks, is built. The
+  runbook creates them. Before the closure authority, which installs hooks,
+  is built, `closure.git` must be a directory whose path resolves to itself:
+  no link anywhere, its own included, and never relative. The
   native egress socket path under it is bounded to 107 bytes, which the
   provider enforces.
 - **A Linux-only guard.**
@@ -111,15 +113,18 @@ same controller tree, which R19's import check covers.
   real runtime, vendor and catalog with a synthetic generation (construction
   reads no store) whose evidence names this host's launch facts. It is
   unavailable, and has the READ profile, the sealed account and `Q` as each
-  revision. A non-production configuration and an unprepared state directory
-  are refused, the latter untouched. `mint` prints this host's pins, and the
+  revision. A non-production configuration is refused, and so are an
+  unprepared state and a link to the state or from `closure.git`, with
+  nothing behind them touched. `mint` prints this host's pins, and the
   documented `python -m` entry mints the same graph.
-- **Mutants:** sixteen in `check_m8_n5_host_mutations.py`, one per check. The
+- **Mutants:** twenty-one in `check_m8_n5_host_mutations.py`, one per check. The
   account's well-formedness has none, because the returned seal validates it
   again.
 - **Review:** Astra (job_95d1f6760f0b) found the subset check, the `__main__`
   graph, the fixture's documentation-space addresses and long state path, the
-  unbounded read, and the authority built before validation. All are fixed.
+  unbounded read, and the authority built before validation. The connector
+  review found open nested shapes, permissive booleans and a linked
+  `closure.git`. All are fixed.
 
 ## Part B: the read stage (next PR)
 

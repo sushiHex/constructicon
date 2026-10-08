@@ -38,7 +38,12 @@ from constructicon.core.native_operator import (
 from constructicon.core.qualification import QualificationAuthorization
 from constructicon.substrate.executors import codex_lane, operator_store
 from constructicon.substrate.executors.codex import CodexOperatorProvider, launch_identity
-from constructicon.substrate.executors.codex_protocol import ExpectedAccount, named_method
+from constructicon.substrate.executors.codex_protocol import (
+    SPEND_FIELDS,
+    USAGE_FIELDS,
+    ExpectedAccount,
+    named_method,
+)
 from constructicon.substrate.executors.egress import identity_digests
 from constructicon.substrate.executors.operator_store import BindingStore
 from constructicon.substrate.git.acquisition import AcquisitionClosure
@@ -127,35 +132,56 @@ def sealed_account(
     q = digest(codex_lane.EVIDENCE_DOMAIN, 1, json.loads(canonical_json(record)))
     if q != store.subscription_mode_adapter_revision or q != store.store_conformance_revision:
         raise ContractViolation("the evidence is not the qualification this generation sealed")
-    if set(record) != codex_lane.STARTUP_FIELDS | {"completed"}:
+    if set(record) != codex_lane.STARTUP_FIELDS | {"completed"} or any(
+        type(record[key]) is not dict or set(record[key]) != fields
+        for key, fields in NESTED_FIELDS.items()
+    ):
         raise ContractViolation("the sealed qualification is not a closed startup record")
-    custody, gate, process, relay, credential, readback = (
-        record[key] if type(record[key]) is dict else {}
-        for key in ("custody", "gate", "process", "relay", "credential", "readback")
+    custody, gate, process, relay, credential, readback, observation = (
+        record[key] for key in NESTED_FIELDS
     )
-    account = gate.get("account")
     passing = (
         record["completed"] is True,
         record["schema_version"] == codex_lane.LANE_SCHEMA and record["lane"] == "startup",
-        record["faults"] == [] and record["vendor_conformance_qualified"] is False,
-        custody.get("kind") == "maintenance" and set(custody) == {"kind", "generation_floor"},
+        record["faults"] == [] and record["vendor_identity"] == "unverified",
+        record["vendor_conformance_qualified"] is False,
+        custody["kind"] == "maintenance",
         record["methods_sent"] == [named_method(item) for item in codex_lane.STARTUP_METHODS],
-        record["observation"] == {"malformed_records": 0, "first_error": False},
-        gate.get("completed") is True and gate.get("plan") in codex_lane.QUALIFICATION_PLANS,
-        _is_digest(account),
-        readback.get("spend_control_reached", True) in (False, None),
-        process.get("returncode") == 0 and process.get("payload_returncode") == 0,
-        not any(
-            process.get(key, True) for key in ("timed_out", "bound_exceeded", "exchange_failed")
-        ),
-        relay.get("closed") is True and relay.get("denied") == {},
-        all(credential.get(key) is True for key in ("present", "regular_0600", "checked")),
+        _zero(observation["malformed_records"]) and observation["first_error"] is False,
+        gate["completed"] is True and gate["plan"] in codex_lane.QUALIFICATION_PLANS,
+        _is_digest(gate["account"]),
+        readback["spend_control_reached"] is False or readback["spend_control_reached"] is None,
+        _zero(process["returncode"]) and _zero(process["payload_returncode"]),
+        all(process[key] is False for key in ("timed_out", "bound_exceeded", "exchange_failed")),
+        relay["closed"] is True and relay["denied"] == {},
+        all(credential[key] is True for key in ("present", "regular_0600", "checked")),
     )
     if not all(passing):
         raise ContractViolation("the sealed qualification is not a passing startup")
     if any(record[key] != value for key, value in installed.items()):
         raise ContractViolation("the sealed qualification ran other artifacts than are installed")
-    return ExpectedAccount(plan_type=gate["plan"], identity=Digest(account))
+    return ExpectedAccount(plan_type=gate["plan"], identity=Digest(gate["account"]))
+
+
+NESTED_FIELDS = {
+    "custody": {"kind", "generation_floor"},
+    "gate": {"completed", "plan", "account"},
+    "process": {
+        "returncode", "payload_returncode", "timed_out", "bound_exceeded", "exchange_failed",
+        "elapsed_s", "stderr_bytes",
+    },
+    "relay": {"destinations", "denied", "closed"},
+    "credential": {"present", "regular_0600", "mtime_changed", "checked"},
+    "readback": {*SPEND_FIELDS, *USAGE_FIELDS},
+    "observation": {"malformed_records", "first_error"},
+}
+"""Each nested object a passing maintenance startup records, closed as the
+runbook's `check_evidence` closes it."""
+
+
+def _zero(value: object) -> bool:
+    """An integer zero, never `False` standing in for one."""
+    return type(value) is int and value == 0
 
 
 def _evidence(path: Path) -> dict[str, Any]:
@@ -208,8 +234,12 @@ def operator_provider(
         raise ContractViolation("the host assembly requires the Linux host")
     # Checked before the closure authority is constructed: constructing it
     # installs hooks, so it must never touch a directory assembly would refuse.
+    # The authority's path resolves to itself only when every component is
+    # canonical, the state's included, and never when it is relative: a link
+    # anywhere would let construction write elsewhere.
     state = host.state
-    if not (state.is_absolute() and state.resolve() == state and (state / "closure.git").is_dir()):
+    closure = state / "closure.git"
+    if not (closure.resolve() == closure and closure.is_dir()):
         raise ContractViolation("the state directory is not this host's prepared state")
     launcher = codex_lane._launcher(host.launch_root)
     configuration = codex_lane.production_configuration()
@@ -246,7 +276,7 @@ def operator_provider(
             host.launch_root / "operator-stores", host.store_key, store,
         ),
         closure=AcquisitionClosure(
-            GitAuthority(state / "closure.git", state / "workspaces"),
+            GitAuthority(closure, state / "workspaces"),
         ),
         egress=policy,
         qualification=qualification,
