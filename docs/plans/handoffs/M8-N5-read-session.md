@@ -140,8 +140,10 @@ succeeded. The verdict reads that and the attempt record together:
   began and that ended without an accepted answer. It is never retried automatically; stop for the
   owner. A wrong answer is not a local failure.
 
-A second `run` of the same authorization refuses at acquisition: the record
-already exists, whatever the journal holds.
+A second `run` of the same authorization dispatches nothing. While the
+journal holds the first run, it replays that run's final status and acquires
+nothing. Against a reset journal it reaches acquisition, which refuses
+because the record already exists.
 
 ## T6. One retry, only after a diagnosed local failure
 
