@@ -3852,3 +3852,7 @@ The runbook's S6b removes `chatgpt.com` from the startup policy and expected `ac
 
 - **Measured on the real binary.** A new `unrouted` case in the account-recovery lane runs S6b's exact policy with its declared denial. `account/read` is denied (`denied:destination`), no request reaches either host, the vendor reports "workspace routing discovery failed", nothing is refreshed, and the run stops at the third method with exactly the lane's stopped-gate faults and `NO_RESULT_FAULT`.
 - **The checker and runbook.** `check_evidence`'s `denial` mode now requires that shape: three methods, `gate` `{completed: false, plan: null, account: null}`, no readback, and that exact fault set with the destination denial. Its test scripts the vendor's error reading. The runbook says why, and its mode list now names `initial` and the account seal.
+
+### N5: a live loser's custody
+
+A losing process that stays alive kept its codex acquisition guard and store lock, because the walker closes nothing after ownership loss and only close released them. The successor's reconciliation then waited on that guard until the loser's process exited, forever when RunHost re-claims in the same process. Reproduced on `main` with a retaining double (both loss paths) before the fix. An optional L0 `RelinquishingCapability` now lets the walker free local custody on loss without any durable write; the codex handle's cleanup splits into the durable closure commit (close only) and one shared local release. Proof and mutants: M8-N5-live-loser-custody.md.

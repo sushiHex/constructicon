@@ -74,6 +74,7 @@ from constructicon.core.workspace import (
     Disposition,
     LeaseContext,
     LeasedCapability,
+    RelinquishingCapability,
     StaleAcquisition,
 )
 from constructicon.runtime.context import ChannelFacade, NodeContext, NodeImpl
@@ -1071,6 +1072,22 @@ class Walker:
         await self._finish_cleanup(close_all())
 
     @staticmethod
+    async def _relinquish_acquired(
+        acquired: list[tuple[LeasedCapability, AcquiredCapability]],
+    ) -> None:
+        """After ownership loss: free local custody; disposition is the successor's.
+
+        One joined batch, like close: a cancellation must not abandon siblings.
+        """
+
+        async def relinquish_all() -> None:
+            for capability, acquisition in acquired:
+                if isinstance(capability, RelinquishingCapability):
+                    await capability.relinquish(acquisition)
+
+        await Walker._finish_cleanup(relinquish_all())
+
+    @staticmethod
     async def _discard_unrecorded_acquisition(
         capability: LeasedCapability,
         acquisition: AcquiredCapability,
@@ -1687,6 +1704,7 @@ class Walker:
                 ),
             )
         except OwnershipLost:
+            await self._relinquish_acquired(acquired)
             raise
         except CheckpointConflict:
             # The current run lease still owns every acquisition recorded
@@ -1696,6 +1714,7 @@ class Walker:
             raise
         except (_CancelRequested, asyncio.CancelledError):
             if lost:
+                await self._relinquish_acquired(acquired)
                 raise lost[0] from None
             await self._close_acquired(lease, acquired, "discard")
             raise

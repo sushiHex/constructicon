@@ -135,10 +135,26 @@ MUTANTS = (
     ),
     (
         "cleanup cancels and joins the active exchange before releasing custody",
-        CODEX + "CodexOperatorHandle._cleanup_owned",
+        CODEX + "CodexOperatorHandle._release_local_owned",
         "(self._materialization, self.active, self.worker_active)",
         "(self._materialization, self.worker_active)",
         CODEX_ADAPTER_TEST + "test_close_cancels_an_exchange_still_in_flight",
+    ),
+    (
+        "relinquishment releases this process's custody",
+        CODEX + "CodexOperatorHandle.relinquish",
+        "errors = await finish_owned(self._release_local())",
+        "errors = []",
+        CODEX_ADAPTER_TEST
+        + "test_relinquishment_joins_work_and_frees_custody_but_commits_no_closure",
+    ),
+    (
+        "relinquishment commits no closure",
+        CODEX + "CodexOperatorHandle.relinquish",
+        "errors = await finish_owned(self._release_local())",
+        'errors = await finish_owned(self._release_local()); await self.cleanup("discard")',
+        CODEX_ADAPTER_TEST
+        + "test_relinquishment_joins_work_and_frees_custody_but_commits_no_closure",
     ),
     (
         "recovery reference acquisition matches the stale lease epoch",

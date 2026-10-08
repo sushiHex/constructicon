@@ -118,6 +118,19 @@ class LeasedCapability(Protocol):
     ) -> LeaseReconciliation: ...
 
 
+@runtime_checkable
+class RelinquishingCapability(Protocol):
+    """A leased capability whose acquisitions hold process-local custody.
+
+    After ownership loss the walker closes nothing: disposition belongs to the
+    successor. It relinquishes instead: stop and join the acquisition's work,
+    then release what this process holds, writing nothing durable. Without it
+    a living loser keeps custody its successor's reconciliation must wait on.
+    """
+
+    async def relinquish(self, acquisition: AcquiredCapability) -> None: ...
+
+
 def lease_id_for(run_id: RunId, path: ExecutionPath, binding_id: str) -> str:
     """Logical lease identity — one per run/invocation/binding.
 

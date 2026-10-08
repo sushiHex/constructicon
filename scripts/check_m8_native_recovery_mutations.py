@@ -62,9 +62,22 @@ MUTANTS = (
      TEST + "test_native_process_observer_distinguishes_worker_child_from_supervisors"),
     ("cancellation closes an observed lost owner's recorded acquisitions",
      "constructicon.runtime.walker:Walker._invoke",
-     "if lost:\n            raise lost[0]", "if False:\n            raise lost[0]",
+     "if lost:\n            await self._relinquish_acquired(acquired)",
+     "if False:\n            await self._relinquish_acquired(acquired)",
      "tests/runtime/test_materialization_control.py::"
      "test_cancellation_during_ownership_loss_teardown_leaves_recorded_siblings_to_successor"),
+    ("an observed ownership loss relinquishes local custody",
+     "constructicon.runtime.walker:Walker._invoke",
+     "except OwnershipLost:\n        await self._relinquish_acquired(acquired)",
+     "except OwnershipLost:\n        pass",
+     "tests/runtime/test_ownership_loss_custody.py::"
+     "test_a_live_loser_releases_custody_so_its_successor_can_reconcile[checked]"),
+    ("a latched ownership loss relinquishes local custody",
+     "constructicon.runtime.walker:Walker._invoke",
+     "await self._relinquish_acquired(acquired)\n            raise lost[0]",
+     "raise lost[0]",
+     "tests/runtime/test_ownership_loss_custody.py::"
+     "test_a_live_loser_releases_custody_so_its_successor_can_reconcile[cancelled]"),
 )
 
 if __name__ == "__main__":
