@@ -89,6 +89,9 @@ PROOFS = {
         "foundation",
         "tests/substrate/test_codex_host.py scripts/check_m8_n5_host_mutations.py",
     ),
+    "Rehearse the Stage 3 READ session without a login": (
+        "foundation", "tests/test_m8_n5_read_rehearsal.py",
+    ),
     "Prove the host plans the package CI installed": (
         "foundation", "tests/test_m8_host_runtime.py",
     ),
