@@ -1848,9 +1848,8 @@ async def test_a_grouped_cleanup_failure_keeps_a_cancellation_a_cancellation(
         assert "cleanup failed" in outcome.error.detail
 
 
-async def test_close_cancels_an_exchange_still_in_flight(
-    tmp_path, portable_binding, substituted_guard,
-):
+async def in_flight(tmp_path, binding, *, epoch=1):
+    """A materialized acquisition whose exchange is blocked mid-call."""
     entered = asyncio.Event()
 
     @dataclass(frozen=True, kw_only=True)
@@ -1882,19 +1881,128 @@ async def test_close_cancels_an_exchange_still_in_flight(
     )
     provider = CodexOperatorProvider(
         launcher=launcher, profile=codex_profile(),
-        identity=identity_for(launcher, store_identity=portable_binding[1].sealed),
+        identity=identity_for(launcher, store_identity=binding[1].sealed),
         expected_account=EXPECTED, binary=BINARY, configuration=CONFIGURATION, catalog=(),
         acquisition_root=tmp_path / "acquisitions", unavailable_reasons=(),
-        binding_store=portable_binding[1], closure=portable_binding[2],
+        binding_store=binding[1], closure=binding[2],
     )
-    acquired = await provider.acquire(context())
+    acquired = await provider.acquire(context(epoch=epoch))
     await acquired.materialize()
     running = asyncio.create_task(
         acquired.resource.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS),
     )
     await asyncio.wait_for(entered.wait(), 5)
+    return provider, acquired, running
+
+
+def stale_row(acquired, *, epoch=1) -> StaleAcquisition:
+    ctx = context(epoch=epoch)
+    return StaleAcquisition(
+        lease=CapabilityLease(
+            lease_id=acquired.lease_id, acquisition_epoch=epoch, run_id=ctx.run_lease.run_id,
+            binding_id=ctx.binding.binding, path=ctx.path, state="active",
+            resource_ref=acquired.resource_ref,
+        ),
+        disposition="discard",
+    )
+
+
+async def test_close_cancels_an_exchange_still_in_flight(
+    tmp_path, portable_binding, substituted_guard,
+):
+    provider, acquired, running = await in_flight(tmp_path, portable_binding)
     closure = await provider.close(acquired, "discard")
     assert closure.disposition == "discarded"
+    with pytest.raises(asyncio.CancelledError):
+        await running
+
+
+async def test_relinquishment_joins_work_and_frees_custody_but_commits_no_closure(
+    tmp_path, portable_binding, substituted_guard,
+):
+    """Ownership is lost: stop, join and let go, but leave disposition alone."""
+    world, store, closure = portable_binding
+    provider, acquired, running = await in_flight(tmp_path, portable_binding)
+    handle = acquired.resource
+    released = len(world.closed)
+
+    await provider.relinquish(acquired)
+
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    assert handle.closed and not handle.ready
+    assert handle._store_lock is None and handle._guard_owner is None
+    assert len(world.closed) > released, "the store lock was not released"
+    assert not closure.is_closed(handle.paths), "relinquishment committed closure"
+    with pytest.raises(ContractViolation, match="not open and materialized"):
+        await handle.execute(TaskSpec(instruction="x"), workspace=None, grants=GRANTS)
+
+    # Disposition is the successor's, and nothing is left for it to wait on.
+    successor = provider_for(
+        bare_launcher(), unavailable_reasons=(), binding=(store, closure), root=tmp_path,
+    )
+    outcome = await asyncio.wait_for(
+        successor.reconcile(context(epoch=2), (stale_row(acquired),)), 5,
+    )
+    assert outcome.reaped == (acquired.resource_ref,)
+    assert closure.is_closed(handle.paths)
+
+
+async def test_relinquishment_failures_survive_the_callers_cancellation(
+    tmp_path, portable_binding, substituted_guard, monkeypatch,
+):
+    """Cancelling the relinquishing caller must not swallow a release failure."""
+    provider, acquired, running = await in_flight(tmp_path, portable_binding)
+    handle = acquired.resource
+    release_custody = handle._release_custody
+
+    async def failing_release(**owners):
+        await release_custody(**owners)
+        return [OSError("the store lock would not close")]
+
+    monkeypatch.setattr(handle, "_release_custody", failing_release)
+    relinquishing = asyncio.create_task(provider.relinquish(acquired))
+    await asyncio.sleep(0)
+    relinquishing.cancel()
+    (outcome,) = await asyncio.gather(relinquishing, return_exceptions=True)
+    assert isinstance(outcome, OSError) and "would not close" in str(outcome), outcome
+    with pytest.raises(asyncio.CancelledError):
+        await running
+
+
+@LINUX
+async def test_a_successor_waits_on_a_live_losers_real_guard_until_it_relinquishes(
+    tmp_path, portable_binding,
+):
+    """The real flock, not the substitution: the control proves exclusion."""
+    import fcntl
+
+    _, store, closure = portable_binding
+    provider, acquired, running = await in_flight(tmp_path, portable_binding)
+    successor = provider_for(
+        bare_launcher(), unavailable_reasons=(), binding=(store, closure), root=tmp_path,
+    )
+    reconciling = asyncio.create_task(
+        successor.reconcile(context(epoch=2), (stale_row(acquired),)),
+    )
+    paths = acquired.resource.paths
+    # Affirmative contention, not elapsed time: the successor has committed
+    # closure and is now at the guard, which the live loser still holds.
+    async with asyncio.timeout(5):
+        while not closure.is_closed(paths):
+            await asyncio.sleep(0.01)
+    probe = os.open(paths.guard, os.O_RDWR)
+    try:
+        with pytest.raises(BlockingIOError):
+            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        os.close(probe)
+    assert not reconciling.done(), "the successor did not wait on the live guard"
+
+    await provider.relinquish(acquired)
+
+    outcome = await asyncio.wait_for(reconciling, 5)
+    assert outcome.reaped == (acquired.resource_ref,)
     with pytest.raises(asyncio.CancelledError):
         await running
 

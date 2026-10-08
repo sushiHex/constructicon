@@ -4,6 +4,7 @@ from _mutations import run
 
 MODULE = "tests.native_lifecycle:"
 TEST = "tests/test_native_lifecycle.py::"
+CUSTODY = "tests/runtime/test_ownership_loss_custody.py::"
 
 MUTANTS = (
     ("unentered close disposes", MODULE + "NativeFixtureProvider.close",
@@ -62,9 +63,35 @@ MUTANTS = (
      TEST + "test_native_process_observer_distinguishes_worker_child_from_supervisors"),
     ("cancellation closes an observed lost owner's recorded acquisitions",
      "constructicon.runtime.walker:Walker._invoke",
-     "if lost:\n            raise lost[0]", "if False:\n            raise lost[0]",
+     "if lost:\n            raise lost[0] from",
+     "if False:\n            raise lost[0] from",
      "tests/runtime/test_materialization_control.py::"
      "test_cancellation_during_ownership_loss_teardown_leaves_recorded_siblings_to_successor"),
+    ("an observed ownership loss relinquishes local custody",
+     "constructicon.runtime.walker:Walker._invoke",
+     "failure := await self._relinquish_acquired(acquired)", "failure := None",
+     CUSTODY + "test_a_live_loser_releases_custody_so_its_successor_can_reconcile[checked]"),
+    ("a latched ownership loss relinquishes local custody",
+     "constructicon.runtime.walker:Walker._invoke",
+     "raise lost[0] from await self._relinquish_acquired(acquired)", "raise lost[0] from None",
+     CUSTODY + "test_a_live_loser_releases_custody_so_its_successor_can_reconcile[cancelled]"),
+    ("one failed relinquishment strands no sibling",
+     "constructicon.runtime.walker:Walker._relinquish_acquired",
+     "errors.append(exc)", "raise",
+     CUSTODY + "test_one_failed_relinquishment_strands_no_sibling_and_the_loss_stays_primary"),
+    ("a cancellation-class relinquish failure strands no sibling",
+     "constructicon.runtime.walker:Walker._relinquish_acquired",
+     "except BaseException as exc:", "except Exception as exc:",
+     CUSTODY + "test_one_failed_relinquishment_strands_no_sibling_and_the_loss_stays_primary"
+     "[cancellation]"),
+    ("a cancellation during relinquishment cannot displace the loss",
+     "constructicon.runtime.walker:Walker._relinquish_acquired",
+     "with contextlib.suppress(asyncio.CancelledError):", "with contextlib.suppress():",
+     CUSTODY + "test_a_cancellation_during_relinquishment_leaves_the_loss_primary"),
+    ("a loss found while closing relinquishes the rest",
+     "constructicon.runtime.walker:Walker._close_acquired",
+     "failure := await self._relinquish_acquired(rest)", "failure := None",
+     CUSTODY + "test_a_loss_found_while_closing_relinquishes_the_siblings_not_yet_closed"),
 )
 
 if __name__ == "__main__":

@@ -587,8 +587,8 @@ MUTANTS = (
     (
         "close cancels an exchange still in flight",
         CLOSE,
-        "await handle.cleanup(disposition)",
-        "handle.closed = True",
+        'await self._own(acquisition, "close").cleanup(disposition)',
+        'self._own(acquisition, "close").closed = True',
         STORE_ADAPTER
         + "test_materialization_retains_one_store_lock_and_records_three_checks",
     ),

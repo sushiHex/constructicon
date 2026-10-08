@@ -1456,6 +1456,7 @@ class CodexOperatorHandle:
         self.worker_active: asyncio.Task[ProcessResult] | None = None
         self._materialization: asyncio.Task[None] | None = None
         self._cleanup: asyncio.Task[None] | None = None
+        self._local_release: asyncio.Task[list[BaseException]] | None = None
         self._close_disposition: Disposition | None = None
         self._guard_owner: AbstractAsyncContextManager[int] | None = None
         self._guard_fd: int | None = None
@@ -1888,6 +1889,25 @@ class CodexOperatorHandle:
             self._cleanup = asyncio.create_task(self._cleanup_owned())
         await finish_owned(self._cleanup)
 
+    async def relinquish(self) -> None:
+        """Ownership is lost: join this acquisition's work, then free its custody.
+
+        Commits no closure. That is disposition, and disposition belongs to the
+        successor, whose reconciliation waits on exactly the guard released here.
+        """
+        self.closed = True
+        release = self._release_local()
+        try:
+            await finish_owned(release)
+        finally:
+            # finish_owned joins the release even when this caller is
+            # cancelled meanwhile; its failures must still surface.
+            errors = release.result()
+            if len(errors) == 1:
+                raise errors[0]
+            if errors:
+                raise BaseExceptionGroup("codex acquisition relinquishment failed", errors)
+
     async def _cleanup_owned(self) -> None:
         errors: list[BaseException] = []
         closure = self.provider.closure
@@ -1903,7 +1923,20 @@ class CodexOperatorHandle:
                     )))
                 except BaseException as exc:
                     errors.append(exc)
+        errors.extend(await finish_owned(self._release_local()))
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise BaseExceptionGroup("codex acquisition cleanup failed", errors)
 
+    def _release_local(self) -> asyncio.Task[list[BaseException]]:
+        """The one release of this process's custody, shared by close and loss."""
+        if self._local_release is None:
+            self._local_release = asyncio.create_task(self._release_local_owned())
+        return self._local_release
+
+    async def _release_local_owned(self) -> list[BaseException]:
+        errors: list[BaseException] = []
         # These tasks own all work that can still acquire or pass the retained
         # descriptions. Join them before closing either parent copy.
         pending = tuple(dict.fromkeys(
@@ -1940,10 +1973,7 @@ class CodexOperatorHandle:
             held=held,
             owner=owner,
         ))
-        if len(errors) == 1:
-            raise errors[0]
-        if errors:
-            raise BaseExceptionGroup("codex acquisition cleanup failed", errors)
+        return errors
 
 
 def _hashable(value: Any) -> bool:
@@ -2148,6 +2178,14 @@ class CodexOperatorProvider:
     async def close(
         self, acquisition: AcquiredCapability, disposition: Disposition,
     ) -> LeaseClosure:
+        await self._own(acquisition, "close").cleanup(disposition)
+        return LeaseClosure(disposition="released" if disposition == "release" else "discarded")
+
+    async def relinquish(self, acquisition: AcquiredCapability) -> None:
+        await self._own(acquisition, "relinquishment").relinquish()
+
+    def _own(self, acquisition: AcquiredCapability, operation: str) -> CodexOperatorHandle:
+        """This provider's handle for exactly this acquisition, or a violation."""
         handle = acquisition.resource
         expected_logical = lease_id_for(
             handle.context.run_lease.run_id,
@@ -2168,9 +2206,8 @@ class CodexOperatorProvider:
             or acquisition.acquisition_id != expected_acquisition
             or acquisition.resource_ref != expected_ref
         ):
-            raise ContractViolation("codex close requires its own handle")
-        await handle.cleanup(disposition)
-        return LeaseClosure(disposition="released" if disposition == "release" else "discarded")
+            raise ContractViolation(f"codex {operation} requires its own handle")
+        return handle
 
     async def reconcile(
         self, context: LeaseContext, stale: tuple[StaleAcquisition, ...],
