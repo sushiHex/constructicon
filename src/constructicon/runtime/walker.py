@@ -1081,7 +1081,7 @@ class Walker:
     @staticmethod
     async def _relinquish_acquired(
         acquired: list[tuple[LeasedCapability, AcquiredCapability]],
-    ) -> Exception | None:
+    ) -> BaseException | None:
         """After ownership loss: free local custody; disposition is the successor's.
 
         Every acquisition is attempted even after one fails, and the batch is
@@ -1098,12 +1098,14 @@ class Walker:
         if not relinquishing:
             return None
 
-        async def relinquish_all() -> list[Exception]:
-            errors: list[Exception] = []
+        async def relinquish_all() -> list[BaseException]:
+            # Cancellation-class failures included: none may stop the batch
+            # or escape it in place of the loss.
+            errors: list[BaseException] = []
             for capability, acquisition in relinquishing:
                 try:
                     await capability.relinquish(acquisition)
-                except Exception as exc:
+                except BaseException as exc:
                     errors.append(exc)
             return errors
 
@@ -1113,7 +1115,7 @@ class Walker:
                 await asyncio.shield(batch)
         errors = batch.result()
         if len(errors) > 1:
-            return ExceptionGroup("ownership-loss relinquishment failed", errors)
+            return BaseExceptionGroup("ownership-loss relinquishment failed", errors)
         return errors[0] if errors else None
 
     @staticmethod

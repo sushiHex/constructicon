@@ -79,6 +79,11 @@ MUTANTS = (
      "constructicon.runtime.walker:Walker._relinquish_acquired",
      "errors.append(exc)", "raise",
      CUSTODY + "test_one_failed_relinquishment_strands_no_sibling_and_the_loss_stays_primary"),
+    ("a cancellation-class relinquish failure strands no sibling",
+     "constructicon.runtime.walker:Walker._relinquish_acquired",
+     "except BaseException as exc:", "except Exception as exc:",
+     CUSTODY + "test_one_failed_relinquishment_strands_no_sibling_and_the_loss_stays_primary"
+     "[cancellation]"),
     ("a cancellation during relinquishment cannot displace the loss",
      "constructicon.runtime.walker:Walker._relinquish_acquired",
      "with contextlib.suppress(asyncio.CancelledError):", "with contextlib.suppress():",

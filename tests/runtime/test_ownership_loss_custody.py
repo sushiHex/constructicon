@@ -255,16 +255,21 @@ async def test_a_live_loser_releases_custody_so_its_successor_can_reconcile(
     await world.succeed(run_id, winner)
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [OSError("this custody would not release"), asyncio.CancelledError("relinquish cancelled")],
+    ids=["error", "cancellation"],
+)
 async def test_one_failed_relinquishment_strands_no_sibling_and_the_loss_stays_primary(
-    world,
+    world, failure
 ):
-    run_id = RunId("live-loser-failed-sibling")
+    run_id = RunId(f"live-loser-failed-sibling-{type(failure).__name__}")
     executor = world.provider("retaining")
     sibling = world.provider("sibling")
     held, claimed = await lose_mid_call(world, executor, run_id)
 
     async def fail(handle):
-        raise OSError("this custody would not release")
+        raise failure
 
     executor.before_relinquish = fail
     running = await world.start(run_id, {"executor": "retaining", "z": "sibling"})
@@ -273,7 +278,7 @@ async def test_one_failed_relinquishment_strands_no_sibling_and_the_loss_stays_p
     claimed.set()
     loss = await outcome(running)
 
-    assert isinstance(loss.__cause__, OSError)
+    assert loss.__cause__ is failure
     assert sibling.relinquished == [sibling.handles[0].key]
     assert world.held() == [True, False]
 
