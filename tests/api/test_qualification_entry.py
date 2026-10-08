@@ -284,6 +284,29 @@ async def test_a_journal_holding_another_run_is_refused_before_recovery(
         )
 
 
+async def test_the_same_run_id_carrying_another_graph_is_refused_before_recovery(
+    tmp_path, portable_binding, clock
+):
+    """A run id names only an actor and a key: a stored run with the authorized
+    id but another graph is not this qualification's, and is never recovered."""
+    first = authorization(tmp_path, portable_binding, clock)
+    await qualify(
+        provider=provider(tmp_path, portable_binding, first), grants=GRANTS,
+        timeout_s=30, now_fn=clock.now,
+    )
+    other = "codex-other"
+    regraphed = authorization(
+        tmp_path, portable_binding, clock, capability_id=other,
+        source_graph_hash=source_graph_hash_for(qualification_graph(other)),
+    )
+    assert regraphed.run_id == first.run_id
+    with pytest.raises(ContractViolation, match="not this qualification's"):
+        await qualify(
+            provider=provider(tmp_path, portable_binding, regraphed), grants=GRANTS,
+            timeout_s=30, now_fn=clock.now,
+        )
+
+
 async def test_an_unauthorized_provider_or_invocation_is_refused_before_any_journal(
     tmp_path, portable_binding, clock
 ):

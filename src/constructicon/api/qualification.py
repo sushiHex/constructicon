@@ -34,8 +34,8 @@ from constructicon.core.envelope import utc_now
 from constructicon.core.errors import ContractViolation
 from constructicon.core.grants import EffectiveGrants
 from constructicon.core.graph import Graph, GraphNode, Ref
-from constructicon.core.identity import digest
-from constructicon.core.manifest import source_graph_hash_for
+from constructicon.core.identity import Digest, digest
+from constructicon.core.manifest import parse_manifest_json, source_graph_hash_for
 from constructicon.core.ports import Port
 from constructicon.core.qualification import QualificationAuthorization
 from constructicon.core.run import RunStatus
@@ -125,10 +125,7 @@ async def qualify(
         )
     _require_coherent(authorization)
     journal = SqliteJournal(Path(authorization.journal), now_fn=now_fn)
-    # The journal is this qualification's alone. Checked before any recovery
-    # starts: the RunHost resumes every recoverable run in the journal it opens.
-    if any(record.run_id != authorization.run_id for record in journal.run_records(limit=2)):
-        raise ContractViolation("the journal holds runs that are not this qualification's")
+    _require_dedicated(journal, authorization)
     capability = authorization.capability_id
     system = Constructicon(
         journal=journal,
@@ -177,6 +174,23 @@ def _status(journal: SqliteJournal, run_id: RunId) -> RunStatus:
     if record is None:
         raise ContractViolation("the admitted qualification run has no durable record")
     return record.status
+
+
+def _require_dedicated(journal: SqliteJournal, authorization: QualificationAuthorization) -> None:
+    """The journal is this qualification's alone, checked before recovery starts:
+    the RunHost resumes whatever a journal holds. A run id names only an actor
+    and a key, so the authorized run must also carry the authorized graph."""
+    for record in journal.run_records(limit=2):
+        if record.run_id != authorization.run_id or _stored_graph(
+            journal, record.run_id
+        ) != authorization.source_graph_hash:
+            raise ContractViolation("the journal holds runs that are not this qualification's")
+
+
+def _stored_graph(journal: SqliteJournal, run_id: RunId) -> Digest | None:
+    manifest_hash = journal.run_manifest_hash(run_id)
+    raw = None if manifest_hash is None else journal.load_manifest_json(manifest_hash)
+    return None if raw is None else parse_manifest_json(raw).source_graph_hash
 
 
 def _require_coherent(authorization: QualificationAuthorization) -> None:

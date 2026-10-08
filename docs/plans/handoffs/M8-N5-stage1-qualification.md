@@ -109,7 +109,9 @@ graph: one node `qualify`, one executor binding, no loop, and an explicit
 component version. Its body holds the materialized executor and returns,
 without ever executing it. The entry:
 - refuses an authorization naming any other invocation;
-- refuses a journal that holds any run but the authorized one, before recovery
+- refuses a journal that holds any run but the authorized one, or holds the
+  authorized run id with another stored graph (a run id names only an actor
+  and a key), before recovery
   starts, since the RunHost resumes whatever a journal holds. One
   authorization therefore means one fresh journal;
 - assembles a private `Constructicon` over that journal;
@@ -150,7 +152,7 @@ MCP adapter from reaching the entry.
 | successor, `max_epoch` spent | epoch 1 is reconciled after physical quiescence; the next epoch refuses at `acquire`; the run fails with no new row | entry test; Linux twin |
 | successor within the budget | epoch 1 is reconciled; the next epoch acquires and succeeds | entry test |
 | expiry | admission still admits; `acquire` refuses; cleanup proceeds | entry and provider tests |
-| a journal holding another run | refused before recovery starts | entry test |
+| a journal holding another run, or the authorized run id with another graph | refused before recovery starts | entry tests |
 | a locked (reproduce or counterfactual) admission | never exempt | admission test |
 | any other run, invocation, graph, capability or binding | refused before a handle exists | core and provider tests |
 | journal reset within the window | epoch 1 is permitted again: no dispatch, no credential, no spend | accepted (decision 2) |
@@ -182,5 +184,5 @@ CI's authorizations are minted by the service and sealed verbatim by root, so
 the lane proves the reader's checks, not owner provenance.
 
 **Mutants.** Every one fails an assertion:
-- `check_m8_n5_stage1_mutations.py`: one per gate (15).
+- `check_m8_n5_stage1_mutations.py`: one per gate (16).
 - `check_m8_n5_stage1_linux_mutations.py`: one per reader check (8).
