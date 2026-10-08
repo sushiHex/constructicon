@@ -308,4 +308,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # Run as the importable module, never as ``__main__``: the graph names each
+    # node by its module, which must be the one the registry imports cold.
+    from constructicon.api import qualification
+
+    raise SystemExit(qualification.main())

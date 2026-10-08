@@ -16,9 +16,14 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+
+from pydantic import ValidationError
 
 from constructicon.core.errors import ContractViolation
 from constructicon.core.grants import EffectiveGrants, ModelSelection, Posture
@@ -33,7 +38,7 @@ from constructicon.core.native_operator import (
 from constructicon.core.qualification import QualificationAuthorization
 from constructicon.substrate.executors import codex_lane, operator_store
 from constructicon.substrate.executors.codex import CodexOperatorProvider, launch_identity
-from constructicon.substrate.executors.codex_protocol import ExpectedAccount
+from constructicon.substrate.executors.codex_protocol import ExpectedAccount, named_method
 from constructicon.substrate.executors.egress import identity_digests
 from constructicon.substrate.executors.operator_store import BindingStore
 from constructicon.substrate.git.acquisition import AcquisitionClosure
@@ -41,6 +46,9 @@ from constructicon.substrate.git.authority import GitAuthority
 
 LAUNCH_ROOT = Path("/var/lib/constructicon-m8-launch")
 MAX_EVIDENCE_BYTES = 1048576
+_O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
 
 READ_PROFILE = NativeOperatorExecutorProfileV3(
     name="codex-operator-read",
@@ -103,34 +111,89 @@ class HostSession:
     launch_root: Path = LAUNCH_ROOT
 
 
-def sealed_account(store: NativeOperatorStoreIdentityV1, evidence: Path) -> ExpectedAccount:
+def sealed_account(
+    store: NativeOperatorStoreIdentityV1, evidence: Path, installed: Mapping[str, Any],
+) -> ExpectedAccount:
     """The account a generation sealed, from its own qualification evidence.
 
-    The file must be exactly the one sealed: its digest is both store
-    revisions. It must also be a passing maintenance startup with a completed
-    gate naming an approved plan and an account. This is the code twin of the
-    runbook's `read_seal`, without trusting that the runbook was followed.
+    The code twin of the runbook's `check_evidence` for a passing maintenance
+    startup, so it holds without trusting that the runbook was followed:
+    - the file is exactly the one sealed (its digest is both store revisions);
+    - it is a closed, passing startup by every affirmative fact the lane records;
+    - the artifacts it names are `installed`, `codex_lane.launch_facts` of this
+      host, so an older qualification cannot vouch for changed artifacts.
     """
-    raw = evidence.read_bytes()
-    if not 0 < len(raw) <= MAX_EVIDENCE_BYTES:
-        raise ContractViolation("the sealed qualification evidence is unavailable")
-    record = json.loads(raw)
+    record = _evidence(evidence)
     q = digest(codex_lane.EVIDENCE_DOMAIN, 1, json.loads(canonical_json(record)))
     if q != store.subscription_mode_adapter_revision or q != store.store_conformance_revision:
         raise ContractViolation("the evidence is not the qualification this generation sealed")
-    gate = record.get("gate") or {}
-    if not (
-        record.get("completed") is True
-        and record.get("schema_version") == codex_lane.LANE_SCHEMA
-        and record.get("lane") == "startup"
-        and record.get("faults") == []
-        and (record.get("custody") or {}).get("kind") == "maintenance"
-        and gate.get("completed") is True
-        and gate.get("plan") in codex_lane.QUALIFICATION_PLANS
-        and isinstance(gate.get("account"), str)
-    ):
+    if set(record) != codex_lane.STARTUP_FIELDS | {"completed"}:
+        raise ContractViolation("the sealed qualification is not a closed startup record")
+    custody, gate, process, relay, credential, readback = (
+        record[key] if type(record[key]) is dict else {}
+        for key in ("custody", "gate", "process", "relay", "credential", "readback")
+    )
+    account = gate.get("account")
+    passing = (
+        record["completed"] is True,
+        record["schema_version"] == codex_lane.LANE_SCHEMA and record["lane"] == "startup",
+        record["faults"] == [] and record["vendor_conformance_qualified"] is False,
+        custody.get("kind") == "maintenance" and set(custody) == {"kind", "generation_floor"},
+        record["methods_sent"] == [named_method(item) for item in codex_lane.STARTUP_METHODS],
+        record["observation"] == {"malformed_records": 0, "first_error": False},
+        gate.get("completed") is True and gate.get("plan") in codex_lane.QUALIFICATION_PLANS,
+        _is_digest(account),
+        readback.get("spend_control_reached", True) in (False, None),
+        process.get("returncode") == 0 and process.get("payload_returncode") == 0,
+        not any(
+            process.get(key, True) for key in ("timed_out", "bound_exceeded", "exchange_failed")
+        ),
+        relay.get("closed") is True and relay.get("denied") == {},
+        all(credential.get(key) is True for key in ("present", "regular_0600", "checked")),
+    )
+    if not all(passing):
         raise ContractViolation("the sealed qualification is not a passing startup")
-    return ExpectedAccount(plan_type=gate["plan"], identity=Digest(gate["account"]))
+    if any(record[key] != value for key, value in installed.items()):
+        raise ContractViolation("the sealed qualification ran other artifacts than are installed")
+    return ExpectedAccount(plan_type=gate["plan"], identity=Digest(account))
+
+
+def _evidence(path: Path) -> dict[str, Any]:
+    """One bounded, regular, duplicate-free JSON object; never a FIFO or a link."""
+    try:
+        fd = os.open(path, os.O_RDONLY | _O_CLOEXEC | _O_NOFOLLOW | _O_NONBLOCK)
+    except OSError as exc:
+        raise ContractViolation("the sealed qualification evidence is unavailable") from exc
+    try:
+        info = os.fstat(fd)
+        raw = b""
+        if stat.S_ISREG(info.st_mode) and 0 < info.st_size <= MAX_EVIDENCE_BYTES:
+            raw = os.read(fd, MAX_EVIDENCE_BYTES + 1)
+        if not 0 < len(raw) == info.st_size:
+            raise ContractViolation("the sealed qualification evidence is unavailable")
+        record = json.loads(raw, object_pairs_hook=_unique)
+    except (OSError, ValueError) as exc:
+        raise ContractViolation("the sealed qualification evidence is unavailable") from exc
+    finally:
+        os.close(fd)
+    if type(record) is not dict:
+        raise ContractViolation("the sealed qualification evidence is unavailable")
+    return record
+
+
+def _is_digest(value: object) -> bool:
+    try:
+        Digest.model_validate(value)
+    except ValidationError:
+        return False
+    return True
+
+
+def _unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    keys = [key for key, _ in pairs]
+    if len(set(keys)) != len(keys):
+        raise ValueError("a duplicated key")
+    return dict(pairs)
 
 
 def operator_provider(
@@ -143,6 +206,11 @@ def operator_provider(
     """
     if sys.platform != "linux":
         raise ContractViolation("the host assembly requires the Linux host")
+    # Checked before the closure authority is constructed: constructing it
+    # installs hooks, so it must never touch a directory assembly would refuse.
+    state = host.state
+    if not (state.is_absolute() and state.resolve() == state and (state / "closure.git").is_dir()):
+        raise ContractViolation("the state directory is not this host's prepared state")
     launcher = codex_lane._launcher(host.launch_root)
     configuration = codex_lane.production_configuration()
     if (host.session / "config.toml").read_text(encoding="utf-8") != configuration:
@@ -166,16 +234,19 @@ def operator_provider(
         launcher=launcher,
         profile=READ_PROFILE,
         identity=identity,
-        expected_account=sealed_account(store, host.qualification),
+        expected_account=sealed_account(
+            store, host.qualification,
+            codex_lane.launch_facts(launcher, policy, executable, configuration),
+        ),
         binary=codex_lane.RUNTIME_BINARY,
         configuration=configuration,
         catalog=(),
-        acquisition_root=host.state / "acquisitions",
+        acquisition_root=state / "acquisitions",
         binding_store=BindingStore(
             host.launch_root / "operator-stores", host.store_key, store,
         ),
         closure=AcquisitionClosure(
-            GitAuthority(host.state / "closure.git", host.state / "workspaces"),
+            GitAuthority(state / "closure.git", state / "workspaces"),
         ),
         egress=policy,
         qualification=qualification,
