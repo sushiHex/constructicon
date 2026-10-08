@@ -1,7 +1,8 @@
 # M8 N4 launch-set replacement after the first login
 
 Status: reviewed runbook. Nothing here authorizes a host action; each run
-needs a written owner authorization on #77 naming `C` and these commands.
+needs a written owner authorization naming `C` and these commands, on the issue
+of the session it continues (#77 for N4, #78 for N5).
 `M8-N4-host-runtime.md` and `M8-D2-host-installation.md` keep their bytes, and
 this document is their successor for one case.
 
@@ -29,7 +30,7 @@ as it already is: R11 provenance, R12 staging, R13's file commands and
 
 ## LR0. Authorization
 
-The owner's authorization on #77 names:
+The owner's authorization on that issue names:
 - `C`;
 - this runbook;
 - the session it continues;
@@ -38,8 +39,8 @@ The owner's authorization on #77 names:
 ## LR1. Fresh boot
 
 Clean `Stop-VM`, then `Start-VM`. Never `Save-VM` and never a checkpoint after
-login. Record `/proc/sys/kernel/random/boot_id`. From this boot until LR8
-passes, run no `maintain`, `activate`, lane or `codex_lane` command, and no
+login. Record `/proc/sys/kernel/random/boot_id`. From this boot until the controller is
+current (LR8, or LR9 after it), run no `maintain`, `activate`, lane or `codex_lane` command, and no
 second session. As the service user, with the N4 runbook's common block, the
 newest sealed descriptor must refuse for the boot-bound anchor:
 
@@ -209,7 +210,7 @@ it is never read as "not loaded".
 | loaded with no file (an outside change) | `judge-retire` refuses | stop for a separate decision |
 
 Never remove `L` or the store. Never run the original fixed removal or restore a
-checkpoint. Post every record to #77; a rerun overwrites `retire.json`, so the
+checkpoint. Post every record to that issue; a rerun overwrites `retire.json`, so the
 posted record is the history.
 
 ## LR5. Stage
@@ -251,7 +252,8 @@ rejudged, never restaged.
 
 ## LR7. Probe
 
-As the service user, with the N4 runbook's common block, run S3's preflight
+Run after the controller is current (see Order). As the service user, with
+the N4 runbook's common block, run S3's preflight
 line. It must print `"launch_ready": true`. It runs the artifact checks and the
 benign physical probe, including the
 `constructicon-m8-launch//&constructicon-m8-workload (enforce)` attachment.
@@ -292,19 +294,61 @@ echo "verify exit $?"; cat "$W/verify.json"
 ```
 
 `verify-controller` must exit 0 with `"installed": true` and `different: 0`.
-If it refuses, the controller replacement (its removal, then R17 to R19) needs
-its own authorization.
+If it refuses, the controller replacement (LR9) needs its own authorization.
 
-Then the N4 session resumes at S0 at `C`.
+## LR9. Controller replacement after login
 
-## Evidence (posted on #77)
+Run only when LR8 refused because the installed tree differs. This needs its
+own authorization. The controller holds no credential, so removing it is not
+store maintenance (`M8-N4-host-runtime.md`, "Failure and recovery").
+
+After login, R16's checkpoint is forbidden. Otherwise R17 to R19 run exactly as
+written once both the controller and `$HOME/m8-controller` are absent, and they
+bring their own failure table ("On failure (controller)"). So LR9 does three
+things:
+1. confirms that LR8's record is a refusal of an installed tree, not an
+   unobserved or uncomputed one;
+2. sets LR8's workspace aside;
+3. removes the tree.
+
+In a fresh shell:
+
+```bash
+umask 077
+C=<40-hex merge commit named in LR0>
+W="$HOME/m8-controller"
+/usr/bin/python3 -I -S -B -c 'import json, sys
+r = json.load(open(sys.argv[1], encoding="utf-8"))
+e = r["observed"]["/opt/constructicon-m8-controller"]
+assert r["installed"] is False and e["state"] == "tree" and e["different"] > 0
+print("lr8-refused-a-tree")' "$W/verify.json" < /dev/null | /usr/bin/grep -qxF lr8-refused-a-tree \
+  && test "${#C}" -eq 40 && test ! -e "$HOME/m8-controller-refused-$C" \
+  && /usr/bin/mv -n "$W" "$HOME/m8-controller-refused-$C" \
+  && sudo /usr/bin/rm -rf --one-file-system /opt/constructicon-m8-controller \
+  && test ! -e /opt/constructicon-m8-controller && echo "LR9 removed"
+```
+
+It must print `LR9 removed`. Then, in a fresh shell at `C`, run R17 to R19
+exactly as written, with their failure table. R18 must print `R18 installed`
+and verify `"installed": true` with `"different": 0`. R19 must print
+`"passed": true`.
+
+## Order
+
+LR0 to LR6, then LR8, then LR9 if LR8 refused, then LR7. The probe runs only
+once the controller is current, because the controller runs the preflight.
+Then the session this replacement continues resumes at `C`.
+
+## Evidence (posted on the continued session's issue)
 
 - The authorization, `boot_id`, the LR1 refusal, and the LR2 records.
 - `LR3 passed`, and the R11 output.
 - `retire.json`, the `LR4 retired` line, and `retired.json`.
 - `stage.json`, `judge.json`, the `LR6 installed` line, and `verify.json`.
 - The LR7 line, and the LR8 records.
-- The continuity facts: the old and new `C`, the old and new `runtime_digest`, the store identity, and which N4 steps rerun.
+- When LR9 ran: the `LR9 removed` line, and R17 to R19's records (`wheels.json`,
+  `stage.json`, `judge.json`, `verify.json`, `check.json`).
+- The continuity facts: the old and new `C`, the old and new `runtime_digest`, the store identity, and which steps of the continued session rerun.
 
 ## What this does not establish
 
