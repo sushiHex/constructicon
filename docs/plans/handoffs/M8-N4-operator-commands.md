@@ -300,7 +300,9 @@ is created `0700` and contains exactly `config.toml`, `login-policy.json`,
 `startup-policy.json`, and the final `pin-record.json`. All files are `0600`.
 The login policy seals only `auth.openai.com:443`; startup seals that host and
 `chatgpt.com:443`, both with a connection bound of 8. The configuration has
-the reviewed `gpt-5.5` model, bound catalog and disabled auxiliary features.
+the production model and effort (`codex_lane.PREPARE_MODEL` and
+`PREPARE_EFFORT`, held to the pinned catalog in CI), the bound catalog and
+disabled auxiliary features.
 
 ```bash
 "${SERVICE[@]}" "${LANE[@]}" prepare --out "$W" < /dev/null
