@@ -65,6 +65,7 @@ import tomllib
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, suppress
 from dataclasses import asdict, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -84,6 +85,7 @@ from constructicon.core.native_operator import (
     NativeOperatorStoreIdentityV1,
 )
 from constructicon.core.process import ProcessIO
+from constructicon.core.qualification import QualificationAuthorization
 from constructicon.core.workspace import (
     AcquiredCapability,
     Disposition,
@@ -1444,10 +1446,14 @@ class CodexOperatorHandle:
 
     def __init__(
         self, provider: CodexOperatorProvider, context: LeaseContext, paths: AcquisitionPaths,
+        *, dispatch: bool = True,
     ) -> None:
         self.provider = provider
         self.context = context
         self.paths = paths
+        # False for a qualification acquisition: the whole lifecycle runs, and
+        # execute refuses before anything else. Fixed at acquire, never changed.
+        self.dispatch = dispatch
         self.entered = False
         self.ready = False
         self.closed = False
@@ -1594,6 +1600,8 @@ class CodexOperatorHandle:
     async def execute(
         self, task: TaskSpec, *, workspace: WorkspaceView | None, grants: EffectiveGrants,
     ) -> ExecutorOutcome:
+        if not self.dispatch:
+            raise ContractViolation("a qualification acquisition never dispatches")
         if self.closed or not self.ready:
             raise ContractViolation("codex acquisition is not open and materialized")
         if self.executed:
@@ -2026,6 +2034,7 @@ class CodexOperatorProvider:
         binding_store: BindingStore | None = None,
         closure: AcquisitionClosure | None = None,
         egress: EgressPolicy | None = None,
+        qualification: QualificationAuthorization | None = None,
     ) -> None:
         if not binary.startswith("/") or "\0" in binary:
             raise ContractViolation("the native client requires a fixed absolute executable")
@@ -2140,10 +2149,21 @@ class CodexOperatorProvider:
             reasons += (STORE_NOT_ESTABLISHED,)
         if profile.subscription_overage == "forbidden" and OVERAGE_NOT_ENFORCED not in reasons:
             reasons += (OVERAGE_NOT_ENFORCED,)
+        if qualification is not None and (
+            binding_store is None
+            or qualification.revision != identity.revision
+            or qualification.operator_binding_digest != identity.store.operator_binding_digest
+        ):
+            raise ContractViolation(
+                "a qualification authorization must name this provider and its physical binding"
+            )
         self._unavailable = reasons
         self.binding_store = binding_store
         self.closure = closure
         self.egress = egress
+        # Verified by the assembly from a trusted source, never a caller's: it
+        # admits and acquires exactly one run without making this available.
+        self.qualification = qualification
         self.handles: list[CodexOperatorHandle] = []
 
     @property
@@ -2154,17 +2174,38 @@ class CodexOperatorProvider:
     def unavailable_reasons(self) -> tuple[str, ...]:
         return self._unavailable
 
+    def authorizes_admission(self, *, source_graph_hash: Digest, capability_id: str) -> bool:
+        return self.qualification is not None and self.qualification.admits(
+            source_graph_hash=source_graph_hash,
+            capability_id=capability_id,
+            revision=self.identity.revision,
+        )
+
     async def acquire(self, context: LeaseContext) -> AcquiredCapability:
-        if self.unavailable_reasons:
+        qualification = self.qualification
+        if self.unavailable_reasons and qualification is None:
             raise ContractViolation("an unavailable operator provider cannot acquire")
         if self.binding_store is None or self.closure is None:
             raise ContractViolation("an available operator provider requires a physical binding")
         if context.check_control is None:
             raise ContractViolation("an operator acquisition requires invocation control")
+        if qualification is not None and (faults := qualification.acquisition_faults(
+            run_id=context.run_lease.run_id,
+            path=context.path,
+            binding=context.binding.binding,
+            source_graph_hash=context.source_graph_hash,
+            capability_id=context.binding.capability_id,
+            revision=context.binding.revision,
+            operator_binding_digest=self.identity.store.operator_binding_digest,
+            epoch=context.run_lease.epoch,
+            now=datetime.now(UTC),
+        )):
+            raise ContractViolation("; ".join(faults))
         logical = lease_id_for(context.run_lease.run_id, context.path, context.binding.binding)
         acquisition = acquisition_id_for(logical, context.run_lease.epoch)
         handle = CodexOperatorHandle(
             self, context, AcquisitionPaths(self._acquisition_root, acquisition),
+            dispatch=qualification is None,
         )
         self.handles.append(handle)
         return AcquiredCapability(

@@ -139,6 +139,42 @@ jobs:
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_operator_store_containment.py \
               -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           uv run python scripts/check_m8_n3a_mutations.py
+      - name: Prove N5 Stage 1 qualification on the real store and guard
+        if: matrix.lane == 'foundation'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Reuses the N3a store fixture. The service mints the pins; only root
+          # installs an authorization, 0640 root:m8-service in a root-owned
+          # directory, and the production reader is all the twin can use.
+          launch=/var/lib/constructicon-m8-launch
+          sudo install -d -o m8-service -g m8-service -m 0700 "$launch/qualification-state"
+          sudo install -d -o root -g root -m 0755 "$launch/qualification"
+          as_service() {
+            sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
+              M8_LINUX_ROOT="$launch" M8_OPERATOR_STORE_ROOT="$launch/operator-stores" \
+              M8_QUALIFICATION_STATE="$launch/qualification-state" "$@"
+          }
+          as_service "$PWD/.venv/bin/python" -m tests.substrate._qualification_twin mint \
+            > "$RUNNER_TEMP/m8-qualification-pins.txt"
+          while read -r scenario authorization; do
+            target="$launch/qualification/$scenario.json"
+            printf '%s' "$authorization" | sudo tee "$target" > /dev/null
+            sudo chown root:m8-service "$target"
+            sudo chmod 0640 "$target"
+          done < "$RUNNER_TEMP/m8-qualification-pins.txt"
+          # One unsealed variant per reader check, each otherwise identical.
+          accepted="$launch/qualification/accepted.json"
+          sudo install -o m8-service -g m8-service -m 0640 "$accepted" "$launch/qualification/runtime-owned.json"
+          sudo install -o root -g m8-service -m 0644 "$accepted" "$launch/qualification/world-readable.json"
+          sudo install -d -o m8-service -g m8-service -m 0755 "$launch/qualification-writable"
+          sudo install -o root -g m8-service -m 0640 "$accepted" "$launch/qualification-writable/accepted.json"
+          stat -c '%a %U %G %n' "$launch/qualification"/*.json "$launch/qualification-writable"/*.json
+          as_service M8_QUALIFICATION_REQUIRED=1 M8_QUALIFICATION_AUTHORIZATIONS="$launch/qualification" \
+            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_qualification_linux.py \
+              -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
+          as_service M8_QUALIFICATION_REQUIRED=1 M8_QUALIFICATION_AUTHORIZATIONS="$launch/qualification" \
+            "$PWD/.venv/bin/python" scripts/check_m8_n5_stage1_linux_mutations.py
       - name: Prove N3b acquisition-scoped egress denial
         if: matrix.lane == 'foundation'
         shell: bash
@@ -324,6 +360,7 @@ jobs:
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_native_recovery.py \
               tests/test_native_lifecycle.py -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           uv run python scripts/check_m8_native_recovery_mutations.py
+          uv run python scripts/check_m8_n5_stage1_mutations.py
       - name: Measure combined native startup and mediation
         if: matrix.lane == 'combined'
         shell: bash

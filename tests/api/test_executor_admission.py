@@ -16,6 +16,7 @@ from constructicon.core.control import RunSubmission
 from constructicon.core.grants import ModelSelection, Posture
 from constructicon.core.identity import digest
 from constructicon.core.introspection import DESCRIPTION_SCHEMA_VERSION, SystemDescription
+from constructicon.core.manifest import source_graph_hash_for
 from constructicon.substrate.executors.fake import FakeExecutor
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.api.test_control_response_loss import RUN_ACTOR
@@ -106,6 +107,29 @@ async def test_known_unavailable_provider_is_described_and_refused(journal, inje
         "alias": "executor",
     }
     assert fault.repair and provider.handles == [] and provider.executor.calls == []
+
+
+async def test_a_qualification_authorization_admits_only_its_graph_and_publishes_every_reason(
+    journal,
+) -> None:
+    """Stage 1: the one authorized graph is admitted while the provider stays
+    unavailable; any other graph still meets the provider's exact reasons."""
+    reason = "Linux boundary not proved"
+    provider = FakeExecutorProvider(unavailable_reasons=(reason,))
+    system = executor_system(journal, provider)
+    graph = await register_component(system, journal)
+    provider.qualified_graph = source_graph_hash_for(graph)
+
+    (capability,) = system.describe().capabilities
+    assert capability.available is False and provider.unavailable_reasons == (reason,)
+    assert isinstance(system.admit_graph(graph, INPUTS), AdmissionAccepted)
+
+    other = graph.model_copy(update={"name": "another-graph"})
+    refused = system.admit_graph(other, INPUTS)
+    assert isinstance(refused, AdmissionRejected)
+    assert [fault.details["defect"] for fault in refused.faults] == ["executor_unavailable"]
+    assert reason in refused.faults[0].message
+    assert provider.handles == []
 
 
 @pytest.mark.parametrize(
