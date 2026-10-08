@@ -1,5 +1,5 @@
 8cc657d175e3c81fd695e1333ce2ac8b1ade800a1a5bd10dc99ab7722f4e4939  README.md
-4c1af0fde83451b3eb1f9201042387d4d7810852acf3c52baa9322d7f7905a6d  handoffs/M8-N5-host-session.md
+f11045d5e3b0f0494f9760f5b31d4c083e5fb6477fe11a513a12d12299f76cad  handoffs/M8-N5-host-session.md
 70bc6ab03aa9ae0edea44850cce5b507a715ad6df195791bc59cf355b3973e3c  handoffs/M8-N5-stage1-qualification.md
 af0d26e2e3a87301ddf6f6cf4f6fa207b223905b39ea16812341b36e4b7e84e5  handoffs/M8-N5-live-loser-custody.md
 7d1fb8790ce212f2173a15bcd26fa50127e190e376a6b51c6e9507e1cbd0bf3d  handoffs/M8-N5-account-identity.md
@@ -7,7 +7,7 @@ af0d26e2e3a87301ddf6f6cf4f6fa207b223905b39ea16812341b36e4b7e84e5  handoffs/M8-N5
 e7a7a97772164055c5a4b5fafc12fe903272d52ea1b679cf86511c50d1a3b8e8  handoffs/M8-N5-native-tool-inventory.md
 349a79981c4b6d0de494fa873a6b52a39850787aa37b56f1797ea1addb86ac9b  handoffs/M8-N4-host-runtime.md
 0652af4c7671b028afb4c7fc65a9c369bfaee014ba2e49bf2fd1077632c5409a  handoffs/M8-N4-operator-commands.md
-b4089b92549f0c436c04c9586eeb977f223c4556f80a0a0151eab5942ac1af4f  handoffs/M8-N4-launch-replacement.md
+16cb614cdf76b1d1f9fc983b3eeb8decc9bf00b28e8cf92dd246489e477aada4  handoffs/M8-N4-launch-replacement.md
 1c4cb2556177263ff07b7ac91e072ff66723e986c689041466aa09b201225571  handoffs/M8-N5-state-review.md
 76e169b119a8ed6c92d2f460f07b5e20a29f3b5685689a230bab26400ee9c1fd  handoffs/M8-N4-state-review.md
 63c1f3bc31ad5ebcc2f56a52b3d799d1f7884499b65bfa4280c765ebc0f694e8  handoffs/M8-N4-proxy-bridge.md

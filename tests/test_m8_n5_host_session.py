@@ -6,8 +6,10 @@ touched, and no vendor binary or DNS is used.
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -87,9 +89,29 @@ def test_g4_is_published_activated_and_g3_refuses_against_it():
     assert not re.search(r"--generation [123]\b|g[12]\.sealed", document)
 
 
-def test_s4s_plan_must_continue_n4s():
+@pytest.mark.parametrize(
+    ("seal", "status"),
+    [(f"pro/sha256:{'a' * 64}", 0), (f"prolite/sha256:{'a' * 64}", 1), ("pro", 0)],
+)
+def test_s4s_plan_must_continue_n4s(seal, status):
+    """Run, not read: the seal is `<plan>/<identity>`, and only N4's `pro` passes."""
     block = _fences(_section(_text(SESSION), "H4. S4, and the plan's continuity"))[0]
-    assert 'test "${S4_SEAL%%/*}" = pro' in block
+    script = f"set -Eeuo pipefail\nS4_SEAL='{seal}'\n{block}"
+    ran = subprocess.run(
+        [_bash(), "-c", script], stdin=subprocess.DEVNULL,
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    assert ran.returncode == status, ran.stderr
+
+
+def test_s1s_documented_output_is_what_prepare_prints(tmp_path, monkeypatch, capsys):
+    from constructicon.substrate.executors import codex_lane
+
+    monkeypatch.setattr(codex_lane, "prepare", lambda out: None)
+    assert codex_lane.main(["prepare", "--out", str(tmp_path / "w")]) == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["prepared"] is True
+    assert '`"prepared": true`' in _text(SESSION)
 
 
 def test_every_active_startup_names_g4_its_seal_and_a_fresh_name():
@@ -110,29 +132,73 @@ def test_each_refresh_attempt_is_numbered_checked_active_first_and_timeless():
     assert "s3-completed-at" not in _text(SESSION)
 
 
-def test_every_lane_flag_the_session_passes_is_offered():
-    flags = set(re.findall(r"(--[a-z][a-z-]+)", "\n".join(_fences(_text(SESSION)))))
-    lane = _run_isolated("constructicon.substrate.executors.codex_lane", "startup", "--help")
-    publish = _run_isolated("constructicon.substrate.executors.operator_store", "publish", "--help")
-    activate = _run_isolated(
-        "constructicon.substrate.executors.operator_store", "activate", "--help",
+COMMANDS = {
+    "startup": ("constructicon.substrate.executors.codex_lane", "startup"),
+    "publish": ("constructicon.substrate.executors.operator_store", "publish"),
+    "activate": ("constructicon.substrate.executors.operator_store", "activate"),
+}
+
+
+@pytest.mark.parametrize("command", sorted(COMMANDS))
+def test_every_flag_each_command_passes_is_its_own_parsers(command):
+    """Per command, not pooled: a store flag on a lane command must fail here."""
+    module, subcommand = COMMANDS[command]
+    calls = re.findall(
+        rf"\b{command} (--.*?)(?:< /dev/null|\|)", "\n".join(_fences(_text(SESSION))), re.S,
     )
-    offered = lane.stdout + publish.stdout + activate.stdout
-    assert lane.returncode == publish.returncode == activate.returncode == 0
-    for flag in flags - {"--generation"}:
-        assert flag in offered, flag
-    assert "--generation" in publish.stdout and "--generation" in activate.stdout
+    assert calls, command
+    offered = _run_isolated(module, subcommand, "--help")
+    assert offered.returncode == 0, offered.stderr
+    for call in calls:
+        for flag in re.findall(r"(--[a-z][a-z-]+)", call):
+            assert flag in offered.stdout, (command, flag)
 
 
-def test_lr9_removes_only_the_controller_and_runs_after_lr8s_fetch():
+def _lr9_gate() -> str:
     section = _section(_text(REPLACEMENT), "LR9. Controller replacement after login")
     (block,) = _fences(section)
-    assert 'test -s "$W/wheels.txt" && test -s "$W/verify.json"' in block
-    assert "sudo /usr/bin/rm -rf --one-file-system /opt/constructicon-m8-controller" in block
-    assert block.index("test -s") < block.index("rm -rf") < block.index("test ! -e")
-    assert "run R18 and R19 exactly as written" in " ".join(section.split())
-    order = " ".join(_section(_text(REPLACEMENT), "Order").split())
-    assert "LR0 to LR6, then LR8, then LR9 if LR8 refused, then LR7" in order
+    return re.search(r"-c '(?P<body>.*?)' \"\$W/verify\.json\"", block, re.S).group("body")
+
+
+@pytest.mark.parametrize(
+    ("record", "refused_a_tree"),
+    [
+        ({"installed": False, "observed": {"/opt/constructicon-m8-controller": {
+            "state": "tree", "different": 7}}}, True),
+        ({"installed": True, "observed": {"/opt/constructicon-m8-controller": {
+            "state": "tree", "different": 0}}}, False),
+        ({"installed": False, "observed": {"/opt/constructicon-m8-controller": {
+            "state": "absent"}}}, False),
+        ({"installed": False, "failure": "the plan never computed"}, False),
+    ],
+    ids=["refused-tree", "current", "absent", "uncomputed"],
+)
+def test_lr9_removes_only_after_lr8_refused_an_installed_tree(tmp_path, record, refused_a_tree):
+    """Run, not read: LR9's gate on the four shapes LR8's record can take."""
+    record_path = tmp_path / "verify.json"
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    ran = subprocess.run(
+        [sys.executable, "-I", "-S", "-B", "-c", _lr9_gate(), str(record_path)],
+        stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30, check=False,
+    )
+    assert (ran.stdout.strip() == "lr8-refused-a-tree") is refused_a_tree
+
+
+def test_lr9_sets_lr8s_workspace_aside_then_runs_r17_to_r19_verbatim():
+    section = _section(_text(REPLACEMENT), "LR9. Controller replacement after login")
+    (block,) = _fences(section)
+    order = [
+        block.index("lr8-refused-a-tree"),
+        block.index('/usr/bin/mv -n "$W" "$HOME/m8-controller-refused-$C"'),
+        block.index("sudo /usr/bin/rm -rf --one-file-system /opt/constructicon-m8-controller"),
+        block.index("test ! -e /opt/constructicon-m8-controller"),
+    ]
+    assert order == sorted(order)
+    assert "run R17 to R19 exactly as written, with their failure table" in " ".join(
+        section.split(),
+    )
+    order_text = " ".join(_section(_text(REPLACEMENT), "Order").split())
+    assert "LR0 to LR6, then LR8, then LR9 if LR8 refused, then LR7" in order_text
 
 
 @pytest.mark.parametrize("phrase", ["gpt-5.5", "s3-completed-at.utc\" < /dev/null | /usr/bin/grep"])

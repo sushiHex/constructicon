@@ -21,9 +21,11 @@ Each is the recommended default. The owner's authorization confirms each one
 or names its replacement.
 1. **S6b and S6c run.** They are the declared refusals, and their shapes are
    measured on the real binary (#129).
-2. **The plan continues N4's.** S4 is checked as `initial`, since N4's evidence
-   predates the account seal. Its plan must be `pro`, the plan N4 qualified,
-   or the session stops for the owner.
+2. **The plan continues N4's.** S4's plan must be `pro`, the plan N4
+   qualified, or the session stops for the owner. The plan is the strongest
+   continuity available: N4's qualification evidence predates the account seal
+   (lane schema 2 records no `gate.account`), so S4 is checked as `initial` and
+   binds the account it observes.
 3. **Evidence is posted on #78**, the N5 issue.
 4. **Refresh attempts stay on this boot.** A reboot makes the active binding
    refuse until maintenance re-anchors it. After a reboot, further attempts
@@ -48,7 +50,7 @@ W=/home/m8-service/m8-n5-stage2
 `W_OLD` holds N4's g1 to g3 and their evidence, and this session only reads
 it. S1 creates `W`, and nothing in it is ever reused or repaired. The LR
 blocks set their own `W` for their workspaces; run them in their own shells,
-never after loading the common file.
+never after loading the common file. The one exception is H1's line, below.
 
 ## H0. Authorization
 
@@ -64,7 +66,9 @@ A missing item is a stop.
 ## H1. Launch and controller at `C`
 
 Run LR's Order: LR0 to LR6, then LR8, then LR9 if LR8 refused, then LR7. LR1's
-anchor check names N4's newest descriptor:
+anchor check is the one line run through `n5-common.sh`. It runs at LR1, under
+the old controller and before anything replaces it, and names N4's newest
+descriptor:
 
 ```bash
 binding_check "$W_OLD/g3.sealed.json" reboot-anchor -
@@ -84,8 +88,9 @@ Require status zero, and the affirmative no-drift output, from both.
 
 ## H3. S1 into the fresh directory
 
-OC's S1 block, unchanged; it creates `W`. It must print nothing and exit zero.
-If it fails, the directory is abandoned, and a new attempt needs a new path.
+OC's S1 block, unchanged; it creates `W`. `prepare` prints one JSON line with
+`"prepared": true`, the layout check prints nothing, and both exit zero. If it
+fails, the directory is abandoned, and a new attempt needs a new path.
 
 ## H4. S4, and the plan's continuity
 
@@ -97,7 +102,9 @@ test "${S4_SEAL%%/*}" = pro \
 ```
 
 The `initial` check binds whatever identity S4 observes. From here on, every
-check names that seal.
+check names that seal. If S4 or its checks refuse, the session stops. Another
+attempt is a new authorized session from H3, with a new `W`, never a rerun into
+this one.
 
 ## H5. S6a
 
@@ -125,8 +132,9 @@ binding_check "$W_OLD/g3.sealed.json" stale-generation "$W/g4.sealed.json"
 ## H7. Active startup on g4, then the S6b and S6c refusals
 
 This is OC's S8, at g4, with this session's file names. The active run is also
-offered to the `refresh` checker, and either answer is recorded. A refusal
-passes only with its exact faults.
+offered to the `refresh` checker. `refresh-measured` here already ends the
+refresh attempts, so H8 does not run. A refusal passes only with its exact
+faults.
 
 ```bash
 load_final_qualification
