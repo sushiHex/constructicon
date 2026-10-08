@@ -145,8 +145,10 @@ already exists, whatever the journal holds.
 
 ## T6. One retry, only after a diagnosed local failure
 
-Only for those three verdicts, with the failure diagnosed as
-local, and only once. The owner's new comment on #78 names the diagnosis.
+Only for those three verdicts, with the failure diagnosed as local. N5 has
+one more attempt in all, READ and WRITE together (the owner's budget
+decision of 2026-10-05 on #78), so using it here leaves none for Stage 4.
+The owner's new comment on #78 names the diagnosis and spends that attempt.
 Then T2 to T5 run again with this block appended to the common file:
 
 ```bash
@@ -160,8 +162,7 @@ HOST=(--session "$W" --store-key "$K" --sealed "$W/g4.sealed.json"
 
 Every name is new: the state, the record, the journal, the authorization and
 its run. `HOST` is assigned again because it captured the first `S` when it
-was built. The retry is Stage 3's one retry; the evidence says whether it
-was used.
+was built.
 
 ## Evidence and limits
 
@@ -169,7 +170,7 @@ Post on #78:
 - the authorization link;
 - T3's pins;
 - `run`'s status and T5's verdict;
-- whether T6's one retry was used;
+- whether T6 spent N5's one more attempt;
 - the attempt record (every phase it reached is in its last write).
 
 Never post a credential, token, code, email, account identifier or the

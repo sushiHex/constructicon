@@ -186,8 +186,8 @@ the parser requires the record for, and only for, the read stage.
 - T5: the one `run`, which passes only if the run succeeded and the record
   completed: the turn completes inside `execute`, before the run's checkpoint
   and closure;
-- T6: one retry, only after a diagnosed local failure with nothing
-  dispatched, under entirely new names.
+- T6: N5's one more attempt (READ and WRITE together), only after a
+  diagnosed local failure with nothing dispatched, under entirely new names.
 
 **Proof.**
 - **Portable:**
