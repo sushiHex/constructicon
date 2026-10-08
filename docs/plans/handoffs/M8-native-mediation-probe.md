@@ -397,7 +397,10 @@ materialization, then the native PID immediately after spawn. The active-worker
 case emits a separate report after
 the contained WRITE worker has written a heartbeat; the before-worker case
 never starts that worker. Killing the Python driver with SIGKILL bypasses its
-cleanup. Before any test cleanup or recovery call, the native PID stops
+cleanup. The driver spawns the native under a kernel parent-death SIGKILL
+(`setpriv --pdeathsig KILL`), so the native ends with its driver, an event the
+harness owns; the vendor's own stdin-EOF shutdown is neither relied on nor
+claimed. Before any test cleanup or recovery call, the native PID stops
 executing and the heartbeat stops. PID start time distinguishes the observed
 process from a reused PID at enrollment; cleanup retains and signals a Linux
 pidfd, never the numeric PID after an identity check. A zombie counts as

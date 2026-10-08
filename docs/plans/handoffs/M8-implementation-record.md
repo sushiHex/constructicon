@@ -3894,3 +3894,38 @@ unchanged, and T6 runs under new names.
 Fable's design review (job_08bb94033cdd) held that the store's silence about
 `Q` is designed (ADR 0021:160-163), not a defect, and that #132 and the
 control-denial narrowing land after Stage 3 (job_5067d4ce7dad).
+
+### #110, the remaining flakes: each outcome now an event
+
+**Driver death.** Nothing in Constructicon ended the harness's native after its
+driver was SIGKILLed: the vendor drained its stdin EOF, bounded only by its own
+45 s watchdog at `rust-v0.160.1`, so the 5 s wait was a margin over vendor
+shutdown. #118's "each fix makes the outcome depend on an event, not on
+timing" overstated this one. The owner fixture now spawns the native under
+`setpriv --pdeathsig KILL`, so the kernel ends it as its driver exits; the 5 s
+is only a hang guard. Production native lifetime remains the launcher's
+`--die-with-parent` and supervisor; this is harness hygiene, not production
+evidence. Proven portably (the native, and only the native, is wrapped; one
+mutant) and on Linux (a stub that ignores EOF exits with its killed owner).
+
+**Startup EOFs: corrected attribution.** The five `denied:eof` connections were
+the plugins-on positive control's, not the clean run's: job 112020223955 fails
+at the control's assertion, after the clean run's zero-denial assertions
+passed. The passages above that attribute them to the clean run, and the
+exact-pin search for a clean-run caller, rest on that misreading. #124's
+awaited analytics exporter replaced the racing control, and the control now
+requires its denials to be destination denials only.
+
+**WRITE worker entry.** The 5 s bound covered about 0.3 s of work, not the
+4 s the report assumed (setup precedes it), and an early end of `execute`
+read as the same timeout. The test now races the worker's entry against
+`execute`'s end, with no margin, and names the outcome if `execute` ends
+first.
+
+**Bridge mutant 4.** Its killing test could pass with the mutant in place: a
+reset that reached the dial before it returned took the forwarder's
+failed-dial exit, which ends it without the wake. The test now waits for the
+dial to return before the reset, so only the wake can end the forwarder; the
+test's leaf is blocking, as production's is.
+
+No production code changed.

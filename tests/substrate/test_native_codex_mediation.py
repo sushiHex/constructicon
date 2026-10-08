@@ -616,7 +616,7 @@ async def test_driver_death_and_explicit_successor_reconciliation(
         heartbeat = paths[0].payload / "workspace" / "worker-live"
         if active_worker or first.pid is not None:
             # Kill only once the native has answered every request and waits on
-            # the worker: a kill mid-handshake would time the native's own drain.
+            # the worker, so the kill lands at a defined point of the protocol.
             line = await asyncio.wait_for(owner.stdout.readline(), 20)
             assert json.loads(line) == {"phase": pause}
         if active_worker:
@@ -629,6 +629,9 @@ async def test_driver_death_and_explicit_successor_reconciliation(
         await asyncio.wait_for(owner.wait(), 5)
         assert owner.returncode == -signal.SIGKILL
         if first.pidfd is not None:
+            # The owner's parent-death SIGKILL ends the native, an event the
+            # harness owns, never the vendor's EOF drain (_native_probe_owner,
+            # #110). The bound is only a hang guard.
             async with asyncio.timeout(5):
                 await native_exit(first.pidfd)
         if active_worker:

@@ -626,10 +626,12 @@ async def test_the_production_configuration_makes_no_startup_connection_at_all(
     # The same-run positive control: the same refusal at the same point, and the
     # analytics exporter's CONNECT, whose flush the process awaits before
     # exiting, was seen and denied. Its own head is required, so another
-    # background connection cannot stand in for it.
+    # background connection cannot stand in for it. Its denials are destination
+    # denials only: an EOF before a complete head is a background request racing
+    # shutdown, the plugins control's flake under #110, never the declaration.
     assert control["methods_sent"] == clean["methods_sent"]
     assert set(control["faults"]) == NO_LOGIN, control["faults"]
-    assert control["relay"]["denied"].get("denied:destination", 0) >= 1, control["relay"]
+    assert set(control["relay"]["denied"]) == {"denied:destination"}, control["relay"]
     assert any(
         head.startswith(f"CONNECT {ANALYTICS_EXPORTER} ") for head in control["heads"]
     ), control["heads"]

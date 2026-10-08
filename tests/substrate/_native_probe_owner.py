@@ -30,6 +30,20 @@ from tests.substrate.test_native_codex_mediation import (
     process_state,
 )
 
+PDEATHSIG = ("/usr/bin/setpriv", "--pdeathsig", "KILL", "--")
+
+
+def native_argv(argv, binary: Path) -> tuple[str, ...]:
+    """The native's argv under a kernel parent-death SIGKILL; any other unchanged.
+
+    The harness owns the native's end (#110). Killed, this owner takes the native
+    with it at once, where the vendor would otherwise drain its stdin EOF for up
+    to its own 45 s watchdog. setpriv execs in place, so the reported PID and
+    start time are the native's. The signal follows the spawning thread, which is
+    this owner's event-loop thread, the one a SIGKILL ends.
+    """
+    return (*PDEATHSIG, *argv) if argv[0] == str(binary) else tuple(argv)
+
 
 async def wait_for_heartbeat(heartbeat):
     async with asyncio.timeout(15):
@@ -79,10 +93,11 @@ async def main():
     catalog = install_catalog((binary, env), restricted=True)
     native_pid = None
     create = asyncio.create_subprocess_exec
+    assert Path(PDEATHSIG[0]).is_file(), "the parent-death shim is not installed"
 
     async def observe(*argv, **kwargs):
         nonlocal native_pid
-        process = await create(*argv, **kwargs)
+        process = await create(*native_argv(argv, binary), **kwargs)
         if argv[0] == str(binary):
             native_pid = process.pid
             state = process_state(native_pid)
