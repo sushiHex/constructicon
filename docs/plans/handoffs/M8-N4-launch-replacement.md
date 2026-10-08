@@ -38,8 +38,8 @@ The owner's authorization on #77 names:
 ## LR1. Fresh boot
 
 Clean `Stop-VM`, then `Start-VM`. Never `Save-VM` and never a checkpoint after
-login. Record `/proc/sys/kernel/random/boot_id`. From this boot until LR8
-passes, run no `maintain`, `activate`, lane or `codex_lane` command, and no
+login. Record `/proc/sys/kernel/random/boot_id`. From this boot until the controller is
+current (LR8, or LR9 after it), run no `maintain`, `activate`, lane or `codex_lane` command, and no
 second session. As the service user, with the N4 runbook's common block, the
 newest sealed descriptor must refuse for the boot-bound anchor:
 
@@ -251,7 +251,8 @@ rejudged, never restaged.
 
 ## LR7. Probe
 
-As the service user, with the N4 runbook's common block, run S3's preflight
+Run after the controller is current (see Order). As the service user, with
+the N4 runbook's common block, run S3's preflight
 line. It must print `"launch_ready": true`. It runs the artifact checks and the
 benign physical probe, including the
 `constructicon-m8-launch//&constructicon-m8-workload (enforce)` attachment.
@@ -292,10 +293,35 @@ echo "verify exit $?"; cat "$W/verify.json"
 ```
 
 `verify-controller` must exit 0 with `"installed": true` and `different: 0`.
-If it refuses, the controller replacement (its removal, then R17 to R19) needs
-its own authorization.
+If it refuses, the controller replacement (LR9) needs its own authorization.
 
-Then the N4 session resumes at S0 at `C`.
+## LR9. Controller replacement after login
+
+The controller holds no credential, so removing it is not store maintenance
+(`M8-N4-host-runtime.md`, "Failure and recovery"). After login, R16's
+checkpoint is forbidden, and R17 cannot run, because LR8 has already fetched
+`C` and its locked wheels into `$HOME/m8-controller`. LR9 therefore removes
+the installed tree and reinstalls from LR8's workspace. In a fresh shell:
+
+```bash
+umask 077
+C=<40-hex merge commit named in LR0>
+W="$HOME/m8-controller"
+J=(/usr/bin/python3 -I "$W/m8_host_artifacts.py")
+test "${#C}" -eq 40 && test -s "$W/wheels.txt" && test -s "$W/verify.json" \
+  && sudo /usr/bin/rm -rf --one-file-system /opt/constructicon-m8-controller \
+  && test ! -e /opt/constructicon-m8-controller && echo "LR9 removed"
+```
+
+Then, in the same shell, run R18 and R19 exactly as written. R18 must print
+`R18 installed`, and verify `"installed": true` with `"different": 0`. R19 must
+print `"passed": true`.
+
+## Order
+
+LR0 to LR6, then LR8, then LR9 if LR8 refused, then LR7. The probe runs only
+once the controller is current, because the controller runs the preflight.
+Then the session this replacement continues resumes at `C`.
 
 ## Evidence (posted on #77)
 
