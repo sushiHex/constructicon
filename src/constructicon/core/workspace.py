@@ -63,6 +63,9 @@ class LeaseContext:
     # In-memory observation of the walker's existing run-control law, not a
     # second owner or durable field. Legacy providers need not consume it.
     check_control: Callable[[], None] | None = None
+    # The run's sealed source graph, from its manifest: an observation for a
+    # provider whose authorization pins a graph, since recovery skips admission.
+    source_graph_hash: Digest | None = None
 
 
 @dataclass(frozen=True)

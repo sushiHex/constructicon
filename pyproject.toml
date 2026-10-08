@@ -96,10 +96,18 @@ source_modules = [
     "constructicon.api.cursor",
     "constructicon.api.detail",
     "constructicon.api.introspection",
+    "constructicon.api.qualification",
     "constructicon.api.run_host",
     "constructicon.api.system",
 ]
 forbidden_modules = ["mcp"]
+
+# M8 N5 Stage 1: the qualification entry is not a caller-selectable surface.
+[[tool.importlinter.contracts]]
+name = "The MCP adapter never reaches the qualification entry"
+type = "forbidden"
+source_modules = ["constructicon.api.mcp"]
+forbidden_modules = ["constructicon.api.qualification"]
 
 # Dependency budget: the kernel imports stdlib + pydantic only.
 [[tool.importlinter.contracts]]

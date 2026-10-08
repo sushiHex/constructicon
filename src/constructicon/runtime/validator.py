@@ -30,7 +30,7 @@ from constructicon.core.grants import (
 )
 from constructicon.core.graph import Graph, GraphNode, Loop, Ref
 from constructicon.core.human import canonical_exchange_fault
-from constructicon.core.identity import canonical_json, digest, json_value
+from constructicon.core.identity import Digest, canonical_json, digest, json_value
 from constructicon.core.manifest import (
     CONTINUE_SCHEMA_HASH,
     CONTINUE_TYPE,
@@ -55,6 +55,7 @@ from constructicon.core.ports import (
     PortAddress,
     same_boundary,
 )
+from constructicon.core.qualification import QualificationAuthorizing
 from constructicon.core.registry import RegistrySnapshot, StoredVersion
 from constructicon.runtime._resolution import select_version
 from constructicon.runtime.registry import CapabilityDescriptor, embedded_schema_faults
@@ -91,6 +92,7 @@ class _Compilation:
     snapshot: RegistrySnapshot
     catalog: dict[str, CapabilityDescriptor]
     capabilities: Mapping[str, object]
+    source_graph_hash: Digest
     faults: list[AdmissionFault | str] = field(default_factory=list)
     resolutions: list[ComponentResolution] = field(default_factory=list)
     bindings: list[ResolvedPortBinding] = field(default_factory=list)
@@ -117,10 +119,14 @@ def admit(
     if not isinstance(normalized_inputs, dict):
         raise AdmissionError(["run inputs must be a JSON object keyed by port name"])
 
+    # A pure function of the authored graph, known before any fault is found:
+    # a qualification authorization is asked about exactly this graph.
+    graph_hash = source_graph_hash_for(graph)
     comp = _Compilation(
         snapshot=snapshot,
         catalog=catalog,
         capabilities=capabilities,
+        source_graph_hash=graph_hash,
         resolution_lock=(
             {pin.scope.segments: pin for pin in resolution_lock.pins}
             if resolution_lock is not None
@@ -194,7 +200,6 @@ def admit(
     if comp.faults:
         raise AdmissionError(comp.faults)
 
-    graph_hash = source_graph_hash_for(graph)
     world_hash = digest(
         "world",
         1,
@@ -325,6 +330,32 @@ def _compile_graph(
                 _Source(address=source.address, port=port) for source in bound
             ]
     return outputs
+
+
+def _admitted_unavailability(
+    comp: _Compilation, descriptor: CapabilityDescriptor, capability_id: str
+) -> tuple[str, ...]:
+    """The executor-unavailable faults this admission raises.
+
+    A provider holding a verified qualification authorization for exactly this
+    graph omits its own published reasons here, and nowhere else: describe()
+    still publishes them, and an absent or incoherent provider is never cleared.
+    Never under a resolution lock: a reproduced or counterfactual admission can
+    keep the authored graph while resolving different code.
+    """
+    provider = comp.capabilities.get(capability_id)
+    reasons = descriptor.executor_unavailability(provider)
+    if (
+        reasons
+        and comp.resolution_lock is None
+        and descriptor.executor_incoherence(provider) is None
+        and isinstance(provider, QualificationAuthorizing)
+        and provider.authorizes_admission(
+            source_graph_hash=comp.source_graph_hash, capability_id=capability_id
+        )
+    ):
+        return ()
+    return reasons
 
 
 def _compile_node(
@@ -889,7 +920,7 @@ def _register_atomic(
             )
             continue
         profile = descriptor.executor_profile
-        for reason in descriptor.executor_unavailability(comp.capabilities.get(capability_id)):
+        for reason in _admitted_unavailability(comp, descriptor, capability_id):
             comp.faults.append(
                 AdmissionFault(
                     code=AdmissionCode.GRAPH_CONTRACT_INVALID,

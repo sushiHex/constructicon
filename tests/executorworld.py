@@ -20,7 +20,7 @@ from constructicon.core.executor import (
     TaskSpec,
 )
 from constructicon.core.grants import EffectiveGrants
-from constructicon.core.identity import canonical_json, digest
+from constructicon.core.identity import Digest, canonical_json, digest
 from constructicon.core.workspace import (
     AcquiredCapability,
     Disposition,
@@ -136,6 +136,11 @@ class FakeExecutorProvider:
         self.handles: list[FakeExecutorHandle] = []
         self.before_materialize: Callable[[FakeExecutorHandle], Awaitable[None]] | None = None
         self.reconciled: list[str] = []
+        # The I6 double for QualificationAuthorizing: admission's question only.
+        self.qualified_graph: Digest | None = None
+
+    def authorizes_admission(self, *, source_graph_hash: Digest, capability_id: str) -> bool:
+        return self.qualified_graph is not None and source_graph_hash == self.qualified_graph
 
     @property
     def identity(self) -> ExecutorLaunchIdentity:
