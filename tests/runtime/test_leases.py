@@ -406,6 +406,86 @@ async def test_unrecorded_acquisition_is_closed_without_a_lease_transition(
     assert journal.capability_leases(RunId("run-unrecorded-acquisition")) == []
 
 
+async def test_a_lost_answer_after_the_lease_commit_closes_the_recorded_row(
+    journal: SqliteJournal,
+) -> None:
+    """Response loss: the row is durable though recording raised. Settled against
+    the journal, it is closed under the fence, not left active on a failed run."""
+    system, capability = leased_system(journal, leased_ok_impl)
+
+    def lose_the_answer(name: str) -> None:
+        if name == "lease.after_record_commit":
+            raise ConnectionError("the commit's answer was lost")
+
+    journal.fault_probe = lose_the_answer
+    run_id = RunId("run-lost-record-answer")
+    result = await system._start_direct(leased_graph(), INPUTS, run_id=run_id)
+
+    assert result.status is RunStatus.FAILED
+    assert any("answer was lost" in error for error in result.failures.values())
+    assert capability.closed == [(capability.acquired[0], "discard")]
+    assert [(row.state, row.disposition) for row in journal.capability_leases(run_id)] == [
+        ("closed", "discarded")
+    ]
+
+
+async def test_a_late_answer_after_a_successor_claimed_leaves_the_row_to_it(
+    journal: SqliteJournal, clock: FakeClock
+) -> None:
+    """The answer is lost and arrives after the lease expired and a successor
+    claimed the run: the old worker disposes nothing and loses ownership."""
+    system, capability = leased_system(journal, leased_ok_impl)
+    run_id = RunId("run-late-record-answer")
+
+    def answer_too_late(name: str) -> None:
+        if name == "lease.after_record_commit":
+            clock.advance(LEASE_TTL_S + 1)
+            journal.claim_run(run_id, owner_id="successor", ttl_s=LEASE_TTL_S)
+            raise ConnectionError("the commit's answer arrived too late")
+
+    journal.fault_probe = answer_too_late
+    with pytest.raises(OwnershipLost) as caught:
+        await system._start_direct(leased_graph(), INPUTS, run_id=run_id)
+
+    assert isinstance(caught.value.__context__, ConnectionError)
+    assert capability.closed == []
+    assert [(row.state, row.disposition) for row in journal.capability_leases(run_id)] == [
+        ("active", None)
+    ]
+
+
+async def test_a_failed_settling_read_still_discards_the_acquisition_locally(
+    journal: SqliteJournal,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the outcome cannot be settled, the local discard this path always had
+    still runs; the recording failure stays the one reported."""
+    system, capability = leased_system(journal, leased_ok_impl)
+
+    reads = journal.capability_leases
+    armed: list[bool] = []
+
+    def refuse_record(*args: object, **kwargs: object) -> None:
+        armed.append(True)
+        raise ConnectionError("the journal went away")
+
+    def settling_read_fails(run_id: RunId) -> list:
+        if armed:
+            armed.pop()
+            raise ConnectionError("still away")
+        return reads(run_id)
+
+    monkeypatch.setattr(journal, "record_capability_lease", refuse_record)
+    monkeypatch.setattr(journal, "capability_leases", settling_read_fails)
+    result = await system._start_direct(
+        leased_graph(), INPUTS, run_id=RunId("run-unsettled-record")
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert any("went away" in error for error in result.failures.values())
+    assert capability.closed == [(capability.acquired[0], "discard")]
+
+
 @pytest.mark.parametrize("close_fails", [False, True], ids=["closed", "close-failed"])
 async def test_cancellation_waits_for_unrecorded_acquisition_cleanup_and_preserves_failure(
     journal: SqliteJournal,

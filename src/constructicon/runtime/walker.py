@@ -1192,7 +1192,23 @@ class Walker:
                 raise lost from cleanup
             raise
         except Exception:
-            await self._discard_unrecorded_acquisition(capability, acquisition)
+            # The commit may have landed with only its answer lost. Settle that
+            # against durable state: a row still active as written is ours, and
+            # is closed under the fence like any recorded acquisition. Anything
+            # else, including a settling read that itself fails, keeps the
+            # local discard this path always had.
+            try:
+                recorded = durable in self._journal.capability_leases(lease.run_id)
+            except Exception:
+                recorded = False
+            if recorded:
+                # The answer may also have arrived late: affirm the ownership
+                # fence before any physical cleanup, or a successor that has
+                # claimed the run since would race us over this resource.
+                self._journal.heartbeat(lease, ttl_s=self._lease_ttl_s)
+                await self._close_acquired(lease, [(capability, acquisition)], "discard")
+            else:
+                await self._discard_unrecorded_acquisition(capability, acquisition)
             raise
         return acquisition
 
