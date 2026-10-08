@@ -141,34 +141,41 @@ effect. One record per authorization accounts for it instead (S3-1).
 A no-dispatch authorization pins neither grants nor a record.
 
 **The attempt record** (`substrate/executors/attempt_record.py`). Every write
-creates a file exclusively and makes it durable (the file, then its directory):
+creates a file exclusively, writes every byte, and makes it durable (the file,
+then its directory):
 1. **`acquired`.** Reserved at `acquire`, before any handle exists. A second
    acquisition, even after a journal reset, finds it and refuses.
 2. **`intent`.** Written by the conversation's `before_turn`, the last word
    before `turn/start` is written. It returns a refusal and never raises,
-   because the conversation does not hold the handle. An authorization that
-   expired by then refuses here.
+   because the conversation does not hold the handle. Expiry is checked on
+   both sides of the durable write, so a slow write cannot carry an expired
+   authorization into the turn.
 3. **The outcome,** classified from facts:
-   - `not dispatched` unless `turn/start` was written whole (`turn_written`, set
-     after the write returns), so an input-budget refusal after intent is
-     proven not dispatched;
+   - `not dispatched` only if the write of `turn/start` never began
+     (`turn_sent`, set as the write begins, because the transport may hold
+     the bytes before a drain fails or is cancelled). An input-budget refusal
+     after intent is proven not dispatched;
    - otherwise `completed` only for an accepted answer, and `possibly
      dispatched` for anything else.
 
    The facts are Stage 3's evidence list, bounded and never text: the
-   answer's length, usage or "unknown", the served model or "unknown", the
-   readbacks, relay counts, process facts and identities. A record that never
+   decoded answer's length, usage or "unknown", the served model or
+   "unknown", the readbacks, relay counts, process facts and identities, and
+   a refusal's reason. What the conversation observed is recorded whether or
+   not its result was accepted. A record that never
    reaches its outcome still reads correctly: at `acquired` nothing was
    dispatched, and at `intent` the turn possibly was.
 
 **Gated dispatch** (`codex.py`). A read authorization's handle may dispatch.
 Its `execute` settles the record however the turn ends, including on
-cancellation. Without a read authorization nothing changes: Stage 1's handles
+cancellation. A clean result salvaged from a failed exchange is refused, never
+published as an answer; before this, any handle would have published it. Without a read authorization nothing changes: Stage 1's handles
 never dispatch, and an unqualified provider is unavailable.
 
 **The read graph** (`api/qualification.py`). The graph is one node,
 `qualification_read_node`. Its task is a literal under 200 bytes, so the
-node's source digest pins it (S3-3). It returns only the answer's length.
+node's source digest pins it (S3-3). It accepts only an accepted text answer
+and returns only its length.
 `mint --stage qualification-read --attempt-record PATH` pins the READ grants;
 the parser requires the record for, and only for, the read stage.
 
@@ -176,7 +183,9 @@ the parser requires the record for, and only for, the read stage.
 - T0 to T2: the authorization, the host as Stage 2 left it, and fresh state
   under a path that fits the egress socket bound;
 - T3 and T4: the service mints and root installs;
-- T5: the one `run`, whose verdict is read from the record;
+- T5: the one `run`, which passes only if the run succeeded and the record
+  completed: the turn completes inside `execute`, before the run's checkpoint
+  and closure;
 - T6: one retry, only after a diagnosed local failure with nothing
   dispatched, under entirely new names.
 
@@ -187,11 +196,28 @@ the parser requires the record for, and only for, the read stage.
   - an intent that cannot be written refuses;
   - one completed turn with the evidence fields and no answer text;
   - a spent attempt refusing a later acquisition;
-  - expiry before the turn: not dispatched;
+  - expiry before the turn, or during the intent's write: not dispatched;
   - an input-budget refusal after intent: not dispatched;
-  - a failure after the turn was written: possibly dispatched;
+  - a write that began and then failed: possibly dispatched;
+  - a failure after the turn was sent: possibly dispatched;
+  - a clean result from a failed exchange: refused;
+  - a refused turn keeps its readbacks and reason;
+  - short and stalled record writes;
   - the entry end to end, including a reset journal that cannot spend the turn
     again;
-  - the runbook's blocks, flags and programs, run against synthetic records.
-- **Mutants:** thirteen in `check_m8_n5_read_mutations.py`, run in the
-  lifecycle lane. Two checks have none; the script says why.
+  - the runbook's blocks, flags and programs, run against synthetic records,
+    and each attempt's expanded state.
+- **Mutants:** twenty-four in `check_m8_n5_read_mutations.py`, run in the
+  lifecycle lane, one per check.
+- **Review:** Astra (job_18dce68827b2) found:
+  - a delivered turn recorded as not dispatched;
+  - a salvaged clean result published as an answer (pre-existing);
+  - T5 passing a failed run;
+  - short record writes;
+  - expiry during the intent's write;
+  - the transcript measured as the answer;
+  - refused turns losing their evidence;
+  - T6 keeping the first state;
+  - two unjustified mutant exemptions.
+
+  All are fixed.

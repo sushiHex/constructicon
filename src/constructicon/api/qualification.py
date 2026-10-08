@@ -83,9 +83,10 @@ async def qualification_read_node(
         raise ContractViolation("the READ qualification binds the codex operator only")
     task = TaskSpec(instruction="Reply with the single word: ready")
     outcome = await executor.execute(task, workspace=None, grants=ctx.grants)
-    if not isinstance(outcome, ExecutorSuccess) or not outcome.raw_reply:
+    answer = outcome.output
+    if not isinstance(outcome, ExecutorSuccess) or not isinstance(answer, str) or not answer:
         raise ContractViolation(f"the READ turn ended {outcome.status}")
-    return {REPORT.name: {"answer_bytes": len(outcome.raw_reply.encode("utf-8"))}}
+    return {REPORT.name: {"answer_bytes": len(answer.encode("utf-8"))}}
 
 
 @dataclass(frozen=True)

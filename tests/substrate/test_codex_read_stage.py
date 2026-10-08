@@ -8,6 +8,7 @@ facts: never dispatched, completed, or possibly dispatched.
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -23,7 +24,8 @@ from constructicon.core.run import RunLease
 from constructicon.core.workspace import LeaseContext
 from constructicon.substrate.executors import codex
 from constructicon.substrate.executors.attempt_record import AttemptRecord
-from constructicon.substrate.executors.codex import CodexOperatorProvider
+from constructicon.substrate.executors.codex import EXCHANGE_FAULT, CodexOperatorProvider
+from constructicon.substrate.executors.linux import ProcessExchangeError
 from tests.substrate import test_codex_adapter as adapter
 from tests.substrate.test_codex_adapter import (
     BINARY,
@@ -31,8 +33,10 @@ from tests.substrate.test_codex_adapter import (
     CONFIGURATION,
     EMPTY_RESULT,
     EXPECTED,
+    FINISHED,
     GRANTS,
     MANAGED_RESULT,
+    ScriptedNative,
     bare_launcher,
     clean_native,
     codex_profile,
@@ -73,7 +77,11 @@ def test_an_intent_that_cannot_be_recorded_is_a_refusal_not_a_raise(tmp_path, mo
         raise OSError(28, "No space left on device")
 
     monkeypatch.setattr(record, "_replace", broken)
-    assert record.intend() == "the attempt record could not record intent: No space left on device"
+    try:
+        refusal = record.intend()
+    except OSError:
+        pytest.fail("an unrecordable intent raised instead of refusing")
+    assert refusal == "the attempt record could not record intent: No space left on device"
 
 
 def read_authorization(plain: CodexOperatorProvider, record: Path, **changes):
@@ -150,10 +158,12 @@ async def test_one_read_turn_completes_and_its_record_says_so(
     assert (written["phase"], written["dispatch"]) == ("outcome", "completed")
     facts = written["facts"]
     assert set(facts) == {
-        "status", "answer_bytes", "usage", "served_model", "readbacks", "relay", "process",
-        "identities",
+        "status", "refusal", "answer_bytes", "usage", "served_model", "readbacks", "relay",
+        "process", "identities",
     }
-    assert facts["status"] == "success" and facts["answer_bytes"] == len(outcome.raw_reply)
+    # The decoded answer, known independently: the scripted client says "done".
+    assert outcome.output == "done" and facts["answer_bytes"] == len(b"done")
+    assert facts["status"] == "success" and facts["refusal"] is None
     assert facts["served_model"] == "unknown" and facts["process"]["returncode"] == 0
     assert facts["identities"]["capability_revision"] == qualified.identity.revision
     assert outcome.raw_reply not in record.read_text(encoding="utf-8")
@@ -192,20 +202,20 @@ async def test_an_authorization_expired_before_the_turn_dispatches_nothing(
 async def test_a_turn_refused_after_its_intent_is_proven_not_dispatched(
     tmp_path, portable_binding, substituted_guard, monkeypatch,
 ):
-    """The intent is durable, but `turn/start` never reached the client whole:
-    the input budget refused it. That is a local failure, not a spent turn."""
+    """The intent is durable, but the write of `turn/start` never began: the
+    adapter's own input budget refused it. A local failure, not a spent turn."""
     qualified, granted, record = reading(tmp_path, portable_binding, clean_native())
-    send = codex.CodexConversation._send
+    encode = codex.encode_record
 
-    async def refuse_the_turn(self, io, value):
+    def oversized_turn(value):
+        raw = encode(value)
         if value.get("method") == "turn/start":
-            self._refuse("the conversation reached its cumulative input budget")
-            return False
-        return await send(self, io, value)
+            return raw + b" " * qualified.launcher.limits.input_bytes
+        return raw
 
-    monkeypatch.setattr(codex.CodexConversation, "_send", refuse_the_turn)
+    monkeypatch.setattr(codex, "encode_record", oversized_turn)
     _, outcome = await turn(qualified, granted)
-    assert outcome.status == "failure"
+    assert outcome.status == "failure" and "input budget" in outcome.error.detail
     assert phase(record)["dispatch"] == "not dispatched"
 
 
@@ -239,3 +249,102 @@ async def test_a_read_acquisition_dispatches_and_holds_its_reserved_record(
     acquired = await qualified.acquire(context(granted))
     assert acquired.resource.dispatch is True and acquired.resource.attempt is not None
     assert phase(record)["phase"] == "acquired"
+
+
+async def test_a_turn_whose_write_began_and_then_failed_is_possibly_dispatched(
+    tmp_path, portable_binding, substituted_guard, monkeypatch,
+):
+    """The transport holds the bytes before its drain fails: the client may have
+    the turn, so a failed write after it began is never "not dispatched"."""
+    qualified, granted, record = reading(tmp_path, portable_binding, clean_native())
+    write = ScriptedNative.write
+
+    async def delivered_then_failed(self, data):
+        await write(self, data)
+        if b'"turn/start"' in data:
+            raise OSError(32, "the drain failed after delivery")
+
+    monkeypatch.setattr(ScriptedNative, "write", delivered_then_failed)
+    _, outcome = await turn(qualified, granted)
+    assert outcome.status == "failure"
+    assert phase(record)["dispatch"] == "possibly dispatched"
+
+
+async def test_a_clean_result_salvaged_from_a_failed_exchange_is_refused(
+    tmp_path, portable_binding, substituted_guard,
+):
+    native = clean_native()
+    record = tmp_path / "stage3.attempt"
+    launcher = bare_launcher(
+        native, raises=ProcessExchangeError(FINISHED), raises_after_conversation=True,
+    )
+    granted = read_authorization(provider(tmp_path, portable_binding, launcher), record)
+    qualified = provider(tmp_path, portable_binding, launcher, granted)
+    _, outcome = await turn(qualified, granted)
+    assert outcome.status == "failure" and EXCHANGE_FAULT in outcome.error.detail
+    written = phase(record)
+    assert written["dispatch"] == "possibly dispatched"
+    assert EXCHANGE_FAULT in (written["facts"]["refusal"] or "")
+
+
+async def test_a_refused_turn_keeps_what_the_conversation_observed(
+    tmp_path, portable_binding, substituted_guard,
+):
+    """The result is discarded, never the evidence: readbacks, usage and the
+    refusal's reason survive the pre-acceptance gate's refusal."""
+    native = clean_native(accounts=[{"result": MANAGED_RESULT}, {"result": EMPTY_RESULT}])
+    qualified, granted, record = reading(tmp_path, portable_binding, native)
+    _, outcome = await turn(qualified, granted)
+    assert outcome.status == "failure" and outcome.rate_limit is None
+    facts = phase(record)["facts"]
+    assert facts["readbacks"] and (facts["refusal"] or "").startswith("unavailable: ")
+    assert facts["answer_bytes"] is None
+
+
+async def test_an_authorization_that_expires_while_its_intent_is_written_dispatches_nothing(
+    tmp_path, portable_binding, substituted_guard, monkeypatch,
+):
+    qualified, granted, record = reading(tmp_path, portable_binding, clean_native())
+    intend = AttemptRecord.intend
+
+    def slow_intend(self):
+        # The durable write outlasts the window.
+        qualified.qualification = granted.model_copy(
+            update={"not_after": datetime.now(UTC) - timedelta(seconds=1)},
+        )
+        return intend(self)
+
+    monkeypatch.setattr(AttemptRecord, "intend", slow_intend)
+    _, outcome = await turn(qualified, granted)
+    assert outcome.status == "failure" and "expired" in outcome.error.detail
+    assert phase(record)["dispatch"] == "not dispatched"
+
+
+def test_a_short_write_is_completed_never_published_truncated(tmp_path, monkeypatch):
+    from constructicon.substrate.executors import attempt_record
+
+    real = os.write
+    monkeypatch.setattr(attempt_record.os, "write", lambda fd, data: real(fd, bytes(data[:3])))
+    record = AttemptRecord.reserve(tmp_path / "stage3.attempt", {"authorization_id": "a"})
+    assert record.intend() is None
+    text = (tmp_path / "stage3.attempt").read_text(encoding="utf-8")
+    assert text.endswith("}\n"), text
+    assert json.loads(text)["phase"] == "intent"
+
+
+def test_a_write_without_progress_refuses_rather_than_retrying(tmp_path, monkeypatch):
+    from constructicon.substrate.executors import attempt_record
+
+    record = AttemptRecord.reserve(tmp_path / "stage3.attempt", {})
+    calls = []
+
+    def stalled(fd, data):
+        calls.append(len(data))
+        if len(calls) > 1:
+            raise AssertionError("a write that made no progress was retried")
+        return 0
+
+    monkeypatch.setattr(attempt_record.os, "write", stalled)
+    assert record.intend() == "the attempt record could not record intent: " + (
+        "the attempt record made no progress"
+    )

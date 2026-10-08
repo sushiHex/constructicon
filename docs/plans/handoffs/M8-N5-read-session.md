@@ -108,26 +108,36 @@ The reader accepts only this shape: root-owned, group `m8-service`, mode
 ## T5. The one READ turn
 
 ```bash
-"${SERVICE[@]}" "${QUAL[@]}" run "${HOST[@]}" --authorization "$A" --timeout 600 \
-  < /dev/null || true
+if "${SERVICE[@]}" "${QUAL[@]}" run "${HOST[@]}" --authorization "$A" --timeout 600 \
+  < /dev/null; then RUN=succeeded; else RUN=failed; fi
 "${SERVICE[@]}" /usr/bin/python3 -I -S -B -c 'import json, os, sys
-if not os.path.exists(sys.argv[1]):
+record, run = sys.argv[1:]
+if not os.path.exists(record):
     print("never-acquired"); raise SystemExit
-r = json.load(open(sys.argv[1], encoding="utf-8"))
-verdict = {"completed": "completed", "not dispatched": "not-dispatched"}.get(
-    r.get("dispatch"), "acquired-only" if r["phase"] == "acquired" else "possibly-dispatched")
-print(verdict)' "$S/stage3.attempt" < /dev/null
+r = json.load(open(record, encoding="utf-8"))
+if r.get("dispatch") == "completed":
+    print("passed" if run == "succeeded" else "completed-run-failed")
+elif r.get("dispatch") == "not dispatched":
+    print("not-dispatched")
+else:
+    print("acquired-only" if r["phase"] == "acquired" else "possibly-dispatched")' \
+  "$S/stage3.attempt" "$RUN" < /dev/null
 ```
 
-`run` prints only the run's status. The attempt record is the verdict:
-- **`completed`:** Stage 3 passed. The record holds the answer's length, usage
-  or "unknown", the served model or "unknown", the readbacks, relay counts,
-  process facts and identities, and never the answer's text.
+`run` prints only the run's status, and exits zero only when the run
+succeeded. The verdict reads that and the attempt record together:
+- **`passed`:** the run succeeded and the record completed. Stage 3 passed.
+  The record holds the answer's length, usage or "unknown", the served model
+  or "unknown", the readbacks, relay counts, process facts and identities,
+  and never the answer's text.
+- **`completed-run-failed`:** the turn was answered, but the run failed after
+  it, for example in its checkpoint or closure. Stage 3 did not pass, and the
+  turn is spent: stop for the owner.
 - **`not-dispatched`**, **`acquired-only`** or **`never-acquired`:**
-  `turn/start` was never written whole. If the failure is diagnosed as local,
+  the write of `turn/start` never began. If the failure is diagnosed as local,
   T6 applies.
-- **`possibly-dispatched`:** a record left at its intent, or a turn that ended
-  without an accepted answer. It is never retried automatically; stop for the
+- **`possibly-dispatched`:** a record left at its intent, or a turn whose write
+  began and that ended without an accepted answer. It is never retried automatically; stop for the
   owner. A wrong answer is not a local failure.
 
 A second `run` of the same authorization refuses at acquisition: the record
@@ -144,17 +154,22 @@ S=/home/m8-service/m8-n5-stage3r
 A=/var/lib/constructicon-m8-launch/qualification/stage3-read-retry.json
 ID="n5-stage3r-$C"
 KEY=stage3r
+HOST=(--session "$W" --store-key "$K" --sealed "$W/g4.sealed.json"
+  --qualification "$W/s6a-qualification.json" --state "$S")
 ```
 
 Every name is new: the state, the record, the journal, the authorization and
-its run.
+its run. `HOST` is assigned again because it captured the first `S` when it
+was built. The retry is Stage 3's one retry; the evidence says whether it
+was used.
 
 ## Evidence and limits
 
 Post on #78:
 - the authorization link;
 - T3's pins;
-- `run`'s status;
+- `run`'s status and T5's verdict;
+- whether T6's one retry was used;
 - the attempt record (every phase it reached is in its last write).
 
 Never post a credential, token, code, email, account identifier or the

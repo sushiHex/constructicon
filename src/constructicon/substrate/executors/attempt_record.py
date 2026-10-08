@@ -19,6 +19,7 @@ threat model: the runtime is not an adversary of its own budget (ADR
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 from collections.abc import Mapping
@@ -72,7 +73,12 @@ class AttemptRecord:
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_CLOEXEC | _O_NOFOLLOW
         fd = os.open(path, flags, 0o600)
         try:
-            os.write(fd, (json.dumps(body, sort_keys=True) + "\n").encode("utf-8"))
+            pending = memoryview((json.dumps(body, sort_keys=True) + "\n").encode("utf-8"))
+            while pending:
+                written = os.write(fd, pending)
+                if written <= 0:
+                    raise OSError(errno.EIO, "the attempt record made no progress")
+                pending = pending[written:]
             os.fsync(fd)
         finally:
             os.close(fd)

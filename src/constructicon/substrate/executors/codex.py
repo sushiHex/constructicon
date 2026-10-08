@@ -195,6 +195,7 @@ WITHHELD_METHODS = 16
 """How many withheld method names to retain for reporting."""
 
 RELAY_DENIAL_FAULT = "the egress relay denied a connection"
+EXCHANGE_FAULT = "the exchange raised after the launch"
 """Public and fixed: the relay's reason literals stay evidence (``EgressRelay.denied``)."""
 
 
@@ -422,9 +423,9 @@ class CodexConversation:
         self._turn_requested = False
         # The last word before `turn/start` is written: a refusal, never a raise.
         self._before_turn = before_turn
-        # True once `turn/start` was written whole to the native client. Before
-        # that, nothing was dispatched, whatever else failed.
-        self.turn_written = False
+        # True once the write of `turn/start` began. Until then nothing was
+        # dispatched, whatever else failed; from then the client may hold it.
+        self.turn_sent = False
         self._spent = 0
         self._allocated: set[int] = set()
         self._correlated: set[int] = set()
@@ -755,6 +756,9 @@ class CodexConversation:
         if self._spent + len(raw) > self._input_limit:
             self._refuse("the conversation reached its cumulative input budget")
             return False
+        # Set as the write begins, not when it returns: the transport may hold
+        # the bytes before a drain fails or is cancelled.
+        self.turn_sent = self.turn_sent or value.get("method") == "turn/start"
         try:
             await io.write(raw)
         except (ContractViolation, OSError) as exc:
@@ -783,7 +787,6 @@ class CodexConversation:
         self._turn_requested = self._turn_requested or method == "turn/start"
         if not await self._send(io, payload):
             return None
-        self.turn_written = self.turn_written or method == "turn/start"
         while True:
             line = await self._read(io)
             if line is None:
@@ -1671,25 +1674,32 @@ class CodexOperatorHandle:
             self._settle_attempt(outcome)
 
     def _intend(self) -> str | None:
-        """The record's intent, the last word before `turn/start` is written."""
+        """The record's intent, the last word before `turn/start` is written.
+
+        Expiry is checked on both sides of the durable write, so a slow write
+        cannot carry an expired authorization into the turn.
+        """
+        if self.attempt is None:
+            return "a read qualification requires its attempt record"
+        return self._expired() or self.attempt.intend() or self._expired()
+
+    def _expired(self) -> str | None:
         qualification = self.provider.qualification
         if qualification is not None and datetime.now(UTC) >= qualification.not_after:
             return "qualification refuses an expired authorization"
-        if self.attempt is None:
-            return "a read qualification requires its attempt record"
-        return self.attempt.intend()
+        return None
 
     def _settle_attempt(self, outcome: ExecutorOutcome | None) -> None:
         """Classify the one attempt from facts, never from hope.
 
-        Before `turn/start` was written whole, nothing was dispatched, whatever
+        Until the write of `turn/start` began, nothing was dispatched, whatever
         else failed. After it, only an accepted answer is completed.
         """
         if self.attempt is None:
             return
-        written = self._conversation is not None and self._conversation.turn_written
+        sent = self._conversation is not None and self._conversation.turn_sent
         dispatch: Dispatch = (
-            "not dispatched" if not written
+            "not dispatched" if not sent
             else "completed" if isinstance(outcome, ExecutorSuccess)
             else "possibly dispatched"
         )
@@ -1701,18 +1711,30 @@ class CodexOperatorHandle:
         """Stage 3's evidence (M8-N5-state-review.md): bounded facts, never text.
 
         The accepted answer's length, usage or "unknown", the served model or
-        "unknown", the readbacks, relay counts, process facts and identities.
+        "unknown", the readbacks, relay counts, process facts and identities,
+        and a refusal's reason. What the conversation observed is recorded
+        whether or not its result was accepted.
         """
-        reply = None if outcome is None else outcome.raw_reply
-        usage = None if outcome is None else outcome.usage
-        readbacks = None if outcome is None else outcome.rate_limit
+        conversation = self._conversation
+        observed = None if conversation is None else conversation.observation
+        answer = outcome.output if isinstance(outcome, ExecutorSuccess) else None
+        readbacks = None if conversation is None else rate_limit_of(
+            conversation.before_spend, conversation.after_spend,
+        )
         process = self.process
         identity = self.provider.identity
         return {
             "status": None if outcome is None else outcome.status,
-            "answer_bytes": None if reply is None else len(reply.encode("utf-8")),
-            "usage": "unknown" if usage is None else usage.model_dump(mode="json"),
-            "served_model": (outcome and outcome.served_model) or "unknown",
+            "refusal": (
+                f"{outcome.error.kind}: {outcome.error.detail}"
+                if isinstance(outcome, ExecutorFailure) else None
+            ),
+            "answer_bytes": len(answer.encode("utf-8")) if isinstance(answer, str) else None,
+            "usage": (
+                "unknown" if observed is None or observed.usage is None
+                else observed.usage.model_dump(mode="json")
+            ),
+            "served_model": (observed and observed.served_model) or "unknown",
             "readbacks": None if readbacks is None else readbacks.detail,
             "relay": {
                 "destinations": dict(self.relay_destinations),
@@ -1833,11 +1855,13 @@ class CodexOperatorHandle:
                 conversation=conversation, timeout_s=remaining, native_store=native_store,
                 deadline=deadline,
             ))
+            exchange_failed = False
             try:
                 result = await self.active
             except ProcessExchangeError as exc:
-                # Something escaped the callback; the evidence survives.
-                result = exc.result
+                # Something escaped the callback; the evidence survives, but
+                # never as a success (below): the exchange itself failed.
+                result, exchange_failed = exc.result, True
             except (OSError, ContractViolation) as exc:
                 return _unavailable(str(exc), grants)
             except BaseExceptionGroup as group:
@@ -1876,7 +1900,13 @@ class CodexOperatorHandle:
             return unavailable_outcome(
                 faults, conversation.observation, result, requested_model=requested,
             )
-        return decode_turn(conversation.observation, result, requested_model=requested)
+        outcome = decode_turn(conversation.observation, result, requested_model=requested)
+        if exchange_failed and isinstance(outcome, ExecutorSuccess):
+            # A clean result salvaged from a failed exchange is not an answer.
+            return unavailable_outcome(
+                (EXCHANGE_FAULT,), conversation.observation, result, requested_model=requested,
+            )
+        return outcome
 
     async def _exchange(
         self, command: tuple[str, ...], *, posture: Posture, guard_fds: tuple[int, ...],

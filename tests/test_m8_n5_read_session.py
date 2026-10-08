@@ -85,6 +85,24 @@ def test_each_state_directory_fits_the_egress_socket_bound(block):
     assert len(os.fsencode(socket)) <= MAX_SOCKET_PATH_BYTES, socket
 
 
+def _expanded_host(*blocks: str) -> list[str]:
+    """`HOST` as bash expands it after the composed common file and blocks."""
+    script = "\n".join([_setup(), _override(), *blocks, 'printf "%s\\n" "${HOST[@]}"'])
+    ran = subprocess.run(
+        [_bash(), "-s"], input=script, capture_output=True, text=True,
+        timeout=30, check=False, env={**os.environ, "C": "c" * 40},
+    )
+    assert ran.returncode == 0, ran.stderr
+    return ran.stdout.splitlines()
+
+
+def test_each_attempt_passes_its_own_state_to_every_command():
+    """`HOST` captures `S` when built, so the retry must build it again."""
+    first, retry = _expanded_host(), _expanded_host(_retry())
+    assert first[first.index("--state") + 1] == _attempt(_override())["S"]
+    assert retry[retry.index("--state") + 1] == _attempt(_retry())["S"]
+
+
 def test_the_retry_renames_everything_the_first_attempt_named():
     first, retry = _attempt(_override()), _attempt(_retry())
     assert set(first) == set(retry) == set(ATTEMPT_NAMES)
@@ -142,21 +160,30 @@ def test_t3_refuses_pins_naming_another_record_or_journal(tmp_path, arguments):
 
 
 @pytest.mark.parametrize(
-    ("record", "verdict"),
+    ("record", "run", "verdict"),
     [
-        ({"phase": "outcome", "dispatch": "completed"}, "completed"),
-        ({"phase": "outcome", "dispatch": "not dispatched"}, "not-dispatched"),
-        ({"phase": "outcome", "dispatch": "possibly dispatched"}, "possibly-dispatched"),
-        ({"phase": "intent"}, "possibly-dispatched"),
-        ({"phase": "acquired"}, "acquired-only"),
-        (None, "never-acquired"),
+        ({"phase": "outcome", "dispatch": "completed"}, "succeeded", "passed"),
+        ({"phase": "outcome", "dispatch": "completed"}, "failed", "completed-run-failed"),
+        ({"phase": "outcome", "dispatch": "not dispatched"}, "failed", "not-dispatched"),
+        ({"phase": "outcome", "dispatch": "possibly dispatched"}, "failed", "possibly-dispatched"),
+        ({"phase": "intent"}, "failed", "possibly-dispatched"),
+        ({"phase": "acquired"}, "failed", "acquired-only"),
+        (None, "failed", "never-acquired"),
     ],
 )
-def test_t5_reads_the_verdict_from_the_attempt_record(tmp_path, record, verdict):
+def test_t5_reads_the_verdict_from_the_run_and_the_attempt_record(tmp_path, record, run, verdict):
+    """Only a succeeded run and a completed record pass: the turn completes
+    inside `execute`, before the run's checkpoint and closure can still fail."""
     path = tmp_path / "stage3.attempt"
     if record is not None:
         path.write_text(json.dumps(record), encoding="utf-8")
-    ran = _run(_program("T5. The one READ turn"), str(path))
+    ran = _run(_program("T5. The one READ turn"), str(path), run)
     assert ran.returncode == 0, ran.stderr
     assert ran.stdout.strip() == verdict
-    assert f"**`{verdict}`" in _text(SESSION) or f"`{verdict}`" in _text(SESSION)
+    assert f"**`{verdict}`" in _text(SESSION)
+
+
+def test_t5_records_the_runs_status_without_stopping_before_the_verdict():
+    block = _fences(_section(_text(SESSION), "T5. The one READ turn"))[0]
+    assert "then RUN=succeeded; else RUN=failed; fi" in block
+    assert '"$S/stage3.attempt" "$RUN"' in block

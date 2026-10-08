@@ -13,6 +13,7 @@ import re
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -25,6 +26,7 @@ from constructicon.api.qualification import (
     qualify,
 )
 from constructicon.core.errors import ContractViolation
+from constructicon.core.executor import ExecutorError, ExecutorFailure, ExecutorSuccess
 from constructicon.core.identity import digest
 from constructicon.core.manifest import source_graph_hash_for
 from constructicon.core.qualification import QualificationAuthorization
@@ -32,6 +34,7 @@ from constructicon.core.run import RunStatus
 from constructicon.runtime.walker import DEFAULT_LEASE_TTL_S
 from constructicon.substrate.executors.codex import (
     UNQUALIFIED_PREREQUISITES,
+    CodexOperatorHandle,
     CodexOperatorProvider,
 )
 from constructicon.substrate.journal.sqlite import SqliteJournal
@@ -437,3 +440,29 @@ async def test_a_read_authorization_with_a_relative_record_is_not_this_qualifica
     with pytest.raises(ContractViolation, match="does not name this qualification"):
         await qualify(provider=reader, grants=GRANTS, timeout_s=30, now_fn=clock.now)
     assert not Path(granted.journal).exists()
+
+
+
+@pytest.mark.parametrize(
+    ("outcome", "answered"),
+    [
+        (ExecutorSuccess(output="done"), 4),
+        (ExecutorFailure(output="salvaged", error=ExecutorError(kind="timeout", detail="t")), None),
+        (ExecutorSuccess(output=None), None),
+    ],
+    ids=["answer", "salvaged-failure", "no-answer"],
+)
+async def test_the_read_node_reports_only_an_accepted_text_answer(outcome, answered):
+    handle = object.__new__(CodexOperatorHandle)
+
+    async def execute(task, *, workspace, grants):
+        return outcome
+
+    handle.execute = execute
+    ctx = SimpleNamespace(capability=lambda alias: handle, grants=GRANTS)
+    if answered is None:
+        with pytest.raises(ContractViolation, match="the READ turn ended"):
+            await qualification.qualification_read_node(ctx, {})
+    else:
+        report = await qualification.qualification_read_node(ctx, {})
+        assert report == {"report": {"answer_bytes": answered}}
