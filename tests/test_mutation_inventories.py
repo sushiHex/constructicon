@@ -39,13 +39,51 @@ def mutants(name: str) -> list[tuple]:
     return list(loaded["MUTANTS"])
 
 
+def executed(workflow: Path) -> list[str]:
+    """The inventories a workflow's steps run: commands, not mentions.
+
+    Comments are dropped; a matrix's entries count only where a step runs the
+    matrix value; no step may be switched off with a literal false.
+    """
+    code = "\n".join(
+        re.sub(r"(^|\s)#.*$", "", line) for line in workflow.read_text("utf-8").splitlines()
+    )
+    assert not re.search(r"^\s*-?\s*if:\s*(false|\$\{\{\s*false\s*\}\})\s*$", code, re.M), (
+        workflow.name
+    )
+    commands = re.findall(r'python"?\s+scripts/(check_\w+_mutations\.py)', code)
+    matrix = re.findall(r"^\s+- (check_\w+_mutations\.py)\s*$", code, re.M)
+    if matrix:
+        assert re.search(r"python\s+scripts/\$\{\{\s*matrix\.inventory\s*\}\}", code), workflow.name
+    return commands + matrix
+
+
 def test_every_inventory_runs_in_exactly_one_ci_place():
-    found = [
-        script
-        for workflow in sorted(WORKFLOWS.glob("*.yml"))
-        for script in re.findall(r"\b(check_\w+_mutations\.py)\b", workflow.read_text("utf-8"))
-    ]
+    found = [script for path in sorted(WORKFLOWS.glob("*.yml")) for script in executed(path)]
     assert sorted(found) == INVENTORIES
+
+
+RUN = "      - run: uv run python scripts/check_a_mutations.py\n"
+
+
+@pytest.mark.parametrize(
+    ("workflow", "runs"),
+    [
+        (RUN, ["check_a_mutations.py"]),
+        ("      # was: uv run python scripts/check_a_mutations.py\n", []),
+        ("      - if: false\n  " + RUN.lstrip(" "), None),
+        ("        inventory:\n          - check_a_mutations.py\n", None),
+    ],
+    ids=["command", "comment", "switched-off", "matrix-never-run"],
+)
+def test_only_a_running_command_counts_as_run(tmp_path, workflow, runs):
+    path = tmp_path / "workflow.yml"
+    path.write_text(workflow, encoding="utf-8")
+    if runs is None:
+        with pytest.raises(AssertionError):
+            executed(path)
+    else:
+        assert executed(path) == runs
 
 
 @pytest.mark.parametrize("name", INVENTORIES)
@@ -63,7 +101,7 @@ def test_every_mutant_names_live_code(harness, name):
             pytest.fail(f"{name}: {label}: {exc!r}")
 
 
-def test_every_killing_test_is_collected(tmp_path):
+def test_every_killing_test_is_collected(harness, tmp_path):
     """A renamed test or parameter id is a run-time NOT PROVEN; collect them all now."""
     nodes = sorted({entry[4] for name in INVENTORIES for entry in mutants(name)})
     arguments = tmp_path / "nodes.txt"
