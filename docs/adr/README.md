@@ -60,3 +60,11 @@ separate explicit operator authorization per provider, the private Linux
 deployment is a separate operator decision, and no credential, account
 inspection, model call or live profile is authorized. ADR 0019 still governs
 hosted Linux evidence.
+
+Proposed [ADR 0022](0022-operator-disposal-records-abandoned-capabilities.md)
+records an ADMIN-only, idempotent escape from unreconcilable active capability
+accounting through the existing `lost` state. It proposes a co-located fenced
+command receipt and explicit versioned public accounting; it proves no physical
+cleanup. Only the owner may accept it. Its documentation may merge under the
+normal PR gate while [#143](https://github.com/sushiHex/constructicon/issues/143)
+remains open; implementation is separate after acceptance and #132's merge.

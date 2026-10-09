@@ -4026,3 +4026,67 @@ modules; the S3-4 citation was corrected to acknowledge its narrower text.
 Reviewer uncertainty about issue state was not treated as evidence; the owner's
 confirmation that Stage 2/3 are unrun remains the host status. The plan's proof
 requirements remain future work; no second cross-review is claimed.
+
+### #143 — proposed operator disposal of unreconcilable capability accounting
+
+[ADR 0022](../../adr/0022-operator-disposal-records-abandoned-capabilities.md)
+is Proposed. Its docs-only slice inspects `d355416` and the complete #143 and
+#132 discussions; it adds no implementation or behavior evidence. Only the
+owner may accept it, and the documentation PR does not settle that decision.
+The issue remains open; implementation needs a separate issue after acceptance
+and #132's merge. Claude's independent cross-review at `f580d7d`
+(`job_98aaf8880642`, actual `claude-opus-5-5`) found the core valid and nine
+refinements. Its issue access was unavailable; the drafting agent and root
+independently read the complete discussions. The ADR records all nine adopted
+dispositions, distinguishing introduced gaps, a simplified design choice, and
+the pre-existing bounded result query. Exact-head verification remains required
+after these changes and rebase; the review is not owner acceptance.
+
+The proposal names at most 100 exact `(lease_id, acquisition_epoch)` rows and
+requires ADMIN, a bounded reason, an idempotency key, and a RUNNING run with NULL
+journal ownership. One co-located transaction compares a sealed run/row fence,
+keeps ownership and its epoch unchanged, moves the exact active batch to
+`lost` with no disposition, and records canonical lease transitions plus a
+positively sealed command receipt. The three command crash seams, worker-claim
+races, truthful public result summary/detail, migration, and accepting/refusing
+tests are future
+proof obligations, not results of this slice. Receipt-backed `lost` abandons
+cleanup accounting; old opaque lost facts have unknown cause. Neither proves
+process death, lock release, physical cleanup, or store reuse.
+
+The review corrections require every lost transition to carry either exact
+disposal ownership or a positively sealed migration-only old witness; removing
+both audit and relationship must still fail row-to-proof coverage. Per-run
+accounting era floors bound server-issued new detail cuts because legacy initial
+seals contain no event position. Result-family `result_schema_version=2`
+separates disposed and opaque lost counts and labels truncated failure previews
+partial. Real SQLite tests replace the unnecessary full journal double. Invalid
+input refuses before command claim; observational refusals itemize the complete
+bounded batch. A queued submitted resume can lose its attempt fence before
+claim and still be followed by ordinary recovery. Private reason text is in
+both request and plan. The connector review of `5767164`
+([comment 4227634594](https://github.com/sushiHex/constructicon/pull/146#discussion_r4227634594))
+found an introduced privacy oracle in the draft's public request/plan digests.
+Source inspection confirms the request hash is deterministic; an executed
+credential-free synthetic three-candidate check recovered the actual reason.
+That is hash-oracle evidence, not disposal implementation or public-surface
+proof. The corrected proposal keeps reason-bearing hashes in the private
+command/event relationship. All run-readable audit, accounting, result and
+receipt-reference bytes, including reference content hashes, derive only from
+public records. Private binding/replay integrity and actor-or-ADMIN command
+detail authority remain unchanged. Accepting READ-only recursive field walks
+and indistinguishable public records for different private reasons are future
+proof obligations. This corrects cross-review disposition 9's insufficient
+removal of only a dedicated reason digest; no additional Claude review is
+claimed. All proposed behavior remains future implementation/proof.
+
+The source-backed correction is that `runs_resume` already reaches RUNNING with
+no live owner and clears same-host deferral. No new retry command is proposed.
+Persistent reconciliation fails before the first control check, which is why a
+recorded cancellation alone cannot pass it. #132's guard is still unmerged at
+the inspected baseline; its accepted implementation direction refuses all four
+terminal statuses, including PARKED, while any active row remains. A retained
+completion with cleanup failure then stays RUNNING/owner NULL. After disposal,
+ordinary resume still can fail on unnamed active rows or a retained physical
+guard; cancellation and checkpoint/output behavior keep their existing laws.
+The proposal adds no Stage 4 prerequisite and authorizes no host or vendor work.
