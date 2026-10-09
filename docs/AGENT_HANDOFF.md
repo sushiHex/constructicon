@@ -15,6 +15,123 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #143 — proposed operator disposal of abandoned capability accounting
+
+**Merged `4f0178d1` (PR #146) on 2026-10-09 UTC from final head `a037cbc`.**
+The docs-only change adds [Proposed ADR 0022](adr/0022-operator-disposal-records-abandoned-capabilities.md)
+and records its evidence. It merged as Proposed, not accepted: only the owner
+may accept it, and implementation requires a separate issue
+after acceptance and #132's merge.
+
+**What the proposal says.** An ADMIN-only, idempotent command could abandon
+accounting for a bounded batch of exact active `(lease_id, acquisition_epoch)`
+rows on a RUNNING run with NULL journal ownership. A co-located transaction
+would recheck the run/row fence, move only the named rows to `lost` with no
+disposition, and record the canonical transitions and a positively sealed
+receipt. Existing `runs_resume` supplies the retry path; disposal would not
+cancel, resume, or terminalize the run. Receipt-backed `lost` means only that
+the cleanup obligation was administratively abandoned. It does not prove
+process death, physical cleanup, lock release, candidate disposal, or store
+reuse. Historical opaque `lost` facts retain unknown cause.
+The proposal also requires a storage migration (7→8 if no intervening change
+advances it) and a `result_schema_version=2` result shape. Acceptance would
+therefore carry migration and client-compatibility obligations, not just a
+new administrative command.
+
+**Corrections worth carrying.**
+- The draft's public request/plan hashes created a reason-guessing privacy
+  oracle. The connector finding was reproduced with a credential-free
+  synthetic candidate check. The final proposal keeps reason-bearing bindings
+  private; run-readable audit, accounting, result, and receipt-reference bytes
+  (including reference hashes) would derive only from public data. Private replay
+  binding remains. This is hash-oracle evidence, not an implemented command or
+  an executed public-surface privacy proof.
+- `runs_resume` already supports RUNNING with no live owner; a new retry command
+  is not proposed. The obstruction described by #132 is stale-lease
+  reconciliation before the walker's first control check, not lack of a resume
+  route.
+
+**What this slice does NOT establish.**
+- Owner acceptance, implementation, or any changed runtime behavior.
+- The proposed crash/race, SQLite, migration, result-surface or accepting-path
+  privacy proofs; those remain future obligations.
+- Physical quiescence, successful cleanup, or permission for host/vendor work.
+
+See the [M8 implementation record](plans/handoffs/M8-implementation-record.md),
+under "#143 — proposed operator disposal of unreconcilable capability accounting".
+
+---
+
+## N5 Stage 4 — WRITE qualification planning draft
+
+**Merged `13921e25` (PR #144) on 2026-10-09 UTC from head `7f30d77`.** The
+docs-only change adds the [Stage 4 WRITE planning draft](plans/handoffs/M8-N5-stage4-write.md)
+and updates the plan index and implementation record. The document remains a
+review draft: all seven S4 decisions were open at merge, and the plan authorizes
+nothing. Its proposed implementation, proofs, smoke, host session and model
+request are future work. CI's docs-only path skipped native proof lanes; that
+is not native execution evidence.
+At merge, the owner had confirmed Stage 2 and Stage 3 were unrun. The plan
+gates implementation on owner-declared Stage 3 completion, the S4 decisions,
+and #132's merged cleanup outcome; planning is not permission to bypass them.
+
+**Corrections worth carrying.**
+- The initial g4-reuse route was not compatible with the ordered controller
+  procedure: LR9 starts with LR1's fresh boot. S4-4 now recommends the existing
+  next-generation route. Conditional g4 reuse still requires a separately
+  reviewed, owner-approved no-reboot controller/quiescence procedure and
+  sealed-fact equality and compatibility proof; the draft supplies none.
+- The independent cross-review also found missing WRITE root-grant,
+  observation-bound and checkpoint-recovery treatment. Those are now explicit
+  proposals, not accepted decisions or implemented behavior.
+
+**What this slice does NOT establish.**
+- Approval of any S4 decision or an approved implementation design.
+- Any Stage 2 or 3 host execution, WRITE implementation,
+  CI/native/host proof, qualification, production availability, or permission
+  for host action or a model request.
+
+See the [M8 implementation record](plans/handoffs/M8-implementation-record.md),
+under "Issue #141: Stage 4 WRITE planning draft".
+
+---
+
+## M8 plan manifest — guarded staged refresh
+
+**Merged `d3554169` (PR #140) on 2026-10-09 UTC from final head `88f83b4`.**
+`scripts/regen_plan_manifest.py` refreshes named staged plan documents from
+staged blobs while anchoring unnamed documents to the committed manifest and
+checking the complete staged Markdown inventory. It refuses missing or
+drifted entries, unnamed additions, deletions, conflict markers and unresolved
+manifest index stages before writing; callers must explicitly resolve a
+conflict. Real-Git fixtures cover refusal without changing the manifest,
+named updates, no-op refresh, and explicit resolution. Five manifest-guard
+mutants were added to the existing M8 inventory; the final PR record reports
+all 38 M8 mutants assertion-killed on the final head, with the manifest guards
+included. The final CI/review evidence and limits are recorded on [PR #140](https://github.com/sushiHex/constructicon/pull/140).
+
+**Corrections worth carrying.**
+- The first implementation trusted the working manifest and enumerated only
+  its entries, allowing an unnamed staged plan edit with a matching manual digest
+  and an unnamed new document to pass. The committed baseline and complete
+  staged inventory close those omissions.
+- Text conflict markers alone missed a marker-free modify/delete conflict
+  whose index remained unmerged. The final guard checks unmerged manifest index
+  stages before reading the baseline. Automatic manifest conflict aggregation
+  was removed; explicit resolution is required.
+
+**What this slice does NOT establish.**
+- Runtime manifest enforcement or a change to Constructicon runtime behavior.
+- Permission to edit frozen plans: naming a document for refresh is not approval
+  to change it. Deletion/renaming is also outside the helper's supported flow.
+- Linux containment or host/vendor proof from the manifest tests or a green
+  general gate.
+
+See the [M8 implementation record](plans/handoffs/M8-implementation-record.md),
+under "PR #140: committed plan-manifest baselines and complete staged inventory".
+
+---
+
 ## #110 — the CI timing flakes, each now an event
 
 **Merged `d6a7576` (#122) on 2026-10-06 and `8a0d87d` (#139) on 2026-10-09 UTC. #110 is closed.** #118 (`624cc37`) fixed the first three flakes. Neither PR changed production code or raised a bound.
