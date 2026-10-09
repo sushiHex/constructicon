@@ -4026,3 +4026,34 @@ modules; the S3-4 citation was corrected to acknowledge its narrower text.
 Reviewer uncertainty about issue state was not treated as evidence; the owner's
 confirmation that Stage 2/3 are unrun remains the host status. The plan's proof
 requirements remain future work; no second cross-review is claimed.
+
+### #143 — proposed operator disposal of unreconcilable capability accounting
+
+[ADR 0022](../../adr/0022-operator-disposal-records-abandoned-capabilities.md)
+is Proposed. Its docs-only slice inspects `d355416` and the complete #143 and
+#132 discussions; it adds no implementation or behavior evidence. Only the
+owner may accept it, and the documentation PR does not settle that decision.
+The issue remains open; implementation needs a separate issue after acceptance
+and #132's merge. One independent cross-review and exact-head PR verification
+are still required before review readiness.
+
+The proposal names at most 100 exact `(lease_id, acquisition_epoch)` rows and
+requires ADMIN, a bounded reason, an idempotency key, and a RUNNING run with NULL
+journal ownership. One co-located transaction compares a sealed run/row fence,
+keeps ownership and its epoch unchanged, moves the exact active batch to `lost` with no
+disposition, and records canonical lease transitions plus a positively sealed
+command receipt. The three command crash seams, worker-claim races, truthful
+public result summary/detail, migration, and accepting/refusing tests are future
+proof obligations, not results of this slice. `lost` abandons cleanup accounting;
+it proves no process death, lock release, physical cleanup, or store reuse.
+
+The source-backed correction is that `runs_resume` already reaches RUNNING with
+no live owner and clears same-host deferral. No new retry command is proposed.
+Persistent reconciliation fails before the first control check, which is why a
+recorded cancellation alone cannot pass it. #132's guard is still unmerged at
+the inspected baseline; its accepted implementation direction refuses all four
+terminal statuses, including PARKED, while any active row remains. A retained
+completion with cleanup failure then stays RUNNING/owner NULL. After disposal,
+ordinary resume still can fail on unnamed active rows or a retained physical
+guard; cancellation and checkpoint/output behavior keep their existing laws.
+The proposal adds no Stage 4 prerequisite and authorizes no host or vendor work.
