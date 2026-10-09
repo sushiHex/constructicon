@@ -4034,18 +4034,38 @@ is Proposed. Its docs-only slice inspects `d355416` and the complete #143 and
 #132 discussions; it adds no implementation or behavior evidence. Only the
 owner may accept it, and the documentation PR does not settle that decision.
 The issue remains open; implementation needs a separate issue after acceptance
-and #132's merge. One independent cross-review and exact-head PR verification
-are still required before review readiness.
+and #132's merge. Claude's independent cross-review at `f580d7d`
+(`job_98aaf8880642`, actual `claude-opus-5-5`) found the core valid and nine
+refinements. Its issue access was unavailable; the drafting agent and root
+independently read the complete discussions. The ADR records all nine adopted
+dispositions, distinguishing introduced gaps, a simplified design choice, and
+the pre-existing bounded result query. Exact-head verification remains required
+after these changes and rebase; the review is not owner acceptance.
 
 The proposal names at most 100 exact `(lease_id, acquisition_epoch)` rows and
 requires ADMIN, a bounded reason, an idempotency key, and a RUNNING run with NULL
 journal ownership. One co-located transaction compares a sealed run/row fence,
-keeps ownership and its epoch unchanged, moves the exact active batch to `lost` with no
-disposition, and records canonical lease transitions plus a positively sealed
-command receipt. The three command crash seams, worker-claim races, truthful
-public result summary/detail, migration, and accepting/refusing tests are future
-proof obligations, not results of this slice. `lost` abandons cleanup accounting;
-it proves no process death, lock release, physical cleanup, or store reuse.
+keeps ownership and its epoch unchanged, moves the exact active batch to
+`lost` with no disposition, and records canonical lease transitions plus a
+positively sealed command receipt. The three command crash seams, worker-claim
+races, truthful public result summary/detail, migration, and accepting/refusing
+tests are future
+proof obligations, not results of this slice. Receipt-backed `lost` abandons
+cleanup accounting; old opaque lost facts have unknown cause. Neither proves
+process death, lock release, physical cleanup, or store reuse.
+
+The review corrections require every lost transition to carry either exact
+disposal ownership or a positively sealed migration-only old witness; removing
+both audit and relationship must still fail row-to-proof coverage. Per-run
+accounting era floors bound server-issued new detail cuts because legacy initial
+seals contain no event position. Result-family `result_schema_version=2`
+separates disposed and opaque lost counts and labels truncated failure previews
+partial. Real SQLite tests replace the unnecessary full journal double. Invalid
+input refuses before command claim; observational refusals itemize the complete
+bounded batch. A queued submitted resume can lose its attempt fence before
+claim and still be followed by ordinary recovery. Private reason text is in
+both request and plan; no extra public reason digest is proposed. All this
+remains future implementation/proof, not new executed behavior evidence.
 
 The source-backed correction is that `runs_resume` already reaches RUNNING with
 no live owner and clears same-host deferral. No new retry command is proposed.

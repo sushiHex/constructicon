@@ -62,7 +62,9 @@ cleanup obligation. It is not evidence of process death, physical cleanup,
 lock release, candidate disposal, store reuse eligibility, or successful
 `release`/`discard`. External acquisition fences, supervisor custody, and store
 locks retain their existing authority. NULL ownership proves only that the
-journal has no current worker owner. It proves no physical quiescence.
+journal has no current worker owner. It proves no physical quiescence. This
+meaning is specific to receipt-backed disposal; retained opaque `lost` facts
+have unknown cause and must not acquire an invented administrative meaning.
 
 ### Exact request and admission
 
@@ -91,6 +93,14 @@ narrow command serves #132's owner-NULL failure state without taking over an
 owned attempt or claiming that expiry proves a dead process. Historical
 terminal runs with active rows are outside this proposal.
 
+After claiming a schema-valid request, observational row refusals are itemized
+for every named pair: missing, wrong run, closed, opaque lost, already
+disposed, or another baseline mismatch. An already-disposed item carries
+its validated public receipt reference. At most 100 pair items are returned,
+matching the
+input bound; run-level ownership/status faults remain explicit as well. A
+single bad member refuses the batch and changes no member.
+
 The immutable typed domain plan seals the actor/command/request identities,
 run id and manifest identity, expected RUNNING status, NULL owner and owner
 epoch, latest event sequence, canonical reason, and every exact named row's
@@ -99,8 +109,11 @@ validated acquisition/lifecycle provenance. A hash of that complete validated
 baseline binds each row; it is not a hash of the selector alone. The existing
 public `RunHead` omits owner epoch and lease inventory, so it is insufficient
 as this plan's snapshot: add an operation-specific L0 snapshot on the existing
-co-located store, with a genuine transactional test double. This is not a new
-lease manager or store interface.
+co-located store. Use real SQLite contract tests and instrumented providers,
+following the existing `store_approval_exchange` transaction precedent.
+`InMemoryControlStore` deliberately is not a `ControlPlaneStore`; do not expand
+it into a second journal merely to test this command. This adds no interface,
+lease manager, or store abstraction.
 
 ### One administrative transaction and receipt
 
@@ -124,19 +137,22 @@ If the fence still agrees, that transaction:
    and the existing `legacy_base_hash` only when that row has a legacy seal.
 3. Appends one new typed `CapabilityDisposalRecorded` audit event, binding the
    command id, request/plan digests, run fence before and after, named row
-   baseline hashes, exact transition sequences, and reason digest. The reason
-   text stays in the sealed command plan. This
-   event is the immutable domain receipt, not an `EffectReceipt`: no external
-   effect was performed.
-4. Co-seals one `capability_disposal` command/event relationship over the exact
-   command claim, typed plan, audit event, and ordered transitions.
+   baseline hashes and exact transition sequences. The request and plan
+   digests bind the reason; its text stays in the private request and plan.
+   This event is the immutable domain receipt, not an `EffectReceipt`: no
+   external effect was performed.
+4. Co-seals one `capability_disposal` command/event relationship over immutable
+   command identity/actor/request facts, typed plan, audit event, and ordered
+   transitions. The live command owner/epoch fence is checked at application;
+   an application claim epoch may be recorded as a historical fact but is not
+   a requirement that later command ownership remain unchanged.
 
 Use the existing journal transaction, event insertion, and positive-seal
 machinery. Administrative event-sequence allocation must compare the planned
 NULL-owner/status/epoch/event fence in that transaction; it must not construct
 a fictional `RunLease` or call a worker writer with invented ownership. The
-reason digest and command attribution live in the typed audit receipt, and the
-reason text in the plan, never as extra fields on the existing canonical
+command attribution lives in the typed audit receipt, and the reason text in
+the private request and plan, never as extra fields on the existing canonical
 `LeaseTransition` payload. Current worker writers must refuse minting `lost`
 or reactivating a lost acquisition; an existing historical transition retains
 its original interpretation. Disposal does not change a closed row.
@@ -144,35 +160,83 @@ its original interpretation. Disposal does not change a closed row.
 A worker claim and disposal serialize against the same runs row. If the worker
 claims first, disposal changes no row and returns the durable refusal below.
 If disposal commits first, a later worker claim observes its new events and
-ordinarily advances the epoch; recovery skips the lost rows. An old explicit resume plan is
-superseded by the new event fence; a subsequent resume uses a fresh key.
+ordinarily advances the epoch; recovery skips the lost rows. An old explicit
+resume plan can be superseded by the new event fence. In particular, a
+submitted intent queued before worker claim can be dropped by the pump after
+disposal, then ordinary RUNNING recovery can start an attempt. Submission is
+not proof the queued attempt claimed its fence. A fresh resume key is needed if the
+operator requests a new explicit attempt; disposal does not guarantee that
+every route needs one or that an old submitted command becomes rejected.
 No check before a transaction or process-local lock can substitute for this
 comparison. Another administrator's overlapping disposal similarly causes
 one transaction to refuse; batches never partially apply.
 
 The relationship family has primary key `command_id` and secondary selector
-`(run_id, audit_event_seq)`. Its one canonical projector independently validates
-the ADMIN claim, typed plan, exact audit event, each contiguous preceding
-transition in canonical pair order, each acquisition's existing provenance,
-and the final lost/None lifecycle. Both command and event point reads, retries,
+`(run_id, audit_event_seq)`. Its one canonical projector independently
+validates the immutable ADMIN command identity/actor/request, typed plan,
+exact audit event, each contiguous preceding transition in canonical pair
+order, each acquisition's existing provenance, and the final lost/None
+lifecycle. Both command and event point reads, retries,
 and bounded inventory reads use that projector. Bidirectional open inventory
 requires each new audit event to have exactly one relationship, and each
 relationship to own exactly one audit event and the complete planned batch.
-A deleted event/row with retained proof is damage, not absence or permission to
-dispose again. A command owning that receipt cannot become rejected.
+The row/history projector additionally requires every transition to `lost` to
+be owned by exactly one disposal receipt or one positive pre-v8 witness, with
+disjoint provenance eras. An initial legacy lost lifecycle similarly requires
+its explicit historical witness. Audit-to-relationship inventory alone cannot
+prove this: deleting both audit and relationship must still fail the surviving
+lost transition's row-to-proof check. A deleted event/row with retained proof
+is damage, not absence or permission to dispose again. A command owning that
+receipt cannot become rejected.
+
+Receipt projection never compares its historical application claim with the
+command's current mutable claim owner/epoch. Reclaiming a prepared command
+after domain commit legitimately changes that fence, and completion releases
+it. The immutable relationship must remain valid across those handoffs, or
+the domain/completion crash seam could not replay successfully.
 
 Version the persistence extension rather than silently admitting a new fact
-family into schema 7. If no intervening change advances it, use migration 7→8;
-old journals acquire an empty current disposal family, with no inferred
-historical disposal attribution. Existing lease events, legacy seals, plans,
-responses, and manifests retain their bytes. An old lost row remains an
-opaque lost fact without an invented operator reason or receipt.
+family into schema 7. If no intervening change advances it, use migration 7→8.
+First validate the old journal through its existing canonical projectors.
+Migration alone mints `capability_lost_pre_v8` witnesses for its valid retained
+lost transitions, keyed by exact `(run_id, event_seq)` and selected by
+`(lease_id, acquisition_epoch)`, hashing their exact canonical event bytes and
+identities. It separately mints `capability_initial_lost_pre_v8` witnesses for
+valid legacy initial lost seals, keyed/selected by the exact lease pair and
+binding run identity, base hash, and canonical initial lifecycle bytes.
+These classify only observed old writer facts, never a disposal actor or
+reason.
+Both families have bidirectional sealed inventories, migration-only mint
+guards, and canonical point/batch projectors. Current reads/writes/open cannot
+mint either family; missing current disposal attribution is never a historical
+classification. Fixtures produced by the actual old journal writer must prove
+the retained shapes. Existing lease events, legacy seals, plans, responses, and
+manifests retain their bytes.
+
+The same migration records a positively sealed per-run
+`capability_accounting_era` row, keyed and selected by run id, binding the
+exact retained run world,
+`source="schema7-migration"`, and that run's event-sequence floor. The floor is
+the validated latest sequence at migration, not a sequence invented for a
+legacy initial lifecycle. Its witnesses must name only facts at or before
+that floor. New runs co-commit their era row with creation, using
+`source="schema8-creation"` and floor zero; their full history begins at
+creation.
+Only migration can classify an existing run as migrated, and only actual new
+creation can mint the new-run era. Row-to-seal and run-to-era inventories
+reject missing, deleted, moved, or altered era evidence; a current open cannot
+repair it. This small operation-specific era record bounds the accounting
+projection described below; it is not a new generic query facility.
 
 ### Command law, refusal, and replay
 
 The command follows `authorize → claim → plan → apply once → record → replay`.
-Invalid pre-domain requests retain the complete typed refusal in the existing
-rejection-plan family. Once a domain plan exists, fence supersession has one
+After authorization, malformed JSON, schema-invalid input, oversized fields,
+duplicate pairs, and invalid keys return `REQUEST_INVALID` before claiming:
+they create no command and are not a replayable durable refusal. For a claimed,
+schema-valid request, pre-domain observational refusals retain their complete
+typed response in the existing rejection-plan family. Once a domain plan
+exists, fence supersession has one
 canonical refusal determined by that immutable plan. The failed comparison
 and terminal rejection commit together under the command fence in the same
 store transaction; its positive terminal seal retains the actual rejection
@@ -204,40 +268,63 @@ run, or reason is the existing typed idempotency conflict and changes nothing.
 ### Truthful public accounting and compatibility
 
 Add an explicitly versioned result projection, `RunResultPreviewV2` with
-`schema_version=2`, as the new `runs_result` response. It retains the existing
-run/status/outputs/failures/detail fields and adds a required typed capability
-accounting summary: exact `active_count`, exact `lost_count`, `through_event_seq`,
-and an accounting detail reference. Any positive lost count is rendered as
-"capability cleanup abandoned; physical cleanup unverified", including when
-the run status is SUCCEEDED. Counts describe validated durable rows, never
-provider success. The summary contains no inferred disposal actor/reason for
-legacy lost facts and no claim of physical clearance when both counts are zero.
+`result_schema_version=2`, as the new `runs_result` response. This field is
+distinct from sibling command responses' existing global `schema_version=3`.
+It retains the existing run/status/outputs/failures/detail fields and adds
+a required typed capability
+accounting summary: exact `active_count`, `disposed_count`, `opaque_lost_count`,
+`lost_count = disposed_count + opaque_lost_count`, `through_event_seq`, and an
+accounting detail reference. Receipt-backed lost rows count as disposed and
+render "capability cleanup abandoned; physical cleanup unverified", including
+when the run status is SUCCEEDED. Witness-backed old lost rows render
+"lost capability; cause and physical cleanup unknown". Counts describe
+validated durable rows, never provider success. The summary contains no
+inferred disposal actor/reason for opaque facts and no claim of physical
+clearance when all counts are zero.
 
 Derive status and accounting through one coherent read snapshot; count all
 validated rows rather than a truncated preview. Full identities and disposal
 receipt links are in bounded/chunked detail pinned to that event cut, including
 on a RUNNING run. A new accounting-detail URI family is needed: the present
-terminal-only result reference cannot supply it. It reconstructs lease state
-at the pinned cut from exact current event history or legacy initial seals and
-validates disposal relationships; it never reads mutable current rows as the
-state of an older cut. Public detail authorization is the existing run-read
+terminal-only result reference cannot supply it. Issue only server-derived cuts
+at or after the sealed per-run accounting floor; refuse any requested cut below
+that floor or without its era evidence. For a migrated run, existing canonical
+history and legacy initial seals establish its state at that migration floor,
+then exact later events reconstruct supported cuts. The old legacy seal alone
+cannot establish its position in arbitrary earlier event history. New runs
+have full history from floor zero. Detail validates disposal relationships and
+old witnesses and never reads mutable current rows as the state of an older
+cut. Public detail authorization is the existing run-read
 scope. Keep the free-text reason and actor's private command detail behind the
 existing command actor-or-ADMIN authorization; public audit events and
-accounting detail expose the disposal event id and reason digest, not a copy
-of private reason text or the actor's private command record. Event
+accounting detail expose the disposal event id and existing plan/request
+digests, not private reason text, a separate public reason digest, or the
+actor's private command record. Event
 summary/detail reads therefore need no weaker or special authorization path.
 
-The absence of a schema version denotes exactly the old result shape when
-decoding retained legacy fixtures; its accounting is unknown, never fabricated
-as zero. Current writers emit version 2 only. Do not silently add fields to the
-unversioned old preview or weaken `extra=forbid` in old clients: they must refuse
-and upgrade for new result responses. Other existing control schema-3 responses
-keep their wire shapes; this result family's version does not allocate a new
+The current old projection is a live query, not a durably stored command
+response. Its compatibility fixtures retain the unversioned shape; absence of
+`result_schema_version` selects exactly that shape, with accounting unknown,
+never fabricated as zero. Current writers emit version 2 only. Do not silently
+add fields to the unversioned old preview or weaken `extra=forbid` in old
+clients: they must refuse and upgrade for new result responses. Other existing
+control schema-3 responses keep their wire shapes; this result family's version
+does not allocate a new
 global control schema. Existing terminal result detail bytes/digests remain
 unchanged; the accounting reference is separate. Historical command responses
 are not rewritten, and missing current disposal proof never selects a legacy
 fallback. Publish the new response and tool schema through the existing typed
 control/MCP vocabulary; no Graph or manifest schema change is required.
+
+Current `runs_result` reads status, materialized outputs, failure events, and
+detail separately; it scans at most 1,000 events and retains at most 20 failure
+items. These are pre-existing query limits, not defects introduced by disposal
+or behavior fixed by this documentation. V2 must explicitly mark its bounded
+failure preview partial when either bound omits evidence, using affirmative
+scan/truncation evidence rather than interpreting absence as completeness.
+The new coherent-read promise covers status and capability accounting only;
+outputs, failure preview, and terminal detail retain their existing semantics
+and limits. No generic query redesign is proposed.
 
 ### What the next attempt can do
 
@@ -285,18 +372,26 @@ None of the following proofs has been implemented or executed by this docs
 slice. The separate implementation must supply credential-free tests of both
 acceptance and refusal and assertion-only mutation evidence:
 
-- A genuine co-located store double and SQLite admit exact ADMIN disposal and
+- Real SQLite contract tests admit exact ADMIN disposal and
   refuse OPERATE, non-NULL ownership (live and expired), wrong run/epoch,
-  duplicate/oversized/noncanonical input, and mixed active/nonactive batches.
+  duplicate/oversized/noncanonical input, and mixed active/nonactive batches;
+  input refusals prove no command claim, and observational refusals prove a
+  complete bounded per-pair response, including existing receipt references.
 - All three crash seams in the table, including real process restart over a
-  durable fake world, prove one receipt, an unchanged owner epoch, exact transitions,
-  and unchanged canonical success/refusal responses.
+  durable fake world, prove one receipt, an unchanged owner epoch, exact
+  transitions, and unchanged canonical success/refusal responses.
 - Deterministic worker claim, heartbeat, resume-plan, and overlapping disposal
   races prove the accepting and superseded paths and no partially applied batch.
+  A submitted resume queued before claim is superseded by disposal; test both
+  dropping its intent and subsequent ordinary recovery, without falsely
+  promising that its already-submitted command turns rejected.
 - Exact event/relationship/plan/row deletion, relocation, valid-to-valid rewrite,
+  deletion of both audit and relationship with a surviving lost transition,
   receipt omission, and false legacy classification fail closed on point,
   batch, retry, query, and open inventory paths. Schema-7 fixture migration
-  preserves bytes and never invents old disposal provenance.
+  preserves bytes and never invents old disposal provenance. Migration-only
+  witnesses and per-run accounting floors must resist current minting,
+  deletion, relocation, and valid-to-valid alteration; below-floor cuts refuse.
 - Providers are instrumented: disposal and replay call neither `close` nor
   `reconcile`, and neither remove physical guards nor unlock/reuse stores.
   A retained guard must still refuse a fresh acquisition after accounting loss.
@@ -305,9 +400,36 @@ acceptance and refusal and assertion-only mutation evidence:
   outcomes. The #132 terminal guard remains binding until no active rows remain.
 - Every published field has an invariant bound; inputs at those bounds make
   them bind. Result summary/detail cuts stay coherent across later disposal,
-  recovery, and resumed attempts. Current/legacy result readers, legacy opaque
-  lost facts, event/command/detail authorization, and MCP's single delegation
-  receive explicit compatibility and secret-free accepting-path tests.
+  recovery, and resumed attempts. Failure previews whose bounds actually bind
+  must report partial. Current/legacy result readers, receipt-backed versus
+  opaque lost facts, event/command/detail authorization, and MCP's single
+  delegation receive explicit compatibility and secret-free accepting-path
+  tests.
+
+## Independent review dispositions
+
+Claude's single cross-review (`job_98aaf8880642`, actual `claude-opus-5-5`)
+reviewed the Proposed ADR at `f580d7d`. It found the core decision valid
+without a redesign and reported nine refinements. The reviewer could not
+read GitHub issues; the drafting agent and root independently read both
+issue threads.
+The following source checks reproduce its premises; these are documentation
+corrections, not executed proof of the proposed implementation.
+
+| Finding and classification | Disposition and source premise |
+| --- | --- |
+| 1. Introduced: lost-to-receipt coverage missing. | Adopted. `_validate_capability_lease_history` accepts canonical `lost` independently of attribution. Require row/history-to-proof coverage, exact migration-only old witnesses, and deletion-of-both evidence tests. |
+| 2. Introduced: all old lost facts labeled abandoned. | Adopted. Existing history records no disposal actor/reason. Split disposed and opaque counts and meanings; never invent old administrative intent. |
+| 3. Design choice: full transactional double requirement. | Adopted simplification. `substrate/control.py` and `test_control_store.py` explicitly keep the memory ledger outside `ControlPlaneStore`; use real SQLite and the existing co-located-method precedent instead of a second journal. |
+| 4. Introduced: result version confused with global version; nonexistent durable old query responses. | Adopted. `RunResultPreview` is unversioned live query data; choose `result_schema_version` and limit byte-preservation claims to real command responses and terminal detail. |
+| 5. Introduced: legacy initial lifecycle given an invented event position. | Adopted. `_sqlite_leases.py` retains state/disposition/update time without sequence. Add positively sealed accounting floors and restrict new cuts; do not claim arbitrary old-cut reconstruction. |
+| 6. Introduced: malformed requests incorrectly treated as durable refusals; batch diagnostics underspecified. | Adopted. `_begin_command` refuses malformed key/JSON before claiming. Distinguish input from observational refusal and itemize every named pair within the request bound. |
+| 7. Introduced: queued resume supersession stated too strongly. | Adopted. `_fill_capacity` drops stale event-fenced intents before ordinary recovery; an already-submitted command is not thereby rejected. Require the deterministic queued-before-claim race test. |
+| 8. Pre-existing: separately read and truncated result fields. | Adopted scope clarification. `_ControlQueries.runs_result` caps events/failures. V2 must expose partial failure preview; coherent-read promise covers only status/accounting. This slice fixes no current query implementation. |
+| 9. Introduced: reason described as plan-only and extra public reason digest. | Adopted. The canonical request also retains reason text; keep both private. Existing request/plan digests already bind it, so omit a separate reason digest. |
+
+No finding was rejected. The proposal remains Proposed after these changes;
+owner acceptance and separate implementation authority remain outstanding.
 
 ## Authority and scope
 
