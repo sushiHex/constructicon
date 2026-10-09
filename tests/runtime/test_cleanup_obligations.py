@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sqlite3
 from dataclasses import replace
 
@@ -181,6 +182,49 @@ async def test_relinquishment_hard_death_preserves_the_known_loss_boundary(world
         assert world.held() == [True, True]
     for resource in [provider, sibling]:
         resource.handles[0].release()
+
+
+@pytest.mark.parametrize("group_aware", [False, True], ids=["native", "group-aware"])
+async def test_mixed_relinquishment_hard_death_preserves_group_and_custody(
+    world, monkeypatch, group_aware,
+):
+    """Actual-runtime coverage plus controlled 3.12 suppress semantics on 3.11 CI."""
+    if group_aware:
+        @contextlib.contextmanager
+        def grouped_suppress(*exceptions):
+            try:
+                yield
+            except BaseExceptionGroup as error:
+                _, remaining = error.split(exceptions)
+                if remaining is not None:
+                    raise remaining  # noqa: B904 - mirror Python 3.12 contextlib.suppress.
+            except exceptions:
+                pass
+
+        monkeypatch.setattr(contextlib, "suppress", grouped_suppress)
+    provider, sibling = world.provider("retaining"), world.provider("sibling")
+    run_id = RunId(f"mixed-relinquish-death-{group_aware}")
+    death, cancellation = InjectedCrash("release crashed"), asyncio.CancelledError("release")
+    crash = BaseExceptionGroup("mixed release hard death", [death, cancellation])
+
+    async def fail_close(handle):
+        raise OSError("close failed")
+
+    async def fail_release(handle):
+        raise crash
+
+    provider.before_close, provider.before_relinquish = fail_close, fail_release
+    result = await outcome(await world.start(run_id, {"executor": "retaining", "z": "sibling"}))
+    try:
+        assert result is crash, result
+        assert result.exceptions == (death, cancellation)
+        assert sibling.closes == [] and sibling.relinquished == []
+        assert world.journal.run_state(run_id).owner_id == "loser"
+        assert world.rows(run_id) == [("active", None), ("active", None)]
+        assert world.held() == [True, True]
+    finally:
+        for resource in [provider, sibling]:
+            resource.handles[0].release()
 
 
 @pytest.mark.parametrize("node_fails", [False, True], ids=["checkpointed", "node-failed"])

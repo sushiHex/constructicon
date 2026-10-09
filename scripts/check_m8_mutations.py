@@ -459,6 +459,17 @@ MUTANTS = (
         CLEANUP + "test_relinquishment_hard_death_preserves_the_known_loss_boundary[lost-grouped]",
     ),
     (
+        "relinquishment preserves mixed hard-death groups on supported runtimes",
+        "constructicon.runtime.walker:Walker._relinquish_acquired",
+        "try:  # noqa: SIM105 - suppress rewrites exception groups on Python 3.12+.\n"
+        "            await asyncio.shield(batch)\n"
+        "        except asyncio.CancelledError:\n"
+        "            pass",
+        "with contextlib.suppress(asyncio.CancelledError):\n"
+        "            await asyncio.shield(batch)",
+        CLEANUP + "test_mixed_relinquishment_hard_death_preserves_group_and_custody[group-aware]",
+    ),
+    (
         "worker cancellation cannot bypass its atomic lease fence",
         "constructicon.substrate.journal._sqlite_execution:_SqliteExecutionMixin.request_cancel",
         "if lease is None:", "if True:",

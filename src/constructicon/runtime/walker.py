@@ -1271,8 +1271,10 @@ class Walker:
 
         batch = asyncio.ensure_future(relinquish_all())
         while not batch.done():
-            with contextlib.suppress(asyncio.CancelledError):
+            try:  # noqa: SIM105 - suppress rewrites exception groups on Python 3.12+.
                 await asyncio.shield(batch)
+            except asyncio.CancelledError:
+                pass
         errors = batch.result()
         return _cleanup_error(errors)
 

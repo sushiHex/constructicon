@@ -87,7 +87,7 @@ MUTANTS = (
      "[cancellation]"),
     ("a cancellation during relinquishment cannot displace the loss",
      "constructicon.runtime.walker:Walker._relinquish_acquired",
-     "with contextlib.suppress(asyncio.CancelledError):", "with contextlib.suppress():",
+     "except asyncio.CancelledError:", "except OwnershipLost:",
      CUSTODY + "test_a_cancellation_during_relinquishment_leaves_the_loss_primary"),
     ("a loss found while closing relinquishes the rest",
      "constructicon.runtime.walker:Walker._close_acquired",

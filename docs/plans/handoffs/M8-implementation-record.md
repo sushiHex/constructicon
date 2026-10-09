@@ -4221,3 +4221,40 @@ cases passed after the fixture correction (2 tests, 12.56 seconds); the touched
 test file passed ruff. The corrected-head full gate and CI still require fresh
 evidence. The single source-only Claude review and owner-stage/merge holds
 remain unchanged.
+
+#### Connector follow-up: preserve supported-runtime hard-death groups
+
+The owner enabled review credits and authorized necessary reviews. The
+connector's [review of `e63c9f4`](https://github.com/sushiHex/constructicon/pull/147#pullrequestreview-5468399116)
+completed with [one P2 finding](https://github.com/sushiHex/constructicon/pull/147#discussion_r4228764377).
+The earlier usage-limit responses remain non-executed reviews, not clean results.
+The introduced normal-relinquishment hard-death path passed its raised group
+through `contextlib.suppress(CancelledError)`. Python 3.12's suppress splits
+groups, deriving a different exception and removing cancellation children.
+The existing normal-grouped case assertion-failed on actual Python 3.12.13;
+new mixed hard-death/cancellation cases also assertion-failed there. A pure
+stdlib mixed-group check reproduced the splitting on Python 3.13 as well.
+
+Relinquishment now catches only top-level task cancellation explicitly around
+its shielded join. Original hard-death groups escape unchanged; repeated caller
+cancellation still cannot interrupt the joined batch. Existing known-loss
+precedence and sibling joining are preserved. The pre-existing heartbeat-stop
+and synchronous release handlers are not broadened by this repair.
+
+The new test checks original group and child identity, retained ownership and
+active rows, and no later sibling close or relinquishment. Its native-runtime
+path passes on 3.11 but fails on 3.12 before the fix. A clearly labeled controlled
+3.12 suppress primitive reproduces the group-splitting semantics in the 3.11 CI
+gate; that is not a claim of a native 3.11 defect. The six-case affected matrix
+passed on both Python 3.11.15 and actual Python 3.12.13 after the fix. All 75 M8
+mutants were assertion-killed, including exact restoration of the old suppress
+block. The initial broader runtime/inventory batch had 382 passes and one stale
+native-inventory source target, not a production failure. That cancellation
+target was reanchored without changing its test or obligation; all twelve
+portable native-recovery mutants were assertion-killed, and all 33 inventory
+consistency tests passed. A redundant broader rerun was interrupted after the
+focused inventory pass and is incomplete, not passing evidence. Ruff passed
+source, tests and both touched scripts; strict mypy passed all 110 source files.
+The full gate, CI and narrow exact-head connector follow-up await the new head.
+No vendor binary ran locally and no Constructicon model request ran; the draft
+and owner-confirmed Stage 3 T5/no-T6 merge hold remain closed.
