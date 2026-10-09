@@ -3875,7 +3875,7 @@ The operator runbook described only the N4 session, so N5 Stage 2 had no runnabl
 
 ### N5 Stage 3, part B: the read stage and its session
 
-The `qualification-read` authorization pins the READ grants, an attempt record and one epoch. `attempt_record.py` is the owner's one durable artifact per authorization (decision S3-1): reserved exclusively at `acquire`, so no later acquisition, even after a journal reset, can dispatch; its intent is written, with expiry checked on both sides, as the conversation's last word before `turn/start`; and its outcome is classified from facts, `not dispatched` only if the write of `turn/start` never began. The record holds Stage 3's evidence list, bounded and never text, including what a refused turn observed and why it was refused. A read authorization's handle dispatches; a clean result salvaged from a failed exchange is now refused for every handle (a pre-existing gap). The fixed read graph carries its task literal inside the node (S3-3), and `mint --stage` pins the read stage. `M8-N5-read-session.md` is the session (T0 to T6): T5 passes only a succeeded run with a completed record, and T6 may spend N5's one more attempt (READ and WRITE together), only after a diagnosed local failure with nothing dispatched, under entirely new names. Proven portably over the scripted client, the entry end to end and the runbook's own programs; twenty-four mutants in the lifecycle lane. Astra's review (job_18dce68827b2) found nine defects, eight introduced and one pre-existing; all are fixed. `codex.py` is frozen from here until Stage 3 completes (decision S3-4).
+The `qualification-read` authorization pins the READ grants, an attempt record and one epoch. `attempt_record.py` is the owner's one durable artifact per authorization (decision S3-1): reserved exclusively at `acquire`, so no later acquisition, even after a journal reset, can dispatch; its intent is written, with expiry checked on both sides, as the conversation's last word before `turn/start`; and its outcome is classified from facts, `not dispatched` only if the write of `turn/start` never began. The record holds Stage 3's evidence list, bounded and never text, including what a refused turn observed and why it was refused. A read authorization's handle dispatches; a clean result salvaged from a failed exchange is now refused for every handle (a pre-existing gap). The fixed read graph carries its task literal inside the node (S3-3), and `mint --stage` pins the read stage. `M8-N5-read-session.md` is the session (T0 to T6): T5 passes only a succeeded run with a completed record, and T6 may spend N5's one more attempt (READ and WRITE together), only after a diagnosed local failure with nothing dispatched, under entirely new names. Proven portably over the scripted client, the entry end to end and the runbook's own programs; twenty-four mutants in the lifecycle lane. Astra's review (job_18dce68827b2) found nine defects, eight introduced and one pre-existing; all are fixed. `codex.py` and `codex_protocol.py` are frozen from here (decision S3-4): Stage 2's evidence records the adapter and protocol revisions, which digest each whole module, so any edit invalidates g4; a change waits for an owner decision on #78.
 
 ### N5 Stage 3: the READ session rehearsed on CI
 
@@ -3947,3 +3947,51 @@ upstream sockets the relay opens, the relay's own witness that it never
 dialled.
 
 No production code changed.
+
+### PR #140: committed plan-manifest baselines and complete staged inventory
+
+The new `scripts/regen_plan_manifest.py` initially trusted working manifest
+digests and enumerated only manifest entries. Isolated Git fixtures reproduced
+both introduced connector findings: a staged frozen-plan edit plus a matching
+manual digest succeeded, and an unnamed staged new document was omitted while
+the helper reported success. Omitting the frozen plan's manifest entry also
+bypassed the first implementation's check.
+
+The helper now anchors unnamed documents to `HEAD:docs/plans/MANIFEST.sha256`
+and checks the complete staged Markdown inventory. Unnamed digests, missing
+committed entries, staged deletions and unnamed additions refuse before a
+write. Manifest and staged document conflicts must be explicitly resolved
+before refreshing; all standard and diff3 manifest conflict markers refuse.
+The helper also checks the manifest's unmerged Git index stages before reading
+its baseline, because modify/delete conflicts can leave marker-free working
+bytes while the index remains conflicted.
+Named new and living documents use staged blobs even if working bytes differ.
+Naming a document does not approve editing a frozen plan, and deletion or
+renaming is outside the helper's supported workflow.
+
+`tests/test_regen_plan_manifest.py` supplies real Git fixture proofs for these
+refusals, unchanged manifest bytes on refusal, no-op behavior, named staged
+updates and conflict refusal. Five new cases in the existing
+`scripts/check_m8_mutations.py` inventory remove the committed baseline,
+complete staged inventory, omitted-entry check, conflict-marker refusal and
+unmerged-manifest-index refusal;
+they use the shared assertion-only mutation runner and existing CI job.
+At the first repair (`a7569e8`), the manifest fixtures, docs validation and
+mutation-inventory checks passed together (111 tests), and all 37 M8 mutants
+were assertion-killed on Windows. A further connector finding reproduced an
+omission on one manifest conflict side hidden by the aggregate parser. That
+evidence did not establish each side's inventory. The follow-up removes
+automatic manifest conflict resolution entirely; a test with each marker and
+otherwise unique valid entries isolates the marker check from other parser
+refusals for its mutation proof.
+The first follow-up (`e5002e7`) passed 24 manifest fixture cases and 93
+docs/inventory checks locally (117 total); all 37 cases in the updated M8 mutation inventory were
+assertion-killed on Windows, including the explicit conflict-marker check.
+Its further connector review reproduced a real modify/delete conflict whose
+marker-free working manifest was accepted despite unresolved index stages.
+The index check applies to every conflict form; real Git fixtures cover both
+modify/delete directions, add/add with manually resolved working bytes, and
+acceptance after the caller stages an explicit resolution.
+The index follow-up passed 28 manifest fixture cases locally. Its fifth
+manifest guard-removal mutant was separately assertion-killed on Windows.
+No frozen plan, adapter, protocol or runtime behavior changes in this repair.

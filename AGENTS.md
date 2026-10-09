@@ -95,9 +95,18 @@ docs/adr/        history by reference — why things are the way they are
 `uv run verify` is ruff, mypy, import-linter and pytest. Everything below is
 real and passes a green gate, so it is yours to check by hand.
 
-- **`docs/plans/MANIFEST.sha256` is unchecked.** Change any document under
-  `docs/plans/` and refresh its digest in the same commit, then verify all of
-  them with `sha256sum --check MANIFEST.sha256` from that directory.
+- **`docs/plans/MANIFEST.sha256` is yours to refresh.** The gate checks it
+  (`tests/test_m8_ci_scope.py`, against the working tree) but never updates
+  it. Add a document under `docs/plans/`, or change a living one (an
+  implementation record or the index; approved plans are frozen bytes, above).
+  Stage it, run `python scripts/regen_plan_manifest.py <each changed or new
+  path, relative to docs/plans/>`, and stage the manifest in the same commit.
+  The script checks unnamed documents against the committed HEAD manifest and
+  refuses omitted entries or unnamed staged additions. Resolve manifest and
+  document conflicts explicitly before running it. The helper does not approve
+  edits to frozen plans or support deletion/renaming. Write documents as LF
+  (`docs/plans/.gitattributes`); a CRLF working copy fails the local check even
+  when the staged bytes are right.
 - **`scripts/` is linted and type-checked by nothing.** ruff covers `src` and
   `tests`; mypy covers `src/constructicon`. Pytest is different: `testpaths`
   limits *discovery*, not what a test may import, and tests do import scripts —
