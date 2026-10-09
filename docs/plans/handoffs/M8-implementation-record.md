@@ -4090,3 +4090,43 @@ completion with cleanup failure then stays RUNNING/owner NULL. After disposal,
 ordinary resume still can fail on unnamed active rows or a retained physical
 guard; cancellation and checkpoint/output behavior keep their existing laws.
 The proposal adds no Stage 4 prerequisite and authorizes no host or vendor work.
+
+### #149 — wrong-plan evidence across an interrupted account reading
+
+The Stage 2 host run at `8a0d87d` stopped at H7 S6c. The initial, held and
+active startups passed, as did the destination-denial control; refresh was
+unmeasured. S6c refused on `account/updated` before judging the account
+reading, and cleanup labeled its still-pending reply as arriving before its
+request. The exact wrong-plan checker refused that evidence, correctly.
+The [bounded host record](https://github.com/sushiHex/constructicon/issues/78#issuecomment-6088373704)
+and [credential-free reproduction](https://github.com/sushiHex/constructicon/issues/78#issuecomment-6088405934)
+establish a sufficient interleaving, not the unavailable raw host notice.
+The owner [authorized the focused freeze exception](https://github.com/sushiHex/constructicon/issues/78#issuecomment-6088737015),
+reviewed correction and fresh qualification; the old g4 evidence is not reused
+for changed adapter/protocol revisions.
+
+**State review before implementation.** An allocated request is not proof
+that a write succeeded. A successful send may already have buffered its reply
+when an intervening notice refuses the gate. Refusal does not mean there is
+no outstanding reply; cancellation or a failed write is not a completed send.
+Cleanup must retain the sent request's identity until its one matching reply
+is judged, and must still reject pre-send, unknown, malformed and duplicate
+ids. Consuming a pending reply records evidence only: it cannot clear a
+refusal, send a readback, start a thread or turn, or resume the state machine.
+The account reading's identity must be judged against the same sealed
+expectation even on this cleanup path. A missing or contradictory reading
+cannot become a successful negative control.
+
+**Chosen correction.** Preserve the schema-4 evidence shape. An exact,
+approved-plan `account/updated` with the wrong plan receives a distinct bounded
+fault. Malformed or wrong-auth notices keep the generic refusal; no arbitrary
+payload is published. The checker requires the account reading's exact plan
+fault and sealed identity, optionally accompanied by that exact notice fault.
+It never accepts the generic refusal as proof. This avoids a redundant
+`plan_refusal` record and its second set of consistency rules.
+
+The earlier successful startups are corroboration, not a substitute for S6c's
+missing fact: they observed different notifications. Their pairing does not
+prove the failed run's notice shape. No retrospective qualification is made.
+Implementation, mutation and final-head review results are recorded below
+when executed; the design and pre-fix reproduction alone are not those gates.

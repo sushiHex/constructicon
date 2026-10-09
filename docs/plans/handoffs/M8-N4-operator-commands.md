@@ -149,7 +149,10 @@ else:
         require(e["methods_sent"] == methods[:3] and e["gate"] == {"completed": False, "plan": None, "account": seal.identity.root} and e["readback"] is None)
         wrong_plan = "account plan " + named_value(seal.plan_type) + " is not the expected " + repr("plus")
         required_faults = {wrong_plan, "the startup gate did not complete", "the startup did not send exactly the four authorized methods", "no spend readback was judged"}
-        require(set(e["faults"]) == required_faults and len(e["faults"]) == len(required_faults))
+        notice_plan = "account/updated plan " + named_value(seal.plan_type) + " is not the expected " + repr("plus")
+        actual_faults = set(e["faults"])
+        require(actual_faults in (required_faults, required_faults | {notice_plan}))
+        require(len(e["faults"]) == len(actual_faults))
         require(e["relay"]["denied"] == {})
     elif mode == "denial":
         require(custody == "active" and seal is not None)
@@ -502,7 +505,13 @@ S6b's policy removes `chatgpt.com`. At rust-v0.160.1 `account/read` itself check
 workspace there, so the reading is denied at the relay and the run stops at
 the third method; the account-recovery lane's `unrouted` case measures this.
 S6c sends the sealed identity with the plan `plus`, so the observed approved
-plan alone refuses at the account gate. Both methods lists are checked using
+plan refuses at the account gate. An exact wrong-plan `account/updated`
+notification can arrive before that reading. It refuses immediately; cleanup
+may judge the already-sent reading but never continues the gate. The checker
+requires the reading's sealed account identity and its exact plan fault, with
+only the additional exact notice-plan fault permitted. A generic notification
+refusal, a missing reading, a different account or any extra fault is not proof
+of this control. Both methods lists are checked using
 the producer's
 `named_method` representation. Neither path sends `thread/start`.
 

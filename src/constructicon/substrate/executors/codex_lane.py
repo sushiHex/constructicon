@@ -66,6 +66,9 @@ from constructicon.substrate.executors.codex import (
     configured_provider,
 )
 from constructicon.substrate.executors.codex_protocol import (
+    QUALIFICATION_PLANS as QUALIFICATION_PLANS,
+)
+from constructicon.substrate.executors.codex_protocol import (
     SPEND_FIELDS,
     USAGE_FIELDS,
     ExpectedAccount,
@@ -107,9 +110,6 @@ LOGIN_ARGUMENTS = ("login", "--device-auth")
 STARTUP_ARGUMENTS = ("app-server", "--strict-config", "--stdio")
 STARTUP_METHODS = ("initialize", "initialized", "account/read", "account/rateLimits/read")
 """The owner's authorization for the startup lane, in order: nothing else is sent."""
-QUALIFICATION_PLANS = ("pro", "prolite")
-"""What the owner-attended S4 qualification may observe and seal (M8-N4-state-review.md,
-orchestrator decision 1); the operator cannot narrow or widen this with a flag."""
 RUNTIME_BINARY = VENDOR_MOUNT + "/bin/codex"
 RUNTIME_CATALOG = CATALOG_MOUNT
 """In-zone paths of the bound vendor tree's client and the bound model catalog."""

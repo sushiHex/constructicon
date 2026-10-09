@@ -36,6 +36,7 @@ from constructicon.substrate.executors.linux import sealed_catalog
 from tests.operator_store_world import StoreWorld
 from tests.substrate import test_codex_lane as fake_lane
 from tests.substrate.test_codex_protocol import IDENTITY, spend_result
+from tests.substrate.test_codex_refusal import AccountNoticeNative
 
 ROOT = Path(__file__).parents[1]
 RUNBOOK = ROOT / "docs" / "plans" / "handoffs" / "M8-N4-operator-commands.md"
@@ -510,6 +511,59 @@ async def test_documented_checker_accepts_actual_wrong_plan_refusal(
     assert result.returncode == 0, (result.stderr, evidence["faults"])
     assert result.stdout.strip() == str(revision)
     assert _check_evidence("active", path, "active", seal(plan), policy, directory).returncode != 0
+
+
+@pytest.mark.parametrize("plan", ["pro", "prolite"])
+@pytest.mark.parametrize("order", ["before", "after"])
+@pytest.mark.parametrize("read_limit", [None, 1], ids=["same-chunk", "split"])
+async def test_wrong_plan_checker_requires_notice_and_reading_evidence(
+    evidence_world, plan, order, read_limit,
+):
+    from tests.substrate.test_codex_adapter import exact_update
+    from tests.substrate.test_codex_protocol import managed
+
+    directory, policy = evidence_world
+    native = AccountNoticeNative(notice=exact_update(plan), account=managed(planType=plan),
+                                order=order, read_limit=read_limit)
+    _, evidence = await fake_lane.startup(
+        directory, lane=_active_lane(directory, native),
+        expected=ExpectedAccount(plan_type="plus", identity=IDENTITY),
+    )
+    path = directory / "notice-wrongplan.json"
+    revision = write_evidence(path, evidence)
+    result = _check_evidence("wrongplan", path, "active", seal(plan), policy, directory)
+    assert result.returncode == 0, (result.stderr, evidence)
+    assert result.stdout.strip() == str(revision)
+    assert _check_evidence("active", path, "active", seal(plan), policy, directory).returncode != 0
+
+
+@pytest.mark.parametrize("case", ["wrong-auth", "malformed", "other-account", "duplicate",
+                                  "conflicting-plan", "missing-reading"])
+async def test_wrong_plan_checker_refuses_other_failures(evidence_world, case):
+    from tests.substrate.test_codex_adapter import exact_update
+    from tests.substrate.test_codex_protocol import managed
+
+    options = {
+        "wrong-auth": {"notice": {"method": "account/updated", "params": {
+            "authMode": "apikey", "planType": "pro",
+        }}},
+        "malformed": {"notice": {"method": "account/updated", "params": {
+            "authMode": "chatgpt", "planType": "pro", "extra": True,
+        }}},
+        "other-account": {"account": managed(email="other")},
+        "duplicate": {"duplicate": True},
+        "conflicting-plan": {"notice": exact_update("prolite")},
+        "missing-reading": {"reply_override": {"error": {}}},
+    }
+    directory, policy = evidence_world
+    _, evidence = await fake_lane.startup(
+        directory, lane=_active_lane(directory, AccountNoticeNative(**options[case])),
+        expected=ExpectedAccount(plan_type="plus", identity=IDENTITY),
+    )
+    path = directory / "wrongplan-other-failure.json"
+    write_evidence(path, evidence)
+    result = _check_evidence("wrongplan", path, "active", seal("pro"), policy, directory)
+    assert result.returncode != 0, evidence
 
 
 async def test_documented_checker_accepts_actual_unrouted_account_denial(

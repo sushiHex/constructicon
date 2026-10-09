@@ -795,6 +795,26 @@ def account_identity(reply: Any) -> Digest | None:
     return digest(ACCOUNT_IDENTITY_DOMAIN, 1, {"email": email, "workspace": workspace})
 
 
+QUALIFICATION_PLANS = ("pro", "prolite")
+"""The approved qualification vocabulary, also the only rejected notice plans
+that may become affirmative public plan evidence. Unknown values stay opaque."""
+
+
+def _exact_updated_plan(record: Mapping[str, Any]) -> str | None:
+    """Decode the exact id-less ChatGPT notice shape, without judging its plan."""
+
+    params = record.get("params")
+    if (
+        record.get("method") != ACCOUNT_UPDATED or "id" in record
+        or "result" in record or "error" in record
+        or not isinstance(params, Mapping) or set(params) != {"authMode", PLAN_TYPE_KEY}
+        or params["authMode"] != "chatgpt" or type(params[PLAN_TYPE_KEY]) is not str
+    ):
+        return None
+    plan: str = params[PLAN_TYPE_KEY]
+    return plan
+
+
 def updated_plan(record: Mapping[str, Any], expected: ExpectedAccount) -> str | None:
     """The plan an exact ``account/updated`` reports, or ``None`` if it is not exact.
 
@@ -805,15 +825,8 @@ def updated_plan(record: Mapping[str, Any], expected: ExpectedAccount) -> str | 
     reading.
     """
 
-    params = record.get("params")
-    if (
-        record.get("method") != ACCOUNT_UPDATED or "result" in record or "error" in record
-        or not isinstance(params, Mapping) or set(params) != {"authMode", PLAN_TYPE_KEY}
-        or params["authMode"] != "chatgpt" or not expected.accepts(params[PLAN_TYPE_KEY])
-    ):
-        return None
-    plan: str = params[PLAN_TYPE_KEY]
-    return plan
+    plan = _exact_updated_plan(record)
+    return plan if expected.accepts(plan) else None
 
 
 def account_notice_faults(record: Mapping[str, Any], expected: ExpectedAccount) -> tuple[str, ...]:
@@ -834,7 +847,15 @@ def account_notice_faults(record: Mapping[str, Any], expected: ExpectedAccount) 
         return ()
     refused = (ACCOUNT_NOTICE_FAULT.format(method=named_method(method)),)
     if method == ACCOUNT_UPDATED:
-        return () if updated_plan(record, expected) is not None else refused
+        if updated_plan(record, expected) is not None:
+            return ()
+        plan = _exact_updated_plan(record)
+        if plan in QUALIFICATION_PLANS:
+            return (
+                f"account/updated plan {named_value(plan)} is not the expected "
+                f"{expected.plan_type!r}",
+            )
+        return refused
     if method == RATE_LIMITS_UPDATED:
         params = record.get("params")
         snapshot = params.get("rateLimits") if isinstance(params, Mapping) else None
