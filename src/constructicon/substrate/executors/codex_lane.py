@@ -456,10 +456,21 @@ async def run_startup(
     )
     faults += [fault for holds, fault in checks if not holds]
     faults += launch_faults(launched)
-    if bool(launched.denied) != expect_denial:
-        faults.append(
-            DENIAL_FAULT if launched.denied else "the declared control denial did not occur"
+    if expect_denial:
+        if launched.denied.get("denied:destination", 0) == 0:
+            faults.append("the declared control denial did not occur")
+        unexpected_denials = sorted(
+            kind.removeprefix("denied:")
+            for kind, count in launched.denied.items()
+            if count and kind != "denied:destination"
         )
+        if unexpected_denials:
+            faults.append(
+                "the control had undeclared relay denial kinds: "
+                + ", ".join(unexpected_denials)
+            )
+    elif launched.denied:
+        faults.append(DENIAL_FAULT)
     reading = conversation.before_spend
     refreshed = (
         launched.destinations.get("accepted:" + REFRESH_DESTINATION, 0) > 0
