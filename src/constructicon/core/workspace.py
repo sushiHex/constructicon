@@ -125,10 +125,10 @@ class LeasedCapability(Protocol):
 class RelinquishingCapability(Protocol):
     """A leased capability whose acquisitions hold process-local custody.
 
-    After ownership loss the walker closes nothing: disposition belongs to the
-    successor. It relinquishes instead: stop and join the acquisition's work,
-    then release what this process holds, writing nothing durable. Without it
-    a living loser keeps custody its successor's reconciliation must wait on.
+    After ownership loss, a failed close, or an unsettled ownership check, stop
+    and join the acquisition's work, then release what this process holds,
+    writing nothing durable. Recovery retains disposition authority over any
+    active row. Repeating relinquishment must not repeat local release work.
     """
 
     async def relinquish(self, acquisition: AcquiredCapability) -> None: ...

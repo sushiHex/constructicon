@@ -88,6 +88,48 @@ DEFAULT_LEASE_TTL_S = 30.0
 DEFAULT_HEARTBEAT_INTERVAL_S = 10.0
 
 
+class _CleanupFailure(Exception):
+    """Only known cleanup sites may bypass ordinary invocation containment."""
+
+    def __init__(
+        self, error: BaseException, node_error: BaseException | None = None,
+        cancellation: asyncio.CancelledError | None = None,
+    ) -> None:
+        self.error = error
+        self.node_error = node_error
+        self.cancellation = cancellation or (
+            node_error if isinstance(node_error, asyncio.CancelledError) else None
+        )
+        super().__init__(str(error))
+
+
+def _is_hard_death(error: BaseException) -> bool:
+    """Known cleanup groups do not turn process death into normal shutdown."""
+    if isinstance(error, BaseExceptionGroup):
+        return any(_is_hard_death(child) for child in error.exceptions)
+    return not isinstance(error, (Exception, asyncio.CancelledError))
+
+
+def _cleanup_error(errors: list[BaseException]) -> BaseException | None:
+    """Combine known cleanup results, counting a shared release failure once."""
+    unique: list[BaseException] = []
+    seen: set[int] = set()
+
+    def add(error: BaseException) -> None:
+        if isinstance(error, BaseExceptionGroup):
+            for child in error.exceptions:
+                add(child)
+        elif id(error) not in seen:
+            seen.add(id(error))
+            unique.append(error)
+
+    for error in errors:
+        add(error)
+    if len(unique) > 1:
+        return BaseExceptionGroup("capability cleanup failed", unique)
+    return unique[0] if unique else None
+
+
 _WAIT_REASON: dict[str, ChannelWaitReason] = {
     "advice": "awaiting_advisor",
     "approval": "awaiting_approval",
@@ -388,6 +430,8 @@ class Walker:
         )
         lost: list[OwnershipLost] = []
         heartbeat = asyncio.create_task(self._heartbeat_loop(lease, lost))
+        failure: Exception | asyncio.CancelledError | None = None
+        result: RunResult | None = None
         try:
             result = await self._execute(
                 bound,
@@ -398,34 +442,87 @@ class Walker:
                 capability_mode=capability_mode,
                 cause=cause,
             )
-        except asyncio.CancelledError:
-            await self._stop_heartbeat(heartbeat)
-            if cancellation == "cancel":
-                with contextlib.suppress(OwnershipLost, ContractViolation):
-                    journal.transition_run(
-                        lease,
-                        expected=frozenset({RunStatus.RUNNING}),
-                        target=RunStatus.CANCELLED,
-                        event_kind="RunCancelled",
-                        payload={"source": "asyncio"},
-                    )
-            self._release_quietly(lease)
-            raise
-        except OwnershipLost:
-            await self._stop_heartbeat(heartbeat)
-            raise
-        except Exception:
-            await self._stop_heartbeat(heartbeat)
-            self._release_quietly(lease)
-            raise
+        except (Exception, asyncio.CancelledError) as exc:
+            failure = exc
         except BaseException:
             # Hard death: durable state must look exactly like a crash. The
             # ownership lease expires and the next worker reconciles resources.
             await self._stop_heartbeat(heartbeat)
             raise
-        await self._stop_heartbeat(heartbeat)
-        self._release_quietly(lease)
+        await self._finish_run(lease, heartbeat, failure, cancellation=cancellation, lost=lost)
+        assert result is not None
         return result
+
+    async def _finish_run(
+        self,
+        lease: RunLease,
+        heartbeat: asyncio.Task[None],
+        failure: Exception | asyncio.CancelledError | None,
+        *,
+        cancellation: Literal["cancel", "abandon"],
+        lost: list[OwnershipLost],
+    ) -> None:
+        """Normal shutdown joins heartbeats and releases even after ordinary errors.
+
+        Hard-death BaseExceptions escape before release, as in the drive boundary.
+        Known ownership loss stays primary; no exception context is inspected.
+        """
+        cleanup = failure if isinstance(failure, _CleanupFailure) else None
+        primary = cleanup.error if cleanup is not None else failure
+        cancelled = cleanup.cancellation if cleanup is not None else (
+            failure if isinstance(failure, asyncio.CancelledError) else None
+        )
+        loss = primary if isinstance(primary, OwnershipLost) else None
+        errors = [] if primary is None or loss is not None or isinstance(
+            primary, asyncio.CancelledError,
+        ) else [primary]
+        intent_recorded = False
+        try:
+            await self._stop_heartbeat(heartbeat)
+        except OwnershipLost as exc:
+            loss = loss or exc
+        except Exception as exc:
+            errors.append(exc)
+        if lost:
+            loss = loss or lost[0]
+        if cancellation == "cancel" and cancelled is not None and loss is None:
+            try:
+                self._journal.request_cancel(lease.run_id, lease=lease)
+                intent_recorded = True
+            except OwnershipLost as exc:
+                loss = exc
+            except Exception as exc:
+                errors.append(exc)
+        if isinstance(failure, asyncio.CancelledError) and intent_recorded and loss is None:
+            try:
+                self._journal.transition_run(
+                    lease, expected=frozenset({RunStatus.RUNNING}),
+                    target=RunStatus.CANCELLED, event_kind="RunCancelled",
+                    payload={"source": "asyncio"},
+                )
+            except OwnershipLost as exc:
+                loss = exc
+            except ContractViolation:
+                pass  # Preserve the existing already-terminal cancellation path.
+            except Exception as exc:
+                errors.append(exc)
+        try:
+            self._release_quietly(lease)
+        except Exception as exc:
+            errors.append(exc)
+        if loss is not None:
+            for secondary in errors:
+                loss.add_note(f"run shutdown also failed: {type(secondary).__name__}: {secondary}")
+            raise loss
+        if (error := _cleanup_error(errors)) is not None:
+            original = (
+                cleanup.node_error or cleanup.cancellation if cleanup is not None else cancelled
+            )
+            if original is not None:
+                raise error from original
+            raise error
+        if primary is not None:
+            raise primary
 
     async def _heartbeat_loop(self, lease: RunLease, lost: list[OwnershipLost]) -> None:
         try:
@@ -1053,14 +1150,41 @@ class Walker:
         lease: RunLease,
         acquired: list[tuple[LeasedCapability, AcquiredCapability]],
         disposition: Disposition,
+        *,
+        lost: list[OwnershipLost] | None = None,
+        node_error: BaseException | None = None,
+        prior_error: BaseException | None = None,
+        cancellation: asyncio.CancelledError | None = None,
     ) -> None:
         if not acquired:
+            if prior_error is not None:
+                raise _CleanupFailure(prior_error, node_error, cancellation)
             return
 
         async def close_all() -> None:
+            errors = [prior_error] if prior_error is not None else []
             for index, (capability, acquisition) in enumerate(acquired):
-                closure = await capability.close(acquisition, disposition)
                 try:
+                    if lost:
+                        raise lost[0]
+                    self._journal.heartbeat(lease, ttl_s=self._lease_ttl_s)
+                except OwnershipLost as loss:
+                    failure = await self._relinquish_acquired(acquired[index:], loss=loss)
+                    if failure is not None:
+                        errors.append(failure)
+                    raise loss from _cleanup_error(errors)
+                except Exception as observation:
+                    errors.append(observation)
+                    failure = await self._relinquish_acquired(acquired[index:])
+                    if failure is not None:
+                        errors.append(failure)
+                    error = _cleanup_error(errors)
+                    assert error is not None
+                    raise _CleanupFailure(error, node_error, cancellation) from None
+                closed = False
+                try:
+                    closure = await capability.close(acquisition, disposition)
+                    closed = True
                     self._journal.transition_capability_lease(
                         lease,
                         lease_id=acquisition.lease_id,
@@ -1071,24 +1195,58 @@ class Walker:
                     )
                 except OwnershipLost as loss:
                     # A successor owns the remaining rows: relinquish, not close.
-                    rest = acquired[index + 1:]
-                    if (failure := await self._relinquish_acquired(rest)) is not None:
-                        raise loss from failure
-                    raise
+                    rest = acquired[index + 1:] if closed else acquired[index:]
+                    if (failure := await self._relinquish_acquired(rest, loss=loss)) is not None:
+                        errors.append(failure)
+                    raise loss from _cleanup_error(errors)
+                except (Exception, asyncio.CancelledError, BaseExceptionGroup) as exc:
+                    if _is_hard_death(exc):
+                        raise
+                    errors.append(exc)
+                    failure = await self._relinquish_acquired(
+                        [(capability, acquisition)], loss=lost[0] if lost else None,
+                    )
+                    if failure is not None:
+                        errors.append(failure)
+                    # Close or its row write failed. Relinquishment is local and
+                    # idempotent even after physical close; it changes no row.
+                    # Re-observe ownership, including after the last failed close.
+                    try:
+                        if lost:
+                            raise lost[0]
+                        self._journal.heartbeat(lease, ttl_s=self._lease_ttl_s)
+                    except OwnershipLost as loss:
+                        remaining = acquired[index + 1:]
+                        failure = await self._relinquish_acquired(remaining, loss=loss)
+                        if failure is not None:
+                            errors.append(failure)
+                        raise loss from _cleanup_error(errors)
+                    except Exception as observation:
+                        errors.append(observation)
+                        failure = await self._relinquish_acquired(acquired[index + 1:])
+                        if failure is not None:
+                            errors.append(failure)
+                        error = _cleanup_error(errors)
+                        assert error is not None
+                        raise _CleanupFailure(error, node_error, cancellation) from None
+            if (error := _cleanup_error(errors)) is not None:
+                raise _CleanupFailure(error, node_error, cancellation) from None
 
         await self._finish_cleanup(close_all())
 
     @staticmethod
     async def _relinquish_acquired(
         acquired: list[tuple[LeasedCapability, AcquiredCapability]],
+        *,
+        loss: OwnershipLost | None = None,
     ) -> BaseException | None:
-        """After ownership loss: free local custody; disposition is the successor's.
+        """Free local custody after loss or failed cleanup; write nothing durable.
 
-        Every acquisition is attempted even after one fails, and the batch is
-        joined through cancellation without surfacing it: the loss stays the
-        primary exception, as on the latched path. Failures are returned for
-        the caller to chain as the loss's cause. With nothing to relinquish
-        there is no await, so a legacy provider's loss path is unchanged.
+        Ordinary failures never strand siblings. A known loss stays primary
+        even over hard-death failures; without that fact, hard death escapes
+        immediately with crash semantics. Caller cancellation cannot interrupt
+        this joined batch; normal callers retain it at the outer cleanup barrier.
+        With nothing to relinquish there is no await.
         """
         relinquishing = [
             (capability, acquisition)
@@ -1106,25 +1264,49 @@ class Walker:
                 try:
                     await capability.relinquish(acquisition)
                 except BaseException as exc:
+                    if loss is None and _is_hard_death(exc):
+                        raise
                     errors.append(exc)
             return errors
 
         batch = asyncio.ensure_future(relinquish_all())
         while not batch.done():
-            with contextlib.suppress(asyncio.CancelledError):
+            try:  # noqa: SIM105 - suppress rewrites exception groups on Python 3.12+.
                 await asyncio.shield(batch)
+            except asyncio.CancelledError:
+                pass
         errors = batch.result()
-        if len(errors) > 1:
-            return BaseExceptionGroup("ownership-loss relinquishment failed", errors)
-        return errors[0] if errors else None
+        return _cleanup_error(errors)
 
     @staticmethod
     async def _discard_unrecorded_acquisition(
         capability: LeasedCapability,
         acquisition: AcquiredCapability,
+        *,
+        loss: OwnershipLost | None = None,
     ) -> None:
         """Finish cleanup that has no durable lease row to recover it."""
-        await Walker._finish_cleanup(capability.close(acquisition, "discard"))
+        async def discard() -> None:
+            try:
+                await capability.close(acquisition, "discard")
+            except OwnershipLost as close_loss:
+                failure = await Walker._relinquish_acquired(
+                    [(capability, acquisition)], loss=loss or close_loss,
+                )
+                raise close_loss from failure
+            except (Exception, asyncio.CancelledError, BaseExceptionGroup) as exc:
+                if _is_hard_death(exc):
+                    raise
+                errors: list[BaseException] = [exc]
+                failure = await Walker._relinquish_acquired([(capability, acquisition)], loss=loss)
+                if failure is not None:
+                    errors.append(failure)
+                error = _cleanup_error(errors)
+                assert error is not None
+                cancelled = exc if isinstance(exc, asyncio.CancelledError) else None
+                raise _CleanupFailure(error, cancellation=cancelled) from None
+
+        await Walker._finish_cleanup(discard())
 
     @staticmethod
     async def _finish_cleanup(work: Awaitable[object]) -> None:
@@ -1140,7 +1322,22 @@ class Walker:
                 await asyncio.shield(close_task)
             except asyncio.CancelledError as exc:
                 cancellation = exc
-        close_task.result()
+            except (Exception, BaseExceptionGroup) as exc:
+                if _is_hard_death(exc):
+                    raise
+                pass  # Shield reports failure only after the task has completed.
+        try:
+            close_task.result()
+        except OwnershipLost:
+            raise
+        except _CleanupFailure as cleanup:
+            if cancellation is not None:
+                cleanup.cancellation = cancellation
+            raise
+        except (Exception, asyncio.CancelledError, BaseExceptionGroup) as exc:
+            if _is_hard_death(exc):
+                raise
+            raise _CleanupFailure(exc, cancellation=cancellation) from None
         if cancellation is not None:
             raise cancellation
 
@@ -1189,11 +1386,15 @@ class Walker:
             self._journal.record_capability_lease(lease, durable)
         except OwnershipLost as lost:
             try:
-                await self._discard_unrecorded_acquisition(capability, acquisition)
-            except (Exception, asyncio.CancelledError) as cleanup:
+                await self._discard_unrecorded_acquisition(capability, acquisition, loss=lost)
+            except _CleanupFailure as cleanup:
+                raise lost from cleanup.error
+            except OwnershipLost as cleanup:
+                raise lost from cleanup
+            except asyncio.CancelledError as cleanup:
                 raise lost from cleanup
             raise
-        except Exception:
+        except Exception as record_error:
             # The commit may have landed with only its answer lost. Settle that
             # against durable state: a row still active as written is ours, and
             # is closed under the fence like any recorded acquisition. Anything
@@ -1207,10 +1408,34 @@ class Walker:
                 # The answer may also have arrived late: affirm the ownership
                 # fence before any physical cleanup, or a successor that has
                 # claimed the run since would race us over this resource.
-                self._journal.heartbeat(lease, ttl_s=self._lease_ttl_s)
-                await self._close_acquired(lease, [(capability, acquisition)], "discard")
+                try:
+                    self._journal.heartbeat(lease, ttl_s=self._lease_ttl_s)
+                except Exception as observation:
+                    async def release_unenrolled(
+                        observation_error: Exception, original: Exception,
+                    ) -> None:
+                        failure = await self._relinquish_acquired(
+                            [(capability, acquisition)],
+                            loss=observation_error if isinstance(observation_error, OwnershipLost)
+                            else None,
+                        )
+                        if isinstance(observation_error, OwnershipLost):
+                            raise observation_error from failure
+                        errors = [observation_error, *([failure] if failure is not None else [])]
+                        error = _cleanup_error(errors)
+                        assert error is not None
+                        raise _CleanupFailure(error, original) from None
+
+                    await self._finish_cleanup(release_unenrolled(observation, record_error))
+                await self._close_acquired(
+                    lease, [(capability, acquisition)], "discard", node_error=record_error,
+                )
             else:
-                await self._discard_unrecorded_acquisition(capability, acquisition)
+                try:
+                    await self._discard_unrecorded_acquisition(capability, acquisition)
+                except _CleanupFailure as cleanup:
+                    cleanup.node_error = record_error
+                    raise
             raise
         return acquisition
 
@@ -1563,6 +1788,24 @@ class Walker:
                     effect_mode=effect_mode,
                     capability_mode=capability_mode,
                 )
+            except _CleanupFailure as cleanup:
+                original = cleanup.node_error
+                if original is not None and not isinstance(
+                    original, (OwnershipLost, CheckpointConflict, _CancelRequested,
+                               InvocationParked, asyncio.CancelledError),
+                ):
+                    try:
+                        self._journal.append_event(
+                            lease, "NodeFailed", path=path,
+                            payload={"error": str(original), "error_type": type(original).__name__},
+                        )
+                    except OwnershipLost as loss:
+                        raise loss from cleanup.error
+                    except Exception as diagnostic:
+                        error = _cleanup_error([cleanup.error, diagnostic])
+                        assert error is not None
+                        cleanup.error = error
+                raise
             except (OwnershipLost, CheckpointConflict, _CancelRequested):
                 raise
             except asyncio.CancelledError:
@@ -1753,28 +1996,36 @@ class Walker:
                     outputs=envelopes,
                 ),
             )
+        except _CleanupFailure as cleanup:
+            await self._close_acquired(
+                lease, acquired, "discard", lost=lost,
+                node_error=cleanup.node_error, prior_error=cleanup.error,
+                cancellation=cleanup.cancellation,
+            )
+            raise
         except OwnershipLost as loss:
-            if (failure := await self._relinquish_acquired(acquired)) is not None:
+            if (failure := await self._relinquish_acquired(acquired, loss=loss)) is not None:
                 raise loss from failure
             raise
-        except CheckpointConflict:
+        except CheckpointConflict as exc:
             # The current run lease still owns every acquisition recorded
             # before the contradiction. Discard those resources now; unlike
             # OwnershipLost, no successor owns their cleanup boundary.
-            await self._close_acquired(lease, acquired, "discard")
+            await self._close_acquired(lease, acquired, "discard", lost=lost, node_error=exc)
             raise
-        except (_CancelRequested, asyncio.CancelledError):
+        except (_CancelRequested, asyncio.CancelledError) as exc:
             if lost:
-                raise lost[0] from await self._relinquish_acquired(acquired)
-            await self._close_acquired(lease, acquired, "discard")
+                raise lost[0] from await self._relinquish_acquired(acquired, loss=lost[0])
+            await self._close_acquired(lease, acquired, "discard", lost=lost, node_error=exc)
             raise
-        except Exception:
-            await self._close_acquired(lease, acquired, "discard")
+        except Exception as exc:
+            await self._close_acquired(lease, acquired, "discard", lost=lost, node_error=exc)
             raise
         await self._close_acquired(
             lease,
             acquired,
             "discard" if capability_mode == "discard" else "release",
+            lost=lost,
         )
         return outputs
 
