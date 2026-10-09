@@ -15,6 +15,49 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #143 — proposed operator disposal of abandoned capability accounting
+
+**Merged `4f0178d1` (PR #146) on 2026-10-09 UTC from final head `a037cbc`.**
+The docs-only change adds [Proposed ADR 0022](adr/0022-operator-disposal-records-abandoned-capabilities.md)
+and records its evidence. The proposal is not accepted: only the owner may
+accept it, #143 remains open, and implementation requires a separate issue
+after acceptance and #132's merge.
+
+**What the proposal says.** An ADMIN-only, idempotent command could abandon
+accounting for a bounded batch of exact active `(lease_id, acquisition_epoch)`
+rows on a RUNNING run with NULL journal ownership. A co-located transaction
+would recheck the run/row fence, move only the named rows to `lost` with no
+disposition, and record the canonical transitions and a positively sealed
+receipt. Existing `runs_resume` supplies the retry path; disposal would not
+cancel, resume, or terminalize the run. Receipt-backed `lost` means only that
+the cleanup obligation was administratively abandoned. It does not prove
+process death, physical cleanup, lock release, candidate disposal, or store
+reuse. Historical opaque `lost` facts retain unknown cause.
+
+**Corrections worth carrying.**
+- The draft's public request/plan hashes created a reason-guessing privacy
+  oracle. The connector finding was reproduced with a credential-free
+  synthetic candidate check. The final proposal keeps reason-bearing bindings
+  private; run-readable audit, accounting, result, and receipt-reference bytes
+  (including reference hashes) derive only from public data. Private replay
+  binding remains. This is hash-oracle evidence, not an implemented command or
+  an executed public-surface privacy proof.
+- `runs_resume` already supports RUNNING with no live owner; a new retry command
+  is not proposed. The obstruction described by #132 is stale-lease
+  reconciliation before the walker's first control check, not lack of a resume
+  route.
+
+**What this slice does NOT establish.**
+- Owner acceptance, implementation, or any changed runtime behavior.
+- The proposed crash/race, SQLite, migration, result-surface or accepting-path
+  privacy proofs; those remain future obligations.
+- Physical quiescence, successful cleanup, or permission for host/vendor work.
+
+See the [M8 implementation record](plans/handoffs/M8-implementation-record.md),
+under "#143 — proposed operator disposal of unreconcilable capability accounting".
+
+---
+
 ## N5 Stage 4 — WRITE qualification planning draft
 
 **Merged `13921e25` (PR #144) on 2026-10-09 UTC from head `7f30d77`.** The
