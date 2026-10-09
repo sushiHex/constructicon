@@ -277,6 +277,18 @@ jobs:
             M8_OPERATOR_STORE_ROOT=/var/lib/constructicon-m8-launch/operator-stores \
             M8_HOST_ASSEMBLY_REQUIRED=1 \
             "$PWD/.venv/bin/python" scripts/check_m8_n5_host_mutations.py
+      - name: Rehearse the Stage 3 READ session without a login
+        if: matrix.lane == 'foundation'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The runbook's own T2 to T6 blocks, as the runner with sudo, over the
+          # N3a fixture under a synthetic g4 and a logged-out credential: the
+          # startup gate must refuse at account/read, before turn/start, with no
+          # connection. Nothing after account/read can be rehearsed here.
+          M8_READ_REHEARSAL_REQUIRED=1 "$PWD/.venv/bin/python" -m pytest \
+            tests/test_m8_n5_read_rehearsal.py \
+            -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
       - name: Prove the host plans the package CI installed
         if: matrix.lane == 'foundation'
         shell: bash

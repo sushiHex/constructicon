@@ -221,3 +221,33 @@ the parser requires the record for, and only for, the read stage.
   - two unjustified mutant exemptions.
 
   All are fixed.
+
+## The rehearsal
+
+`tests/test_m8_n5_read_rehearsal.py` runs the session's own T2 to T6 blocks on
+the provisioned foundation lane:
+- **Inputs:** the production entry, assembly and reader, and the real vendor
+  on the base runtime. The CI store fixture runs under a synthetic g4, whose
+  revisions are a passing S6a record's digest `Q`, and a logged-out `{}`
+  credential.
+- **What it pins:** each link of the refusal, not only its end:
+  - the run fails and T5 reads `not-dispatched`;
+  - the refusal is exactly `account/read`'s error, and the relay counts no
+    connection;
+  - the vendor exits cleanly, and nothing after the gate was observed;
+  - the identities name `Q` and the fixture's binding;
+  - a second run, with or without its journal, leaves the record unchanged;
+  - T6 retries under entirely new names.
+- **What it cannot rehearse:** anything after `account/read`. The spend
+  readback, `thread/start`, the intent, `turn/start` and a real answer run
+  first on the host.
+
+**The store never reads `Q`, by design.** S3-2's "store identity" is the
+sealed `NativeOperatorStoreIdentityV1` the assembly reads. The descriptor
+proves which provisioned slot was bound, not that authentication succeeded
+(ADR 0021:160-163), and `activate` treats the sealed identity as trusted
+operator input. `Q` binds where it matters: the capability revision folds it
+in, the authorization pins that revision, and the provider refuses a mismatch.
+That is why a synthetic g4 over the fixture can stand in for the host's real
+one. Recording `Q` in the descriptor would be new durable authority, so it is
+not part of N5.

@@ -3876,3 +3876,21 @@ The operator runbook described only the N4 session, so N5 Stage 2 had no runnabl
 ### N5 Stage 3, part B: the read stage and its session
 
 The `qualification-read` authorization pins the READ grants, an attempt record and one epoch. `attempt_record.py` is the owner's one durable artifact per authorization (decision S3-1): reserved exclusively at `acquire`, so no later acquisition, even after a journal reset, can dispatch; its intent is written, with expiry checked on both sides, as the conversation's last word before `turn/start`; and its outcome is classified from facts, `not dispatched` only if the write of `turn/start` never began. The record holds Stage 3's evidence list, bounded and never text, including what a refused turn observed and why it was refused. A read authorization's handle dispatches; a clean result salvaged from a failed exchange is now refused for every handle (a pre-existing gap). The fixed read graph carries its task literal inside the node (S3-3), and `mint --stage` pins the read stage. `M8-N5-read-session.md` is the session (T0 to T6): T5 passes only a succeeded run with a completed record, and T6 may spend N5's one more attempt (READ and WRITE together), only after a diagnosed local failure with nothing dispatched, under entirely new names. Proven portably over the scripted client, the entry end to end and the runbook's own programs; twenty-four mutants in the lifecycle lane. Astra's review (job_18dce68827b2) found nine defects, eight introduced and one pre-existing; all are fixed. `codex.py` is frozen from here until Stage 3 completes (decision S3-4).
+
+### N5 Stage 3: the READ session rehearsed on CI
+
+`tests/test_m8_n5_read_rehearsal.py` (foundation lane, new step) runs
+`M8-N5-read-session.md`'s own T2 to T6 blocks, composed with HS's common file
+and one CI override (OC's `PY` as this checkout's interpreter under the same
+isolated `runpy` entry, and the fixture's store key).
+
+It runs over the N3a fixture under a synthetic g4 whose revisions are a
+passing record's digest, with the credential swapped to `{}` and restored.
+It pins every link of the refusal: the exact `account/read` fault, zero relay
+connections, a clean vendor exit on the base runtime, and no observation after
+the gate. A second run with or without its journal leaves the record
+unchanged, and T6 runs under new names.
+
+Fable's design review (job_08bb94033cdd) held that the store's silence about
+`Q` is designed (ADR 0021:160-163), not a defect, and that #132 and the
+control-denial narrowing land after Stage 3 (job_5067d4ce7dad).

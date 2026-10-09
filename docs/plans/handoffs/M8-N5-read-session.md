@@ -11,7 +11,10 @@ It runs on the host Stage 2 left (`M8-N5-host-session.md`, HS):
   `W`.
 
 It reuses HS's common file and OC's functions (`M8-N4-operator-commands.md`)
-rather than copying them. The code it runs is `constructicon.api.qualification`
+rather than copying them. CI runs T2 to T6 as written, logged out, on the
+provisioned foundation lane (`tests/test_m8_n5_read_rehearsal.py`): the gate
+must refuse at `account/read` with no connection. Nothing after `account/read`
+is rehearsed; it runs first here. The code it runs is `constructicon.api.qualification`
 at `C` (M8-N5-stage3-read.md).
 
 ## How to run
