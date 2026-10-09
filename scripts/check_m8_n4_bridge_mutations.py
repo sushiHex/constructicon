@@ -204,9 +204,23 @@ MUTANTS = (
     (
         "N4-L5 any denial in a clean lane is a fault",
         LANE + "run_startup",
-        "if bool(launched.denied) != expect_denial:",
-        "if False:",
+        "elif launched.denied:",
+        "elif False:",
         T + "test_any_denial_in_a_clean_startup_is_a_fault",
+    ),
+    (
+        "N4-L5a a control requires a destination denial",
+        LANE + "run_startup",
+        'if launched.denied.get("denied:destination", 0) == 0:',
+        "if False:",
+        T + "test_control_denial_requires_destination_and_names_other_denials",
+    ),
+    (
+        "N4-L5b a control reports undeclared denial kinds",
+        LANE + "run_startup",
+        "if unexpected_denials:",
+        "if False:",
+        T + "test_control_destination_denial_also_reports_undeclared_kinds",
     ),
     (
         "N4-L6 a measured refresh needs the credential write",

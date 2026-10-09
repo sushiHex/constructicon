@@ -414,17 +414,53 @@ async def test_any_denial_in_a_clean_startup_is_a_fault(tmp_path):
     assert DENIAL_FAULT in evidence["faults"]
 
 
-@pytest.mark.parametrize("denied", [True, False])
-async def test_a_declared_control_denial_must_occur(tmp_path, denied):
-    def deny(lane):
-        if denied:
-            FakeRelay.instances[-1].observed["denied:destination"] += 1
+async def test_eof_denials_in_a_clean_startup_keep_the_clean_denial_fault(tmp_path):
+    def deny_eof(lane):
+        FakeRelay.instances[-1].observed["denied:eof"] += 5
 
-    _, evidence = await startup(tmp_path, startup_native(), during=deny, expect_denial=True)
-    if denied:
-        assert DENIAL_FAULT not in evidence["faults"]
-    else:
-        assert "the declared control denial did not occur" in evidence["faults"]
+    _, evidence = await startup(tmp_path, startup_native(), during=deny_eof)
+    assert DENIAL_FAULT in evidence["faults"]
+
+
+async def test_control_denial_requires_destination_and_names_other_denials(tmp_path):
+    def deny_eof(lane):
+        FakeRelay.instances[-1].observed["denied:eof"] += 5
+
+    _, evidence = await startup(
+        tmp_path, startup_native(), during=deny_eof, expect_denial=True,
+    )
+    assert "the declared control denial did not occur" in evidence["faults"]
+    assert "the control had undeclared relay denial kinds: eof" in evidence["faults"]
+    assert DENIAL_FAULT not in evidence["faults"]
+
+
+async def test_a_declared_control_denial_must_occur(tmp_path):
+    _, evidence = await startup(tmp_path, startup_native(), expect_denial=True)
+    assert "the declared control denial did not occur" in evidence["faults"]
+
+
+async def test_destination_only_control_denial_is_accepted(tmp_path):
+    def deny_destination(lane):
+        FakeRelay.instances[-1].observed["denied:destination"] += 1
+
+    _, evidence = await startup(
+        tmp_path, startup_native(), during=deny_destination, expect_denial=True,
+    )
+    assert evidence["faults"] == []
+
+
+async def test_control_destination_denial_also_reports_undeclared_kinds(tmp_path):
+    def deny_mixed(lane):
+        observed = FakeRelay.instances[-1].observed
+        observed["denied:destination"] += 1
+        observed["denied:eof"] += 5
+
+    _, evidence = await startup(
+        tmp_path, startup_native(), during=deny_mixed, expect_denial=True,
+    )
+    assert evidence["faults"] == [
+        "the control had undeclared relay denial kinds: eof",
+    ]
 
 
 async def test_an_undeclared_plan_is_a_fault_and_is_not_recorded_as_the_plan(tmp_path):

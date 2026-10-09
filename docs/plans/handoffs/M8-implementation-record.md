@@ -4090,3 +4090,17 @@ completion with cleanup failure then stays RUNNING/owner NULL. After disposal,
 ordinary resume still can fail on unnamed active rows or a retained physical
 guard; cancellation and checkpoint/output behavior keep their existing laws.
 The proposal adds no Stage 4 prerequisite and authorizes no host or vendor work.
+
+### #142 — destination denials are the declared startup control
+
+`codex_lane.run_startup` now requires `denied:destination` when
+`expect_denial=True`, and reports any additional denial kinds by name as an
+itemized fault. A control with five EOF denials and no destination denial
+therefore reports both the missing declared denial and `eof`; a destination-only
+control passes. Clean runs retain `DENIAL_FAULT` for any denial. Portable fake
+tests cover the empty control, the EOF-only and mixed controls, destination-only
+acceptance, and clean EOF behavior. The N4-L5 bridge inventory is re-anchored
+to the clean-lane branch and has one assertion-killed mutant for each new
+control guard. Windows portable tests passed; Linux bridge inventory evidence
+remains for CI. This does not qualify the vendor or run Stages 2 or 3; the owner
+gate remains closed.
