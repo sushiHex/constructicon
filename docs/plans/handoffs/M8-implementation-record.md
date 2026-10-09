@@ -4064,8 +4064,21 @@ partial. Real SQLite tests replace the unnecessary full journal double. Invalid
 input refuses before command claim; observational refusals itemize the complete
 bounded batch. A queued submitted resume can lose its attempt fence before
 claim and still be followed by ordinary recovery. Private reason text is in
-both request and plan; no extra public reason digest is proposed. All this
-remains future implementation/proof, not new executed behavior evidence.
+both request and plan. The connector review of `5767164`
+([comment 4227634594](https://github.com/sushiHex/constructicon/pull/146#discussion_r4227634594))
+found an introduced privacy oracle in the draft's public request/plan digests.
+Source inspection confirms the request hash is deterministic; an executed
+credential-free synthetic three-candidate check recovered the actual reason.
+That is hash-oracle evidence, not disposal implementation or public-surface
+proof. The corrected proposal keeps reason-bearing hashes in the private
+command/event relationship. All run-readable audit, accounting, result and
+receipt-reference bytes, including reference content hashes, derive only from
+public records. Private binding/replay integrity and actor-or-ADMIN command
+detail authority remain unchanged. Accepting READ-only recursive field walks
+and indistinguishable public records for different private reasons are future
+proof obligations. This corrects cross-review disposition 9's insufficient
+removal of only a dedicated reason digest; no additional Claude review is
+claimed. All proposed behavior remains future implementation/proof.
 
 The source-backed correction is that `runs_resume` already reaches RUNNING with
 no live owner and clears same-host deferral. No new retry command is proposed.

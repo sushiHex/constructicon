@@ -135,17 +135,25 @@ If the fence still agrees, that transaction:
 2. Moves all named rows to `lost`/`None` and emits one existing canonical
    `LeaseTransition` per row, with its exact old state, identity, observed time,
    and the existing `legacy_base_hash` only when that row has a legacy seal.
-3. Appends one new typed `CapabilityDisposalRecorded` audit event, binding the
-   command id, request/plan digests, run fence before and after, named row
-   baseline hashes and exact transition sequences. The request and plan
-   digests bind the reason; its text stays in the private request and plan.
+3. Appends one new typed public `CapabilityDisposalRecorded` audit event,
+   binding the command id, run fence before and after, named row baseline
+   hashes and exact transition sequences. Its payload contains neither reason
+   text nor a digest of reason-bearing request, plan, or private proof data.
+   Row baseline hashes cover acquisition facts, not the disposal reason.
    This event is the immutable domain receipt, not an `EffectReceipt`: no
    external effect was performed.
-4. Co-seals one `capability_disposal` command/event relationship over immutable
-   command identity/actor/request facts, typed plan, audit event, and ordered
-   transitions. The live command owner/epoch fence is checked at application;
+4. Privately co-seals one `capability_disposal` command/event relationship over
+   immutable command identity/actor/request facts, typed plan, audit event,
+   and ordered transitions. The live command owner/epoch fence is checked at
+   application;
    an application claim epoch may be recorded as a historical fact but is not
    a requirement that later command ownership remain unchanged.
+
+The private relationship retains canonical request/plan digests and verifies
+their complete reason-bearing contents. Public projections are serialized from
+the validated public record, not from a private payload with fields hidden only
+after hashing. A public receipt or accounting `DetailRef` content hash therefore
+binds only its public bytes. No new cryptographic mechanism is required.
 
 Use the existing journal transaction, event insertion, and positive-seal
 machinery. Administrative event-sequence allocation must compare the planned
@@ -295,12 +303,17 @@ cannot establish its position in arbitrary earlier event history. New runs
 have full history from floor zero. Detail validates disposal relationships and
 old witnesses and never reads mutable current rows as the state of an older
 cut. Public detail authorization is the existing run-read
-scope. Keep the free-text reason and actor's private command detail behind the
-existing command actor-or-ADMIN authorization; public audit events and
-accounting detail expose the disposal event id and existing plan/request
-digests, not private reason text, a separate public reason digest, or the
-actor's private command record. Event
-summary/detail reads therefore need no weaker or special authorization path.
+scope. Keep the reason-bearing request, plan, their digests, private relationship
+seal, and actor's private command detail behind the existing command
+actor-or-ADMIN authorization. Public audit and accounting records expose the
+disposal event id and public receipt references, not reason text or any digest
+of reason-bearing data. This law covers every run-readable surface: event
+summaries/pages and direct event detail, result summary/detail references,
+accounting chunks, and per-pair refusal receipt references. A public reference
+must resolve only the public record; it cannot hash private contents and then
+return a redacted rendering. Validate the private relationship before rendering
+the public record, but never forward its payload or digests through a generic
+event renderer. Existing actor-or-ADMIN command detail authority is unchanged.
 
 The current old projection is a live query, not a durably stored command
 response. Its compatibility fixtures retain the unversioned shape; absence of
@@ -405,6 +418,15 @@ acceptance and refusal and assertion-only mutation evidence:
   opaque lost facts, event/command/detail authorization, and MCP's single
   delegation receive explicit compatibility and secret-free accepting-path
   tests.
+- An accepting ADMIN disposal followed by READ-only recursive field walks of
+  every public surface above exposes no reason-bearing payload or digest.
+  Isolated fixtures with identical public command/event facts and different
+  reasons produce identical public records and reference hashes; candidate
+  reason enumeration cannot distinguish them. Their private request/plan
+  bindings differ and still validate exact replay and fail on tampering. Test
+  direct references and bounded/chunked paths, not only summary redaction;
+  actor-or-ADMIN private command detail remains available under its existing
+  authority. These are future proofs, not executed implementation evidence.
 
 ## Independent review dispositions
 
@@ -426,7 +448,20 @@ corrections, not executed proof of the proposed implementation.
 | 6. Introduced: malformed requests incorrectly treated as durable refusals; batch diagnostics underspecified. | Adopted. `_begin_command` refuses malformed key/JSON before claiming. Distinguish input from observational refusal and itemize every named pair within the request bound. |
 | 7. Introduced: queued resume supersession stated too strongly. | Adopted. `_fill_capacity` drops stale event-fenced intents before ordinary recovery; an already-submitted command is not thereby rejected. Require the deterministic queued-before-claim race test. |
 | 8. Pre-existing: separately read and truncated result fields. | Adopted scope clarification. `_ControlQueries.runs_result` caps events/failures. V2 must expose partial failure preview; coherent-read promise covers only status/accounting. This slice fixes no current query implementation. |
-| 9. Introduced: reason described as plan-only and extra public reason digest. | Adopted. The canonical request also retains reason text; keep both private. Existing request/plan digests already bind it, so omit a separate reason digest. |
+| 9. Introduced: reason described as plan-only and extra public reason digest. | Adopted, then corrected by the connector finding below. The request and plan both retain reason text privately. Removing only the dedicated reason digest was insufficient: their canonical digests must also stay private. |
+
+The exact-head connector review of `5767164` found an introduced privacy
+oracle ([comment 4227634594](https://github.com/sushiHex/constructicon/pull/146#discussion_r4227634594)).
+The source check confirms `command_request_hash` deterministically hashes the
+canonical request independently of its idempotency key. An executed
+credential-free synthetic check compared three candidate reasons against one
+such digest and matched exactly the actual reason. This demonstrates the hash
+oracle, not an implemented disposal command or an executed public-surface test.
+Adopted: keep all reason-bearing hashes in the private relationship and derive
+public audit/accounting/reference bytes only from public records. The
+accepting-path field-walk and candidate-enumeration proofs above remain future
+implementation requirements. No additional independent Claude review is
+claimed.
 
 No finding was rejected. The proposal remains Proposed after these changes;
 owner acceptance and separate implementation authority remain outstanding.
