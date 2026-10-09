@@ -12,6 +12,7 @@ CORE = "tests/core/test_executor_policy.py::"
 API = "tests/api/test_executor_admission.py::"
 LIFECYCLE = "tests/runtime/test_materialization.py::"
 CONTROL = "tests/runtime/test_materialization_control.py::"
+CLEANUP = "tests/runtime/test_cleanup_obligations.py::"
 MANIFEST = "scripts.regen_plan_manifest:main"
 PLAN_TESTS = "tests/test_regen_plan_manifest.py::"
 
@@ -287,6 +288,172 @@ MUTANTS = (
         'if git("ls-files", "--unmerged", "--", "docs/plans/MANIFEST.sha256"):',
         "if False:",
         PLAN_TESTS + "test_refuses_manifest_index_conflict_without_markers[other]",
+    ),
+    (
+        "every terminal status accounts for active cleanup",
+        "constructicon.substrate.journal._sqlite_execution:_SqliteExecutionMixin.transition_run",
+        "if target in TERMINAL_STATUS_EVENTS:", "if False:",
+        CLEANUP + "test_active_rows_refuse_every_terminal_transition",
+    ),
+    (
+        "an active acquisition refuses terminalization",
+        "constructicon.substrate.journal._sqlite_execution:_SqliteExecutionMixin.transition_run",
+        "if active:", "if False:",
+        CLEANUP + "test_active_rows_refuse_every_terminal_transition",
+    ),
+    (
+        "cleanup guard uses the canonical lease selector",
+        "constructicon.substrate.journal._sqlite_execution:_SqliteExecutionMixin.transition_run",
+        "rows = _capability_lease_rows(conn, run_id=lease.run_id)",
+        'rows = conn.execute("SELECT * FROM capability_leases WHERE run_id = ?", '
+        '(lease.run_id,)).fetchall()',
+        CLEANUP + "test_terminal_cleanup_guard_preserves_ownership_and_projection_fences",
+    ),
+    (
+        "provider failure does not stop sibling cleanup",
+        "constructicon.runtime.walker:Walker._close_acquired",
+        "errors.append(exc)", "raise _CleanupFailure(exc, node_error)",
+        CLEANUP + "test_failed_close_escapes_its_site_and_releases_every_sibling",
+    ),
+    (
+        "a failed close relinquishes its local custody",
+        "constructicon.runtime.walker:Walker._close_acquired",
+        "[(capability, acquisition)], loss=lost[0] if lost else None,",
+        "[], loss=lost[0] if lost else None,",
+        CLEANUP + "test_failed_close_escapes_its_site_and_releases_every_sibling",
+    ),
+    (
+        "failed close observes a successor before another physical close",
+        "constructicon.runtime.walker:Walker._close_acquired",
+        "self._journal.heartbeat(lease, ttl_s=self._lease_ttl_s)", "None",
+        CLEANUP + "test_failed_close_observes_ownership_before_any_later_close[fenced]",
+    ),
+    (
+        "settle ownership observation failure releases unenrolled custody",
+        "constructicon.runtime.walker:Walker._acquire_invocation_capability",
+        "[(capability, acquisition)],\n"
+        "                        loss=observation_error",
+        "[],\n                        loss=observation_error",
+        CLEANUP + "test_settle_heartbeat_failure_releases_unenrolled_custody",
+    ),
+    (
+        "shared close and relinquish errors appear once",
+        "constructicon.runtime.walker:_cleanup_error",
+        "elif id(error) not in seen:", "else:",
+        CLEANUP + "test_shared_release_errors_are_deduplicated_without_walking_context",
+    ),
+    (
+        "original invocation failure is carried explicitly",
+        "constructicon.runtime.walker:Walker._execute_or_restore",
+        "original = cleanup.node_error", "original = None",
+        CLEANUP + "test_failed_close_escapes_its_site_and_releases_every_sibling[node-failed]",
+    ),
+    (
+        "cancellation observed during cleanup remains an explicit fact",
+        "constructicon.runtime.walker:Walker._finish_cleanup",
+        "cleanup.cancellation = cancellation", "pass",
+        CLEANUP + "test_failed_close_preserves_explicit_cancellation_intent[checkpointed-cancel]",
+    ),
+    (
+        "cleanup failure still records user cancellation durably",
+        "constructicon.runtime.walker:Walker._finish_run",
+        'if cancellation == "cancel" and cancelled is not None and loss is None:', "if False:",
+        CLEANUP + "test_failed_close_preserves_explicit_cancellation_intent[invoking-cancel]",
+    ),
+    (
+        "abandonment never invents user cancellation",
+        "constructicon.runtime.walker:Walker._finish_run",
+        'cancellation == "cancel" and cancelled is not None and loss is None',
+        "cancelled is not None and loss is None",
+        CLEANUP + "test_failed_close_preserves_explicit_cancellation_intent[checkpointed-abandon]",
+    ),
+    (
+        "ordinary shutdown failures still release run ownership",
+        "constructicon.runtime.walker:Walker._finish_run",
+        "self._release_quietly(lease)", "None",
+        CLEANUP + "test_failed_cancel_request_still_stops_heartbeat_and_releases",
+    ),
+    (
+        "a failed cancellation request still stops its heartbeat",
+        "constructicon.runtime.walker:Walker._finish_run",
+        "await self._stop_heartbeat(heartbeat)", "None",
+        CLEANUP + "test_failed_cancel_request_still_stops_heartbeat_and_releases",
+    ),
+    (
+        "background heartbeat failure cannot replace ownership loss",
+        "constructicon.runtime.walker:Walker._finish_run",
+        "if loss is not None:", "if False:",
+        CLEANUP + "test_background_heartbeat_failure_releases_without_replacing_loss"
+        "[ownership-lost]",
+    ),
+    (
+        "cleanup errors bypass node-failure containment",
+        "constructicon.runtime.walker:Walker._execute_or_restore",
+        "except _CleanupFailure as cleanup:", "except _CancelRequested as cleanup:",
+        CLEANUP + "test_failed_close_escapes_its_site_and_releases_every_sibling[checkpointed]",
+    ),
+    (
+        "unknown ownership releases remaining custody without another close",
+        "constructicon.runtime.walker:Walker._close_acquired",
+        "except Exception as observation:", "except ContractViolation as observation:",
+        CLEANUP + "test_failed_close_observes_ownership_before_any_later_close[failed]",
+    ),
+    (
+        "grouped hard death retains crash semantics",
+        "constructicon.runtime.walker:_is_hard_death",
+        "return not isinstance(error, (Exception, asyncio.CancelledError))", "return False",
+        CLEANUP + "test_hard_death_during_close_retains_crash_semantics[grouped]",
+    ),
+    (
+        "unrecorded ownership loss relinquishes eager custody",
+        "constructicon.runtime.walker:Walker._discard_unrecorded_acquisition",
+        "[(capability, acquisition)], loss=loss or close_loss,",
+        "[], loss=loss or close_loss,",
+        CLEANUP + "test_unrecorded_close_loss_relinquishes_eager_custody",
+    ),
+    (
+        "unrecorded release retains observed task cancellation",
+        "constructicon.runtime.walker:Walker._discard_unrecorded_acquisition",
+        "await Walker._finish_cleanup(discard())", "await discard()",
+        CLEANUP + "test_unenrolled_release_retains_observed_cancellation[cancel-unrecorded]",
+    ),
+    (
+        "settled unenrolled release retains observed task cancellation",
+        "constructicon.runtime.walker:Walker._acquire_invocation_capability",
+        "await self._finish_cleanup(release_unenrolled(observation, record_error))",
+        "await release_unenrolled(observation, record_error)",
+        CLEANUP + "test_unenrolled_release_retains_observed_cancellation[cancel-settled]",
+    ),
+    (
+        "unrecorded cleanup cannot replace the original ownership loss",
+        "constructicon.runtime.walker:Walker._acquire_invocation_capability",
+        "except OwnershipLost as cleanup:", "except CheckpointConflict as cleanup:",
+        CLEANUP + "test_unrecorded_close_loss_relinquishes_eager_custody[record-lost]",
+    ),
+    (
+        "failed diagnostics cannot erase cleanup or cancellation facts",
+        "constructicon.runtime.walker:Walker._execute_or_restore",
+        "except Exception as diagnostic:", "except CheckpointConflict as diagnostic:",
+        CLEANUP + "test_failed_node_diagnostic_preserves_cleanup_failure_and_cancellation[error]",
+    ),
+    (
+        "ownership loss while recording diagnostics remains primary",
+        "constructicon.runtime.walker:Walker._execute_or_restore",
+        "except OwnershipLost as loss:", "except CheckpointConflict as loss:",
+        CLEANUP + "test_failed_node_diagnostic_preserves_cleanup_failure_and_cancellation[lost]",
+    ),
+    (
+        "normal relinquishment preserves hard death instead of releasing ownership",
+        "constructicon.runtime.walker:Walker._relinquish_acquired",
+        "if loss is None and _is_hard_death(exc):", "if False:",
+        CLEANUP + "test_relinquishment_hard_death_preserves_the_known_loss_boundary"
+        "[normal-grouped]",
+    ),
+    (
+        "known ownership loss remains primary over relinquishment hard death",
+        "constructicon.runtime.walker:Walker._relinquish_acquired",
+        "loss is None and _is_hard_death(exc)", "_is_hard_death(exc)",
+        CLEANUP + "test_relinquishment_hard_death_preserves_the_known_loss_boundary[lost-grouped]",
     ),
 )
 

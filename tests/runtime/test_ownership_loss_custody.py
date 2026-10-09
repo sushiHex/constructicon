@@ -86,12 +86,15 @@ class RetainingProvider(FakeExecutorProvider):
         self.before_relinquish: Hook | None = None
         self.closes: list[str] = []
         self.relinquished: list[str] = []
+        self.acquisitions: list[AcquiredCapability] = []
 
     async def acquire(self, context: LeaseContext) -> AcquiredCapability:
         acquisition = await super().acquire(context)
         handle = RetainingHandle(self, context, acquisition.acquisition_id)
         self.handles[-1] = handle
-        return replace(acquisition, resource=handle, materialize=handle.materialize)
+        retained = replace(acquisition, resource=handle, materialize=handle.materialize)
+        self.acquisitions.append(retained)
+        return retained
 
     async def close(
         self, acquisition: AcquiredCapability, disposition: Disposition

@@ -28,7 +28,9 @@ from constructicon.core.identity import Digest, canonical_json, parse_json_value
 from constructicon.core.journal import Checkpoint, JournalEvent
 from constructicon.core.manifest import CapabilityLease
 from constructicon.core.run import (
+    TERMINAL_STATUS_EVENTS,
     CheckpointConflict,
+    CleanupUnresolved,
     OwnershipLost,
     RunAttemptSuperseded,
     RunLease,
@@ -356,6 +358,19 @@ class _SqliteExecutionMixin:
     ) -> None:
         with self._txn() as conn:
             seq = self._allocate_seq(conn, lease, expected_statuses=expected)
+            if target in TERMINAL_STATUS_EVENTS:
+                rows = _capability_lease_rows(conn, run_id=lease.run_id)
+                active = [
+                    row for raw in rows
+                    if (row := _capability_lease_from_row(
+                        raw, connection=conn, expected_run_id=lease.run_id,
+                    )).state == "active"
+                ]
+                if active:
+                    raise CleanupUnresolved(
+                        f"run {lease.run_id!r}: {len(active)} active acquisitions"
+                        f" prevent transition to {target.value!r}"
+                    )
             placeholders = ", ".join("?" for _ in expected)
             cur = conn.execute(
                 f"UPDATE runs SET status = ? WHERE run_id = ? AND status IN ({placeholders})",

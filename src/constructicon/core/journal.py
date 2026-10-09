@@ -102,7 +102,9 @@ class Journal(Protocol):
         target: RunStatus,
         event_kind: str,
         payload: dict[str, Any] | None = None,
-    ) -> None: ...
+    ) -> None:
+        """Fenced transition; terminal targets refuse active rows with CleanupUnresolved."""
+        ...
 
     def append_event(
         self,

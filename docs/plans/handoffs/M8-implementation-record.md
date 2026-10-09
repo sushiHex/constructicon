@@ -4090,3 +4090,58 @@ completion with cleanup failure then stays RUNNING/owner NULL. After disposal,
 ordinary resume still can fail on unnamed active rows or a retained physical
 guard; cancellation and checkpoint/output behavior keep their existing laws.
 The proposal adds no Stage 4 prerequisite and authorizes no host or vendor work.
+
+### Issue #132: cleanup obligations survive a failed close
+
+The owner's final [October 8 design](https://github.com/sushiHex/constructicon/issues/132#issuecomment-6071188359)
+and [October 9 handoff](https://github.com/sushiHex/constructicon/issues/132#issuecomment-6072723429)
+authorize construction and review on a draft PR. Merge remains blocked until
+the owner records Stage 3's T5 verdict and confirms no T6 retry will run on
+#78. Stage 2 and the owner-attended Stage 3 have not run in this wave.
+
+Future journal transitions to SUCCEEDED, FAILED, CANCELLED or PARKED refuse
+active capability acquisitions with the L0 `CleanupUnresolved` error. The
+check uses canonical lease projections in the existing fenced transaction;
+refusal changes neither status nor event sequence. The walker's normal exit
+releases ownership, leaving unresolved RUNNING rows recoverable. No schema,
+run status, durable cleanup ledger or migration is added.
+
+Cleanup failures bypass invocation failure containment through a private
+site-specific carrier and escape as their actual errors. It carries the
+original invocation/setup error and observed task cancellation explicitly;
+it never walks arbitrary exception context. A failed close after a completed
+checkpoint does not invent NodeFailed. Close attempts later siblings while
+ownership is affirmed, relinquishes failed-close custody, and hands remaining
+custody over when ownership is lost or cannot be observed. A settled committed
+row whose heartbeat check fails also relinquishes its still-unenrolled handle.
+Repeated results of a shared local-release task are deduplicated by exception
+identity, including known exception-group leaves.
+
+Normal shutdown joins the heartbeat and attempts ownership release after
+ordinary errors. Cancel mode records observed task cancellation durably even
+when cleanup failure replaces cancellation; abandonment invents none. Normal
+cleanup hard death keeps the ownership lease and active rows for crash recovery,
+including known exception groups. Relinquishment receives an explicit known-loss
+fact: that loss stays primary while all siblings are joined, as before this repair.
+Diagnostic-write failure retains the cleanup error and cancellation facts;
+diagnostic ownership loss remains primary, and diagnostic hard death escapes.
+
+The first portable regression run on unchanged production code produced nine
+assertion failures and one passing abandonment case. The tests exercise real
+SQLite journals and the existing retained-custody and delayed-close doubles.
+The final portable focused batch passed 122 tests across cleanup obligations,
+retained custody, materialization control, leases, materialization and inventory
+checks. Ruff passed for source, tests and both touched inventory scripts; strict
+mypy passed all 110 source files. All twelve portable walker/custody/settlement
+cases in the native-recovery inventory were assertion-killed, with its newly
+redundant latched-loss target reanchored to the shared close batch and its
+settlement outcome asserted affirmatively. The complete M8 inventory assertion-
+killed all 64 mutants, including 26 new cleanup guard cases and all 38 retained
+cases. No vendor binary ran locally and no Constructicon model request ran.
+These checks do not claim the full gate, native CI binary proofs or owner stages.
+
+Limits: retained terminal runs with active rows are not repaired. An
+unrecorded failed cleanup with no row cannot gain a durable recovery obligation
+from this guard. Persistent reconciliation failure remains the Proposed ADR
+in #143. The frozen Stage 3 T5 wording and adapter/protocol bytes are preserved;
+the eventual PR records the runbook's changed failure behavior instead.
