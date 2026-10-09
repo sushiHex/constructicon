@@ -9,9 +9,10 @@ Paths are canonical Markdown paths relative to `docs/plans/`. A named path is
 does not approve editing a frozen plan: that remains governed by AGENTS.md.
 Every unnamed entry must be present with its committed HEAD digest, and its
 staged bytes must match that digest. Every staged new document must be named.
-Refusals write nothing. Manifest conflicts and staged document conflicts must
-be resolved explicitly before running this tool. Deletion and renaming
-are not supported: removing a manifest line cannot bypass these checks.
+Refusals write nothing. Textual or Git-index manifest conflicts and staged
+document conflicts must be resolved explicitly before running this tool.
+Deletion and renaming are not supported: removing a manifest line cannot bypass
+these checks.
 tests/test_m8_ci_scope.py checks the result against the working tree, so commit
 documents as LF (docs/plans/.gitattributes).
 """
@@ -80,6 +81,8 @@ def main(named: list[str]) -> int:
     try:
         if any(not plan_path(path) for path in named):
             raise ValueError("name canonical Markdown paths relative to docs/plans/")
+        if git("ls-files", "--unmerged", "--", "docs/plans/MANIFEST.sha256"):
+            raise ValueError("resolve manifest index conflicts explicitly before refresh")
         baseline = entries(git("show", "HEAD:docs/plans/MANIFEST.sha256"))
         current = entries(MANIFEST.read_bytes())
         staged = staged_documents()

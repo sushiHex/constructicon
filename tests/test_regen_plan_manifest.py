@@ -175,3 +175,74 @@ def test_refuses_unresolved_staged_document(repository: Path) -> None:
     assert result.returncode == 1
     assert b"CONFLICT" in result.stdout
     refuse(repository, ["handoffs/living.md"])
+
+
+def manifest_modify_delete_conflict(repository: Path, deleted_side: str) -> None:
+    manifest = repository / "docs/plans/MANIFEST.sha256"
+
+    def change(side: str) -> None:
+        if side == deleted_side:
+            git(repository, "rm", "--", "docs/plans/MANIFEST.sha256")
+        else:
+            manifest.write_bytes(manifest.read_bytes() + b"\n")
+            git(repository, "add", "--", "docs/plans/MANIFEST.sha256")
+        git(repository, "commit", "-qm", f"{side} manifest change")
+
+    git(repository, "checkout", "-qb", "other")
+    change("other")
+    git(repository, "checkout", "-q", "-")
+    change("ours")
+    result = subprocess.run(
+        ["git", "-C", str(repository), "merge", "--no-edit", "other"],
+        check=False, capture_output=True, stdin=subprocess.DEVNULL,
+    )
+    assert result.returncode == 1
+    assert b"CONFLICT (modify/delete)" in result.stdout
+    assert manifest.is_file()
+    assert not any(marker.encode() in manifest.read_bytes() for marker in regen.MARKERS)
+    assert git(repository, "ls-files", "--unmerged", "--", "docs/plans/MANIFEST.sha256")
+
+
+@pytest.mark.parametrize("deleted_side", ["ours", "other"])
+def test_refuses_manifest_index_conflict_without_markers(
+    repository: Path, deleted_side: str,
+) -> None:
+    manifest_modify_delete_conflict(repository, deleted_side)
+    refuse(repository, [])
+
+
+def test_accepts_manifest_after_explicit_index_resolution(repository: Path) -> None:
+    manifest_modify_delete_conflict(repository, "other")
+    git(repository, "add", "--", "docs/plans/MANIFEST.sha256")
+    assert not git(repository, "ls-files", "--unmerged", "--", "docs/plans/MANIFEST.sha256")
+    assert regen.main([]) == 0
+    assert (repository / "docs/plans/MANIFEST.sha256").read_bytes() == (
+        entry("frozen.md", b"approved bytes\n") +
+        entry("handoffs/living.md", b"living record\n")
+    )
+
+
+def test_refuses_add_add_manifest_index_conflict_after_working_bytes_resolved(
+    repository: Path,
+) -> None:
+    manifest = repository / "docs/plans/MANIFEST.sha256"
+    baseline = manifest.read_bytes()
+    git(repository, "rm", "--", "docs/plans/MANIFEST.sha256")
+    git(repository, "commit", "-qm", "Common ancestor without manifest")
+    git(repository, "checkout", "-qb", "other")
+    manifest.write_bytes(baseline + b"other addition\n")
+    git(repository, "add", "--", "docs/plans/MANIFEST.sha256")
+    git(repository, "commit", "-qm", "Other manifest addition")
+    git(repository, "checkout", "-q", "-")
+    manifest.write_bytes(baseline + b"\n")
+    git(repository, "add", "--", "docs/plans/MANIFEST.sha256")
+    git(repository, "commit", "-qm", "Our manifest addition")
+    result = subprocess.run(
+        ["git", "-C", str(repository), "merge", "--no-edit", "other"],
+        check=False, capture_output=True, stdin=subprocess.DEVNULL,
+    )
+    assert result.returncode == 1
+    assert b"CONFLICT (add/add)" in result.stdout
+    manifest.write_bytes(baseline)
+    assert git(repository, "ls-files", "--unmerged", "--", "docs/plans/MANIFEST.sha256")
+    refuse(repository, [])

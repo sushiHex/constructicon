@@ -3962,15 +3962,19 @@ and checks the complete staged Markdown inventory. Unnamed digests, missing
 committed entries, staged deletions and unnamed additions refuse before a
 write. Manifest and staged document conflicts must be explicitly resolved
 before refreshing; all standard and diff3 manifest conflict markers refuse.
+The helper also checks the manifest's unmerged Git index stages before reading
+its baseline, because modify/delete conflicts can leave marker-free working
+bytes while the index remains conflicted.
 Named new and living documents use staged blobs even if working bytes differ.
 Naming a document does not approve editing a frozen plan, and deletion or
 renaming is outside the helper's supported workflow.
 
 `tests/test_regen_plan_manifest.py` supplies real Git fixture proofs for these
 refusals, unchanged manifest bytes on refusal, no-op behavior, named staged
-updates and conflict refusal. Four new cases in the existing
+updates and conflict refusal. Five new cases in the existing
 `scripts/check_m8_mutations.py` inventory remove the committed baseline,
-complete staged inventory, omitted-entry check and conflict-marker refusal;
+complete staged inventory, omitted-entry check, conflict-marker refusal and
+unmerged-manifest-index refusal;
 they use the shared assertion-only mutation runner and existing CI job.
 At the first repair (`a7569e8`), the manifest fixtures, docs validation and
 mutation-inventory checks passed together (111 tests), and all 37 M8 mutants
@@ -3980,7 +3984,14 @@ evidence did not establish each side's inventory. The follow-up removes
 automatic manifest conflict resolution entirely; a test with each marker and
 otherwise unique valid entries isolates the marker check from other parser
 refusals for its mutation proof.
-The follow-up passed 24 manifest fixture cases and 93 docs/inventory checks
-locally (117 total); all 37 cases in the updated M8 mutation inventory were
+The first follow-up (`e5002e7`) passed 24 manifest fixture cases and 93
+docs/inventory checks locally (117 total); all 37 cases in the updated M8 mutation inventory were
 assertion-killed on Windows, including the explicit conflict-marker check.
+Its further connector review reproduced a real modify/delete conflict whose
+marker-free working manifest was accepted despite unresolved index stages.
+The index check applies to every conflict form; real Git fixtures cover both
+modify/delete directions, add/add with manually resolved working bytes, and
+acceptance after the caller stages an explicit resolution.
+The index follow-up passed 28 manifest fixture cases locally. Its fifth
+manifest guard-removal mutant was separately assertion-killed on Windows.
 No frozen plan, adapter, protocol or runtime behavior changes in this repair.

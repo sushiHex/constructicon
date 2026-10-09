@@ -281,6 +281,13 @@ MUTANTS = (
         "continue",
         PLAN_TESTS + "test_refuses_each_manifest_conflict_marker[<<<<<<<]",
     ),
+    (
+        "unmerged manifest index refuses even without textual markers",
+        MANIFEST,
+        'if git("ls-files", "--unmerged", "--", "docs/plans/MANIFEST.sha256"):',
+        "if False:",
+        PLAN_TESTS + "test_refuses_manifest_index_conflict_without_markers[other]",
+    ),
 )
 
 if __name__ == "__main__":
