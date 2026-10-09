@@ -4002,15 +4002,27 @@ No frozen plan, adapter, protocol or runtime behavior changes in this repair.
 authorization/assembly pins, the fixed writer and downstream contained gate,
 attempt accounting distinct from capture/gate qualification, owner-run smoke
 and session shape, bounded evidence and future proof requirements. Its seven
-S4 decisions are open on #78. The g4 route is conditional on unchanged frozen
-modules and sealed installed facts, existing custody checks, an authorized
-controller update and future compatibility proof; unchanged adapter bytes
-alone do not qualify a host or authorize a session.
+S4 decisions are open on #78. The recommended installed route expects the next
+generation: LR9's ordered procedure depends on LR1's fresh boot. Conditional
+g4 reuse needs a separately reviewed owner-approved no-reboot controller and
+quiescence procedure as well as sealed-fact equality and compatibility proof;
+this draft supplies none. Unchanged adapter bytes alone do not qualify a host.
 
 Status: Review draft: S4 decisions open on #78; authorizes nothing.
 This entry records a planning draft, not implementation or executed proof.
 The owner has not run Stage 2/3 in this planning session. Stage 4 implementation
 remains gated on owner-declared Stage 3 completion, S4 decisions and #132's
 merged cleanup outcome. No code, host action, model request, qualification,
-production availability or owner decision is established here. Independent
-cross-review and documentation checks remain to be recorded before ready.
+production availability or owner decision is established here.
+
+Independent Claude review `job_ce5e2115ccef` (actual selected model
+`claude-opus-5-5`) found two introduced planning blockers: the existing
+controller route cannot preserve g4, and WRITE root grants/observation limits
+and checkpoint-only recovery needed explicit treatment. Both were reproduced
+against source and adopted, with refinements to phase bounds, base/tree proof,
+acquisition ordering, smoke isolation and authorization compatibility/scope.
+Its proposed narrower freeze was rejected because the wave brief freezes both
+modules; the S3-4 citation was corrected to acknowledge its narrower text.
+Reviewer uncertainty about issue state was not treated as evidence; the owner's
+confirmation that Stage 2/3 are unrun remains the host status. The plan's proof
+requirements remain future work; no second cross-review is claimed.

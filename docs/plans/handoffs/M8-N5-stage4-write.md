@@ -75,23 +75,29 @@ record are included here.
    authorization, as described in Part A, with no new store-generation fields
    or durable assembly-seal service. Exact proposed fields and checks require
    review; current authorization does not already pin workspace/base/gate.
-4. **S4-4: g4 and controller route.** Alternatives: reuse g4 with both frozen
-   modules unchanged and all sealed installed facts equal, or an explicitly
-   authorized update and requalification into the next generation.
-   Recommendation: attempt the conditional g4 route in Part A, including an
-   owner-authorized controller check/replacement. If equality or the required
-   proof cannot hold, stop for the owner's new-generation decision. An
-   unchanged adapter alone does not qualify this route.
+4. **S4-4: generation and controller route.** Alternatives: use the existing
+   authorized update/requalification route into the next generation, or first
+   obtain a separately reviewed, owner-approved no-reboot controller/quiescence
+   procedure that permits conditional g4 reuse. Recommendation: expect the
+   next generation using the existing route. LR9's ordered route starts with
+   LR1's fresh boot; g4 cannot survive it without maintenance/requalification.
+   This plan does not design or authorize a no-reboot alternative. Unchanged
+   frozen modules establish source compatibility, not an installed route.
 5. **S4-5: smoke, capture and gate limits and custody.** Alternatives: keep the
    existing per-operation bounds with a fixed gate check, or seek a reviewed
    overall-deadline mechanism before implementation. Recommendation: preserve
    the accepted 300 s exchange/callback deadline and the writer/workspace's
    exact matching 300 s grants, hence 300 s per reset/capture operation. Give
    the separate checker invocation READ grants with no tools/environment or
-   network, 30 s enclosing verification, and one fixed Python check at 20 s.
+   network, 30 s enclosing verification (merge preparation, snapshot, digests,
+   20 s Python check and attestation), with joined cleanup. Keep the existing
+   30 s populate launch and 30 s per assembly runtime-identification probe.
    For the smoke, use 300 s for its deterministic worker launch and each
-   capture operation, then the same 30 s/20 s gate. Cancellation joins cleanup;
-   these bounds do not guarantee a total session or cleanup wall-clock cap.
+   capture operation, then the same 30 s/20 s gate. Recommend a 1200 s WRITE
+   observation wait, covering populate + exchange + optional reset + capture
+   + gate (30 + 300 + 300 + 300 + 30 s). Timeout means incomplete, never an
+   automatic retry. These are per-phase/observation bounds, not a total session
+   or cleanup wall-clock cap; cancellation joins cleanup.
    Use disposable fixture authority and retained candidate/evidence only;
    never install into a real target. Specify its private root custody in the
    reviewed runbook. Later owner-directed cleanup preserves the spent record.
@@ -127,6 +133,12 @@ and defaults; do not add null/default WRITE keys to those records. Preserve
 existing attempt-record fields independently: its reservation names the
 authorization id, run, epoch and acquisition, not an authorization-payload
 digest. Golden compatibility fixtures must hold both existing wire shapes.
+Stage-aware parsing must return the existing `QualificationAuthorization`
+interface consumed by the frozen provider, not an incompatible wrapper.
+The complete serialized WRITE record must fit the root reader's 8192-byte
+limit. Its scope/binding/epoch/expiry checks govern the executor acquisition;
+workspace/gate authority comes from the proposed L4 pins and manifest checks,
+not an invented generic authorization-acquisition rule.
 
 The current graph hash pins the fixed component source and bindings. It does
 not pin the catalog's workspace/gate revisions or the fixture base. Under the
@@ -158,7 +170,9 @@ production configuration, executable and sealed account/store facts, with:
   account assurance and `operator_authorized` overage.
 - Exact WRITE grants: prepared catalog model and effort, network `allow` for
   the native vendor session only, empty environment allowlist,
-  `allowed_tools=("contained_python",)`, and 300 s.
+  `allowed_tools=("contained_python",)`, and 300 s. The entry uses these WRITE
+  root grants, not its current hardcoded READ root grants; the graph narrows
+  the downstream checker to S4-5's explicit READ grants.
 - `ContainedWriteWorkspaceProvider` and `ContainedGateRunner` against the
   prepared fixture authority, actual installed runtime and dedicated journal,
   with exact leased descriptors of kinds `workspace.contained` and
@@ -170,15 +184,18 @@ The provider remains unavailable except for the specifically authorized graph.
 Take the three conformance references from sealed `Q`, following S3-2: a
 reference to startup qualification, not earned WRITE/vendor conformance.
 
-### Freeze answer: conditional g4 reuse, not qualification by source
+### Freeze answer: unchanged modules; next generation by the existing route
 
 The proposed implementation leaves `codex.py` and `codex_protocol.py` unchanged.
-Both are frozen with no end date under S3-4. Their whole-module source digests
+The current wave's brief freezes both with no end date; S3-4's accepted text
+explicitly names `codex.py`. Their whole-module source digests
 are Stage 2's adapter/protocol revisions. The existing provider already reserves
 any authorization's attempt-record path, uses its `dispatches` predicate and
 settles any supplied attempt record, independent of posture. Extending the
 core stage predicate and L4 assembly therefore has a source-compatible route;
-that route still needs the future proofs below.
+that route still needs the future proofs below. The adapter's source digest
+does not include the imported core dispatch predicate: unchanged adapter bytes
+do not prove unchanged dispatch semantics or compatibility.
 
 Before relying on g4, `sealed_account` must accept the exact generation's
 closed passing startup evidence and compare every installed `launch_facts`
@@ -189,15 +206,20 @@ executor capability revision, which the WRITE authorization must pin; they do
 not themselves prove a new store generation is needed or that g4 suffices.
 
 The updated controller tree also needs its authorized installation route.
-[Stage 2](M8-N5-host-session.md), decisions and H2, and
-[launch replacement](M8-N4-launch-replacement.md), LR8/LR9, already require a
-controller check/replacement when source differs. Stage 4's future runbook must
-name the reviewed merged commit and applicable owner authorization, without
-silently reusing Stage 2's authorization for a new update. A reboot or changed
-sealed launch facts stops g4 reuse. Any needed frozen-module edit, changed
-configuration/runtime/egress, or failed compatibility proof requires the
-owner's explicit replacement/requalification route into the next generation;
-no conformance hash may be invented to bridge it.
+[Stage 2](M8-N5-host-session.md), H1 and decision 5, requires a current controller.
+[Launch replacement](M8-N4-launch-replacement.md), Order and LR9, starts with
+LR1's fresh boot: that is its quiescence premise, not an optional process scan.
+Stage 2 decision 4 says a reboot requires authorized requalification into the
+next generation. Therefore S4-4 recommends that existing route, even with both
+modules unchanged. Conditional g4 reuse also requires a separately reviewed,
+owner-approved no-reboot controller/quiescence procedure; none exists in this
+proposal. Its equality tests above are necessary but insufficient.
+
+The future runbook must name the reviewed merged commit and applicable owner
+authorization; Stage 2's authorization cannot silently authorize another
+update. Frozen-module edits, changed configuration/runtime/egress or failed
+compatibility proofs likewise stop for the owner's replacement/requalification
+decision. No conformance hash may be invented to bridge any mismatch.
 
 ## Part B: the fixed WRITE graph
 
@@ -206,6 +228,11 @@ writer binds both executor and contained workspace on the same invocation;
 the downstream checker binds the contained gate. A workspace acquired by a
 different node is not transferable: existing ownership checks require the
 same run, epoch, path, manifest, owner and exact effective grants.
+Keep aliases `executor` then `workspace`, the admission/walker acquisition
+order, so the attempt is reserved before workspace population. Population
+failure may leave an acquired-only record, which proves no turn was dispatched;
+it grants no new retry right. Only the existing diagnosed-local-failure rule,
+remaining shared retry and separate owner authorization permit a new record.
 
 Proposed task literal, inside the writer function:
 
@@ -231,12 +258,19 @@ failed check is data; the qualification node/report must explicitly reject
 `evaluation.ok=False` rather than treating run completion as a passed exam.
 No merge/install effect is assembled. Record target/base equality affirmatively.
 Refuse base/target drift observed during preflight or before the writer calls
-`execute`. This is not an atomic fence around dispatch: drift observed later
+`execute`. The trusted L4 fixed WRITE request carries the sealed base, and the
+writer compares the acquired `workspace.base` before executing. The report
+must prove gate `subject.candidate` equals the captured candidate,
+`expected_base` equals the sealed base, and `tested_tree` equals the candidate's
+tree: the contained gate actually checks a prepared merge tree. This is not
+an atomic fence around dispatch: drift observed later
 must fail the gate/report and cannot undo or refund a dispatched turn.
 
 The current [qualification entry](../../../src/constructicon/api/qualification.py)
 needs stage-specific definitions, graph, bootstrap, assembly and mint/run
-handling. Use importable node functions and source digests as Stage 3 does;
+handling, including WRITE root grants and S4-5's 1200 s observation wait rather
+than the current READ grants/600 s default. Use importable node functions and
+source digests as Stage 3 does;
 put the task literal inside its function, not a module constant. A fixed gate
 program is bound by its actual check argv/check-set identity. No caller-supplied
 task, code, tool widening or dynamic check selection is introduced.
@@ -246,7 +280,10 @@ task, code, tool widening or dynamic check selection is introduced.
 The future credential-free smoke would run a deterministic program against the
 installed runtime Python using the same worker argv, real Linux launcher and
 acquisition-owned contained workspace, then real capture and the fixed gate.
-It needs no native session, credential or model request. It must affirmatively
+Use `LinuxLauncher.run` with fixed `WORKER_ARGUMENTS` and `input_kind="task"`,
+never a Codex handle, native session or store lock. Use a separate smoke fixture
+and journal; independently recheck the WRITE seed/base afterwards. It needs no
+credential or model request. It must affirmatively
 produce the exact candidate, passing gate attestation and settled leases under
 the host's runtime identities. This proves that host's worker/capture/gate
 composition, not authenticated Codex callbacks; those are exercised by the
@@ -257,8 +294,9 @@ The future session runbook would specify these phases, with refusal tables:
 1. Owner evidence: Stage 3 finished, remaining shared retry disposition, S4
    decisions, reviewed implementation head and prerequisites. Resolve S4-6
    from READ evidence before choosing the configuration/generation route.
-2. The authorized controller check/replacement and g4 equality checks, or the
-   explicitly chosen new-generation host session. Do not touch the store via
+2. The authorized controller update and next-generation requalification, or
+   S4-4's separately reviewed no-reboot alternative plus g4 equality checks.
+   Do not touch the store via
    an unreviewed controller or invent a new login requirement.
 3. Fresh private state, reviewed fixture/base and the authorized no-model smoke
    on the host's actual runtime. A failed smoke stops before a WRITE turn.
@@ -272,6 +310,13 @@ The future session runbook would specify these phases, with refusal tables:
    dispatched, and only if the shared N5 retry remains. Use entirely fresh
    names and preserve the previous record. Stop on any uncertain dispatch,
    unresolved custody or cleanup failure; inspection does not grant a retry.
+
+An observation timeout leaves the WRITE verdict incomplete. Recovery may
+finish only the checker if the exact durable writer checkpoint restores the
+captured candidate without acquiring another executor or dispatching. With a
+spent attempt and no such checkpoint, refuse writer replay; neither a longer
+wait nor recovery creates another attempt. Prove both paths before relying on
+that distinction, including checkpoint integrity and #132's final behavior.
 
 ## Part D: evidence and verdict
 
@@ -321,6 +366,7 @@ The following is the required proof design, not tests written or executed:
 
 - **Portable accepting and refusing paths:** WRITE authorization shape and
   grant/pin equality; golden retained authorization/attempt wire shapes;
+  existing provider interface and root-reader 8192-byte bound;
   wrong graph/run/path/epoch/revision/base/fixture/gate;
   expired authorization; spent record across journal reset; unavailable
   provider preserved; importable node/source identity. Run the permitting
@@ -333,6 +379,9 @@ The following is the required proof design, not tests written or executed:
   red gate, lost checkpoint and cleanup failure separately. Recovery must not
   replay a model turn through a fresh attempt after dispatch; a spent record
   must refuse even where older unqualified WRITE tests replayed the writer.
+  Test executor-before-workspace acquisition, populate failure/acquired-only
+  accounting, and observation timeout with exact writer checkpoint (checker
+  recovery only) versus without it (spent writer refuses, no dispatch).
   Exercise #132's final terminal-obligation behavior instead of assuming
   terminal status means all leases closed.
 - **Physical credential-free composition:** production WRITE profile/grants,
@@ -342,6 +391,8 @@ The following is the required proof design, not tests written or executed:
   change, wrong/extra/mode-changed files, failed gate, closure and no target
   installation. Test moved base before dispatch versus after dispatch, matching
   writer/workspace 300 s capture grants and separate 30 s/20 s gate bounds.
+  Hold sealed-base request/workspace equality, candidate/expected-base/tested-
+  tree proof, 30 s populate/probes and 1200 s observation independently.
   Exercise limits with an input where each bound actually binds.
   The existing N2 composition in
   [test_codex_write_capture.py](../../../tests/substrate/test_codex_write_capture.py)
@@ -363,10 +414,24 @@ The following is the required proof design, not tests written or executed:
   vendor, host or g4 proof. Owner-only host smoke and turn evidence remain
   separate from CI and must be reported as unrun until they actually run.
 
-One independent cross-review of this draft is required before ready. It must
-check the freeze route, new pins' authority, attempt/capture/gate boundaries,
-budget/retry wording, owner session scope and honest evidence claims against
-source and accepted documents. Record adopted findings and evidence-based
-rejections here before ready; do not describe a pending review as passed.
+## Independent cross-review disposition
 
-Review record: pending independent cross-review; no disposition claimed.
+Claude review `job_ce5e2115ccef`, selected actual model `claude-opus-5-5`, found
+two introduced planning blockers, reproduced against source and adopted:
+LR9's fresh-boot premise invalidates the proposed default g4 route, and the
+READ-root/600 s entry defaults and recovery distinction were not fully planned.
+S4-4 now recommends the existing next-generation route; Parts A-C specify WRITE
+root grants, 1200 s observation and checkpoint-only checker recovery.
+
+Adopted refinements: complete populate/probe/gate bounds; sealed base versus
+actual workspace and merged tested tree; executor-first acquired-only failures;
+separate smoke fixture/journal and direct worker launch; authorization interface,
+8192-byte limit and retained wire compatibility; executor-only authority scope;
+and source hashing's imported-dispatch limitation. All are future proposals,
+with S4 decisions still open and no implementation/host proof claimed.
+
+Rejected the review's proposed narrowing of the freeze to `codex.py`: the wave
+brief freezes both modules. Adopted its citation correction, since S3-4 itself
+names only `codex.py`. The review's uncertainty about #132/#142 status supplies
+no positive status evidence; their issue/owner gates remain unchanged. The owner
+confirmed Stage 2/3 are unrun. No second cross-review is claimed.
