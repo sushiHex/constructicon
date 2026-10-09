@@ -3947,3 +3947,32 @@ upstream sockets the relay opens, the relay's own witness that it never
 dialled.
 
 No production code changed.
+
+### PR #140: committed plan-manifest baselines and complete staged inventory
+
+The new `scripts/regen_plan_manifest.py` initially trusted working manifest
+digests and enumerated only manifest entries. Isolated Git fixtures reproduced
+both introduced connector findings: a staged frozen-plan edit plus a matching
+manual digest succeeded, and an unnamed staged new document was omitted while
+the helper reported success. Omitting the frozen plan's manifest entry also
+bypassed the first implementation's check.
+
+The helper now anchors unnamed documents to `HEAD:docs/plans/MANIFEST.sha256`
+and checks the complete staged Markdown inventory. Unnamed digests, missing
+committed entries, staged deletions and unnamed additions refuse before a
+write. Conflicted working manifests may be resolved only when every side keeps
+the committed digests for unnamed entries; staged document conflicts refuse.
+Named new and living documents use staged blobs even if working bytes differ.
+Naming a document does not approve editing a frozen plan, and deletion or
+renaming is outside the helper's supported workflow.
+
+`tests/test_regen_plan_manifest.py` supplies real Git fixture proofs for these
+refusals, unchanged manifest bytes on refusal, no-op behavior, named staged
+updates and conflict recovery. Four new cases in the existing
+`scripts/check_m8_mutations.py` inventory remove the committed baseline,
+complete staged inventory, omitted-entry check and all-conflict-sides check;
+they use the shared assertion-only mutation runner and existing CI job.
+Locally, the manifest fixtures, docs validation and mutation-inventory checks
+passed together (111 tests). All 37 cases in the M8 inventory, including the
+four new manifest cases, were assertion-killed on Windows.
+No frozen plan, adapter, protocol or runtime behavior changes in this repair.

@@ -101,9 +101,11 @@ real and passes a green gate, so it is yours to check by hand.
   implementation record or the index; approved plans are frozen bytes, above).
   Stage it, run `python scripts/regen_plan_manifest.py <each changed or new
   path, relative to docs/plans/>`, and stage the manifest in the same commit.
-  The script refuses if any unnamed document's staged bytes differ from the
-  manifest. Write documents as LF (`docs/plans/.gitattributes`); a CRLF working
-  copy fails the local check even when the staged bytes are right.
+  The script checks unnamed documents against the committed HEAD manifest and
+  refuses omitted entries or unnamed staged additions. It does not approve
+  edits to frozen plans or support deletion/renaming. Write documents as LF
+  (`docs/plans/.gitattributes`); a CRLF working copy fails the local check even
+  when the staged bytes are right.
 - **`scripts/` is linted and type-checked by nothing.** ruff covers `src` and
   `tests`; mypy covers `src/constructicon`. Pytest is different: `testpaths`
   limits *discovery*, not what a test may import, and tests do import scripts —

@@ -1,4 +1,4 @@
-"""PR A's policy, identity, and materialization proofs; no Linux claim.
+"""M8 policy, identity, materialization and plan-manifest proofs; no Linux claim.
 
 Run with ``uv run python scripts/check_m8_mutations.py``. The shared runner
 mutates only child-process code objects and requires an assertion failure.
@@ -12,6 +12,8 @@ CORE = "tests/core/test_executor_policy.py::"
 API = "tests/api/test_executor_admission.py::"
 LIFECYCLE = "tests/runtime/test_materialization.py::"
 CONTROL = "tests/runtime/test_materialization_control.py::"
+MANIFEST = "scripts.regen_plan_manifest:main"
+PLAN_TESTS = "tests/test_regen_plan_manifest.py::"
 
 MUTANTS = (
     *(
@@ -249,6 +251,36 @@ MUTANTS = (
         "close_task.result()",
         "pass",
         CONTROL + "test_cleanup_failure_is_not_laundered_into_cancellation",
+    ),
+    (
+        "plan manifest baseline comes from committed HEAD",
+        MANIFEST,
+        'entries(git("show", "HEAD:docs/plans/MANIFEST.sha256"))',
+        "entries(MANIFEST.read_bytes())",
+        PLAN_TESTS + "test_refuses_unnamed_staged_drift_against_committed_baseline"
+        "[matching-digest]",
+    ),
+    (
+        "every staged new plan document is named",
+        MANIFEST,
+        "if staged != wanted:",
+        "if False:",
+        PLAN_TESTS + "test_refuses_unnamed_staged_new_document[False]",
+    ),
+    (
+        "unnamed committed entries cannot be omitted",
+        MANIFEST,
+        "path not in current or any(value != digest for value in current[path])",
+        "any(value != digest for value in current.get(path, []))",
+        PLAN_TESTS + "test_refuses_manifest_edits_and_deletions_of_unnamed_paths[omitted]",
+    ),
+    (
+        "every conflict side preserves unnamed committed digests",
+        MANIFEST,
+        "any(value != digest for value in current[path])",
+        "current[path][0] != digest",
+        PLAN_TESTS + "test_conflicted_manifest_requires_unnamed_digests_equal_committed_baseline"
+        "[True]",
     ),
 )
 
