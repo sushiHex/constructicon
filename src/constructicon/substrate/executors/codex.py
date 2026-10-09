@@ -113,6 +113,7 @@ from constructicon.substrate.executors.codex_protocol import (
     GATE_INCOMPLETE_FAULT,
     INCONCLUSIVE_DRAIN_FAULT,
     MAX_TOOL_CALLS,
+    QUALIFICATION_PLANS,
     RECORD_BYTES,
     UNSOLICITED_REPLY_FAULT,
     ExpectedAccount,
@@ -429,14 +430,18 @@ class CodexConversation:
         self._spent = 0
         self._allocated: set[int] = set()
         self._correlated: set[int] = set()
+        # One successfully written request can remain unanswered when a notice
+        # refuses the phase. Its eventual reply is audited without resuming it.
+        self._pending_reply: tuple[int, str] | None = None
         self._deferred: bytes | None = None
         self._deferred_request: bytes | None = None
         # Turn evidence read while the ``turn/start`` reply was outstanding, in
         # arrival order; it joins the transcript once the reply names the turn.
         self._held: list[bytes] = []
-        # The plan every ``account/updated`` names; it must agree with the first
-        # reading (M8-N5-state-review.md, decision 1).
-        self._noticed_plan: str | None = None
+        # The first known reading or accepted notice plan, including a reading
+        # that independently refused. Later facts must agree even in cleanup;
+        # this private latch never qualifies the public startup gate.
+        self._plan_fact: str | None = None
         self._pre_send_record = False
         self._excluded = 0
         self._server_requests: set[tuple[str, int | str]] = set()
@@ -614,9 +619,14 @@ class CodexConversation:
         plan = None if faults else updated_plan(record, self._expected)
         if plan is None:
             return faults
-        if self._noticed_plan not in (None, plan):
+        return self._plan_faults(plan)
+
+    def _plan_faults(self, plan: str) -> tuple[str, ...]:
+        """Retain the first plan fact; contradictory later facts cannot replace it."""
+
+        if self._plan_fact not in (None, plan):
             return (UPDATED_FAULT,)
-        self._noticed_plan = plan
+        self._plan_fact = plan
         return ()
 
     def _absorb(self, line: bytes, record: Mapping[str, Any], *, pre_send: bool = False) -> bool:
@@ -787,6 +797,7 @@ class CodexConversation:
         self._turn_requested = self._turn_requested or method == "turn/start"
         if not await self._send(io, payload):
             return None
+        self._pending_reply = (identifier, method)
         while True:
             line = await self._read(io)
             if line is None:
@@ -827,17 +838,42 @@ class CodexConversation:
                 line, record, context=f"the {method!r} request", awaiting=identifier,
             ):
                 return None
-            if type(record["id"]) is not int:
-                # Reachable although ownership already passed: ``1.0 in {1}`` is
-                # true, so a float can be "owned" and equal to an awaited int. The
-                # wire form still has to be the one the protocol specifies.
-                self._refuse(f"a reply to {method!r} carries a non-integer id")
+            if not self._accept_reply(record, method=method):
                 return None
-            if ("result" in record) == ("error" in record):
-                self._refuse(f"the {method!r} reply carries neither a result nor an error")
-                return None
-            self._correlated.add(record["id"])
             return record
+
+    def _accept_reply(self, record: Mapping[str, Any], *, method: str) -> bool:
+        """The same structural correlation checks for normal and cleanup replies."""
+
+        if "method" in record:
+            self._refuse("this conversation authorizes no native request here")
+            return False
+        if type(record["id"]) is not int:
+            # Reachable although ownership already passed: ``1.0 in {1}`` is
+            # true, so a float can be "owned" and equal to an awaited int. The
+            # wire form still has to be the one the protocol specifies.
+            self._refuse(f"a reply to {method!r} carries a non-integer id")
+            return False
+        if ("result" in record) == ("error" in record):
+            self._refuse(f"the {method!r} reply carries neither a result nor an error")
+            return False
+        self._correlated.add(record["id"])
+        self._pending_reply = None
+        return True
+
+    def _judge_account(self, reply: Mapping[str, Any], *, first: bool = False) -> tuple[str, ...]:
+        """Judge a reading at either site without widening or resuming the phase."""
+
+        if first:
+            # Even a refused first reading names the actual account it judged.
+            self.observed_account = account_identity(reply)
+        faults = account_faults(reply, self._expected)
+        plan = account_plan(reply)
+        # A known literal remains a fact despite another refusal, but missing,
+        # malformed or undeclared plans cannot supply coherence evidence.
+        if plan is not None and (self._expected.accepts(plan) or plan in QUALIFICATION_PLANS):
+            return faults + self._plan_faults(plan)
+        return faults
 
     def _defer_tool_request(self, line: bytes, record: Mapping[str, Any]) -> bool:
         """Hold at most one validated request until ``turn/start`` names its turn."""
@@ -1142,6 +1178,7 @@ class CodexConversation:
         must not be the one thing no rule sees.
         """
 
+        pre_send, self._pre_send_record = self._pre_send_record, False
         try:
             record = parse_record(line)
         except RecordDamaged:
@@ -1159,7 +1196,20 @@ class CodexConversation:
         if "method" in record and self._catalog:
             self._refuse("a native request arrived during the terminal drain")
             return False
-        self._judge_identified(line, record, context="the drain to EOF")
+        pending = self._pending_reply
+        awaiting = None if pre_send or pending is None else pending[0]
+        if not self._judge_identified(
+            line, record, context="the drain to EOF", awaiting=awaiting,
+        ):
+            return False
+        if (
+            pending is not None and self._owned(record["id"])
+            and self._accept_reply(record, method=pending[1]) and pending[1] == "account/read"
+        ):
+            # The refusal stays latched. Retain and judge the reading's own
+            # identity, never infer it from an identity-free notice, and
+            # never resume the gate or send a spend request from cleanup.
+            self.faults += self._judge_account(record, first=not self._turn_requested)
         return False
 
     async def _finish(self, io: ProcessIO) -> None:
@@ -1260,18 +1310,12 @@ class CodexConversation:
         before = await self._account(io)
         if before is None:
             return
-        # Recorded even for a refused reading, so its evidence names the account judged.
-        self.observed_account = account_identity(before)
-        faults = account_faults(before, self._expected)
+        faults = self._judge_account(before, first=True)
         if faults:
             # A refused pre-turn reading never sends a turn.
             self.faults += faults
             return
         self.observed_plan = account_plan(before)
-        if self._noticed_plan not in (None, self.observed_plan):
-            # A notice before the reading was held for exactly this comparison.
-            self._refuse(UPDATED_FAULT)
-            return
         if self.observed_plan is not None:
             # One literal per run (SPEND-2): qualification's alternatives only
             # select the first, so a later reading naming the other declared
@@ -1356,7 +1400,7 @@ class CodexConversation:
             # A missing pre-acceptance reply is a refusal, never something to
             # wait on: the child may simply have exited after the turn.
             return
-        self.faults += account_faults(after, self._expected)
+        self.faults += self._judge_account(after)
         self.faults += account_change_faults(before, after)
         readback = await self._request(
             io, rate_limits_read_request(self._next_identifier()),

@@ -92,6 +92,9 @@ MATRIX_TEST = "tests/substrate/test_codex_matrix.py::"
 WRITE_TEST = "tests/substrate/test_codex_write.py::"
 
 UPDATED = "constructicon.substrate.executors.codex_protocol:updated_plan"
+EXACT_UPDATED = "constructicon.substrate.executors.codex_protocol:_exact_updated_plan"
+ACCEPT_REPLY = "constructicon.substrate.executors.codex:CodexConversation._accept_reply"
+JUDGE_ACCOUNT = "constructicon.substrate.executors.codex:CodexConversation._judge_account"
 EFFORT = "constructicon.substrate.executors.codex:configured_effort"
 ROUTING = "constructicon.substrate.executors.codex_protocol:routing_faults"
 COMPLETED_ITEM = "constructicon.substrate.executors.codex_protocol:_completed_item"
@@ -109,26 +112,26 @@ CONTRADICTION = ADAPTER + "test_a_contradicting_account_update_refuses"
 N5_PROTOCOL = (
     # --- N5 Stage 0: account/updated on an exact match only (decision 1) ---
     ("N5-1 account/updated is admitted when exact", ACCOUNT_RECORD,
-     "return () if updated_plan(record, expected) is not None else refused", "return refused",
+     "if updated_plan(record, expected) is not None:", "if False:",
      SPEND_TEST + "test_an_exact_account_update_naming_an_accepted_plan_passes"),
-    ("N5-2 account/updated has exactly two keys", UPDATED,
+    ("N5-2 account/updated has exactly two keys", EXACT_UPDATED,
      'set(params) != {"authMode", PLAN_TYPE_KEY}',
      'not {"authMode", PLAN_TYPE_KEY} <= set(params)',
      SPEND_TEST + "test_any_other_account_update_refuses"),
-    ("N5-3 account/updated names the chatgpt mode", UPDATED,
+    ("N5-3 account/updated names the chatgpt mode", EXACT_UPDATED,
      'or params["authMode"] != "chatgpt" ', "",
      SPEND_TEST + "test_any_other_account_update_refuses"),
-    ("N5-4 account/updated carries no reply or error", UPDATED,
-     ' or "result" in record or "error" in record', "",
+    ("N5-4 account/updated carries no reply or error", EXACT_UPDATED,
+     'or "result" in record or "error" in record', "",
      SPEND_TEST + "test_any_other_account_update_refuses"),
     ("N5-5 account/updated names an accepted plan", UPDATED,
-     " or not expected.accepts(params[PLAN_TYPE_KEY])", "",
+     "return plan if expected.accepts(plan) else None", "return plan",
      SPEND_TEST + "test_any_other_account_update_refuses"),
-    ("N5-6 notices agree with each other", NOTICES,
-     "if self._noticed_plan not in (None, plan):", "if False:",
+    ("N5-6 notices agree with each other", "constructicon.substrate.executors.codex:CodexConversation._plan_faults",
+     "if self._plan_fact not in (None, plan):", "if False:",
      CONTRADICTION + "[between-notices]"),
-    ("N5-7 the first reading agrees with the notices", CONVERSE,
-     "if self._noticed_plan not in (None, self.observed_plan):", "if False:",
+    ("N5-7 the first reading agrees with the notices", JUDGE_ACCOUNT,
+     "return faults + self._plan_faults(plan)", "return faults",
      CONTRADICTION + "[before-reading]"),
     # --- N5 Stage 0: the decoder reads the pinned events ---
     ("N5-8 the old turn fields stay unread", ANSWER,
@@ -269,8 +272,8 @@ N5_PROTOCOL = (
     ("N5-A7 the run seals the first reading's account", CONVERSE,
      "identity=self.observed_account,", "",
      ADAPTER + "test_another_login_after_the_turn_is_refused_whoever_sealed_the_first"),
-    ("N5-A8 a refused reading's account is still recorded", CONVERSE,
-     "self.observed_account = account_identity(before)", "self.observed_account = None",
+    ("N5-A8 a refused reading's account is still recorded", JUDGE_ACCOUNT,
+     "self.observed_account = account_identity(reply)", "self.observed_account = None",
      ADAPTER + "test_a_sealed_account_refuses_another_login_before_any_turn"),
     ("N5-A9 a provider requires the sealed account", PROVIDER_INIT,
      "if expected_account.identity is None or expected_account.alternatives:", "if False:",
@@ -353,7 +356,7 @@ MUTANTS = (
     (
         "a faulting pre-acceptance reading discards the turn",
         CONVERSE,
-        "self.faults += account_faults(after, self._expected)",
+        "self.faults += self._judge_account(after)",
         "self.faults += ()",
         DISCARD,
     ),
@@ -423,7 +426,7 @@ MUTANTS = (
     ),
     (
         "a reply must correlate with the request that earned it",
-        CORRELATE,
+        ACCEPT_REPLY,
         'if type(record["id"]) is not int:',
         "if False:",
         ADAPTER + "test_a_reply_whose_id_is_the_awaited_int_spelled_as_a_float_is_refused",
@@ -800,13 +803,15 @@ MUTANTS = (
     (
         "the drain to eof applies the duplicate rule",
         AUDIT,
-        'self._judge_identified(line, record, context="the drain to EOF")',
-        "pass",
+        'if not self._judge_identified(\n'
+        '        line, record, context="the drain to EOF", awaiting=awaiting,\n'
+        '    ):',
+        "if False:",
         ADAPTER + "test_a_duplicate_reply_id_is_refused_even_during_the_drain_to_eof",
     ),
     (
         "a correlated id is remembered",
-        CORRELATE,
+        ACCEPT_REPLY,
         "self._correlated.add(record[\"id\"])",
         "pass",
         ADAPTER + "test_a_duplicate_reply_id_is_refused_even_during_the_drain_to_eof",
@@ -1027,9 +1032,9 @@ MUTANTS = (
     (
         "N4-21 only an accepted plan is recorded as observed",
         CONVERSE,
-        "    faults = account_faults(before, self._expected)\n    if faults:",
+        "    faults = self._judge_account(before, first=True)\n    if faults:",
         "    self.observed_plan = account_plan(before)\n"
-        "    faults = account_faults(before, self._expected)\n    if faults:",
+        "    faults = self._judge_account(before, first=True)\n    if faults:",
         STARTUP_TEST + "test_qualification_refuses_an_undeclared_plan_and_records_none",
     ),
     # --- the lane review's notice and plan findings (2026-09-24) ---
@@ -1159,6 +1164,110 @@ MUTANTS = (
         "stop is not True",
         SPEND_TEST + "test_a_notice_reports_the_spend_control_reached"
         "_unless_null_absent_or_false[string]",
+    ),
+    # H7: refusal is latched, but a sent reply remains evidence, not a forgery.
+    (
+        "H7-1 only a successfully sent pending request admits a cleanup reply",
+        CORRELATE,
+        "self._pending_reply = (identifier, method)",
+        "pass",
+        "tests/substrate/test_codex_refusal.py::"
+        "test_exact_wrong_plan_notice_and_reading_are_affirmative[same-chunk-before]",
+    ),
+    (
+        "H7-2 a pre-send fragment cannot answer during cleanup",
+        AUDIT,
+        "awaiting = None if pre_send or pending is None else pending[0]",
+        "awaiting = None if pending is None else pending[0]",
+        "tests/substrate/test_codex_refusal.py::"
+        "test_cleanup_cannot_correlate_a_reply_started_before_its_request",
+    ),
+    (
+        "H7-3 cleanup judges the pending account reading",
+        AUDIT,
+        'pending[1] == "account/read"',
+        'pending[1] == "account/rateLimits/read"',
+        "tests/substrate/test_codex_refusal.py::"
+        "test_exact_wrong_plan_notice_and_reading_are_affirmative[same-chunk-before]",
+    ),
+    (
+        "H7-4 cleanup cannot overwrite the first account identity",
+        AUDIT,
+        "first=not self._turn_requested",
+        "first=True",
+        "tests/substrate/test_codex_refusal.py::"
+        "test_cleanup_never_overwrites_the_first_readings_identity",
+    ),
+    (
+        "H7-5 only the approved notice vocabulary becomes plan evidence",
+        ACCOUNT_RECORD,
+        "if plan in QUALIFICATION_PLANS:",
+        "if plan is not None:",
+        "tests/substrate/test_codex_refusal.py::"
+        "test_only_an_exact_approved_notice_can_supply_plan_evidence[unknown-plan]",
+    ),
+    (
+        "H7-6 an exact account notice has no identifier",
+        EXACT_UPDATED,
+        ' or "id" in record',
+        "",
+        "tests/substrate/test_codex_refusal.py::"
+        "test_an_id_bearing_notice_cannot_supply_exact_plan_evidence",
+    ),
+    (
+        "H7-7 a cleanup reply still has a strictly integer identifier",
+        ACCEPT_REPLY,
+        'if type(record["id"]) is not int:',
+        "if False:",
+        "tests/substrate/test_codex_refusal.py::"
+        "test_a_pending_reply_still_requires_the_exact_response_contract[float]",
+    ),
+    (
+        "H7-8 a cleanup reply carries exactly one result or error",
+        ACCEPT_REPLY,
+        'if ("result" in record) == ("error" in record):',
+        "if False:",
+        "tests/substrate/test_codex_refusal.py::"
+        "test_a_pending_reply_still_requires_the_exact_response_contract[neither]",
+    ),
+    (
+        "H7-9 a cleanup reply never admits a native request",
+        ACCEPT_REPLY,
+        'if "method" in record:',
+        "if False:",
+        "tests/substrate/test_codex_refusal.py::"
+        "test_a_pending_reply_still_requires_the_exact_response_contract[native-request]",
+    ),
+    (
+        "H7-10 cleanup checks the account against every previously accepted notice",
+        JUDGE_ACCOUNT,
+        "return faults + self._plan_faults(plan)",
+        "return faults",
+        "tests/substrate/test_codex_refusal.py::"
+        "test_cleanup_checks_the_plan_latched_before_the_pending_reading",
+    ),
+    (
+        "H7-11 a pending cleanup reply cannot answer twice",
+        ACCEPT_REPLY,
+        'self._correlated.add(record["id"])',
+        "pass",
+        "tests/substrate/test_codex_refusal.py::test_a_pending_account_reply_cannot_answer_twice",
+    ),
+    (
+        "H7-12 account faults never hide a plan contradiction",
+        JUDGE_ACCOUNT,
+        "return faults + self._plan_faults(plan)",
+        "return faults + (() if faults else self._plan_faults(plan))",
+        "tests/substrate/test_codex_refusal.py::"
+        "test_reading_contradiction_preserves_independent_faults[wrong-plan-same-chunk-cleanup-before]",
+    ),
+    (
+        "H7-13 cleanup notices check a previously refused reading",
+        NOTICES,
+        "return self._plan_faults(plan)",
+        "return ()",
+        "tests/substrate/test_codex_refusal.py::"
+        "test_cleanup_notice_checks_an_already_refused_reading[same-chunk]",
     ),
     *N5_PROTOCOL,
 )

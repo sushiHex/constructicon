@@ -4090,3 +4090,81 @@ completion with cleanup failure then stays RUNNING/owner NULL. After disposal,
 ordinary resume still can fail on unnamed active rows or a retained physical
 guard; cancellation and checkpoint/output behavior keep their existing laws.
 The proposal adds no Stage 4 prerequisite and authorizes no host or vendor work.
+
+### #149 — wrong-plan evidence across an interrupted account reading
+
+The Stage 2 host run at `8a0d87d` stopped at H7 S6c. The initial, held and
+active startups passed, as did the destination-denial control; refresh was
+unmeasured. S6c refused on `account/updated` before judging the account
+reading, and cleanup labeled its still-pending reply as arriving before its
+request. The exact wrong-plan checker refused that evidence, correctly.
+The [bounded host record](https://github.com/sushiHex/constructicon/issues/78#issuecomment-6088373704)
+and [credential-free reproduction](https://github.com/sushiHex/constructicon/issues/78#issuecomment-6088405934)
+establish a sufficient interleaving, not the unavailable raw host notice.
+The owner [authorized the focused freeze exception](https://github.com/sushiHex/constructicon/issues/78#issuecomment-6088737015),
+reviewed correction and fresh qualification; the old g4 evidence is not reused
+for changed adapter/protocol revisions.
+
+**State review before implementation.** An allocated request is not proof
+that a write succeeded. A successful send may already have buffered its reply
+when an intervening notice refuses the gate. Refusal does not mean there is
+no outstanding reply; cancellation or a failed write is not a completed send.
+Cleanup must retain the sent request's identity until its one matching reply
+is judged, and must still reject pre-send, unknown, malformed and duplicate
+ids. Consuming a pending reply records evidence only: it cannot clear a
+refusal, send a readback, start a thread or turn, or resume the state machine.
+The account reading's identity must be judged against the same sealed
+expectation even on this cleanup path. A missing or contradictory reading
+cannot become a successful negative control.
+
+**Chosen correction.** Preserve the schema-4 evidence shape. An exact,
+approved-plan `account/updated` with the wrong plan receives a distinct bounded
+fault. Malformed or wrong-auth notices keep the generic refusal; no arbitrary
+payload is published. The checker requires the account reading's exact plan
+fault and sealed identity, optionally accompanied by that exact notice fault.
+It never accepts the generic refusal as proof. This avoids a redundant
+`plan_refusal` record and its second set of consistency rules.
+
+The earlier successful startups are corroboration, not a substitute for S6c's
+missing fact: they observed different notifications. Their pairing does not
+prove the failed run's notice shape. No retrospective qualification is made.
+**Executed verification.** The focused refusal/adapter/lane/checker suite
+passed 302 tests, with two platform skips; two subsequently added checker
+cases also passed, rejecting an extra generic notice and a repeated exact
+notice. The N2 inventory killed all 183 mutants by assertion (11 new H7
+guards and 172 existing guards); none were unmeasured. The independent review
+at `c6af20c` found no blocking defect and ran 403 targeted tests, with two
+skips. Its extra fake interrupted-write probe remained unqualified: a write
+that does not return successfully does not establish pending-reply authority.
+That conservative case is not a successful negative-control proof.
+
+The successor runbook's 14 focused tests check private create-exclusive seal
+capture, g4-to-S6a binding, account continuity, fresh g5 paths and explicit
+file transport. It preserves the failed evidence and the frozen HS/RS/LR
+bytes. No host action, vendor binary, credential or model call was used for
+these new tests. Required final-head full-gate and CI evidence is recorded
+on [PR #150](https://github.com/sushiHex/constructicon/pull/150); targeted
+tests and mutation kills alone do not establish those gates.
+
+**Pre-existing verification limit.** The initial Python 3.12.13 full run
+hit the unchanged dynamic mailbox-proxy fixture: 3.12 runtime protocol checks
+do not consult `__getattr__`. The fixture and its assembly/protocol sources
+are unchanged from main; the interpreter distinction was reproduced with
+3.11.15 and 3.12.13. [Issue #151](https://github.com/sushiHex/constructicon/issues/151)
+tracks that compatibility work separately. The CI-representative full gate
+uses the workflows' pinned Python 3.11, not an asserted pass for Python 3.12.
+
+**Connector review correction.** The first head's green tests and inventory
+did not prove coherence when a reading already carried another refusal. The
+connector found that an accepted `plus` notice, a refused `pro` notice and a
+`pro` reading could produce exactly the S6c-allowed faults: the independent
+reading fault suppressed the notice/reading contradiction. This introduced
+finding was reproduced through the actual operator checker, including the
+reverse order where the reading arrived before the accepted notice. Eight
+pre-fix timing cases wrongly passed by assertion; malformed and unknown-plan
+controls already refused. A single private plan-coherence latch now serves
+both known reading literals and accepted notices, independently of other
+faults. It retains the first fact, appends contradictions without discarding
+independent refusals, and never qualifies the public gate. The follow-up tests
+and mutation results are recorded on the PR's final head, not inferred from
+the earlier 183 kills. No host retry occurred while correcting this finding.
