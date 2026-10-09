@@ -4128,5 +4128,28 @@ It never accepts the generic refusal as proof. This avoids a redundant
 The earlier successful startups are corroboration, not a substitute for S6c's
 missing fact: they observed different notifications. Their pairing does not
 prove the failed run's notice shape. No retrospective qualification is made.
-Implementation, mutation and final-head review results are recorded below
-when executed; the design and pre-fix reproduction alone are not those gates.
+**Executed verification.** The focused refusal/adapter/lane/checker suite
+passed 302 tests, with two platform skips; two subsequently added checker
+cases also passed, rejecting an extra generic notice and a repeated exact
+notice. The N2 inventory killed all 183 mutants by assertion (11 new H7
+guards and 172 existing guards); none were unmeasured. The independent review
+at `c6af20c` found no blocking defect and ran 403 targeted tests, with two
+skips. Its extra fake interrupted-write probe remained unqualified: a write
+that does not return successfully does not establish pending-reply authority.
+That conservative case is not a successful negative-control proof.
+
+The successor runbook's 14 focused tests check private create-exclusive seal
+capture, g4-to-S6a binding, account continuity, fresh g5 paths and explicit
+file transport. It preserves the failed evidence and the frozen HS/RS/LR
+bytes. No host action, vendor binary, credential or model call was used for
+these new tests. Required final-head full-gate and CI evidence is recorded
+on [PR #150](https://github.com/sushiHex/constructicon/pull/150); targeted
+tests and mutation kills alone do not establish those gates.
+
+**Pre-existing verification limit.** The initial Python 3.12.13 full run
+hit the unchanged dynamic mailbox-proxy fixture: 3.12 runtime protocol checks
+do not consult `__getattr__`. The fixture and its assembly/protocol sources
+are unchanged from main; the interpreter distinction was reproduced with
+3.11.15 and 3.12.13. [Issue #151](https://github.com/sushiHex/constructicon/issues/151)
+tracks that compatibility work separately. The CI-representative full gate
+uses the workflows' pinned Python 3.11, not an asserted pass for Python 3.12.

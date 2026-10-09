@@ -15,6 +15,34 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #149 — affirmative wrong-plan evidence through refusal cleanup
+
+[PR #150](https://github.com/sushiHex/constructicon/pull/150) preserves the
+schema-4 evidence shape while distinguishing an exact approved wrong-plan
+`account/updated` from a generic notice refusal. A successfully sent request
+can remain outstanding after a notice stops the session. Cleanup audits its
+reply under the same structural/account checks without resuming the session
+or sending another request; pre-send and duplicate protections still apply.
+
+The operator checker requires the account reading's exact plan refusal and
+sealed identity, with at most one matching exact-notice fault. Generic,
+missing, contradictory and extra evidence does not qualify. All 183 N2
+mutants were assertion-killed; focused and independent-review results live
+in the [implementation record](plans/handoffs/M8-implementation-record.md).
+
+**Correction worth carrying.** Earlier successful startup notices cannot
+prove the notice shape in a different failed run. The fake reproduction
+establishes a sufficient interleaving, not the unavailable raw host payload.
+The failed H7 result stays failed. The new
+[requalification instructions](plans/handoffs/M8-N5-requalification.md)
+preserve its directory and carry the checked account seal into fresh g5
+qualification at the new merged commit.
+
+**Not established here:** host requalification, measured refresh, Stage 3
+READ, or any vendor/model result. The separate Stage 3 authorization and pin
+review still apply. Python 3.12's unchanged structural-proxy test failure is
+recorded in #151; a Python 3.11 gate is not evidence for 3.12 compatibility.
+
 ## #143 — proposed operator disposal of abandoned capability accounting
 
 **Merged `4f0178d1` (PR #146) on 2026-10-09 UTC from final head `a037cbc`.**

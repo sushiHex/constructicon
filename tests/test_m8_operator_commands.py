@@ -566,6 +566,30 @@ async def test_wrong_plan_checker_refuses_other_failures(evidence_world, case):
     assert result.returncode != 0, evidence
 
 
+@pytest.mark.parametrize("duplicate", [False, True], ids=["generic-notice", "repeated-notice"])
+async def test_wrong_plan_checker_refuses_later_notice_pollution(evidence_world, duplicate):
+    from tests.substrate.test_codex_adapter import exact_update
+
+    class PollutedNative(AccountNoticeNative):
+        def _respond(self, raw):
+            super()._respond(raw)
+            if json.loads(raw).get("method") == "account/read":
+                self._emit(exact_update() if duplicate else {
+                    "method": "account/updated", "params": {},
+                })
+
+    directory, policy = evidence_world
+    _, evidence = await fake_lane.startup(
+        directory, lane=_active_lane(directory, PollutedNative()),
+        expected=ExpectedAccount(plan_type="plus", identity=IDENTITY),
+    )
+    assert len(evidence["faults"]) == 6
+    path = directory / "wrongplan-polluted.json"
+    write_evidence(path, evidence)
+    result = _check_evidence("wrongplan", path, "active", seal("pro"), policy, directory)
+    assert result.returncode != 0, evidence
+
+
 async def test_documented_checker_accepts_actual_unrouted_account_denial(
     evidence_world: tuple[Path, Path],
 ) -> None:
