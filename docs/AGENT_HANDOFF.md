@@ -15,6 +15,73 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## N5 Stage 4 — WRITE qualification planning draft
+
+**Merged `13921e25` (PR #144) on 2026-10-09 UTC from head `7f30d77`.** The
+docs-only change adds the [Stage 4 WRITE planning draft](plans/handoffs/M8-N5-stage4-write.md)
+and updates the plan index and implementation record. The document remains a
+review draft: all seven S4 decisions are open on #78, and the plan authorizes
+nothing. Its proposed implementation, proofs, smoke, host session and model
+request are future work. CI's docs-only path skipped native proof lanes; that
+is not native execution evidence.
+
+**Corrections worth carrying.**
+- The initial g4-reuse route was not compatible with the ordered controller
+  procedure: LR9 starts with LR1's fresh boot. S4-4 now recommends the existing
+  next-generation route. Conditional g4 reuse still requires a separately
+  reviewed, owner-approved no-reboot controller/quiescence procedure and
+  sealed-fact checks; the draft supplies none.
+- The independent cross-review also found missing WRITE root-grant,
+  observation-bound and checkpoint-recovery treatment. Those are now explicit
+  proposals, not accepted decisions or implemented behavior.
+
+**What this slice does NOT establish.**
+- Approval of any S4 decision or an approved implementation design.
+- Completion of Stage 2 or 3 in this planning session, any WRITE implementation,
+  CI/native/host proof, qualification, production availability, or permission
+  for host action or a model request.
+
+See the [M8 implementation record](plans/handoffs/M8-implementation-record.md),
+under "Issue #141: Stage 4 WRITE planning draft".
+
+---
+
+## M8 plan manifest — guarded staged refresh
+
+**Merged `d3554169` (PR #140) on 2026-10-09 UTC from final head `88f83b4`.**
+`scripts/regen_plan_manifest.py` refreshes named staged plan documents from
+staged blobs while anchoring unnamed documents to the committed manifest and
+checking the complete staged Markdown inventory. It refuses missing or
+drifted entries, unnamed additions, deletions, conflict markers and unresolved
+manifest index stages before writing; callers must explicitly resolve a
+conflict. Real-Git fixtures cover refusal without changing the manifest,
+named updates, no-op refresh, and explicit resolution. Five manifest-guard
+mutants were added to the existing M8 inventory; the final PR record reports
+all 38 M8 mutants assertion-killed on the final head, with the manifest guards
+included. The final CI/review evidence and limits are recorded on [PR #140](https://github.com/sushiHex/constructicon/pull/140).
+
+**Corrections worth carrying.**
+- The first implementation trusted the working manifest and enumerated only
+  its entries, allowing a staged frozen-plan edit with a matching manual digest
+  and an unnamed new document to pass. The committed baseline and complete
+  staged inventory close those omissions.
+- Text conflict markers alone missed a marker-free modify/delete conflict
+  whose index remained unmerged. The final guard checks unmerged manifest index
+  stages before reading the baseline. Automatic manifest conflict aggregation
+  was removed; explicit resolution is required.
+
+**What this slice does NOT establish.**
+- Runtime manifest enforcement or a change to Constructicon runtime behavior.
+- Permission to edit frozen plans: naming a document for refresh is not approval
+  to change it. Deletion/renaming is also outside the helper's supported flow.
+- Linux containment or host/vendor proof from the manifest tests or a green
+  general gate.
+
+See the [M8 implementation record](plans/handoffs/M8-implementation-record.md),
+under "PR #140: committed plan-manifest baselines and complete staged inventory".
+
+---
+
 ## #110 — the CI timing flakes, each now an event
 
 **Merged `d6a7576` (#122) on 2026-10-06 and `8a0d87d` (#139) on 2026-10-09 UTC. #110 is closed.** #118 (`624cc37`) fixed the first three flakes. Neither PR changed production code or raised a bound.
