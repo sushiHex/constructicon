@@ -33,13 +33,17 @@ cancel, resume, or terminalize the run. Receipt-backed `lost` means only that
 the cleanup obligation was administratively abandoned. It does not prove
 process death, physical cleanup, lock release, candidate disposal, or store
 reuse. Historical opaque `lost` facts retain unknown cause.
+The proposal also requires a storage migration (7→8 if no intervening change
+advances it) and a `result_schema_version=2` result shape. Acceptance would
+therefore carry migration and client-compatibility obligations, not just a
+new administrative command.
 
 **Corrections worth carrying.**
 - The draft's public request/plan hashes created a reason-guessing privacy
   oracle. The connector finding was reproduced with a credential-free
   synthetic candidate check. The final proposal keeps reason-bearing bindings
   private; run-readable audit, accounting, result, and receipt-reference bytes
-  (including reference hashes) derive only from public data. Private replay
+  (including reference hashes) would derive only from public data. Private replay
   binding remains. This is hash-oracle evidence, not an implemented command or
   an executed public-surface privacy proof.
 - `runs_resume` already supports RUNNING with no live owner; a new retry command
@@ -67,20 +71,23 @@ review draft: all seven S4 decisions were open at merge, and the plan authorizes
 nothing. Its proposed implementation, proofs, smoke, host session and model
 request are future work. CI's docs-only path skipped native proof lanes; that
 is not native execution evidence.
+At merge, the owner had confirmed Stage 2 and Stage 3 were unrun. The plan
+gates implementation on owner-declared Stage 3 completion, the S4 decisions,
+and #132's merged cleanup outcome; planning is not permission to bypass them.
 
 **Corrections worth carrying.**
 - The initial g4-reuse route was not compatible with the ordered controller
   procedure: LR9 starts with LR1's fresh boot. S4-4 now recommends the existing
   next-generation route. Conditional g4 reuse still requires a separately
   reviewed, owner-approved no-reboot controller/quiescence procedure and
-  sealed-fact checks; the draft supplies none.
+  sealed-fact equality and compatibility proof; the draft supplies none.
 - The independent cross-review also found missing WRITE root-grant,
   observation-bound and checkpoint-recovery treatment. Those are now explicit
   proposals, not accepted decisions or implemented behavior.
 
 **What this slice does NOT establish.**
 - Approval of any S4 decision or an approved implementation design.
-- Completion of Stage 2 or 3 in this planning session, any WRITE implementation,
+- Any Stage 2 or 3 host execution, WRITE implementation,
   CI/native/host proof, qualification, production availability, or permission
   for host action or a model request.
 
