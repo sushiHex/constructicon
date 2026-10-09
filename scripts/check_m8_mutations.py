@@ -239,8 +239,8 @@ MUTANTS = (
     (
         "cleanup retains every enrolled sibling",
         "constructicon.runtime.walker:Walker._close_acquired",
-        "for capability, acquisition in acquired:",
-        "for capability, acquisition in acquired[:1]:",
+        "for index, (capability, acquisition) in enumerate(acquired):",
+        "for index, (capability, acquisition) in enumerate(acquired[:1]):",
         CONTROL + "test_repeated_cancellation_finishes_recorded_cleanup",
     ),
     (
