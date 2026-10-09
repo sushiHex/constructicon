@@ -524,6 +524,25 @@ def pin_native(pid, start):
     return fd
 
 
+def pin_children(pid):
+    """Pidfds for every child of a live process, the owner's own tree.
+
+    Read while the owner lives and waits, so no child can be reaped or its PID
+    reused between the kernel's list and the pin.
+    """
+    pinned = []
+    try:
+        for task in Path(f"/proc/{pid}/task").iterdir():
+            for child in (task / "children").read_text().split():
+                with suppress(ProcessLookupError):
+                    pinned.append(os.pidfd_open(int(child)))
+    except BaseException:
+        for fd in pinned:
+            os.close(fd)
+        raise
+    return pinned
+
+
 async def native_exit(fd):
     """The pinned process's exit itself: a pidfd becomes readable when it exits."""
 
@@ -623,17 +642,26 @@ async def test_driver_death_and_explicit_successor_reconciliation(
             assert heartbeat.read_bytes()
         else:
             assert not heartbeat.exists()
+        children = pin_children(owner.pid)
         owner.kill()
         # The native child has its own pipes, not these report pipes. Waiting
         # for the driver's exit must not credit a graceful Python finally.
         await asyncio.wait_for(owner.wait(), 5)
         assert owner.returncode == -signal.SIGKILL
-        if first.pidfd is not None:
-            # The owner's parent-death SIGKILL ends the native, an event the
-            # harness owns, never the vendor's EOF drain (_native_probe_owner,
-            # #110). The bound is only a hang guard.
+        # Every child of the dead owner ends on an event the harness owns, never
+        # on the vendor's EOF drain (#110): the native by its parent-death
+        # SIGKILL (_native_probe_owner), and a worker's supervisor, a subreaper,
+        # only once it has reaped the worker's whole tree. So the heartbeat has
+        # stopped by construction when this returns. The bound is a hang guard.
+        try:
             async with asyncio.timeout(5):
-                await native_exit(first.pidfd)
+                for fd in children:
+                    await native_exit(fd)
+                if first.pidfd is not None:
+                    await native_exit(first.pidfd)
+        finally:
+            for fd in children:
+                os.close(fd)
         if active_worker:
             stopped = heartbeat.read_bytes()
             await asyncio.sleep(.2)

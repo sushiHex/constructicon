@@ -277,8 +277,15 @@ def test_a_killed_owner_takes_its_native_with_it(tmp_path):
 
     from tests.substrate import _native_probe_owner as owner
 
-    stub = (sys.executable, "-c", "import time; time.sleep(3600)")
+    # The stub announces itself on a FIFO. It can only run once setpriv has set
+    # the parent-death signal and exec'd it: killing the owner earlier would let
+    # prctl see an already dead parent, and no signal would ever come.
+    ready = tmp_path / "ready"
+    os.mkfifo(ready)
+    announce = "import os, sys, time; os.write(os.open(sys.argv[1], os.O_WRONLY), b'r'); "
+    stub = (sys.executable, "-c", announce + "time.sleep(3600)", str(ready))
     argv = list(owner.native_argv(stub, Path(sys.executable)))
+    listening = os.open(ready, os.O_RDONLY | os.O_NONBLOCK)
     # The owner: spawn the native from its main thread, report it, and wait.
     program = (
         "import json, subprocess, sys, time\n"
@@ -297,6 +304,8 @@ def test_a_killed_owner_takes_its_native_with_it(tmp_path):
         driver.stdin.flush()
         pid = int(driver.stdout.readline())
         pidfd = os.pidfd_open(pid)
+        announced, _, _ = select.select([listening], [], [], 5)
+        assert announced and os.read(listening, 1) == b"r", "the stub never ran"
         os.kill(driver.pid, signal.SIGKILL)
         driver.wait(5)
         ready, _, _ = select.select([pidfd], [], [], 5)
@@ -305,6 +314,7 @@ def test_a_killed_owner_takes_its_native_with_it(tmp_path):
     finally:
         driver.kill()
         driver.wait()
+        os.close(listening)
         if pidfd is not None:
             with contextlib.suppress(ProcessLookupError):
                 signal.pidfd_send_signal(pidfd, signal.SIGKILL)

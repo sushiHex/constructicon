@@ -3905,8 +3905,19 @@ timing" overstated this one. The owner fixture now spawns the native under
 `setpriv --pdeathsig KILL`, so the kernel ends it as its driver exits; the 5 s
 is only a hang guard. Production native lifetime remains the launcher's
 `--die-with-parent` and supervisor; this is harness hygiene, not production
-evidence. Proven portably (the native, and only the native, is wrapped; one
-mutant) and on Linux (a stub that ignores EOF exits with its killed owner).
+evidence.
+
+The active stage's "heartbeat stopped" check had leaned on that drain too. It
+sampled the heartbeat once the native exited, and the slow drain had given
+the worker's supervisor time to tear the worker down. The test now pins every
+child of the owner before the kill and waits for each to exit. That includes
+the worker's supervisor, a subreaper that exits only after reaping the
+worker's whole tree, so the heartbeat has stopped by construction.
+
+Proven portably (the native, and only the native, is wrapped; one mutant) and
+on Linux (a stub that ignores EOF exits with its killed owner). That stub
+announces itself on a FIFO, which it can do only after `setpriv` has run
+`prctl` and exec'd it, so the kill can never beat the signal's installation.
 
 **Startup EOFs: corrected attribution.** The five `denied:eof` connections were
 the plugins-on positive control's, not the clean run's: job 112020223955 fails
