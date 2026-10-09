@@ -15,21 +15,239 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
-## #110 — stream timeout proof and startup EOF observation
+## #110 — the CI timing flakes, each now an event
 
-The portable stream-timeout test now releases its injected `ETIMEDOUT` only
-after the established reply, peer hello and upstream read have been observed.
-Its accepted/reset counts and deadline are unchanged. The first three #110
-timing flakes were fixed earlier in #118.
+**Merged `d6a7576` (#122) on 2026-10-06 and `8a0d87d` (#139) on 2026-10-09 UTC. #110 is closed.** #118 (`624cc37`) fixed the first three flakes. Neither PR changed production code or raised a bound.
+- **Stream timeout (#122).** The portable test releases its injected `ETIMEDOUT` only after it has observed the established reply, the peer hello and the upstream read. The accepted/reset counts and the deadline are unchanged.
+- **Driver death (#139).** The harness's native runs under `setpriv --pdeathsig KILL`, so the kernel ends it when its driver exits. The 5 s wait is now only a hang guard. This is harness hygiene, not production evidence.
+- **WRITE worker entry (#139).** The test races the worker's entry against the end of `execute`, with no margin.
+- **Bridge mutant 4 (#139).** The reset waits for the dial to return, so only the wake can end the forwarder.
 
-The native startup proof records bounded relay read lengths and the phase of
-each observed event. Its zero-denial assertion has never failed: the five
-`denied:eof` connections once reported for the clean run were the plugins-on
-control's (job 112020223955 fails at the control's assertion, after the clean
-run's passed). PR #124 replaced that racing control with an analytics exporter
-whose flush the client awaits, and the control now requires destination
-denials only. Vendor conformance is not established at either pin. The exact observations and limits are in the
-[M8 implementation record](plans/handoffs/M8-implementation-record.md).
+**Corrections worth carrying.**
+- **The five startup `denied:eof` connections came from the plugins-on control, not the clean run.** Job 112020223955 fails at the control's assertion, after the clean run's zero-denial assertions had passed. #122 attributed the five to the clean run, and its exact-pin search for a clean-run caller rested on that misreading. Its bounded phase and read-length diagnostics remain. #124's awaited analytics exporter replaced the racing control, and the control now requires destination denials only.
+- **#118 overstated its driver-death fix.** Its 5 s wait was a margin over the vendor's own EOF drain, which only the vendor's 45 s watchdog bounds at `rust-v0.160.1`.
+- **#139's own CI found two more timing dependencies.**
+  - The active stage's heartbeat check relied on that same drain (run 37863215371). It now waits for every child of the owner, including the worker's subreaping supervisor.
+  - N3b mutant 15 read NOT PROVEN once (run 37865423977) because the peer's accept list can lag the dial. Its test now counts the relay's own upstream sockets.
+  - On the final head `7120b7e`, every check passed except `docs`, which was skipped.
+
+**What these slices do NOT establish.**
+- Vendor conformance at either pin.
+- Any narrowing of the control verdict in `codex_lane.run_startup` to destination denials. That is a controller change, and it lands after N5 Stage 3 (job_5067d4ce7dad).
+- A green Python 3.13 run for #122. That run hit a Channel proxy test failure that predates the PR.
+
+The details are in the [M8 implementation record](plans/handoffs/M8-implementation-record.md), under "#110, the remaining flakes".
+
+---
+
+## N5 Stage 3 — the READ session rehearsed on the foundation lane
+
+**Merged `1251f81` (PR #138) on 2026-10-09 UTC from head `30308f4`. Every check passed except `docs`, which was skipped.** `tests/test_m8_n5_read_rehearsal.py` runs T2 to T6 of the read-session runbook exactly as written, on CI's provisioned foundation lane. It uses HS's common file with one CI override, which sets OC's `PY` and the fixture's store key. Its step, "Rehearse the Stage 3 READ session without a login", succeeded on the final head. No earlier CI step had launched the real vendor binary on the base runtime.
+
+The inputs are the N3a fixture store under a synthetic g4, whose revisions are a passing S6a record's digest `Q`, and a logged-out `{}` credential. The credential is restored byte for byte afterwards. The test checks every link of the refusal, not just the final "not dispatched":
+- the refusal is exactly `account/read`'s error;
+- the relay counted zero connections;
+- the vendor exited cleanly;
+- nothing after the gate was observed.
+
+A second run, with or without its journal, leaves the record byte-identical. T6 runs under new names.
+
+**Corrections worth carrying.**
+- **The store never reads `Q`, by design.** This was Fable's design review (job_08bb94033cdd). The descriptor proves which slot was bound, not that authentication succeeded (ADR 0021:160-163). `Q` is bound through the capability revision instead: the authorization pins that revision, and the provider refuses a mismatch. That is why a synthetic g4 can stand in for the host's real one. Recording `Q` in the descriptor would be new durable authority, so it is not part of N5.
+
+**What this slice does NOT establish.**
+- Nothing after `account/read` was rehearsed. The spend readback, `thread/start`, the intent, `turn/start` and a real answer run first on the host.
+- T0 and T1 are host-only and were not rehearsed.
+
+See [M8-N5-stage3-read.md](plans/handoffs/M8-N5-stage3-read.md) and the [M8 implementation record](plans/handoffs/M8-implementation-record.md).
+
+---
+
+## M8 CI — every mutation inventory runs in CI and names live code
+
+**Merged `f68019c` (PR #137) on 2026-10-09 UTC from head `24af153`. Every check passed except `docs`, which was skipped.**
+A mutation inventory only counts as evidence if it runs, and a mutant only counts if its target still exists. Until this PR, both problems showed up at run time or not at all.
+- `tests/test_mutation_inventories.py` runs under `uv run verify` and checks three things without running anything. Each `scripts/check_*_mutations.py` must run in exactly one place in CI. Each mutant's target text must occur exactly once, found the way the harness finds it (`_mutations.mutated`). Each killing test must still collect.
+- A new `mutations` matrix job in `verify.yml` runs the six inventories that ran nowhere: `check_m8_mutations.py`, `check_m71_mutations.py`, `check_m8_native_operator_mutations.py`, `check_m8_qualification_mutations.py`, `check_fault_coordinate_mutations.py` and `check_registry_store_mutations.py`. That is 115 mutants. All six legs passed on the final head.
+
+**Corrections worth carrying.**
+- **Six of the 27 inventories ran nowhere.** Refactors had also left mutants aimed at code that no longer existed: the N4 bridge mutants, the Stage 1 dispatch mutant, and "cleanup retains every enrolled sibling", which #130 orphaned. That last one now targets #130's loop line, and it is killed.
+- **The first of two new mutants on the `rest = acquired[index + 1:]` slice survived.** Its test now also checks that the closed acquisition is not relinquished a second time.
+- **A comment or a disabled step is not a run.** Only a running command counts. A step switched off with a literal `false` is refused. A matrix entry counts only where a step runs the matrix value.
+
+**What this slice does NOT establish.**
+- Three provenance scripts stay out of CI on purpose, because each one proves something against a fixed base commit: `check_m71_fixture_provenance.py`, `check_m8_compatibility.py` and `check_m8_native_operator_compatibility.py`.
+- The implementation record has no entry for this slice.
+
+---
+
+## N5 Stage 3 part B — the read stage, its attempt record and its session
+
+**Merged `caa3eda` (PR #136) on 2026-10-08 UTC. Every check passed except `docs`, which was skipped.** Part A (#135) was already merged. This part adds:
+- a `qualification-read` authorization that pins the READ grants, an absolute
+  attempt-record path and exactly one epoch;
+- `attempt_record.py`, which keeps one record per authorization (decision S3-1).
+  The record is reserved exclusively at `acquire`, so no later acquisition can
+  dispatch, even after a journal reset. Its intent is written before
+  `turn/start`, with expiry checked on both sides of that write. Its outcome is
+  `not dispatched` only if the write of `turn/start` never began;
+- a fixed read graph whose task literal sits inside the node, so the node's
+  source digest pins it (S3-3);
+- the session runbook `M8-N5-read-session.md`, steps T0 to T6. T5 passes only
+  a run that succeeded with a completed record.
+
+**`codex.py` and `codex_protocol.py` are frozen from this merge (decision
+S3-4).** Stage 2's evidence records the adapter and protocol revisions, which
+are digests of all of each module, so any later edit invalidates g4. The
+freeze has no end date: a change waits for an owner decision on #78.
+
+The turn is not journaled as an effect. The record explicitly sets aside ADR
+0018:331-332's rejection of "a durable executor ledger", because one record per
+authorization is not a ledger.
+
+**Corrections worth carrying.**
+- **A clean result salvaged from a failed exchange used to be published as an
+  answer, for every handle.** This gap existed before the slice. It is now
+  refused.
+- **T6 may spend N5's one more attempt, READ and WRITE together.** Using it for
+  a Stage 3 retry leaves none for Stage 4.
+
+**What this slice does NOT establish.**
+- The tests are portable. They cover the scripted native client, the entry end
+  to end and the runbook's own programs. The twenty-four mutants run in the
+  lifecycle lane. Nothing ran on the host.
+- Evidence is in the
+  [M8 implementation record](plans/handoffs/M8-implementation-record.md) and
+  [M8-N5-stage3-read.md](plans/handoffs/M8-N5-stage3-read.md).
+
+---
+
+## N5 Stage 2 runbook and Stage 3 part A — the host-session script and the production host assembly
+
+**Merged on 2026-10-08 UTC. On each final head every check passed except `docs`, which was skipped:**
+- `8083a70` (#134): the Stage 2 host-session runbook, [`M8-N5-host-session.md`](plans/handoffs/M8-N5-host-session.md).
+- `8c3fea4` (#135): `codex_host.py` and the `mint` and `run` host commands, with the owner's decisions S3-1 to S3-4 in [`M8-N5-stage3-read.md`](plans/handoffs/M8-N5-stage3-read.md).
+
+The runbook references OC and LR instead of copying them. It sets up a fresh session directory next to N4's, which it only reads. It publishes and activates g4 and requires g3 to refuse against it. It then runs numbered refresh attempts with no elapsed-time criterion. LR gains LR9, which replaces the controller after login, and an Order section that runs the probe only once the controller is current.
+
+The host assembly builds the operator provider only from installed facts. `sealed_account` is the code twin of the runbook's `check_evidence`. The three conformance revisions are the sealed qualification digest `Q`. Under S3-2, `Q` is a reference, not a claim of conformance. This closes Stage 1's "no production assembly" boundary. Twenty-one mutants each target one check, and the foundation lane proves the assembly as `m8-service`. The details are in the [M8 implementation record](plans/handoffs/M8-implementation-record.md).
+
+**Corrections worth carrying.**
+- **Stage 2 had no runnable script.** The audit at `b0d9556` found the #126 to #129 changes already in the runbook. The session structure was what had gone stale. OC's S1 still named the model by the old `gpt-5.5` literal.
+- **Fable's review of #134 found gaps in the first draft.** Among them, H3 expected S1 to print nothing, so a good directory would have been abandoned. LR9 began as a custom install with no failure table.
+- **Astra (job_95d1f6760f0b) and the connector review found real defects in #135.** They included a subset check where an exact check was needed, a `__main__` entry that registered a different graph, an unbounded read, open nested shapes, permissive booleans and a linked `closure.git`. All are fixed.
+
+**What this does NOT establish.**
+- Neither PR ran anything on the host. Stage 2 had not run when they merged.
+- The runbook's five default decisions are for the owner to confirm in the authorization.
+- The provider stays unavailable. `Q` claims no conformance, and the evidence records `vendor_conformance_qualified: false`.
+- Part B, the read stage, is not in these merges.
+- The new modules are not in `PROOF_MODULES`. R19's import check covers them as part of the controller tree.
+
+---
+
+## N5 Stage 1 — the qualification acquisition and its two prerequisites
+
+**Merged on 2026-10-08 UTC. On each final head every check passed except `docs`, which was skipped:**
+- `cf40859` (#130): a live loser releases its custody.
+- `6fd3ce1` (#131): a lost answer after the lease commit closes the recorded row.
+- `b0d9556` (#133): the qualification acquisition, credential-free.
+
+One owner-placed authorization lets exactly one fixed run drive the real acquire, record, materialize, close and reconcile of the codex operator provider. The provider stays unavailable and never dispatches. The authorization is a root-owned `0640` file with `max_epoch` 1, and the root-file reader is its only source. Its budget is the fenced epoch, per journal incarnation. This was proved portably and by the Linux twin on the foundation lane, including real process death, with 16 portable and 8 Linux mutants killed. The design, the owner decisions and the crash table are in [M8-N5-stage1-qualification.md](plans/handoffs/M8-N5-stage1-qualification.md).
+
+**Corrections worth carrying.**
+- **Closing nothing on ownership loss did not hand over custody.** A loser that stayed alive kept the codex guard and store lock, so its successor's reconciliation waited until the loser's process exited. When RunHost re-claimed the run in the same process, it waited forever. The walker now relinquishes local custody on loss and writes nothing durable ([design](plans/handoffs/M8-N5-live-loser-custody.md)).
+- **A recording exception does not mean "not recorded".** A lost answer after the commit left the row `active` on a FAILED run, and startup recovery never revisits a FAILED run. The walker now settles the outcome against the journal.
+- **A run id names only an actor and a key.** The dedicated journal was assumed, not enforced. The entry now refuses a journal that holds any other run, or the authorized run id with a different stored graph.
+
+**What this slice does NOT establish.**
+- Stage 1 had no production assembly, so the Linux twin was the only composition. #135 added the assembly later.
+- A timeout counts as a death, so no relinquishment fires. Expiry and leases read two different clocks. The root grants are unpinned, and the first stage that dispatches must pin them.
+- Single consumption across a journal reset is left to the first stage that dispatches.
+- A FAILED run whose own cleanup fails can still keep active leases. This was already true before these PRs and is tracked in [#132](https://github.com/sushiHex/constructicon/issues/132).
+
+---
+
+## N5 — `account/read` recovery, the sealed account identity and S6b at rust-v0.160.1
+
+**Merged on 2026-10-07 UTC. On each final head every check passed except `docs`, which was skipped:**
+- `347ffee` (#127): `account/read` recovers from a 401 on the real binary, without a real credential. No production code changed.
+- `72d2021` (#128): the sealed account identity.
+- `5620223` (#129): S6b's shape at rust-v0.160.1, measured on the real binary.
+
+The production startup lane drives the pinned binary with production's configuration, command, URLs and eight-connection bound. The only fakes are the destinations: one HTTPS server at `127.0.0.1:443` serves `chatgpt.com` and `auth.openai.com` by SNI, and the store holds a fixture credential. Each of #127's cases opens with the pin's recovery: two old-bearer 401s, then one refresh. A clean recovery reaches all four methods with `refresh: measured`. A refused refresh leaves `auth.json` byte-identical. An account change is refused before any new-bearer check, and an unsealed backend is refused by `routing_faults`. The account-recovery lane now runs every case sealed. Its `stranger` case, sealed for another login, is refused by the identity fault. Mutants N5-A1 to A9 (A5 dropped) and N5-L4 are killed ([design](plans/handoffs/M8-N5-account-read-recovery.md), [identity](plans/handoffs/M8-N5-account-identity.md), [record](plans/handoffs/M8-implementation-record.md)).
+
+**Corrections worth carrying.**
+- **`ExpectedAccount` bound the plan, not the account.** A switch completed before the adapter's reading would have shown another `pro` login as a clean reading. The seal is now `<plan>/<identity>`, where the identity is a digest of `account.email` and `workspaceRouting.chatgptAccountId`. Neither value is kept. `LANE_SCHEMA` is 4.
+- **S6b expected `account/read` to pass without `chatgpt.com`.** At rust-v0.160.1, `account/read` checks the workspace there itself. The reading is denied at the relay and the run stops at the third method. Left as it was, the Stage 2 host session would have failed at S6b. A new `unrouted` case measures this on the real binary, and `check_evidence`'s `denial` mode now requires this shape.
+- **The still-unauthorized case did not reliably reach the eight-connection bound.** #127's body says it does, but three vendor discovery callers race. A sixth case, `bounded`, proves the refusal deterministically under a three-connection bound.
+
+**What this does NOT establish.**
+- Every reading and refresh here went to the fakes. None reached the vendor.
+- The production binding. Stage 3's assembly must take the seal from the generation's qualification evidence and check it against its sealed digest.
+- A switch that only the vendor's hidden user id would show, or a switch made and undone between the two readings of a run.
+
+---
+
+## N5 Stage 0b — the rules at the pin and the native tool inventory
+
+**Merged on 2026-10-07 UTC. On each final head every check passed except `docs`, which was skipped:**
+- `c8769af` (#125): the remaining Stage 0b rules at `rust-v0.160.1` (`d27764b8`).
+- `ddd3118` (#126): the native tool inventory, measured and closed. The design is [`M8-N5-native-tool-inventory.md`](plans/handoffs/M8-N5-native-tool-inventory.md).
+
+**What #125 established:**
+- Production seals `gpt-6.1-sol` at `model_reasoning_effort = "low"`. One rule, `codex_catalog.catalog_choice`, makes that choice. CI checks the sealed literals against the installed catalog. The provider refuses a grant whose effort differs from the sealed one or names none.
+- `EgressRelay.denied` is the only place the relay's counters are read. The provider refuses the turn on any denial, so a successful answer cannot mask one.
+- `check_evidence` binds lane evidence to the installed adapter and protocol revisions, the runtime digest, the vendor client and the catalog.
+- Any `workspaceRouting` other than absent, or `https://chatgpt.com` with a known residency override, is refused before any turn.
+- When a total has no input tokens, or a compaction ran, usage is reported as unknown, never as zero.
+
+**What #126 established.** Under the production recipe, the real binary offered fourteen native tools (CI run 37614544749). In WRITE, `contained_python` could be reached only through `exec`. Three layers close this: a sealed catalog the launcher mounts on each launch, a sealed `environments.toml` with `include_local = false`, and `TOOL_CONTROLS`. On the real binary, sealed READ offers nothing and sealed WRITE offers exactly `contained_python`. All 18 known native names are refused. A real-zone test shows that production's launch path mounts that same seal.
+
+**Corrections worth carrying.**
+- **Removing `apply_patch_freeform` did not remove `apply_patch`.** Its handler registers whenever an execution environment exists and the model advertises the tool. Separately, the pinned catalog's tool selectors outrank the configuration.
+- **`ADAPTER_REVISION` version 1 hashed only three class bodies.** It now hashes the whole module.
+- **`CODEX_CA_CERTIFICATE` widens trust instead of narrowing it.** Trust roots are not a containment control. The egress relay is.
+- **`request_max_retries = 0` on the built-in provider would be silently ignored.** Retries stay at the vendor defaults, by owner decision on #78.
+- **N4's rule that a denial must not be fatal to the turn is reversed.**
+- **`[agents] enabled = false` also blocks the collaboration tools without the catalog layer.** The design had not predicted this.
+- **#126 added an evidence field without changing `schema_version`.** `LANE_SCHEMA` is now 3.
+
+**What this does NOT establish.**
+- Requests after a remote compaction are not proved, and neither are hidden tools under names not yet known.
+- The voice host claim is proved from source only.
+- The backend request count is unknown.
+
+The details are in the [M8 implementation record](plans/handoffs/M8-implementation-record.md).
+
+---
+
+## N5 Stage 0b — the protocol at the pinned shapes, and the pin at rust-v0.160.1
+
+**Merged on 2026-10-06 UTC. On each final head every check passed except `docs`, which was skipped:**
+- `0e5058e` (#123): the protocol at the pinned shapes, landed at `rust-v0.153.4`. The shapes were read at both 0.153.4 and 0.160.0 and are identical.
+- `e8b3e56` (#124): the pin moved to `rust-v0.160.1` through the upgrade routine in [`M8-N5-state-review.md`](plans/handoffs/M8-N5-state-review.md).
+
+**What #123 established.**
+- `account/updated` passes only as exactly `{"authMode": "chatgpt", "planType": <an accepted plan>}`. Every notice and the first `account/read` must name the same plan. A contradiction latches as a fault.
+- The answer is the single `agentMessage` in this turn's `turn/completed` summary. A READ turn that completes without one is damage. Usage is the last `thread/tokenUsage/updated` total. The served model is the last `model/rerouted` target, and it is unknown when there is no reroute.
+- Partial text is kept as an observation only. The adapter refuses a turn that never completes and publishes none of that text.
+- The placement and combined lanes fold the real binary's wire through a drain to EOF. They assert the answer `"fixture complete"`, usage equal to the number of fake responses served, and no damage. Mutants N5-1 to N5-29 and the re-anchored usage bound are all killed.
+
+**What #124 established.**
+- The foundation lane checks the package's Sigstore bundle with cosign `v2.6.5`, which is pinned by sha256. The certificate's workflow SHA must equal the catalog commit `d27764b8`. The first run printed `Verified OK`.
+- `goals = false` is set in every recipe that turns the other built-ins off, production included (N5-P1). All four real-binary lanes pass at the pin: foundation, lifecycle, mediation and combined.
+
+**Corrections worth carrying.**
+- **The old decoder read fields the pinned `Turn` does not have** (`turn.output`, `turn.model`, `turn.usage`). A real turn would have decoded as a success with no output.
+- **At 0.160.1 the goal tools reached every request.** They became visible on ephemeral threads, and that caused all 99 mediation and combined failures. The first explanation of the cause was wrong, and cross-review corrected it.
+- **The plugins-on startup control never actually ran plugin sync.** It raced unawaited requests against shutdown, and at 0.160.1 it stopped connecting. The control now uses analytics, which has an awaited flush, and it requires `CONNECT ab.chatgpt.com:443` (N5-P2, N5-P3).
+
+**What this does NOT establish.**
+- Vendor conformance at either pin. The lane turns were served by fake responses.
+- That a `model/rerouted` target is the model that finally served the answer. Publishing it as the served model is a design choice.
+- That `account/updated` arrives at startup. A no-login startup sent none, so this is left for the 0.160.1 audit.
+- The rest of Stage 0b: `workspaceRouting` under decision 2, the sealed model and effort, relay denials in the provider outcome, the `check_evidence` identities, the `account/read` recovery tests, and the trust-root and voice-host controls. Details are in the [M8 implementation record](plans/handoffs/M8-implementation-record.md).
 
 ---
 
