@@ -4196,3 +4196,28 @@ restored outward loss alone no longer masks an unfinished batch. Remaining
 platform-bound native cases were not run locally. There is no second external
 review. The full gate awaits the final head; owner-stage and merge holds remain
 closed.
+
+#### Portable qualification setup correction
+
+The rebased draft head `15b17fd` passed Verify and runner-qualification CI,
+but its Windows full gate emitted two failures and was interrupted before
+completion. This is an incomplete failing gate, not a pass. Named narrow
+reproductions failed both foreign-run and foreign-graph qualification tests
+with TimeoutError. Their host logs retained the actual materialization and
+cleanup error: `physical acquisition guards require Linux`. Both setup paths
+omitted the existing `substituted_guard` fixture. The foreign-run case passed
+against source and test bytes identical to baseline `4f0178d`: its permissive
+SUCCEEDED-or-FAILED assertion had accepted the old swallowed cleanup failure.
+The new cleanup law correctly leaves the active acquisition RUNNING instead
+of publishing that false terminal outcome.
+
+This is a pre-existing portable fixture weakness exposed by the corrected
+cleanup behavior, not a production regression. Both tests now substitute only
+the platform-bound guard reference, as neighboring credential-free lifecycle
+tests do, and affirmatively require their seed run to SUCCEED before probing
+foreign journal identity. The real guard and Linux/native proofs are unchanged;
+no timeout, retry, provider/protocol or production code is changed. Both red
+cases passed after the fixture correction (2 tests, 12.56 seconds); the touched
+test file passed ruff. The corrected-head full gate and CI still require fresh
+evidence. The single source-only Claude review and owner-stage/merge holds
+remain unchanged.

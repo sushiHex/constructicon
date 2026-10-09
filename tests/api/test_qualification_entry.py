@@ -275,7 +275,7 @@ async def test_an_ownership_loss_relinquishes_and_a_successor_completes(
 
 
 async def test_a_journal_holding_another_run_is_refused_before_recovery(
-    tmp_path, portable_binding, clock
+    tmp_path, portable_binding, substituted_guard, clock
 ):
     """The journal is the qualification's alone: its RunHost would resume
     whatever the journal holds, so a foreign run refuses the whole entry."""
@@ -283,7 +283,7 @@ async def test_a_journal_holding_another_run_is_refused_before_recovery(
     assert await qualify(
         provider=provider(tmp_path, portable_binding, first), grants=GRANTS,
         timeout_s=30, now_fn=clock.now,
-    ) in (RunStatus.SUCCEEDED, RunStatus.FAILED)
+    ) is RunStatus.SUCCEEDED
     second = authorization(tmp_path, portable_binding, clock, idempotency_key="another")
     with pytest.raises(ContractViolation, match="not this qualification's"):
         await qualify(
@@ -293,15 +293,15 @@ async def test_a_journal_holding_another_run_is_refused_before_recovery(
 
 
 async def test_the_same_run_id_carrying_another_graph_is_refused_before_recovery(
-    tmp_path, portable_binding, clock
+    tmp_path, portable_binding, substituted_guard, clock
 ):
     """A run id names only an actor and a key: a stored run with the authorized
     id but another graph is not this qualification's, and is never recovered."""
     first = authorization(tmp_path, portable_binding, clock)
-    await qualify(
+    assert await qualify(
         provider=provider(tmp_path, portable_binding, first), grants=GRANTS,
         timeout_s=30, now_fn=clock.now,
-    )
+    ) is RunStatus.SUCCEEDED
     other = "codex-other"
     regraphed = authorization(
         tmp_path, portable_binding, clock, capability_id=other,
