@@ -113,6 +113,7 @@ from constructicon.substrate.executors.codex_protocol import (
     GATE_INCOMPLETE_FAULT,
     INCONCLUSIVE_DRAIN_FAULT,
     MAX_TOOL_CALLS,
+    QUALIFICATION_PLANS,
     RECORD_BYTES,
     UNSOLICITED_REPLY_FAULT,
     ExpectedAccount,
@@ -437,9 +438,10 @@ class CodexConversation:
         # Turn evidence read while the ``turn/start`` reply was outstanding, in
         # arrival order; it joins the transcript once the reply names the turn.
         self._held: list[bytes] = []
-        # The plan every ``account/updated`` names; it must agree with the first
-        # reading (M8-N5-state-review.md, decision 1).
-        self._noticed_plan: str | None = None
+        # The first known reading or accepted notice plan, including a reading
+        # that independently refused. Later facts must agree even in cleanup;
+        # this private latch never qualifies the public startup gate.
+        self._plan_fact: str | None = None
         self._pre_send_record = False
         self._excluded = 0
         self._server_requests: set[tuple[str, int | str]] = set()
@@ -617,9 +619,14 @@ class CodexConversation:
         plan = None if faults else updated_plan(record, self._expected)
         if plan is None:
             return faults
-        if self._noticed_plan not in (None, plan):
+        return self._plan_faults(plan)
+
+    def _plan_faults(self, plan: str) -> tuple[str, ...]:
+        """Retain the first plan fact; contradictory later facts cannot replace it."""
+
+        if self._plan_fact not in (None, plan):
             return (UPDATED_FAULT,)
-        self._noticed_plan = plan
+        self._plan_fact = plan
         return ()
 
     def _absorb(self, line: bytes, record: Mapping[str, Any], *, pre_send: bool = False) -> bool:
@@ -861,8 +868,11 @@ class CodexConversation:
             # Even a refused first reading names the actual account it judged.
             self.observed_account = account_identity(reply)
         faults = account_faults(reply, self._expected)
-        if not faults and self._noticed_plan not in (None, account_plan(reply)):
-            return (UPDATED_FAULT,)
+        plan = account_plan(reply)
+        # A known literal remains a fact despite another refusal, but missing,
+        # malformed or undeclared plans cannot supply coherence evidence.
+        if plan is not None and (self._expected.accepts(plan) or plan in QUALIFICATION_PLANS):
+            return faults + self._plan_faults(plan)
         return faults
 
     def _defer_tool_request(self, line: bytes, record: Mapping[str, Any]) -> bool:

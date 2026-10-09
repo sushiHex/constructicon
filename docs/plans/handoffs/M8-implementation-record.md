@@ -4153,3 +4153,18 @@ are unchanged from main; the interpreter distinction was reproduced with
 3.11.15 and 3.12.13. [Issue #151](https://github.com/sushiHex/constructicon/issues/151)
 tracks that compatibility work separately. The CI-representative full gate
 uses the workflows' pinned Python 3.11, not an asserted pass for Python 3.12.
+
+**Connector review correction.** The first head's green tests and inventory
+did not prove coherence when a reading already carried another refusal. The
+connector found that an accepted `plus` notice, a refused `pro` notice and a
+`pro` reading could produce exactly the S6c-allowed faults: the independent
+reading fault suppressed the notice/reading contradiction. This introduced
+finding was reproduced through the actual operator checker, including the
+reverse order where the reading arrived before the accepted notice. Eight
+pre-fix timing cases wrongly passed by assertion; malformed and unknown-plan
+controls already refused. A single private plan-coherence latch now serves
+both known reading literals and accepted notices, independently of other
+faults. It retains the first fact, appends contradictions without discarding
+independent refusals, and never qualifies the public gate. The follow-up tests
+and mutation results are recorded on the PR's final head, not inferred from
+the earlier 183 kills. No host retry occurred while correcting this finding.

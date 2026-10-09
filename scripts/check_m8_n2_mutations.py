@@ -127,11 +127,11 @@ N5_PROTOCOL = (
     ("N5-5 account/updated names an accepted plan", UPDATED,
      "return plan if expected.accepts(plan) else None", "return plan",
      SPEND_TEST + "test_any_other_account_update_refuses"),
-    ("N5-6 notices agree with each other", NOTICES,
-     "if self._noticed_plan not in (None, plan):", "if False:",
+    ("N5-6 notices agree with each other", "constructicon.substrate.executors.codex:CodexConversation._plan_faults",
+     "if self._plan_fact not in (None, plan):", "if False:",
      CONTRADICTION + "[between-notices]"),
     ("N5-7 the first reading agrees with the notices", JUDGE_ACCOUNT,
-     "if not faults and self._noticed_plan not in (None, account_plan(reply)):", "if False:",
+     "return faults + self._plan_faults(plan)", "return faults",
      CONTRADICTION + "[before-reading]"),
     # --- N5 Stage 0: the decoder reads the pinned events ---
     ("N5-8 the old turn fields stay unread", ANSWER,
@@ -1241,8 +1241,8 @@ MUTANTS = (
     (
         "H7-10 cleanup checks the account against every previously accepted notice",
         JUDGE_ACCOUNT,
-        "if not faults and self._noticed_plan not in (None, account_plan(reply)):",
-        "if False:",
+        "return faults + self._plan_faults(plan)",
+        "return faults",
         "tests/substrate/test_codex_refusal.py::"
         "test_cleanup_checks_the_plan_latched_before_the_pending_reading",
     ),
@@ -1252,6 +1252,22 @@ MUTANTS = (
         'self._correlated.add(record["id"])',
         "pass",
         "tests/substrate/test_codex_refusal.py::test_a_pending_account_reply_cannot_answer_twice",
+    ),
+    (
+        "H7-12 account faults never hide a plan contradiction",
+        JUDGE_ACCOUNT,
+        "return faults + self._plan_faults(plan)",
+        "return faults + (() if faults else self._plan_faults(plan))",
+        "tests/substrate/test_codex_refusal.py::"
+        "test_reading_contradiction_preserves_independent_faults[wrong-plan-same-chunk-cleanup-before]",
+    ),
+    (
+        "H7-13 cleanup notices check a previously refused reading",
+        NOTICES,
+        "return self._plan_faults(plan)",
+        "return ()",
+        "tests/substrate/test_codex_refusal.py::"
+        "test_cleanup_notice_checks_an_already_refused_reading[same-chunk]",
     ),
     *N5_PROTOCOL,
 )

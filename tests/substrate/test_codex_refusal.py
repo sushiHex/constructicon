@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from itertools import permutations
 
 import pytest
 
@@ -30,6 +31,7 @@ TERMINAL = {
 }
 READING_FAULT = "account plan 'pro' is not the expected 'plus'"
 NOTICE_FAULT = "account/updated plan 'pro' is not the expected 'plus'"
+PLAN_ORDERS = tuple(permutations(("accepted", "refusal", "reading")))
 
 
 class AccountNoticeNative(ScriptedNative):
@@ -64,6 +66,66 @@ class AccountNoticeNative(ScriptedNative):
                 self._emit({"id": request["id"], "result": managed()})
             if notifying and self.order == "after":
                 self._emit(self.notice)
+
+
+class ContradictingPlanNative(ScriptedNative):
+    """Latch an accepted notice before a reading that can independently refuse."""
+
+    def __init__(self, *, account=None, order=("accepted", "reading"), read_limit=None):
+        super().__init__(accounts=[{"result": managed() if account is None else account}],
+                         read_limit=read_limit, records=[completed()])
+        self.order = order
+
+    def _respond(self, raw):
+        if json.loads(raw).get("method") != "account/read":
+            super()._respond(raw)
+            return
+        for item in self.order:
+            if item == "reading":
+                super()._respond(raw)
+            else:
+                self._emit(exact_update("plus" if item == "accepted" else "pro"))
+
+
+@pytest.mark.parametrize("order", [("accepted", "reading"),
+                                 ("accepted", "refusal", "reading"),
+                                 ("accepted", "reading", "refusal")],
+                         ids=["normal", "cleanup-before", "cleanup-after"])
+@pytest.mark.parametrize("read_limit", [None, 1], ids=["same-chunk", "split"])
+@pytest.mark.parametrize("account", [managed(), managed(email="other"),
+                                     {**managed(), "requiresOpenaiAuth": False},
+                                     {**managed(), "workspaceRouting": {}},
+                                     managed(planType=None), managed(planType=["pro"]),
+                                     managed(planType="unknown")],
+                         ids=["wrong-plan", "wrong-identity", "provider", "routing",
+                              "missing-plan", "non-string-plan", "unknown-plan"])
+async def test_reading_contradiction_preserves_independent_faults(
+    tmp_path, order, read_limit, account,
+):
+    from constructicon.substrate.executors.codex_protocol import account_faults
+
+    native = ContradictingPlanNative(account=account, order=order, read_limit=read_limit)
+    expected = ExpectedAccount(plan_type="plus", identity=IDENTITY)
+    _, evidence = await startup(tmp_path, native, expected=expected)
+    independent = account_faults({"result": account}, expected)
+    assert independent and set(independent) <= set(evidence["faults"])
+    assert (UPDATED_FAULT in evidence["faults"]) == (account["account"]["planType"] == "pro")
+    assert not evidence["gate"]["completed"] and evidence["readback"] is None
+    assert evidence["methods_sent"] == FOUR[:3]
+    assert native.stdin_closed and native.accounts_seen == 1
+
+
+@pytest.mark.parametrize("read_limit", [None, 1], ids=["same-chunk", "split"])
+async def test_cleanup_notice_checks_an_already_refused_reading(tmp_path, read_limit):
+    native = ContradictingPlanNative(order=("reading", "accepted", "refusal"),
+                                     read_limit=read_limit)
+    _, evidence = await startup(tmp_path, native, expected=ExpectedAccount(
+        plan_type="plus", identity=IDENTITY,
+    ))
+    assert set(evidence["faults"]) == TERMINAL | {READING_FAULT, NOTICE_FAULT, UPDATED_FAULT}
+    assert evidence["gate"] == gate(False, None) and evidence["readback"] is None
+    assert evidence["methods_sent"] == FOUR[:3]
+    assert native.stdin_closed and native.accounts_seen == 1
 
 
 @pytest.mark.parametrize("order", ["before", "after"])

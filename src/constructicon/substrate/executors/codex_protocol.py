@@ -1020,8 +1020,8 @@ def routing_faults(result: Mapping[str, Any]) -> tuple[str, ...]:
 def account_plan(reply: Any) -> str | None:
     """The plan literal of a reading, only when it is a string.
 
-    Called after :func:`account_faults` cleared, so the value is one the
-    binding's expected account accepts: an operator-declared literal.
+    This extracts a literal without accepting it. Callers judge the account
+    and decide whether the literal is one their binding recognizes.
     """
 
     plan = _reading(reply)[1]

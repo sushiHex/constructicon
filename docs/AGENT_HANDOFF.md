@@ -27,7 +27,11 @@ or sending another request; pre-send and duplicate protections still apply.
 The operator checker requires the account reading's exact plan refusal and
 sealed identity, with at most one matching exact-notice fault. Generic,
 missing, contradictory and extra evidence does not qualify. All 183 N2
-mutants were assertion-killed; focused and independent-review results live
+mutants in the first inventory were assertion-killed, but a connector review
+still found a contradictory-notice gap when a reading already carried another
+fault. Its correction uses one private coherence latch for both reading and
+notice orderings; no existing refusal suppresses that check. Follow-up
+mutation, focused and independent-review results live
 in the [implementation record](plans/handoffs/M8-implementation-record.md).
 
 **Correction worth carrying.** Earlier successful startup notices cannot
