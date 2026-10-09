@@ -19,8 +19,8 @@ a slice merges, newest first. Nothing here authorizes work.
 
 **Merged `4f0178d1` (PR #146) on 2026-10-09 UTC from final head `a037cbc`.**
 The docs-only change adds [Proposed ADR 0022](adr/0022-operator-disposal-records-abandoned-capabilities.md)
-and records its evidence. The proposal is not accepted: only the owner may
-accept it, #143 remains open, and implementation requires a separate issue
+and records its evidence. It merged as Proposed, not accepted: only the owner
+may accept it, and implementation requires a separate issue
 after acceptance and #132's merge.
 
 **What the proposal says.** An ADMIN-only, idempotent command could abandon
@@ -63,7 +63,7 @@ under "#143 — proposed operator disposal of unreconcilable capability accounti
 **Merged `13921e25` (PR #144) on 2026-10-09 UTC from head `7f30d77`.** The
 docs-only change adds the [Stage 4 WRITE planning draft](plans/handoffs/M8-N5-stage4-write.md)
 and updates the plan index and implementation record. The document remains a
-review draft: all seven S4 decisions are open on #78, and the plan authorizes
+review draft: all seven S4 decisions were open at merge, and the plan authorizes
 nothing. Its proposed implementation, proofs, smoke, host session and model
 request are future work. CI's docs-only path skipped native proof lanes; that
 is not native execution evidence.
@@ -105,7 +105,7 @@ included. The final CI/review evidence and limits are recorded on [PR #140](http
 
 **Corrections worth carrying.**
 - The first implementation trusted the working manifest and enumerated only
-  its entries, allowing a staged frozen-plan edit with a matching manual digest
+  its entries, allowing an unnamed staged plan edit with a matching manual digest
   and an unnamed new document to pass. The committed baseline and complete
   staged inventory close those omissions.
 - Text conflict markers alone missed a marker-free modify/delete conflict
