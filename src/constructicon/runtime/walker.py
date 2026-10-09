@@ -449,7 +449,7 @@ class Walker:
             # ownership lease expires and the next worker reconciles resources.
             await self._stop_heartbeat(heartbeat)
             raise
-        await self._finish_run(lease, heartbeat, failure, cancellation=cancellation)
+        await self._finish_run(lease, heartbeat, failure, cancellation=cancellation, lost=lost)
         assert result is not None
         return result
 
@@ -460,6 +460,7 @@ class Walker:
         failure: Exception | asyncio.CancelledError | None,
         *,
         cancellation: Literal["cancel", "abandon"],
+        lost: list[OwnershipLost],
     ) -> None:
         """Normal shutdown joins heartbeats and releases even after ordinary errors.
 
@@ -476,18 +477,22 @@ class Walker:
             primary, asyncio.CancelledError,
         ) else [primary]
         intent_recorded = False
-        if cancellation == "cancel" and cancelled is not None and loss is None:
-            try:
-                self._journal.request_cancel(lease.run_id)
-                intent_recorded = True
-            except Exception as exc:
-                errors.append(exc)
         try:
             await self._stop_heartbeat(heartbeat)
         except OwnershipLost as exc:
             loss = loss or exc
         except Exception as exc:
             errors.append(exc)
+        if lost:
+            loss = loss or lost[0]
+        if cancellation == "cancel" and cancelled is not None and loss is None:
+            try:
+                self._journal.request_cancel(lease.run_id, lease=lease)
+                intent_recorded = True
+            except OwnershipLost as exc:
+                loss = exc
+            except Exception as exc:
+                errors.append(exc)
         if isinstance(failure, asyncio.CancelledError) and intent_recorded and loss is None:
             try:
                 self._journal.transition_run(
@@ -1159,10 +1164,25 @@ class Walker:
         async def close_all() -> None:
             errors = [prior_error] if prior_error is not None else []
             for index, (capability, acquisition) in enumerate(acquired):
-                closed = False
                 try:
                     if lost:
                         raise lost[0]
+                    self._journal.heartbeat(lease, ttl_s=self._lease_ttl_s)
+                except OwnershipLost as loss:
+                    failure = await self._relinquish_acquired(acquired[index:], loss=loss)
+                    if failure is not None:
+                        errors.append(failure)
+                    raise loss from _cleanup_error(errors)
+                except Exception as observation:
+                    errors.append(observation)
+                    failure = await self._relinquish_acquired(acquired[index:])
+                    if failure is not None:
+                        errors.append(failure)
+                    error = _cleanup_error(errors)
+                    assert error is not None
+                    raise _CleanupFailure(error, node_error, cancellation) from None
+                closed = False
+                try:
                     closure = await capability.close(acquisition, disposition)
                     closed = True
                     self._journal.transition_capability_lease(
@@ -1188,8 +1208,9 @@ class Walker:
                     )
                     if failure is not None:
                         errors.append(failure)
-                    # A failed physical close skipped the fenced row transition.
-                    # Re-observe ownership before closing any later sibling.
+                    # Close or its row write failed. Relinquishment is local and
+                    # idempotent even after physical close; it changes no row.
+                    # Re-observe ownership, including after the last failed close.
                     try:
                         if lost:
                             raise lost[0]

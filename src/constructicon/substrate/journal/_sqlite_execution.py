@@ -322,14 +322,27 @@ class _SqliteExecutionMixin:
                     f"run {lease.run_id!r}: release fenced out at epoch {lease.epoch}"
                 )
 
-    def request_cancel(self, run_id: RunId) -> None:
+    def request_cancel(self, run_id: RunId, *, lease: RunLease | None = None) -> None:
+        if lease is not None and lease.run_id != run_id:
+            raise ContractViolation("cancellation lease names a different run")
         with self._txn() as conn:
             if _run_mutation_row(conn, run_id) is None:
                 raise ContractViolation(f"unknown run {run_id!r}")
-            updated = conn.execute(
-                "UPDATE runs SET cancel_requested = 1 WHERE run_id = ?",
-                (run_id,),
-            )
+            if lease is None:
+                updated = conn.execute(
+                    "UPDATE runs SET cancel_requested = 1 WHERE run_id = ?",
+                    (run_id,),
+                )
+            else:
+                updated = conn.execute(
+                    "UPDATE runs SET cancel_requested = 1"
+                    " WHERE run_id = ? AND owner_id = ? AND owner_epoch = ?",
+                    (run_id, lease.owner_id, lease.epoch),
+                )
+                if updated.rowcount == 0:
+                    raise OwnershipLost(
+                        f"run {run_id!r}: cancellation fenced out at epoch {lease.epoch}"
+                    )
             if updated.rowcount != 1:
                 raise JournalDamaged(f"run {run_id!r} disappeared during cancellation")
 

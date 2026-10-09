@@ -136,11 +136,14 @@ sequence with genuine deferred-resource doubles, not Linux processes.
 Known cleanup failures escape at their own site instead of becoming invocation
 failures. An original invocation/setup error is retained explicitly, and a
 completed checkpoint is not relabeled failed when its subsequent close fails.
-Close attempts every sibling while ownership can be affirmed; failed closes
+Close positively observes ownership before each physical close; failed closes
 relinquish local custody, and observed ownership loss switches remaining work
 to relinquishment. Normal run shutdown joins heartbeats and releases ownership
-despite ordinary errors. Task cancellation records user intent only in cancel
-mode; shutdown abandonment records none. Normal cleanup preserves hard-death
+despite ordinary errors. Worker cancellation rechecks latched loss after joining
+the heartbeat and atomically fences its intent write with the current lease;
+external cancellation requests retain their run-scoped authority. Task
+cancellation records user intent only in cancel mode; shutdown abandonment
+records none. Normal cleanup preserves hard-death
 crash semantics; already-known ownership loss stays primary while relinquishing.
 Future terminal transitions, including parking, refuse active acquisitions with
 `CleanupUnresolved` in the same fenced journal transaction. The released

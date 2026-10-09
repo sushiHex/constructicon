@@ -4129,7 +4129,7 @@ diagnostic ownership loss remains primary, and diagnostic hard death escapes.
 The first portable regression run on unchanged production code produced nine
 assertion failures and one passing abandonment case. The tests exercise real
 SQLite journals and the existing retained-custody and delayed-close doubles.
-The final portable focused batch passed 122 tests across cleanup obligations,
+The construction head `5798d45` passed 122 portable focused tests across cleanup obligations,
 retained custody, materialization control, leases, materialization and inventory
 checks. Ruff passed for source, tests and both touched inventory scripts; strict
 mypy passed all 110 source files. All twelve portable walker/custody/settlement
@@ -4145,3 +4145,54 @@ unrecorded failed cleanup with no row cannot gain a durable recovery obligation
 from this guard. Persistent reconciliation failure remains the Proposed ADR
 in #143. The frozen Stage 3 T5 wording and adapter/protocol bytes are preserved;
 the eventual PR records the runbook's changed failure behavior instead.
+
+#### Draft review follow-up
+
+[Draft PR #147](https://github.com/sushiHex/constructicon/pull/147) received one
+Claude cross-review, job `job_8d5057a35035`, actual model `claude-opus-5-5`.
+The review supplied source-only premises, not executed reproductions. Tests
+against `5798d45` reproduced three introduced defects as assertion failures;
+a fourth observation passed while affirmatively recording its redundant call.
+The construction-head full gate was interrupted for this follow-up and is
+incomplete, not a passing result.
+
+The dispositions are:
+
+- Adopted, introduced: a cancelled worker with an unfinished acquisition could
+  set its successor's cancellation flag. `request_cancel` now accepts an
+  optional `RunLease`; worker calls enforce run-id agreement and owner/epoch
+  authority in its existing `BEGIN IMMEDIATE` transaction, without allocating
+  an event sequence. External run-scoped requests remain unchanged. An actual
+  successor interposed immediately before the write proves the atomic fence,
+  independently of heartbeat preflight or a latched-loss inference.
+- Adopted, introduced: cancellation-request hard death could leave a heartbeat
+  renewing ownership. Shutdown joins it first, then rechecks the shared loss
+  latch before attempting the fenced intent write. Hard death retains ownership
+  for crash recovery; atomic refusal keeps OwnershipLost primary.
+- Adopted, introduced: ordinary ownership-observation failure settling the
+  second committed-but-unanswered acquisition could physically close an earlier
+  sibling. Every physical close now positively observes ownership first;
+  refusal relinquishes the remaining local handles. Fresh positive observation
+  permits closure after a transient earlier observation failure. The existing
+  post-failed-close observation remains, including for a last failed sibling.
+- Not an independently reproduced defect: relinquishment after successful
+  physical close but failed row write repeats a local, idempotent release call.
+  It changes no durable row, and the adapter shares its completed release task.
+  The checkpoint, real row-write error and active recovery row remain truthful.
+  The inaccurate physical-close-only comment is corrected; behavior is retained.
+
+Pre-existing ordinary background-heartbeat observation policy and provider-owned
+cancellation semantics were not expanded by this follow-up. Already-known
+OwnershipLost still outranks direct/grouped relinquishment hard death and joins
+the batch. The final follow-up targeted batch passed 188 tests, including the
+journal run-projection parity cases. Ruff passed for source, tests and both
+touched inventory scripts; strict mypy passed all 110 source files. The complete
+M8 inventory assertion-killed all 74 mutants: 64 retained construction cases
+and ten added follow-up guards. All twelve portable walker/custody/settlement
+native-recovery mutants were assertion-killed. The late-answer check is
+reanchored to the shared close preflight, and the cancellation join assertion
+records that heartbeat shutdown begins only after owned relinquishment joins;
+restored outward loss alone no longer masks an unfinished batch. Remaining
+platform-bound native cases were not run locally. There is no second external
+review. The full gate awaits the final head; owner-stage and merge holds remain
+closed.

@@ -63,8 +63,8 @@ MUTANTS = (
      TEST + "test_native_process_observer_distinguishes_worker_child_from_supervisors"),
     ("cancellation closes an observed lost owner's recorded acquisitions",
      "constructicon.runtime.walker:Walker._close_acquired",
-     "if lost:\n                    raise lost[0]\n                closure",
-     "if False:\n                    raise lost[0]\n                closure",
+     "if lost:\n                    raise lost[0]\n                self._journal.heartbeat",
+     "if False:\n                    raise lost[0]\n                self._journal.heartbeat",
      "tests/runtime/test_cleanup_obligations.py::"
      "test_close_batch_observes_latched_loss_before_its_first_close"),
     ("an observed ownership loss relinquishes local custody",
@@ -107,10 +107,12 @@ MUTANTS = (
      "tests/runtime/test_leases.py::"
      "test_a_lost_answer_after_the_lease_commit_closes_the_recorded_row"),
     ("a late record answer affirms ownership before disposal",
-     "constructicon.runtime.walker:Walker._acquire_invocation_capability",
-     "self._journal.heartbeat(lease, ttl_s=self._lease_ttl_s)", "None",
-     "tests/runtime/test_leases.py::"
-     "test_a_late_answer_after_a_successor_claimed_leaves_the_row_to_it"),
+     "constructicon.runtime.walker:Walker._close_acquired",
+     "self._journal.heartbeat(lease, ttl_s=self._lease_ttl_s)\n"
+     "            except OwnershipLost as loss:",
+     "None\n            except OwnershipLost as loss:",
+     "tests/runtime/test_cleanup_obligations.py::"
+     "test_second_settle_observation_failure_relinquishes_earlier_siblings[persistent]"),
     ("an unsettled record outcome keeps the local discard",
      "constructicon.runtime.walker:Walker._acquire_invocation_capability",
      "recorded = False", "raise",

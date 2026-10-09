@@ -9,7 +9,7 @@ from dataclasses import replace
 import pytest
 
 from constructicon.core.address import ExecutionPath, RunId, ScopePath
-from constructicon.core.errors import JournalDamaged
+from constructicon.core.errors import ContractViolation, JournalDamaged
 from constructicon.core.manifest import CapabilityLease
 from constructicon.core.run import (
     TERMINAL_STATUS_EVENTS,
@@ -444,7 +444,8 @@ async def test_failed_close_observes_ownership_before_any_later_close(
     assert world.journal.run_state(run_id).owner_id == (winner.owner_id if loss else None)
 
 
-async def test_close_batch_observes_latched_loss_before_its_first_close(world):
+@pytest.mark.parametrize("release_crash", [False, True], ids=["released", "release-crash"])
+async def test_close_batch_observes_latched_loss_before_its_first_close(world, release_crash):
     provider = world.provider("retaining")
     entered, finish = asyncio.Event(), asyncio.Event()
 
@@ -454,6 +455,12 @@ async def test_close_batch_observes_latched_loss_before_its_first_close(world):
         handle.context.check_control()
 
     provider.before_execute = wait
+    death = InjectedCrash("known-loss release crashed")
+    if release_crash:
+        async def fail_release(handle):
+            raise BaseExceptionGroup("release died", [death])
+
+        provider.before_relinquish = fail_release
     system = world.system("loser", {"retaining": provider})
     graph = await register_component(system, world.journal, bindings={"executor": "retaining"})
     run_id = RunId("close-batch-latched")
@@ -468,13 +475,16 @@ async def test_close_batch_observes_latched_loss_before_its_first_close(world):
         ))
         assert await outcome(closing) is loss
         assert provider.closes == []
-        assert provider.relinquished == [provider.handles[0].key]
-        assert world.held() == [False]
+        assert provider.relinquished == ([] if release_crash else [provider.handles[0].key])
+        assert world.held() == [release_crash]
+        if release_crash:
+            assert loss.__cause__ is death
         assert world.rows(run_id) == [("active", None)]
         assert world.journal.run_state(run_id).owner_id == winner.owner_id
     finally:
         finish.set()
         await outcome(running)
+        provider.handles[0].release()
 
 
 async def test_shared_release_errors_are_deduplicated_without_walking_context(world):
@@ -621,7 +631,7 @@ async def test_failed_cancel_request_still_stops_heartbeat_and_releases(world, m
         entered.set()
         await asyncio.Event().wait()
 
-    def refuse_request(*args):
+    def refuse_request(*args, **kwargs):
         raise failure
 
     provider.before_execute = wait
@@ -677,3 +687,290 @@ async def test_background_heartbeat_failure_releases_without_replacing_loss(
         assert result is failure, result
         assert world.journal.run_state(run_id).status is RunStatus.SUCCEEDED
         assert world.journal.run_state(run_id).owner_id is None
+
+
+async def test_cancel_during_unfinished_acquire_cannot_cancel_a_successor(world, monkeypatch):
+    from constructicon.runtime.walker import Walker
+
+    provider = world.provider("retaining")
+    entered = asyncio.Event()
+
+    async def blocked_acquire(context):
+        entered.set()
+        await asyncio.Event().wait()
+
+    async def paused_heartbeat(*args):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(provider, "acquire", blocked_acquire)
+    monkeypatch.setattr(Walker, "_heartbeat_loop", paused_heartbeat)
+    run_id = RunId("cancel-unfinished-acquire-successor")
+    running = await world.start(run_id, {"executor": "retaining"})
+    await entered.wait()
+    winner = world.lose(run_id)
+    assert not world.journal.cancel_requested(run_id)
+    running.cancel()
+    result = await outcome(running)
+    assert isinstance(result, OwnershipLost), result
+    assert not world.journal.cancel_requested(run_id)
+    assert world.journal.run_state(run_id).owner_id == winner.owner_id
+    assert provider.handles == [] and world.rows(run_id) == []
+
+
+async def test_cancel_request_hard_death_stops_the_heartbeat_without_releasing(world, monkeypatch):
+    from constructicon.runtime.walker import Walker
+
+    provider = world.provider("retaining")
+    entered, stopped = asyncio.Event(), asyncio.Event()
+    heartbeats = []
+    crash = InjectedCrash("cancel request crashed")
+
+    async def tracked_heartbeat(*args):
+        heartbeats.append(asyncio.current_task())
+        try:
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
+
+    async def wait(handle):
+        entered.set()
+        await asyncio.Event().wait()
+
+    def fail_request(*args, **kwargs):
+        raise crash
+
+    provider.before_execute = wait
+    monkeypatch.setattr(Walker, "_heartbeat_loop", tracked_heartbeat)
+    monkeypatch.setattr(world.journal, "request_cancel", fail_request)
+    run_id = RunId("cancel-request-hard-death")
+    running = await world.start(run_id, {"executor": "retaining"})
+    await entered.wait()
+    running.cancel()
+    try:
+        assert await outcome(running) is crash
+        assert stopped.is_set()
+        assert heartbeats[0].done()
+        assert world.journal.run_state(run_id).owner_id == "loser"
+    finally:
+        for heartbeat in heartbeats:
+            heartbeat.cancel()
+        await asyncio.gather(*heartbeats, return_exceptions=True)
+
+
+@pytest.mark.parametrize("restored", [False, True], ids=["persistent", "restored"])
+async def test_second_settle_observation_failure_relinquishes_earlier_siblings(
+    world, monkeypatch, restored,
+):
+    from constructicon.runtime.walker import Walker
+
+    first = EagerProvider(ledger=world.ledger, custody=world.custody)
+    second = EagerProvider(ledger=world.ledger, custody=world.custody)
+    world.providers.update(first=first, second=second)
+    record = world.journal.record_capability_lease
+    calls = 0
+    observations = 0
+    observation = OSError("ownership observation failed")
+    heartbeat = world.journal.heartbeat
+
+    def lose_second_answer(*args):
+        nonlocal calls
+        record(*args)
+        calls += 1
+        if calls == 2:
+            raise ConnectionError("second answer lost")
+
+    def fail_heartbeat(*args, **kwargs):
+        nonlocal observations
+        observations += 1
+        if observations == 1 or not restored:
+            raise observation
+        return heartbeat(*args, **kwargs)
+
+    async def paused_heartbeat(*args):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(world.journal, "record_capability_lease", lose_second_answer)
+    monkeypatch.setattr(world.journal, "heartbeat", fail_heartbeat)
+    monkeypatch.setattr(Walker, "_heartbeat_loop", paused_heartbeat)
+    run_id = RunId("second-settle-observation-failed")
+    result = await outcome(await world.start(run_id, {"executor": "first", "z": "second"}))
+    assert result is observation, result
+    assert calls == 2
+    assert first.closes == (["discard"] if restored else []) and second.closes == []
+    assert first.relinquished == ([] if restored else [first.handles[0].key])
+    assert second.relinquished == [second.handles[0].key]
+    assert world.held() == [False, False]
+    assert world.rows(run_id) == [
+        ("closed", "discarded") if restored else ("active", None), ("active", None),
+    ]
+    assert observations >= 2
+    assert world.journal.run_state(run_id).owner_id is None
+
+
+async def test_row_write_failure_after_close_keeps_checkpoint_and_recovery_row(world, monkeypatch):
+    provider = world.provider("retaining")
+    failure = OSError("closed row write failed")
+
+    def fail_transition(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(world.journal, "transition_capability_lease", fail_transition)
+    run_id = RunId("physically-closed-row-write-failed")
+    result = await outcome(await world.start(run_id, {"executor": "retaining"}))
+    assert result is failure
+    assert provider.closes == ["release"]
+    assert provider.relinquished == [provider.handles[0].key]
+    assert world.held() == [False]
+    assert world.rows(run_id) == [("active", None)]
+    assert world.journal.checkpoint(run_id, provider.handles[0].context.path) is not None
+    assert world.journal.run_state(run_id).owner_id is None
+    assert not any(event.kind == "NodeFailed" for event in world.journal.events(run_id))
+
+
+@pytest.mark.parametrize("fence", ["external", "current", "owner", "epoch", "run-id", "stale"])
+def test_cancel_request_optional_lease_fence_preserves_authority_and_sequence(
+    journal, clock, fence,
+):
+    run_id, other = RunId("fenced-cancel"), RunId("other-fenced-cancel")
+    create_test_run(journal, run_id)
+    current = start_test_run(journal, run_id, owner_id="owner")
+    create_test_run(journal, other)
+    start_test_run(journal, other, owner_id="owner")
+    selected, supplied = run_id, current
+    if fence == "owner":
+        supplied = current.model_copy(update={"owner_id": "not-owner"})
+    elif fence == "epoch":
+        supplied = current.model_copy(update={"epoch": current.epoch + 1})
+    elif fence == "run-id":
+        selected = other
+    elif fence == "stale":
+        clock.advance(LEASE_TTL_S + 1)
+        current = journal.claim_run(run_id, owner_id="successor", ttl_s=LEASE_TTL_S)
+    baseline = journal.events(run_id)
+    error = None
+    try:
+        if fence == "external":
+            journal.request_cancel(selected)
+        else:
+            journal.request_cancel(selected, lease=supplied)
+    except Exception as exc:
+        error = exc
+    if fence in {"external", "current"}:
+        assert error is None, error
+        assert journal.cancel_requested(run_id)
+    else:
+        expected = ContractViolation if fence == "run-id" else OwnershipLost
+        assert isinstance(error, expected), error
+        assert not journal.cancel_requested(run_id)
+    assert not journal.cancel_requested(other)
+    assert journal.events(run_id) == baseline
+    assert journal.append_event(current, "AfterCancelRequest").seq == baseline[-1].seq + 1
+
+
+@pytest.mark.parametrize("cleanup_fails", [False, True], ids=["closed", "close-failed"])
+async def test_successor_interposed_at_cancel_write_is_not_cancelled(
+    world, monkeypatch, cleanup_fails,
+):
+    from constructicon.runtime.walker import Walker
+
+    provider = world.provider("retaining")
+    entered = asyncio.Event()
+    request = world.journal.request_cancel
+    winners = []
+    run_id = RunId("interposed-cancel-successor")
+
+    async def wait(handle):
+        entered.set()
+        await asyncio.Event().wait()
+
+    async def paused_heartbeat(*args):
+        await asyncio.Event().wait()
+
+    def interpose_successor(requested, **kwargs):
+        winners.append(world.lose(run_id))
+        request(requested, **kwargs)
+
+    provider.before_execute = wait
+    if cleanup_fails:
+        async def fail_close(handle):
+            raise OSError("close failed before cancellation write")
+
+        provider.before_close = fail_close
+    monkeypatch.setattr(Walker, "_heartbeat_loop", paused_heartbeat)
+    monkeypatch.setattr(world.journal, "request_cancel", interpose_successor)
+    running = await world.start(run_id, {"executor": "retaining"})
+    await entered.wait()
+    running.cancel()
+    result = await outcome(running)
+    assert isinstance(result, OwnershipLost), result
+    assert len(winners) == 1
+    assert world.journal.run_state(run_id).owner_id == winners[0].owner_id
+    assert not world.journal.cancel_requested(run_id)
+    assert world.held() == [False]
+
+
+async def test_loss_latched_while_stopping_heartbeat_skips_cancellation_write(world, monkeypatch):
+    from constructicon.runtime.walker import Walker
+
+    provider = world.provider("retaining")
+    entered = asyncio.Event()
+    loss = OwnershipLost("loss latched during heartbeat join")
+    requests = []
+    run_id = RunId("cancel-heartbeat-join-lost")
+    request = world.journal.request_cancel
+
+    async def blocked_acquire(context):
+        entered.set()
+        await asyncio.Event().wait()
+
+    async def latch_on_stop(self, lease, lost):
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            world.lose(run_id)
+            lost.append(loss)
+
+    def tracked_request(*args, **kwargs):
+        requests.append(args)
+        request(*args, **kwargs)
+
+    monkeypatch.setattr(provider, "acquire", blocked_acquire)
+    monkeypatch.setattr(Walker, "_heartbeat_loop", latch_on_stop)
+    monkeypatch.setattr(world.journal, "request_cancel", tracked_request)
+    running = await world.start(run_id, {"executor": "retaining"})
+    await entered.wait()
+    running.cancel()
+    assert await outcome(running) is loss
+    assert requests == []
+    assert not world.journal.cancel_requested(run_id)
+    assert world.journal.run_state(run_id).owner_id == "successor"
+
+
+async def test_last_failed_close_observes_successor_without_latched_heartbeat(world, monkeypatch):
+    from constructicon.runtime.walker import Walker
+
+    provider = world.provider("retaining")
+    closing, finish = asyncio.Event(), asyncio.Event()
+    failure = OSError("last close failed")
+
+    async def blocked_close(handle):
+        closing.set()
+        await finish.wait()
+        raise failure
+
+    async def paused_heartbeat(*args):
+        await asyncio.Event().wait()
+
+    provider.before_close = blocked_close
+    monkeypatch.setattr(Walker, "_heartbeat_loop", paused_heartbeat)
+    run_id = RunId("last-close-successor")
+    running = await world.start(run_id, {"executor": "retaining"})
+    await closing.wait()
+    winner = world.lose(run_id)
+    finish.set()
+    result = await outcome(running)
+    assert isinstance(result, OwnershipLost), result
+    assert result.__cause__ is failure
+    assert world.journal.run_state(run_id).owner_id == winner.owner_id
+    assert world.rows(run_id) == [("active", None)]
+    assert world.held() == [False]

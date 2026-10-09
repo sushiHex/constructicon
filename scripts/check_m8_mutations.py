@@ -325,8 +325,10 @@ MUTANTS = (
     (
         "failed close observes a successor before another physical close",
         "constructicon.runtime.walker:Walker._close_acquired",
-        "self._journal.heartbeat(lease, ttl_s=self._lease_ttl_s)", "None",
-        CLEANUP + "test_failed_close_observes_ownership_before_any_later_close[fenced]",
+        "raise lost[0]\n                    self._journal.heartbeat(lease, "
+        "ttl_s=self._lease_ttl_s)",
+        "raise lost[0]\n                    None",
+        CLEANUP + "test_last_failed_close_observes_successor_without_latched_heartbeat",
     ),
     (
         "settle ownership observation failure releases unenrolled custody",
@@ -377,7 +379,7 @@ MUTANTS = (
         "a failed cancellation request still stops its heartbeat",
         "constructicon.runtime.walker:Walker._finish_run",
         "await self._stop_heartbeat(heartbeat)", "None",
-        CLEANUP + "test_failed_cancel_request_still_stops_heartbeat_and_releases",
+        CLEANUP + "test_cancel_request_hard_death_stops_the_heartbeat_without_releasing",
     ),
     (
         "background heartbeat failure cannot replace ownership loss",
@@ -395,7 +397,8 @@ MUTANTS = (
     (
         "unknown ownership releases remaining custody without another close",
         "constructicon.runtime.walker:Walker._close_acquired",
-        "except Exception as observation:", "except ContractViolation as observation:",
+        "except Exception as observation:\n                    errors.append(observation)",
+        "except ContractViolation as observation:\n                    errors.append(observation)",
         CLEANUP + "test_failed_close_observes_ownership_before_any_later_close[failed]",
     ),
     (
@@ -454,6 +457,78 @@ MUTANTS = (
         "constructicon.runtime.walker:Walker._relinquish_acquired",
         "loss is None and _is_hard_death(exc)", "_is_hard_death(exc)",
         CLEANUP + "test_relinquishment_hard_death_preserves_the_known_loss_boundary[lost-grouped]",
+    ),
+    (
+        "worker cancellation cannot bypass its atomic lease fence",
+        "constructicon.substrate.journal._sqlite_execution:_SqliteExecutionMixin.request_cancel",
+        "if lease is None:", "if True:",
+        CLEANUP + "test_successor_interposed_at_cancel_write_is_not_cancelled",
+    ),
+    (
+        "cancellation lease must name the selected run",
+        "constructicon.substrate.journal._sqlite_execution:_SqliteExecutionMixin.request_cancel",
+        "if lease is not None and lease.run_id != run_id:", "if False:",
+        CLEANUP + "test_cancel_request_optional_lease_fence_preserves_authority_and_sequence"
+        "[run-id]",
+    ),
+    (
+        "worker cancellation fences the owner identity",
+        "constructicon.substrate.journal._sqlite_execution:_SqliteExecutionMixin.request_cancel",
+        "AND owner_id = ?", "AND ? IS NOT NULL",
+        CLEANUP + "test_cancel_request_optional_lease_fence_preserves_authority_and_sequence"
+        "[owner]",
+    ),
+    (
+        "worker cancellation fences the owner epoch",
+        "constructicon.substrate.journal._sqlite_execution:_SqliteExecutionMixin.request_cancel",
+        "AND owner_epoch = ?", "AND ? IS NOT NULL",
+        CLEANUP + "test_cancel_request_optional_lease_fence_preserves_authority_and_sequence"
+        "[epoch]",
+    ),
+    (
+        "a refused worker cancellation reports ownership loss",
+        "constructicon.substrate.journal._sqlite_execution:_SqliteExecutionMixin.request_cancel",
+        "if updated.rowcount == 0:", "if False:",
+        CLEANUP + "test_cancel_request_optional_lease_fence_preserves_authority_and_sequence"
+        "[stale]",
+    ),
+    (
+        "latched loss is rechecked after the heartbeat join",
+        "constructicon.runtime.walker:Walker._finish_run",
+        "if lost:", "if False:",
+        CLEANUP + "test_loss_latched_while_stopping_heartbeat_skips_cancellation_write",
+    ),
+    (
+        "atomic cancellation refusal outranks earlier cleanup failure",
+        "constructicon.runtime.walker:Walker._finish_run",
+        "intent_recorded = True\n        except OwnershipLost as exc:",
+        "intent_recorded = True\n        except CheckpointConflict as exc:",
+        CLEANUP + "test_successor_interposed_at_cancel_write_is_not_cancelled[close-failed]",
+    ),
+    (
+        "each physical close positively observes ownership first",
+        "constructicon.runtime.walker:Walker._close_acquired",
+        "self._journal.heartbeat(lease, ttl_s=self._lease_ttl_s)\n"
+        "            except OwnershipLost as loss:",
+        "None\n            except OwnershipLost as loss:",
+        CLEANUP + "test_second_settle_observation_failure_relinquishes_earlier_siblings"
+        "[persistent]",
+    ),
+    (
+        "preflight ownership loss retains the known-loss relinquishment law",
+        "constructicon.runtime.walker:Walker._close_acquired",
+        "except OwnershipLost as loss:\n"
+        "                failure = await self._relinquish_acquired(acquired[index:], loss=loss)",
+        "except CheckpointConflict as loss:\n"
+        "                failure = await self._relinquish_acquired(acquired[index:], loss=loss)",
+        CLEANUP + "test_close_batch_observes_latched_loss_before_its_first_close[release-crash]",
+    ),
+    (
+        "preflight observation failure relinquishes every remaining acquisition",
+        "constructicon.runtime.walker:Walker._close_acquired",
+        "failure = await self._relinquish_acquired(acquired[index:])", "failure = None",
+        CLEANUP + "test_second_settle_observation_failure_relinquishes_earlier_siblings"
+        "[persistent]",
     ),
 )
 
