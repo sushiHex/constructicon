@@ -270,17 +270,16 @@ MUTANTS = (
     (
         "unnamed committed entries cannot be omitted",
         MANIFEST,
-        "path not in current or any(value != digest for value in current[path])",
-        "any(value != digest for value in current.get(path, []))",
+        "path not in current or current[path] != digest",
+        "current.get(path, digest) != digest",
         PLAN_TESTS + "test_refuses_manifest_edits_and_deletions_of_unnamed_paths[omitted]",
     ),
     (
-        "every conflict side preserves unnamed committed digests",
-        MANIFEST,
-        "any(value != digest for value in current[path])",
-        "current[path][0] != digest",
-        PLAN_TESTS + "test_conflicted_manifest_requires_unnamed_digests_equal_committed_baseline"
-        "[True]",
+        "unresolved manifest conflicts refuse",
+        "scripts.regen_plan_manifest:entries",
+        'raise ValueError("resolve manifest conflicts explicitly before refresh")',
+        "continue",
+        PLAN_TESTS + "test_refuses_each_manifest_conflict_marker[<<<<<<<]",
     ),
 )
 

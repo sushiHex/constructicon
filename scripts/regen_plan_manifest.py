@@ -9,9 +9,8 @@ Paths are canonical Markdown paths relative to `docs/plans/`. A named path is
 does not approve editing a frozen plan: that remains governed by AGENTS.md.
 Every unnamed entry must be present with its committed HEAD digest, and its
 staged bytes must match that digest. Every staged new document must be named.
-Refusals write nothing. A conflicted working manifest is accepted only when
-every side retains the committed digests for unnamed entries; named entries
-are recomputed. Staged documents must be resolved first. Deletion and renaming
+Refusals write nothing. Manifest conflicts and staged document conflicts must
+be resolved explicitly before running this tool. Deletion and renaming
 are not supported: removing a manifest line cannot bypass these checks.
 tests/test_m8_ci_scope.py checks the result against the working tree, so commit
 documents as LF (docs/plans/.gitattributes).
@@ -27,7 +26,7 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "docs" / "plans" / "MANIFEST.sha256"
-MARKERS = ("<<<<<<<", "=======", ">>>>>>>")
+MARKERS = ("<<<<<<<", "|||||||", "=======", ">>>>>>>")
 
 
 def git(*arguments: str) -> bytes:
@@ -45,17 +44,19 @@ def plan_path(path: str) -> bool:
             and parsed.suffix == ".md")
 
 
-def entries(blob: bytes, *, conflicts: bool = False) -> dict[str, list[str]]:
-    found: dict[str, list[str]] = {}
+def entries(blob: bytes) -> dict[str, str]:
+    found: dict[str, str] = {}
     for line in blob.decode("utf-8").splitlines():
-        if not line.strip() or (conflicts and line.startswith(MARKERS)):
+        if line.startswith(MARKERS):
+            raise ValueError("resolve manifest conflicts explicitly before refresh")
+        if not line.strip():
             continue
         digest, path = line.split("  ", 1)
         if not re.fullmatch(r"[0-9a-f]{64}", digest) or not plan_path(path):
             raise ValueError(f"invalid manifest entry: {line}")
-        if path in found and not conflicts:
-            raise ValueError(f"duplicate committed manifest entry: {path}")
-        found.setdefault(path, []).append(digest)
+        if path in found:
+            raise ValueError(f"duplicate manifest entry: {path}")
+        found[path] = digest
     return found
 
 
@@ -79,9 +80,8 @@ def main(named: list[str]) -> int:
     try:
         if any(not plan_path(path) for path in named):
             raise ValueError("name canonical Markdown paths relative to docs/plans/")
-        baseline = {path: digests[0] for path, digests in
-                    entries(git("show", "HEAD:docs/plans/MANIFEST.sha256")).items()}
-        current = entries(MANIFEST.read_bytes(), conflicts=True)
+        baseline = entries(git("show", "HEAD:docs/plans/MANIFEST.sha256"))
+        current = entries(MANIFEST.read_bytes())
         staged = staged_documents()
         wanted = set(baseline) | set(named)
         if staged != wanted:
@@ -91,7 +91,7 @@ def main(named: list[str]) -> int:
             raise ValueError("manifest contains unknown unnamed paths: "
                              + ", ".join(sorted(set(current) - wanted)))
         drift = [path for path, digest in baseline.items() if path not in named and (
-            path not in current or any(value != digest for value in current[path])
+            path not in current or current[path] != digest
             or hashlib.sha256(git("show", f":docs/plans/{path}")).hexdigest() != digest
         )]
         if drift:

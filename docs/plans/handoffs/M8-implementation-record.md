@@ -3960,19 +3960,27 @@ bypassed the first implementation's check.
 The helper now anchors unnamed documents to `HEAD:docs/plans/MANIFEST.sha256`
 and checks the complete staged Markdown inventory. Unnamed digests, missing
 committed entries, staged deletions and unnamed additions refuse before a
-write. Conflicted working manifests may be resolved only when every side keeps
-the committed digests for unnamed entries; staged document conflicts refuse.
+write. Manifest and staged document conflicts must be explicitly resolved
+before refreshing; all standard and diff3 manifest conflict markers refuse.
 Named new and living documents use staged blobs even if working bytes differ.
 Naming a document does not approve editing a frozen plan, and deletion or
 renaming is outside the helper's supported workflow.
 
 `tests/test_regen_plan_manifest.py` supplies real Git fixture proofs for these
 refusals, unchanged manifest bytes on refusal, no-op behavior, named staged
-updates and conflict recovery. Four new cases in the existing
+updates and conflict refusal. Four new cases in the existing
 `scripts/check_m8_mutations.py` inventory remove the committed baseline,
-complete staged inventory, omitted-entry check and all-conflict-sides check;
+complete staged inventory, omitted-entry check and conflict-marker refusal;
 they use the shared assertion-only mutation runner and existing CI job.
-Locally, the manifest fixtures, docs validation and mutation-inventory checks
-passed together (111 tests). All 37 cases in the M8 inventory, including the
-four new manifest cases, were assertion-killed on Windows.
+At the first repair (`a7569e8`), the manifest fixtures, docs validation and
+mutation-inventory checks passed together (111 tests), and all 37 M8 mutants
+were assertion-killed on Windows. A further connector finding reproduced an
+omission on one manifest conflict side hidden by the aggregate parser. That
+evidence did not establish each side's inventory. The follow-up removes
+automatic manifest conflict resolution entirely; a test with each marker and
+otherwise unique valid entries isolates the marker check from other parser
+refusals for its mutation proof.
+The follow-up passed 24 manifest fixture cases and 93 docs/inventory checks
+locally (117 total); all 37 cases in the updated M8 mutation inventory were
+assertion-killed on Windows, including the explicit conflict-marker check.
 No frozen plan, adapter, protocol or runtime behavior changes in this repair.

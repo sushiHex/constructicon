@@ -84,11 +84,19 @@ def test_refuses_unnamed_staged_new_document(repository: Path, manual_entry: boo
     refuse(repository, ["handoffs/named.md"])
 
 
-def test_accepts_named_new_and_living_documents_from_staged_bytes(repository: Path) -> None:
+@pytest.mark.parametrize("resolved_manifest", [False, True])
+def test_accepts_named_new_and_living_documents_from_staged_bytes(
+    repository: Path, resolved_manifest: bool,
+) -> None:
     document(repository, "handoffs/living.md", b"staged living record\n")
     document(repository, "handoffs/new file.md", b"staged new document\n")
     (repository / "docs/plans/handoffs/living.md").write_bytes(b"unstaged living record\n")
     (repository / "docs/plans/handoffs/new file.md").write_bytes(b"unstaged new document\n")
+    if resolved_manifest:
+        manifest = repository / "docs/plans/MANIFEST.sha256"
+        manifest.write_bytes(manifest.read_bytes().replace(
+            digest(b"living record\n").encode(), b"0" * 64,
+        ))
     assert regen.main(["handoffs/living.md", "handoffs/new file.md"]) == 0
     assert (repository / "docs/plans/MANIFEST.sha256").read_bytes() == (
         entry("frozen.md", b"approved bytes\n") +
@@ -123,25 +131,29 @@ def test_refuses_manifest_edits_and_deletions_of_unnamed_paths(
     refuse(repository, [])
 
 
-@pytest.mark.parametrize("changed_frozen", [False, True])
-def test_conflicted_manifest_requires_unnamed_digests_equal_committed_baseline(
-    repository: Path, changed_frozen: bool,
+@pytest.mark.parametrize("changed_frozen", [False, True, "omitted"])
+def test_refuses_conflicted_manifest_before_refresh(
+    repository: Path, changed_frozen: bool | str,
 ) -> None:
     document(repository, "handoffs/living.md", b"resolved staged record\n")
     manifest = repository / "docs/plans/MANIFEST.sha256"
     original = manifest.read_bytes()
     other = original.replace(digest(b"living record\n").encode(), b"1" * 64)
-    if changed_frozen:
+    if changed_frozen == "omitted":
+        other = other.split(b"\n", 1)[1]
+    elif changed_frozen:
         other = other.replace(digest(b"approved bytes\n").encode(), b"0" * 64)
     manifest.write_bytes(b"<<<<<<< HEAD\n" + original + b"=======\n" + other +
                          b">>>>>>> other\n")
-    if changed_frozen:
-        refuse(repository, ["handoffs/living.md"])
-    else:
-        assert regen.main(["handoffs/living.md"]) == 0
-        assert manifest.read_bytes() == original.replace(
-            digest(b"living record\n").encode(), digest(b"resolved staged record\n").encode(),
-        )
+    refuse(repository, ["handoffs/living.md"])
+
+
+@pytest.mark.parametrize("marker", ["<<<<<<<", "|||||||", "=======", ">>>>>>>"])
+def test_refuses_each_manifest_conflict_marker(repository: Path, marker: str) -> None:
+    """One marker with unique valid entries isolates marker refusal from parsing."""
+    manifest = repository / "docs/plans/MANIFEST.sha256"
+    manifest.write_bytes(marker.encode() + b"\n" + manifest.read_bytes())
+    refuse(repository, [])
 
 
 @pytest.mark.parametrize("named", ["../outside.md", "./frozen.md", "absent.md", "MANIFEST.sha256"])

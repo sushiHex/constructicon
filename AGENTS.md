@@ -102,7 +102,8 @@ real and passes a green gate, so it is yours to check by hand.
   Stage it, run `python scripts/regen_plan_manifest.py <each changed or new
   path, relative to docs/plans/>`, and stage the manifest in the same commit.
   The script checks unnamed documents against the committed HEAD manifest and
-  refuses omitted entries or unnamed staged additions. It does not approve
+  refuses omitted entries or unnamed staged additions. Resolve manifest and
+  document conflicts explicitly before running it. The helper does not approve
   edits to frozen plans or support deletion/renaming. Write documents as LF
   (`docs/plans/.gitattributes`); a CRLF working copy fails the local check even
   when the staged bytes are right.
