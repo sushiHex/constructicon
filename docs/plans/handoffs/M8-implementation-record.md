@@ -3939,4 +3939,11 @@ failed-dial exit, which ends it without the wake. The test now waits for the
 dial to return before the reset, so only the wake can end the forwarder; the
 test's leaf is blocking, as production's is.
 
+**N3b mutant 15** (found in this PR's own CI). Without the control check before
+the dial, the relay still dials, and its post-dial check refuses. The killing
+test's only discriminating fact was the peer's accept list, which can lag that
+dial, so the mutant survived once in 0.10 s. The test now also counts the
+upstream sockets the relay opens, the relay's own witness that it never
+dialled.
+
 No production code changed.

@@ -1004,11 +1004,18 @@ async def test_an_accept_after_stop_is_closed_unread(tmp_path, listeners, peer):
 
 
 async def test_a_control_raise_before_the_dial_is_a_denial_and_stops_the_relay(
-    tmp_path, listeners, peer,
+    tmp_path, listeners, peer, monkeypatch,
 ):
     def control():
         raise LocalClose("the acquisition closed during physical work")
 
+    # The relay's own witness that it never dialled: the peer's accept list
+    # alone could lag a dial the post-dial check then refused (#110).
+    opened = []
+    upstream = egress._upstream
+    monkeypatch.setattr(
+        egress, "_upstream", lambda family: opened.append(family) or upstream(family),
+    )
     relay = relay_for(tmp_path, peer.port, control=control)
 
     async def scenario(facts):
@@ -1028,6 +1035,7 @@ async def test_a_control_raise_before_the_dial_is_a_denial_and_stops_the_relay(
     assert facts["reply"] == ESTABLISHED and facts["closed"] == b""
     assert facts["observed"] == {"denied:control": 1}
     assert relay._stopping
+    assert opened == [], "the relay opened an upstream after a control refusal"
     assert peer.connections == [], "the relay dialled after a control refusal"
 
 
