@@ -3995,3 +3995,22 @@ acceptance after the caller stages an explicit resolution.
 The index follow-up passed 28 manifest fixture cases locally. Its fifth
 manifest guard-removal mutant was separately assertion-killed on Windows.
 No frozen plan, adapter, protocol or runtime behavior changes in this repair.
+
+### Issue #141: Stage 4 WRITE planning draft
+
+[M8-N5-stage4-write.md](M8-N5-stage4-write.md) specifies proposed WRITE
+authorization/assembly pins, the fixed writer and downstream contained gate,
+attempt accounting distinct from capture/gate qualification, owner-run smoke
+and session shape, bounded evidence and future proof requirements. Its seven
+S4 decisions are open on #78. The g4 route is conditional on unchanged frozen
+modules and sealed installed facts, existing custody checks, an authorized
+controller update and future compatibility proof; unchanged adapter bytes
+alone do not qualify a host or authorize a session.
+
+Status: Review draft: S4 decisions open on #78; authorizes nothing.
+This entry records a planning draft, not implementation or executed proof.
+The owner has not run Stage 2/3 in this planning session. Stage 4 implementation
+remains gated on owner-declared Stage 3 completion, S4 decisions and #132's
+merged cleanup outcome. No code, host action, model request, qualification,
+production availability or owner decision is established here. Independent
+cross-review and documentation checks remain to be recorded before ready.
