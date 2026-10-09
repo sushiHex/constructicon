@@ -1,6 +1,7 @@
 """Portable proofs of the investigation instrument, not native CLI evidence."""
 
 import asyncio
+import contextlib
 import json
 import os
 import struct
@@ -251,6 +252,73 @@ def test_catalog_changes_only_the_named_tool_selectors(tmp_path, restricted):
                           tmp_path, "http://127.0.0.1:1/v1", images=False, catalog=path)
     configured = tomllib.loads((config / "config.toml").read_text())
     assert configured.get("model_catalog_json") == str(path)
+
+
+def test_the_owner_spawns_only_the_native_under_a_parent_death_kill():
+    from tests.substrate import _native_probe_owner as owner
+
+    binary = Path("/pinned/bin/codex")
+    native = (str(binary), "app-server", "--stdio")
+    assert owner.native_argv(native, binary) == (
+        "/usr/bin/setpriv", "--pdeathsig", "KILL", "--", *native,
+    )
+    # The launcher's supervisor, also spawned through the owner, is not wrapped.
+    supervisor = ("/usr/bin/bwrap", "--die-with-parent", str(binary))
+    assert owner.native_argv(supervisor, binary) == supervisor
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="pidfd and PR_SET_PDEATHSIG are Linux")
+def test_a_killed_owner_takes_its_native_with_it(tmp_path):
+    """The kernel, not the vendor, ends the native: a stub that ignores stdin EOF
+    still exits once its owner is SIGKILLed (#110)."""
+    import select
+    import signal
+    import subprocess
+
+    from tests.substrate import _native_probe_owner as owner
+
+    # The stub announces itself on a FIFO. It can only run once setpriv has set
+    # the parent-death signal and exec'd it: killing the owner earlier would let
+    # prctl see an already dead parent, and no signal would ever come.
+    ready = tmp_path / "ready"
+    os.mkfifo(ready)
+    announce = "import os, sys, time; os.write(os.open(sys.argv[1], os.O_WRONLY), b'r'); "
+    stub = (sys.executable, "-c", announce + "time.sleep(3600)", str(ready))
+    argv = list(owner.native_argv(stub, Path(sys.executable)))
+    listening = os.open(ready, os.O_RDONLY | os.O_NONBLOCK)
+    # The owner: spawn the native from its main thread, report it, and wait.
+    program = (
+        "import json, subprocess, sys, time\n"
+        "native = subprocess.Popen(json.loads(sys.stdin.readline()), stdin=subprocess.PIPE,\n"
+        "                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        "print(native.pid, flush=True)\n"
+        "time.sleep(3600)\n"
+    )
+    driver = subprocess.Popen(
+        (sys.executable, "-c", program), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, text=True,
+    )
+    pidfd = None
+    try:
+        driver.stdin.write(json.dumps(argv) + "\n")
+        driver.stdin.flush()
+        pid = int(driver.stdout.readline())
+        pidfd = os.pidfd_open(pid)
+        announced, _, _ = select.select([listening], [], [], 5)
+        assert announced and os.read(listening, 1) == b"r", "the stub never ran"
+        os.kill(driver.pid, signal.SIGKILL)
+        driver.wait(5)
+        ready, _, _ = select.select([pidfd], [], [], 5)
+        if not ready:
+            pytest.fail("the native outlived its killed owner")
+    finally:
+        driver.kill()
+        driver.wait()
+        os.close(listening)
+        if pidfd is not None:
+            with contextlib.suppress(ProcessLookupError):
+                signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+            os.close(pidfd)
 
 
 async def test_native_heartbeat_observes_data_not_file_creation(tmp_path, monkeypatch):

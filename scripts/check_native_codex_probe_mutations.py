@@ -62,6 +62,11 @@ MUTANTS = (
      "tests.substrate._native_probe_owner:wait_for_heartbeat",
      " or not heartbeat.read_bytes()", "",
      TEST + "test_native_heartbeat_observes_data_not_file_creation"),
+    ("a killed owner takes its native with it",
+     "tests.substrate._native_probe_owner:native_argv",
+     "return (*PDEATHSIG, *argv) if argv[0] == str(binary) else tuple(argv)",
+     "return tuple(argv)",
+     TEST + "test_the_owner_spawns_only_the_native_under_a_parent_death_kill"),
 )
 
 if __name__ == "__main__":

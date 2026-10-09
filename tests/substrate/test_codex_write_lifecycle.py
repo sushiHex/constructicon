@@ -365,12 +365,17 @@ async def test_close_joins_worker_before_workspace_exit_and_uses_remaining_deadl
             launcher.events.append("workspace-exit")
 
     monkeypatch.setattr(ContainedWriteWorkspace, "use", observed_use)
-    running = None
+    running = entered = None
     try:
         running = asyncio.create_task(acquired.resource.execute(
             TaskSpec(instruction="call the fixed worker"), workspace=workspace, grants=grants,
         ))
-        await asyncio.wait_for(launcher.worker_entered.wait(), 5)
+        # Either the worker enters or execute ends without it. Both are finite,
+        # so no margin is needed for load to consume (#110), and an early end
+        # names its outcome instead of reading as slowness.
+        entered = asyncio.create_task(launcher.worker_entered.wait())
+        await asyncio.wait((entered, running), return_when=asyncio.FIRST_COMPLETED)
+        assert entered.done(), f"execute ended before its worker entered: {running!r}"
         assert launcher.exchange_timeout_s is not None and launcher.worker_timeout_s is not None
         assert 0 < launcher.worker_timeout_s < launcher.exchange_timeout_s
 
@@ -395,9 +400,10 @@ async def test_close_joins_worker_before_workspace_exit_and_uses_remaining_deadl
             with pytest.raises(asyncio.CancelledError):
                 await running
     finally:
-        if running is not None and not running.done():
-            running.cancel()
-            await asyncio.gather(running, return_exceptions=True)
+        for task in (entered, running):
+            if task is not None and not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
         if not acquired.resource.closed:
             await provider.close(acquired, "discard")
         # Windows does not provide the production fd-safe rmtree primitive.

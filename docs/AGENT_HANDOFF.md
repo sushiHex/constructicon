@@ -22,14 +22,13 @@ after the established reply, peer hello and upstream read have been observed.
 Its accepted/reset counts and deadline are unchanged. The first three #110
 timing flakes were fixed earlier in #118.
 
-The native startup proof now records bounded relay read lengths and the phase
-of each observed event. Its zero-denial assertion still applies. At the old
-`rust-v0.153.4` pin, an instrumented clean run had no relay connections; its
-plugins-on control had two zero-byte EOFs during protocol drain. That does not
-explain the earlier five EOFs in a clean run. PR #124 moved the pin to
-`rust-v0.160.1` and uses an analytics exporter as the positive control. This
-slice does not establish the cause of intermittent clean-run EOFs or vendor
-conformance at either pin. The exact observations and limits are in the
+The native startup proof records bounded relay read lengths and the phase of
+each observed event. Its zero-denial assertion has never failed: the five
+`denied:eof` connections once reported for the clean run were the plugins-on
+control's (job 112020223955 fails at the control's assertion, after the clean
+run's passed). PR #124 replaced that racing control with an analytics exporter
+whose flush the client awaits, and the control now requires destination
+denials only. Vendor conformance is not established at either pin. The exact observations and limits are in the
 [M8 implementation record](plans/handoffs/M8-implementation-record.md).
 
 ---

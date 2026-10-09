@@ -46,10 +46,16 @@ class Upstream:
     def __init__(self) -> None:
         self.server = socket.create_server(("127.0.0.1", 0))
         self.dialled = 0
+        # Set once the dial returned: until then a reset can still fail the dial,
+        # whose own exit ends the forwarder without any wake (#110).
+        self.connected = threading.Event()
 
     def dial(self) -> socket.socket:
         self.dialled += 1
-        return socket.create_connection(self.server.getsockname()[:2], timeout=SECONDS)
+        sock = socket.create_connection(self.server.getsockname()[:2], timeout=SECONDS)
+        sock.settimeout(None)  # blocking, as production's leaf is
+        self.connected.set()
+        return sock
 
     def accept(self) -> socket.socket:
         self.server.settimeout(SECONDS)
@@ -277,6 +283,10 @@ def test_an_upstream_reset_ends_an_idle_client(upstream):
     client, accepted = pair()
     thread = start(accepted)
     leaf = upstream.accept()
+    # Only the wake may end the forwarder: the dial has returned, so its failed-
+    # dial exit is closed, and the forwarder is blocked on the idle client.
+    assert upstream.connected.wait(SECONDS) and upstream.dialled == 1
+    assert thread.is_alive()
     reset(leaf)
     assert finished(thread), "the opposite pump was never woken"
     assert read_to_eof(client)[1]
