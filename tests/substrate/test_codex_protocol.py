@@ -368,6 +368,19 @@ def test_account_read_observes_and_never_causes_a_refresh():
     assert account_read_request(4)["params"] == {"refreshToken": False}
 
 
+def test_account_read_requests_refresh_only_when_explicitly_selected():
+    assert account_read_request(4, request_refresh=True) == {
+        "id": 4, "method": "account/read", "params": {"refreshToken": True},
+    }
+    assert account_read_request(4, request_refresh=False) == account_read_request(4)
+
+
+@pytest.mark.parametrize("value", [0, 1, None, "true"])
+def test_account_refresh_selector_is_exactly_boolean(value):
+    with pytest.raises(ContractViolation, match="boolean"):
+        account_read_request(4, request_refresh=value)
+
+
 def test_neither_session_request_can_carry_a_model_or_a_provider():
     started = thread_start_request(2, cwd="/tmp")
     turn = turn_request(3, thread_id=THREAD, task=TaskSpec(instruction="x"), grants=GRANTS)

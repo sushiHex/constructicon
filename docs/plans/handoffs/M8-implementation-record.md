@@ -4200,3 +4200,63 @@ The changed test file passed `ruff check` and the diff passed `git diff --check`
 These focused checks do not claim the full repository gate, CI, later Python
 versions, host qualification, or any vendor/credential activity. Final-head
 gate and review evidence belongs on the linked PR.
+
+### N5 — explicit active-startup refresh (#78)
+
+The owner approved the narrow extension after a read-only pinned-source audit
+and independent Sol review. At `rust-v0.160.1`, the public `account/read`
+selector can request managed refresh without waiting for expiry. The vendor
+first performs an account-guarded reload; a changed same-account source can
+satisfy it without OAuth. The handler can also return an account reading after
+a transient refresh failure. A successful request is not refresh evidence.
+The audit and approval are recorded on
+[#78](https://github.com/sushiHex/constructicon/issues/78#issuecomment-6094663152).
+
+The implementation threads one strict, default-false selector through the
+existing request builder and conversation. True is startup-only, and the lane
+requires active custody before launch. The CLI rejects invalid use before
+reserving evidence or opening the store. Normal startup and model turns retain
+their request bytes; the closed schema-4 evidence shape remains unchanged.
+Explicit startup uses schema 5 and `request_refresh: true` to record selection,
+not delivery or success. Embedded source-derived revisions necessarily change
+when controller code changes; unchanged shape is not identical evidence bytes.
+
+The same existing measurement combines an accepted auth connection, credential
+mtime change and a fault-free startup. No credential reader, token client,
+protocol loop or scheduler was added. After successful evidence publication,
+the explicit CLI prints its measured/unmeasured verdict from that same record;
+faults or publication failure cannot print a passing verdict. This avoids a
+second runbook evidence validator and avoids coercing schema 5 into schema 4.
+Maintenance evidence still has its historical shape and remains the descriptor's
+sealed qualification evidence.
+
+**Introduced combination defect, reproduced before correction.** The initial
+extension allowed explicit refresh with `expect_denial=True`. The existing
+negative control deliberately accepts a declared relay denial; combined with
+an auth connection and credential write, that could print a measured verdict.
+Two pre-fix tests failed by assertion, including the real CLI path. Explicit
+refresh now refuses this combination at both lane and CLI boundaries; ordinary
+negative controls are unchanged. An accepted control denial cannot stand in
+for a clean refresh session.
+
+The [successor procedure](M8-N5-explicit-refresh.md) records the pre-code async
+review, version boundary, exact H8 extension and stop rules. Frozen runbooks
+are not edited. It deliberately requires separate exact-commit deployment and
+new-generation qualification before use; the added pre-READ installation is a
+real cost, not hidden inside the later WRITE batching recommendation.
+
+Portable tests cover the accepting four-method path, wrong selectors and
+custody, main-level forwarding, default compatibility, incomplete measurement
+and post-publication verdict boundaries. The Linux proof uses the pinned client
+only against credential-free controlled endpoints, with fake credentials whose
+expiry and last-refresh cannot trigger natural refresh during the test. It
+compares the omitted default with explicit success and refusal; its local
+collection/portable fixture checks are not native execution evidence.
+Exact-head executed counts, assertion-killed mutants, native CI and independent
+review results are recorded on the implementation PR. No private host action,
+real credential, model request or live refresh is claimed by this slice.
+
+**Preserved gates.** Stage 3 still needs measured refresh and owner-reviewed
+pins. The held cleanup/denial PRs still need T5 and explicit no-T6 disposition.
+S4-1 through S4-5 and S4-7 were accepted with their reviewed clarifications;
+S4-6 remains post-READ. Neither WRITE nor Claude qualification is completed here.

@@ -148,6 +148,13 @@ STARTUP_FIELDS = LOGIN_FIELDS | {
     "methods_sent", "withheld_methods", "gate", "readback", "observation", "refresh", "hold_s",
 }
 """The closed startup record, likewise."""
+EXPLICIT_REFRESH_SCHEMA = 5
+EXPLICIT_REFRESH_FIELDS = STARTUP_FIELDS | {"request_refresh"}
+"""Explicit active startup records add the selected refresh policy. Selection
+does not prove a request was sent or a refresh occurred. ``methods_sent`` records
+successfully written method names only, and the measured-refresh verdict needs
+its existing connection, write and lifecycle facts. Default lanes continue to
+emit schema 4, which the qualification checkers require."""
 
 
 @dataclass(frozen=True)
@@ -407,6 +414,7 @@ async def run_startup(
     custody: Custody, launcher: LinuxLauncher, policy: EgressPolicy, *,
     executable: Executable, configuration: str, expected: ExpectedAccount, lane_dir: Path,
     deadline_s: float, expect_denial: bool = False, hold_s: float = 0.0,
+    request_refresh: bool = False,
 ) -> dict[str, Any]:
     """The four authorized methods, then stdin closes; never a thread.
 
@@ -414,8 +422,16 @@ async def run_startup(
     methods were sent in order, a readback was judged, the session emitted no
     damage, and every launch fact holds. ``hold_s`` pauses after the gate and
     before stdin closes, while the zone is live (RL-3), within the deadline.
+    ``request_refresh`` selects the pinned client's explicit refresh request
+    only under active custody. It does not weaken any measured-refresh fact.
     """
 
+    if type(request_refresh) is not bool:
+        raise ContractViolation("the refresh selector must be boolean")
+    if request_refresh and custody.kind != "active":
+        raise ContractViolation("an explicit refresh requires active startup custody")
+    if request_refresh and expect_denial:
+        raise ContractViolation("an explicit refresh cannot expect a control denial")
     if not 0 <= hold_s < deadline_s:
         raise ContractViolation("the startup hold must lie inside the deadline")
     pause: Callable[[], Awaitable[None]] | None = None
@@ -431,6 +447,7 @@ async def run_startup(
         )}),
         expected=expected, input_limit=launcher.limits.input_bytes, startup_only=True,
         provider=configured_provider(configuration), pause=pause,
+        request_refresh=request_refresh,
     )
     recorded: list[RecordingIO] = []
 
@@ -467,6 +484,8 @@ async def run_startup(
     )
     return {
         **_base("startup", custody, launcher, policy, executable, configuration, launched),
+        **({"schema_version": EXPLICIT_REFRESH_SCHEMA, "request_refresh": True}
+           if request_refresh else {}),
         "methods_sent": methods,
         "withheld_methods": list(conversation.withheld_methods),
         "gate": {"completed": conversation.gate_completed, "plan": conversation.observed_plan,
@@ -751,6 +770,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected", type=ExpectedAccount.from_seal, metavar="PLAN/IDENTITY",
                         help="the account seal: the plan and identity qualification sealed")
     parser.add_argument("--expect-denial", action="store_true")
+    parser.add_argument("--request-refresh", action="store_true",
+                        help="request a refresh during an active startup; never a model turn")
     parser.add_argument("--hold", type=float, default=0.0)
     parser.add_argument("--deadline", type=float)
     options = parser.parse_args(argv)
@@ -758,6 +779,10 @@ def main(argv: list[str] | None = None) -> int:
     deadline = options.deadline if options.deadline is not None else (
         LOGIN_DEADLINE_S if login else STARTUP_DEADLINE_S
     )
+    if options.request_refresh and (login or options.custody != "active"):
+        parser.error("--request-refresh requires active startup custody")
+    if options.request_refresh and options.expect_denial:
+        parser.error("--request-refresh cannot expect a control denial")
     if login and options.custody != "maintenance":
         parser.error("a device login runs only inside maintenance")
     if options.first_login and not login:
@@ -800,6 +825,7 @@ def main(argv: list[str] | None = None) -> int:
                 configuration=configuration, expected=expected,
                 lane_dir=options.lane_dir, deadline_s=deadline,
                 expect_denial=options.expect_denial, hold_s=options.hold,
+                request_refresh=options.request_refresh,
             )
 
         async def under_custody() -> dict[str, Any]:
@@ -823,6 +849,8 @@ def main(argv: list[str] | None = None) -> int:
     revision = reservation.publish(evidence)
     print(json.dumps({"evidence_digest": str(revision), "faults": evidence["faults"]}),
           file=sys.stderr)
+    if options.request_refresh and not evidence["faults"]:
+        print("refresh-" + evidence["refresh"])
     return 1 if evidence["faults"] else 0
 
 

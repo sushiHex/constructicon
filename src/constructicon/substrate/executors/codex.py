@@ -372,9 +372,14 @@ class CodexConversation:
         deadline: float | None = None, startup_only: bool = False,
         provider: str = OPENAI_PROVIDER, pause: Callable[[], Awaitable[None]] | None = None,
         before_turn: Callable[[], str | None] | None = None,
+        request_refresh: bool = False,
     ) -> None:
         if type(startup_only) is not bool:
             raise ContractViolation("the startup-only selector must be boolean")
+        if type(request_refresh) is not bool:
+            raise ContractViolation("the refresh selector must be boolean")
+        if request_refresh and not startup_only:
+            raise ContractViolation("only a startup-only conversation may request refresh")
         if startup_only and catalog:
             raise ContractViolation("a startup-only conversation offers no callbacks")
         if pause is not None and not startup_only:
@@ -414,6 +419,7 @@ class CodexConversation:
         self._worker = worker
         self._deadline = deadline
         self._startup_only = startup_only
+        self._request_refresh = request_refresh
         self._provider = provider
         self._pause = pause
         self._stream = RecordStream()
@@ -1267,7 +1273,9 @@ class CodexConversation:
     async def _account(self, io: ProcessIO) -> Mapping[str, Any] | None:
         """One mode reading. Its frame is consumed here and never transcribed."""
 
-        return await self._request(io, account_read_request(self._next_identifier()))
+        return await self._request(io, account_read_request(
+            self._next_identifier(), request_refresh=self._request_refresh,
+        ))
 
     async def _drain_preamble(self, io: ProcessIO) -> bool:
         """Consume records the byte scope already carried before the session.
