@@ -97,6 +97,9 @@ source_modules = [
     "constructicon.api.detail",
     "constructicon.api.introspection",
     "constructicon.api.qualification",
+    "constructicon.api._qualification_write_graph",
+    "constructicon.api._qualification_write_assembly",
+    "constructicon.api._qualification_write_report",
     "constructicon.api.run_host",
     "constructicon.api.system",
 ]
@@ -107,7 +110,12 @@ forbidden_modules = ["mcp"]
 name = "The MCP adapter never reaches the qualification entry"
 type = "forbidden"
 source_modules = ["constructicon.api.mcp"]
-forbidden_modules = ["constructicon.api.qualification"]
+forbidden_modules = [
+    "constructicon.api.qualification",
+    "constructicon.api._qualification_write_graph",
+    "constructicon.api._qualification_write_assembly",
+    "constructicon.api._qualification_write_report",
+]
 
 # Dependency budget: the kernel imports stdlib + pydantic only.
 [[tool.importlinter.contracts]]

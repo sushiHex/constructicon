@@ -15,6 +15,72 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #142 — declared controls name destination denial
+
+**Merged `100fb75` (PR #145), from reviewed `9de7012`.** A declared control
+requires a positive destination-denial count. Other denial kinds independently
+produce an unexpected-denial fault; an EOF-only control therefore carries both
+the missing-control and unexpected-denial faults. Clean startup still rejects
+every denial kind. No frozen runbook or binary behavior was changed.
+
+The owner released the Stage 3 hold before merge. Exact-head verify, runner
+qualification and all four physical lanes passed; the connector completed its
+review with no findings. Portable accepting/refusing matrices and assertion
+mutants retain both halves of the rule. The local Python 3.12 gate passed
+4,202 tests with 740 skips on byte-identical implementation code; final-head
+documentation checks passed separately. See
+[PR #145](https://github.com/sushiHex/constructicon/pull/145).
+
+**Not established:** a new private-host installation or requalification. The
+READ session used its previously reviewed controller, not this later change.
+
+---
+
+## #132 — settlement before a terminal run
+
+**Merged `88fc71d` (PR #147), byte-identical to reviewed `449296e`.**
+Terminal transitions now refuse active acquisition obligations under the
+journal fence. Cleanup attempts remaining siblings, relinquishes failed local
+custody and preserves ownership-loss precedence. An unresolved close may leave
+an unowned RUNNING run for recovery; a run status alone is not settlement proof.
+Historical terminal/active rows are not repaired by this change.
+
+The owner released the Stage 3 hold after the affirmative READ verdict and
+explicit no-T6 disposition on [#78](https://github.com/sushiHex/constructicon/issues/78#issuecomment-6101919423).
+The exact-head local Python 3.12 gate passed 4,199 tests with 740 platform
+skips. CI passed 4,538 with 401 skips, all four physical lanes, and 75 M8 plus
+29 native-recovery assertion-killed mutants. The final connector review
+completed without new findings. Windows skips are not physical evidence.
+
+**Not established:** a WRITE attempt, qualified WRITE composition, a private
+host installation, or automatic repair of retained historical damage. See
+[PR #147](https://github.com/sushiHex/constructicon/pull/147).
+
+---
+
+## #78 — g6 procedure and the completed READ
+
+**Procedure merged as `b38c8ae` (PR #155).** The additive g6 runbook names
+installed controller `585df33` separately from the reviewed procedure revision
+`ce12de3`. It preserves checked account continuity, composes the established
+fresh-boot installation route, and requires all active controls even when
+natural refresh is measured. Its shell tests establish command composition,
+not host qualification.
+
+The later owner-attended session established g6 and measured explicit H8
+refresh. Stage 3's one READ completed and passed T5; the owner declared it
+finished with no T6. The shared N5 retry remains unused. Vendor retry defaults
+are retained within the fixed deadline; occurrence is unknown. Evidence and
+the distinct owner disposition are on
+[#78](https://github.com/sushiHex/constructicon/issues/78#issuecomment-6101909329).
+No answer text, account identity or private seal is part of that public record.
+
+**Not established:** WRITE completion or general vendor conformance. The old
+READ authorization is spent and is not a reusable launch recipe. Frozen plans
+retain their original pre-decision wording; current disposition lives on #78.
+
+---
+
 ## #78 — explicit active-startup refresh
 
 **Merged `585df33` (PR #154) from reviewed `69a8932`.** The merged tree is

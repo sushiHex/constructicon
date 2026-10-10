@@ -4492,3 +4492,58 @@ runs both refusal controls and the stale-generation proof; only H8 is omitted.
 Ruff and diff checks passed, and independent Sol review found no blocking
 finding in the document or tests. Full repository and CI results remain
 separate, exact-head evidence on the successor PR, not host acceptance.
+
+### N5 — bounded WRITE implementation (#156)
+
+The owner declared Stage 3 complete, with no T6, and selected vendor retry
+defaults within the fixed deadline; occurrence remains unknown. The shared
+N5 retry is unused. The [disposition](https://github.com/sushiHex/constructicon/issues/78#issuecomment-6101919423)
+released the held cleanup/denial changes and the previously accepted S4 design.
+PR #147 actually merged as `88fc71d`, with a tree identical to reviewed
+`449296e`. Inspection of that merged code, not issue status, established the
+cleanup prerequisite before [#156](https://github.com/sushiHex/constructicon/issues/156)
+started. Historical terminal/active damage is not repaired.
+
+The [pre-implementation state review](M8-N5-write-implementation-review.md)
+was committed before implementation. Its separate Sol source review and the
+orchestrator examined each await, recovery state and publication boundary.
+It is not final-head implementation review or executed proof.
+
+The implementation keeps the existing qualification entry and control-plane
+lifecycle. Two fixed graph nodes bind the production WRITE executor and
+contained workspace, then the contained gate. WRITE alone serializes typed
+workspace, gate, fixture/base and report pins. Retained READ/no-dispatch
+authorization wire shapes and both frozen Codex modules remain unchanged.
+The fixture is fresh, private and custody-checked before a Git constructor can
+write; rechecks after runtime probes and before dispatch reject observed drift.
+Recovery compares the actual assembled world and retained inputs/manifest
+before RunHost starts. No new scheduler, cleanup ledger or model interface
+was added.
+
+Credential-free smoke and WRITE use the same workspace/capture/gate assembly.
+Smoke has separate state and no Codex provider or operator-store lock. Their
+bounded reports share one capture/checkpoint/attestation proof; only WRITE
+adds attempt and turn facts. The projection materializes the retained run,
+matches original checkpoints and the journal-minted candidate-bound
+attestation, and checks recorded acquisition settlement. Control shutdown is
+joined before projection, including repeated cancellation. Timeout is an
+incomplete result, not a longer wait or another attempt.
+
+**Correction found by the accepting recovery path.** A predecessor gate may
+be durably closed as discarded before a successor gate finishes. Requiring
+every historical disposition to be released rejected that lawful recovery.
+The proof distinguishes closed historical obligations from the latest required
+successful role; active and lost obligations still cannot pass. No checkpoint
+acquisition epoch is invented: existing checkpoint and attestation contracts
+do not publish one.
+
+The [WRITE session](M8-N5-write-session.md) separates host qualification,
+credential-free smoke, pin review, root installation and the one turn.
+Unexpected exit codes, absent reports and uncertain dispatch stop. It provides
+no retry or cleanup command. A separately pinned deployment successor must
+name the actual merged controller and qualified generation before host use.
+
+Portable, physical and mutation results belong to the implementation PR at
+their executed heads. Tests written but not executed are not proof; local
+Windows skips cannot establish containment. No host installation, smoke,
+WRITE model request or vendor-conformance result is claimed by this entry.
