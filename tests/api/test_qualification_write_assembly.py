@@ -346,7 +346,10 @@ print('private fixture, candidate closure and pack; parent umask unchanged')
 """
 
 
-@pytest.mark.skipif(os.name != "posix", reason="actual POSIX creation modes require Linux")
+@pytest.mark.skipif(
+    os.name != "posix" or os.getuid() == 0,
+    reason="actual POSIX custody proof requires a non-root service identity",
+)
 def test_permissive_parent_umask_preserves_private_fixture_future_refs_and_packs() -> None:
     with tempfile.TemporaryDirectory(prefix=".n5-custody-", dir=Path.home()) as private:
         root = Path(private).resolve() / "fixture"

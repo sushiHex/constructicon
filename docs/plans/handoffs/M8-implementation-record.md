@@ -4644,6 +4644,25 @@ must establish the specific pre-dispatch account-gate refusal and no vendor
 connection; it cannot establish authenticated acceptance. No local vendor
 binary or private-host invocation is authorized by the rehearsal itself.
 
+**Completed implementation evidence at `657089f`.** CI verification passed
+4,720 tests with 408 skips; local Python 3.12 verification passed 4,380 with
+748 skips, strict types and all five import contracts. Runner qualification
+and all four physical lanes passed. Combined's 140 tests include all five new
+WRITE proofs: correct and wrong output, cold reconstruction with and without
+a writer checkpoint, and the actual credential-free smoke entry. All 37 WRITE
+mutants were assertion-killed. Foundation ran both actual WRITE runbook
+rehearsals successfully, including the pinned binary's precise logged-out
+account-gate refusal, zero relay activity and preserved attempt. This is not
+an authenticated WRITE or private-host result.
+
+The final connector review found one introduced test-portability defect:
+the POSIX mode test selected UID 0 even though fixture custody correctly
+requires a non-root service owner. Source confirms that refusal precedes the
+property being measured. The test now explicitly skips root environments;
+it does not change the production guard. The non-root CI proof remains
+mandatory on its supported runner. No skipped root execution is counted as
+permission evidence. Final test-only-head CI belongs to the PR evidence.
+
 ### #142 — destination denials are the declared startup control
 
 `codex_lane.run_startup` now requires `denied:destination` when
