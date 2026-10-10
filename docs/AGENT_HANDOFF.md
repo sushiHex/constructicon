@@ -15,6 +15,34 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #151 — structural channel fixtures across Python versions
+
+**Merged `33f5671` (PR #152) on 2026-10-10 UTC from reviewed `df8ca98`.**
+The merged tree is byte-identical to that reviewed head. The fixtures now
+expose every `Channel` member explicitly, without inheriting the concrete
+transport or either protocol. Their journal-backed subclass adds only the
+exact-journal proof; production code and identity enforcement are unchanged.
+
+**Correction worth carrying.** Python 3.12's static runtime-protocol lookup
+cannot see dynamic `__getattr__` forwarding. The old accepting proxy therefore
+failed before the intended journal guard. The regression now positively proves
+that local, foreign and unproven doubles all satisfy `Channel`, then verifies
+local acceptance and exact-journal refusals, including a foreign journal that
+compares equal. A missing-proof refusal cannot pass by failing the wrong guard.
+
+**Measured.** All 14 introspection tests passed locally on Python 3.11.15 and
+3.12.13. The full local 3.12 gate passed 4,059 tests with 736 platform skips;
+CI's full 3.11 gate passed 4,398 with 397 skips. A new narrow CI step explicitly
+ran the 14 tests on 3.12.3 in its own environment. Qualification, all four Linux
+proof lanes, and the exact-head connector review passed without findings.
+
+**Not established:** compatibility with every later Python release, host or
+controller changes, measured refresh, or Stage 3 qualification. See the
+[implementation record](plans/handoffs/M8-implementation-record.md) and
+[PR #152](https://github.com/sushiHex/constructicon/pull/152).
+
+---
+
 ## #149 — affirmative wrong-plan evidence through refusal cleanup
 
 [PR #150](https://github.com/sushiHex/constructicon/pull/150) preserves the
