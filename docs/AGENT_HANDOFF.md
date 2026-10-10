@@ -15,6 +15,217 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #78 — explicit active-startup refresh
+
+**Merged `585df33` (PR #154) from reviewed `69a8932`.** The merged tree is
+byte-identical to that head. The operator can request managed refresh through
+the existing active-startup conversation; ordinary startup and task requests
+still select false. No token client, credential reader or new protocol loop
+was added. Explicit evidence is schema 5; default evidence keeps schema 4.
+Requested refresh is not measured refresh: the existing connection, credential
+mtime and clean-startup proof still decides the result.
+
+**Measured.** Local verification passed 4,103 tests with 740 platform skips.
+All four Linux proof lanes passed. Downloaded foundation artifacts affirm
+that all four pinned-client fake-endpoint cases ran and passed: default stayed
+unmeasured, explicit success measured, and issuer refusal and failed readback
+stayed unmeasured. All 25 changed/new mutants were assertion-killed. The final
+connector review completed without findings. Qualification's first CI attempt
+timed out downloading Ubuntu package indexes before the probe; the unchanged
+head passed on the second attempt.
+
+**Correction worth carrying.** A declared-denial control can accept a relay
+denial, so combining it with explicit refresh could falsely report a clean
+measurement. The combination now refuses before side effects at both public
+boundaries, with assertion-failing pre-fix reproductions. A successful vendor
+account response can also follow a reload or failed refresh; it is not enough.
+
+**Not established:** live-account refresh, private-host qualification, READ
+or WRITE completion. Source-derived revisions changed, so a separately
+authorized controller deployment and new generation are required before use.
+The T3 pin review, T5/no-T6 hold and post-READ WRITE decisions remain intact.
+See [PR #154](https://github.com/sushiHex/constructicon/pull/154) and the
+[additive procedure](plans/handoffs/M8-N5-explicit-refresh.md).
+
+---
+
+## #151 — structural channel fixtures across Python versions
+
+**Merged `33f5671` (PR #152) on 2026-10-10 UTC from reviewed `df8ca98`.**
+The merged tree is byte-identical to that reviewed head. The fixtures now
+expose every `Channel` member explicitly, without inheriting the concrete
+transport or either protocol. Their journal-backed subclass adds only the
+exact-journal proof; production code and identity enforcement are unchanged.
+
+**Correction worth carrying.** Python 3.12's static runtime-protocol lookup
+cannot see dynamic `__getattr__` forwarding. The old accepting proxy therefore
+failed before the intended journal guard. The regression now positively proves
+that local, foreign and unproven doubles all satisfy `Channel`, then verifies
+local acceptance and exact-journal refusals, including a foreign journal that
+compares equal. A missing-proof refusal cannot pass by failing the wrong guard.
+
+**Measured.** All 14 introspection tests passed locally on Python 3.11.15 and
+3.12.13. The full local 3.12 gate passed 4,059 tests with 736 platform skips;
+CI's full 3.11 gate passed 4,398 with 397 skips. A new narrow CI step explicitly
+ran the 14 tests on 3.12.3 in its own environment. Qualification, all four Linux
+proof lanes, and the exact-head connector review passed without findings.
+
+**Not established:** compatibility with every later Python release, host or
+controller changes, measured refresh, or Stage 3 qualification. See the
+[implementation record](plans/handoffs/M8-implementation-record.md) and
+[PR #152](https://github.com/sushiHex/constructicon/pull/152).
+
+---
+
+## #149 — affirmative wrong-plan evidence through refusal cleanup
+
+[PR #150](https://github.com/sushiHex/constructicon/pull/150) preserves the
+schema-4 evidence shape while distinguishing an exact approved wrong-plan
+`account/updated` from a generic notice refusal. A successfully sent request
+can remain outstanding after a notice stops the session. Cleanup audits its
+reply under the same structural/account checks without resuming the session
+or sending another request; pre-send and duplicate protections still apply.
+
+The operator checker requires the account reading's exact plan refusal and
+sealed identity, with at most one matching exact-notice fault. Generic,
+missing, contradictory and extra evidence does not qualify. All 183 N2
+mutants in the first inventory were assertion-killed, but a connector review
+still found a contradictory-notice gap when a reading already carried another
+fault. Its correction uses one private coherence latch for both reading and
+notice orderings; no existing refusal suppresses that check. Follow-up
+mutation, focused and independent-review results live
+in the [implementation record](plans/handoffs/M8-implementation-record.md).
+
+**Correction worth carrying.** Earlier successful startup notices cannot
+prove the notice shape in a different failed run. The fake reproduction
+establishes a sufficient interleaving, not the unavailable raw host payload.
+The failed H7 result stays failed. The new
+[requalification instructions](plans/handoffs/M8-N5-requalification.md)
+preserve its directory and carry the checked account seal into fresh g5
+qualification at the new merged commit.
+
+**Not established here:** host requalification, measured refresh, Stage 3
+READ, or any vendor/model result. The separate Stage 3 authorization and pin
+review still apply. Python 3.12's unchanged structural-proxy test failure is
+recorded in #151; a Python 3.11 gate is not evidence for 3.12 compatibility.
+
+## #143 — proposed operator disposal of abandoned capability accounting
+
+**Merged `4f0178d1` (PR #146) on 2026-10-09 UTC from final head `a037cbc`.**
+The docs-only change adds [Proposed ADR 0022](adr/0022-operator-disposal-records-abandoned-capabilities.md)
+and records its evidence. It merged as Proposed, not accepted: only the owner
+may accept it, and implementation requires a separate issue
+after acceptance and #132's merge.
+
+**What the proposal says.** An ADMIN-only, idempotent command could abandon
+accounting for a bounded batch of exact active `(lease_id, acquisition_epoch)`
+rows on a RUNNING run with NULL journal ownership. A co-located transaction
+would recheck the run/row fence, move only the named rows to `lost` with no
+disposition, and record the canonical transitions and a positively sealed
+receipt. Existing `runs_resume` supplies the retry path; disposal would not
+cancel, resume, or terminalize the run. Receipt-backed `lost` means only that
+the cleanup obligation was administratively abandoned. It does not prove
+process death, physical cleanup, lock release, candidate disposal, or store
+reuse. Historical opaque `lost` facts retain unknown cause.
+The proposal also requires a storage migration (7→8 if no intervening change
+advances it) and a `result_schema_version=2` result shape. Acceptance would
+therefore carry migration and client-compatibility obligations, not just a
+new administrative command.
+
+**Corrections worth carrying.**
+- The draft's public request/plan hashes created a reason-guessing privacy
+  oracle. The connector finding was reproduced with a credential-free
+  synthetic candidate check. The final proposal keeps reason-bearing bindings
+  private; run-readable audit, accounting, result, and receipt-reference bytes
+  (including reference hashes) would derive only from public data. Private replay
+  binding remains. This is hash-oracle evidence, not an implemented command or
+  an executed public-surface privacy proof.
+- `runs_resume` already supports RUNNING with no live owner; a new retry command
+  is not proposed. The obstruction described by #132 is stale-lease
+  reconciliation before the walker's first control check, not lack of a resume
+  route.
+
+**What this slice does NOT establish.**
+- Owner acceptance, implementation, or any changed runtime behavior.
+- The proposed crash/race, SQLite, migration, result-surface or accepting-path
+  privacy proofs; those remain future obligations.
+- Physical quiescence, successful cleanup, or permission for host/vendor work.
+
+See the [M8 implementation record](plans/handoffs/M8-implementation-record.md),
+under "#143 — proposed operator disposal of unreconcilable capability accounting".
+
+---
+
+## N5 Stage 4 — WRITE qualification planning draft
+
+**Merged `13921e25` (PR #144) on 2026-10-09 UTC from head `7f30d77`.** The
+docs-only change adds the [Stage 4 WRITE planning draft](plans/handoffs/M8-N5-stage4-write.md)
+and updates the plan index and implementation record. The document remains a
+review draft: all seven S4 decisions were open at merge, and the plan authorizes
+nothing. Its proposed implementation, proofs, smoke, host session and model
+request are future work. CI's docs-only path skipped native proof lanes; that
+is not native execution evidence.
+At merge, the owner had confirmed Stage 2 and Stage 3 were unrun. The plan
+gates implementation on owner-declared Stage 3 completion, the S4 decisions,
+and #132's merged cleanup outcome; planning is not permission to bypass them.
+
+**Corrections worth carrying.**
+- The initial g4-reuse route was not compatible with the ordered controller
+  procedure: LR9 starts with LR1's fresh boot. S4-4 now recommends the existing
+  next-generation route. Conditional g4 reuse still requires a separately
+  reviewed, owner-approved no-reboot controller/quiescence procedure and
+  sealed-fact equality and compatibility proof; the draft supplies none.
+- The independent cross-review also found missing WRITE root-grant,
+  observation-bound and checkpoint-recovery treatment. Those are now explicit
+  proposals, not accepted decisions or implemented behavior.
+
+**What this slice does NOT establish.**
+- Approval of any S4 decision or an approved implementation design.
+- Any Stage 2 or 3 host execution, WRITE implementation,
+  CI/native/host proof, qualification, production availability, or permission
+  for host action or a model request.
+
+See the [M8 implementation record](plans/handoffs/M8-implementation-record.md),
+under "Issue #141: Stage 4 WRITE planning draft".
+
+---
+
+## M8 plan manifest — guarded staged refresh
+
+**Merged `d3554169` (PR #140) on 2026-10-09 UTC from final head `88f83b4`.**
+`scripts/regen_plan_manifest.py` refreshes named staged plan documents from
+staged blobs while anchoring unnamed documents to the committed manifest and
+checking the complete staged Markdown inventory. It refuses missing or
+drifted entries, unnamed additions, deletions, conflict markers and unresolved
+manifest index stages before writing; callers must explicitly resolve a
+conflict. Real-Git fixtures cover refusal without changing the manifest,
+named updates, no-op refresh, and explicit resolution. Five manifest-guard
+mutants were added to the existing M8 inventory; the final PR record reports
+all 38 M8 mutants assertion-killed on the final head, with the manifest guards
+included. The final CI/review evidence and limits are recorded on [PR #140](https://github.com/sushiHex/constructicon/pull/140).
+
+**Corrections worth carrying.**
+- The first implementation trusted the working manifest and enumerated only
+  its entries, allowing an unnamed staged plan edit with a matching manual digest
+  and an unnamed new document to pass. The committed baseline and complete
+  staged inventory close those omissions.
+- Text conflict markers alone missed a marker-free modify/delete conflict
+  whose index remained unmerged. The final guard checks unmerged manifest index
+  stages before reading the baseline. Automatic manifest conflict aggregation
+  was removed; explicit resolution is required.
+
+**What this slice does NOT establish.**
+- Runtime manifest enforcement or a change to Constructicon runtime behavior.
+- Permission to edit frozen plans: naming a document for refresh is not approval
+  to change it. Deletion/renaming is also outside the helper's supported flow.
+- Linux containment or host/vendor proof from the manifest tests or a green
+  general gate.
+
+See the [M8 implementation record](plans/handoffs/M8-implementation-record.md),
+under "PR #140: committed plan-manifest baselines and complete staged inventory".
+
+---
+
 ## #110 — the CI timing flakes, each now an event
 
 **Merged `d6a7576` (#122) on 2026-10-06 and `8a0d87d` (#139) on 2026-10-09 UTC. #110 is closed.** #118 (`624cc37`) fixed the first three flakes. Neither PR changed production code or raised a bound.

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
-
 import pytest
 
 from constructicon.api.system import Constructicon
@@ -12,11 +10,17 @@ from constructicon.core.channel import (
     IN_PROCESS_CHANNEL_KIND,
     MAILBOX_CHANNEL_KIND,
     Channel,
+    ChannelAck,
+    ChannelDelivery,
     ChannelDurability,
     ChannelEndpoint,
+    ChannelMessage,
     ChannelProfile,
+    ChannelRevision,
+    ChannelSendIntent,
 )
-from constructicon.core.journal import Journal
+from constructicon.core.identity import ActorId, Digest, JsonValue
+from constructicon.core.journal import Journal, JournalBackedChannel
 from constructicon.runtime.registry import CapabilityDescriptor
 from constructicon.substrate.channels.in_process import InProcessChannel
 from constructicon.substrate.channels.mailbox import MailboxChannel
@@ -29,27 +33,85 @@ MAILBOX_ID = "channel/review"
 IN_PROCESS_ID = "channel/local"
 
 
-class _MailboxProxy:
-    """A structural durable transport, deliberately not a MailboxChannel subclass."""
+class _StructuralMailboxChannel:
+    """Explicit Channel members are visible to Python 3.12's static lookup."""
 
     def __init__(self, mailbox: MailboxChannel) -> None:
         self._mailbox = mailbox
 
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._mailbox, name)
+    @property
+    def channel_id(self) -> str:
+        return self._mailbox.channel_id
+
+    @property
+    def profile(self) -> ChannelProfile:
+        return self._mailbox.profile
+
+    def append_request(
+        self,
+        intent: ChannelSendIntent,
+        attestation_id: str,
+    ) -> ChannelMessage:
+        return self._mailbox.append_request(intent, attestation_id)
+
+    def message(self, message_id: Digest) -> ChannelMessage | None:
+        return self._mailbox.message(message_id)
+
+    def reply_for(self, request_id: Digest) -> ChannelMessage | None:
+        return self._mailbox.reply_for(request_id)
+
+    def reply(
+        self,
+        *,
+        request_id: Digest,
+        actor_id: ActorId,
+        payload: JsonValue,
+        command_id: str,
+    ) -> ChannelMessage:
+        return self._mailbox.reply(
+            request_id=request_id,
+            actor_id=actor_id,
+            payload=payload,
+            command_id=command_id,
+        )
+
+    def acknowledge(
+        self,
+        *,
+        message_id: Digest,
+        actor_id: ActorId,
+        command_id: str,
+    ) -> ChannelAck:
+        return self._mailbox.acknowledge(
+            message_id=message_id,
+            actor_id=actor_id,
+            command_id=command_id,
+        )
+
+    def latest_revision(self, actor_id: ActorId) -> ChannelRevision:
+        return self._mailbox.latest_revision(actor_id)
+
+    def inbox(
+        self,
+        *,
+        actor_id: ActorId,
+        revision: ChannelRevision,
+        after: tuple[int, str] | None,
+        limit: int,
+    ) -> tuple[ChannelDelivery, ...]:
+        return self._mailbox.inbox(
+            actor_id=actor_id,
+            revision=revision,
+            after=after,
+            limit=limit,
+        )
+
+
+class _JournalBackedMailboxChannel(_StructuralMailboxChannel):
+    """A structural durable transport, deliberately not a MailboxChannel subclass."""
 
     def is_assembled_from(self, journal: Journal) -> bool:
         return self._mailbox.is_assembled_from(journal)
-
-
-class _UnprovenMailboxProxy:
-    def __init__(self, mailbox: MailboxChannel) -> None:
-        self._mailbox = mailbox
-
-    def __getattr__(self, name: str) -> Any:
-        if name == "is_assembled_from":
-            raise AttributeError(name)
-        return getattr(self._mailbox, name)
 
 
 class _ValueEqualSqliteJournal(SqliteJournal):
@@ -59,8 +121,7 @@ class _ValueEqualSqliteJournal(SqliteJournal):
         return isinstance(other, SqliteJournal)
 
 
-def _assemble_mailbox(journal: SqliteJournal, capability: object) -> Constructicon:
-    profile = cast(Channel, capability).profile
+def _assemble_mailbox(journal: SqliteJournal, capability: Channel) -> Constructicon:
     return Constructicon(
         journal=journal,
         capabilities={MAILBOX_ID: capability},
@@ -69,7 +130,7 @@ def _assemble_mailbox(journal: SqliteJournal, capability: object) -> Constructic
                 capability_id=MAILBOX_ID,
                 kind=MAILBOX_CHANNEL_KIND,
                 revision="1",
-                channel_profile=profile,
+                channel_profile=capability.profile,
             )
         },
     )
@@ -281,15 +342,26 @@ def test_every_structural_sqlite_channel_must_prove_its_exact_journal(tmp_path) 
     journal = _ValueEqualSqliteJournal(tmp_path / "system.db")
     foreign_journal = _ValueEqualSqliteJournal(tmp_path / "foreign.db")
     assert foreign_journal == journal and foreign_journal is not journal
-    local = _MailboxProxy(MailboxChannel(journal, channel_id=MAILBOX_ID))
-    foreign = _MailboxProxy(
+    local = _JournalBackedMailboxChannel(MailboxChannel(journal, channel_id=MAILBOX_ID))
+    foreign = _JournalBackedMailboxChannel(
         MailboxChannel(foreign_journal, channel_id=MAILBOX_ID)
     )
-    unproven = _UnprovenMailboxProxy(
+    unproven = _StructuralMailboxChannel(
         MailboxChannel(journal, channel_id=MAILBOX_ID)
     )
 
-    _assemble_mailbox(journal, local)
+    for channel in (local, foreign, unproven):
+        assert isinstance(channel, Channel)
+        assert not isinstance(channel, MailboxChannel)
+    assert isinstance(local, JournalBackedChannel)
+    assert local.is_assembled_from(journal)
+    assert isinstance(foreign, JournalBackedChannel)
+    assert not foreign.is_assembled_from(journal)
+    assert not isinstance(unproven, JournalBackedChannel)
+
+    description = _assemble_mailbox(journal, local).describe(limit=100)
+    assert len(description.capabilities) == 1
+    assert description.capabilities[0].channel_profile == local.profile
     for channel in (foreign, unproven):
         with pytest.raises(ValueError, match="must use the exact Constructicon journal"):
             _assemble_mailbox(journal, channel)

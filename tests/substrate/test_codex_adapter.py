@@ -1471,7 +1471,10 @@ async def test_an_exact_account_update_passes_before_during_and_after_the_turn()
 async def test_a_contradicting_account_update_refuses(script):
     native = clean_native(**{"records": [completed()], **script})
     conversation = await converse(native, expected=QUALIFYING)
-    assert UPDATED_FAULT in conversation.faults, conversation.faults
+    assert any(
+        fault == UPDATED_FAULT or fault.startswith("account/updated plan ")
+        for fault in conversation.faults
+    ), conversation.faults
     outcome = unavailable_outcome(
         conversation.faults, conversation.observation, FINISHED, requested_model="gpt-5.6-sol",
     )
