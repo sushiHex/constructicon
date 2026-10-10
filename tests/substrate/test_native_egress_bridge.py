@@ -1067,6 +1067,163 @@ def judge(case, run, peer, errors, policy, credential, seeded, inode) -> None:
         assert held == ("new", "new")
 
 
+class ValidAccountScript(native_account.Script):
+    """The same endpoints, with the initial bearer accepted as well as the new one.
+
+    The recovery fixture rejects every old bearer. This control accepts it, so
+    an OAuth request cannot be explained by a stale token or a backend 401.
+    Refusals remain the existing fixture's, and its log keeps the actual class.
+    """
+
+    def _answer(self, host, method, path, entry, body):
+        if (host, method) == (native_account.BACKEND, "GET") and (
+            path in (native_account.CHECK, native_account.USAGE) and entry["bearer"] == "old"
+        ):
+            entry = {**entry, "bearer": "new"}
+        return super()._answer(host, method, path, entry, body)
+
+
+@pytest.fixture
+def valid_credential(fixture_credential, monkeypatch):
+    """No token-age stimulus: both exp and last_refresh are fixed in 2100."""
+    monkeypatch.setattr(native_account, "EXPIRY", 4102444800)
+    credential, _ = fixture_credential
+    stored = json.loads(native_account.credential())
+    stored["last_refresh"] = "2100-01-01T00:00:00Z"
+    seeded = json.dumps(stored).encode()
+    credential.write_bytes(seeded)
+    return credential, seeded
+
+
+@pytest.mark.parametrize("case", ["clean", "refused", "unauthorized"])
+def test_explicit_refresh_control_answers_the_old_bearer_without_faking_rotation(case):
+    """Portable proof of the native control's answers and redacted log."""
+    script = ValidAccountScript(case)
+    headers = {"authorization": f"Bearer {native_account.OLD.access}",
+               "chatgpt-account-id": native_account.ACCOUNT_ID}
+    status, _ = script.respond(native_account.BACKEND, "GET", native_account.CHECK, headers, b"")
+    assert status == (401 if case == "unauthorized" else 200)
+    assert script.log[-1]["bearer"] == "old"
+    body = json.dumps({"grant_type": "refresh_token",
+                       "refresh_token": native_account.OLD.refresh}).encode()
+    status, answer = script.respond(native_account.ISSUER, "POST", native_account.TOKEN, {}, body)
+    assert status == (401 if case == "refused" else 200)
+    if case != "refused":
+        assert answer["access_token"] == native_account.NEW.access
+        assert answer["refresh_token"] == native_account.NEW.refresh
+    assert script.log[-1]["refresh_token"] == "old" and script.log[-1]["grant"] is True
+    assert not any(token in json.dumps(script.log) for token in native_account.fixture_tokens())
+
+
+EXPLICIT_REFRESH_CASES = ("default", "clean", "refused", "unauthorized")
+
+
+@pytest.mark.parametrize("case", EXPLICIT_REFRESH_CASES)
+async def test_explicit_refresh_of_a_nonexpired_managed_token_is_measured_only_when_clean(
+    binding, trust_launcher, short_root, valid_credential, monkeypatch, case,
+):
+    """The pinned client at the fake destinations, with no age-based trigger.
+
+    The omitted default leaves the accepted old credential alone. The selected
+    request refreshes it, and only endpoint activity, an in-place credential
+    change and clean readback together count as measured. Native CI alone runs
+    the binary; portable collection and the control test do not launch it.
+    """
+    credential, seeded = valid_credential
+    inode = credential.stat().st_ino
+    requests: list[dict] = []
+    write = codex_lane.RecordingIO.write
+
+    async def recording(self, data):
+        await write(self, data)
+        requests.append(json.loads(data))
+
+    monkeypatch.setattr(codex_lane.RecordingIO, "write", recording)
+    policy = account_policy(8)
+    peer = native_account.AccountPeer("clean" if case == "default" else case,
+                                      Path(os.environ["M8_TRUST_PKI"]))
+    peer.script = ValidAccountScript("clean" if case == "default" else case)
+    try:
+        async with active_custody(binding) as custody:
+            options = {} if case == "default" else {"request_refresh": True}
+            run = await run_startup(
+                custody, trust_launcher, policy,
+                executable=vendor_executable(trust_launcher),
+                configuration=production_configuration(), expected=native_account.FIXTURE_ACCOUNT,
+                lane_dir=short_root / f"explicit-{case}", deadline_s=45, **options,
+            )
+        assert await until(lambda: all(session["done"] for session in peer.sessions), 10)
+    finally:
+        peer.close()
+    evidence = {
+        "schema_version": 1, "credential_free_fixture": True,
+        "vendor_conformance_qualified": False, "case": case, "assertions_passed": False,
+        "lane": run, "requests": peer.log, "sessions": peer.sessions,
+    }
+    # These tokens have the fixed 2100 exp, unlike the recovery fixture's. Check
+    # while that expiry is still installed, before any evidence is published.
+    assert not any(token in json.dumps(evidence) for token in native_account.fixture_tokens())
+    write_evidence(f"n5-explicit-refresh-{case}.json", evidence)
+    accepted = sum(count for key, count in run["relay"]["destinations"].items()
+                   if key.startswith("accepted:"))
+    assert peer.log and len(peer.log) == len(peer.sessions) == accepted
+    assert accepted <= policy.connections and run["relay"]["closed"] is True
+    assert {key.split(":", 1)[1] for key in run["relay"]["destinations"]} <= {
+        f"{native_account.BACKEND}:443", f"{native_account.ISSUER}:443"}
+    assert all(s["done"] and s["answered"] and s["alert"] is None and s["error"] is None
+               for s in peer.sessions), peer.sessions
+    assert {s["sni"] for s in peer.sessions} <= {native_account.BACKEND, native_account.ISSUER}
+    assert sorted(os.listdir(credential.parent)) == ["auth.json"]
+    assert credential.stat().st_ino == inode and run["credential"]["regular_0600"] is True
+    account_requests = [request for request in requests if request["method"] == "account/read"]
+    assert len(account_requests) == 1
+    assert account_requests[0]["params"]["refreshToken"] is (case != "default")
+    assert [request["method"] for request in requests] in (
+        list(STARTUP_METHODS), list(STARTUP_METHODS[:3]),
+    )
+    posts = [entry for entry in peer.log if entry["path"] == native_account.TOKEN]
+    if case == "default":
+        assert run["schema_version"] == 4 and "request_refresh" not in run
+        assert posts == [] and run["relay"]["destinations"].get(
+            "accepted:" + codex_lane.REFRESH_DESTINATION, 0) == 0
+        assert run["credential"]["mtime_changed"] is False and credential.read_bytes() == seeded
+        assert all(entry["status"] != 401 for entry in peer.log)
+        assert run["refresh"] == "unmeasured"
+    else:
+        assert run["schema_version"] == 5 and run["request_refresh"] is True
+        assert posts and all(post["grant"] for post in posts)
+        assert run["relay"]["destinations"]["accepted:" + codex_lane.REFRESH_DESTINATION] >= 1
+        assert posts[0]["refresh_token"] == "old"
+        if case == "clean":
+            assert len(posts) == 1 and posts[0]["status"] == 200
+            assert run["credential"]["mtime_changed"] is True
+            stored = json.loads(credential.read_bytes())["tokens"]
+            assert native_account.classify(stored["access_token"], "access") == "new"
+            assert native_account.classify(stored["refresh_token"], "refresh") == "new"
+            assert run["refresh"] == "measured"
+            assert all(entry["status"] != 401 for entry in peer.log)
+            assert [step(entry) for entry in peer.log if entry["path"] == native_account.USAGE] == [
+                ("usage", "new", 200)]
+        elif case == "refused":
+            assert len(posts) == 1 and posts[0]["status"] == 401
+            assert run["credential"]["mtime_changed"] is False
+            assert credential.read_bytes() == seeded and run["refresh"] == "unmeasured"
+            assert set(run["faults"]) == STOPPED | {NO_ACCOUNT_FAULT}
+            assert run["gate"] == {"completed": False, "plan": None, "account": None}
+            assert run["readback"] is None
+        else:
+            assert run["credential"]["mtime_changed"] is True
+            assert run["faults"] and run["gate"]["completed"] is False
+            assert run["readback"] is None and run["refresh"] == "unmeasured"
+    if case in ("default", "clean"):
+        assert run["faults"] == [] and not run["relay"]["denied"]
+        assert run["methods_sent"] == [named_method(method) for method in STARTUP_METHODS]
+        assert run["gate"] == {"completed": True, "plan": "pro", "account": FIXTURE}
+        assert run["readback"] is not None
+    evidence["assertions_passed"] = True
+    write_evidence(f"n5-explicit-refresh-{case}.json", evidence)
+
+
 def test_no_evidence_file_contains_key_material():
     directory = os.environ.get("M8_EVIDENCE_DIRECTORY")
     if not directory:
@@ -1087,8 +1244,12 @@ def test_no_evidence_file_contains_key_material():
     if os.environ.get("M8_BRIDGE_REQUIRED"):
         assert [path.name for path in accounts] == sorted(
             f"n5-account-{case}.json" for case in native_account.CASES)
+    explicit = sorted(Path(directory).glob("n5-explicit-refresh-*.json"))
+    if os.environ.get("M8_BRIDGE_REQUIRED"):
+        assert [path.name for path in explicit] == sorted(
+            f"n5-explicit-refresh-{case}.json" for case in EXPLICIT_REFRESH_CASES)
     tokens = native_account.fixture_tokens()
-    for path in files + accounts:
+    for path in files + accounts + explicit:
         text = path.read_text()
         assert "-----BEGIN" not in text and "PRIVATE KEY" not in text, path.name
         assert not any(token in text for token in tokens), path.name

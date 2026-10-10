@@ -7,6 +7,7 @@ the lane's composition, its evidence and its stop rules are production code
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
 import json
@@ -23,6 +24,7 @@ import pytest
 from scripts.ci import m8_host_artifacts as artifacts
 
 from constructicon.core.errors import ContractViolation
+from constructicon.core.executor import TaskSpec
 from constructicon.core.identity import digest
 from constructicon.substrate.executors import codex_lane, linux, operator_store
 from constructicon.substrate.executors.codex_lane import (
@@ -312,6 +314,9 @@ async def test_a_clean_startup_records_the_four_methods_and_nothing_identifying(
     assert evidence["faults"] == [] and evidence["refresh"] == "unmeasured"
     assert evidence["vendor_identity"] == "unverified"
     assert evidence["vendor_conformance_qualified"] is False
+    assert evidence["schema_version"] == 4 and "request_refresh" not in evidence
+    assert [record["params"] for record in lane.native.received
+            if record.get("method") == "account/read"] == [{"refreshToken": False}]
     assert evidence["executable"] == {
         "path": EXECUTABLE.path, "sha256": EXECUTABLE.sha256,
         "catalog_sha256": EXECUTABLE.catalog_sha256,
@@ -322,6 +327,120 @@ async def test_a_clean_startup_records_the_four_methods_and_nothing_identifying(
     text = json.dumps(evidence)
     for planted in (EMAIL, ACCOUNT_ID, "Codex "):
         assert planted not in text
+
+
+async def test_explicit_refresh_sends_only_the_four_startup_methods(tmp_path):
+    native = startup_native()
+    lane = Lane(tmp_path, native, kind="active")
+    _, evidence = await startup(tmp_path, lane=lane, request_refresh=True)
+    assert evidence["methods_sent"] == FOUR and len(native.received) == 4
+    assert [record["params"] for record in native.received
+            if record.get("method") == "account/read"] == [{"refreshToken": True}]
+    assert native.stdin_closed and evidence["gate"] == gate(True, "pro")
+    assert set(evidence) == codex_lane.EXPLICIT_REFRESH_FIELDS == STARTUP_FIELDS | {
+        "request_refresh",
+    }
+    assert evidence["schema_version"] == codex_lane.EXPLICIT_REFRESH_SCHEMA == 5
+    assert evidence["request_refresh"] is True
+    assert evidence["refresh"] == "unmeasured" and evidence["faults"] == []
+
+
+async def test_normal_turn_keeps_all_account_read_refresh_flags_false():
+    native = clean_native()
+    conversation = codex_lane.CodexConversation(
+        task=TaskSpec(instruction="x"), grants=codex_lane.LANE_GRANTS,
+        expected=ExpectedAccount(plan_type="pro"), input_limit=1024 * 1024,
+    )
+    await conversation(native)
+    assert native.methods == EIGHT and conversation.faults == ()
+    assert [record["params"] for record in native.received
+            if record.get("method") == "account/read"] == [{"refreshToken": False}] * 2
+
+
+@pytest.mark.parametrize("value", [0, 1, None, "true"])
+def test_conversation_refresh_selector_is_exactly_boolean(value):
+    with pytest.raises(ContractViolation, match="boolean"):
+        codex_lane.CodexConversation(
+            task=TaskSpec(instruction="x"), grants=codex_lane.LANE_GRANTS,
+            expected=ExpectedAccount(plan_type="pro"), input_limit=1024,
+            startup_only=True, request_refresh=value,
+        )
+
+
+def test_a_turn_conversation_cannot_request_refresh():
+    with pytest.raises(ContractViolation, match="startup-only"):
+        codex_lane.CodexConversation(
+            task=TaskSpec(instruction="x"), grants=codex_lane.LANE_GRANTS,
+            expected=ExpectedAccount(plan_type="pro"), input_limit=1024,
+            request_refresh=True,
+        )
+
+
+@pytest.mark.parametrize("value", [0, 1, None, "true"])
+async def test_lane_refresh_selector_is_exactly_boolean_before_launch(tmp_path, monkeypatch, value):
+    constructed = []
+    original = codex_lane.CodexConversation
+
+    def conversation(**options):
+        constructed.append(options)
+        return original(**options)
+
+    monkeypatch.setattr(codex_lane, "CodexConversation", conversation)
+    lane = Lane(tmp_path, startup_native(), kind="active")
+    with pytest.raises(ContractViolation, match="boolean"):
+        await startup(tmp_path, lane=lane, request_refresh=value)
+    assert constructed == [] and lane.mounts == [] and lane.opened == []
+
+
+async def test_explicit_refresh_requires_active_custody_before_launch(tmp_path):
+    lane = Lane(tmp_path, startup_native())
+    with pytest.raises(ContractViolation, match="active"):
+        await startup(tmp_path, lane=lane, request_refresh=True)
+    assert lane.mounts == [] and lane.opened == []
+
+
+async def test_explicit_refresh_refuses_a_declared_control_denial_before_launch(tmp_path):
+    def mixed_connections(lane):
+        FakeRelay.instances[-1].destinations["accepted:auth.openai.com:443"] += 1
+        FakeRelay.instances[-1].observed["denied:destination"] += 1
+
+    lane = Lane(tmp_path, startup_native(), kind="active", writes=True, during=mixed_connections)
+    with pytest.raises(ContractViolation, match="denial"):
+        await startup(tmp_path, lane=lane, request_refresh=True, expect_denial=True)
+    assert lane.mounts == [] and lane.opened == []
+
+
+@pytest.mark.parametrize("missing", ["none", "connection", "write", "clean"])
+async def test_explicit_refresh_is_measured_only_with_all_existing_facts(tmp_path, missing):
+    def refresh(lane):
+        if missing != "connection":
+            FakeRelay.instances[-1].destinations["accepted:auth.openai.com:443"] += 1
+
+    lane = Lane(tmp_path, startup_native(), kind="active", during=refresh,
+                writes=missing != "write")
+    if missing == "clean":
+        lane.result = outcome(137, 137)
+    _, evidence = await startup(tmp_path, lane=lane, request_refresh=True)
+    assert evidence["request_refresh"] is True
+    assert evidence["refresh"] == ("measured" if missing == "none" else "unmeasured")
+    assert bool(evidence["faults"]) == (missing == "clean")
+
+
+async def test_a_requested_refresh_that_never_converses_is_unmeasured(tmp_path):
+    lane = Lane(tmp_path, startup_native(), kind="active",
+                result=outcome(125, None, timed_out=True))
+    _, evidence = await startup(tmp_path, lane=lane, request_refresh=True)
+    assert evidence["request_refresh"] is True and evidence["methods_sent"] == []
+    assert evidence["refresh"] == "unmeasured" and evidence["faults"]
+
+
+async def test_cancelled_refresh_publishes_no_measured_record(tmp_path):
+    lane = Lane(tmp_path, startup_native(), kind="active", writes=True)
+    lane.raises = asyncio.CancelledError()
+    with pytest.raises(asyncio.CancelledError):
+        await startup(tmp_path, lane=lane, request_refresh=True)
+    assert lane.mounts and all(closed(fd) for fd in lane.opened)
+    assert not (tmp_path / "lane").exists()
 
 
 def outcome(returncode=0, payload=0, **changes):
@@ -884,7 +1003,7 @@ def main_world(monkeypatch) -> dict[str, Any]:
         seen["events"].append("lane")
         seen["executable"], seen["deadline"] = executable, deadline_s
         seen["options"] = options
-        return {"faults": []}
+        return seen.get("evidence", {"faults": [], "refresh": "unmeasured"})
 
     def inherited(root, key, lock_fd, **options):
         seen["inherited"] = (root, key, lock_fd, options)
@@ -915,6 +1034,121 @@ def test_a_maintenance_lane_proves_the_custody_its_parent_passed(tmp_path, monke
     assert seen["events"] == ["launcher", "enter", "lane", "exit"]
     assert seen["executable"] == EXECUTABLE
     assert json.loads((tmp_path / "evidence.json").read_text())["completed"] is True
+
+
+@pytest.mark.parametrize("lane,custody", [("login", "active"), ("startup", "maintenance")])
+def test_cli_refresh_refuses_incompatible_lane_before_reservation(
+    tmp_path, monkeypatch, capsys, lane, custody,
+):
+    seen = main_world(monkeypatch)
+    reservations = []
+    original = EvidenceFile.__init__
+
+    def reserve(self, path):
+        reservations.append(path)
+        original(self, path)
+
+    monkeypatch.setattr(codex_lane.EvidenceFile, "__init__", reserve)
+    with pytest.raises(SystemExit) as raised:
+        codex_lane.main(lane_command(
+            tmp_path, "--lock-fd=7", "--floor=3", "--custody", custody,
+            "--request-refresh", lane=lane,
+        ))
+    assert raised.value.code == 2
+    assert "--request-refresh requires active startup custody" in capsys.readouterr().err
+    assert reservations == [] and seen["events"] == []
+
+
+def test_cli_refresh_refuses_control_denial_before_reservation(tmp_path, monkeypatch, capsys):
+    seen = main_world(monkeypatch)
+    reservations = []
+    original = EvidenceFile.__init__
+
+    def reserve(self, path):
+        reservations.append(path)
+        original(self, path)
+
+    monkeypatch.setattr(codex_lane.EvidenceFile, "__init__", reserve)
+    with pytest.raises(SystemExit) as raised:
+        codex_lane.main([*active_command(tmp_path, monkeypatch),
+            "--request-refresh", "--expect-denial",
+        ])
+    assert raised.value.code == 2
+    assert "--request-refresh cannot expect a control denial" in capsys.readouterr().err
+    assert reservations == [] and seen["events"] == []
+
+
+def active_command(tmp_path, monkeypatch):
+    world = StoreWorld(tmp_path)
+    world.install(monkeypatch)
+    sealed = tmp_path / "sealed.json"
+    sealed.write_text(world.sealed.model_dump_json(), encoding="utf-8")
+    return lane_command(
+        tmp_path, "--custody=active", "--sealed", str(sealed),
+        "--store-root", str(world.root), "--key", world.key,
+        "--expected", ExpectedAccount(plan_type="pro", identity=IDENTITY).seal,
+        lane="startup",
+    )
+
+
+@pytest.mark.parametrize("selected", [False, True])
+def test_cli_active_startup_forwards_refresh_selection(tmp_path, monkeypatch, capsys, selected):
+    seen = main_world(monkeypatch)
+    arguments = active_command(tmp_path, monkeypatch)
+    if selected:
+        arguments.append("--request-refresh")
+    assert codex_lane.main(arguments) == 0
+    assert seen["events"] == ["launcher", "lane"]
+    assert seen["options"]["request_refresh"] is selected
+    assert capsys.readouterr().out == ("refresh-unmeasured\n" if selected else "")
+
+
+@pytest.mark.parametrize("refresh", ["measured", "unmeasured"])
+def test_cli_refresh_marker_comes_from_the_published_record(
+    tmp_path, monkeypatch, capsys, refresh,
+):
+    seen = main_world(monkeypatch)
+    seen["evidence"] = {"faults": [], "refresh": refresh}
+    publish = EvidenceFile.publish
+
+    def after_publication(self, evidence):
+        assert capsys.readouterr().out == ""
+        assert evidence is seen["evidence"]
+        return publish(self, evidence)
+
+    monkeypatch.setattr(codex_lane.EvidenceFile, "publish", after_publication)
+    assert codex_lane.main([*active_command(tmp_path, monkeypatch), "--request-refresh"]) == 0
+    assert capsys.readouterr().out == f"refresh-{refresh}\n"
+    recorded = json.loads((tmp_path / "evidence.json").read_text())
+    assert recorded == {**seen["evidence"], "completed": True}
+
+
+@pytest.mark.parametrize("failure", ["faults", "cancel", "publish"])
+def test_cli_refresh_never_prints_a_marker_when_the_run_fails(
+    tmp_path, monkeypatch, capsys, failure,
+):
+    seen = main_world(monkeypatch)
+    seen["evidence"] = {"faults": ["fault"] if failure == "faults" else [],
+                        "refresh": "measured"}
+    arguments = [*active_command(tmp_path, monkeypatch), "--request-refresh"]
+    if failure == "faults":
+        assert codex_lane.main(arguments) == 1
+    elif failure == "cancel":
+        async def cancel(*args, **kwargs):
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(codex_lane, "run_startup", cancel)
+        with pytest.raises(asyncio.CancelledError):
+            codex_lane.main(arguments)
+        assert not (tmp_path / "evidence.json").exists()
+    else:
+        monkeypatch.setattr(codex_lane.os, "fsync", lambda fd: (_ for _ in ()).throw(
+            OSError(5, "injected publication failure")
+        ))
+        with pytest.raises(OSError, match="publication failure"):
+            codex_lane.main(arguments)
+        assert not (tmp_path / "evidence.json").exists()
+    assert capsys.readouterr().out == ""
 
 
 @pytest.mark.parametrize("extra", [(), ("--lock-fd", "7"), ("--floor", "3")],
