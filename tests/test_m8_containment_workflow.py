@@ -61,8 +61,9 @@ PROOFS = {
         "combined",
         "tests/substrate/test_native_combined.py tests/substrate/test_combined_startup_origins.py "
         "tests/test_native_combined.py tests/substrate/test_combined_sender.py "
-        "tests/substrate/test_codex_native.py scripts/check_m8_combined_mutations.py "
-        "scripts/check_m8_n2_mutations.py scripts/check_m8_n2_write_mutations.py",
+        "tests/substrate/test_codex_native.py tests/substrate/test_qualification_write_linux.py "
+        "scripts/check_m8_combined_mutations.py scripts/check_m8_n2_mutations.py "
+        "scripts/check_m8_n2_write_mutations.py scripts/check_m8_n5_write_mutations.py",
     ),
     "Probe native mediation with loopback only and no credentials": (
         "mediation",
@@ -90,7 +91,8 @@ PROOFS = {
         "tests/substrate/test_codex_host.py scripts/check_m8_n5_host_mutations.py",
     ),
     "Rehearse the Stage 3 READ session without a login": (
-        "foundation", "tests/test_m8_n5_read_rehearsal.py",
+        "foundation",
+        "tests/test_m8_n5_read_rehearsal.py tests/test_m8_n5_write_rehearsal.py",
     ),
     "Prove the host plans the package CI installed": (
         "foundation", "tests/test_m8_host_runtime.py",

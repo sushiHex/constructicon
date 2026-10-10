@@ -4493,6 +4493,176 @@ Ruff and diff checks passed, and independent Sol review found no blocking
 finding in the document or tests. Full repository and CI results remain
 separate, exact-head evidence on the successor PR, not host acceptance.
 
+### N5 — bounded WRITE implementation (#156)
+
+The owner declared Stage 3 complete, with no T6, and selected vendor retry
+defaults within the fixed deadline; occurrence remains unknown. The shared
+N5 retry is unused. The [disposition](https://github.com/sushiHex/constructicon/issues/78#issuecomment-6101919423)
+released the held cleanup/denial changes and the previously accepted S4 design.
+PR #147 actually merged as `88fc71d`, with a tree identical to reviewed
+`449296e`. Inspection of that merged code, not issue status, established the
+cleanup prerequisite before [#156](https://github.com/sushiHex/constructicon/issues/156)
+started. Historical terminal/active damage is not repaired.
+
+The [pre-implementation state review](M8-N5-write-implementation-review.md)
+was committed before implementation. Its separate Sol source review and the
+orchestrator examined each await, recovery state and publication boundary.
+It is not final-head implementation review or executed proof.
+
+The implementation keeps the existing qualification entry and control-plane
+lifecycle. Two fixed graph nodes bind the production WRITE executor and
+contained workspace, then the contained gate. WRITE alone serializes typed
+workspace, gate, fixture/base and report pins. Retained READ/no-dispatch
+authorization wire shapes and both frozen Codex modules remain unchanged.
+The fixture is fresh, private and custody-checked before a Git constructor can
+write; rechecks after runtime probes and before dispatch reject observed drift.
+Recovery compares the actual assembled world and retained inputs/manifest
+before RunHost starts. No new scheduler, cleanup ledger or model interface
+was added.
+
+Credential-free smoke and WRITE use the same workspace/capture/gate assembly.
+Smoke has separate state and no Codex provider or operator-store lock. Their
+bounded reports share one capture/checkpoint/attestation proof; only WRITE
+adds attempt and turn facts. The projection materializes the retained run,
+matches original checkpoints and the journal-minted candidate-bound
+attestation, and checks recorded acquisition settlement. Control shutdown is
+joined before projection, including repeated cancellation. Timeout is an
+incomplete result, not a longer wait or another attempt.
+
+**Correction found by the accepting recovery path.** A predecessor gate may
+be durably closed as discarded before a successor gate finishes. Requiring
+every historical disposition to be released rejected that lawful recovery.
+The proof distinguishes closed historical obligations from the latest required
+successful role; active and lost obligations still cannot pass. No checkpoint
+acquisition epoch is invented: existing checkpoint and attestation contracts
+do not publish one.
+
+The [WRITE session](M8-N5-write-session.md) separates host qualification,
+credential-free smoke, pin review, root installation and the one turn.
+Unexpected exit codes, absent reports and uncertain dispatch stop. It provides
+no retry or cleanup command. A separately pinned deployment successor must
+name the actual merged controller and qualified generation before host use.
+
+Portable, physical and mutation results belong to the implementation PR at
+their executed heads. Tests written but not executed are not proof; local
+Windows skips cannot establish containment. No host installation, smoke,
+WRITE model request or vendor-conformance result is claimed by this entry.
+
+**Executed initial checks.** Eight portable lifecycle cases passed, then the
+post-gate-await target-drift case passed separately. Nine focused final-source
+report cases passed, including the recovered-discarded versus active/lost
+distinction. All 34 new WRITE mutants were assertion-killed, with no
+NOT PROVEN result. The 37 fake-shell runbook tests passed. The four moved
+legacy host-inventory targets now name their shared implementation: 17
+portable cases were assertion-killed; four platform-only skips are explicitly
+not local kills. Strict mypy over 114 files and all five import contracts
+passed. Full local and Linux gates remain separate exact-head evidence.
+
+**Exact mode, not incidental extraction permissions.** An accepting archive
+test showed that Git `100644` can extract with group-write permission. The
+checker must require the approved regular, non-executable Git mode, not the
+incidental extracted filesystem permission `0644`. The fixed gate checks the
+exact Git inventory and bytes, and the worker-side check now tests regular
+non-executable status. The archive regression passes; this does not admit an
+executable file or a different candidate tree.
+
+**Independent source review.** A separate Sol review of production bytes at
+`d1a8cca` (unchanged at test-only `0175ee7`) found no actionable introduced
+defect. It checked custody before writes, post-await drift, retained-world
+validation before recovery, attempt accounting, checkpoint/attestation
+provenance, settlement and whole-report bounds. Its duplicate focused suite
+was stopped and is incomplete, not a test-pass claim. One earlier full gate
+was also interrupted before the final checker correction and main integration;
+neither interrupted run is completion evidence.
+
+**First CI found what source review did not.** The initial Linux WRITE and
+smoke cases refused the fixture before launching: Git-created metadata was
+group-writable. Attributing this solely to the runner's permissive umask was
+premature. Custody must be established at creation and
+preserved by subsequent Git writes, not repaired recursively afterward. The
+correction uses a child-only umask and the dedicated authority's exact private
+Git sharing policy. Custody checks cover authority metadata and canonical
+private acquisition roots, not untrusted payload descendants that the existing
+workspace and gate adapters validate. Its physical proof remains pending CI.
+
+That first correction was insufficient. Verification at `85cfd2c` passed
+4,719 tests with 408 skips, but the actual service lane still refused before
+launch. A temporary synthetic-only CI diagnostic reproduced the difference:
+the ordinary runner passed, while the service identity with scrubbed environment
+failed. Its recorded metadata showed the initial config at `0664` and initial
+object/ref directories at `0775`; the later objects and ref, created after
+the explicit private Git policy was installed, were private. This establishes
+the creation-stage gap, not why the two environments differ. No credential,
+binary launch or private-host operation was needed for that diagnosis.
+
+The follow-up supplies `--shared=0600` to initialization itself, so the same
+private policy governs the first Git writes as well as subsequent ones. It
+does not relax custody or repair an existing tree. A portable actual-Git test
+observes that policy before any local config exists; the service-lane creation,
+future-ref and pack checks remain the physical acceptance gate. The temporary
+diagnostic workflow is removed, not retained as another CI lane.
+The new guard test failed by assertion before the fix and passed afterward;
+the 37th inventory mutant removes this flag and was assertion-killed. The
+assembly suite passed 18 cases with its POSIX proof skipped locally; mutation
+metadata, scope and manifest checks passed 94 cases. A separate narrow review
+found no introduced consequence and ran two actual-Git cases successfully.
+These do not substitute for the final Linux service proof.
+
+The narrow consequence review reproduced an alias gap in that correction:
+an acquisition-container redirector was accepted before materialization could
+create its workspace outside the intended root. The fix retains canonical
+private `guards`/`payloads` prefixes and checks immediate service-owned
+acquisition containers, without recursively interpreting their untrusted
+workspace or snapshot contents. This is the constructor/recovery write
+boundary, not a replacement capture validator.
+
+The first verification run also exposed three test defects: an enormous
+parameter id exceeded the subprocess environment limit, a test assigned a
+frozen launcher field, and the workflow inventory omitted the new proofs.
+These are failed or unexecuted checks, not passing evidence. The corresponding
+local full run was interrupted after reproducing errors; it must be rerun.
+
+After correction, all 37 report cases and three workflow inventory cases
+passed together (15 platform shell cases skipped on Windows). The separate
+assembly/host/runbook check passed 60 cases, with the actual POSIX creation-mode
+test skipped. A real Windows junction was refused before authority construction
+or outside writes. These are scoped proofs, not the full repository gate or
+physical Linux evidence.
+
+The corrected inventory then assertion-killed all 36 WRITE mutants, including
+the child-only umask and acquisition-container call-site guards, with zero
+NOT PROVEN results. Mutation metadata, scope and manifest checks passed
+94 cases; the two Linux-only rehearsal cases skipped locally. The added
+W4-W6 rehearsal executes the runbook's actual blocks against synthetic CI
+qualification and an empty credential, checking the precise account-gate
+refusal, zero relay activity and preserved attempt. Its Linux result is still
+unverified here; the rehearsal does not run a local vendor binary.
+
+The owner subsequently approved the entire wave, including the previously
+requested credential-free, logged-out WRITE rehearsal in Linux CI. That proof
+must establish the specific pre-dispatch account-gate refusal and no vendor
+connection; it cannot establish authenticated acceptance. No local vendor
+binary or private-host invocation is authorized by the rehearsal itself.
+
+**Completed implementation evidence at `657089f`.** CI verification passed
+4,720 tests with 408 skips; local Python 3.12 verification passed 4,380 with
+748 skips, strict types and all five import contracts. Runner qualification
+and all four physical lanes passed. Combined's 140 tests include all five new
+WRITE proofs: correct and wrong output, cold reconstruction with and without
+a writer checkpoint, and the actual credential-free smoke entry. All 37 WRITE
+mutants were assertion-killed. Foundation ran both actual WRITE runbook
+rehearsals successfully, including the pinned binary's precise logged-out
+account-gate refusal, zero relay activity and preserved attempt. This is not
+an authenticated WRITE or private-host result.
+
+The final connector review found one introduced test-portability defect:
+the POSIX mode test selected UID 0 even though fixture custody correctly
+requires a non-root service owner. Source confirms that refusal precedes the
+property being measured. The test now explicitly skips root environments;
+it does not change the production guard. The non-root CI proof remains
+mandatory on its supported runner. No skipped root execution is counted as
+permission evidence. Final test-only-head CI belongs to the PR evidence.
+
 ### #142 — destination denials are the declared startup control
 
 `codex_lane.run_startup` now requires `denied:destination` when

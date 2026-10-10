@@ -39,15 +39,18 @@ from constructicon.core.qualification import QualificationAuthorization
 from constructicon.substrate.executors import codex_lane, operator_store
 from constructicon.substrate.executors.codex import CodexOperatorProvider, launch_identity
 from constructicon.substrate.executors.codex_protocol import (
+    CONTAINED_PYTHON_CATALOG,
     SPEND_FIELDS,
     USAGE_FIELDS,
     ExpectedAccount,
     named_method,
 )
 from constructicon.substrate.executors.egress import identity_digests
+from constructicon.substrate.executors.linux import LinuxLauncher
 from constructicon.substrate.executors.operator_store import BindingStore
 from constructicon.substrate.git.acquisition import AcquisitionClosure
 from constructicon.substrate.git.authority import GitAuthority
+from constructicon.substrate.git.capture import ContainedWriteWorkspaceProvider
 
 LAUNCH_ROOT = Path("/var/lib/constructicon-m8-launch")
 MAX_EVIDENCE_BYTES = 1048576
@@ -98,6 +101,17 @@ READ_GRANTS = EffectiveGrants(
     timeout_s=120,
 )
 """The READ grants: the profile's one model and effort, and decision 6's 120 s."""
+
+WRITE_PROFILE = READ_PROFILE.model_copy(update={
+    "name": "codex-operator-write", "posture": Posture.WRITE,
+    "grant_policy": READ_PROFILE.grant_policy.model_copy(update={
+        "tool_sets": (CONTAINED_PYTHON_CATALOG,), "workspace_required": True,
+    }),
+    "isolation": READ_PROFILE.isolation.model_copy(update={"filesystem": "workspace_only"}),
+})
+WRITE_GRANTS = READ_GRANTS.model_copy(update={
+    "posture": Posture.WRITE, "allowed_tools": CONTAINED_PYTHON_CATALOG, "timeout_s": 300,
+})
 
 
 @dataclass(frozen=True)
@@ -230,6 +244,26 @@ def operator_provider(
     It stays unavailable: its published reasons are untouched, and only an
     owner's authorization admits a qualification run.
     """
+    return _operator_provider(host, qualification, READ_PROFILE, ())
+
+
+def write_operator_provider(
+    host: HostSession, workspace: ContainedWriteWorkspaceProvider,
+    qualification: QualificationAuthorization | None = None,
+) -> CodexOperatorProvider:
+    """The same installed host facts, with the sole mediated WRITE catalog."""
+    if not isinstance(workspace, ContainedWriteWorkspaceProvider):
+        raise ContractViolation("WRITE host assembly requires a contained workspace")
+    return _operator_provider(
+        host, qualification, WRITE_PROFILE, CONTAINED_PYTHON_CATALOG, workspace.launcher,
+    )
+
+
+def _operator_provider(
+    host: HostSession, qualification: QualificationAuthorization | None,
+    profile: NativeOperatorExecutorProfileV3, catalog: tuple[str, ...],
+    shared_launcher: LinuxLauncher | None = None,
+) -> CodexOperatorProvider:
     if sys.platform != "linux":
         raise ContractViolation("the host assembly requires the Linux host")
     # Checked before the closure authority is constructed: constructing it
@@ -242,6 +276,14 @@ def operator_provider(
     if not (closure.resolve() == closure and closure.is_dir()):
         raise ContractViolation("the state directory is not this host's prepared state")
     launcher = codex_lane._launcher(host.launch_root)
+    if shared_launcher is not None:
+        if (
+            launcher.revision != shared_launcher.revision
+            or launcher.limits != shared_launcher.limits
+            or launcher.expected_runtime != shared_launcher.expected_runtime
+        ):
+            raise ContractViolation("WRITE workspace and executor have different launch runtimes")
+        launcher = shared_launcher
     configuration = codex_lane.production_configuration()
     if (host.session / "config.toml").read_text(encoding="utf-8") != configuration:
         raise ContractViolation("the session configuration is not the production configuration")
@@ -251,18 +293,18 @@ def operator_provider(
     executable = codex_lane.vendor_executable(launcher)
     identity = launch_identity(
         launcher=launcher,
-        profile=READ_PROFILE,
+        profile=profile,
         egress=NativeEgressIdentityV1(**identity_digests(policy), physical_conformance_revision=q),
         store=store,
         executable_digest=Digest(f"sha256:{executable.sha256}"),
         configuration=configuration,
-        catalog=(),
+        catalog=catalog,
         authenticated_startup_conformance_revision=q,
         subscription_mode_conformance_revision=q,
     )
     return CodexOperatorProvider(
         launcher=launcher,
-        profile=READ_PROFILE,
+        profile=profile,
         identity=identity,
         expected_account=sealed_account(
             store, host.qualification,
@@ -270,7 +312,7 @@ def operator_provider(
         ),
         binary=codex_lane.RUNTIME_BINARY,
         configuration=configuration,
-        catalog=(),
+        catalog=catalog,
         acquisition_root=state / "acquisitions",
         binding_store=BindingStore(
             host.launch_root / "operator-stores", host.store_key, store,
