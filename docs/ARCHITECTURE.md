@@ -133,6 +133,24 @@ Recovery always uses the durable row, including when materialization never began
 callbacks default to `None` and retain their eager behavior. PR A proves this
 sequence with genuine deferred-resource doubles, not Linux processes.
 
+Known cleanup failures escape at their own site instead of becoming invocation
+failures. An original invocation/setup error is retained explicitly, and a
+completed checkpoint is not relabeled failed when its subsequent close fails.
+Close positively observes ownership before each physical close; failed closes
+relinquish local custody, and observed ownership loss switches remaining work
+to relinquishment. Normal run shutdown joins heartbeats and releases ownership
+despite ordinary errors. Worker cancellation rechecks latched loss after joining
+the heartbeat and atomically fences its intent write with the current lease;
+external cancellation requests retain their run-scoped authority. Task
+cancellation records user intent only in cancel mode; shutdown abandonment
+records none. Normal cleanup preserves hard-death
+crash semantics; already-known ownership loss stays primary while relinquishing.
+Future terminal transitions, including parking, refuse active acquisitions with
+`CleanupUnresolved` in the same fenced journal transaction. The released
+RUNNING run remains eligible for recovery. Existing terminal rows are not
+migrated or repaired, and an unrecorded acquisition has no invented durable
+recovery obligation.
+
 ### Owned process conversations
 
 L0 `core/process.py` declares `ProcessIO`: bounded byte reads, cumulative-budget

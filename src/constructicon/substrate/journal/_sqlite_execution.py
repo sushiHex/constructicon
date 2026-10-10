@@ -28,7 +28,9 @@ from constructicon.core.identity import Digest, canonical_json, parse_json_value
 from constructicon.core.journal import Checkpoint, JournalEvent
 from constructicon.core.manifest import CapabilityLease
 from constructicon.core.run import (
+    TERMINAL_STATUS_EVENTS,
     CheckpointConflict,
+    CleanupUnresolved,
     OwnershipLost,
     RunAttemptSuperseded,
     RunLease,
@@ -320,14 +322,27 @@ class _SqliteExecutionMixin:
                     f"run {lease.run_id!r}: release fenced out at epoch {lease.epoch}"
                 )
 
-    def request_cancel(self, run_id: RunId) -> None:
+    def request_cancel(self, run_id: RunId, *, lease: RunLease | None = None) -> None:
+        if lease is not None and lease.run_id != run_id:
+            raise ContractViolation("cancellation lease names a different run")
         with self._txn() as conn:
             if _run_mutation_row(conn, run_id) is None:
                 raise ContractViolation(f"unknown run {run_id!r}")
-            updated = conn.execute(
-                "UPDATE runs SET cancel_requested = 1 WHERE run_id = ?",
-                (run_id,),
-            )
+            if lease is None:
+                updated = conn.execute(
+                    "UPDATE runs SET cancel_requested = 1 WHERE run_id = ?",
+                    (run_id,),
+                )
+            else:
+                updated = conn.execute(
+                    "UPDATE runs SET cancel_requested = 1"
+                    " WHERE run_id = ? AND owner_id = ? AND owner_epoch = ?",
+                    (run_id, lease.owner_id, lease.epoch),
+                )
+                if updated.rowcount == 0:
+                    raise OwnershipLost(
+                        f"run {run_id!r}: cancellation fenced out at epoch {lease.epoch}"
+                    )
             if updated.rowcount != 1:
                 raise JournalDamaged(f"run {run_id!r} disappeared during cancellation")
 
@@ -356,6 +371,19 @@ class _SqliteExecutionMixin:
     ) -> None:
         with self._txn() as conn:
             seq = self._allocate_seq(conn, lease, expected_statuses=expected)
+            if target in TERMINAL_STATUS_EVENTS:
+                rows = _capability_lease_rows(conn, run_id=lease.run_id)
+                active = [
+                    row for raw in rows
+                    if (row := _capability_lease_from_row(
+                        raw, connection=conn, expected_run_id=lease.run_id,
+                    )).state == "active"
+                ]
+                if active:
+                    raise CleanupUnresolved(
+                        f"run {lease.run_id!r}: {len(active)} active acquisitions"
+                        f" prevent transition to {target.value!r}"
+                    )
             placeholders = ", ".join("?" for _ in expected)
             cur = conn.execute(
                 f"UPDATE runs SET status = ? WHERE run_id = ? AND status IN ({placeholders})",
