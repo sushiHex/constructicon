@@ -4492,6 +4492,7 @@ runs both refusal controls and the stale-generation proof; only H8 is omitted.
 Ruff and diff checks passed, and independent Sol review found no blocking
 finding in the document or tests. Full repository and CI results remain
 separate, exact-head evidence on the successor PR, not host acceptance.
+
 ### #142 — destination denials are the declared startup control
 
 `codex_lane.run_startup` now requires `denied:destination` when
@@ -4509,3 +4510,15 @@ explicit-refresh extension's refusal of negative controls at both lane and CLI
 boundaries. Final-head verification, assertion-killed bridge inventory and
 review evidence belongs on [PR #145](https://github.com/sushiHex/constructicon/pull/145).
 This correction neither qualifies the vendor nor performs any host session.
+
+**Executed combined integration evidence.** At `3811ecc`, including main
+`b38c8ae` and PR #147's cleanup prerequisite, CI verification passed 4,541 tests
+with 401 platform skips, strict types over 110 source files and all five import
+contracts. The isolated controller import and 14 Python 3.12 channel cases
+passed. Qualification and all four physical proof lanes passed. Fresh Linux
+foundation logs affirmatively report N4-L5, N4-L5a and N4-L5b KILLED
+(1.219s, 1.214s and 1.229s). The same three mutants were assertion-killed on
+local Python 3.12.13, whose focused denial/refresh integration suite passed
+40 tests. The wider Python 3.11.15 focused suite passed 319 tests. This is
+credential-free integration evidence; final main synchronization and review
+evidence remains explicitly tied to the eventual final PR head.
