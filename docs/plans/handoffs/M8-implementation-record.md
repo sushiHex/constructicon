@@ -4260,3 +4260,45 @@ real credential, model request or live refresh is claimed by this slice.
 pins. The held cleanup/denial PRs still need T5 and explicit no-T6 disposition.
 S4-1 through S4-5 and S4-7 were accepted with their reviewed clarifications;
 S4-6 remains post-READ. Neither WRITE nor Claude qualification is completed here.
+
+**Merge and executed evidence.** PR #154 merged as `585df33` from final head
+`69a8932`, with an identical tree. The local Python 3.12 gate passed 4,103
+tests with 740 platform skips; CI verification, qualification and all four
+physical lanes passed. All 25 changed/new mutants were assertion-killed.
+The downloaded foundation artifact contains all four explicit-refresh case
+records with `assertions_passed: true`: default/unmeasured, explicit/measured,
+issuer-refused/unmeasured and failed-readback/unmeasured. Those are pinned-client
+fake-endpoint proofs, not private-host results. Qualification's first attempt
+timed out during Ubuntu package-index download before its probe; an unchanged
+head rerun passed. The connector completed its final-head review without
+findings. Exact run links and evidence are on
+[PR #154](https://github.com/sushiHex/constructicon/pull/154).
+
+### N5 — g6 deployment successor (#78)
+
+The [g6 session](M8-N5-g6-session.md) separates the controller commit
+`585df33eb196cd4afd10d5c12cb1efb37fd5a6e1` from the later reviewed procedure
+artifact. It composes the existing launch/controller replacement and operator
+commands, preserving the checked g5 account seal before a fresh boot. A new
+session directory, maintenance qualification, g6 descriptor and active controls
+must establish the new generation. Prior evidence is retained, never relabeled.
+
+Ordinary H7 measurement can satisfy the existing refresh gate. Otherwise one
+separately authorized explicit H8 attempt uses the merged schema-5 producer's
+post-publication verdict, not a modified schema-4 checker. The READ successor
+names fresh state and authorization paths and retains the owner's T3 pin
+review. It grants no retry, model request, baseline change or live execution.
+
+Portable shell tests exercise only local fake commands. They cannot establish
+host ownership, installed artifacts, drift, custody, vendor behavior or measured
+refresh. Exact executed checks and review results belong on the successor PR.
+The held PRs #145/#147, the T5/no-T6 release condition, S4-6 and WRITE's separate
+implementation gates are unchanged. No private-host action was taken to prepare
+this successor.
+
+**Executed portable checks.** The combined g6, g5 requalification and explicit
+refresh procedure suite passed 59 tests. The measured-H7 accepting case still
+runs both refusal controls and the stale-generation proof; only H8 is omitted.
+Ruff and diff checks passed, and independent Sol review found no blocking
+finding in the document or tests. Full repository and CI results remain
+separate, exact-head evidence on the successor PR, not host acceptance.

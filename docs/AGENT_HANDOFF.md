@@ -15,6 +15,40 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #78 — explicit active-startup refresh
+
+**Merged `585df33` (PR #154) from reviewed `69a8932`.** The merged tree is
+byte-identical to that head. The operator can request managed refresh through
+the existing active-startup conversation; ordinary startup and task requests
+still select false. No token client, credential reader or new protocol loop
+was added. Explicit evidence is schema 5; default evidence keeps schema 4.
+Requested refresh is not measured refresh: the existing connection, credential
+mtime and clean-startup proof still decides the result.
+
+**Measured.** Local verification passed 4,103 tests with 740 platform skips.
+All four Linux proof lanes passed. Downloaded foundation artifacts affirm
+that all four pinned-client fake-endpoint cases ran and passed: default stayed
+unmeasured, explicit success measured, and issuer refusal and failed readback
+stayed unmeasured. All 25 changed/new mutants were assertion-killed. The final
+connector review completed without findings. Qualification's first CI attempt
+timed out downloading Ubuntu package indexes before the probe; the unchanged
+head passed on the second attempt.
+
+**Correction worth carrying.** A declared-denial control can accept a relay
+denial, so combining it with explicit refresh could falsely report a clean
+measurement. The combination now refuses before side effects at both public
+boundaries, with assertion-failing pre-fix reproductions. A successful vendor
+account response can also follow a reload or failed refresh; it is not enough.
+
+**Not established:** live-account refresh, private-host qualification, READ
+or WRITE completion. Source-derived revisions changed, so a separately
+authorized controller deployment and new generation are required before use.
+The T3 pin review, T5/no-T6 hold and post-READ WRITE decisions remain intact.
+See [PR #154](https://github.com/sushiHex/constructicon/pull/154) and the
+[additive procedure](plans/handoffs/M8-N5-explicit-refresh.md).
+
+---
+
 ## #151 — structural channel fixtures across Python versions
 
 **Merged `33f5671` (PR #152) on 2026-10-10 UTC from reviewed `df8ca98`.**
