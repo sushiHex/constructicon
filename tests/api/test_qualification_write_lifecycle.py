@@ -392,3 +392,29 @@ async def test_write_attempt_survives_a_whole_journal_reset(
     assert launcher.commands == callback_calls(launcher) == []
     assert not launcher.native.callback_responses and not second.executor.handles
     assert Path(auth.attempt_record).read_bytes() == spent
+
+
+async def test_write_checker_refuses_target_drift_after_the_gate_await(
+    tmp_path, portable_binding, portable_write_boundary, monkeypatch,
+):
+    launcher = portable_launcher()
+    assembly, auth = await sealed_assembly(tmp_path, launcher, portable_binding[1:])
+    gate = assembly.resources.gate
+    original_verify = gate._verify
+
+    async def drift_after_check(handle, candidate):
+        evaluation = await original_verify(handle, candidate)
+        assert evaluation.ok  # A genuinely positive check, not an earlier refusal.
+        gate.authority._run(
+            "update-ref", gate.target_ref, candidate, auth.write.fixture.base_commit,
+        )
+        return evaluation
+
+    monkeypatch.setattr(gate, "_verify", drift_after_check)
+    async with asyncio.timeout(30):
+        report = await qualification.qualify_write(assembly=assembly, authorization=auth)
+    journal = assembly.resources.journal
+    assert journal.run_state(auth.run_id).status is RunStatus.FAILED
+    assert report.verdict != "passed" and report.target_unchanged is False
+    assert len(launcher.commands) == len(callback_calls(launcher)) == 1
+    assert_closed(assembly, auth.run_id)
