@@ -4186,6 +4186,11 @@ an earlier protocol rejection. The accepting local channel publishes its real
 profile; the foreign journal still fails even when it compares equal to the
 system journal. Production protocol and object-identity checks are unchanged.
 The contributor guide states this portable structural transport contract.
+The existing verify job also runs this test file under Python 3.12 in a
+separate environment, while its full gate remains on Python 3.11. This pins
+the interpreter boundary without adding a second full-suite matrix. The new
+workflow step requires its own successful CI execution; local tests do not
+prove the workflow ran.
 
 **Executed verification.** The pre-fix Python 3.12.13 reproduction failed once
 with the expected missing-contract error. After the correction, all 14 channel
