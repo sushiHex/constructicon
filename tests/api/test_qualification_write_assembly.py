@@ -41,6 +41,27 @@ def test_prepare_and_inspect_fixed_fixture(tmp_path: Path) -> None:
         assembly.prepare_fixture(root)
 
 
+def test_fixture_supplies_private_git_policy_before_initial_config_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "fixture"
+    original = assembly._git
+    initialization = []
+
+    def observed(directory, *args, **kwargs):
+        if args[0] == "init":
+            initialization.append((args, (directory / "authority.git" / "config").exists()))
+        return original(directory, *args, **kwargs)
+
+    monkeypatch.setattr(assembly, "_git", observed)
+    pin = assembly.prepare_fixture(root)
+    assert initialization == [((
+        "init", "--bare", "--shared=0600", "--object-format=sha1", "--template=",
+    ), False)]
+    assert (root / "authority.git" / "config").read_bytes() == assembly._CONFIG
+    assert assembly.inspect_fixture(root) == pin
+
+
 def test_fixture_rejects_changed_seed(tmp_path: Path) -> None:
     root = tmp_path / "fixture"
     assembly.prepare_fixture(root)
@@ -289,7 +310,7 @@ async def test_actual_acquisition_directory_alias_refused_before_constructor_or_
 
 
 _PERMISSIVE_PARENT = """
-import asyncio, json, os, stat, sys
+import asyncio, os, stat, sys
 from pathlib import Path
 from constructicon.api._qualification_write_assembly import prepare_fixture, inspect_fixture
 from constructicon.substrate.executors.linux import DEFAULT_PROCESS_LIMITS
@@ -299,19 +320,7 @@ from constructicon.substrate.git.process import GitProcess
 
 os.umask(0o002)
 root = Path(sys.argv[1])
-try:
-    pin = prepare_fixture(root)
-except Exception:
-    # Synthetic empty fixture only: expose the exact custody premise, never
-    # a host locator, configuration content, account or credential.
-    entries = []
-    for path in sorted((root / 'authority.git').rglob('*')):
-        info = path.lstat()
-        entries.append([str(path.relative_to(root)), oct(stat.S_IMODE(info.st_mode)),
-                        info.st_uid, info.st_gid, info.st_nlink])
-    print(json.dumps({'fixture_custody': entries, 'service_uid': os.getuid()}),
-          file=sys.stderr)
-    raise
+pin = prepare_fixture(root)
 authority = GitAuthority(root / 'authority.git', root / 'authority-workspaces')
 paths = AcquisitionPaths(root / 'workspace-acquisitions', 'acq-' + '0' * 32)
 closure = AcquisitionClosure(authority)

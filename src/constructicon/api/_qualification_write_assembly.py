@@ -178,7 +178,9 @@ def prepare_fixture(root: Path) -> QualificationFixturePin:
     _directory(root)
     for name in (*_CHILDREN, *_ACQUISITION_PREFIXES):
         (root / name).mkdir(mode=0o700)
-    _git(root, "init", "--bare", "--object-format=sha1", "--template=")
+    # The policy must apply to init's own config/refs/object directories, not
+    # only to later writes after the reviewed config replaces init's output.
+    _git(root, "init", "--bare", "--shared=0600", "--object-format=sha1", "--template=")
     # Git may inherit host defaults at init; no such setting survives preparation.
     (root / "authority.git" / "config").write_bytes(_CONFIG)
     (root / "authority.git" / "hooks").mkdir(mode=0o700, exist_ok=True)

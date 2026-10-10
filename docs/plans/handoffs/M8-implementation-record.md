@@ -4576,13 +4576,37 @@ was also interrupted before the final checker correction and main integration;
 neither interrupted run is completion evidence.
 
 **First CI found what source review did not.** The initial Linux WRITE and
-smoke cases refused the fixture before launching: Git-created metadata inherited
-the runner's permissive umask. Custody must be established at creation and
+smoke cases refused the fixture before launching: Git-created metadata was
+group-writable. Attributing this solely to the runner's permissive umask was
+premature. Custody must be established at creation and
 preserved by subsequent Git writes, not repaired recursively afterward. The
 correction uses a child-only umask and the dedicated authority's exact private
 Git sharing policy. Custody checks cover authority metadata and canonical
 private acquisition roots, not untrusted payload descendants that the existing
 workspace and gate adapters validate. Its physical proof remains pending CI.
+
+That first correction was insufficient. Verification at `85cfd2c` passed
+4,719 tests with 408 skips, but the actual service lane still refused before
+launch. A temporary synthetic-only CI diagnostic reproduced the difference:
+the ordinary runner passed, while the service identity with scrubbed environment
+failed. Its recorded metadata showed the initial config at `0664` and initial
+object/ref directories at `0775`; the later objects and ref, created after
+the explicit private Git policy was installed, were private. This establishes
+the creation-stage gap, not why the two environments differ. No credential,
+binary launch or private-host operation was needed for that diagnosis.
+
+The follow-up supplies `--shared=0600` to initialization itself, so the same
+private policy governs the first Git writes as well as subsequent ones. It
+does not relax custody or repair an existing tree. A portable actual-Git test
+observes that policy before any local config exists; the service-lane creation,
+future-ref and pack checks remain the physical acceptance gate. The temporary
+diagnostic workflow is removed, not retained as another CI lane.
+The new guard test failed by assertion before the fix and passed afterward;
+the 37th inventory mutant removes this flag and was assertion-killed. The
+assembly suite passed 18 cases with its POSIX proof skipped locally; mutation
+metadata, scope and manifest checks passed 94 cases. A separate narrow review
+found no introduced consequence and ran two actual-Git cases successfully.
+These do not substitute for the final Linux service proof.
 
 The narrow consequence review reproduced an alias gap in that correction:
 an acquisition-container redirector was accepted before materialization could
