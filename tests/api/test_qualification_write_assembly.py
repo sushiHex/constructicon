@@ -289,7 +289,7 @@ async def test_actual_acquisition_directory_alias_refused_before_constructor_or_
 
 
 _PERMISSIVE_PARENT = """
-import asyncio, os, stat, sys
+import asyncio, json, os, stat, sys
 from pathlib import Path
 from constructicon.api._qualification_write_assembly import prepare_fixture, inspect_fixture
 from constructicon.substrate.executors.linux import DEFAULT_PROCESS_LIMITS
@@ -299,7 +299,19 @@ from constructicon.substrate.git.process import GitProcess
 
 os.umask(0o002)
 root = Path(sys.argv[1])
-pin = prepare_fixture(root)
+try:
+    pin = prepare_fixture(root)
+except Exception:
+    # Synthetic empty fixture only: expose the exact custody premise, never
+    # a host locator, configuration content, account or credential.
+    entries = []
+    for path in sorted((root / 'authority.git').rglob('*')):
+        info = path.lstat()
+        entries.append([str(path.relative_to(root)), oct(stat.S_IMODE(info.st_mode)),
+                        info.st_uid, info.st_gid, info.st_nlink])
+    print(json.dumps({'fixture_custody': entries, 'service_uid': os.getuid()}),
+          file=sys.stderr)
+    raise
 authority = GitAuthority(root / 'authority.git', root / 'authority-workspaces')
 paths = AcquisitionPaths(root / 'workspace-acquisitions', 'acq-' + '0' * 32)
 closure = AcquisitionClosure(authority)
