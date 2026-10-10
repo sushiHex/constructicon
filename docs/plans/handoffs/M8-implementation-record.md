@@ -4692,3 +4692,31 @@ local Python 3.12.13, whose focused denial/refresh integration suite passed
 40 tests. The wider Python 3.11.15 focused suite passed 319 tests. This is
 credential-free integration evidence; final main synchronization and review
 evidence remains explicitly tied to the eventual final PR head.
+
+### N5 g7 deployment package — preparation only
+
+PR #157 merged as `d22bff86e8695a7efef04dc3f47c6d4b0847599c`, byte-identical
+to checked `f3e79d5`. The final head passed verification (4,720 tests,
+408 skips), runner qualification and all four physical lanes. Its 37 WRITE
+mutants were assertion-killed, and both actual WRITE runbook rehearsals passed.
+This completes #156's implementation scope, not authenticated qualification.
+
+The additive [g7 package](M8-N5-g7-session.md) pins that actual merge, rather
+than a predicted commit. It preserves the checked g6 seal under installed
+`585df33` before reboot, composes the existing LR/D2 route, requires positive
+tree-difference evidence before LR9, and seals fresh generation 7. It carries
+every H7 control, conditional one-attempt H8 and the separate W4 pin-review
+pause. The old g6 refresh never substitutes for changed-source qualification.
+
+A source-grounded design pass and a separate adversarial review found no
+actionable issue in that composition. The reviewer ran all 41 new fake-shell
+cases. The initial combined preparation
+check passed 80 cases including g6 and the actual denial-checker regression.
+These establish command composition and refusals only. The final pin and
+integration checks belong to the deployment PR; no host installation,
+credential operation, refresh, smoke or WRITE request has occurred as part
+of this package's preparation. Approved source documents remain unchanged.
+After pinning the actual merge, the integrated g7/g6/WRITE shell suite passed
+116 tests; scope/manifest checks passed 60. All 75 staged plan digests and
+141 relative file-link targets in the changed documentation were verified.
+These counts do not claim anchor validation or host execution.

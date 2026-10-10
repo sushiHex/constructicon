@@ -15,6 +15,36 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #156 — bounded WRITE implementation, not live qualification
+
+**Merged `d22bff8` (PR #157), byte-identical to checked `f3e79d5`.**
+The existing qualification lifecycle now assembles one fixed WRITE graph,
+contained workspace/capture and fixed gate. Bounded evidence requires matched
+attempt identity, validated checkpoints, candidate-bound journal attestation,
+settled obligations and unchanged target. READ wire shapes and frozen vendor
+modules are unchanged. The credential-free smoke uses its own fixture.
+
+Final-head CI passed 4,720 tests with 408 skips, strict types, all five import
+contracts, runner qualification and all four physical lanes. All five new
+physical WRITE cases passed; all 37 WRITE mutants were assertion-killed.
+Actual smoke and logged-out WRITE runbook rehearsals passed. The local gate
+on identical production passed 4,380 tests with 748 platform skips.
+
+**Corrections worth retaining:** a child-only umask alone did not establish
+private initial Git metadata in the service lane; `git init --shared=0600`
+must apply before those writes, not only in the final config. The ambient
+reason for the runner/service difference was not established. Acquisition
+containers remain canonical service-owned metadata even though their contents
+are untrusted payloads. The connector's root-runner test finding was fixed
+by explicitly requiring a non-root POSIX identity, never by relaxing custody.
+
+**Not established:** private-host installation, authenticated WRITE, a target
+installation or general vendor conformance. Deployment and fresh generation
+qualification remain separate from CI evidence. See
+[PR #157](https://github.com/sushiHex/constructicon/pull/157).
+
+---
+
 ## #142 — declared controls name destination denial
 
 **Merged `100fb75` (PR #145), from reviewed `9de7012`.** A declared control
