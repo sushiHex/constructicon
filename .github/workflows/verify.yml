@@ -19,6 +19,10 @@ jobs:
       # The controller tree from the locked wheels, imported under the host's
       # interpreter version (M8-N4-host-runtime.md, controller addendum).
       - run: M8_CONTROLLER_REQUIRED=1 uv run python -m pytest tests/test_m8_controller_env.py::test_the_staged_controller_imports_under_isolated_python -v -p no:cacheprovider
+      - name: Check structural channels on Python 3.12
+        env:
+          UV_PROJECT_ENVIRONMENT: .venv312
+        run: uv run --locked --python 3.12 pytest tests/api/test_channel_introspection.py -q
 
   # The portable mutation inventories, one job each, so one failure never hides
   # another. tests/test_mutation_inventories.py holds every inventory to exactly

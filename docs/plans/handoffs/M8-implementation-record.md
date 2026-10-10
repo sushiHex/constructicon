@@ -4168,3 +4168,35 @@ faults. It retains the first fact, appends contradictions without discarding
 independent refusals, and never qualifies the public gate. The follow-up tests
 and mutation results are recorded on the PR's final head, not inferred from
 the earlier 183 kills. No host retry occurred while correcting this finding.
+
+### #151 — structural channel compatibility across Python versions
+
+The unchanged accepting mailbox proxy failed on Python 3.12.13 at `ce08c6b`:
+assembly rejected it as missing the `Channel` contract before reaching the
+journal proof. Python 3.12 runtime protocol checks use static attribute lookup,
+so dynamic `__getattr__` forwarding was insufficient. A repository scan found
+only the two test doubles in `tests/api/test_channel_introspection.py` using
+this pattern for channel members; the MCP module's lazy import is unrelated.
+
+The fixtures now explicitly expose every `Channel` property and method. A
+structural subclass adds `JournalBackedChannel.is_assembled_from`; neither
+inherits from `MailboxChannel` or either protocol. The unproven base remains a
+valid `Channel` and lacks the journal proof, so its refusal cannot be masked by
+an earlier protocol rejection. The accepting local channel publishes its real
+profile; the foreign journal still fails even when it compares equal to the
+system journal. Production protocol and object-identity checks are unchanged.
+The contributor guide states this portable structural transport contract.
+The existing verify job also runs this test file under Python 3.12 in a
+separate environment, while its full gate remains on Python 3.11. This pins
+the interpreter boundary without adding a second full-suite matrix. The new
+workflow step requires its own successful CI execution; local tests do not
+prove the workflow ran.
+
+**Executed verification.** The pre-fix Python 3.12.13 reproduction failed once
+with the expected missing-contract error. After the correction, all 14 channel
+introspection tests passed on both Python 3.11.15 and 3.12.13 in separate local
+environments, including accepting, foreign-journal and missing-proof cases.
+The changed test file passed `ruff check` and the diff passed `git diff --check`.
+These focused checks do not claim the full repository gate, CI, later Python
+versions, host qualification, or any vendor/credential activity. Final-head
+gate and review evidence belongs on the linked PR.
