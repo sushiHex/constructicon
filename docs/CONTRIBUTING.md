@@ -370,6 +370,13 @@ The built-in capability kinds are reserved: `channel.mailbox` must report
 journal. New transports use a new kind and an honest profile; do not make a
 compatible-looking second handle stand in for one assembled world.
 
+Structural transports and test doubles must expose every `Channel` member
+explicitly, including its properties. Delegation through `__getattr__` alone
+is not a portable implementation of the contract: Python 3.12+ checks runtime
+protocol membership with static attribute lookup. Durable transports also
+expose `JournalBackedChannel.is_assembled_from` explicitly; its proof still
+requires the exact assembled journal object.
+
 - carry typed envelopes only (I5), and derive every identity — never accept a
   caller-authored message id, reply id, sequence number, or routing field;
 - build messages with `message_for_intent` and `message_for_reply` rather than
