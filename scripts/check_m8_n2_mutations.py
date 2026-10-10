@@ -446,11 +446,25 @@ MUTANTS = (
         PROTOCOL + "test_initialize_never_requests_the_experimental_capability",
     ),
     (
-        "the mode reading never causes a refresh",
+        "the default mode reading never requests a refresh",
         ACCOUNT_READ,
-        '"params": {"refreshToken": False},',
+        '"params": {"refreshToken": request_refresh},',
         '"params": {"refreshToken": True},',
         PROTOCOL + "test_account_read_observes_and_never_causes_a_refresh",
+    ),
+    (
+        "explicit account reading carries the selected refresh request",
+        ACCOUNT_READ,
+        '"params": {"refreshToken": request_refresh},',
+        '"params": {"refreshToken": False},',
+        PROTOCOL + "test_account_read_requests_refresh_only_when_explicitly_selected",
+    ),
+    (
+        "the account refresh selector is exactly boolean",
+        ACCOUNT_READ,
+        "if type(request_refresh) is not bool:",
+        "if False:",
+        PROTOCOL + "test_account_refresh_selector_is_exactly_boolean[true]",
     ),
     (
         "a provider override field is refused structurally",

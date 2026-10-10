@@ -289,11 +289,14 @@ def initialized_notification() -> dict[str, Any]:
     return {"method": "initialized"}
 
 
-def account_read_request(request_id: int) -> dict[str, Any]:
-    """Observe the authentication mode; never cause a refresh."""
+def account_read_request(request_id: int, *, request_refresh: bool = False) -> dict[str, Any]:
+    """Observe the mode; an operator startup may explicitly request a refresh."""
+
+    if type(request_refresh) is not bool:
+        raise ContractViolation("the refresh selector must be boolean")
 
     return _sealed({
-        "id": request_id, "method": "account/read", "params": {"refreshToken": False},
+        "id": request_id, "method": "account/read", "params": {"refreshToken": request_refresh},
     })
 
 
