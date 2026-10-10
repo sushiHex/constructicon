@@ -4547,3 +4547,33 @@ Portable, physical and mutation results belong to the implementation PR at
 their executed heads. Tests written but not executed are not proof; local
 Windows skips cannot establish containment. No host installation, smoke,
 WRITE model request or vendor-conformance result is claimed by this entry.
+
+### #142 — destination denials are the declared startup control
+
+`codex_lane.run_startup` now requires `denied:destination` when
+`expect_denial=True`, and reports any additional denial kinds by name as an
+itemized fault. A control with five EOF denials and no destination denial
+therefore reports both the missing declared denial and `eof`; a destination-only
+control passes. Clean runs retain `DENIAL_FAULT` for any denial. Portable fake
+tests cover the empty control, the EOF-only and mixed controls, destination-only
+acceptance, and clean EOF behavior. The N4-L5 bridge inventory is re-anchored
+to the clean-lane branch and has one mutant for each new control guard.
+
+The owner [released the Stage 3 hold](https://github.com/sushiHex/constructicon/issues/78#issuecomment-6101919423)
+after T5 passed and explicitly chose no T6 retry. Integration preserves the
+explicit-refresh extension's refusal of negative controls at both lane and CLI
+boundaries. Final-head verification, assertion-killed bridge inventory and
+review evidence belongs on [PR #145](https://github.com/sushiHex/constructicon/pull/145).
+This correction neither qualifies the vendor nor performs any host session.
+
+**Executed combined integration evidence.** At `3811ecc`, including main
+`b38c8ae` and PR #147's cleanup prerequisite, CI verification passed 4,541 tests
+with 401 platform skips, strict types over 110 source files and all five import
+contracts. The isolated controller import and 14 Python 3.12 channel cases
+passed. Qualification and all four physical proof lanes passed. Fresh Linux
+foundation logs affirmatively report N4-L5, N4-L5a and N4-L5b KILLED
+(1.219s, 1.214s and 1.229s). The same three mutants were assertion-killed on
+local Python 3.12.13, whose focused denial/refresh integration suite passed
+40 tests. The wider Python 3.11.15 focused suite passed 319 tests. This is
+credential-free integration evidence; final main synchronization and review
+evidence remains explicitly tied to the eventual final PR head.
