@@ -298,9 +298,9 @@ async def test_report_whole_bound_binds_without_invented_row_cap(completed, monk
 @pytest.mark.parametrize(
     "field,value",
     [
-        ("served_model", "PRIVATE:/account/" * 10000),
-        ("input_tokens", 10**codex_protocol.NUMBER_CHARS),
-        ("output_tokens", -1),
+        pytest.param("served_model", "PRIVATE:/account/" * 10000, id="private-model-overflow"),
+        pytest.param("input_tokens", 10**codex_protocol.NUMBER_CHARS, id="input-number-overflow"),
+        pytest.param("output_tokens", -1, id="negative-output-count"),
     ],
 )
 async def test_report_every_telemetry_field_obeys_protocol_bounds(completed, field, value):
@@ -317,11 +317,19 @@ async def test_report_every_telemetry_field_obeys_protocol_bounds(completed, fie
     assert_bounded(report)
 
 
-async def test_report_configured_limit_is_not_fabricated_default(completed):
-    launcher = completed[1].executor.launcher
-    launcher.limits = replace(launcher.limits, stdout_bytes=1234567)
-    report = project(completed)
-    assert report.limits.stdout_bytes == 1234567
+async def test_report_configured_limit_is_not_fabricated_default(
+    tmp_path, portable_binding, portable_write_boundary,
+):
+    launcher = portable_launcher()
+    configured = replace(launcher.limits, stdout_bytes=1234567)
+    assert configured.stdout_bytes != launcher.limits.stdout_bytes
+    # Inject the replacement before sealing the provider and authorization:
+    # LinuxLauncher is frozen, and the observed run must use the changed bound.
+    launcher = replace(launcher, limits=configured)
+    assembly, authorization = await sealed_assembly(tmp_path, launcher, portable_binding[1:])
+    report = await qualification.qualify_write(assembly=assembly, authorization=authorization)
+    assert report.verdict == "passed", report.model_dump_json()
+    assert report.limits.stdout_bytes == launcher.limits.stdout_bytes == 1234567
     assert_bounded(report)
 
 

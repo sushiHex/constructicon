@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import tarfile
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -168,3 +169,170 @@ def test_fixed_check_permits_actual_git_mode_100644_archive(tmp_path: Path) -> N
     ran = subprocess.run([sys.executable, "-I", "-c", assembly.CHECK_PROGRAM], cwd=snapshot,
                          stdin=subprocess.DEVNULL, capture_output=True, timeout=30, check=False)
     assert ran.returncode == 0, ran.stderr
+
+
+def test_fixture_git_subprocess_seals_child_umask_without_changing_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+
+    def spawned(command, **kwargs):
+        calls.append(kwargs)
+        return subprocess.CompletedProcess(command, 0, b"checked", b"")
+
+    with monkeypatch.context() as patch:
+        # Only the POSIX spawn primitive is observed; no process-global umask
+        # or platform filesystem claim is substituted into fixture custody.
+        patch.setattr(assembly.subprocess, "run", spawned)
+        patch.setattr(assembly, "Path", type(tmp_path))
+        patch.setattr(assembly.os, "name", "posix")
+        actual = assembly._git(tmp_path, "rev-parse", "--is-bare-repository")
+    assert actual == b"checked"
+    assert len(calls) == 1 and calls[0].get("umask") == 0o077
+    assert "os.umask(" not in Path(assembly.__file__).read_text(encoding="utf-8")
+
+
+def test_private_acquisition_payload_is_not_interpreted_as_authority_metadata(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "fixture"
+    pin = assembly.prepare_fixture(root)
+    payload = root / "workspace-acquisitions" / "payloads" / "untrusted" / "workspace"
+    payload.mkdir(parents=True, mode=0o775)
+    outside = tmp_path / "outside"
+    outside.write_bytes(b"untrusted worker output")
+    os.link(outside, payload / "linked")
+    (payload / "linked").chmod(0o664)
+    assert assembly.inspect_fixture(root) == pin
+    # The identical unsafe alias in the authority remains refused.
+    os.link(outside, root / "authority.git" / "hooks" / "pre-receive")
+    with pytest.raises(ContractViolation, match="unsafe filesystem"):
+        assembly.inspect_fixture(root)
+
+
+@pytest.mark.parametrize("prefix", [
+    "workspace-acquisitions/guards", "workspace-acquisitions/payloads",
+    "gate-acquisitions/guards", "gate-acquisitions/payloads",
+])
+def test_acquisition_metadata_prefix_cannot_redirect_fixture_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, prefix: str,
+) -> None:
+    root = tmp_path / "fixture"
+    assembly.prepare_fixture(root)
+    original = type(root).resolve
+    redirected = root / prefix
+
+    def aliased(path, *args, **kwargs):
+        # Observe the one canonical-path primitive; actual filesystem checks
+        # and other paths remain real (Windows may not create directory links).
+        return tmp_path / "outside" if path == redirected else original(path, *args, **kwargs)
+
+    monkeypatch.setattr(type(root), "resolve", aliased)
+    with pytest.raises(ContractViolation, match="not canonical"):
+        assembly.inspect_fixture(root)
+
+
+@pytest.mark.parametrize("name", ["workspace-acquisitions", "gate-acquisitions"])
+def test_acquisition_container_alias_refused_without_reading_untrusted_contents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str,
+) -> None:
+    root = tmp_path / "fixture"
+    pin = assembly.prepare_fixture(root)
+    container = root / name / "payloads" / ("acq-" + "a" * 32)
+    container.mkdir(mode=0o775)
+    assert assembly.inspect_fixture(root) == pin
+    original = type(root).resolve
+
+    def aliased(path, *args, **kwargs):
+        return tmp_path / "outside" if path == container else original(path, *args, **kwargs)
+
+    monkeypatch.setattr(type(root), "resolve", aliased)
+    with pytest.raises(ContractViolation, match="container is not a canonical directory"):
+        assembly.inspect_fixture(root)
+
+
+async def test_actual_acquisition_directory_alias_refused_before_constructor_or_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "fixture"
+    assembly.prepare_fixture(root)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    alias = root / "workspace-acquisitions" / "payloads" / ("acq-" + "1" * 32)
+    if os.name == "nt":
+        # The Windows directory-alias primitive, not a substitute resolver.
+        subprocess.run(["cmd.exe", "/c", "mklink", "/J", str(alias), str(outside)],
+                       stdin=subprocess.DEVNULL, capture_output=True, check=True, timeout=30)
+    else:
+        alias.symlink_to(outside, target_is_directory=True)
+    calls = []
+    original = assembly.GitAuthority
+
+    class ObservedAuthority(original):
+        def __init__(self, *args):
+            calls.append(args)
+            super().__init__(*args)
+
+    monkeypatch.setattr(assembly, "GitAuthority", ObservedAuthority)
+    try:
+        with pytest.raises(ContractViolation, match="container is not a canonical directory"):
+            await assembly.assemble_contained_write(
+                root, SqliteJournal(tmp_path / "journal.db"), ObservedLauncher(),
+            )
+        assert calls == []
+        assert list(outside.iterdir()) == []
+    finally:
+        if os.name == "nt":
+            alias.rmdir()  # Only the checked test junction, never its target.
+        else:
+            alias.unlink()
+
+
+_PERMISSIVE_PARENT = """
+import asyncio, os, stat, sys
+from pathlib import Path
+from constructicon.api._qualification_write_assembly import prepare_fixture, inspect_fixture
+from constructicon.substrate.executors.linux import DEFAULT_PROCESS_LIMITS
+from constructicon.substrate.git.acquisition import AcquisitionClosure, AcquisitionPaths
+from constructicon.substrate.git.authority import GitAuthority
+from constructicon.substrate.git.process import GitProcess
+
+os.umask(0o002)
+root = Path(sys.argv[1])
+pin = prepare_fixture(root)
+authority = GitAuthority(root / 'authority.git', root / 'authority-workspaces')
+paths = AcquisitionPaths(root / 'workspace-acquisitions', 'acq-' + '0' * 32)
+closure = AcquisitionClosure(authority)
+closure.publish(paths, 'refs/constructicon/test-candidate', pin.base_commit)
+closure.commit(paths, candidate_ref='refs/constructicon/test-candidate')
+assert closure.is_closed(paths)
+# Export bytes through the actual bounded trusted Git pump, then index them.
+git = GitProcess(authority.git_executable, DEFAULT_PROCESS_LIMITS)
+async def imported():
+    packed = await git.run('pack-objects', '--stdout', '--revs',
+        cwd=authority.repository_id, stdin=(pin.base_commit + '\\n').encode())
+    indexed = await git.run('index-pack', '--stdin', cwd=authority.repository_id, stdin=packed)
+    assert indexed.startswith(b'pack\\t')
+asyncio.run(imported())
+assert inspect_fixture(root) == pin
+for path in (root / 'authority.git').rglob('*'):
+    assert not (path.stat().st_mode & 0o022), str(path)
+# The parent's deliberately permissive policy was not globally changed.
+probe = root / 'workspace-acquisitions' / 'parent-mode'
+probe.write_bytes(b'parent')
+assert stat.S_IMODE(probe.stat().st_mode) == 0o664
+print('private fixture, candidate closure and pack; parent umask unchanged')
+"""
+
+
+@pytest.mark.skipif(os.name != "posix", reason="actual POSIX creation modes require Linux")
+def test_permissive_parent_umask_preserves_private_fixture_future_refs_and_packs() -> None:
+    with tempfile.TemporaryDirectory(prefix=".n5-custody-", dir=Path.home()) as private:
+        root = Path(private).resolve() / "fixture"
+        ran = subprocess.run([sys.executable, "-I", "-c", _PERMISSIVE_PARENT, str(root)],
+                             stdin=subprocess.DEVNULL, capture_output=True,
+                             text=True, timeout=60, check=False)
+        assert ran.returncode == 0, ran.stderr
+        assert ran.stdout.strip() == (
+            "private fixture, candidate closure and pack; parent umask unchanged"
+        )

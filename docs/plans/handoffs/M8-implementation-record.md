@@ -4575,6 +4575,51 @@ was stopped and is incomplete, not a test-pass claim. One earlier full gate
 was also interrupted before the final checker correction and main integration;
 neither interrupted run is completion evidence.
 
+**First CI found what source review did not.** The initial Linux WRITE and
+smoke cases refused the fixture before launching: Git-created metadata inherited
+the runner's permissive umask. Custody must be established at creation and
+preserved by subsequent Git writes, not repaired recursively afterward. The
+correction uses a child-only umask and the dedicated authority's exact private
+Git sharing policy. Custody checks cover authority metadata and canonical
+private acquisition roots, not untrusted payload descendants that the existing
+workspace and gate adapters validate. Its physical proof remains pending CI.
+
+The narrow consequence review reproduced an alias gap in that correction:
+an acquisition-container redirector was accepted before materialization could
+create its workspace outside the intended root. The fix retains canonical
+private `guards`/`payloads` prefixes and checks immediate service-owned
+acquisition containers, without recursively interpreting their untrusted
+workspace or snapshot contents. This is the constructor/recovery write
+boundary, not a replacement capture validator.
+
+The first verification run also exposed three test defects: an enormous
+parameter id exceeded the subprocess environment limit, a test assigned a
+frozen launcher field, and the workflow inventory omitted the new proofs.
+These are failed or unexecuted checks, not passing evidence. The corresponding
+local full run was interrupted after reproducing errors; it must be rerun.
+
+After correction, all 37 report cases and three workflow inventory cases
+passed together (15 platform shell cases skipped on Windows). The separate
+assembly/host/runbook check passed 60 cases, with the actual POSIX creation-mode
+test skipped. A real Windows junction was refused before authority construction
+or outside writes. These are scoped proofs, not the full repository gate or
+physical Linux evidence.
+
+The corrected inventory then assertion-killed all 36 WRITE mutants, including
+the child-only umask and acquisition-container call-site guards, with zero
+NOT PROVEN results. Mutation metadata, scope and manifest checks passed
+94 cases; the two Linux-only rehearsal cases skipped locally. The added
+W4-W6 rehearsal executes the runbook's actual blocks against synthetic CI
+qualification and an empty credential, checking the precise account-gate
+refusal, zero relay activity and preserved attempt. Its Linux result is still
+unverified here; the rehearsal does not run a local vendor binary.
+
+The owner subsequently approved the entire wave, including the previously
+requested credential-free, logged-out WRITE rehearsal in Linux CI. That proof
+must establish the specific pre-dispatch account-gate refusal and no vendor
+connection; it cannot establish authenticated acceptance. No local vendor
+binary or private-host invocation is authorized by the rehearsal itself.
+
 ### #142 — destination denials are the declared startup control
 
 `codex_lane.run_startup` now requires `denied:destination` when

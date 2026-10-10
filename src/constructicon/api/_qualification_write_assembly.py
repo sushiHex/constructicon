@@ -48,8 +48,15 @@ _SEED = (
     b"\nconstructicon N5 WRITE seed\n"
 )
 _BASE = hashlib.sha1(b"commit " + str(len(_SEED)).encode() + b"\0" + _SEED).hexdigest()
-_CONFIG = b"[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = true\n"
+_CONFIG = (
+    b"[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = true\n"
+    b"\tsharedRepository = 0600\n"
+)
 _CHILDREN = ("authority.git", "authority-workspaces", "workspace-acquisitions", "gate-acquisitions")
+_ACQUISITION_PREFIXES = tuple(
+    f"{root}/{child}" for root in ("workspace-acquisitions", "gate-acquisitions")
+    for child in ("guards", "payloads")
+)
 CHECK_PROGRAM = (
     "import pathlib,stat\n"
     "p=pathlib.Path('n5-write.txt')\n"
@@ -100,14 +107,37 @@ def _directory(path: Path) -> None:
     _private_directory(info)
 
 
+def _acquisition_container(path: Path) -> None:
+    """The service-owned container is metadata; its contents are model data.
+
+    It may inherit 0775 at creation, but only below a checked 0700 payloads
+    prefix. No other user can reach it. An alias/foreign owner is never allowed
+    to redirect materialization outside that prefix.
+    """
+    if path.resolve() != path or not stat.S_ISDIR(path.lstat().st_mode):
+        raise ContractViolation("WRITE acquisition container is not a canonical directory")
+    if os.name == "posix" and path.lstat().st_uid != getattr(os, "getuid", lambda: -1)():
+        raise ContractViolation("WRITE acquisition container belongs to another service owner")
+
+
 def _custody(root: Path) -> None:
     try:
         _ancestors(root)
-        paths = (root, *(root / child for child in _CHILDREN), root / "authority.git" / "hooks")
+        paths = (
+            root, *(root / child for child in (*_CHILDREN, *_ACQUISITION_PREFIXES)),
+            root / "authority.git" / "hooks",
+        )
         for path in paths:
             _directory(path)
+        for name in ("workspace-acquisitions", "gate-acquisitions"):
+            for path in (root / name / "payloads").iterdir():
+                _acquisition_container(path)
         # Construction overwrites the hook: reject links before that write.
-        for path in root.rglob("*"):
+        # This is authority metadata custody, not a second validator for model
+        # payloads. Acquired workspaces/snapshots live below their own canonical
+        # private roots and their adapters own validation and disposal. They
+        # legitimately contain archive modes and untrusted links while active.
+        for path in (root / "authority.git").rglob("*"):
             info = path.lstat()
             if stat.S_ISLNK(info.st_mode) or not (
                 stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)
@@ -129,6 +159,9 @@ def _git(root: Path, *args: str, stdin: bytes = b"") -> bytes:
     result = subprocess.run(
         (str(Path(executable).resolve()), "--git-dir", str(root / "authority.git"), *args),
         input=stdin, capture_output=True, timeout=60, env={**env, **_PINNED_ENV}, check=False,
+        # Popen sets this in the child only. Never alter the service's process-
+        # global umask while other invocations may be creating files.
+        umask=0o077 if os.name == "posix" else -1,
     )
     if result.returncode:
         raise ContractViolation("the WRITE fixture Git check failed")
@@ -143,14 +176,11 @@ def prepare_fixture(root: Path) -> QualificationFixturePin:
     _private_owner(root.parent.stat())
     root.mkdir(mode=0o700)
     _directory(root)
-    for name in _CHILDREN:
+    for name in (*_CHILDREN, *_ACQUISITION_PREFIXES):
         (root / name).mkdir(mode=0o700)
     _git(root, "init", "--bare", "--object-format=sha1", "--template=")
     # Git may inherit host defaults at init; no such setting survives preparation.
     (root / "authority.git" / "config").write_bytes(_CONFIG)
-    for directory in (root / "authority.git").rglob("*"):
-        if directory.is_dir():
-            directory.chmod(0o700)
     (root / "authority.git" / "hooks").mkdir(mode=0o700, exist_ok=True)
     _git(root, "mktree")
     seed = _git(root, "hash-object", "-t", "commit", "-w", "--stdin", stdin=_SEED)
