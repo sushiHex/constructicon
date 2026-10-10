@@ -4548,6 +4548,33 @@ their executed heads. Tests written but not executed are not proof; local
 Windows skips cannot establish containment. No host installation, smoke,
 WRITE model request or vendor-conformance result is claimed by this entry.
 
+**Executed initial checks.** Eight portable lifecycle cases passed, then the
+post-gate-await target-drift case passed separately. Nine focused final-source
+report cases passed, including the recovered-discarded versus active/lost
+distinction. All 34 new WRITE mutants were assertion-killed, with no
+NOT PROVEN result. The 37 fake-shell runbook tests passed. The four moved
+legacy host-inventory targets now name their shared implementation: 17
+portable cases were assertion-killed; four platform-only skips are explicitly
+not local kills. Strict mypy over 114 files and all five import contracts
+passed. Full local and Linux gates remain separate exact-head evidence.
+
+**Exact mode, not incidental extraction permissions.** An accepting archive
+test showed that Git `100644` can extract with group-write permission. The
+checker must require the approved regular, non-executable Git mode, not the
+incidental extracted filesystem permission `0644`. The fixed gate checks the
+exact Git inventory and bytes, and the worker-side check now tests regular
+non-executable status. The archive regression passes; this does not admit an
+executable file or a different candidate tree.
+
+**Independent source review.** A separate Sol review of production bytes at
+`d1a8cca` (unchanged at test-only `0175ee7`) found no actionable introduced
+defect. It checked custody before writes, post-await drift, retained-world
+validation before recovery, attempt accounting, checkpoint/attestation
+provenance, settlement and whole-report bounds. Its duplicate focused suite
+was stopped and is incomplete, not a test-pass claim. One earlier full gate
+was also interrupted before the final checker correction and main integration;
+neither interrupted run is completion evidence.
+
 ### #142 — destination denials are the declared startup control
 
 `codex_lane.run_startup` now requires `denied:destination` when
