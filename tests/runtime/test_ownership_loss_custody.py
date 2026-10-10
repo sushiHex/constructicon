@@ -86,12 +86,15 @@ class RetainingProvider(FakeExecutorProvider):
         self.before_relinquish: Hook | None = None
         self.closes: list[str] = []
         self.relinquished: list[str] = []
+        self.acquisitions: list[AcquiredCapability] = []
 
     async def acquire(self, context: LeaseContext) -> AcquiredCapability:
         acquisition = await super().acquire(context)
         handle = RetainingHandle(self, context, acquisition.acquisition_id)
         self.handles[-1] = handle
-        return replace(acquisition, resource=handle, materialize=handle.materialize)
+        retained = replace(acquisition, resource=handle, materialize=handle.materialize)
+        self.acquisitions.append(retained)
+        return retained
 
     async def close(
         self, acquisition: AcquiredCapability, disposition: Disposition
@@ -283,11 +286,21 @@ async def test_one_failed_relinquishment_strands_no_sibling_and_the_loss_stays_p
     assert world.held() == [True, False]
 
 
-async def test_a_cancellation_during_relinquishment_leaves_the_loss_primary(world):
+async def test_a_cancellation_during_relinquishment_leaves_the_loss_primary(world, monkeypatch):
+    from constructicon.runtime.walker import Walker
+
     run_id = RunId("live-loser-cancelled-relinquishment")
     executor = world.provider("retaining")
     held, claimed = await lose_mid_call(world, executor, run_id)
     relinquishing, finish = asyncio.Event(), asyncio.Event()
+    stops = []
+    stop = Walker._stop_heartbeat
+
+    async def tracked_stop(task):
+        stops.append(finish.is_set())
+        await stop(task)
+
+    monkeypatch.setattr(Walker, "_stop_heartbeat", staticmethod(tracked_stop))
 
     async def slow(handle):
         relinquishing.set()
@@ -304,6 +317,7 @@ async def test_a_cancellation_during_relinquishment_leaves_the_loss_primary(worl
     finish.set()
     await outcome(running)
 
+    assert stops == [True], "the outer run returned before its owned release batch joined"
     assert world.held() == [False]
     await world.succeed(run_id, winner)
 

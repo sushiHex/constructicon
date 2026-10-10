@@ -13,7 +13,6 @@ import pytest
 from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId
 from constructicon.core.run import OwnershipLost, RunStatus
-from constructicon.runtime.walker import RunResult
 from constructicon.substrate._lifetime import finish_owned
 from tests.api.test_executor_admission import INPUTS, executor_system
 from tests.conftest import LEASE_TTL_S
@@ -339,8 +338,9 @@ async def test_cleanup_failure_is_not_laundered_into_cancellation(
         running.cancel()
         outcome = (await asyncio.gather(running, return_exceptions=True))[0]
         if failure == "provider":
-            assert isinstance(outcome, RunResult) and outcome.status is RunStatus.FAILED
-            assert any("provider could not close" in reason for reason in outcome.failures.values())
+            assert isinstance(outcome, RuntimeError) and str(outcome) == "provider could not close"
+            assert journal.run_state(run_id).status is RunStatus.RUNNING
+            assert journal.run_state(run_id).owner_id is None
             assert provider.ledger.resources == {provider.handles[0].key}
         else:
             assert isinstance(outcome, OwnershipLost)
@@ -353,7 +353,9 @@ async def test_cleanup_failure_is_not_laundered_into_cancellation(
         assert provider.executor.calls == []
         recovered_provider = FakeExecutorProvider(ledger=provider.ledger)
         recovered = executor_system(journal, recovered_provider, owner="cleanup-successor")
-        assert (await recovered._resume_direct(run_id)).status is RunStatus.SUCCEEDED
+        assert (await recovered._resume_direct(run_id)).status is (
+            RunStatus.CANCELLED if failure == "provider" else RunStatus.SUCCEEDED
+        )
         assert recovered_provider.reconciled == [provider.handles[0].key]
         assert provider.ledger.resources == set()
     finally:

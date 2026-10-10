@@ -225,6 +225,10 @@ class OwnershipLost(ConstructiconError):
     The stale worker must stop and write nothing else."""
 
 
+class CleanupUnresolved(ConstructiconError):
+    """Active capability acquisitions prohibit an attempt's terminal transition."""
+
+
 class InvocationParked(ConstructiconError):
     """One invocation is waiting on a durable request — not failing.
 

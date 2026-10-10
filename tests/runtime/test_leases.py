@@ -29,6 +29,7 @@ from constructicon.core.workspace import (
 )
 from constructicon.runtime.context import NodeContext
 from constructicon.runtime.registry import CapabilityDescriptor
+from constructicon.runtime.walker import RunResult
 from constructicon.substrate.channels.in_process import InProcessChannel
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.conftest import (
@@ -419,8 +420,10 @@ async def test_a_lost_answer_after_the_lease_commit_closes_the_recorded_row(
 
     journal.fault_probe = lose_the_answer
     run_id = RunId("run-lost-record-answer")
-    result = await system._start_direct(leased_graph(), INPUTS, run_id=run_id)
-
+    result = (await asyncio.gather(
+        system._start_direct(leased_graph(), INPUTS, run_id=run_id), return_exceptions=True,
+    ))[0]
+    assert isinstance(result, RunResult), result
     assert result.status is RunStatus.FAILED
     assert any("answer was lost" in error for error in result.failures.values())
     assert capability.closed == [(capability.acquired[0], "discard")]
@@ -527,12 +530,11 @@ async def test_cancellation_waits_for_unrecorded_acquisition_cleanup_and_preserv
 
     capability.finish_close.set()
     if close_fails:
-        result = await running
-        assert result.status is RunStatus.FAILED
-        assert any(
-            "unrecorded acquisition cleanup failed" in failure
-            for failure in result.failures.values()
-        )
+        with pytest.raises(RuntimeError, match="unrecorded acquisition cleanup failed") as caught:
+            await running
+        assert isinstance(caught.value.__cause__, CheckpointConflict)
+        assert journal.run_state(run_id).status is RunStatus.RUNNING
+        assert journal.run_state(run_id).owner_id is None
         assert capability.closed == []
     else:
         with pytest.raises(asyncio.CancelledError):

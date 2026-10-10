@@ -90,7 +90,9 @@ class Journal(Protocol):
 
     def release_run(self, lease: RunLease) -> None: ...
 
-    def request_cancel(self, run_id: RunId) -> None: ...
+    def request_cancel(self, run_id: RunId, *, lease: RunLease | None = None) -> None:
+        """Record intent; worker-originated requests atomically fence with their lease."""
+        ...
 
     def cancel_requested(self, run_id: RunId) -> bool: ...
 
@@ -102,7 +104,9 @@ class Journal(Protocol):
         target: RunStatus,
         event_kind: str,
         payload: dict[str, Any] | None = None,
-    ) -> None: ...
+    ) -> None:
+        """Fenced transition; terminal targets refuse active rows with CleanupUnresolved."""
+        ...
 
     def append_event(
         self,

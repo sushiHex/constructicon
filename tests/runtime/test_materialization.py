@@ -15,6 +15,7 @@ from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId
 from constructicon.core.errors import ContractViolation
 from constructicon.core.run import CheckpointConflict, OwnershipLost, RunStatus
+from constructicon.runtime.walker import RunResult
 from tests.api.test_executor_admission import INPUTS, executor_system
 from tests.conftest import LEASE_TTL_S, InjectedCrash
 from tests.executorworld import FakeExecutorProvider, register_component
@@ -78,7 +79,10 @@ async def test_materialization_failure_discards_the_enrolled_acquisition(journal
 
     provider.before_materialize = fail
     run_id = RunId("materialization-failed")
-    result = await system._start_direct(graph, INPUTS, run_id=run_id)
+    (result,) = await asyncio.gather(
+        system._start_direct(graph, INPUTS, run_id=run_id), return_exceptions=True,
+    )
+    assert isinstance(result, RunResult), result
     assert result.status is RunStatus.FAILED
     handle = provider.handles[0]
     assert handle.entered and handle.closed
