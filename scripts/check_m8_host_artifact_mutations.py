@@ -13,6 +13,57 @@ from _mutations import run
 MODULE = "scripts.ci.m8_host_artifacts:"
 TESTS = "tests/test_m8_host_artifacts.py::"
 RUNTIME = "tests/test_m8_host_runtime.py::"
+AUTHORITY_TESTS = "tests/test_m8_qualification_retention.py::"
+
+QUALIFICATION_PORTABLE = (
+    ("retained qualification lookup failure is not observed absence",
+     MODULE + "retained_qualification", "except FileNotFoundError:", "except OSError:",
+     AUTHORITY_TESTS + "test_authority_lookup_failure_is_not_observed_absence"),
+    ("retained qualification is a real directory", MODULE + "retained_qualification",
+     "stat.S_ISDIR(info.st_mode)", "True",
+     AUTHORITY_TESTS + "test_optional_authority_metadata_law_refuses_each_unsafe_premise[file]"),
+    ("retained qualification belongs to root", MODULE + "retained_qualification",
+     " and info.st_uid == ROOT_UID", "",
+     AUTHORITY_TESTS + "test_optional_authority_metadata_law_refuses_each_unsafe_premise[owner]"),
+    ("retained qualification belongs to the root group", MODULE + "retained_qualification",
+     " and info.st_gid == ROOT_GID", "",
+     AUTHORITY_TESTS + "test_optional_authority_metadata_law_refuses_each_unsafe_premise[group]"),
+    ("retained qualification has its exact private-write mode", MODULE + "retained_qualification",
+     "and stat.S_IMODE(info.st_mode) == QUALIFICATION_MODE", "and True",
+     AUTHORITY_TESTS + "test_optional_authority_metadata_law_refuses_each_unsafe_premise[mode]"),
+    ("retained qualification ancestors are custodied", MODULE + "retained_qualification",
+     'require_ancestors(path, (ROOT_UID,), "root")', "pass",
+     AUTHORITY_TESTS + "test_optional_authority_metadata_law_refuses_each_unsafe_premise[ancestor]"),
+    ("retained qualification has no mounted descendants", MODULE + "retained_qualification",
+     "require(not mounted,", "require(True,",
+     AUTHORITY_TESTS + "test_optional_authority_metadata_law_refuses_each_unsafe_premise[mount]"),
+    ("retained qualification is the one exact optional sibling", MODULE + "launch_entries",
+     "if qualification is not None:", "if False:",
+     AUTHORITY_TESTS + "test_launch_entry_law_names_only_the_exact_optional_sibling"),
+    ("retained qualification absence is observed explicitly", MODULE + "retirement",
+     '\"qualification\" in found[\"retained\"]', "True",
+     AUTHORITY_TESTS + "test_retirement_requires_an_explicit_authority_presence_fact"),
+    ("retained qualification identity is never substituted", MODULE + "require_retained_identity",
+     'or kept["qualification"] == previous["qualification"]', "or True",
+     AUTHORITY_TESTS
+     + "test_recorded_authority_identity_cannot_disappear_or_be_inferred[substitution-verify-retired]"),
+    ("retained qualification creation is allowed only after observed absence",
+     MODULE + "require_retained_identity", 'previous["qualification"] is None', "True",
+     AUTHORITY_TESTS
+     + "test_recorded_authority_identity_cannot_disappear_or_be_inferred[substitution-verify-launch]"),
+    ("retained qualification absence is pinned before replacement", MODULE + "require_kept",
+     "require_retained_identity(kept, retirement(commit, workspace))",
+     "require_retained_identity(kept, retirement(commit, workspace), allow_created=True)",
+     AUTHORITY_TESTS
+     + "test_observed_absence_is_pinned_before_install_but_allows_later_root_creation"),
+    ("retained qualification root creation remains legal after installation",
+     MODULE + "verify_launch", "allow_created=True", "allow_created=False",
+     AUTHORITY_TESTS
+     + "test_observed_absence_is_pinned_before_install_but_allows_later_root_creation"),
+    ("retained qualification observation reads no authority content", MODULE + "observe_launch",
+     'if destination != LAUNCH + "/" + QUALIFICATION:', "if True:",
+     AUTHORITY_TESTS + "test_authority_observation_never_hashes_even_a_malformed_authority_file"),
+)
 
 # The launch set (M8-N4-host-runtime.md). Each fact has one check, so no mutant
 # here is masked by an earlier guard. The launch destinations' ancestor checks
@@ -212,17 +263,20 @@ LAUNCH_LINUX = (
      + "test_each_launch_precondition_refuses_judgement[launch root exists-already exists]"),
     # Replacement after the first login (M8-N4-launch-replacement.md).
     ("a kept launch root holds only its store", MODULE + "require_kept",
-     "os.listdir(root / LAUNCH) == [STORE]", "True",
-     RUNTIME + "test_verify_retired_refuses_an_incomplete_retirement"),
-    ("the kept store is the one judge-retire found", MODULE + "require_kept",
-     "retained(root, gid) == retirement(commit, workspace)", "True",
-     RUNTIME + "test_a_substituted_store_is_never_kept"),
+     'set(os.listdir(root / LAUNCH)) == launch_entries(kept["qualification"], installed=False)',
+     "True",
+     AUTHORITY_TESTS + "test_unknown_launch_sibling_is_not_authority[verify-retired]"),
+    ("the kept store is the one judge-retire found", MODULE + "require_retained_identity",
+     '{k: v for k, v in kept.items() if k != "qualification"}\n'
+     '        == {k: v for k, v in previous.items() if k != "qualification"}', "True",
+     AUTHORITY_TESTS + "test_retained_store_identity_is_still_preserved[verify-retired]"),
     ("verify-launch states whether it verified a replacement", MODULE + "verify_launch",
      'record["replacement"] = not absent(workspace / RETIREMENT)', 'record["replacement"] = True',
      RUNTIME + "test_stage_judge_root_sequence_then_verify_accepts"),
-    ("verify-launch holds a replacement to its store", MODULE + "verify_launch",
-     "retained(root, gid) == retirement(commit, workspace)", "True",
-     RUNTIME + "test_a_substituted_store_is_never_kept[verify-launch]"),
+    ("verify-launch holds a replacement to its store", MODULE + "require_retained_identity",
+     '{k: v for k, v in kept.items() if k != "qualification"}\n'
+     '        == {k: v for k, v in previous.items() if k != "qualification"}', "True",
+     AUTHORITY_TESTS + "test_retained_store_identity_is_still_preserved[verify-launch]"),
     ("a retirement record names its commit", MODULE + "retirement",
      'and found.get("commit") == commit', "",
      RUNTIME + "test_a_retirement_from_another_commit_is_never_kept"),
@@ -475,6 +529,7 @@ MUTANTS = (
         )
     ),
     *LAUNCH_PORTABLE,
+    *QUALIFICATION_PORTABLE,
     *CONTROLLER_PORTABLE,
     # Linux-only below: NOT PROVEN on other platforms is expected, never a kill.
     (

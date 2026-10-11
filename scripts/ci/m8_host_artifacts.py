@@ -50,6 +50,7 @@ from typing import IO
 
 ROOT = Path("/")
 ROOT_UID = 0
+ROOT_GID = 0
 GIT = "/usr/bin/git"
 ENVIRONMENT = {
     "PATH": "/usr/bin:/bin",
@@ -88,7 +89,7 @@ REPOSITORY = "source.git"
 STAGING = "staging"
 LISTING_LIMIT = 1 << 20
 
-# The launch set (N4's host runtime). ``LAUNCH`` holds exactly LAUNCH_ENTRIES.
+# The installed launch artifacts, plus the optional retained authority sibling.
 LAUNCH = "var/lib/constructicon-m8-launch"
 LAUNCH_MODE = 0o755
 LAUNCH_ENTRIES = (
@@ -96,6 +97,8 @@ LAUNCH_ENTRIES = (
 )  # fmt: skip
 STORE_MODE = 0o750
 STORE = "operator-stores"
+QUALIFICATION = "qualification"
+QUALIFICATION_MODE = 0o755
 DISPOSABLE = tuple(name for name in LAUNCH_ENTRIES if name != STORE)
 """What a replacement removes. The store holds the vendor login, so it is never removed."""
 RETIREMENT = "retire.json"
@@ -1083,13 +1086,40 @@ def judge_launch(commit: str, root: Path, workspace: Path, listing: str, record:
     record["ready"] = True
 
 
-def retained(root: Path, gid: int) -> dict[str, int]:
+def retained_qualification(root: Path) -> dict[str, int] | None:
+    """Only the authority directory's custody/identity, never its contents."""
+
+    path = root / LAUNCH / QUALIFICATION
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    require(
+        stat.S_ISDIR(info.st_mode) and info.st_uid == ROOT_UID and info.st_gid == ROOT_GID
+        and stat.S_IMODE(info.st_mode) == QUALIFICATION_MODE,
+        f"/{LAUNCH}/{QUALIFICATION} is not a real root:root {QUALIFICATION_MODE:#o} directory",
+    )
+    require_ancestors(path, (ROOT_UID,), "root")
+    mounted = mounts_beneath(path)
+    require(not mounted, f"/{LAUNCH}/{QUALIFICATION} has mounts at or beneath it: {mounted[:4]}")
+    return {"dev": info.st_dev, "ino": info.st_ino}
+
+
+def launch_entries(qualification: dict | None, *, installed: bool) -> set[str]:
+    entries = set(LAUNCH_ENTRIES) if installed else {STORE}
+    if qualification is not None:
+        entries.add(QUALIFICATION)
+    return entries
+
+
+def retained(root: Path, gid: int) -> dict:
     """The launch root a replacement keeps, and the identity it must keep.
 
     ``L`` must be a real root-owned 0755 directory with nothing mounted at or
     beneath it, so no removal inside it reaches another file system, and the
-    store a real root-owned 0750 directory of the service group. The store is
-    never listed: the operator cannot, and nothing here needs its contents.
+    store a real root-owned 0750 directory of the service group. The optional
+    qualification sibling has its own exact metadata law. Neither retained
+    directory is listed; authorization history is not admission input here.
     """
 
     launch = os.lstat(root / LAUNCH)
@@ -1106,10 +1136,11 @@ def retained(root: Path, gid: int) -> dict[str, int]:
         and stat.S_IMODE(store.st_mode) == STORE_MODE,
         f"/{LAUNCH}/{STORE} is not a real root-owned {STORE_MODE:#o} directory of {SERVICE}",
     )
-    return {"dev": store.st_dev, "ino": store.st_ino, "gid": gid}
+    return {"dev": store.st_dev, "ino": store.st_ino, "gid": gid,
+            "qualification": retained_qualification(root)}
 
 
-def retirement(commit: str, workspace: Path) -> dict[str, int]:
+def retirement(commit: str, workspace: Path) -> dict:
     """What ``judge-retire`` found at this commit: the identity the replacement keeps."""
 
     found = json.loads(read_regular(workspace / RETIREMENT))
@@ -1119,20 +1150,38 @@ def retirement(commit: str, workspace: Path) -> dict[str, int]:
         and isinstance(found.get("retained"), dict),
         f"{RETIREMENT} is not a ready retirement judgement at this commit",
     )
+    require(
+        "qualification" in found["retained"],
+        f"{RETIREMENT} has no observed qualification presence or absence",
+    )
     return found["retained"]
 
 
+def require_retained_identity(kept: dict, previous: dict, *, allow_created: bool = False) -> None:
+    require(
+        {k: v for k, v in kept.items() if k != "qualification"}
+        == {k: v for k, v in previous.items() if k != "qualification"},
+        f"/{LAUNCH}/{STORE} is not the store judge-retire found",
+    )
+    require(
+        (allow_created and previous["qualification"] is None)
+        or kept["qualification"] == previous["qualification"],
+        f"/{LAUNCH}/{QUALIFICATION} is not the authority judge-retire found",
+    )
+
+
 def require_kept(commit: str, root: Path, workspace: Path, gid: int) -> None:
-    """A replacement's launch root holds exactly the store ``judge-retire`` found."""
+    """A replacement holds exactly the retained roots ``judge-retire`` found."""
 
     require(
         not absent(workspace / RETIREMENT), f"/{LAUNCH} already exists; installation is fresh-only"
     )
-    require(os.listdir(root / LAUNCH) == [STORE], f"/{LAUNCH} holds more than its store")
+    kept = retained(root, gid)
     require(
-        retained(root, gid) == retirement(commit, workspace),
-        f"/{LAUNCH}/{STORE} is not the store judge-retire found",
+        set(os.listdir(root / LAUNCH)) == launch_entries(kept["qualification"], installed=False),
+        f"/{LAUNCH} holds more than its store and retained authority",
     )
+    require_retained_identity(kept, retirement(commit, workspace))
 
 
 def judge_retire(commit: str, root: Path, workspace: Path, listing: str, record: dict) -> None:
@@ -1150,7 +1199,9 @@ def judge_retire(commit: str, root: Path, workspace: Path, listing: str, record:
     for destination in (LAUNCH, LAUNCH_PROFILE_DESTINATION):
         require_ancestors(root / destination, (ROOT_UID,), "root")
     kept = retained(root, gid)
-    unknown = sorted(set(os.listdir(root / LAUNCH)) - set(LAUNCH_ENTRIES))
+    unknown = sorted(set(os.listdir(root / LAUNCH)) - launch_entries(
+        kept["qualification"], installed=True,
+    ))
     require(not unknown, f"/{LAUNCH} holds entries the retirement does not name: {unknown[:4]}")
     if loaded_among(listing, LAUNCH_PROFILE_NAMES):
         # Unloading reads the installed profile, so it must still be there and root's.
@@ -1160,7 +1211,7 @@ def judge_retire(commit: str, root: Path, workspace: Path, listing: str, record:
 
 
 def verify_retired(commit: str, root: Path, workspace: Path, listing: str, record: dict) -> None:
-    """Retirement left only the store it found: no disposable entry, no launch profile."""
+    """Only the observed retained roots remain: no disposable entry or launch profile."""
 
     launch_inputs(commit, workspace, record)
     gid = service_account(record)
@@ -1180,7 +1231,7 @@ def observe_launch(root: Path, listing: str, expected: dict | None = None) -> di
         LAUNCH + "/runtime": expected["runtime"], LAUNCH + "/native-codex": expected["vendor"],
     }  # fmt: skip
     observed: dict[str, object] = {}
-    destinations = (LAUNCH, *(f"{LAUNCH}/{name}" for name in LAUNCH_ENTRIES),
+    destinations = (LAUNCH, *(f"{LAUNCH}/{name}" for name in (*LAUNCH_ENTRIES, QUALIFICATION)),
                     LAUNCH_PROFILE_DESTINATION)  # fmt: skip
     for destination in destinations:
         path = root / destination
@@ -1204,7 +1255,8 @@ def observe_launch(root: Path, listing: str, expected: dict | None = None) -> di
                     entry["count"] = len(listed)
             elif stat.S_ISREG(info.st_mode):
                 entry["state"] = "file"
-                entry["sha256"] = hash_regular(path)
+                if destination != LAUNCH + "/" + QUALIFICATION:
+                    entry["sha256"] = hash_regular(path)
             else:
                 entry["state"] = "symlink" if stat.S_ISLNK(info.st_mode) else "other"
         except FileNotFoundError:
@@ -1220,12 +1272,13 @@ def observe_launch(root: Path, listing: str, expected: dict | None = None) -> di
 
 
 def launch_table(
-    expected: dict, blobs: dict[str, bytes], values: dict[str, str], gid: int
+    expected: dict, blobs: dict[str, bytes], values: dict[str, str], gid: int,
+    qualification: dict | None = None,
 ) -> dict[str, tuple[str, int, object]]:
     """Destination -> (kind, mode, content): the reviewed installation."""
 
     return {
-        LAUNCH: ("directory", LAUNCH_MODE, sorted(LAUNCH_ENTRIES)),
+        LAUNCH: ("directory", LAUNCH_MODE, sorted(launch_entries(qualification, installed=True))),
         LAUNCH + "/bwrap": ("file", 0o555, values["bwrap_sha256"]),
         LAUNCH_PROFILE_DESTINATION: ("file", 0o444, sha256(blobs[LAUNCH_PROFILE])),
         LAUNCH + "/runtime": ("tree", 0, None),
@@ -1268,19 +1321,21 @@ def verify_launch(commit: str, root: Path, workspace: Path, listing: str, record
 
     blobs, values = launch_inputs(commit, workspace, record)
     gid = service_account(record)
+    qualification = retained_qualification(root)
     with open_vendor(workspace / TARBALL, values["codex_sha256"]) as archive:
         expected = launch_expectation(root, workspace, blobs, values, record, archive)
     record["observed"] = observe_launch(root, listing, expected)
-    assess_launch(record["observed"], launch_table(expected, blobs, values, gid))
+    assess_launch(record["observed"], launch_table(expected, blobs, values, gid, qualification))
     for destination in (LAUNCH, LAUNCH_PROFILE_DESTINATION):
         require_ancestors(root / destination, (ROOT_UID,), "root")
     # Stated, never inferred: a replacement's runbook requires ``replacement: true``,
     # so a workspace that lost its retirement record cannot pass as one.
     record["replacement"] = not absent(workspace / RETIREMENT)
     if record["replacement"]:
-        require(
-            retained(root, gid) == retirement(commit, workspace),
-            f"/{LAUNCH}/{STORE} is not the store judge-retire found",
+        # Preinstall kept-state checks pin absence too. This postinstall verifier
+        # also runs after root legitimately creates the authority directory.
+        require_retained_identity(
+            retained(root, gid), retirement(commit, workspace), allow_created=True,
         )
     record["installed"] = True
 

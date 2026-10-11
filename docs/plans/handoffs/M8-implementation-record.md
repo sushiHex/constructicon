@@ -4720,3 +4720,80 @@ After pinning the actual merge, the integrated g7/g6/WRITE shell suite passed
 116 tests; scope/manifest checks passed 60. All 75 staged plan digests and
 141 relative file-link targets in the changed documentation were verified.
 These counts do not claim anchor validation or host execution.
+
+### #159 — retain qualification authority across launch replacement
+
+The owner-authorized g7 session exposed a lifecycle composition defect before
+LR4's first root write. READ T4 creates root-owned `qualification/` beside
+`operator-stores/`; the launch replacement inventory still named only its
+earlier six entries. `judge-retire` refused that sibling. `require_kept`
+(used by retirement verification and replacement admission) and
+`verify-launch` encode the same incomplete inventory. Bypassing one refusal
+would not make the transition correct.
+
+The [host stop record](https://github.com/sushiHex/constructicon/issues/78#issuecomment-6114305256)
+records boot `d8d9e311-6b35-4d6a-aaeb-cb11c86c5084`, passing D2/no-drift
+and provenance checks, and both refusal records. The installed launch,
+controller and credential store remained unchanged. LR3 had already archived
+the previous workspace, so restarting the old sequence is not a valid resume.
+No maintenance, refresh or model request followed the stop.
+
+**Design boundary.** Qualification authorizations are retained operator
+configuration, not disposable launch artifacts. Recognize exactly that optional
+directory with explicit custody and continuity checks; continue refusing unknown
+siblings. Do not inspect its authorization contents, treat expiration as garbage
+collection, or add it to the inventory from which disposal is derived. The
+runtime's bounded authorization reader remains the only authority parser.
+
+**Failure review before implementation.** These judges are synchronous, but
+separate invocations cross durable boundaries. A retirement record must state
+what it observed before removal. Later verification cannot infer preservation
+from a directory merely existing at the same path. A refused judge leaves the
+installed state intact; failed disposal or installation cannot publish success.
+An optional directory absent before a completed installation may legitimately
+be created later by an authorized root operation. That later creation is not
+permission to substitute a directory whose identity was already promised.
+
+**Required proof.** Exercise installed READ/WRITE authorization state through
+retirement and replacement, preserving its files; require the old no-directory
+path too. Refuse unsafe custody, redirection, identity substitution or loss,
+mounts and unknown entries. Mutation evidence must be assertion failures, not
+skips or errors.
+
+**Implemented law and local evidence.** The retirement record now explicitly
+records absence or the directory's device/inode identity. Missing observation
+is refused, never normalized to absence. Every lifecycle judge checks the same
+root-owned, non-symlink, non-mounted directory with exact mode and retained
+identity. Only post-install verification permits authorized later creation
+after recorded absence. The disposable inventory is unchanged, and the
+observer never reads authorization contents.
+
+The accepting regression assertion-fails when replayed against the base
+`6bc3d6a` judge body: the failure names the extra `qualification` directory.
+It passes with the new judge. The broader local host-artifact suite passed
+231 tests with 204 platform skips. Fourteen new guard mutants and three moved
+existing guard mutants were assertion-killed, not counted from errors.
+The final lookup-failure test proves that `PermissionError` is not recorded
+as absence; the final portable retention/inventory suite passed 94 cases.
+Independent narrow review found no actionable introduced defect; its 91
+retention/resume cases passed. The Linux stock-command lifecycle proof is
+written but awaits CI: substituted local metadata is not physical-host proof.
+Full-gate and final-head evidence belongs to the fix PR. No host resume has
+occurred as part of this implementation.
+
+**Additive resume preparation.** The
+[resume draft](M8-N5-g7-retention-resume.md) continues only the recorded boot
+under continuous exclusive custody and no intervening acquisition. It checks
+the precise paused refusal and old script bytes, preserves the failed workspace
+in a fresh archive, and requires new-commit provenance rather than relabeling
+old output. The controller stays `UNPINNED` until the fix actually merges.
+All g7 controls, the bounded refresh choice and W4 owner review remain.
+
+The 32 new fake-shell cases and 41 existing g7 cases passed locally, and Ruff
+passed for the new test. Two preparation corrections are worth retaining:
+the boot guard must stop explicitly before later commands, and shallow CI
+checkouts cannot supply arbitrary historical Git objects. Tests use a tiny
+synthetic source identity while executing the real digest comparison; the
+actual `d22bff8` blob digest was separately verified against Git. These are
+composition tests, not host qualification or a claim that a paused state can
+be inferred from the absence of running processes.

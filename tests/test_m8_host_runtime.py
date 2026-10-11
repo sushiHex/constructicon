@@ -1605,6 +1605,42 @@ def test_a_replacement_keeps_the_store_and_what_it_holds(
 
 
 @LINUX
+def test_a_replacement_preserves_read_and_write_authority_history(
+    launch_host: LaunchHost, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Real stock retirement/replacement commands preserve the installed sibling."""
+    sentinel = with_binding(launch_host, capsys)
+    authority = launch_host.launch() / artifacts.QUALIFICATION
+    authority.mkdir(mode=artifacts.QUALIFICATION_MODE)
+    authority.chmod(artifacts.QUALIFICATION_MODE)
+    launch_host.gids[authority] = artifacts.ROOT_GID
+    history = {
+        "stage3-read-g6.json": b'{"expired": "READ history is not admission input"}\n',
+        "stage4-write.json": b"opaque WRITE authority history\n",
+    }
+    for name, content in history.items():
+        (authority / name).write_bytes(content)
+        (authority / name).chmod(0o640)
+    before = {name: os.stat(authority / name).st_ino for name in history}
+    directory = os.stat(authority).st_ino
+    status, record = launch_host.run("verify-launch", capsys)
+    assert status == 0 and record["installed"] is True, record
+    judgement = retired(launch_host, capsys)
+    assert judgement["retained"]["qualification"]["ino"] == directory
+    status, record = launch_host.run("verify-retired", capsys)
+    assert status == 0 and record["retired"] is True, record
+    restaged(launch_host, capsys)
+    assert launch_host.install(sequence=replacement_sequence()) == 0
+    status, record = launch_host.run("verify-launch", capsys)
+    assert status == 0 and record["installed"] is True and record["replacement"] is True, record
+    assert sentinel.read_bytes() == SENTINEL
+    assert os.stat(authority).st_ino == directory
+    for name, content in history.items():
+        assert (authority / name).read_bytes() == content
+        assert os.stat(authority / name).st_ino == before[name]
+
+
+@LINUX
 def test_a_partial_retirement_completes_on_a_rerun(
     launch_host: LaunchHost, capsys: pytest.CaptureFixture[str]
 ) -> None:
