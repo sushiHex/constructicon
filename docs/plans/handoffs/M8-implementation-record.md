@@ -4797,3 +4797,25 @@ synthetic source identity while executing the real digest comparison; the
 actual `d22bff8` blob digest was separately verified against Git. These are
 composition tests, not host qualification or a claim that a paused state can
 be inferred from the absence of running processes.
+
+**Merged proof and exact pin.** PR #160 merged as
+`f6cd85a6ed247fdcbb44dc002b8a99fdf18f1324`; its whole tree equals reviewed
+`58db676b863c032ecb67e5966d704e57a105f072`. Exact-head CI passed 4,854 tests
+with 408 platform skips, strict types over 114 source files, all five import
+contracts, runner qualification and all four containment lanes. The Linux
+stock-command preservation case is selected by that passing Ubuntu suite;
+its quiet log does not report individual passing case names. The host-artifact
+inventory reports 170 assertion kills, including all 14 new guards and three
+retargeted guards, with no NOT PROVEN result. Local verification passed 4,513
+tests with 749 platform skips. The connector completed its exact-head review
+with a positive reaction and no findings or unresolved conversations.
+
+The separate resume-package revision now pins that actual merge, preserves
+the original `P`, `O`, `D`, boot and paused-source digest, and keeps the strict
+pin guard. This changes preparation only: the code/procedure pair still needs
+owner authorization, and W4 still pauses before W5. The paused host has not
+been touched by the repair or pinning work.
+
+The pinned-package fake-shell suite passed 37 cases locally, including the
+actual published pin's accepting path and independent unpinned/malformed
+refusals; Ruff passed. This is procedure composition evidence, not deployment.
