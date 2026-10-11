@@ -15,6 +15,29 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #78 — g7 deployment stopped at a retained-state boundary
+
+**Procedure merged as `6bc3d6a` (PR #158), from reviewed `39de68f`.**
+Final-head CI passed 4,761 tests with 408 skips, runner qualification and all
+four physical lanes; local verification passed 4,421 with 748 platform skips.
+The connector review found no actionable issue. These were preparation proofs,
+not a live lifecycle result.
+
+The later authorized host session passed checked g6 continuity, clean reboot,
+the exact reboot-anchor refusal, D2 verification/probe, no-drift checks and
+R11 provenance. LR4 then refused before root writes: Stage 3 had legitimately
+created `qualification/`, which the older replacement inventory did not name.
+The store and installed launch/controller were not removed. No maintenance,
+refresh or WRITE followed the refusal.
+
+**Correction to the preparation claim:** shell-block composition alone did
+not establish compatibility with state created by the preceding READ session.
+Replacement acceptance needs that lifecycle fixture. A final shell exit of
+zero was not success: the affirmative retirement verdict was false. Evidence
+is on [#78](https://github.com/sushiHex/constructicon/issues/78#issuecomment-6114305256).
+
+---
+
 ## #156 — bounded WRITE implementation, not live qualification
 
 **Merged `d22bff8` (PR #157), byte-identical to checked `f3e79d5`.**
