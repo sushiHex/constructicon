@@ -152,6 +152,44 @@ class WriteReportSpendReading(BaseModel):
     secondary_used_percent: _WireInteger | None = None
 
 
+WorkerResultCategory: TypeAlias = Literal[
+    "success", "nonzero", "timeout", "output_bound", "incomplete", "invalid_utf8"
+]
+
+
+class CallbackObservation(BaseModel):
+    """A bounded prefix of admitted callbacks, never a count of inbound requests.
+
+    Eight is the closed mediated-callback ceiling, not a new execution budget.
+    Null means no worker result was observed, not that no worker ran.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1]
+    admitted_started: Annotated[int, Field(strict=True, ge=0, le=8)]
+    admitted_completed: Annotated[int, Field(strict=True, ge=0, le=8)]
+    worker_results: tuple[WorkerResultCategory | None, ...] = Field(max_length=8)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _version(cls, value: object) -> object:
+        if isinstance(value, dict) and "schema_version" in value and (
+            type(value["schema_version"]) is not int or value["schema_version"] != 1
+        ):
+            raise ValueError("callback observation requires exact schema 1")
+        return value
+
+    @model_validator(mode="after")
+    def _prefix(self) -> CallbackObservation:
+        if self.admitted_started != len(self.worker_results) or (
+            self.admitted_completed > self.admitted_started
+            or any(result != "success" for result in self.worker_results[:self.admitted_completed])
+        ):
+            raise ValueError("callback observations contradict the admitted prefix")
+        return self
+
+
 class WriteReportTelemetry(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -162,10 +200,17 @@ class WriteReportTelemetry(BaseModel):
     output_tokens: _Count | None = None
     before: WriteReportSpendReading | None = None
     after: WriteReportSpendReading | None = None
-    # No existing public producer measures these; a limit is not an observation.
-    callback_count: None = None
+    callbacks: CallbackObservation | None = None
+    # An observed final outcome snapshot, not fsync acknowledgement or all responses completed.
+    callbacks_final_snapshot: Annotated[bool, Field(strict=True)] | None = None
     backend_request_count: None = None
     vendor_retry_count: None = None
+
+    @model_validator(mode="after")
+    def _callback_provenance(self) -> WriteReportTelemetry:
+        if (self.callbacks is None) != (self.callbacks_final_snapshot is None):
+            raise ValueError("callback observations require explicit snapshot provenance")
+        return self
 
 
 class WriteReportObligation(BaseModel):
@@ -208,7 +253,7 @@ class CaptureQualificationReport(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 1
     verdict: Literal["passed", "not-qualified", "incomplete"]
     observation: WriteObservation
     issues: tuple[WriteReportIssue, ...] = Field(max_length=len(WriteReportIssue))
@@ -278,6 +323,8 @@ class CaptureQualificationReport(BaseModel):
 class SmokeQualificationReport(CaptureQualificationReport):
     """The contained capture proof, with no fabricated executor or turn facts."""
 
+    schema_version: Literal[1] = 1
+
     @model_validator(mode="after")
     def _passing_facts(self) -> SmokeQualificationReport:
         if len(set(self.issues)) != len(self.issues):
@@ -288,6 +335,7 @@ class SmokeQualificationReport(CaptureQualificationReport):
 
 
 class WriteQualificationReport(CaptureQualificationReport):
+    schema_version: Literal[2] = 2
     authorization_identity: Digest
     attempt_identity: Digest | None = None
     attempt_epoch: _Count | None = None

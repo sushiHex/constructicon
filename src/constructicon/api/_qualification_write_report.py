@@ -32,6 +32,7 @@ from constructicon.core.identity import Digest, canonical_json, digest, parse_js
 from constructicon.core.manifest import SELF_BINDING, CapabilityLease
 from constructicon.core.qualification import QualificationAuthorization
 from constructicon.core.qualification_write import (
+    CallbackObservation,
     CaptureQualificationReport,
     SmokeQualificationReport,
     WriteObservation,
@@ -440,10 +441,20 @@ def _turn_facts(
         data["attempt_identity"] = digest("qualification-write-attempt", 1, record)
         required = {"authorization_id", "run_id", "epoch", "acquisition_id", "phase", "at"}
         phase = record.get("phase")
+        callback_keys = {"callbacks"} if "callbacks" in record else set()
         if phase not in ("acquired", "intent", "outcome") or set(record) != (
             required | {"dispatch", "facts"} if phase == "outcome" else required
-        ):
+        ) | callback_keys:
             raise ValueError("attempt shape")
+        callbacks = (
+            CallbackObservation.model_validate(record["callbacks"])
+            if callback_keys else None
+        )
+        callback_telemetry = {
+            "callbacks": callbacks,
+            "callbacks_final_snapshot": phase == "outcome" if callbacks is not None else None,
+        }
+        data["telemetry"] = WriteReportTelemetry.model_validate(callback_telemetry)
         instant = datetime.fromisoformat(record["at"])
         if instant.tzinfo is None:
             raise ValueError("attempt time")
@@ -547,6 +558,7 @@ def _turn_facts(
             raise ValueError("attempt usage")
         readbacks = facts["readbacks"]
         telemetry: dict[str, Any] = {
+            **callback_telemetry,
             "requested_model": authorization.grants.model_selection.model
             if authorization.grants
             else None,
