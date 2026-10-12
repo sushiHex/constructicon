@@ -15,6 +15,30 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #159 — qualification authority survives launch replacement
+
+**Merged `f6cd85a` (PR #160), byte-identical to reviewed `58db676`.**
+The launch lifecycle now recognizes the exact optional root-owned
+`qualification/` directory without reading its contents or adding it to
+disposal. Retirement records presence or absence affirmatively, and subsequent
+judges preserve the identity they promised. Only completed-install verification
+permits authorized later creation after an observed absence; missing evidence
+is never absence. Unknown siblings, unsafe custody, mounts and substitution
+still refuse.
+
+Exact-head CI passed 4,854 tests with 408 skips, runner qualification and all
+four physical lanes. All 170 host-artifact mutants were assertion-killed,
+including 14 new guards. Local verification passed 4,513 with 749 platform
+skips. Independent review and the final-head connector review found no
+actionable defect. Windows skips are not counted as Linux lifecycle proof.
+
+This fixes the pre-existing composition defect exposed by #158's host session.
+It does not install the fix, qualify g7, authorize a new acquisition or remove
+historical authorizations. The additive resume draft deliberately shipped
+unpinned; deployment must name the actual merge and retain its separate gates.
+
+---
+
 ## #78 — g7 deployment stopped at a retained-state boundary
 
 **Procedure merged as `6bc3d6a` (PR #158), from reviewed `39de68f`.**

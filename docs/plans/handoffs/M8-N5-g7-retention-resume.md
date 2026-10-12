@@ -1,10 +1,13 @@
 # M8 N5 g7: resume after the retained-authorization refusal
 
-Status: first draft, not runnable; `C=UNPINNED` until the retention fix actually
-merges and its exact code pin receives separate owner review. This document
-authorizes no host action. Do not use a PR head or predict its merge commit.
-The installed code pin and this procedure's reviewed documentation revision
-are separate artifacts. Frozen source documents retain their bytes.
+Status: deployment package for separate owner review and host authorization.
+The target controller is PR #160's verified squash commit
+`f6cd85a6ed247fdcbb44dc002b8a99fdf18f1324` (`C`), whose tree is byte-identical
+to reviewed and checked `58db676`. This document authorizes no host action.
+Do not substitute a PR head or a later main head. The target code pin and this
+procedure's later reviewed documentation revision are separate artifacts;
+this pinned procedure is not an artifact present at `C`. Frozen source
+documents retain their bytes.
 
 This continues [#78](https://github.com/sushiHex/constructicon/issues/78) and
 implements the bounded resume scope of
@@ -95,15 +98,15 @@ reviewed route and fresh LR1/LR2 records; it is not a fallback supplied here.
 Resume-check alone declares `C=O` and sources only the old-controller common;
 that read-only setup supplies fail-closed shell settings before any check.
 Every subsequent script declares exact new `C` and runs in a fresh shell. The
-workstation guard below refuses this draft before any transport. After pinning,
-use g7 H0's LF-only, SHA-256 common/step-pair transport discipline unchanged,
+workstation guard below refuses an invalid pin before any transport. Use g7
+H0's LF-only, SHA-256 common/step-pair transport discipline unchanged,
 with strict host-key checking, BatchMode, and SSH execution stdin `/dev/null`.
 Hash each installer file as the file actually executed; it has no N5 common.
 
 ```bash
-C=UNPINNED
+C=f6cd85a6ed247fdcbb44dc002b8a99fdf18f1324
 [[ "$C" =~ ^[0-9a-f]{40}$ ]] \
-  || { echo 'retention-fix controller is UNPINNED; stop for review' >&2; exit 1; }
+  || { echo 'retention-fix controller pin is invalid; stop for review' >&2; exit 1; }
 ```
 
 ## Complete LR3 workspace-resume override

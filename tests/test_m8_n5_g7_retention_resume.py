@@ -18,6 +18,7 @@ from tests.test_m8_n5_host_session import HANDOFFS, _fences, _section, _text
 from tests.test_m8_operator_commands import PYTHON_PROGRAM, _bash
 
 DOCUMENT = HANDOFFS / "M8-N5-g7-retention-resume.md"
+CONTROLLER = "f6cd85a6ed247fdcbb44dc002b8a99fdf18f1324"
 P = "d22bff86e8695a7efef04dc3f47c6d4b0847599c"
 OLD = "585df33eb196cd4afd10d5c12cb1efb37fd5a6e1"
 BOOT = "d8d9e311-6b35-4d6a-aaeb-cb11c86c5084"
@@ -109,7 +110,7 @@ def _portable_block(*, fault: str = "none") -> str:
     return block.replace(program["body"], body).replace("/usr/bin/python3", executable)
 
 
-def test_every_new_block_parses_and_unpinned_transport_refuses():
+def test_every_new_block_parses_and_actual_controller_pin_passes_the_guard():
     for block in _fences(_text(DOCUMENT)):
         checked = subprocess.run(
             [_bash(), "-n"], input=block, capture_output=True, text=True,
@@ -118,7 +119,19 @@ def test_every_new_block_parses_and_unpinned_transport_refuses():
         assert checked.returncode == 0, checked.stderr
     boot, transport = _blocks("Authorization, boot continuity and immutable transport")
     assert BOOT in boot and "/proc/sys/kernel/random/boot_id" in boot
-    refused = _run(transport + "\necho must-not-transport")
+    assert transport.splitlines()[0] == f"C={CONTROLLER}"
+    accepted = _run(transport + "\necho pin-checked")
+    assert accepted.returncode == 0, accepted.stderr
+    assert accepted.stdout == "pin-checked\n"
+
+
+@pytest.mark.parametrize("controller", ["UNPINNED", "", "a" * 39, "a" * 41, "A" * 40])
+def test_unpinned_or_malformed_controller_still_refuses_before_transport(controller: str):
+    _, transport = _blocks("Authorization, boot continuity and immutable transport")
+    assert transport.splitlines()[0] == f"C={CONTROLLER}"
+    guard = "\n".join(transport.splitlines()[1:])
+    refused = _run('C="$CONTROLLER"\n' + guard + "\necho must-not-transport",
+                   CONTROLLER=controller)
     assert refused.returncode == 1
     assert refused.stdout == ""
 
@@ -216,7 +229,7 @@ def test_archive_requires_specific_refusal_and_preserves_both_old_workspaces(
         _private_file(archive / "preserve", b"existing")
     elif fault == "workspace-mode":
         w.chmod(0o720)
-    result = _run(_portable_block(fault=fault), HOME=str(home), C="a" * 40)
+    result = _run(_portable_block(fault=fault), HOME=str(home), C=CONTROLLER)
     if fault == "none":
         assert result.returncode == 0, result.stderr
         assert result.stdout == "paused-workspace-preserved\n"
@@ -261,7 +274,7 @@ def test_alias_or_dangling_archive_never_moves_paused_state(
         (w / "retire.json").symlink_to(target)
     if os.name != "nt":
         block = _portable_block()
-    result = _run(block, HOME=str(home), C="a" * 40)
+    result = _run(block, HOME=str(home), C=CONTROLLER)
     assert result.returncode != 0
     assert result.stdout == ""
     assert w.exists()
@@ -274,14 +287,14 @@ def test_late_failure_preserves_archive_and_does_not_authorize_r11_replay(
     home = _world(tmp_path, paused_script)
     result = _run(
         "set -e\n" + _portable_block() + "\nfalse\necho must-not-run-r11",
-        HOME=str(home), C="a" * 40,
+        HOME=str(home), C=CONTROLLER,
     )
     assert result.returncode != 0
     assert result.stdout == "paused-workspace-preserved\n"
     assert not (home / "m8-launch").exists()
     archive = home / ("m8-launch-refused-" + P)
     assert (archive / "m8_host_artifacts.py").read_bytes() == paused_script
-    replay = _run(_portable_block(), HOME=str(home), C="a" * 40)
+    replay = _run(_portable_block(), HOME=str(home), C=CONTROLLER)
     assert replay.returncode != 0
     assert replay.stdout == ""
     assert (archive / "m8_host_artifacts.py").read_bytes() == paused_script
@@ -289,9 +302,10 @@ def test_late_failure_preserves_archive_and_does_not_authorize_r11_replay(
 
 def test_resume_source_map_preserves_lifecycle_and_owner_gates():
     document = _text(DOCUMENT)
-    for value in (P, OLD, BOOT, "8c1b14eed6f02474abcc1ac998e3bf87f8c6ade3", SHA):
+    for value in (CONTROLLER, P, OLD, BOOT, "8c1b14eed6f02474abcc1ac998e3bf87f8c6ade3", SHA):
         assert value in document
-    assert "first draft, not runnable" in document
+    assert "deployment package for separate owner review and host authorization" in document
+    assert "This document authorizes no host action" in document
     assert "continuous exclusive custody" in document
     assert "no maintenance, activation, account/model acquisition" in document
     assert "R6 is not authorized" in document
