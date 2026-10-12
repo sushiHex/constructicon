@@ -4819,3 +4819,63 @@ been touched by the repair or pinning work.
 The pinned-package fake-shell suite passed 37 cases locally, including the
 actual published pin's accepting path and independent unpinned/malformed
 refusals; Ruff passed. This is procedure composition evidence, not deployment.
+
+### #159 — archive custody after the fresh-shell record refusal
+
+The authorized resume at `5c9cf4d` passed exact boot, noninteractive sudo,
+no-drift and old-generation reboot-anchor checks. Its archive guard then
+refused before the move: `retire.json` was operator-owned `0664` inside the
+canonical operator-owned `0700` workspace. The script and vendor record were
+`0600`. No archive, new provenance, root installation, maintenance, activation
+or model acquisition followed. The [stop record](https://github.com/sushiHex/constructicon/issues/159#issuecomment-6115417822)
+preserves the observation and its limits.
+
+**Introduced defect.** The resume guard assumed all three records inherited
+R11's `umask 077`. LR4 runs in a fresh shell and redirects its own record;
+there is no such inheritance. The test fixture explicitly made every file
+`0600`, so it never proved the producer/consumer sequence. This was a false
+refusal, not host drift or permission to repair historical evidence.
+
+**Design reviewed before implementation.** The additive
+[archive successor](M8-N5-g7-archive-custody.md) checks effective custody:
+canonical operator-owned `0700` directories, real ancestors writable only by
+root or that operator, and regular, operator-owned, single-link records. The
+three public historical leaves need no permission-mode whitelist behind that
+directory boundary. Failed reads still refuse. Every source-byte digest,
+provenance fact, exact refusal and no-overwrite guard remains required. The
+script is hashed as data, never executed. Root and the operator remain trusted;
+continuous exclusive custody is an explicit prerequisite, not inferred from
+file metadata or an empty process list.
+
+A separate design review confirmed this boundary. A narrower proposed list of
+allowed retirement-record modes was rejected: it would encode ambient umasks
+instead of the custody invariant and retain a false-refusal class. No chmod,
+frozen-document edit or production-code relaxation is part of this correction.
+The controller remains `f6cd85a`; the successor procedure has its own revision.
+
+**Fresh-shell audit.** LR4, LR5/R12 and LR6 create records under their own
+shell settings. R18 requires explicit `C/W/J`, and R19 requires `W`; package
+composition must supply these declarations rather than inherit a previous
+shell. LR/HR diagnostic `cat` can succeed after an earlier failure, so success
+requires the named affirmative verdicts and markers, not final exit alone.
+OC/g7/WRITE reload their common file explicitly. The successor changes only
+the archive guard; all installation, g7, owner evidence review and W4 gates
+remain. No live-host result is claimed by this preparation entry.
+
+**Regression shape.** The new suite executes the unchanged R11 variant and
+LR4 in separate Bash processes. Only Git/network, the artifact-judge tool and
+platform metadata boundaries are substituted; real redirections produce the
+records that the actual archive block consumes. Six umasks include `000`,
+which yields `0666` retirement output on Linux inside R11's `0700` workspace.
+Acceptance preserves record bytes, modes and identities. Refusals cover
+custody, aliases, provenance, source hashes and occupied destinations. Ten
+direct mutations of the extracted runbook block require failure at the
+killing test's assertion, not merely an error in the mutated command.
+
+The accepting regression was measured red against the frozen original guard
+on Windows with explicit POSIX metadata substitution. That is a reproduced
+consumer refusal, not a physical mode measurement. Linux tests use a real
+trusted ancestor chain under the checkout, not `/tmp`'s world-writable parent.
+Exact-head execution evidence belongs to the PR; Windows mode substitutes
+never count as Linux producer or host proof. No vendor binary or private-host
+command is part of this suite.
