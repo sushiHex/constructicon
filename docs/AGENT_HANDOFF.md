@@ -15,6 +15,32 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #159 — archive records by custody, not inherited umask
+
+**Merged `aec6a85` (PR #162), byte-identical to reviewed `21211a6`.**
+The additive archive successor preserves the frozen procedures and all
+historical bytes/modes. It checks canonical operator-owned 0700 directories,
+trusted non-writable ancestors, regular/operator-owned/single-link public
+records, same-filesystem rename, and the original provenance/refusal facts.
+The controller stays `f6cd85a`; this is not a production-code change.
+
+The introduced assumption was that R11's umask carried into LR4's fresh
+shell. It did not: the actual retirement record was 0664, and the old fixture
+made every record 0600. The new suite executes those producer blocks in
+separate shells under six umasks and asserts preservation. All 61 cases and
+ten assertion-killed runbook mutations passed; Windows metadata doubles are
+not physical proof. Linux CI passed 4,920 tests with 408 skips, qualification,
+all four containment lanes and 170 host-artifact mutants. Local verification
+passed 4,579 with 749 platform skips. Independent and connector reviews were
+clean on the exact head.
+
+This establishes the reviewed archive procedure, not its execution, g7
+qualification or WRITE authority. The successor requires fresh exact-revision
+authorization and retains boot/custody/drift checks, owner evidence review
+and the W4 pause. Current host state and ownership remain on #78, not here.
+
+---
+
 ## #159 — qualification authority survives launch replacement
 
 **Merged `f6cd85a` (PR #160), byte-identical to reviewed `58db676`.**

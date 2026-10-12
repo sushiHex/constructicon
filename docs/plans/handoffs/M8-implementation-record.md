@@ -4879,3 +4879,20 @@ trusted ancestor chain under the checkout, not `/tmp`'s world-writable parent.
 Exact-head execution evidence belongs to the PR; Windows mode substitutes
 never count as Linux producer or host proof. No vendor binary or private-host
 command is part of this suite.
+
+**Merged archive proof.** PR #162 merged as
+`aec6a85a7e0168cd2b376f8175a24bea5c6ed6bf`, whole-tree identical to reviewed
+`21211a649cd05bf0ee9713694265442e092a3df8`. All 61 focused cases passed
+locally, including ten direct assertion-killed runbook mutations. Independent
+narrow review found no actionable defect and separately passed 18 cases.
+The final-head connector review completed with a positive reaction, no
+findings and no unresolved conversations.
+
+Exact-head Linux verify passed 4,920 tests with 408 skips, including the new
+unskipped actual-umask and trusted-ancestor cases. Qualification and all four
+containment lanes passed; the host-artifact inventory reported 170 kills.
+Local verify passed 4,579 tests with 749 platform skips, lint, strict types
+over 114 source files and all five import contracts. The staged manifest
+validated all 77 entries. No local metadata substitute is counted as a
+physical-host or vendor result. The merge changed preparation only; the
+successor's separate execution gates remain in force.
