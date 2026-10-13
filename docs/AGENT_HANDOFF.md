@@ -15,6 +15,30 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #78 — g8 procedure preserves history and the actual-pin gate
+
+The additive [g8 procedure](plans/handoffs/M8-N5-g8-session.md) pins controller
+`59de73b` separately from its own documentation revision. It composes the
+unchanged reviewed installation and session blocks, checks old-controller g7
+continuity before reboot, and gives g8 qualification and the additional WRITE
+fresh state and authorization names. It does not replay completed archive or
+retention-resume steps, reset the spent attempt, or infer qualification from CI.
+
+The generation check concerns both validated maintenance records' historical
+floor, not a live post-activation claim. The publication helper independently
+enforces the next generation. Every H7 control remains required; H8 is at most
+one conditional refresh. Owner review of qualification evidence and the W4
+actual-pin/smoke pause remain separate from the additional-turn budget.
+
+A preparation correction is worth retaining: an upload example must itself
+enforce the preservation rule. The new transport requires an absent per-step
+package directory before upload and verifies hashes before execution; prose
+forbidding overwrite is not enough. Fake-shell evidence establishes stopping
+and composition only, not host installation, refresh or a live WRITE result.
+Current execution evidence and custody belong on #78, not in this handoff.
+
+---
+
 ## #78 — bounded WRITE observations, not another attempt
 
 **Merged `59de73b` (PR #164), byte-identical to reviewed `f6972a8`.**
