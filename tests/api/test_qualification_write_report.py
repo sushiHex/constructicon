@@ -105,8 +105,14 @@ async def test_report_accepting_path_uses_full_materialization(completed, monkey
         row.state == "closed" and row.disposition == "released" for row in report.obligations
     )
     assert report.turn_dispatch == "completed" and report.turn_status == "success"
+    assert report.schema_version == 2
     assert report.target_unchanged is True and report.check_count == 1
-    assert report.telemetry.callback_count is report.telemetry.backend_request_count is None
+    assert report.telemetry.callbacks is not None
+    assert report.telemetry.callbacks.admitted_started == 1
+    assert report.telemetry.callbacks.admitted_completed == 1
+    assert report.telemetry.callbacks.worker_results == ("success",)
+    assert report.telemetry.callbacks_final_snapshot is True
+    assert report.telemetry.backend_request_count is None
     assert report.telemetry.vendor_retry_count is None
     assert report.limits.stdout_bytes == assembly.executor.launcher.limits.stdout_bytes
     assert_bounded(report)
@@ -347,6 +353,113 @@ def test_public_contract_names_and_counts_match_protocol():
     ):
         with pytest.raises(ValidationError):
             WriteReportTelemetry.model_validate(values)
+
+
+async def test_callback_provenance_and_legacy_absence_stay_distinct(completed, monkeypatch):
+    assembly, authorization = completed[1:3]
+    retained = json.loads(Path(authorization.attempt_record).read_text())
+    legacy = {key: value for key, value in retained.items() if key != "callbacks"}
+    monkeypatch.setattr(projection, "_attempt", lambda path: legacy)
+    report = project(completed)
+    assert report.schema_version == 2 and report.verdict == "passed"
+    assert report.telemetry.callbacks is None and report.telemetry.callbacks_final_snapshot is None
+    progress = {key: value for key, value in retained.items() if key not in {"facts", "dispatch"}}
+    progress["phase"] = "intent"
+    monkeypatch.setattr(projection, "_attempt", lambda path: progress)
+    report = project(completed)
+    assert report.verdict != "passed" and report.telemetry.callbacks_final_snapshot is False
+    assert report.telemetry.callbacks.admitted_started == 1
+    assert report.telemetry.callbacks.worker_results == ("success",)
+    assert report.turn_dispatch == "possibly dispatched"
+    assert assembly.executor.identity
+
+
+def test_write_schema_two_and_smoke_schema_one_are_strict_disjoint_consumers():
+    common = {"verdict": "incomplete", "observation": "error", "issues": (),
+              "details_complete": False, "run_id": "run-" + "0" * 32,
+              "report_definition": digest("report", 1, "test")}
+    smoke = SmokeQualificationReport.model_validate(common)
+    write = WriteQualificationReport.model_validate({
+        **common, "authorization_identity": digest("auth", 1, "test"),
+    })
+    assert smoke.schema_version == 1 and write.schema_version == 2
+    with pytest.raises(ValidationError):
+        SmokeQualificationReport.model_validate({**common, "schema_version": 2})
+    with pytest.raises(ValidationError):
+        WriteQualificationReport.model_validate({**write.model_dump(), "schema_version": 1})
+
+
+@pytest.mark.parametrize("value", [0, 1, "false", "true"])
+def test_callback_finalization_is_exact_boolean_not_coerced(value):
+    with pytest.raises(ValidationError):
+        WriteReportTelemetry.model_validate({"callbacks_final_snapshot": value, "callbacks": {
+            "schema_version": 1, "admitted_started": 0,
+            "admitted_completed": 0, "worker_results": [],
+        }})
+
+
+@pytest.mark.parametrize("values", [
+    {"callbacks_final_snapshot": False},
+    {"callbacks": {"schema_version": 1, "admitted_started": 0,
+                   "admitted_completed": 0, "worker_results": []}},
+])
+def test_callback_snapshot_and_its_provenance_cannot_be_separated(values):
+    with pytest.raises(ValidationError):
+        WriteReportTelemetry.model_validate(values)
+
+
+async def test_successful_attempt_refuses_unfinished_callback_observations(completed, monkeypatch):
+    record = json.loads(Path(completed[2].attempt_record).read_text())
+    for worker in (None, "success", "nonzero"):
+        record["callbacks"] = {"schema_version": 1, "admitted_started": 1,
+                               "admitted_completed": 0, "worker_results": [worker]}
+        monkeypatch.setattr(projection, "_attempt", lambda path: record)
+        report = project(completed)
+        assert report.verdict != "passed", f"contradictory successful callback snapshot: {worker}"
+        assert WriteReportIssue.ATTEMPT_INVALID in report.issues
+
+
+async def test_passed_contract_refuses_unfinished_or_partial_callback_observations(completed):
+    document = completed[3].model_dump(mode="json")
+    for worker in (None, "success", "nonzero"):
+        document["telemetry"]["callbacks"] = {
+            "schema_version": 1, "admitted_started": 1,
+            "admitted_completed": 0, "worker_results": [worker],
+        }
+        with pytest.raises(ValidationError):
+            WriteQualificationReport.model_validate(document)
+    document["telemetry"]["callbacks"] = {
+        "schema_version": 1, "admitted_started": 0,
+        "admitted_completed": 0, "worker_results": [],
+    }
+    document["telemetry"]["callbacks_final_snapshot"] = False
+    with pytest.raises(ValidationError):
+        WriteQualificationReport.model_validate(document)
+
+
+async def test_callback_crossfact_law_permits_zero_legacy_and_failed_prefix(completed, monkeypatch):
+    record = json.loads(Path(completed[2].attempt_record).read_text())
+    record["callbacks"] = {"schema_version": 1, "admitted_started": 0,
+                           "admitted_completed": 0, "worker_results": []}
+    monkeypatch.setattr(projection, "_attempt", lambda path: record)
+    zero = project(completed)
+    assert zero.verdict == "passed" and zero.telemetry.callbacks_final_snapshot is True
+    assert zero.telemetry.callbacks.admitted_started == 0
+    assert WriteQualificationReport.model_validate(zero.model_dump()) == zero
+    del record["callbacks"]
+    legacy = project(completed)
+    assert legacy.verdict == "passed" and legacy.telemetry.callbacks is None
+    assert WriteQualificationReport.model_validate(legacy.model_dump()) == legacy
+    record["callbacks"] = {"schema_version": 1, "admitted_started": 1,
+                           "admitted_completed": 0, "worker_results": ["nonzero"]}
+    record["dispatch"] = "possibly dispatched"
+    record["facts"]["status"] = "failure"
+    failed = project(completed)
+    assert failed.verdict == "not-qualified"
+    assert WriteReportIssue.ATTEMPT_INVALID not in failed.issues
+    assert failed.telemetry.callbacks_final_snapshot is True
+    assert failed.telemetry.callbacks.worker_results == ("nonzero",)
+    assert WriteQualificationReport.model_validate(failed.model_dump()) == failed
 
 
 def test_report_definition_covers_whole_contract_and_projection():

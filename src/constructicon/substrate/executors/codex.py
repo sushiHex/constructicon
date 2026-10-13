@@ -372,6 +372,7 @@ class CodexConversation:
         deadline: float | None = None, startup_only: bool = False,
         provider: str = OPENAI_PROVIDER, pause: Callable[[], Awaitable[None]] | None = None,
         before_turn: Callable[[], str | None] | None = None,
+        observe_callbacks: Callable[[int, int], None] | None = None,
         request_refresh: bool = False,
     ) -> None:
         if type(startup_only) is not bool:
@@ -454,6 +455,7 @@ class CodexConversation:
         self._tool_calls: set[str] = set()
         self._callbacks_started = 0
         self._callbacks_completed = 0
+        self._observe_callbacks = observe_callbacks
         # Classified and bounded: what the session emitted before the turn
         # existed is a fact about the pinned interface worth reporting, and
         # the native lane records it.
@@ -943,6 +945,8 @@ class CodexConversation:
         # this call eligible to run again.
         self._tool_calls.add(call.call_id)
         self._callbacks_started += 1
+        if self._observe_callbacks is not None:
+            self._observe_callbacks(self._callbacks_started, self._callbacks_completed)
         try:
             completed = await self._await_callback(io, call.program)
             if completed is None:
@@ -962,6 +966,8 @@ class CodexConversation:
         self._queue = held + self._queue
         # Worker return and the complete response write are both positive facts.
         self._callbacks_completed += 1
+        if self._observe_callbacks is not None:
+            self._observe_callbacks(self._callbacks_started, self._callbacks_completed)
         return True
 
     async def _await_callback(
@@ -1855,7 +1861,11 @@ class CodexOperatorHandle:
             raise ContractViolation("the pinned launch recipe drifted from its identity")
         deadline = asyncio.get_running_loop().time() + grants.timeout_s
         worker = None
+        observer = None
         if workspace is not None:
+            if self.attempt is not None:
+                self.attempt.enable_callbacks()
+                observer = self._observe_callbacks
             async def run_worker(program: str) -> str:
                 return await self._run_worker(
                     program, workspace=workspace, grants=grants, deadline=deadline,
@@ -1869,6 +1879,7 @@ class CodexOperatorHandle:
             deadline=deadline if worker is not None else None,
             provider=configured_provider(provider.configuration),
             before_turn=self._intend if self.attempt is not None else None,
+            observe_callbacks=observer,
         )
         self._conversation = conversation
 
@@ -2050,7 +2061,22 @@ class CodexOperatorHandle:
                 # terminal already or was explicitly cancelled and joined.
                 if not task.done():
                     raise ContractViolation("contained callback worker lost ownership")
-                self.worker_active = None
+                try:
+                    # EOF/cancellation may win the conversation race despite an
+                    # actual worker result. Observe it at its producer boundary.
+                    if result is None and not task.cancelled():
+                        # No ProcessResult on a failed task means unknown, not failure.
+                        with suppress(BaseException):
+                            result = task.result()
+                    if result is not None:
+                        try:
+                            self._observe_worker(result)
+                        except Exception:
+                            if primary is None:
+                                raise
+                            # The record latched failure; preserve cancellation/loss.
+                finally:
+                    self.worker_active = None
             assert result is not None
             self._validated_workspace(validated, grants)
             if (
@@ -2064,6 +2090,51 @@ class CodexOperatorHandle:
                 return result.stdout.decode("utf-8")
             except UnicodeError as exc:
                 raise ContractViolation("the contained callback returned invalid UTF-8") from exc
+
+    def _observe_callbacks(self, started: int, completed: int) -> None:
+        if self.attempt is None or self.attempt.callbacks is None:
+            return
+        previous = self.attempt.callbacks
+        from constructicon.core.qualification_write import CallbackObservation
+
+        self.attempt.observe_callbacks(CallbackObservation(
+            schema_version=1,
+            admitted_started=started, admitted_completed=completed,
+            worker_results=(
+                previous.worker_results + (None,) * (started - previous.admitted_started)
+            ),
+        ))
+
+    def _observe_worker(self, result: ProcessResult) -> None:
+        if self.attempt is None or self.attempt.callbacks is None:
+            return
+        previous = self.attempt.callbacks
+        from constructicon.core.qualification_write import CallbackObservation, WorkerResultCategory
+
+        category: WorkerResultCategory
+        # Precedence is explicit when a ProcessResult carries several flags.
+        if result.timed_out:
+            category = "timeout"
+        elif result.bound_exceeded is not None:
+            category = "output_bound"
+        elif result.payload_returncode is None or result.payload_returncode != result.returncode:
+            category = "incomplete"
+        elif result.returncode != 0:
+            category = "nonzero"
+        else:
+            try:
+                result.stdout.decode("utf-8")
+                category = "success"
+            except UnicodeError:
+                category = "invalid_utf8"
+        if not previous.worker_results:
+            raise ContractViolation("worker observations require an admitted callback")
+        self.attempt.observe_callbacks(CallbackObservation(
+            schema_version=1,
+            admitted_started=previous.admitted_started,
+            admitted_completed=previous.admitted_completed,
+            worker_results=(*previous.worker_results[:-1], category),
+        ))
 
     async def cleanup(self, disposition: Disposition) -> None:
         if self._close_disposition is None:

@@ -86,7 +86,8 @@ async def write_writer(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[s
     executor = ctx.capability(EXECUTOR)
     if not isinstance(executor, CodexOperatorHandle):
         raise ContractViolation("the WRITE qualification binds the codex operator only")
-    workspace = await _writer_workspace(ctx, _request(inputs))
+    request = _request(inputs)
+    workspace = await _writer_workspace(ctx, request)
     task = TaskSpec(instruction=(
         "Use contained_python to create n5-write.txt containing exactly ready "
         "followed by a newline. Change no other files."
@@ -95,7 +96,10 @@ async def write_writer(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[s
     if not isinstance(outcome, ExecutorSuccess):
         raise ContractViolation(f"the WRITE turn ended {outcome.status}")
     await workspace.commit_all("constructicon N5 WRITE candidate")
-    return {CANDIDATE.name: workspace.git_ref().model_dump(mode="json")}
+    candidate = workspace.git_ref()
+    if candidate.commit == request.base_commit:
+        raise ContractViolation("the WRITE qualification captured no change")
+    return {CANDIDATE.name: candidate.model_dump(mode="json")}
 
 
 async def smoke_writer(ctx: NodeContext, inputs: Mapping[str, Any]) -> Mapping[str, Any]:

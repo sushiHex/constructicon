@@ -2,8 +2,9 @@
 
 The native peer is a real scripted byte channel. SQLite, the walker, attempt
 record, acquisition closures, Git objects, checkpoint and gate attestation are
-real. Worker execution and capture are deterministic contract doubles here;
-the companion Linux lane exercises their actual containment implementation.
+real. Most cases substitute worker/capture contracts; the no-change case
+restores capture with locally executed fixed Git plumbing, not containment.
+The companion Linux lane exercises their actual containment implementation.
 """
 
 from __future__ import annotations
@@ -12,6 +13,9 @@ import asyncio
 import json
 import os
 import shutil
+import sqlite3
+import subprocess
+import sys
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, fields
 from datetime import UTC, datetime, timedelta
@@ -24,6 +28,7 @@ from constructicon.api import _qualification_write_assembly as assembly_module
 from constructicon.api import qualification
 from constructicon.api._qualification_write_assembly import WriteAssembly
 from constructicon.api._qualification_write_graph import (
+    CHECKER_SCOPE,
     WRITER_SCOPE,
     write_definitions,
     write_graph,
@@ -31,6 +36,7 @@ from constructicon.api._qualification_write_graph import (
 )
 from constructicon.api._qualification_write_report import write_report_definition
 from constructicon.api.control import ControlPlane
+from constructicon.core.address import ExecutionPath
 from constructicon.core.control import RunSubmission
 from constructicon.core.errors import ContractViolation
 from constructicon.core.identity import canonical_json, digest
@@ -44,6 +50,8 @@ from constructicon.substrate.executors.codex_protocol import CONTAINED_PYTHON_CA
 from constructicon.substrate.executors.linux import LinuxLauncher, ProcessResult
 from constructicon.substrate.gates import contained as gates_module
 from constructicon.substrate.git import acquisition, contained
+from constructicon.substrate.git.authority import _PINNED_ENV, _set_write_bits, candidate_ref_for
+from constructicon.substrate.git.capture import ContainedWriteWorkspaceProvider
 from constructicon.substrate.git.process import GitProcess
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.native_operator_world import native_egress
@@ -58,6 +66,8 @@ from tests.substrate.test_codex_adapter import portable_binding as portable_bind
 from tests.substrate.test_codex_write import write_native
 
 PROGRAM = "from pathlib import Path; Path('n5-write.txt').write_bytes(b'ready\\n')"
+REAL_CAPTURE = ContainedWriteWorkspaceProvider.capture
+REAL_POPULATE = contained.ContainedWorkspaceProvider.populate
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -210,6 +220,137 @@ def assert_closed(assembly, run_id):
 
 def callback_calls(launcher):
     return [call for call in launcher.worker_calls if call[0] == codex.WORKER_ARGUMENTS]
+
+
+class NoChangeLauncher(PortableWriteLauncher):
+    """Scripted no-op callback; real fixed capture Git outside containment.
+
+    Only trusted production Git plumbing is executed locally. This portable
+    test does not establish Linux process isolation or fd-based disposal.
+    """
+
+    async def run(self, command, **kwargs):
+        for descriptor in kwargs["guard_fds"]:
+            os.fstat(descriptor)
+        if kwargs["workspace"] is None:
+            return await super().run(command, **kwargs)
+        self.worker_calls.append((command, kwargs))
+        if command == codex.WORKER_ARGUMENTS:
+            assert sorted(path.name for path in kwargs["workspace"].iterdir()) == [".git"]
+            assert kwargs["stdin"].strip() == b"pass"
+            return FINISHED
+        git = shutil.which("git")
+        assert git is not None
+        actual = list(command)
+        if actual[0] == "/usr/bin/python3":
+            actual[0] = sys.executable
+            assert actual[1:3] == ["-I", "-c"]
+            actual[3] = actual[3].replace("'/usr/bin/git'", repr(git))
+        else:
+            assert actual[:2] == ["/usr/bin/git", "pack-objects"]
+            actual[0] = git
+        result = await asyncio.to_thread(
+            subprocess.run, actual, cwd=kwargs["workspace"], input=kwargs.get("stdin", b""),
+            capture_output=True, check=False, timeout=30, env={**os.environ, **_PINNED_ENV},
+        )
+        return ProcessResult(result.returncode, result.stdout, result.stderr, 0,
+                             payload_returncode=result.returncode)
+
+
+async def assert_no_change_is_terminal(assembly, auth, launcher, monkeypatch):
+    """Shared accepting capture/refusing writer assertions for both launchers."""
+    workspace = assembly.resources.workspace
+    captured = []
+    original_capture = workspace.capture
+
+    async def observed_capture(view, message):
+        candidate = await original_capture(view, message)
+        captured.append(candidate)
+        return candidate
+
+    monkeypatch.setattr(workspace, "capture", observed_capture)
+    async with asyncio.timeout(60):
+        report = await qualification.qualify_write(assembly=assembly, authorization=auth)
+    journal = assembly.resources.journal
+    base = assembly.resources.fixture.base_commit
+    assert captured == [base]  # Actual capture completed and positively returned the base.
+    assert journal.run_state(auth.run_id).status is RunStatus.FAILED
+    assert report.verdict != "passed"
+    assert journal.checkpoint(auth.run_id, ExecutionPath(scope=WRITER_SCOPE)) is None
+    assert journal.checkpoint(auth.run_id, ExecutionPath(scope=CHECKER_SCOPE)) is None
+    failed = [event for event in journal.events(auth.run_id) if event.kind == "NodeFailed"]
+    assert len(failed) == 1 and failed[0].path.scope == WRITER_SCOPE
+    assert failed[0].payload == {"error_type": "ContractViolation",
+                               "error": "the WRITE qualification captured no change"}
+    rows = journal.capability_leases(auth.run_id)
+    assert len(rows) == 2 and {row.binding_id for row in rows} == {"executor", "workspace"}
+    assert all(row.state == "closed" for row in rows)
+    # Measured on the no-checkpoint failure path, not inferred from the native
+    # turn's completion: the walker disposes both writer acquisitions.
+    assert {row.binding_id: row.disposition for row in rows} == {
+        "executor": "discarded", "workspace": "discarded",
+    }
+    writer = next(row for row in rows if row.binding_id == "workspace")
+    acquisition_id = json.loads(writer.resource_ref)["acquisition"]
+    paths = acquisition.AcquisitionPaths(workspace.root, acquisition_id)
+    assert workspace.closure.is_closed(paths)
+    assert workspace.closure.candidate(candidate_ref_for(auth.run_id, acquisition_id)) is None
+    assert not list(workspace.root.glob("payloads/*"))
+    assert not list(assembly.resources.gate.root.glob("payloads/*"))
+    assert all(handle.closed for handle in assembly.executor.handles)
+    with sqlite3.connect(auth.journal) as connection:
+        attestations = [json.loads(row[0]) for row in connection.execute(
+            "SELECT attestation_json FROM attestations",
+        )]
+    assert not [row for row in attestations if row["created_by_run"] == auth.run_id]
+    assert len(launcher.commands) == len(callback_calls(launcher)) == 1
+    assert len(launcher.native.callback_responses) == 1
+    assert any("git('add', '--all'" in arg
+               for command, _ in launcher.worker_calls for arg in command)
+    assert any(command[:2] == ("/usr/bin/git", "pack-objects")
+               for command, _ in launcher.worker_calls)
+    assert not any(assembly.resources.gate.checks[0].argv[-1] in command
+                   for command, _ in launcher.worker_calls)
+    spent = Path(auth.attempt_record).read_bytes()
+    assert json.loads(spent)["dispatch"] == "completed"
+    assert assembly.resources.authority.resolve_ref(assembly.resources.fixture.target_ref) == base
+    calls = list(launcher.worker_calls)
+    async with asyncio.timeout(60):
+        replay = await qualification.qualify_write(assembly=assembly, authorization=auth)
+    assert replay.verdict != "passed" and journal.run_state(auth.run_id).status is RunStatus.FAILED
+    assert len(launcher.commands) == len(launcher.native.callback_responses) == 1
+    assert launcher.worker_calls == calls and captured == [base]
+    assert journal.capability_leases(auth.run_id) == rows
+    assert Path(auth.attempt_record).read_bytes() == spent
+    return rows
+
+
+async def test_write_no_change_capture_refuses_before_checkpoint_and_gate(
+    tmp_path, portable_binding, portable_write_boundary, monkeypatch,
+):
+    monkeypatch.setattr(ContainedWriteWorkspaceProvider, "capture", REAL_CAPTURE)
+    monkeypatch.setattr(ContainedWriteWorkspaceProvider, "populate", REAL_POPULATE)
+    if os.name == "nt":
+        # Windows pack read-only bits substitute POSIX unlink semantics only;
+        # constrain every disposal to this test's actual private fixture.
+        real_rmtree = shutil.rmtree
+
+        def dispose(path, *args, **kwargs):
+            resolved = Path(path).resolve(strict=True)
+            test_root = tmp_path.resolve(strict=True)
+            assert resolved != test_root and resolved.is_relative_to(test_root)
+            _set_write_bits(Path(path), writable=True)
+            return real_rmtree(path, *args, **kwargs)
+
+        dispose.avoids_symlink_attacks = True
+        monkeypatch.setattr(shutil, "rmtree", dispose)
+    initial = portable_launcher()
+    configuration = {item.name: getattr(initial, item.name)
+                     for item in fields(PortableWriteLauncher)}
+    configuration["native"] = write_native(program="pass")
+    launcher = NoChangeLauncher(**configuration)
+    assembly, auth = await sealed_assembly(tmp_path, launcher, portable_binding[1:])
+    await assert_no_change_is_terminal(assembly, auth, launcher, monkeypatch)
 
 
 @pytest.mark.parametrize("contents,passed", [(b"ready\n", True), (b"wrong\n", False)])

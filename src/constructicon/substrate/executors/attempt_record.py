@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from constructicon.core.errors import ContractViolation
+from constructicon.core.qualification_write import CallbackObservation
 
 Dispatch = Literal["completed", "not dispatched", "possibly dispatched"]
 _O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
@@ -40,6 +41,9 @@ class AttemptRecord:
     def __init__(self, path: Path, identity: Mapping[str, Any]) -> None:
         self.path = path
         self._identity = dict(identity)
+        self.callbacks: CallbackObservation | None = None
+        self._callback_failed = False
+        self._phase = "acquired"
 
     @classmethod
     def reserve(cls, path: Path, identity: Mapping[str, Any]) -> AttemptRecord:
@@ -56,13 +60,52 @@ class AttemptRecord:
         try:
             self._replace({"phase": "intent"})
         except OSError as exc:
+            if self.callbacks is not None:
+                self._callback_failed = True
             return f"the attempt record could not record intent: {exc.strerror}"
+        self._phase = "intent"
         return None
 
     def complete(self, dispatch: Dispatch, facts: Mapping[str, Any]) -> None:
+        if self._callback_failed:
+            return  # Preserve the surviving partial snapshot, even after rename/fsync failure.
         self._replace({"phase": "outcome", "dispatch": dispatch, "facts": dict(facts)})
+        self._phase = "outcome"
+
+    def enable_callbacks(self) -> None:
+        """Affirm zero without moving the acquired reservation into dispatch intent."""
+        if self.callbacks is not None or self._phase != "acquired":
+            raise ContractViolation("callback observations require a fresh acquisition")
+        self._observe(CallbackObservation(
+            schema_version=1, admitted_started=0, admitted_completed=0, worker_results=(),
+        ))
+
+    def observe_callbacks(self, observation: CallbackObservation) -> None:
+        previous = self.callbacks
+        if previous is None or self._phase != "intent" or (
+            observation.admitted_started < previous.admitted_started
+            or observation.admitted_completed < previous.admitted_completed
+            or any(old is not None and old != new for old, new in zip(
+                previous.worker_results, observation.worker_results,
+                strict=False,
+            ))
+        ):
+            raise ContractViolation("callback observations cannot retract retained facts")
+        self._observe(observation)
+
+    def _observe(self, observation: CallbackObservation) -> None:
+        if self._callback_failed:
+            raise ContractViolation("callback observations could not be retained")
+        self.callbacks = observation
+        try:
+            self._replace({"phase": self._phase})
+        except OSError as exc:
+            self._callback_failed = True
+            raise ContractViolation("callback observations could not be retained") from exc
 
     def _replace(self, content: Mapping[str, Any]) -> None:
+        if self.callbacks is not None:
+            content = {**content, "callbacks": self.callbacks.model_dump(mode="json")}
         following = self.path.with_name(self.path.name + ".next")
         self._write(following, content)
         os.replace(following, self.path)

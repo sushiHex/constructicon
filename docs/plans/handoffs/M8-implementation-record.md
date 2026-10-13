@@ -4896,3 +4896,75 @@ over 114 source files and all five import contracts. The staged manifest
 validated all 77 entries. No local metadata substitute is counted as a
 physical-host or vendor result. The merge changed preparation only; the
 successor's separate execution gates remain in force.
+
+### N5 WRITE no-change refusal and bounded observations
+
+The separately authorized WRITE attempt completed its native turn but did
+not establish WRITE qualification. Copy-only diagnostics found a writer
+checkpoint whose candidate equalled the sealed base, followed by the existing
+checker refusal. A credential-free reproduction established that a successful
+no-op callback can follow this path through ordinary capture and gate code.
+It does not establish what the live callback did: the retained attempt lacks
+durable callback observations. Successful direct smoke does not establish a
+successful authenticated callback.
+
+The owner approved one focused follow-up wave and then a
+[narrow adapter-freeze exception](https://github.com/sushiHex/constructicon/issues/78#issuecomment-6134552934)
+for bounded durable callback observations. The
+[additive state review](M8-N5-write-observations-review.md) records the
+pre-implementation review, progress/crash semantics, legacy-unknown rule and
+fresh-installation/qualification consequence. Accepted plan bytes and
+`codex_protocol.py` stay unchanged. This wave authorizes no new model attempt
+and performs no live-host operation.
+
+Four public diagnostic comments were sanitized to remove private execution
+locators; edited bodies were read back and checked. Hashes and conclusions
+were preserved. No claim is made about removal from third-party caches or
+GitHub's comment edit history.
+
+The permanent no-change lifecycle test first failed against the old writer
+at its assertion that no writer checkpoint should exist. The correction
+compares actual captured candidate with sealed base before publishing output,
+not by changing generic Git or gate behavior. Review and execution evidence
+for the final implementation belong to the linked PR; this entry does not
+claim an unrun test, Linux proof or successful live WRITE.
+
+**Review dispositions.** The independent pass reproduced an overclaim in the
+initial term "successfully sealed": a final outcome file can be visible even
+when its directory sync raises. It did not reproduce incorrect counts or a
+later unobserved callback. The correction names final-snapshot publication,
+not filesystem-sync acknowledgement; no second seal or ledger is added.
+Progress-write failure remains distinct and prevents a final overwrite.
+
+Early bounded callback projection from a mismatched attempt was examined,
+not classified as an introduced authority bypass. The existing report also
+retains partial turn/epoch/telemetry facts while marking the attempt invalid
+or mismatched and demoting the verdict. Final-snapshot provenance must not be
+read as identity validation or qualification success. No broader change to
+that partial-report policy is included.
+
+The pre-connector narrow independent source review found no introduced blocker after
+that correction. Its stable-source focused run passed 33 tests: callback
+observations and failure seams, no-change capture/replay, legacy/progress
+provenance and strict WRITE-2/SMOKE-1 report versions. An additional injection
+at the actual post-rename directory-sync call confirmed the distinction:
+accurate final observations can be visible despite the failed sync. These are
+portable/seam proofs, not physical Linux execution or full-gate evidence.
+
+The connector then found an introduced cross-fact defect: independently valid
+callback observations could contradict a completed/successful attempt without
+demoting the report. Two regressions reproduced it by assertion, in the
+projection and in direct validation of the public passing-report contract.
+The correction shares one response-completion predicate between those
+consumers. The projection names `ATTEMPT_INVALID`; the passing contract
+requires supplied observations to be final and complete. This does not require
+callbacks to occur: exact zero and legacy absence remain permitted, while
+failed outcomes retain truthful incomplete prefixes. Final-head execution and
+review evidence are recorded on PR #164, not inferred from the earlier gate.
+
+The targeted follow-up independently passed all three correction tests and
+exercised four mixed dispatch/status cases. Either success claim with an
+unfinished callback is invalid; possibly-dispatched failure and partial
+outcomes retain their observations without that fault. The producer confirms
+that `completed` means an accepted `ExecutorSuccess`, not mere process exit.
+No introduced consequence was found in that narrow review.

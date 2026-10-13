@@ -22,6 +22,7 @@ from constructicon.substrate.executors import codex, codex_lane
 from constructicon.substrate.executors.linux import LinuxLauncher
 from tests.api.test_qualification_write_lifecycle import (
     assert_closed,
+    assert_no_change_is_terminal,
     reconstruct_write,
     sealed_assembly,
 )
@@ -48,7 +49,8 @@ def physical_launcher(launcher, *, contents="ready"):
         "assert not Path('/vendor-store').exists()\n"
         "assert not Path('/tmp/home/.codex').exists()\n"
         "assert Path('/proc/net/route').read_text().splitlines()[1:] == []\n"
-        f"Path('n5-write.txt').write_bytes({contents!r}.encode()+b'\\n')\n"
+        + (f"Path('n5-write.txt').write_bytes({contents!r}.encode()+b'\\n')\n"
+           if contents is not None else "pass\n")
     )
     return PhysicalWorkerLauncher(
         **{item.name: getattr(launcher, item.name) for item in fields(LinuxLauncher)},
@@ -89,6 +91,14 @@ async def test_scripted_qualified_write_physical_cold_reconstruction(
 ):
     await reconstruct_write(private_fixture_root, portable_binding[1:], monkeypatch,
                             checkpointed, lambda: physical_launcher(launcher))
+
+
+async def test_scripted_no_change_runs_real_capture_but_never_acquires_the_gate(
+    launcher, portable_binding, private_fixture_root, monkeypatch,
+):
+    physical = physical_launcher(launcher, contents=None)
+    assembly, auth = await sealed_assembly(private_fixture_root, physical, portable_binding[1:])
+    await assert_no_change_is_terminal(assembly, auth, physical, monkeypatch)
 
 
 @dataclass(frozen=True, kw_only=True)
