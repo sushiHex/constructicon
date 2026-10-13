@@ -5087,8 +5087,8 @@ the validated checkpoint chain binds base `135710f5793f33135ab3c6a751e1baba9c8f9
 to changed candidate `bbf71186ad0e1cf7964760dd54116db34e19b177` and tree
 `9942fa280f2fb73e5426624bd53e8be1ea4ca419`. A candidate-bound journal attestation
 and the one fixed check passed. Executor, workspace and gate obligations were
-all closed/released; the target remained unchanged. Public authority, workspace,
-gate and report identities matched the reviewed W4 projection.
+all closed/released; the target remained unchanged. Executor capability,
+fixture/base, workspace, gate and report pins matched the reviewed W4 projection.
 
 Read-only local validation passed the strict schema-2 contract: 4,401 canonical
 bytes against its existing 16,000-byte report bound, not the authorization
