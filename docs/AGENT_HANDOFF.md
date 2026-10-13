@@ -17,12 +17,14 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ## #143 — simplify evidence only after proving its replacement
 
-The further Fable review of Proposed ADR 0022 reduces two proposed mechanisms:
-terminal rejection can follow a monotone supersession comparison separately,
-and only legacy-acquisition runs need migration accounting floors. The former
-requires receipt-first replay; the latter requires affirmative complete-history
-and reverse-inventory proof before a reader can use zero. Neither is a missing-
-fact inference. The proposal remains unaccepted and unimplemented.
+The further Fable review of ADR 0022 simplifies terminal rejection: it can
+follow a monotone supersession comparison separately, with receipt-first
+replay. Its second simplification did not survive the connector review:
+sparse migration floors cannot distinguish erased eventless legacy data from
+complete empty history. Keep a positively sealed era for every run and bind
+the exact migration inventory; only co-committed current creation proves zero.
+The owner accepted the decision and staged implementation on 2026-10-13.
+This is design evidence, not implemented disposal behavior.
 
 One tempting simplification was false: lack of internal `lost` callers does
 not mean no old writer can produce lost data. Credential-free probes used the

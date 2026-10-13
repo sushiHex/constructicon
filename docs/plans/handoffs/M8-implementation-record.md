@@ -5370,14 +5370,15 @@ was revalidated at `dfd116b`, after #132's terminal guard merged. Its historical
 or tradeoffs, with no acceptance-blocking correctness finding. The ADR records
 each source-checked disposition, including the rejected simplification.
 
-Two qualified simplifications reduce new machinery. Disposal still compares
+One qualified simplification reduces new machinery. Disposal still compares
 and applies the full batch atomically, but its immutable supersession refusal
 can use existing separate terminal recording, with receipt-first retry and an
-explicit crash proof. Accounting floors become migration-only records for
-runs with legacy acquisitions, not a new co-commit on every run. Zero-floor
-history requires positive acquisition/history, reverse-inventory and event-
-extent proof; absence of a floor is not permission. These are proposed design
-obligations, not implemented guarantees.
+explicit crash proof. The attempted sparse-floor simplification was withdrawn
+after the connector review of `7934b25`: erasing an eventless legacy row and
+its seal could leave the zero-history tests vacuously true. The revised design
+retains a positive era for every run and binds its exact floor inventory.
+Deleting legacy evidence cannot become permission to publish zero accounting.
+These are design obligations, not implemented guarantees.
 
 Removing historical lost support was rejected by actual writer evidence.
 The schema-7 public transition API writes `lost`/`None` accepted after reopen.
@@ -5392,5 +5393,11 @@ the ADMIN definition from the MCP delegation ADR, and records the exact-query
 cost and optional-accounting-query alternative. Result v2 remains intentional
 so abandonment appears on the ordinary result surface. The existing 58-test
 cleanup suite passed on Python 3.12; no disposal behavior is credited to it.
-Proposal/document validation belongs to the PR. No runtime implementation,
-owner acceptance, physical disposal, account or private-host action occurred.
+Proposal/document validation belongs to the PR. The owner subsequently
+accepted the recommended ADR decision and staged implementation on 2026-10-13.
+The acceptance revision restores positive per-run eras and their inventory
+commitment. Credential-free probes distinguish a real M3 event-backed fixture
+(row/seal deletion refused) from an admitted eventless legacy shape (migration,
+read and reopen still accept after row/seal deletion). Both exited zero; they
+do not establish that an old writer emitted the eventless shape. No runtime
+implementation, physical disposal, account or private-host action occurred.
