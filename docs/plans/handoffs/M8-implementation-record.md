@@ -5116,3 +5116,71 @@ principal/scope continuity or complete M8. N4/N5/Codex acceptance and publicatio
 require explicit profile-specific disposition on the owning issues. Claude N6
 and Pi/integrated N7 receive no Codex credit; the unselected gateway is not native
 conformance. Frozen plans and protocol bytes remain unchanged.
+
+### Qualification scenarios: affirmative crash and report witnesses (#170)
+
+PR #169's exact-head CI passed, but its local full verification at `d2915ef`
+finished with four failures, 4,808 passes and 750 skips in about 6,705 seconds.
+Both successor-budget cases failed; both exact WRITE candidate cases reported
+timeouts. The original detailed trace was not retained. A separate unchanged-head
+focused rerun passed all four in 48.60 seconds. That does not establish the
+original cause, erase the failed full run or constitute a passed local gate.
+The affected qualification code and tests were unchanged from `ee7071f`.
+
+The separate [#170](https://github.com/sushiHex/constructicon/issues/170) tests-only
+slice reproduces two narrower premises deterministically. A held materialization
+plus an injected observer timeout leaves a discarded acquisition, not the
+intended active post-crash custody. An outer WRITE scenario timer can abort before
+the real entry returns any report. Both old scenarios assertion-failed under the
+controlled seams in 7.08 seconds; no seconds-long delay or retry supplied the
+ordering. These proofs are not a reconstruction of the lost full-suite trace.
+
+The recovery scenario now signals immediately after real materialization and
+immediately before `InjectedCrash`, without an intervening await. It races that
+fact against observer termination, removes the synthetic observation timer only
+for this test harness, then cancels and joins the observer. Both owned tasks are
+joined on every exit. The real grants, lease/authorization budgets, retained
+active custody and both successor-epoch outcomes remain unchanged. Failed,
+timed-out and cancelled early observers cannot stand in for the crash or start
+successor reconciliation. The WRITE scenario removes only its redundant outer
+30-second timer; production observation/task/Git/gate limits and every candidate,
+report, callback, closure and unchanged-target assertion remain.
+
+Focused execution passed the four affected cases plus two controlled premise
+cases (six passes in 40.30 seconds). The final five controlled/early-observer
+cases passed in 18.07 seconds, including those two premises again; these runs
+cover nine distinct cases, not eleven. Ruff passed on all three affected test
+modules. The parent independently inspected the narrow scenario correction;
+exact-head repository verification, CI and final review remain pending. #110's
+closed, separately traced scenarios are not credited as this slice's proof.
+
+No production code, default deadline, task/lease budget, vendor binary, host,
+credential, model call, frozen plan or native qualification changed. This fixes
+test scenario oracles, not a claimed product root cause or an inferred live pass.
+
+**Connector correction, introduced P2.** The first implementation removed the
+observer's synthetic timer without retaining a finite failure watchdog. If
+materialization stalled before the crash fact, both owned tasks could remain
+pending forever. The connector finding was accepted, not dismissed by the
+passing focused suite or the first head's 5,031-pass / 409-skip CI verification.
+
+The existing event-versus-observer wait now has a separate 30-second failure
+watchdog. An empty completion set fails before any crash or successor claim;
+the unchanged `finally` cancels and joins both owned tasks. This bounds failure
+observation only, not a production deadline or evidence that a crash occurred.
+It does not claim slow hosts can no longer exceed a test watchdog.
+
+A deterministic regression first affirms that both tasks remain pending, then
+substitutes only the wait primitive's expiration result, without a seconds-long
+delay. Before correction it assertion-failed on the missing finite bound in
+1.62 seconds. After correction it proves watchdog failure, an unset crash fact,
+no successor, and both tasks joined. All ten focused cases passed in 56.21
+seconds; ruff and diff checks passed. The parent reviewed the exact narrow
+watchdog correction; corrected-head CI and review disposition remain pending.
+
+Before changing the tests, the initial full Windows run was stopped by resolving
+and terminating only its own worktree's process ancestry. Its complete partial
+log is preserved at approximately 35 percent: lint, strict types and five
+contracts passed, but the full pytest did not complete and is not counted as a
+passed local gate or corrected-head evidence. No production or frozen bytes
+changed. The original four failures' exact cause remains unproved.

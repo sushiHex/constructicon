@@ -113,7 +113,9 @@ def after_materialization(qualified: CodexOperatorProvider, then) -> None:
     qualified.acquire = acquire_then
 
 
-def dying_after_materialization(qualified: CodexOperatorProvider) -> None:
+def dying_after_materialization(
+    qualified: CodexOperatorProvider, crashed: asyncio.Event,
+) -> None:
     """Materialize for real, then die as a process does: no handler runs, so the
     recorded row stays active and the handle keeps its custody."""
     acquire = qualified.acquire
@@ -125,6 +127,7 @@ def dying_after_materialization(qualified: CodexOperatorProvider) -> None:
 
         async def materialize_then_die():
             await real()
+            crashed.set()
             raise InjectedCrash("process death after materialization")
 
         return replace(acquisition, materialize=materialize_then_die)
@@ -177,9 +180,31 @@ async def test_a_successor_reconciles_and_acquires_only_within_the_budget(
     The successor reconciles it; a new acquisition needs an authorized epoch."""
     granted = authorization(tmp_path, portable_binding, clock, max_epoch=max_epoch)
     first = provider(tmp_path, portable_binding, granted)
-    dying_after_materialization(first)
-    with pytest.raises(TimeoutError):
-        await qualify(provider=first, grants=GRANTS, timeout_s=2, now_fn=clock.now)
+    crashed = asyncio.Event()
+    dying_after_materialization(first, crashed)
+    # Remove only the observer's synthetic scenario oracle. The crash fact,
+    # not elapsed time, establishes where this abandoned owner stopped. The
+    # separate finite failure watchdog below cannot stand in for that fact;
+    # task, lease, authorization and Git budgets remain the production ones.
+    observer = asyncio.create_task(qualify(
+        provider=first, grants=GRANTS, timeout_s=float("inf"), now_fn=clock.now,
+    ))
+    witnessed = asyncio.create_task(crashed.wait())
+    try:
+        done, _ = await asyncio.wait(
+            (observer, witnessed), timeout=30, return_when=asyncio.FIRST_COMPLETED,
+        )
+        assert done, "crash witness stalled before failure watchdog"
+        assert witnessed.done() and not observer.done(), "observer ended before recorded crash"
+        assert crashed.is_set() and first.handles[0].ready
+        observer.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await observer
+    finally:
+        for task in (observer, witnessed):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(observer, witnessed, return_exceptions=True)
     assert rows(granted) == [(1, "active", None)]
     assert first.handles[0].ready, "the dead owner's handle still holds its custody"
 
