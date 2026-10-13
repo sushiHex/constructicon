@@ -5328,3 +5328,35 @@ exact-head repository gate are recorded on the PR, not passed off as new
 runtime evidence. Startup-source closure remains the next bounded prerequisite
 under #40; physical qualification remains separate. No vendor binary, account,
 credential, private-host action or model call ran, and no frozen bytes changed.
+
+### N6 startup restrictions: policy before mode, not an empty catalog
+
+The [fixed-startup audit](M8-N6-startup-restrictions.md) advances
+[#175](https://github.com/sushiHex/constructicon/issues/175) on the same
+CLI 2.1.296 / SDK 0.3.296 pin. Ordinary tool execution uses the permitted pool;
+an absent operation cannot fall back to the full built-in inventory. This is
+a positive alternative to relying on the omitted inventory arrays. Initial
+strict MCP loading also excludes inherited configurations. Neither fact proves
+the complete catalog stays fixed: the later plugin-refresh loader requires
+its own exclusion or point-of-use restriction.
+
+The startup obstacle is now more precise. Unknown subscription state can
+enable remote policy loading before the first mode reply. Noninteractive
+consent deferral still permits current-run application. Empty parent managed
+settings do not override stronger policy; safe mode retains managed hooks.
+SessionStart can supply a prompt consumed before initialize. This is source
+reachability, not a claim that any real operator account exercised it.
+
+The environment-preservation candidate using `byoc` does not freeze policy
+hooks and was not adopted. A narrower credential-file projection with
+disposable configuration is source-feasible but needs independent physical
+refresh qualification; the existing native mount remains Codex-specific.
+The remote-settings-path override was rejected because its accessor is inert
+in this release, not because its environment name was absent from the binary.
+
+The reviewed one-READ state design remains conditional. No accepting driver,
+new tests/mutants or physical proof is claimed. Repeated source inspection is
+not permission to weaken the startup gate. Current ownership and the remaining
+fixed-policy/through-turn MCP requirements stay on #175; #40 stays open.
+No vendor process, credentials, model call, private host, accepted ADR, frozen
+plan or Codex code was touched. Exact-head validation belongs on the PR.

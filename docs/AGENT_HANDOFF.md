@@ -15,6 +15,30 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #175 — initial strict configuration is not a lifetime restriction
+
+The CLI 2.1.296 source audit establishes ordinary tool-pool membership at
+execution, but its MCP exceptions need independent closure. Strict MCP mode
+excludes inherited configuration at initial loading; the later plugin-refresh
+loader does not itself apply that same check. Do not infer lifetime catalog
+closure from the first snapshot.
+
+Startup also precedes its reported mode: unknown subscription state can make
+remote policy eligible, and headless consent deferral still applies it for
+the current run. Parent managed settings cannot override stronger policy;
+safe mode retains managed hooks. A SessionStart-supplied prompt can precede
+initialize. This is pinned-source evidence, not a live account observation.
+
+Disposable configuration removes inherited settings, not newly fetched policy.
+The proposed `byoc` environment preservation does not freeze policy hooks;
+it was not adopted. The remote-settings-path name was another false lead:
+its accessor is compiled inert in this release.
+
+No READ driver or new physical proof follows from this audit. The conditional
+state design, existing contracts and frozen decisions remain unchanged.
+
+---
+
 ## #174 — optional inventory fields are not empty tool sets
 
 The pinned N6c source audit supports repeated initialization as a fresh
