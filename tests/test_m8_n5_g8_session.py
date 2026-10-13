@@ -7,10 +7,12 @@ import os
 import re
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
+from constructicon.substrate.executors.egress import MAX_SOCKET_PATH_BYTES, SOCKET_NAME
+from constructicon.substrate.git.acquisition import AcquisitionPaths
 from tests import test_m8_n5_write_session as write_session
 from tests.test_m8_n5_g6_session import SEAL, _run
 from tests.test_m8_n5_host_session import HANDOFFS, _fences, _section, _text
@@ -123,7 +125,7 @@ def test_composed_transport_never_overwrites_a_remote_package(tmp_path: Path, oc
 def test_composed_preboot_checks_old_g7_before_fresh_capture(
     tmp_path: Path, failure: str, seal: str, existing: bool,
 ):
-    prior, capture = _blocks("Before reboot: checked g7 continuity at the old controller")
+    prior, _, capture = _blocks("Before reboot: checked g7 continuity at the old controller")
     assert prior == "W=/home/m8-service/m8-n5-stage2g7"
     private = tmp_path / "n5-g8-account.seal"
     if existing:
@@ -152,6 +154,67 @@ def test_composed_preboot_checks_old_g7_before_fresh_capture(
         assert not private.exists()
     anchor, = _blocks("H1: normal LR and D2 on one fresh boot")
     assert anchor == 'binding_check "$W/g7.sealed.json" reboot-anchor -'
+
+
+@pytest.mark.parametrize(
+    "failure", ["none", "sudo", "drift", "profiles", "launch", "controller"],
+)
+def test_preboot_old_verifiers_use_exact_argv_and_never_overwrite_old_records(
+    tmp_path: Path, failure: str,
+):
+    prior, verification, _ = _blocks("Before reboot: checked g7 continuity at the old controller")
+    for name in ("m8-launch", "m8-controller"):
+        workspace = tmp_path / name
+        workspace.mkdir()
+        for record in ("verify.json", "profiles-verify", "retire.json", "vendor.json"):
+            (workspace / record).write_bytes(("preserved-" + name + "-" + record).encode())
+    before = {path: (path.read_bytes(), path.stat().st_ino, path.stat().st_mode)
+              for path in tmp_path.glob("m8-*/*")}
+    operator = _text(HANDOFFS / "M8-N4-operator-commands.md")
+    setup = operator.split("## Setup", 1)[1].split("\n### ", 1)[0]
+    common = tmp_path / "prior-common.sh"
+    common.write_text("\n".join([*_fences(setup), prior]), encoding="utf-8", newline="\n")
+    checks, = _fences(_section(_text(HANDOFFS / "M8-N5-host-session.md"), "H2. S0 at `C`"))
+    checks = checks.replace("/usr/local/bin/m8-host-drift", "drift")
+    # Only executable/root profile boundaries are substituted. Actual OC setup,
+    # pipefail, argv, stdin pipe, order and old workspace files remain real.
+    verification = verification.replace("/usr/bin/python3", "verifier")
+    result = _run("\n".join([
+        "C=" + OLD, 'source "$TEST_COMMON"',
+        'check() { test "$FAILURE" != "$1"; }',
+        'sudo() { case "$*" in',
+        '"-n true") check sudo ;;',
+        '"-n /usr/bin/cat /sys/kernel/security/apparmor/profiles") '
+        'echo profiles >> "$TEST_LOG"; check profiles || return 1; echo kernel-profiles ;;',
+        '*) return 97 ;; esac; }',
+        'drift() { check drift; }',
+        'verifier() { case "$*" in',
+        '"-I $HOME/m8-launch/m8_host_artifacts.py verify-launch $C $HOME/m8-launch") '
+        'test "$(/usr/bin/cat)" = kernel-profiles || return 2; echo launch >> "$TEST_LOG"; '
+        'check launch || return 1; echo launch-verified ;;',
+        '"-I $HOME/m8-controller/m8_host_artifacts.py verify-controller $C $HOME/m8-controller") '
+        'echo controller >> "$TEST_LOG"; test -z "$(/usr/bin/cat)" || return 2; '
+        'check controller || return 1; echo controller-verified ;;',
+        '*) return 98 ;; esac; }', checks, verification, "echo continuity-permitted",
+    ]), HOME=tmp_path.as_posix(), FAILURE=failure, TEST_LOG=(tmp_path / "calls").as_posix(),
+        TEST_COMMON=common.as_posix())
+    assert (result.returncode == 0) is (failure == "none"), result.stderr
+    log = tmp_path / "calls"
+    calls = log.read_text().splitlines() if log.exists() else []
+    if failure == "none":
+        assert calls == ["profiles", "launch", "controller"]
+        assert result.stdout.splitlines() == [
+            "launch-verified", "controller-verified", "continuity-permitted",
+        ]
+    else:
+        assert "continuity-permitted" not in result.stdout
+        if failure in {"sudo", "drift"}:
+            assert calls == []
+        if failure in {"profiles", "launch"}:
+            assert "controller" not in calls
+    assert {path: (path.read_bytes(), path.stat().st_ino, path.stat().st_mode)
+            for path in before} == before
+    assert ">" not in verification
 
 
 @pytest.mark.parametrize("fresh", [SEAL, "pro/changed"], ids=["same", "changed"])
@@ -315,6 +378,11 @@ def test_complete_w0_override_has_fresh_names_and_qualified_g8():
     assert identity == "n5-stage4g8-" + C and key == "stage4g8"
     assert host[host.index("--sealed") + 1] == "qualified/g8.sealed.json"
     assert host[host.index("--state") + 1] == state
+    # POSIX lexical layout only, not a real socket or containment proof.
+    socket = AcquisitionPaths(
+        PurePosixPath(state) / "acquisitions", "acq-" + "0" * 32,
+    ).payload / SOCKET_NAME
+    assert len(os.fsencode(socket)) == 96 <= MAX_SOCKET_PATH_BYTES
 
 
 @pytest.mark.parametrize("occupied", ["state", "authorization"])
@@ -366,6 +434,9 @@ def test_fresh_g8_declarations_compose_the_exact_ws_accepting_path(
 def test_normal_route_preserves_old_archives_pin_pause_and_nonpassing_stop():
     document = _text(DOCUMENT)
     assert "normal fresh LR route" in document and "Do not replay" in document
+    assert "own step file, not chained automatically into continuity capture" in document
+    assert "in a **separate step file**" in document
+    assert "Exit zero alone is not" in document
     assert "O=" + OLD in document
     assert "R6 baseline creation or drift" in document
     assert "historical maintenance custody" in document

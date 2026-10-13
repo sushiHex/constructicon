@@ -5031,3 +5031,18 @@ Review of the draft found that the transport example could overwrite a common
 file despite prose forbidding it. The executable example now requires an absent
 per-step package directory before upload and hash verification. The tests
 exercise both fresh transport and preservation of an occupied package.
+
+Offline packaging inspection also found that copying the old verifier shell
+redirections would overwrite historical verification records. A complete
+additive preboot block retains their read-only verifier arguments, streams the
+kernel profile input directly, and emits records to fresh external capture.
+The operator inspects affirmative installation/provenance facts before the
+separate continuity step. The historical workspaces are not rewritten.
+
+The final focused suite passed 61 cases. Its new verifier tests retain actual
+pipe/fail-fast behavior while substituting executable boundaries, and assert
+old file bytes, identities and modes remain unchanged. The fake launch log is
+written after consuming the profile pipe, establishing causal order rather
+than assuming pipeline process scheduling. The actual POSIX acquisition layout
+puts the new relay path at 96 bytes against the 107-byte limit; this is lexical
+evidence, not a physical socket test.

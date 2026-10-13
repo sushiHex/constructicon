@@ -54,7 +54,8 @@ runtime substitutions or rewriting of frozen block bodies generates scripts.
 | Script | Reviewed composition |
 | --- | --- |
 | Prior common | OC's two Setup blocks at `O`, then the prior `W` declaration below |
-| Preboot | Literal `C=O`, source prior common, HS H2, then this document's continuity capture |
+| Old-installation verification | Literal `C=O`, source prior common, HS H2, then this document's verifier block; inspect affirmative results before the separate capture step |
+| Continuity capture | Separate step file: literal `C=O`, source prior common, HS H2, then this document's capture block after the old-installation result checks |
 | LR1 anchor | Literal `C=O`, source prior common, this document's reboot-anchor override |
 | LR2 | LR2 unchanged, substituting only its documented `D` declaration |
 | LR3/R11 | LR3's two blocks at `C`; documented `O=f6cd85a` and `C` declarations |
@@ -117,9 +118,8 @@ No transport or host execution occurs until the separate authorization.
 
 First reconfirm root/operator trust and exclusive custody: no other
 administrator, agent or authorized writer acts during this session. A process
-scan is not that proof. Verify the recorded installed launch/controller at
-`O` using their existing verifier/provenance records before changing anything.
-Prepare `n5-g8-prior-common.sh` from OC Setup at `O`, then append:
+scan is not that proof. Prepare `n5-g8-prior-common.sh` from OC Setup at `O`,
+then append:
 
 ```bash
 W=/home/m8-service/m8-n5-stage2g7
@@ -127,7 +127,31 @@ W=/home/m8-service/m8-n5-stage2g7
 
 In a fresh shell, declare exact `C=O`, source that common, and run HS H2
 unchanged first. Require noninteractive sudo and affirmative no drift before
-this fresh capture. Never judge old evidence using new adapter revisions:
+any later step. Run this complete old-installation verification block in its
+own step file, not chained automatically into continuity capture.
+It uses LR6/LR8's verifier argv but does not redirect into their historical
+workspace records. The fresh kernel profile read goes directly to the launch
+verifier; the controller verifier needs no profile input. Capture stdout via
+the reviewed transport into fresh private records outside both old workspaces.
+The already sourced OC fail-fast/pipefail settings apply here, not to LR/HR
+installers. Inspect and record both successful verifiers and affirmative
+installation/provenance records at `O`; launch must also affirm `replacement` true, and
+controller must show observed tree `different` zero. Exit zero alone is not
+that review: launch can report installed with `replacement` false when its
+retirement record is missing. No fetch or record repair:
+
+```bash
+sudo -n /usr/bin/cat /sys/kernel/security/apparmor/profiles \
+  | /usr/bin/python3 -I "$HOME/m8-launch/m8_host_artifacts.py" \
+      verify-launch "$C" "$HOME/m8-launch"
+/usr/bin/python3 -I "$HOME/m8-controller/m8_host_artifacts.py" \
+  verify-controller "$C" "$HOME/m8-controller" < /dev/null
+```
+
+Only after those affirmative result checks, run this fresh continuity capture
+in a **separate step file**. Declare exact `C=O`, source prior common and repeat
+HS H2 first; no script automatically crosses the result-review boundary.
+Never judge old evidence using new adapter revisions:
 
 ```bash
 binding_check "$W/g7.sealed.json" accepted -
