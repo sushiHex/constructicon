@@ -189,3 +189,38 @@ A fixed nonvendor Python worker through the existing Linux duplex fixture can
 prove actual process ownership, deadline, EOF/exit and joins. Mark Windows skips
 unverified, not physical proof. No credentials, vendor SDK import/execution,
 vendor network, model call, host operation or production availability is in scope.
+
+## Credential-free implementation evidence
+
+The new `claude_initialize.py` is 172 lines: one single-use callback, its narrow
+owned-exchange binding, frozen enum-only observations and private predicates.
+One private lifecycle state (`new/incomplete/refused/completed`) replaces
+separate entry/poison/completion booleans. Framing searches only each new chunk,
+not the accumulated prefix; EOF needs only a one-byte read after stdin close.
+N6a, Codex and core source remain unchanged.
+
+Tests were written first; the initial run failed collection because this module
+did not exist. This records ordering, not a semantic guard kill. The implemented
+portable lifecycle suite executed **83 passed**. Together with N6a, the focused
+run executed **209 passed, 6 skipped, 30 deselected** in 0.63 s. The six new
+Linux cases are **unverified locally on Windows**: two selected plans with
+clean/bad actual exits, deadline after an affirmative worker reply, and
+cancellation after an affirmative reply. They use only fixed Python workers,
+retain the two real probe/workload subprocess handles, and require both handles
+terminated before return/raise. The cancellation observer races task completion
+and joins both waiters; no scheduling sleep stands in for phase evidence.
+
+Ruff passed for the new source/tests, appended duplex cases and inventory;
+strict mypy passed for the one new source file, and diff whitespace checks
+passed. New inventory metadata/one-place checks also passed (85 passed,
+33 deselected with the lifecycle suite). No new workflow entry is needed:
+the existing physical foundation step already executes the whole duplex file.
+
+The existing Claude inventory executed **76 assertion-killed mutants**, exit 0,
+with no NOT PROVEN result: 36 retained N6a guards and 40 new lifecycle guards.
+Mutations are isolated child code objects, not working-tree rewrites. Both the
+private callback gate and public observation/process-result call sites are
+pinned, including cancellation category/privacy and incomplete completion.
+Full exact-head CI, independent implementation review and actual Linux execution
+remain separate evidence. No vendor executable, SDK import, credentials, model,
+host or vendor network was exercised locally.

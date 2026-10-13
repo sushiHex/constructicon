@@ -15,6 +15,44 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #171 — initialization completion belongs to the owned exchange
+
+N6b joins the existing process conversation to N6a's finite codec. A mode match
+alone cannot complete it: stdin close, actual EOF and the same launch's clean
+supervisor/payload result are affirmative requirements. Reentry irreversibly
+poisons completion across suspended awaits. Failed launches cannot publish
+their captured bytes or original exception chains.
+
+The state review preceded implementation. Two design corrections matter:
+checking single-use only at entry misses a suspended first invocation, and
+`raise ... from None` inside a catch still retains the original context.
+Physical tests must inspect joined handles, not infer joins from a return.
+
+This is not Claude native qualification, startup clearance, a provider or a
+model attempt. Fixed Python workers prove the process seam; they cannot prove
+actual Claude EOF behavior. Codex historical acceptance separately closes
+#77/#78/#41 at distinct READ g6 and WRITE g8 revisions. Live expiry and natural
+refresh remain unmeasured; no common current profile or M8 completion follows.
+
+---
+
+## #170 — a crash scenario needs a crash witness
+
+Qualification tests now await an event recorded after materialization, rather
+than interpreting a short observer timeout as process death. A separate finite
+failure watchdog bounds a stalled test but never supplies the crash fact.
+Every owned observer/witness task is joined. WRITE awaits its real lifecycle
+report without the redundant outer scenario timer; production budgets and
+terminal custody assertions are unchanged.
+
+The original four Windows full-run failures passed an unchanged-head focused
+rerun, but the missing original detailed trace prevents an exact-cause claim.
+Controlled regressions prove the timer assumptions independently. Review caught
+an introduced unbounded wait; its correction makes watchdog expiration fail
+without inventing a crash or starting successor recovery.
+
+---
+
 ## #168 — Claude mode bytes are not startup authority
 
 N6a begins with a pure initialization codec pinned to CLI 2.1.296 / SDK

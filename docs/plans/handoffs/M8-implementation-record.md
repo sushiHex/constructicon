@@ -5248,3 +5248,43 @@ preserved. No credential, checkpoint, store or target was changed. Another
 boot requires fresh continuity and qualification. No production provider,
 conformance hash, new attempt, Claude/Pi credit or M8 completion follows.
 Frozen decisions retain their original bytes.
+
+### N6b: one owned initialization exchange, not startup clearance
+
+[#171](https://github.com/sushiHex/constructicon/issues/171) consumes N6a's codec
+through the existing `ProcessIO` conversation and `LinuxLauncher.exchange`.
+The [state review](M8-N6b-state-review.md) was independently reviewed and
+committed before implementation. It adds no L0 interface, provider, native
+store recipe, model request, callback response or second process owner.
+
+Completion is one affirmative, private fact after the bounded selected-mode
+reply, successful stdin close and actual EOF. The binding publishes only a
+finite mode/lifecycle observation after the same launch returns clean supervisor
+and payload exits, without timeout or exceeded bound. Reentry permanently
+poisons the callback; every suspended channel operation rechecks that state.
+The launcher still owns deadline, process cleanup and joins. Ordinary launch
+failures and cancellation publish fresh static exceptions outside the catch,
+not captured output, original exception context or a failed launch's result.
+
+The design review corrected two gaps before code: a suspended first entry must
+not resurrect completion after reentry, and exception privacy must include
+captured process results and nested cancellation groups. An extra-byte bound
+probe was rejected: LF is already included in the record ceiling, so a full
+buffer without LF can refuse immediately. The implementation review of physical
+tests required actual joined subprocess handles rather than inferring joins
+from a returned observation. No production launcher behavior was changed.
+
+Portable permitting and refusing tests cover Pro/Max, fragmented and boundary
+frames, every suspended operation, stale/reentered callbacks, contradictory
+process evidence and all fields of the public observation/exception boundary.
+Six networkless fixed-Python-worker cases exercise the existing Linux fixture;
+Windows skips are not their proof. Exact-head CI and mutation outcomes belong
+on the PR; the state review records measured focused evidence separately.
+
+The result remains initialization observation, not ADR 0021 startup clearance,
+identity, availability or an attestation. Correlation and local read order do
+not authenticate the vendor or establish arrival freshness. Actual Claude EOF
+behavior is unmeasured. Catalog/configuration, native layout, tools, egress,
+refresh, spending and the task lifecycle need their independent proofs.
+Codex, core contracts, workflows and frozen decisions are unchanged. No vendor
+binary, credential, model call or private-host operation ran for this slice.

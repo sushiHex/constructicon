@@ -485,3 +485,138 @@ async def test_progress_does_not_renew_the_absolute_deadline(launcher, tmp_path)
     ))
     assert len(received) >= 6 and result.stdout.startswith(received)
     assert result.timed_out and result.bound_exceeded is None
+
+
+def _claude_initialize_worker(plan, behavior="clean"):
+    """Fixed networkless Python, not Claude or native-store/startup evidence."""
+    return "import json,sys,time\n" + f"plan={plan!r}\nbehavior={behavior!r}\n" + """
+request = json.loads(sys.stdin.buffer.readline())
+assert request == {'type': 'control_request', 'request_id': request['request_id'],
+                   'request': {'subtype': 'initialize'}}
+reply = {'type': 'control_response', 'response': {
+    'subtype': 'success', 'request_id': request['request_id'], 'response': {
+        'account': {'apiProvider': 'firstParty', 'subscriptionType': plan,
+                    'email': 'private-test-account'},
+        'claude_code_version': '2.1.296', 'session_state': 'idle'},
+    'pending_permission_requests': [], 'pending_user_dialog_requests': []}}
+print(json.dumps(reply), flush=True)
+assert sys.stdin.buffer.read() == b''
+if behavior in ('cancel', 'timeout'): time.sleep(100)
+if behavior == 'bad-exit': sys.exit(19)
+"""
+
+
+def _claude_process_handles(monkeypatch):
+    processes = []
+    spawn = asyncio.create_subprocess_exec
+
+    async def observed(*args, **kwargs):
+        process = await spawn(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", observed)
+    return processes
+
+
+@pytest.mark.parametrize("plan", ["PRO", "MAX"])
+@pytest.mark.parametrize("behavior", ["clean", "bad-exit"])
+async def test_claude_initialization_owned_worker_eof_and_actual_exit(
+    launcher, tmp_path, plan, behavior, monkeypatch,
+):
+    from constructicon.substrate.executors.claude_initialize import (
+        ClaudeLifecycleVerdict,
+        observe_initialization,
+    )
+    from constructicon.substrate.executors.claude_protocol import (
+        ClaudeInitializeVerdict,
+        ClaudePlan,
+    )
+
+    processes = _claude_process_handles(monkeypatch)
+    selected = ClaudePlan[plan]
+    paths = AcquisitionPaths(tmp_path, acquisition_id_for("claude-initialization-physical", 1))
+    async with acquisition_guard(paths) as guard:
+        report = await observe_initialization(
+            launcher, ("/usr/bin/python3", "-I", "-c",
+                       _claude_initialize_worker(selected.value, behavior)),
+            selected_plan=selected, guard_fds=(guard,), timeout_s=10,
+        )
+    assert report.mode_verdict is ClaudeInitializeVerdict.MODE_MATCH
+    assert report.lifecycle is (ClaudeLifecycleVerdict.INITIALIZATION_OBSERVED
+                                if behavior == "clean" else ClaudeLifecycleVerdict.PROCESS_REFUSED)
+    assert len(processes) == 2 and all(process.returncode is not None for process in processes)
+
+
+async def test_claude_initialization_actual_deadline_joins_after_reply(
+    launcher, tmp_path, monkeypatch,
+):
+    from constructicon.substrate.executors.claude_initialize import (
+        ClaudeLifecycleVerdict,
+        observe_initialization,
+    )
+    from constructicon.substrate.executors.claude_protocol import (
+        ClaudeInitializeVerdict,
+        ClaudePlan,
+    )
+
+    processes = _claude_process_handles(monkeypatch)
+    paths = AcquisitionPaths(tmp_path, acquisition_id_for("claude-initialization-deadline", 1))
+    async with acquisition_guard(paths) as guard:
+        report = await observe_initialization(
+            launcher, ("/usr/bin/python3", "-I", "-c",
+                       _claude_initialize_worker("Claude Pro", "timeout")),
+            selected_plan=ClaudePlan.PRO, guard_fds=(guard,), timeout_s=5,
+        )
+    assert report.mode_verdict is ClaudeInitializeVerdict.MODE_MATCH
+    assert report.lifecycle is ClaudeLifecycleVerdict.PROCESS_REFUSED
+    assert len(processes) == 2 and all(process.returncode is not None for process in processes)
+
+
+async def test_claude_initialization_actual_cancel_after_mode_joins_before_raise(
+    launcher, tmp_path, monkeypatch,
+):
+    from constructicon.substrate.executors import claude_initialize
+    from constructicon.substrate.executors.claude_protocol import (
+        ClaudeInitializeVerdict,
+        ClaudePlan,
+    )
+
+    processes = _claude_process_handles(monkeypatch)
+    entered = asyncio.Event()
+    original = claude_initialize.judge_initialize
+
+    def observed(*args, **kwargs):
+        verdict = original(*args, **kwargs)
+        if verdict is ClaudeInitializeVerdict.MODE_MATCH:
+            entered.set()  # Actual worker reply, not a scheduling sleep.
+        return verdict
+
+    monkeypatch.setattr(claude_initialize, "judge_initialize", observed)
+    paths = AcquisitionPaths(tmp_path, acquisition_id_for("claude-initialization-cancel", 1))
+    async with acquisition_guard(paths) as guard:
+        task = asyncio.create_task(claude_initialize.observe_initialization(
+            launcher, ("/usr/bin/python3", "-I", "-c",
+                       _claude_initialize_worker("Claude Pro", "cancel")),
+            selected_plan=ClaudePlan.PRO, guard_fds=(guard,), timeout_s=10,
+        ))
+        waiter = asyncio.create_task(entered.wait())
+        try:
+            done, _pending = await asyncio.wait((waiter, task), timeout=10,
+                                               return_when=asyncio.FIRST_COMPLETED)
+            assert done, "fixed worker never reached the cancellation phase"
+            if task in done:
+                await task  # Surface an early actual failure instead of hiding it behind a timeout.
+                pytest.fail("fixed worker completed before the intended cancellation phase")
+            assert waiter in done
+            task.cancel("private-test-cancellation")
+            with pytest.raises(asyncio.CancelledError) as caught:
+                await task
+        finally:
+            waiter.cancel()
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(waiter, task, return_exceptions=True)
+    assert str(caught.value) == "Claude initialization cancelled"
+    assert caught.value.__cause__ is None and caught.value.__context__ is None
+    assert len(processes) == 2 and all(process.returncode is not None for process in processes)
