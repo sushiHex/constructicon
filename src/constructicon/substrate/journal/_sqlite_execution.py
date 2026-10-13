@@ -769,8 +769,6 @@ class _SqliteExecutionMixin:
         target: str,
         disposition: str | None = None,
     ) -> None:
-        if target == "lost":
-            raise ContractViolation("worker capability writes cannot mint lost accounting")
         with self._txn() as conn:
             row = _capability_lease_row(
                 conn,
@@ -788,12 +786,14 @@ class _SqliteExecutionMixin:
                 expected_lease_id=lease_id,
                 expected_acquisition_epoch=acquisition_epoch,
             )
+            if stored.state == target and stored.disposition == disposition:
+                return  # idempotent at-target: crash-interrupted transition re-runs
+            if target == "lost":
+                raise ContractViolation("worker capability writes cannot mint lost accounting")
             if stored.state == "lost" and target == "active":
                 raise ContractViolation(
                     "worker capability writes cannot reactivate lost accounting"
                 )
-            if stored.state == target and stored.disposition == disposition:
-                return  # idempotent at-target: crash-interrupted closure re-runs
             if stored.state not in expected:
                 raise ContractViolation(
                     f"capability lease {lease_id!r}: transition to {target!r} "

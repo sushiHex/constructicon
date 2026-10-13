@@ -10,6 +10,22 @@ MIGRATION_TESTS = "tests/migrations/test_sqlite_v7_to_v8.py::"
 
 MUTANTS = (
     (
+        "empty current stores prove their accounting table columns",
+        SCHEMA + "_SqliteSchemaMixin._require_current_v8_tables",
+        'if columns != {"run_id", "world_hash", "source", "floor", "inventory_hash"}:',
+        "if False:",
+        JOURNAL_TESTS + "test_empty_accounting_database_refuses_each_changed_column[inventory_hash]",
+    ),
+    (
+        "historical lost retries observe a proven fact without minting one",
+        EXECUTION + "_SqliteExecutionMixin.transition_capability_lease",
+        "        if stored.state == target and stored.disposition == disposition:",
+        '        if target == "lost":\n'
+        '            raise ContractViolation("lost retry rejected before observation")\n'
+        "        if stored.state == target and stored.disposition == disposition:",
+        MIGRATION_TESTS + "test_actual_schema7_lost_transition_retry_after_migration_is_an_exact_noop",
+    ),
+    (
         "creation co-commits a positive accounting era",
         SCHEMA + "_SqliteSchemaMixin.create_run",
         "mint_creation_accounting_era(connection, created)",

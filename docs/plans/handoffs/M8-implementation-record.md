@@ -5464,6 +5464,18 @@ and separate tests retain missing-era refusal and external extent damage.
 No global cache or full inventory validation was added to event allocation.
 Repeated point world validation has a cost, not a constant-time whole-run claim.
 
+The connector review identified two introduced compatibility gaps. A current
+empty store skipped per-run era checks, so altered era-table columns could
+survive open. Schema preflight now checks the exact column-name inventory,
+including generated columns, without depending on retained runs. Tests cover
+empty and populated stores and unchanged bytes after refusal. Separately,
+rejecting `lost` before projection rejected an exact retry of a committed old
+transition. The canonical projection and at-target comparison now precede the
+new-loss refusal. The actual schema-7 fixture proves a no-op retry after
+migration, while damaged witnesses, changed dispositions, new loss and
+reactivation still refuse. Historical lost-to-closed transitions still permit.
+Both corrections have assertion-killed mutants; no historical law was removed.
+
 Issue #179 remains open for truthful result v2/detail accounting and the
 administrative disposal command, including transaction/replay and host
 integration proofs. This slice changes no public result, MCP tool, provider,

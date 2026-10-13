@@ -401,6 +401,11 @@ class _SqliteSchemaMixin:
             " AND name = 'capability_accounting_eras'"
         ).fetchone() is None:
             raise JournalDamaged("schema 8 capability accounting eras table is missing")
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_xinfo(capability_accounting_eras)")
+        }
+        if columns != {"run_id", "world_hash", "source", "floor", "inventory_hash"}:
+            raise JournalDamaged("schema 8 capability accounting eras table has changed columns")
 
     def _migrate_m7_to_m8(self, connection: sqlite3.Connection) -> None:
         connection.execute("BEGIN IMMEDIATE")

@@ -134,7 +134,10 @@ def test_new_runs_co_commit_positive_creation_eras(tmp_path: Path) -> None:
     assert SqliteJournal(database).capability_leases(RUN) == []
 
 
-def test_current_workers_cannot_mint_lost_facts(tmp_path: Path) -> None:
+@pytest.mark.parametrize("disposition", (None, "released"))
+def test_current_workers_cannot_mint_lost_facts(
+    tmp_path: Path, disposition: str | None,
+) -> None:
     database = tmp_path / "worker-lost.db"
     journal = SqliteJournal(database)
     create_test_run(journal, RUN)
@@ -158,6 +161,7 @@ def test_current_workers_cannot_mint_lost_facts(tmp_path: Path) -> None:
             acquisition_epoch=acquisition.acquisition_epoch,
             expected=frozenset({"active"}),
             target="lost",
+            disposition=disposition,
         )
     assert journal.capability_leases(RUN) == [acquisition]
     assert journal.run_head(RUN) == before
@@ -393,22 +397,67 @@ def test_accounting_read_uses_one_snapshot_during_a_committing_acquisition(
     assert reader.capability_leases(RUN) == [acquisition]
 
 
-@pytest.mark.parametrize("damage", ("missing-table", "extra-column", "missing-column"))
+def test_empty_current_accounting_database_reopens(tmp_path: Path) -> None:
+    database = tmp_path / "empty-era-structure.db"
+    SqliteJournal(database)
+    reopened = SqliteJournal(database)
+    assert reopened.capability_leases(RUN) == []
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM runs").fetchone() == (0,)
+        assert connection.execute("SELECT COUNT(*) FROM capability_accounting_eras").fetchone() == (
+            0,
+        )
+        assert connection.execute("PRAGMA user_version").fetchone() == (8,)
+
+
+@pytest.mark.parametrize("populated", (False, True))
+@pytest.mark.parametrize(
+    "damage",
+    ("missing-table", "extra-column", "extra-generated-column", "missing-column"),
+)
 def test_accounting_point_and_open_refuse_missing_or_changed_structure(
     tmp_path: Path,
     damage: str,
+    populated: bool,
 ) -> None:
     database = tmp_path / "era-structure.db"
     journal = SqliteJournal(database)
-    create_test_run(journal, RUN)
+    if populated:
+        create_test_run(journal, RUN)
     with sqlite3.connect(database) as connection:
         if damage == "missing-table":
             connection.execute("DROP TABLE capability_accounting_eras")
         elif damage == "extra-column":
             connection.execute("ALTER TABLE capability_accounting_eras ADD COLUMN extra TEXT")
+        elif damage == "extra-generated-column":
+            connection.execute(
+                "ALTER TABLE capability_accounting_eras"
+                " ADD COLUMN extra TEXT GENERATED ALWAYS AS ('extra') VIRTUAL"
+            )
         else:
             connection.execute("ALTER TABLE capability_accounting_eras DROP COLUMN inventory_hash")
-    with pytest.raises(JournalDamaged, match="accounting"):
-        journal.capability_leases(RUN)
+        before = tuple(connection.iterdump())
+    if populated:
+        with pytest.raises(JournalDamaged, match="accounting"):
+            journal.capability_leases(RUN)
     with pytest.raises(JournalDamaged, match="accounting"):
         SqliteJournal(database)
+    with sqlite3.connect(database) as connection:
+        assert tuple(connection.iterdump()) == before
+
+
+@pytest.mark.parametrize("column", ("run_id", "world_hash", "source", "floor", "inventory_hash"))
+def test_empty_accounting_database_refuses_each_changed_column(
+    tmp_path: Path, column: str,
+) -> None:
+    database = tmp_path / f"empty-era-column-{column}.db"
+    SqliteJournal(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            f"ALTER TABLE capability_accounting_eras RENAME COLUMN {column} TO changed"
+        )
+        before = tuple(connection.iterdump())
+    with pytest.raises(JournalDamaged, match="accounting"):
+        SqliteJournal(database)
+    with sqlite3.connect(database) as connection:
+        assert tuple(connection.iterdump()) == before

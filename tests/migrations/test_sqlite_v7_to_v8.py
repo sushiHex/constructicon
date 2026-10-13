@@ -202,6 +202,88 @@ def test_current_worker_cannot_reactivate_historical_lost(tmp_path: Path) -> Non
     assert journal.run_head(RUN) == before
 
 
+def test_actual_schema7_lost_transition_retry_after_migration_is_an_exact_noop(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "historical-lost-retry.db"
+    historical_database(database, "schema7-lost-transitions.sql")
+    journal = SqliteJournal(database)
+    lost = journal.capability_leases(RUN)[0]
+    worker = journal.claim_run(RUN, owner_id="retry-worker", ttl_s=30)
+    before = retained_bytes(database)
+    with sqlite3.connect(database) as connection:
+        proof_before = {
+            table: connection.execute(f"SELECT * FROM {table} ORDER BY 1, 2").fetchall()
+            for table in ("durable_fact_seals", "capability_accounting_eras")
+        }
+    failure = None
+    try:
+        journal.transition_capability_lease(
+            worker, lease_id=lost.lease_id, acquisition_epoch=lost.acquisition_epoch,
+            expected=frozenset({"active"}), target="lost", disposition=None,
+        )
+    except ContractViolation as refusal:
+        failure = refusal
+    assert failure is None, (
+        f"exact retry of a committed historical lost transition refused: {failure}"
+    )
+    assert retained_bytes(database) == before
+    assert SqliteJournal(database).capability_leases(RUN) == [lost]
+    with sqlite3.connect(database) as connection:
+        assert {
+            table: connection.execute(f"SELECT * FROM {table} ORDER BY 1, 2").fetchall()
+            for table in proof_before
+        } == proof_before
+
+
+def test_historical_lost_retry_with_changed_disposition_cannot_mint_loss(tmp_path: Path) -> None:
+    database = tmp_path / "historical-lost-changed-retry.db"
+    historical_database(database, "schema7-lost-transitions.sql")
+    journal = SqliteJournal(database)
+    lost = journal.capability_leases(RUN)[0]
+    worker = journal.claim_run(RUN, owner_id="retry-worker", ttl_s=30)
+    before = retained_bytes(database)
+    with pytest.raises(ContractViolation, match="lost"):
+        journal.transition_capability_lease(
+            worker, lease_id=lost.lease_id, acquisition_epoch=lost.acquisition_epoch,
+            expected=frozenset({"lost"}), target="lost", disposition="released",
+        )
+    assert retained_bytes(database) == before
+
+
+def test_historical_lost_exact_retry_still_validates_its_witness(tmp_path: Path) -> None:
+    database = tmp_path / "historical-lost-damaged-retry.db"
+    historical_database(database, "schema7-lost-transitions.sql")
+    journal = SqliteJournal(database)
+    lost = journal.capability_leases(RUN)[0]
+    worker = journal.claim_run(RUN, owner_id="retry-worker", ttl_s=30)
+    with sqlite3.connect(database) as connection:
+        connection.execute("DELETE FROM durable_fact_seals WHERE family = 'capability_lost_pre_v8'")
+    before = retained_bytes(database)
+    with pytest.raises(JournalDamaged, match=r"lost|witness"):
+        journal.transition_capability_lease(
+            worker, lease_id=lost.lease_id, acquisition_epoch=lost.acquisition_epoch,
+            expected=frozenset({"active"}), target="lost", disposition=None,
+        )
+    assert retained_bytes(database) == before
+
+
+def test_historical_lost_can_still_close_under_current_worker_authority(tmp_path: Path) -> None:
+    database = tmp_path / "historical-lost-close.db"
+    historical_database(database, "schema7-lost-transitions.sql")
+    journal = SqliteJournal(database)
+    lost = journal.capability_leases(RUN)[0]
+    worker = journal.claim_run(RUN, owner_id="closing-worker", ttl_s=30)
+    journal.transition_capability_lease(
+        worker, lease_id=lost.lease_id, acquisition_epoch=lost.acquisition_epoch,
+        expected=frozenset({"lost"}), target="closed", disposition="released",
+    )
+    closed = SqliteJournal(database).capability_leases(RUN)[0]
+    assert closed.state == "closed"
+    assert closed.disposition == "released"
+    assert journal.events(RUN)[-1].payload["from"] == "lost"
+
+
 def test_deleted_historical_lost_witness_is_not_reminted_on_open(tmp_path: Path) -> None:
     database = tmp_path / "deleted-witness.db"
     historical_database(database, "schema7-lost-transitions.sql")
