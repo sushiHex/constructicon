@@ -15,6 +15,27 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #78 — g8 live WRITE passed at its observed boundary
+
+The [separately authorized g8 WRITE](https://github.com/sushiHex/constructicon/issues/78#issuecomment-6138432607)
+passed at `59de73b` after fresh qualification and owner review of actual pins
+and smoke. Its schema-2 report affirms a succeeded run, validated checkpoint
+chain, changed candidate, candidate-bound passed check, three closed/released
+obligations and unchanged target. No target installation or second turn occurred.
+
+One admitted callback completed with an observed successful worker. Served
+model, backend requests and vendor retries stay unknown; token counts prove
+neither hard spending ceilings nor zero cost. Complete checks and the joined
+report, not an empty fault list or mixed-head local gate, establish this result.
+
+The transport stop required bounded owner-authorized resume, not overwrite or
+refund. Prior spent state is preserved; accepted READ T5/no-T6 remains its own
+pinned history, not a new READ run. This result neither publishes a provider
+nor auto-enables a profile or closes N5/M8. Claude and Pi require independent
+proofs; acceptance and disposition remain on the owning issues.
+
+---
+
 ## #78 — g8 procedure preserves history and the actual-pin gate
 
 The additive [g8 procedure](plans/handoffs/M8-N5-g8-session.md) pins controller
