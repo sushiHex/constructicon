@@ -61,7 +61,8 @@ runtime substitutions or rewriting of frozen block bodies generates scripts.
 | LR3/R11 | LR3's two blocks at `C`; documented `O=f6cd85a` and `C` declarations |
 | LR4/LR5/LR6 | LR4 / HR R12 / LR6 at `C`; fresh shells declare `C`, `W="$HOME/m8-launch"`, and required `J` (LR6 needs `J` prefixed) |
 | LR8 | LR8 at `C`, with verified `O=f6cd85a` for the old controller archive |
-| LR9/R17-R19 | Conditional LR9, then each HR block separately at `C`; prefix required `C/W/J`, including controller `W` for R19 |
+| LR9/R17/R18 | Conditional LR9, then HR R17/R18 separately at `C`; prefix required `C/W/J` |
+| R19 | HR R19 at `C` after controller verification on either path (LR8 passed or LR9/R17/R18 completed); prefix `C` and controller `W` |
 | LR7 | OC setup at `C`, then only OC S3's preflight line; no login |
 | New common | OC's two Setup blocks at `C`, then H2-H5 declarations below |
 | H2-H5 | HS H2, OC S1, OC S4 plus account comparison, OC S6a unchanged |
@@ -170,7 +171,10 @@ overwrite, credential read or posting of the private seal is supplied.
 
 ## H1: normal LR and D2 on one fresh boot
 
-Run LR0-6, then LR8, conditional LR9/HR R17-R19, then LR7. LR1 is clean
+Run LR0-6, then LR8, conditional LR9/HR R17/R18, then R19 and LR7.
+R19 is required after the controller verifies at `C` on **both paths**:
+whether LR8 passes without replacement or LR9/R17/R18 completes replacement.
+LR1 is clean
 Stop-VM/Start-VM, never Save-VM or checkpoint; record the full new boot ID.
 Before replacement, source the prior common at `O` in its own fresh shell:
 

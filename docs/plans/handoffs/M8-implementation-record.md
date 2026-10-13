@@ -5046,3 +5046,11 @@ written after consuming the profile pipe, establishing causal order rather
 than assuming pipeline process scheduling. The actual POSIX acquisition layout
 puts the new relay path at 96 bytes against the 107-byte limit; this is lexical
 evidence, not a physical socket test.
+
+Local package review compared 46 LF-only, syntax-valid shell files and 112
+source segments against the pinned revisions, with 29 per-step manifests.
+It corrected a route ambiguity: R19 is mandatory after the controller verifies
+at the new commit on either path, not only after LR9 replacement. The separate
+script already supported both paths. Package provenance is tied to the actual
+committed procedure revision, never a guessed future head; syntax and source
+equality do not establish execution or physical behavior.

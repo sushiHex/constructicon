@@ -434,6 +434,8 @@ def test_fresh_g8_declarations_compose_the_exact_ws_accepting_path(
 def test_normal_route_preserves_old_archives_pin_pause_and_nonpassing_stop():
     document = _text(DOCUMENT)
     assert "normal fresh LR route" in document and "Do not replay" in document
+    assert "conditional LR9/HR R17/R18, then R19 and LR7" in document
+    assert "R19 is required after the controller verifies at `C` on **both paths**" in document
     assert "own step file, not chained automatically into continuity capture" in document
     assert "in a **separate step file**" in document
     assert "Exit zero alone is not" in document
