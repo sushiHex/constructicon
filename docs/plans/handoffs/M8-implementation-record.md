@@ -5157,3 +5157,30 @@ closed, separately traced scenarios are not credited as this slice's proof.
 No production code, default deadline, task/lease budget, vendor binary, host,
 credential, model call, frozen plan or native qualification changed. This fixes
 test scenario oracles, not a claimed product root cause or an inferred live pass.
+
+**Connector correction, introduced P2.** The first implementation removed the
+observer's synthetic timer without retaining a finite failure watchdog. If
+materialization stalled before the crash fact, both owned tasks could remain
+pending forever. The connector finding was accepted, not dismissed by the
+passing focused suite or the first head's 5,031-pass / 409-skip CI verification.
+
+The existing event-versus-observer wait now has a separate 30-second failure
+watchdog. An empty completion set fails before any crash or successor claim;
+the unchanged `finally` cancels and joins both owned tasks. This bounds failure
+observation only, not a production deadline or evidence that a crash occurred.
+It does not claim slow hosts can no longer exceed a test watchdog.
+
+A deterministic regression first affirms that both tasks remain pending, then
+substitutes only the wait primitive's expiration result, without a seconds-long
+delay. Before correction it assertion-failed on the missing finite bound in
+1.62 seconds. After correction it proves watchdog failure, an unset crash fact,
+no successor, and both tasks joined. All ten focused cases passed in 56.21
+seconds; ruff and diff checks passed. The parent reviewed the exact narrow
+watchdog correction; corrected-head CI and review disposition remain pending.
+
+Before changing the tests, the initial full Windows run was stopped by resolving
+and terminating only its own worktree's process ancestry. Its complete partial
+log is preserved at approximately 35 percent: lint, strict types and five
+contracts passed, but the full pytest did not complete and is not counted as a
+passed local gate or corrected-head evidence. No production or frozen bytes
+changed. The original four failures' exact cause remains unproved.

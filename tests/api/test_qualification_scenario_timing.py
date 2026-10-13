@@ -109,6 +109,54 @@ async def test_recovery_scenario_rejects_and_joins_an_early_observer(
     assert not (asyncio.all_tasks() - pending_before)
 
 
+async def test_recovery_failure_watchdog_refuses_a_stalled_crash_witness(
+    tmp_path, portable_binding, substituted_guard, clock, monkeypatch,
+):
+    pending_before = asyncio.all_tasks()
+    entered, stopped = asyncio.Event(), asyncio.Event()
+    calls, waiting, crashes = [], [], []
+    dying = entry.dying_after_materialization
+
+    def capture_crash(provider, crashed):
+        crashes.append(crashed)
+        dying(provider, crashed)
+
+    async def stalled(**kwargs):
+        calls.append(kwargs)
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
+
+    class WatchdogAsyncio:
+        def __getattr__(self, name):
+            return getattr(asyncio, name)
+
+        async def wait(self, tasks, *, return_when, timeout=None):
+            await entered.wait()
+            waiting.extend(tasks)
+            assert len(tasks) == 2 and all(not task.done() for task in tasks)
+            assert return_when is asyncio.FIRST_COMPLETED
+            assert timeout == 30, "pending crash scenario has no finite failure watchdog"
+            # Substitute only the wait primitive: expiration is an empty done
+            # set, not a crash fact. No seconds-long stall supplies the proof.
+            return set(), set(tasks)
+
+    monkeypatch.setattr(entry, "asyncio", WatchdogAsyncio())
+    monkeypatch.setattr(entry, "qualify", stalled)
+    monkeypatch.setattr(entry, "dying_after_materialization", capture_crash)
+    with pytest.raises(AssertionError, match="crash witness stalled before failure watchdog"):
+        await entry.test_a_successor_reconciles_and_acquires_only_within_the_budget(
+            tmp_path, portable_binding, substituted_guard, clock,
+            1, RunStatus.FAILED, [(1, "closed", "discarded")],
+        )
+    assert len(calls) == 1 and calls[0]["provider"].handles == []
+    assert len(crashes) == 1 and not crashes[0].is_set()
+    assert stopped.is_set() and all(task.done() for task in waiting)
+    assert not (asyncio.all_tasks() - pending_before)
+
+
 async def test_write_scenario_waits_for_report_not_an_outer_scenario_timer(
     tmp_path, portable_binding, portable_write_boundary, monkeypatch,
 ):

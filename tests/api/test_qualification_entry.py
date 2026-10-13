@@ -182,15 +182,19 @@ async def test_a_successor_reconciles_and_acquires_only_within_the_budget(
     first = provider(tmp_path, portable_binding, granted)
     crashed = asyncio.Event()
     dying_after_materialization(first, crashed)
-    # Remove only the observer's synthetic scenario timer. The crash fact,
-    # not elapsed time, establishes where this abandoned owner stopped; task,
-    # lease, authorization and Git budgets remain the production ones.
+    # Remove only the observer's synthetic scenario oracle. The crash fact,
+    # not elapsed time, establishes where this abandoned owner stopped. The
+    # separate finite failure watchdog below cannot stand in for that fact;
+    # task, lease, authorization and Git budgets remain the production ones.
     observer = asyncio.create_task(qualify(
         provider=first, grants=GRANTS, timeout_s=float("inf"), now_fn=clock.now,
     ))
     witnessed = asyncio.create_task(crashed.wait())
     try:
-        await asyncio.wait((observer, witnessed), return_when=asyncio.FIRST_COMPLETED)
+        done, _ = await asyncio.wait(
+            (observer, witnessed), timeout=30, return_when=asyncio.FIRST_COMPLETED,
+        )
+        assert done, "crash witness stalled before failure watchdog"
         assert witnessed.done() and not observer.done(), "observer ended before recorded crash"
         assert crashed.is_set() and first.handles[0].ready
         observer.cancel()
