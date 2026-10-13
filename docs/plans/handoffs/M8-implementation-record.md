@@ -4943,10 +4943,28 @@ or mismatched and demoting the verdict. Final-snapshot provenance must not be
 read as identity validation or qualification success. No broader change to
 that partial-report policy is included.
 
-The final narrow independent source review found no introduced blocker after
+The pre-connector narrow independent source review found no introduced blocker after
 that correction. Its stable-source focused run passed 33 tests: callback
 observations and failure seams, no-change capture/replay, legacy/progress
 provenance and strict WRITE-2/SMOKE-1 report versions. An additional injection
 at the actual post-rename directory-sync call confirmed the distinction:
 accurate final observations can be visible despite the failed sync. These are
 portable/seam proofs, not physical Linux execution or full-gate evidence.
+
+The connector then found an introduced cross-fact defect: independently valid
+callback observations could contradict a completed/successful attempt without
+demoting the report. Two regressions reproduced it by assertion, in the
+projection and in direct validation of the public passing-report contract.
+The correction shares one response-completion predicate between those
+consumers. The projection names `ATTEMPT_INVALID`; the passing contract
+requires supplied observations to be final and complete. This does not require
+callbacks to occur: exact zero and legacy absence remain permitted, while
+failed outcomes retain truthful incomplete prefixes. Final-head execution and
+review evidence are recorded on PR #164, not inferred from the earlier gate.
+
+The targeted follow-up independently passed all three correction tests and
+exercised four mixed dispatch/status cases. Either success claim with an
+unfinished callback is invalid; possibly-dispatched failure and partial
+outcomes retain their observations without that fault. The producer confirms
+that `completed` means an accepted `ExecutorSuccess`, not mere process exit.
+No introduced consequence was found in that narrow review.

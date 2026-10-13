@@ -189,6 +189,11 @@ class CallbackObservation(BaseModel):
             raise ValueError("callback observations contradict the admitted prefix")
         return self
 
+    @property
+    def responses_complete(self) -> bool:
+        """All admitted responses completed; zero is valid and not mandatory usage."""
+        return self.admitted_completed == self.admitted_started
+
 
 class WriteReportTelemetry(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -357,6 +362,14 @@ class WriteQualificationReport(CaptureQualificationReport):
             self._capture_complete({"executor", "workspace", "gate"})
             and self.turn_dispatch == "completed"
             and self.turn_status == "success"
+            and (
+                self.telemetry is None
+                or self.telemetry.callbacks is None
+                or (
+                    self.telemetry.callbacks_final_snapshot is True
+                    and self.telemetry.callbacks.responses_complete
+                )
+            )
             and self.target_unchanged is True
             and self.limits is not None
             and self.installed is not None

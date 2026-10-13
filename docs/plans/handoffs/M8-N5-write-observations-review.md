@@ -59,6 +59,15 @@ census. After workers join, a final snapshot can be visible even if the final
 directory sync raises: it contains the actual final observations, but cannot
 certify that syscall's success or survival of a later power loss.
 
+Success must agree with supplied observations. Every admitted callback must
+have a completed response before an attempt may claim success; the prefix
+contract already requires a successful worker for each completed response.
+The projection classifies a contradiction as an invalid attempt. The public
+passing-report contract independently requires a final, complete snapshot
+when observations exist, using the same completion predicate. Zero admitted
+callbacks can be complete; missing legacy observations remain unknown. Failed
+and partial outcomes may truthfully carry incomplete callback prefixes.
+
 WRITE's strict report contract would advance to schema 2; smoke stays at
 schema 1. One callback observation block is authoritative. Backend request
 count and vendor retry count remain unknown. No bound becomes a claim about

@@ -502,6 +502,10 @@ def _turn_facts(
             "identities",
         }:
             raise ValueError("attempt facts")
+        if callbacks is not None and (
+            record["dispatch"] == "completed" or facts["status"] == "success"
+        ) and not callbacks.responses_complete:
+            issues.add(Issue.ATTEMPT_INVALID)
         identity = assembly.executor.identity
         if facts["identities"] != {
             "adapter_revision": str(identity.adapter_revision),

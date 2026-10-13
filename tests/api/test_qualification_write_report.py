@@ -408,6 +408,60 @@ def test_callback_snapshot_and_its_provenance_cannot_be_separated(values):
         WriteReportTelemetry.model_validate(values)
 
 
+async def test_successful_attempt_refuses_unfinished_callback_observations(completed, monkeypatch):
+    record = json.loads(Path(completed[2].attempt_record).read_text())
+    for worker in (None, "success", "nonzero"):
+        record["callbacks"] = {"schema_version": 1, "admitted_started": 1,
+                               "admitted_completed": 0, "worker_results": [worker]}
+        monkeypatch.setattr(projection, "_attempt", lambda path: record)
+        report = project(completed)
+        assert report.verdict != "passed", f"contradictory successful callback snapshot: {worker}"
+        assert WriteReportIssue.ATTEMPT_INVALID in report.issues
+
+
+async def test_passed_contract_refuses_unfinished_or_partial_callback_observations(completed):
+    document = completed[3].model_dump(mode="json")
+    for worker in (None, "success", "nonzero"):
+        document["telemetry"]["callbacks"] = {
+            "schema_version": 1, "admitted_started": 1,
+            "admitted_completed": 0, "worker_results": [worker],
+        }
+        with pytest.raises(ValidationError):
+            WriteQualificationReport.model_validate(document)
+    document["telemetry"]["callbacks"] = {
+        "schema_version": 1, "admitted_started": 0,
+        "admitted_completed": 0, "worker_results": [],
+    }
+    document["telemetry"]["callbacks_final_snapshot"] = False
+    with pytest.raises(ValidationError):
+        WriteQualificationReport.model_validate(document)
+
+
+async def test_callback_crossfact_law_permits_zero_legacy_and_failed_prefix(completed, monkeypatch):
+    record = json.loads(Path(completed[2].attempt_record).read_text())
+    record["callbacks"] = {"schema_version": 1, "admitted_started": 0,
+                           "admitted_completed": 0, "worker_results": []}
+    monkeypatch.setattr(projection, "_attempt", lambda path: record)
+    zero = project(completed)
+    assert zero.verdict == "passed" and zero.telemetry.callbacks_final_snapshot is True
+    assert zero.telemetry.callbacks.admitted_started == 0
+    assert WriteQualificationReport.model_validate(zero.model_dump()) == zero
+    del record["callbacks"]
+    legacy = project(completed)
+    assert legacy.verdict == "passed" and legacy.telemetry.callbacks is None
+    assert WriteQualificationReport.model_validate(legacy.model_dump()) == legacy
+    record["callbacks"] = {"schema_version": 1, "admitted_started": 1,
+                           "admitted_completed": 0, "worker_results": ["nonzero"]}
+    record["dispatch"] = "possibly dispatched"
+    record["facts"]["status"] = "failure"
+    failed = project(completed)
+    assert failed.verdict == "not-qualified"
+    assert WriteReportIssue.ATTEMPT_INVALID not in failed.issues
+    assert failed.telemetry.callbacks_final_snapshot is True
+    assert failed.telemetry.callbacks.worker_results == ("nonzero",)
+    assert WriteQualificationReport.model_validate(failed.model_dump()) == failed
+
+
 def test_report_definition_covers_whole_contract_and_projection():
     source = Path(projection.__file__)
     contract = source.parents[1] / "core" / "qualification_write.py"

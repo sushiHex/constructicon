@@ -224,6 +224,20 @@ MUTANTS = (
     ("WRITE projection keeps observed callback facts rather than invented unknown",
      PROJECTION + "_turn_facts", "if callback_keys else None", "if False else None",
      REPORT_TEST + "test_report_accepting_path_uses_full_materialization"),
+    ("successful WRITE evidence requires every admitted callback response complete",
+     CORE + "CallbackObservation.responses_complete",
+     "return self.admitted_completed == self.admitted_started", "return True",
+     REPORT_TEST + "test_successful_attempt_refuses_unfinished_callback_observations"),
+    ("WRITE projection identifies contradictory callback success as invalid",
+     PROJECTION + "_turn_facts", "and not callbacks.responses_complete:", "and False:",
+     REPORT_TEST + "test_successful_attempt_refuses_unfinished_callback_observations"),
+    ("a public passing report requires a complete final callback snapshot when supplied",
+     CORE + "WriteQualificationReport._passing_facts",
+     "and (\n            self.telemetry is None\n            or self.telemetry.callbacks is None\n"
+     "            or (\n                self.telemetry.callbacks_final_snapshot is True\n"
+     "                and self.telemetry.callbacks.responses_complete\n            )\n        )",
+     "and True",
+     REPORT_TEST + "test_passed_contract_refuses_unfinished_or_partial_callback_observations"),
 )
 
 if __name__ == "__main__":
