@@ -53,6 +53,14 @@ from constructicon.substrate.journal._sqlite_base import (
     _durable_text,
     _path_key,
 )
+from constructicon.substrate.journal._sqlite_capability_provenance import (
+    CapabilityLeaseHistory,
+    accounting_run_row,
+    require_accounting_absence,
+    require_accounting_era,
+    require_capability_lost_provenance,
+    validate_accounting_run,
+)
 from constructicon.substrate.journal._sqlite_effects import (
     EFFECT_PREPARATION_FACT_FAMILY,
     StoredEffectRequest,
@@ -689,6 +697,10 @@ class _SqliteExecutionMixin:
                 f"run lease {lease.run_id!r} epoch {lease.epoch}"
             )
         with self._txn() as conn:
+            run = _run_mutation_row(conn, lease.run_id)
+            if run is None:
+                raise ContractViolation("capability acquisition has no retained run")
+            require_accounting_era(conn, accounting_run_row(conn, lease.run_id))
             existing = _capability_lease_row(
                 conn,
                 lease_id=capability_lease.lease_id,
@@ -757,6 +769,8 @@ class _SqliteExecutionMixin:
         target: str,
         disposition: str | None = None,
     ) -> None:
+        if target == "lost":
+            raise ContractViolation("worker capability writes cannot mint lost accounting")
         with self._txn() as conn:
             row = _capability_lease_row(
                 conn,
@@ -774,6 +788,10 @@ class _SqliteExecutionMixin:
                 expected_lease_id=lease_id,
                 expected_acquisition_epoch=acquisition_epoch,
             )
+            if stored.state == "lost" and target == "active":
+                raise ContractViolation(
+                    "worker capability writes cannot reactivate lost accounting"
+                )
             if stored.state == target and stored.disposition == disposition:
                 return  # idempotent at-target: crash-interrupted closure re-runs
             if stored.state not in expected:
@@ -814,14 +832,23 @@ class _SqliteExecutionMixin:
     def capability_leases(self, run_id: RunId) -> list[CapabilityLease]:
         with self._read() as conn:
             rows = _capability_lease_rows(conn, run_id=run_id)
-            return [
+            histories: list[CapabilityLeaseHistory] = []
+            leases = [
                 _capability_lease_from_row(
                     row,
                     connection=conn,
                     expected_run_id=run_id,
+                    histories=histories,
                 )
                 for row in rows
             ]
+            if _run_mutation_row(conn, run_id) is not None:
+                validate_accounting_run(conn, run_id, histories)
+            elif rows:
+                raise JournalDamaged("capability accounting rows have no retained run")
+            else:
+                require_accounting_absence(conn, run_id)
+            return leases
 
     def mint_attestation(self, lease: RunLease, draft: AttestationDraft) -> Attestation:
         with self._txn() as conn:
@@ -1513,7 +1540,7 @@ def _validate_capability_lease_history(
     created_at: datetime,
     updated_at: datetime,
     updated_at_text: str,
-) -> None:
+) -> tuple[JournalEvent, ...]:
     """Prove a lease row is the final state of its exact append-only event chain."""
 
     _register_lease_identity_functions(connection)
@@ -1577,7 +1604,7 @@ def _validate_capability_lease_history(
             raise JournalDamaged(
                 f"capability lease {lease.lease_id!r} lifecycle contradicts its sealed history"
             )
-        return
+        return tuple(events)
     if not events or events[0].kind != "LeaseAcquired":
         raise JournalDamaged(f"capability lease {lease.lease_id!r} has no exact acquisition event")
     acquired = events[0]
@@ -1638,6 +1665,7 @@ def _validate_capability_lease_history(
         raise JournalDamaged(
             f"capability lease {lease.lease_id!r} lifecycle contradicts its event chain"
         )
+    return tuple(events)
 
 
 def _capability_lease_from_row(
@@ -1647,6 +1675,8 @@ def _capability_lease_from_row(
     expected_run_id: RunId | None = None,
     expected_lease_id: str | None = None,
     expected_acquisition_epoch: int | None = None,
+    require_provenance: bool = True,
+    histories: list[CapabilityLeaseHistory] | None = None,
 ) -> CapabilityLease:
     """Project one lease row without normalizing any durable relational fact."""
 
@@ -1715,7 +1745,7 @@ def _capability_lease_from_row(
             and stored.acquisition_epoch != expected_acquisition_epoch
         ):
             raise ValueError("lease epoch column contradicts its selected epoch")
-        _validate_capability_lease_history(
+        events = _validate_capability_lease_history(
             connection,
             stored,
             legacy_seal=legacy_seal,
@@ -1723,6 +1753,11 @@ def _capability_lease_from_row(
             updated_at=updated_at,
             updated_at_text=updated_at_text,
         )
+        history = CapabilityLeaseHistory(row, stored, events, legacy_seal)
+        if require_provenance:
+            require_capability_lost_provenance(connection, history)
+        if histories is not None:
+            histories.append(history)
         return stored
     except JournalDamaged:
         raise
@@ -1730,13 +1765,18 @@ def _capability_lease_from_row(
         raise JournalDamaged(f"{identity} is not a valid durable record") from exc
 
 
-def validate_capability_lease_inventory(connection: sqlite3.Connection) -> None:
+def validate_capability_lease_inventory(
+    connection: sqlite3.Connection, *, require_provenance: bool = False,
+) -> dict[RunId, list[CapabilityLeaseHistory]]:
     """Project every lease and every event-to-lease edge through one law."""
 
     validate_legacy_lease_seal_inventory(connection)
     retained: set[str] = set()
+    histories: list[CapabilityLeaseHistory] = []
     for row in connection.execute("SELECT * FROM capability_leases").fetchall():
-        lease = _capability_lease_from_row(row, connection=connection)
+        lease = _capability_lease_from_row(
+            row, connection=connection, require_provenance=require_provenance, histories=histories,
+        )
         retained.add(_lease_event_identity(lease.lease_id, lease.acquisition_epoch))
 
     for row in connection.execute(
@@ -1750,3 +1790,7 @@ def validate_capability_lease_inventory(connection: sqlite3.Connection) -> None:
                 f"capability lease event {event.run_id!r}/{event.seq}"
                 " has no exact retained lease"
             )
+    by_run: dict[RunId, list[CapabilityLeaseHistory]] = {}
+    for history in histories:
+        by_run.setdefault(history.lease.run_id, []).append(history)
+    return by_run

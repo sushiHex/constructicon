@@ -15,6 +15,29 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #179 — capability accounting starts with a positive run fact
+
+The ADR 0022 provenance slice introduces schema 8, not a disposal API. Every
+run has a sealed accounting era; migration commits its exact acquisition
+inventory at a validated event floor, and creation co-commits complete history
+from zero. Later activity reconstructs the earlier inventory rather than
+rehashing mutable current state. Historical lost transitions and initial lost
+legacy acquisitions retain distinct migration-only witnesses. Worker authority
+cannot create lost accounting or reactivate a historical lost acquisition.
+
+Actual schema-7 and schema-6 writer fixtures reproduce byte-for-byte. The
+eventless legacy erasure fixture is a separate, explicitly synthetic admitted
+shape, not a claim about those writers. A review found ordinary active point
+paths skipped era validation; the shared projection and acquisition path now
+require it, with unchanged-state refusal proofs. A different suspected missing
+reverse acquisition check was already present; no duplicate scan was added.
+
+These facts establish accounting provenance only. They do not establish
+physical cleanup, resource reuse, public result v2 or a disposal command. No
+provider, credential, model or private-host operation is involved.
+
+---
+
 ## #143 — simplify evidence only after proving its replacement
 
 The further Fable review of ADR 0022 simplifies terminal rejection: it can

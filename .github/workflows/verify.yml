@@ -33,6 +33,7 @@ jobs:
       fail-fast: false
       matrix:
         inventory:
+          - check_capability_provenance_mutations.py
           - check_claude_protocol_mutations.py
           - check_fault_coordinate_mutations.py
           - check_m71_mutations.py

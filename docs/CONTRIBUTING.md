@@ -421,13 +421,13 @@ with an itemized fault rather than guessing which pair is the exchange.
 
 ## Changing SQLite persistence (L1)
 
-`SqliteJournal` is one schema-7 WAL store assembled from private responsibility
+`SqliteJournal` is one schema-8 WAL store assembled from private responsibility
 modules: `_sqlite_base`, `_sqlite_schema`, `_sqlite_execution`,
 `_sqlite_execution_facts`, `_sqlite_runs`, `_sqlite_effects`, `_sqlite_leases`,
 `_sqlite_attestations`, `_sqlite_registry`, `_sqlite_actors`, `_sqlite_control`,
 `_sqlite_commands`, `_sqlite_approvals`, `_sqlite_channels`,
-`_sqlite_fact_seals`, and `_sqlite_queries`. A Python module
-move is not a data migration. Preserve SQL shape, transaction boundaries,
+`_sqlite_fact_seals`, `_sqlite_capability_provenance`, and `_sqlite_queries`.
+A Python module move is not a data migration. Preserve SQL shape, transaction boundaries,
 write-once equality, epoch fences, fault-probe positions, canonical bytes, and
 all source-schema fixtures.
 
@@ -441,6 +441,17 @@ Compatibility belongs solely to a versioned migration and must name a real
 fixture-proven writer era. Read and batch paths use the same sealed canonical
 projection as retries; a faster query is not a weaker evidence boundary. See
 [ADR 0016](adr/0016-positive-durable-facts-and-provenance-eras.md).
+
+Schema 8 adds the positively sealed `capability_accounting_eras` inventory.
+New run creation co-commits its zero-floor era. The 7→8 migration validates the
+complete schema-7 inventory before binding each run's event floor and exact
+acquisition inventory, including eventless legacy acquisitions. Historical
+lost transitions and initially lost acquisitions receive distinct witnesses;
+current writers cannot mint those classifications. Reconstruct the original
+floor when validating later lifecycle changes and acquisitions: hashing only
+today's mutable rows is not the migration commitment. Current workers cannot
+write `lost` or change a historical lost acquisition back to `active`. See
+[ADR 0022](adr/0022-operator-disposal-records-abandoned-capabilities.md).
 
 Schema 7 adds `durable_fact_seals`; `runs.creation_command_id`;
 `effects.outcome_run_id` and `effects.outcome_event_seq`;

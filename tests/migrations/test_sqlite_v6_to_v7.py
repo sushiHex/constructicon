@@ -177,6 +177,7 @@ def _downgrade_v7_schema_to_v6(database: Path) -> None:
     """
 
     with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE IF EXISTS capability_accounting_eras")
         connection.execute("DROP INDEX channel_reply_command_unique")
         connection.execute("ALTER TABLE channel_messages DROP COLUMN reply_provenance_version")
         connection.execute("ALTER TABLE channel_messages DROP COLUMN command_id")
@@ -416,6 +417,7 @@ def test_v6_to_v7_adds_exact_provenance_without_rewriting_historical_content(
 
     after = _dump(database)
     assert set(after) == set(before) | {
+        "capability_accounting_eras",
         "channel_provenance",
         "durable_fact_seals",
         "legacy_capability_lease_seals",
