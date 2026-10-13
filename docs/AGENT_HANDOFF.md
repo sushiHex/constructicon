@@ -15,6 +15,22 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #168 — Claude mode bytes are not startup authority
+
+N6a begins with a pure initialization codec pinned to CLI 2.1.296 / SDK
+0.3.296. The source artifacts were inspected without execution; fake tests
+exercise the exact selected Pro/Max mode and refusing paths. The codec emits
+only finite verdicts and adds no provider, process, credentials or availability.
+
+The newer protocol's pending permission/dialog lists are load-bearing shape
+facts, but empty lists do not prove no inherited prompt exists. Correlation
+also does not prove arrival freshness. These limits belong to the later
+conversation's explicit state law, not an inferred successful startup. Current
+tool reachability and physical store/egress qualification remain independent
+obligations; old Claude or Codex evidence does not qualify this pin.
+
+---
+
 ## #78 — g8 live WRITE passed at its observed boundary
 
 The [separately authorized g8 WRITE](https://github.com/sushiHex/constructicon/issues/78#issuecomment-6138432607)

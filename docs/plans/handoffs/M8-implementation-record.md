@@ -5184,3 +5184,39 @@ log is preserved at approximately 35 percent: lint, strict types and five
 contracts passed, but the full pytest did not complete and is not counted as a
 passed local gate or corrected-head evidence. No production or frozen bytes
 changed. The original four failures' exact cause remains unproved.
+
+### N6a: a pinned Claude initialization codec, not a provider
+
+[#168](https://github.com/sushiHex/constructicon/issues/168) starts the independent
+Claude work with the [N6a state review](M8-N6a-state-review.md). Public CLI
+2.1.296 and paired SDK 0.3.296 artifacts were hash-verified and inspected without
+executing a vendor binary, SDK or installer. Main and an independent Sol reader
+reviewed the request/account branches before implementation. The older Claude
+screen remains historical; no previous pin's qualification transfers.
+
+The pure codec builds only bare initialization and judges one complete bounded
+reply against a caller-owned request id and exact selected Pro or Max plan.
+It reuses the core JSON law, rejects alternate authentication and malformed
+envelopes, and returns only a closed finite verdict. Account identifiers,
+prompts, error text and unjudged vendor metadata never leave that judgment.
+The 256 KiB record ceiling is adapter policy, not a vendor guarantee.
+
+The current protocol supplies pending permission/dialog lists. Their absence
+is not an empty list, and even empty lists plus idle state do not establish
+that no inherited prompt exists. Likewise an id match does not prove arrival
+freshness, and a reported version does not authenticate the executable. These
+limits are explicit in both the code and the state review, not deferred to an
+implicit success convention.
+
+There is no asynchronous driver, process launch, credential handling, user
+message, callback, provider, or availability change in this slice. It does not
+establish tool exclusion, physical storage/egress, live mode, overage control,
+principal continuity or Claude conformance. Codex source and L0 contracts are
+unchanged. The next consumer must satisfy the existing task/lease lifecycle;
+this byte codec cannot stand in for its affirmative startup and result gates.
+
+The focused suite passed 126 cases and was independently rerun with the same
+result. All 36 dedicated guard mutants were assertion-killed, with no errors
+counted as kills. The independent implementation review found no introduced
+defect. These are pure protocol proofs; exact-head full-gate and CI evidence
+belongs on the slice's PR, not inferred from these focused results.
