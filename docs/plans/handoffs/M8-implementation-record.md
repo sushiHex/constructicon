@@ -4991,3 +4991,66 @@ host installation, generation qualification or live WRITE. The old attempt
 remains spent. A fresh additive deployment successor must preserve history
 and retain the actual-pin review pause; any further turn needs its own budget
 decision. No frozen plan or protocol byte was changed.
+
+### N5 g8 deployment preparation
+
+The owner approved the next deployment/qualification wave and one additional
+bounded WRITE attempt. The [additive g8 procedure](M8-N5-g8-session.md) pins
+the actual observation-repair merge `59de73b`, not a later documentation head.
+It preserves old-controller g7 continuity before the reboot and uses the
+normal reviewed launch/controller replacement route, not the already-completed
+retention or archive-resume steps. Occupied archive/session destinations stop.
+
+The procedure checks both validated maintenance records for the historical
+strict-integer generation floor 7 before publishing generation 8. This is a
+recorded maintenance fact, not an inference about the live floor after
+activation; publication independently enforces the next generation under its
+retained lock. Every active/refusal control remains required even when natural
+refresh is measured. An explicit refresh is conditional and single-attempt.
+
+Fresh WRITE state and authorization names prevent reuse of the spent attempt.
+The fixed task and limits remain unchanged. The procedure preserves the owner
+review of qualification evidence and the W4 actual-pin/smoke pause before root
+installation and dispatch. It supplies no R6 re-baseline, automatic retry,
+historical cleanup or new interpretation of legacy observations.
+
+This entry records preparation only. Offline shell tests cannot establish
+custody, installation, physical qualification, refresh or a live WRITE result.
+Exact-head review and verification evidence belong to the preparation PR;
+host actions require the reviewed procedure and their own affirmative records.
+
+The focused portable suite passed 55 cases, including permitting and refusing
+transport, continuity, generation-floor, active/refusal controls, conditional
+refresh and composed WRITE paths. Windows substitutes only the unavailable
+POSIX directory-mode operation in the transport rehearsal; it does not prove
+remote ownership or permissions. The accepting path exposed that distinction.
+The occupied-authorization fixture was also corrected to occupy the actual
+harness destination, rather than refusing earlier for missing mint input.
+
+Review of the draft found that the transport example could overwrite a common
+file despite prose forbidding it. The executable example now requires an absent
+per-step package directory before upload and hash verification. The tests
+exercise both fresh transport and preservation of an occupied package.
+
+Offline packaging inspection also found that copying the old verifier shell
+redirections would overwrite historical verification records. A complete
+additive preboot block retains their read-only verifier arguments, streams the
+kernel profile input directly, and emits records to fresh external capture.
+The operator inspects affirmative installation/provenance facts before the
+separate continuity step. The historical workspaces are not rewritten.
+
+The final focused suite passed 61 cases. Its new verifier tests retain actual
+pipe/fail-fast behavior while substituting executable boundaries, and assert
+old file bytes, identities and modes remain unchanged. The fake launch log is
+written after consuming the profile pipe, establishing causal order rather
+than assuming pipeline process scheduling. The actual POSIX acquisition layout
+puts the new relay path at 96 bytes against the 107-byte limit; this is lexical
+evidence, not a physical socket test.
+
+Local package review compared 46 LF-only, syntax-valid shell files and 112
+source segments against the pinned revisions, with 29 per-step manifests.
+It corrected a route ambiguity: R19 is mandatory after the controller verifies
+at the new commit on either path, not only after LR9 replacement. The separate
+script already supported both paths. Package provenance is tied to the actual
+committed procedure revision, never a guessed future head; syntax and source
+equality do not establish execution or physical behavior.
