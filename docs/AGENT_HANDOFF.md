@@ -15,6 +15,32 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #174 — optional inventory fields are not empty tool sets
+
+The pinned N6c source audit supports repeated initialization as a fresh
+current-session mode projection, not an expiry or refresh witness. Cache
+invalidation is conditional; the model client uses the same route predicates.
+The SDK's cached initial/claimed-session answer is a different operation.
+
+At CLI 2.1.296, the native context-usage producer omits both built-in inventory
+arrays that the SDK optionally declares. A permitting fake with empty arrays
+would invent evidence. The audit therefore holds READ implementation until
+the fixed startup predicate is established; it does not prove the client
+incapable. Point-of-use mechanical restriction remains a candidate alternative.
+The headless quota branch is source-excluded, not every startup helper.
+
+The conditional state design was independently reviewed. Two corrections are
+worth retaining: spend callback identity before awaiting a worker, and do not
+claim separate worker launches share the native launcher's byte counter. They
+share the remaining deadline, with per-call and aggregate bounds. N6b remains
+an EOF-closing observation, not a persistent task conversation.
+
+This is source/design evidence only: no new READ code, physical proof, vendor
+execution, credential, model call, host change or production availability.
+Follow-up ownership and acceptance belong to #175 and #40, not this document.
+
+---
+
 ## #171 — initialization completion belongs to the owned exchange
 
 N6b joins the existing process conversation to N6a's finite codec. A mode match

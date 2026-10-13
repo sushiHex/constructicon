@@ -5288,3 +5288,43 @@ behavior is unmeasured. Catalog/configuration, native layout, tools, egress,
 refresh, spending and the task lifecycle need their independent proofs.
 Codex, core contracts, workflows and frozen decisions are unchanged. No vendor
 binary, credential, model call or private-host operation ran for this slice.
+
+### N6c: source-supported mode, unresolved pre-dispatch catalog
+
+[#174](https://github.com/sushiHex/constructicon/issues/174) records the
+[pinned READ source/state review](M8-N6c-READ-state-review.md). CLI 2.1.296 and
+SDK 0.3.296 members were independently rehashed and inspected without execution.
+Two focused source audits and a separate state-design review preceded any
+implementation decision. This slice adds documentation, not a READ adapter.
+
+Repeated bare initialize is a supported fresh current-session mode projection;
+the model client uses the same OAuth-route predicates. A cached credential is
+not intrinsically a failed mode interface, but neither initialize nor the
+potentially cached/seeded `get_usage` proves expiry handling or refresh.
+The current headless quota-probe branch is source-excluded. Neither observation
+qualifies the rest of startup, account configuration or native behavior.
+
+The decisive gap is concrete: the current `get_context_usage` producer omits
+both built-in inventory arrays despite their optional SDK declarations. An
+accepting fake with empty arrays would invent a fact; a later turn's catalog
+cannot authorize its earlier dispatch. The audit does not conclude that no
+supported mechanical restriction or other observation can work. It identifies
+the exact startup/callback predicate and helper closure still to establish.
+`--bare` is not subscription-preserving, and `--safe-mode` leaves managed
+policy and built-ins active; neither is a shortcut around that work.
+
+The conditional design reuses TaskSpec, grants, the acquisition/ProcessIO
+lifetime, and a provider-minted READ workspace. It spends the one dispatch and
+each admitted callback before their uncertain awaits, retains sole-reader
+bytes across worker races, and requires terminal checks, EOF and the same
+joined process result. Review corrected callback spending and an overstated
+shared byte budget: workers have per-call limits and aggregate bounds, while
+all launches share the remaining deadline. N6b's EOF-closing observation stays
+unchanged; it is not repurposed as a persistent conversation.
+
+The conditional implementation gate did not clear, so no READ implementation,
+new tests/mutants or physical proofs are claimed. Document validation and the
+exact-head repository gate are recorded on the PR, not passed off as new
+runtime evidence. Startup-source closure remains the next bounded prerequisite
+under #40; physical qualification remains separate. No vendor binary, account,
+credential, private-host action or model call ran, and no frozen bytes changed.
