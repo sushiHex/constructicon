@@ -24,13 +24,14 @@ from constructicon.core.control import (
     APPROVE_SCOPE,
     READ_SCOPE,
     AuthenticatedActor,
+    CapabilityAccountingSummary,
     ChannelMessagePage,
     ChannelMessageSummary,
     CommandSummary,
     ComponentComparison,
     ControlCode,
+    ControlPlaneStore,
     ControlRejected,
-    ControlStore,
     DetailChunk,
     DetailRef,
     EventPage,
@@ -38,7 +39,7 @@ from constructicon.core.control import (
     NamePage,
     PageInfo,
     RunPage,
-    RunResultPreview,
+    RunResultPreviewV2,
     RunSummary,
     VersionPage,
     VersionSummary,
@@ -73,7 +74,7 @@ class _ControlQueries:
         self,
         *,
         system: Constructicon,
-        store: ControlStore,
+        store: ControlPlaneStore,
         journal: Journal,
         registry: ComponentRegistry,
         cursors: CursorCodec,
@@ -293,32 +294,46 @@ class _ControlQueries:
         self,
         actor: AuthenticatedActor,
         run_id: RunId,
-    ) -> RunResultPreview | ControlRejected:
+    ) -> RunResultPreviewV2 | ControlRejected:
         denied = self._authorize(actor)
         if denied:
             return denied
-        record = self._journal.run_record(run_id)
-        if record is None:
+        snapshot = self._store.capability_accounting_snapshot(run_id)
+        if snapshot is None:
             return self._fault(
                 ControlCode.RUN_UNKNOWN,
                 f"unknown run {run_id!r}",
                 "use a RunId returned by a Constructicon run mutation",
             )
         outputs: dict[str, JsonValue] = {}
-        if record.status is RunStatus.SUCCEEDED:
+        if snapshot.run.status is RunStatus.SUCCEEDED:
             materialized = json_value(self._system.materialize_run(run_id))
             if isinstance(materialized, dict):
                 outputs = self._bounded_mapping(materialized)
         failures: dict[str, str] = {}
-        for event in self._journal.events(run_id, after_seq=0, limit=1_000):
+        failure_events = self._journal.events(run_id, after_seq=0, limit=1_001)
+        for event in failure_events[:1_000]:
             if event.kind == "NodeFailed" and event.path and event.payload:
                 failures[event.path.render()] = str(event.payload.get("error", "failed"))
-        return RunResultPreview(
+        accounting = snapshot.detail
+        reference = self._details.accounting_reference(actor, accounting)
+        if isinstance(reference, ControlRejected):
+            return reference
+        disposed = sum(item.loss == "disposed" for item in accounting.items)
+        opaque = sum(item.loss == "opaque_lost" for item in accounting.items)
+        return RunResultPreviewV2(
+            result_schema_version=2,
             run_id=run_id,
-            status=record.status,
+            status=snapshot.run.status,
             outputs=outputs,
             failures=dict(list(sorted(failures.items()))[:20]),
             detail=self._details.optional_reference(actor, DetailAddress.result(run_id)),
+            failures_partial=len(failure_events) > 1_000 or len(failures) > 20,
+            capability_accounting=CapabilityAccountingSummary(
+                active_count=sum(item.state == "active" for item in accounting.items),
+                disposed_count=disposed, opaque_lost_count=opaque, lost_count=disposed + opaque,
+                through_event_seq=accounting.through_event_seq, detail=reference,
+            ),
         )
 
     def commands_status(

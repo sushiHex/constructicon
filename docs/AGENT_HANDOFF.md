@@ -15,6 +15,24 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #179 — truthful accounting is a coherent public read
+
+Result schema 2 adds complete capability counts and cut-pinned chunked detail;
+the unversioned result decoder remains exact and does not invent zero history.
+Run status and accounting share a SQLite snapshot. Old cuts survive closure,
+resume and reopen, while failure previews explicitly expose their scan/item
+limits. The public payload determines the accounting detail hash.
+
+Batch prefetch reuses the canonical pair projection rather than issuing a
+whole-journal identity query per pair. This removes repeated scans, not all
+global cost. Existing unmarked legacy events remain opaque under the canonical
+historical law; current exact-pair foreign contradictions still refuse. Real
+legacy fixtures and an explicitly synthetic admitted shape distinguish those
+claims. No administrative disposal, physical cleanup, provider operation or
+private-host qualification follows from this read-only slice.
+
+---
+
 ## #179 — capability accounting starts with a positive run fact
 
 The ADR 0022 provenance slice introduces schema 8, not a disposal API. Every

@@ -675,6 +675,7 @@ _sqlite_approvals        approval projection and durable relationships
 _sqlite_control          command transactions and approval application
 _sqlite_channels         messages, acknowledgements, provenance, bounded reads
 _sqlite_queries          bounded run/event projections
+_sqlite_accounting       coherent run/status and historical capability accounting
 ```
 
 This is implementation decomposition, not multiple stores.
@@ -711,9 +712,27 @@ Reads reconstruct that floor after later acquisitions or lifecycle changes,
 so erased legacy evidence cannot become empty accounting. Historical lost
 transitions and initially lost acquisitions have separate migration-only
 witnesses. Current workers cannot mint `lost` or reactivate a historical lost
-acquisition. This implements the provenance foundation of
-[ADR 0022](adr/0022-operator-disposal-records-abandoned-capabilities.md), not its
-public accounting result or administrative disposal command.
+acquisition. Exact retries of proven historical transitions remain observations,
+not permission to mint new loss.
+
+`runs_result` publishes result schema 2 with a complete capability-accounting
+summary and a chunked detail pinned to its event cut. Status and accounting
+come from one SQLite read snapshot. Loss distinguishes positively witnessed
+opaque history from disposal; opaque loss has unknown physical cleanup, never
+an invented receipt. The public accounting payload alone determines its detail
+hash. Historical cuts reconstruct later-closed acquisitions without including
+later acquisitions, and refuse cuts outside the positively proven era.
+
+The old unversioned result model remains an exact compatibility decoder; missing
+accounting is not converted to zero. Failure previews expose partiality when
+their 1,000-event scan or 20-item bound omits evidence. Other result details and
+outputs retain their existing read semantics; this is not a whole-result
+snapshot promise. The accounting reader prefetches retained lease facts once,
+then uses the canonical pair projection: it avoids repeated whole-journal
+identity queries, but still has linear global prefetch cost. Existing opaque
+legacy-event interpretation is unchanged. The administrative disposal command
+from [ADR 0022](adr/0022-operator-disposal-records-abandoned-capabilities.md)
+is a separate slice, not implemented by these reads.
 
 Compatibility preserves exact writer bytes rather than normalizing them into
 today's shape. M1/M2 effect requests omit `run_id`, `manifest_hash`, and `mode`;

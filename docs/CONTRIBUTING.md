@@ -426,10 +426,19 @@ modules: `_sqlite_base`, `_sqlite_schema`, `_sqlite_execution`,
 `_sqlite_execution_facts`, `_sqlite_runs`, `_sqlite_effects`, `_sqlite_leases`,
 `_sqlite_attestations`, `_sqlite_registry`, `_sqlite_actors`, `_sqlite_control`,
 `_sqlite_commands`, `_sqlite_approvals`, `_sqlite_channels`,
-`_sqlite_fact_seals`, `_sqlite_capability_provenance`, and `_sqlite_queries`.
+`_sqlite_fact_seals`, `_sqlite_capability_provenance`, `_sqlite_accounting`,
+and `_sqlite_queries`.
 A Python module move is not a data migration. Preserve SQL shape, transaction boundaries,
 write-once equality, epoch fences, fault-probe positions, canonical bytes, and
 all source-schema fixtures.
+
+Capability accounting is an operation-specific coherent read, not a second
+journal abstraction. Its status and accounting share one transaction, and its
+detail names a validated historical cut. Reuse the canonical pair/history
+projection and positive era proof; do not replace missing legacy evidence with
+zero counts. The result-v2 decoder keeps unversioned historical results exact.
+New public fields must be represented in the bounded summary or canonical,
+chunked public detail, never by leaking a private command or plan representation.
 
 Every new immutable fact or cross-row relationship family needs one
 owner-defined exact hash, primary key, secondary selector where one exists,

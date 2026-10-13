@@ -17,9 +17,10 @@ from constructicon.core.control import (
     INTERACTION_SCOPES,
     READ_SCOPE,
     AuthenticatedActor,
+    CapabilityAccountingDetail,
     ControlCode,
+    ControlPlaneStore,
     ControlRejected,
-    ControlStore,
     DetailChunk,
     DetailRef,
     channel_authority_holder,
@@ -54,6 +55,10 @@ class DetailAddress:
     @staticmethod
     def event(run_id: RunId, seq: int) -> str:
         return f"constructicon://runs/{quote(str(run_id), safe='')}/events/{seq}"
+
+    @staticmethod
+    def accounting(run_id: RunId, through_event_seq: int) -> str:
+        return f"constructicon://runs/{quote(str(run_id), safe='')}/accounting/{through_event_seq}"
 
     @staticmethod
     def command(command_id: str) -> str:
@@ -156,7 +161,7 @@ class DetailResolver:
         self,
         *,
         system: Constructicon,
-        store: ControlStore,
+        store: ControlPlaneStore,
         cursors: CursorCodec,
         journal: Journal,
         registry: ComponentRegistry,
@@ -217,6 +222,18 @@ class DetailResolver:
 
         reference = self.reference(actor, uri)
         return reference if isinstance(reference, DetailRef) else None
+
+    def accounting_reference(
+        self, actor: AuthenticatedActor, payload: CapabilityAccountingDetail,
+    ) -> DetailRef | ControlRejected:
+        """Hash only the strict public accounting projection already read together."""
+
+        uri = DetailAddress.accounting(payload.run_id, payload.through_event_seq)
+        denied = self._family_lock(actor, uri)
+        if denied is not None:
+            return denied
+        public = CapabilityAccountingDetail.model_validate_json(canonical_json(payload))
+        return DetailRef(uri=uri, digest=digest("detail", 1, public.model_dump(mode="json")))
 
     def read(
         self,
@@ -428,6 +445,17 @@ class DetailResolver:
         # through, because a reference minted onto an owner's own response never
         # passes one: `runs_approve` needs approve, not read.
         try:
+            if family == "runs" and len(parts) == 3 and parts[1] == "accounting":
+                cut = int(parts[2])
+                if cut < 0 or str(cut) != parts[2]:
+                    return self._not_found(uri, "accounting cut must be a canonical sequence")
+                snapshot = self._store.capability_accounting_snapshot(
+                    RunId(parts[0]), through_event_seq=cut,
+                )
+                if snapshot is None:
+                    return self._not_found(uri, "accounting run does not exist")
+                return snapshot.detail.model_dump(mode="json")
+
             if family == "runs" and len(parts) == 2:
                 run_id = RunId(parts[0])
                 run_record = self._journal.run_record(run_id)

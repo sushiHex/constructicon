@@ -38,7 +38,7 @@ from constructicon.core.control import (
     NamePage,
     PromotionCommandResult,
     RunPage,
-    RunResultPreview,
+    RunResultPreviewV2,
     RunSubmission,
     RunSummary,
     VersionPage,
@@ -133,7 +133,7 @@ def create_mcp_server(
         return control.runs_events(await actor(), RunId(run_id), cursor=cursor, limit=limit)
 
     @server.tool(description="Read one bounded run-result preview plus full-detail reference.")
-    async def runs_result(run_id: str) -> RunResultPreview | ControlRejected:
+    async def runs_result(run_id: str) -> RunResultPreviewV2 | ControlRejected:
         return control.runs_result(await actor(), RunId(run_id))
 
     @server.tool(description="Read one durable command and its stored result.")
@@ -362,6 +362,15 @@ def _register_detail_resources(
     )
     async def run_result(run_id: str) -> str:
         return await chunk(f"constructicon://runs/{run_id}/result")
+
+    @server.resource(
+        "constructicon://runs/{run_id}/accounting/{through_event_seq}",
+        name="run-capability-accounting",
+        description="Capability accounting at one immutable proven event cut.",
+        mime_type="application/json",
+    )
+    async def run_accounting(run_id: str, through_event_seq: str) -> str:
+        return await chunk(f"constructicon://runs/{run_id}/accounting/{through_event_seq}")
 
     @server.resource(
         "constructicon://runs/{run_id}/events/{seq}",
