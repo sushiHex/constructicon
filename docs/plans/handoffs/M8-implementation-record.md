@@ -4968,3 +4968,26 @@ unfinished callback is invalid; possibly-dispatched failure and partial
 outcomes retain their observations without that fault. The producer confirms
 that `completed` means an accepted `ExecutorSuccess`, not mere process exit.
 No introduced consequence was found in that narrow review.
+
+**Merged proof.** PR #164 merged as
+`59de73bbc9b6f6a9a814b6193f0252e92d1bdd3e`, whole-tree identical to reviewed
+`f6972a8ad6e516fcc77f2874ac5ae0346228ad1a`. Exact-head Linux verification
+passed 4,965 tests with 409 skips, lint, strict types, all five import contracts,
+the isolated controller import and structural-channel checks. Qualification
+and all four containment lanes passed. Combined ran 141 tests, including the
+unskipped physical no-change capture case. Each of the 61 WRITE inventory
+labels was matched to an assertion-killed result, with no `NOT PROVEN` result.
+
+The baseline Windows full gate passed 4,621 tests with 750 platform skips.
+The later connector correction passed 36 focused local tests, three new
+assertion-killed mutants and 94 documentation/inventory checks; it received
+the exact-head Linux full gate above, not a second Windows full run. All 78
+planning digests matched. The connector finding was answered with verified
+evidence and resolved before merge; its narrow independent follow-up found
+no introduced consequence. No additional broad connector pass is claimed.
+
+This merge establishes implementation and credential-free proof, not a new
+host installation, generation qualification or live WRITE. The old attempt
+remains spent. A fresh additive deployment successor must preserve history
+and retain the actual-pin review pause; any further turn needs its own budget
+decision. No frozen plan or protocol byte was changed.
