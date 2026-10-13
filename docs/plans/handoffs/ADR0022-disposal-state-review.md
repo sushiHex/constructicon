@@ -110,6 +110,11 @@ neither. Later idleness cannot restore that plan's baseline or change refusal
 wording. Command ownership loss and journal damage are separate failures, not
 evidence of domain supersession.
 
+The application result distinguishes a validated receipt from an explicit
+typed supersession fact. Only a completed, validated baseline comparison may
+produce that fact. An optional receipt lookup represents absence only; it is
+never itself evidence that comparison ran or that the domain was superseded.
+
 Every retry and rejection path resolves the command's validated receipt first.
 Matching lost rows do not establish command ownership of disposal. A command
 with its own committed receipt can never become rejected, including through
