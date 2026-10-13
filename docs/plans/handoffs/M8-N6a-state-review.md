@@ -159,3 +159,25 @@ Each new guard gets a measured assertion-killed mutant in the dedicated inventor
 registered once in the existing CI matrix. No vendor executable, SDK import,
 credentials or network is used by these tests. Exact-head verification and
 independent review are required before claiming this bounded slice complete.
+
+## Credential-free implementation evidence
+
+The implementation is 137 lines in `substrate/executors/claude_protocol.py`:
+the two proposed functions, two closed enums, and one private argument check.
+The initial tests-only run failed collection because the implementation was
+absent; that is test-first ordering, not evidence of a semantic guard kill.
+
+On the implemented snapshot, the focused protocol suite executed **126 passed**
+in 0.26 s, including both plans, the at-limit matching response, and over-limit
+refusals. Explicit bounded pytest IDs preserve the large bound-testing inputs
+without inflating `PYTEST_CURRENT_TEST`. Ruff passed for the codec, tests and
+inventory; strict mypy passed for this one new source file. New inventory metadata
+and one-place CI registration checks passed alongside the suite (128 passed,
+33 deselected). `git diff --check` passed.
+
+`scripts/check_claude_protocol_mutations.py` executed **36 assertion-killed
+mutants**, exit 0, with no NOT PROVEN result. These mutate only isolated child
+code objects; no source file is rewritten. The inventory is registered once in
+the existing portable mutation matrix. CI has not executed that workflow change
+locally, and a full repository gate / final-head review remains separate evidence.
+No native executable, SDK import, credentials, model call or host was exercised.
