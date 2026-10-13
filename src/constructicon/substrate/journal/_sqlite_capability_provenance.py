@@ -128,7 +128,14 @@ def accounting_inventory_hash(histories: Sequence[CapabilityLeaseHistory], floor
     return digest("capability-accounting-inventory", 1, inventory)
 
 
-def accounting_run_row(connection: sqlite3.Connection, run_id: RunId) -> sqlite3.Row:
+def capability_run_world_row(connection: sqlite3.Connection, run_id: RunId) -> sqlite3.Row:
+    """Prove the immutable world used by a capability's point era projection.
+
+    A writer may already have allocated its next event inside this transaction.
+    Point authority does not require that staged event to have been inserted;
+    external accounting separately proves the complete committed event extent.
+    """
+
     row = connection.execute(
         "SELECT r.*, o.origin_json FROM runs AS r"
         " LEFT JOIN run_origins AS o ON o.run_id = r.run_id WHERE r.run_id = ?",
@@ -137,8 +144,15 @@ def accounting_run_row(connection: sqlite3.Connection, run_id: RunId) -> sqlite3
     if row is None:
         raise JournalDamaged(f"capability accounting run {run_id!r} has no retained world")
     validated_run_world(connection, row)
-    validated_event_fence(connection, run_id=run_id, next_event_seq=row["next_event_seq"])
     return cast(sqlite3.Row, row)
+
+
+def accounting_run_row(connection: sqlite3.Connection, run_id: RunId) -> sqlite3.Row:
+    """Prove the run world and complete event extent for coherent accounting."""
+
+    row = capability_run_world_row(connection, run_id)
+    validated_event_fence(connection, run_id=run_id, next_event_seq=row["next_event_seq"])
+    return row
 
 
 def require_accounting_absence(connection: sqlite3.Connection, run_id: RunId) -> None:
@@ -202,7 +216,10 @@ def require_accounting_era(
         selector=str(run_id),
         fact_hash=accounting_era_fact_hash(era),
     )
-    if era.world_hash != run_world_fact_hash(run) or era.floor > run["next_event_seq"]:
+    fence = _durable_sequence(
+        run["next_event_seq"], fact="capability accounting run fence", allow_zero=True,
+    )
+    if era.world_hash != run_world_fact_hash(run) or era.floor > fence:
         raise JournalDamaged(
             f"capability accounting era for run {run_id!r} contradicts its world/floor"
         )
@@ -356,7 +373,9 @@ def require_capability_lost_provenance(
 ) -> int:
     lost_events = _lost_events(history)
     initial_lost = history.legacy is not None and history.legacy.state == "lost"
-    era = require_accounting_era(connection, accounting_run_row(connection, history.lease.run_id))
+    era = require_accounting_era(
+        connection, capability_run_world_row(connection, history.lease.run_id),
+    )
     if not lost_events and not initial_lost and history.legacy is None:
         return 0
     if era.source != "schema7-migration":

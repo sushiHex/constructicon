@@ -117,20 +117,38 @@ MUTANTS = (
     (
         "ordinary active point paths cannot skip positive era evidence",
         PROVENANCE + "require_capability_lost_provenance",
-        "    era = require_accounting_era(connection, accounting_run_row(connection, history.lease.run_id))\n"
+        "    era = require_accounting_era(\n"
+        "        connection, capability_run_world_row(connection, history.lease.run_id),\n"
+        "    )\n"
         "    if not lost_events and not initial_lost and history.legacy is None:\n"
         "        return 0",
         "    if not lost_events and not initial_lost and history.legacy is None:\n"
         "        return 0\n"
-        "    era = require_accounting_era(connection, accounting_run_row(connection, history.lease.run_id))",
+        "    era = require_accounting_era(\n"
+        "        connection, capability_run_world_row(connection, history.lease.run_id),\n"
+        "    )",
         JOURNAL_TESTS + "test_current_active_capability_paths_require_positive_era[close]",
     ),
     (
         "new acquisitions require their run accounting era",
         EXECUTION + "_SqliteExecutionMixin.record_capability_lease",
-        "require_accounting_era(conn, accounting_run_row(conn, lease.run_id))",
+        "require_accounting_era(conn, capability_run_world_row(conn, lease.run_id))",
         "pass  # new acquisition is not permission to repair missing run evidence",
         JOURNAL_TESTS + "test_current_active_capability_paths_require_positive_era[acquire]",
+    ),
+    (
+        "point era proof permits a lawful allocated event inside its transaction",
+        PROVENANCE + "require_capability_lost_provenance",
+        "capability_run_world_row(connection, history.lease.run_id)",
+        "accounting_run_row(connection, history.lease.run_id)",
+        JOURNAL_TESTS + "test_terminal_transition_proves_era_inside_its_staged_event_transaction[succeeded]",
+    ),
+    (
+        "external accounting proves the complete committed event extent",
+        PROVENANCE + "accounting_run_row",
+        'validated_event_fence(connection, run_id=run_id, next_event_seq=row["next_event_seq"])',
+        "pass  # point world proof is not a complete accounting snapshot",
+        JOURNAL_TESTS + "test_external_accounting_still_requires_complete_committed_event_extent",
     ),
 )
 

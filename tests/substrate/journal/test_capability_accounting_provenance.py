@@ -11,10 +11,111 @@ from tests.run_worlds import create_test_run, start_test_run
 from constructicon.core.address import ExecutionPath, RunId, ScopePath
 from constructicon.core.errors import ContractViolation, JournalDamaged
 from constructicon.core.manifest import CapabilityLease
+from constructicon.core.run import TERMINAL_STATUS_EVENTS, RunStatus
 from constructicon.core.workspace import lease_id_for
 from constructicon.substrate.journal.sqlite import SCHEMA_VERSION, SqliteJournal
 
 RUN = RunId("run-capability-provenance")
+
+
+@pytest.mark.parametrize("target", tuple(TERMINAL_STATUS_EVENTS))
+def test_terminal_transition_proves_era_inside_its_staged_event_transaction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: RunStatus,
+) -> None:
+    from tests.conftest import FakeClock
+    from tests.substrate.journal.test_lease_projection import _recorded_lease
+
+    from constructicon.substrate.journal import _sqlite_capability_provenance as provenance
+
+    journal, worker, active, database = _recorded_lease(tmp_path, FakeClock())
+    journal.transition_capability_lease(
+        worker, lease_id=active.lease_id, acquisition_epoch=active.acquisition_epoch,
+        expected=frozenset({"active"}), target="closed", disposition="released",
+    )
+    original = provenance.require_accounting_era
+    observed = []
+
+    def observe(connection, run):
+        maximum = connection.execute(
+            "SELECT MAX(seq) FROM events WHERE run_id = ?", (worker.run_id,),
+        ).fetchone()[0]
+        observed.append((run["next_event_seq"], maximum))
+        return original(connection, run)
+
+    monkeypatch.setattr(provenance, "require_accounting_era", observe)
+    try:
+        journal.transition_run(
+            worker, expected=frozenset({RunStatus.RUNNING}), target=target,
+            event_kind=TERMINAL_STATUS_EVENTS[target],
+        )
+    except JournalDamaged as damage:
+        pytest.fail(f"lawful staged terminal transition was refused: {damage}")
+    assert len(observed) == 1
+    fence, maximum = observed[0]
+    assert fence == maximum + 1
+    monkeypatch.undo()
+    assert journal.run_state(worker.run_id).status is target
+    assert journal.events(worker.run_id)[-1].seq == fence
+    assert journal.capability_leases(worker.run_id)[0].state == "closed"
+    assert SqliteJournal(database).run_state(worker.run_id).status is target
+
+
+def test_terminal_transition_refuses_missing_era_without_mutating_its_transaction(
+    tmp_path: Path,
+) -> None:
+    from tests.conftest import FakeClock
+    from tests.substrate.journal.test_lease_projection import _recorded_lease
+
+    journal, worker, active, database = _recorded_lease(tmp_path, FakeClock())
+    journal.transition_capability_lease(
+        worker, lease_id=active.lease_id, acquisition_epoch=active.acquisition_epoch,
+        expected=frozenset({"active"}), target="closed", disposition="released",
+    )
+    with sqlite3.connect(database) as connection:
+        before = {
+            table: connection.execute(f"SELECT * FROM {table}").fetchall()
+            for table in ("runs", "events", "capability_leases")
+        }
+        connection.execute("DELETE FROM capability_accounting_eras")
+        connection.execute(
+            "DELETE FROM durable_fact_seals WHERE family = 'capability_accounting_era'"
+        )
+    with pytest.raises(JournalDamaged, match="era"):
+        journal.transition_run(
+            worker, expected=frozenset({RunStatus.RUNNING}), target=RunStatus.CANCELLED,
+            event_kind="RunCancelled",
+        )
+    with sqlite3.connect(database) as connection:
+        assert {
+            table: connection.execute(f"SELECT * FROM {table}").fetchall()
+            for table in before
+        } == before
+
+
+def test_external_accounting_still_requires_complete_committed_event_extent(
+    tmp_path: Path,
+) -> None:
+    from tests.conftest import FakeClock
+    from tests.substrate.journal.test_lease_projection import _recorded_lease
+
+    from constructicon.substrate.journal._sqlite_capability_provenance import accounting_run_row
+
+    journal, worker, _active, database = _recorded_lease(tmp_path, FakeClock())
+    with sqlite3.connect(database) as connection:
+        fence = connection.execute("SELECT next_event_seq FROM runs").fetchone()[0]
+        connection.execute("DELETE FROM events WHERE seq = ?", (fence,))
+        assert connection.execute("SELECT COUNT(*) FROM events").fetchone()[0] == fence - 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM capability_accounting_eras"
+        ).fetchone()[0] == 1
+    with journal._read() as connection, pytest.raises(JournalDamaged, match=r"event.*fence"):
+        accounting_run_row(connection, worker.run_id)
+    with pytest.raises(JournalDamaged):
+        journal.capability_leases(worker.run_id)
+    with pytest.raises(JournalDamaged):
+        SqliteJournal(database)
 
 
 def test_new_runs_co_commit_positive_creation_eras(tmp_path: Path) -> None:

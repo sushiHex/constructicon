@@ -55,7 +55,7 @@ from constructicon.substrate.journal._sqlite_base import (
 )
 from constructicon.substrate.journal._sqlite_capability_provenance import (
     CapabilityLeaseHistory,
-    accounting_run_row,
+    capability_run_world_row,
     require_accounting_absence,
     require_accounting_era,
     require_capability_lost_provenance,
@@ -700,7 +700,7 @@ class _SqliteExecutionMixin:
             run = _run_mutation_row(conn, lease.run_id)
             if run is None:
                 raise ContractViolation("capability acquisition has no retained run")
-            require_accounting_era(conn, accounting_run_row(conn, lease.run_id))
+            require_accounting_era(conn, capability_run_world_row(conn, lease.run_id))
             existing = _capability_lease_row(
                 conn,
                 lease_id=capability_lease.lease_id,

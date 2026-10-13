@@ -5453,10 +5453,16 @@ nonlegacy active point path returned before proving its era, so an ordinary
 worker close could commit after that era was erased. Era validation now
 precedes the shared point-path return, and new acquisition requires it too.
 Permitting reads and closure still work; point/close/acquire refusal tests
-assert unchanged rows, event extent and ownership. The checks reuse canonical
-run/world/extent validation; they do not introduce a global cache or put full
-inventory validation into event allocation. Repeated point validation has a
-cost, not a claim of constant-time whole-run accounting.
+assert unchanged rows, event extent and ownership. The first correction exposed
+another state boundary in full CI: terminalization reserves an event sequence
+before its capability projection, so a complete event-extent check there
+rejects the transaction's legitimate intermediate state. Point era proof now
+uses the canonical immutable world; the external accounting wrapper adds the
+complete committed extent proof. There is no skip-validation flag. Four
+terminal-status permitting tests affirm the allocated-but-not-inserted state,
+and separate tests retain missing-era refusal and external extent damage.
+No global cache or full inventory validation was added to event allocation.
+Repeated point world validation has a cost, not a constant-time whole-run claim.
 
 Issue #179 remains open for truthful result v2/detail accounting and the
 administrative disposal command, including transaction/replay and host
