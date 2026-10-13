@@ -15,6 +15,39 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #78 — bounded WRITE observations, not another attempt
+
+**Merged `59de73b` (PR #164), byte-identical to reviewed `f6972a8`.**
+The owner-authorized narrow adapter exception records bounded callback
+admissions, successful response writes and finite worker-result observations
+in the existing attempt record. Progress is a lower bound; legacy absence
+stays unknown. WRITE reports use schema 2; smoke stays at 1. The qualification
+writer now refuses a captured candidate equal to the sealed base before its
+checkpoint or gate acquisition. Generic Git and gate semantics are unchanged.
+
+Exact-head Linux verification passed 4,965 tests with 409 skips, strict types
+and all five import contracts. Runner qualification and all four physical
+lanes passed, including the unskipped real no-change capture test. All 61
+WRITE mutants were assertion-killed. Local full verification of the baseline
+passed 4,621 with 750 platform skips; the later correction had focused local
+proofs and exact-head Linux full verification, not a second Windows full run.
+
+**Corrections worth retaining:** a visible final snapshot is not proof that
+directory sync returned successfully. Separately, valid bounded observations
+can contradict a successful attempt. The connector found that introduced P2;
+both report projection and the public passing contract now share the response
+completion law. The fix was reproduced, mutation-pinned and independently
+reviewed; its thread was resolved before merge. Zero-callback success, legacy
+unknowns and truthful incomplete failure observations remain representable.
+
+This does not establish why the prior live turn captured no change, successful
+live WRITE, or a new attempt budget. Its dispatched authorization remains
+spent. No host action or model call ran. Changed adapter bytes require fresh
+installation and qualification; g7 cannot qualify them. Frozen plans and
+`codex_protocol.py` remain unchanged. Current decisions belong on #78.
+
+---
+
 ## #159 — archive records by custody, not inherited umask
 
 **Merged `aec6a85` (PR #162), byte-identical to reviewed `21211a6`.**
