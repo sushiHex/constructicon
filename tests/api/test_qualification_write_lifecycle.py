@@ -359,8 +359,10 @@ async def test_qualified_write_actual_entry_joins_and_reports_exact_candidate(
 ):
     launcher = portable_launcher(contents=contents)
     assembly, auth = await sealed_assembly(tmp_path, launcher, portable_binding[1:])
-    async with asyncio.timeout(30):
-        report = await qualification.qualify_write(assembly=assembly, authorization=auth)
+    # The real entry owns its observation/task/process budgets. A redundant
+    # wall-clock scenario timer can abort before any report exists and cannot
+    # establish whether this exact candidate passed or failed.
+    report = await qualification.qualify_write(assembly=assembly, authorization=auth)
     journal = assembly.resources.journal
     assert journal.run_state(auth.run_id).status is (
         RunStatus.SUCCEEDED if passed else RunStatus.FAILED

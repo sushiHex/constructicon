@@ -5116,3 +5116,44 @@ principal/scope continuity or complete M8. N4/N5/Codex acceptance and publicatio
 require explicit profile-specific disposition on the owning issues. Claude N6
 and Pi/integrated N7 receive no Codex credit; the unselected gateway is not native
 conformance. Frozen plans and protocol bytes remain unchanged.
+
+### Qualification scenarios: affirmative crash and report witnesses (#170)
+
+PR #169's exact-head CI passed, but its local full verification at `d2915ef`
+finished with four failures, 4,808 passes and 750 skips in about 6,705 seconds.
+Both successor-budget cases failed; both exact WRITE candidate cases reported
+timeouts. The original detailed trace was not retained. A separate unchanged-head
+focused rerun passed all four in 48.60 seconds. That does not establish the
+original cause, erase the failed full run or constitute a passed local gate.
+The affected qualification code and tests were unchanged from `ee7071f`.
+
+The separate [#170](https://github.com/sushiHex/constructicon/issues/170) tests-only
+slice reproduces two narrower premises deterministically. A held materialization
+plus an injected observer timeout leaves a discarded acquisition, not the
+intended active post-crash custody. An outer WRITE scenario timer can abort before
+the real entry returns any report. Both old scenarios assertion-failed under the
+controlled seams in 7.08 seconds; no seconds-long delay or retry supplied the
+ordering. These proofs are not a reconstruction of the lost full-suite trace.
+
+The recovery scenario now signals immediately after real materialization and
+immediately before `InjectedCrash`, without an intervening await. It races that
+fact against observer termination, removes the synthetic observation timer only
+for this test harness, then cancels and joins the observer. Both owned tasks are
+joined on every exit. The real grants, lease/authorization budgets, retained
+active custody and both successor-epoch outcomes remain unchanged. Failed,
+timed-out and cancelled early observers cannot stand in for the crash or start
+successor reconciliation. The WRITE scenario removes only its redundant outer
+30-second timer; production observation/task/Git/gate limits and every candidate,
+report, callback, closure and unchanged-target assertion remain.
+
+Focused execution passed the four affected cases plus two controlled premise
+cases (six passes in 40.30 seconds). The final five controlled/early-observer
+cases passed in 18.07 seconds, including those two premises again; these runs
+cover nine distinct cases, not eleven. Ruff passed on all three affected test
+modules. The parent independently inspected the narrow scenario correction;
+exact-head repository verification, CI and final review remain pending. #110's
+closed, separately traced scenarios are not credited as this slice's proof.
+
+No production code, default deadline, task/lease budget, vendor binary, host,
+credential, model call, frozen plan or native qualification changed. This fixes
+test scenario oracles, not a claimed product root cause or an inferred live pass.
