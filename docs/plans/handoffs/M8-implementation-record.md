@@ -5054,3 +5054,65 @@ at the new commit on either path, not only after LR9 replacement. The separate
 script already supported both paths. Package provenance is tied to the actual
 committed procedure revision, never a guessed future head; syntax and source
 equality do not establish execution or physical behavior.
+
+### N5 g8: the bounded live WRITE passed
+
+The [installation record](https://github.com/sushiHex/constructicon/issues/78#issuecomment-6137309017)
+and [complete g8 qualification](https://github.com/sushiHex/constructicon/issues/78#issuecomment-6137285152)
+establish execution separately from preparation. Procedure `ca007a5` merged
+in PR #166 as `6569dc7`; the installed controller was
+`59de73bbc9b6f6a9a814b6193f0252e92d1bdd3e`. On clean boot
+`b1d76090-8369-4197-ac4b-02647a6ee18e`, launch/controller replacement preserved
+the store and qualification authority identities. Computed LR8 tree drift
+justified replacement; R19/preflight passed before maintenance.
+
+Fresh maintenance and continuity checks passed; both validated records named
+historical floor 7 before g8 publication/activation. All H7 controls and stale-g7
+refusal passed even though natural refresh was unmeasured. The single conditional
+H8 explicitly measured refresh in completed schema-5 evidence. The transport
+stop required [bounded owner-authorized resume](https://github.com/sushiHex/constructicon/issues/78#issuecomment-6137118466),
+not historical overwrite or refund. Complete checks, not empty faults, offline
+package equality or prior/mixed-head local gates, establish these live results.
+
+After the owner reviewed the [actual W4 pins and passing independent smoke](https://github.com/sushiHex/constructicon/issues/78#issuecomment-6137328017),
+the [exact-pin W5/W6 approval](https://github.com/sushiHex/constructicon/issues/78#issuecomment-6138388983)
+authorized one additional bounded WRITE. W1 repeated drift/qualification/binding
+checks. Unchanged W5/W6 each ran once with LF/hash checks and exclusive custody;
+no new pin, retry, remint, recovery, cleanup or target installation followed.
+
+The [published W6 result](https://github.com/sushiHex/constructicon/issues/78#issuecomment-6138432607)
+reports `passed`, terminal observation, succeeded run, complete details and no
+issues for `run-4ed277bbbeb06a7a40968518ab94eb7f`. Epoch 1 completed successfully;
+the validated checkpoint chain binds base `135710f5793f33135ab3c6a751e1baba9c8f9ed3`
+to changed candidate `bbf71186ad0e1cf7964760dd54116db34e19b177` and tree
+`9942fa280f2fb73e5426624bd53e8be1ea4ca419`. A candidate-bound journal attestation
+and the one fixed check passed. Executor, workspace and gate obligations were
+all closed/released; the target remained unchanged. Public authority, workspace,
+gate and report identities matched the reviewed W4 projection.
+
+Read-only local validation passed the strict schema-2 contract: 4,401 canonical
+bytes against its existing 16,000-byte report bound, not the authorization
+reader's separate limit or a fresh private-journal inspection. Smoke remains
+schema 1 and proves deterministic composition, not authenticated callbacks.
+
+The final callback snapshot contains one admitted start, one completed response
+and one successful worker result. It is not an inbound-request census or a
+directory-fsync acknowledgment. Requested model was `gpt-6.1-sol`, effort `low`;
+served model was absent. Observed input/output tokens were 11,811/141; backend
+request and vendor retry counts stayed unknown. The recorded exchange/capture,
+callback, gate/check, byte and observation limits held their existing meanings:
+observation is not a total cleanup deadline, and no hard token or finite monetary
+ceiling or zero spend is proved.
+
+The [earlier READ T5 disposition](https://github.com/sushiHex/constructicon/issues/78#issuecomment-6101919423)
+remains its own pinned history with no T6, not a new READ run. The earlier
+dispatched no-change attempt remains spent and its
+private evidence preserved; this result neither explains its model behavior
+nor refunds its budget. No private seal, credential, execution locator or
+model/callback text is added here.
+
+Observed success does not publish a provider, auto-enable a profile, attest
+principal/scope continuity or complete M8. N4/N5/Codex acceptance and publication
+require explicit profile-specific disposition on the owning issues. Claude N6
+and Pi/integrated N7 receive no Codex credit; the unselected gateway is not native
+conformance. Frozen plans and protocol bytes remain unchanged.
