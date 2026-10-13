@@ -5360,3 +5360,37 @@ not permission to weaken the startup gate. Current ownership and the remaining
 fixed-policy/through-turn MCP requirements stay on #175; #40 stays open.
 No vendor process, credentials, model call, private host, accepted ADR, frozen
 plan or Codex code was touched. Exact-head validation belongs on the PR.
+
+### #143 — Fable refinements before the owner decision
+
+Proposed [ADR 0022](../../adr/0022-operator-disposal-records-abandoned-capabilities.md)
+was revalidated at `dfd116b`, after #132's terminal guard merged. Its historical
+`d355416` baseline is preserved. The owner requested a focused Fable review;
+`job_8619e11741b0` ran `claude-fable-5-1` read-only and found seven improvements
+or tradeoffs, with no acceptance-blocking correctness finding. The ADR records
+each source-checked disposition, including the rejected simplification.
+
+Two qualified simplifications reduce new machinery. Disposal still compares
+and applies the full batch atomically, but its immutable supersession refusal
+can use existing separate terminal recording, with receipt-first retry and an
+explicit crash proof. Accounting floors become migration-only records for
+runs with legacy acquisitions, not a new co-commit on every run. Zero-floor
+history requires positive acquisition/history, reverse-inventory and event-
+extent proof; absence of a floor is not permission. These are proposed design
+obligations, not implemented guarantees.
+
+Removing historical lost support was rejected by actual writer evidence.
+The schema-7 public transition API writes `lost`/`None` accepted after reopen.
+The actual schema-6 writer at `181672a` accepts initially lost acquisitions;
+its database migrates through `dfd116b` to an exact initial-lifecycle seal.
+Both credential-free probes passed. No internal caller using a value is not
+proof that a public writer could never emit it. The two historical witness
+families and opaque-lost accounting remain.
+
+The revision also distinguishes host deferral from restart recovery, separates
+the ADMIN definition from the MCP delegation ADR, and records the exact-query
+cost and optional-accounting-query alternative. Result v2 remains intentional
+so abandonment appears on the ordinary result surface. The existing 58-test
+cleanup suite passed on Python 3.12; no disposal behavior is credited to it.
+Proposal/document validation belongs to the PR. No runtime implementation,
+owner acceptance, physical disposal, account or private-host action occurred.
