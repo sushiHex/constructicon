@@ -15,6 +15,29 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #143 — simplify evidence only after proving its replacement
+
+The further Fable review of ADR 0022 simplifies terminal rejection: it can
+follow a monotone supersession comparison separately, with receipt-first
+replay. Its second simplification did not survive the connector review:
+sparse migration floors cannot distinguish erased eventless legacy data from
+complete empty history. Keep a positively sealed era for every run and bind
+the exact migration inventory; only co-committed current creation proves zero.
+The owner accepted the decision and staged implementation on 2026-10-13.
+This is design evidence, not implemented disposal behavior.
+
+One tempting simplification was false: lack of internal `lost` callers does
+not mean no old writer can produce lost data. Credential-free probes used the
+schema-7 public transition writer and actual schema-6 initial-acquisition
+writer, including reopen/migration. Both lawful shapes exist, so both historic
+witness families remain. A future implementation must preserve them.
+
+Disposal also does not clear RunHost's failure deferral. The deferring host
+requires fresh explicit resume; a restarted host can recover normally. No
+accounting transition proves physical cleanup or releases resource fencing.
+
+---
+
 ## #175 — initial strict configuration is not a lifetime restriction
 
 The CLI 2.1.296 source audit establishes ordinary tool-pool membership at

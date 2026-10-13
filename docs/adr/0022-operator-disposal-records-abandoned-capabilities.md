@@ -1,12 +1,21 @@
 # 0022 — Operator disposal records abandoned capability accounting
 
-Status: Proposed
+Status: Accepted (2026-10-13)
 
 Issue: [#143](https://github.com/sushiHex/constructicon/issues/143).
-Baseline inspected: `d355416`. Only the owner may accept this ADR. Merging its
-documentation under the normal PR gate does not accept it; the issue remains
-open. Implementation needs a separate issue after owner acceptance and the
-merge of [#132](https://github.com/sushiHex/constructicon/issues/132).
+Baseline inspected: `d355416`. The owner accepted the recommended ADR decision
+and implementation sequence on 2026-10-13: "do 1-4 ... all related work is
+approved." Acceptance covers accounting abandonment, unchanged physical
+fencing, persistence schema 8 and explicit result projection v2. Review of the
+acceptance revision restores positive per-run provenance as described below;
+it does not relax the decision. Implementation remains separate from this
+documentation and follows the merged
+[#132](https://github.com/sushiHex/constructicon/issues/132).
+
+Current-source revalidation, 2026-10-13, at `dfd116b`: #132's terminal guard
+is merged and the journal remains schema 7. The historical baseline below is
+unchanged. Fable's subsequent improvement review and dispositions are recorded
+below. Owner acceptance changes design authority, not implementation status.
 
 ## Problem and existing facts
 
@@ -30,7 +39,12 @@ prevents an already recorded cancellation from being observed on each attempt.
 The existing `CapabilityLease` contract permits `active`, `closed`, and `lost`.
 Its durable table identity is `(lease_id, acquisition_epoch)`; a logical lease
 id alone can name several physical acquisitions. The current recovery loop
-selects only `active` rows from older epochs. No current writer records `lost`.
+selects only `active` rows from older epochs. No internal lifecycle caller
+currently requests `lost`, but the public journal writer can lawfully record
+it. The schema-7 writer, canonical reader and reopen path accept `lost`/`None`;
+older writers can also record an initially lost acquisition. Historical lost
+facts therefore cannot be classified as damage merely because no internal
+call site currently requests them.
 The existing `transition_capability_lease` requires worker `RunLease` authority,
 and the journal checks exact canonical `LeaseTransition` payloads. Neither is
 an administrative disposal API.
@@ -48,7 +62,7 @@ Source anchors: [resume contracts](../../src/constructicon/core/control.py),
 [result query](../../src/constructicon/api/_control_queries.py), and
 [result detail](../../src/constructicon/api/detail.py).
 
-## Proposed decision
+## Decision
 
 Add one transport-neutral control mutation, `runs_dispose_capabilities`, requiring
 `constructicon:admin` and a caller idempotency key. It abandons accounting for
@@ -81,8 +95,10 @@ callers must not place credentials or private resource paths in it.
 Authorization precedes command claiming or lifecycle startup. An OPERATE actor,
 even the run's submitting actor, cannot dispose. A transport derives its actor
 and delegates once; it accepts no caller-authored identity or authority object.
-The API may be exposed through an ADMIN-gated MCP handler under ADR 0012; MCP
-does not acquire journal authority of its own.
+The API may be exposed through an MCP handler using the existing
+[`ADMIN_SCOPE`](../../src/constructicon/core/control.py) gate. ADR 0012 owns
+the transport's single-delegation rule, not that scope's definition; MCP does
+not acquire journal authority of its own.
 
 Plan preparation uses one coherent journal read of the run and all named rows.
 Admit only RUNNING with `owner_id=None` and every named row belonging to that
@@ -171,7 +187,11 @@ If disposal commits first, a later worker claim observes its new events and
 ordinarily advances the epoch; recovery skips the lost rows. An old explicit
 resume plan can be superseded by the new event fence. In particular, a
 submitted intent queued before worker claim can be dropped by the pump after
-disposal, then ordinary RUNNING recovery can start an attempt. Submission is
+disposal, then ordinary RUNNING recovery can start an attempt when the host
+has not deferred that run. The host that reported persistent cleanup failure
+skips its deferred run until an explicit `runs_resume` clears the deferral;
+disposal does not clear it. A restarted host has no such process-local
+deferral and may recover ordinarily. Submission is
 not proof the queued attempt claimed its fence. A fresh resume key is needed if the
 operator requests a new explicit attempt; disposal does not guarantee that
 every route needs one or that an old submitted command becomes rejected.
@@ -221,20 +241,29 @@ classification. Fixtures produced by the actual old journal writer must prove
 the retained shapes. Existing lease events, legacy seals, plans, responses, and
 manifests retain their bytes.
 
-The same migration records a positively sealed per-run
-`capability_accounting_era` row, keyed and selected by run id, binding the
-exact retained run world,
-`source="schema7-migration"`, and that run's event-sequence floor. The floor is
-the validated latest sequence at migration, not a sequence invented for a
-legacy initial lifecycle. Its witnesses must name only facts at or before
-that floor. New runs co-commit their era row with creation, using
-`source="schema8-creation"` and floor zero; their full history begins at
-creation.
-Only migration can classify an existing run as migrated, and only actual new
-creation can mint the new-run era. Row-to-seal and run-to-era inventories
-reject missing, deleted, moved, or altered era evidence; a current open cannot
-repair it. This small operation-specific era record bounds the accounting
-projection described below; it is not a new generic query facility.
+The same migration records one positively sealed `capability_accounting_era`
+for every retained run. Keyed and selected by run id, it binds the exact run
+world, `source="schema7-migration"`, the validated latest event sequence as its
+accounting floor, and a digest of the canonical complete acquisition/lifecycle
+inventory at that floor. Include legacy acquisitions in every state, not only
+lost rows. This is a commitment to the validated migration snapshot, not an
+invented event position for an old initial lifecycle. Only migration may mint
+that source. New runs co-commit their era with creation, using
+`source="schema8-creation"`, floor zero and the canonical empty inventory.
+
+Run-to-era and row-to-seal inventories reject missing, deleted, moved or
+altered evidence, even if a legacy acquisition and its seal disappear together.
+An accounting read reconstructs the inventory at the sealed floor from exact
+initial provenance and history and compares its digest; later legitimate
+transitions or acquisitions cannot be mistaken for the migration snapshot.
+It also validates reverse event-to-row inventory and the run event extent
+against its allocation fence. A current open cannot mint or repair an era.
+Only an exact creation-era witness grants full history from zero; every
+migrated run retains its recorded floor, including one with no acquisitions.
+A missing floor, empty collection or absent legacy seal never grants zero.
+These checks apply on accounting reads as well as open. The era is a small
+operation-specific provenance record, not a new generic query facility.
+The separate pre-v8 lost witnesses remain migration-only with exact eras.
 
 ### Command law, refusal, and replay
 
@@ -244,13 +273,23 @@ duplicate pairs, and invalid keys return `REQUEST_INVALID` before claiming:
 they create no command and are not a replayable durable refusal. For a claimed,
 schema-valid request, pre-domain observational refusals retain their complete
 typed response in the existing rejection-plan family. Once a domain plan
-exists, fence supersession has one
-canonical refusal determined by that immutable plan. The failed comparison
-and terminal rejection commit together under the command fence in the same
-store transaction; its positive terminal seal retains the actual rejection
-decision. Mutable later ownership or row state cannot change that refusal on
-replay. Return fresh-key repair guidance, not an instruction to retry a
-terminally rejected key.
+exists, fence supersession has one canonical refusal determined by that
+immutable plan. The application transaction still checks the complete command,
+run and row fences before any mutation, but terminal rejection may be recorded
+separately through the existing command machinery. Lawful supersession cannot
+restore the planned baseline: worker claim advances the owner epoch, and
+domain changes advance the event sequence; release lowers neither. The
+positive terminal seal records the eventual rejection decision, not the time
+of an earlier failed comparison. Command ownership loss and journal damage
+are not domain supersession and must not become this refusal.
+
+Every retry resolves the validated domain receipt before comparison or
+rejection. A committed disposal can never become rejected. A crash after a
+failed comparison but before terminal recording therefore either resolves its
+own receipt or re-proves supersession and records the same plan-derived
+refusal, even after later worker release or further event advancement. Mutable
+later state cannot change its wording or diagnostics. Return fresh-key repair
+guidance, not an instruction to retry a terminally rejected key.
 
 After a successful domain commit, complete the command with a typed bounded
 result: `status="disposed"`, run id, exact named pairs, count, command metadata,
@@ -264,6 +303,7 @@ response; it does not require those rows still to be active. Matching current
 | Interruption | Required retry behavior |
 | --- | --- |
 | After plan commit, before domain mutation | Reclaim the command; apply the same sealed batch at its original fence, or retain the canonical superseded refusal; never re-plan from new rows. |
+| After failed domain comparison, before terminal rejection | Reclaim; resolve its own receipt first, otherwise re-prove the irreversible supersession and record the same canonical refusal. Command ownership loss or journal damage does not become supersession. |
 | After domain mutation, before command completion | Resolve the positively sealed batch receipt; complete the same success response without another transition or provider call. |
 | After command completion, before delivery | Replay the stored response, changing only existing replay metadata; no journal domain mutation. |
 
@@ -295,12 +335,13 @@ validated rows rather than a truncated preview. Full identities and disposal
 receipt links are in bounded/chunked detail pinned to that event cut, including
 on a RUNNING run. A new accounting-detail URI family is needed: the present
 terminal-only result reference cannot supply it. Issue only server-derived cuts
-at or after the sealed per-run accounting floor; refuse any requested cut below
-that floor or without its era evidence. For a migrated run, existing canonical
-history and legacy initial seals establish its state at that migration floor,
-then exact later events reconstruct supported cuts. The old legacy seal alone
-cannot establish its position in arbitrary earlier event history. New runs
-have full history from floor zero. Detail validates disposal relationships and
+at or after the applicable accounting floor; refuse a cut below a required
+floor or without its sealed evidence. For a migrated run,
+existing canonical history and initial seals establish its state
+at that migration floor, then exact later events reconstruct supported cuts.
+The old legacy seal alone cannot establish its position in arbitrary earlier
+event history. Only a positively proved schema-8 creation era uses floor zero;
+retained runs use their sealed migration floor. Detail validates disposal relationships and
 old witnesses and never reads mutable current rows as the state of an older
 cut. Public detail authorization is the existing run-read
 scope. Keep the reason-bearing request, plan, their digests, private relationship
@@ -339,6 +380,15 @@ The new coherent-read promise covers status and capability accounting only;
 outputs, failure preview, and terminal detail retain their existing semantics
 and limits. No generic query redesign is proposed.
 
+Exact accounting has a real read cost: the current lease-history projector
+scans lease events through an identity UDF for each row, including events in
+other runs. Implementation should measure and avoid repeated whole-journal
+work, but not silently weaken validation. In particular, adding a run filter
+alone can hide a contradictory same-lease event placed in another run; an
+indexed or batched replacement must retain exact identity, reverse inventory
+and cross-run damage checks. Performance evidence must accompany any such
+change. This proposal is not evidence that the existing query cost is fixed.
+
 ### What the next attempt can do
 
 Disposal does not promise the next attempt terminates: unnamed active rows can
@@ -355,6 +405,10 @@ alongside its outputs. A new acquisition may still fail against a retained
 physical guard or store lock. Disposal does not authorize reuse of an old
 resource, bypass adapter checks, or retroactively prove an output's physical
 publication. All ordinary effect, capability, and output contracts still apply.
+These outcomes require an attempt actually to start: on the host retaining a
+failure deferral, the operator must submit a fresh resume key; disposal alone
+does not schedule that attempt. Ordinary recovery on a restarted host remains
+possible, subject to the normal ownership and resource fences.
 
 ## Alternatives and tradeoffs
 
@@ -378,6 +432,12 @@ publication. All ordinary effect, capability, and output contracts still apply.
 - **Hide lost behind a terminal result detail.** Current detail contains none,
   and a stuck RUNNING run has no terminal result. Versioned summary plus an
   immutable accounting cut costs a client upgrade and makes abandonment visible.
+- **Keep the result unchanged and add an accounting query.** This can expose
+  the same facts without breaking old result readers, but readers of the main
+  result could still present SUCCEEDED without the abandonment warning. The
+  proposal deliberately keeps result v2 so ordinary result consumption must
+  confront accounting status; a separate optional query is not equivalent to
+  that visibility requirement. The client-upgrade cost is explicit.
 
 ## Required future evidence
 
@@ -390,9 +450,15 @@ acceptance and refusal and assertion-only mutation evidence:
   duplicate/oversized/noncanonical input, and mixed active/nonactive batches;
   input refusals prove no command claim, and observational refusals prove a
   complete bounded per-pair response, including existing receipt references.
-- All three crash seams in the table, including real process restart over a
-  durable fake world, prove one receipt, an unchanged owner epoch, exact
-  transitions, and unchanged canonical success/refusal responses.
+- All command crash seams in the table, including real process restart over a
+  durable fake world, prove exact transitions, one receipt for success, and
+  unchanged canonical success/refusal responses. Successful disposal leaves
+  owner epoch unchanged; refusal and replay preserve competing lawful epoch
+  and event changes.
+  Also cover the failed-comparison/terminal-recording seam, including a worker
+  releasing ownership after supersession, an advanced event fence, loss of
+  command ownership, and journal damage. Only genuine domain supersession
+  yields the canonical refusal; receipt-first replay always preserves success.
 - Deterministic worker claim, heartbeat, resume-plan, and overlapping disposal
   races prove the accepting and superseded paths and no partially applied batch.
   A submitted resume queued before claim is superseded by disposal; test both
@@ -403,8 +469,17 @@ acceptance and refusal and assertion-only mutation evidence:
   receipt omission, and false legacy classification fail closed on point,
   batch, retry, query, and open inventory paths. Schema-7 fixture migration
   preserves bytes and never invents old disposal provenance. Migration-only
-  witnesses and per-run accounting floors must resist current minting,
+  witnesses and per-run accounting eras must resist current minting,
   deletion, relocation, and valid-to-valid alteration; below-floor cuts refuse.
+  Deleting an era and its seal still refuses while the run survives. Deleting
+  an eventless legacy acquisition and its seal refuses against the retained
+  era's inventory commitment; deleting all four must also refuse. Cover
+  active, closed and lost legacy acquisitions, genuinely empty migrated runs,
+  new-run creation rollback, reverse inventory and erased event extent.
+  New histories accept cuts from zero only with their creation witness;
+  retained histories accept their validated migration floor and later cuts.
+  Do not claim detection after erasure of every independent fact including the
+  run and its world; that is not the row/era deletion case above.
 - Providers are instrumented: disposal and replay call neither `close` nor
   `reconcile`, and neither remove physical guards nor unlock/reuse stores.
   A retained guard must still refuse a fresh acquisition after accounting loss.
@@ -463,15 +538,59 @@ accepting-path field-walk and candidate-enumeration proofs above remain future
 implementation requirements. No additional independent Claude review is
 claimed.
 
-No finding was rejected. The proposal remains Proposed after these changes;
-owner acceptance and separate implementation authority remain outstanding.
+That review rejected no finding. The proposal remained Proposed at that stage;
+owner acceptance and implementation authority had not yet been given.
+
+### Fable improvement pass, 2026-10-13
+
+The owner requested one further improvement-oriented review on current main
+`dfd116b`. Hardline job `job_8619e11741b0` ran `claude-fable-5-1` at requested
+high effort, read-only. It confirmed the decision core and reported seven
+items, with no acceptance-blocking correctness finding. The orchestrator
+checked the premises; focused Sol checks covered the two evidence-removal
+proposals and the claimed absence of an old lost writer. This is design review,
+not owner acceptance or execution of the future disposal proofs.
+
+| Finding and classification | Disposition and evidence |
+| --- | --- |
+| 1. Design simplification: separate failed comparison from terminal rejection. | Adopted with receipt-first retry, immutable refusal, and distinct ownership-loss/damage outcomes. Run claim advances epoch; release does not reverse it, and event allocation is monotone. Existing resume already records its plan-derived refusal separately. The administrative application remains one atomic transaction. A new rejection-recording crash seam is required. |
+| 2. Design simplification: avoid era records for every run. | Initially adopted, then withdrawn after the connector counterexample below. Acquisition XOR and event extent cannot witness an erased eventless acquisition. Keep the positive per-run era and bind its exact migration inventory. |
+| 3. Conditional simplification: remove historical lost witnesses if old writers cannot produce them. | Rejected on a reproduced false premise. The schema-7 public transition writer at `dfd116b` produces `lost`/`None`, accepted by read and reopen. The actual schema-6 writer at `181672a` accepts an initially lost acquisition; its real database reopens and migrates through `dfd116b` with an exact legacy initial-lost seal. Both credential-free probes exited zero. Internal call-site absence is not absence of a lawful writer. Both witness families and opaque-lost accounting remain. |
+| 4. Introduced precision gap: disposal does not clear host deferral. | Adopted. `RunHost._report_failure` defers, recovery skips deferred runs, and explicit launch clears deferral. The deferring host needs a fresh resume; a restarted host may recover ordinarily. Neither path makes disposal a scheduler. |
+| 5. Pre-existing cost: exact summary repeats lease-history scans. | Acknowledged with an implementation cost/proof requirement, not a claimed optimization. The identity UDF currently scans across runs; a run predicate alone risks hiding cross-run contradictions. Any bounded/indexed replacement must preserve those checks and supply evidence. |
+| 6. Optional design alternative: separate accounting query. | Recorded, not selected. Result v2 deliberately makes abandonment visible to ordinary result consumers, at the stated strict-client upgrade cost. An optional query would weaken that visibility, despite being a valid different product choice. |
+| 7. Introduced citation imprecision: ADR 0012 versus ADMIN scope. | Corrected. The scope links to its existing L0 definition; ADR 0012 supplies the transport delegation law. |
+
+The existing cleanup-obligation suite passed 58 tests on Python 3.12 during
+current-main revalidation. That is baseline evidence, not proof of the proposed
+command or migration. The old-writer probes above preserve the distinction
+between lawful retained data and future receipt-backed administrative loss.
+A narrow follow-up check corrected the revised crash-proof wording: disposal
+itself does not advance owner epoch, but refusal/replay must preserve lawful
+advancement by a competing worker rather than require the old epoch globally.
+
+The connector review of `7934b25` identified an introduced flaw in the sparse
+floor replacement ([comment 4264681010](https://github.com/sushiHex/constructicon/pull/178#discussion_r4264681010)).
+The current canonical legacy reader admits an initial acquisition without an
+acquisition event. Erasing its row,
+legacy seal and sparse floor leaves an empty inventory and unchanged event
+extent; universal checks over the remaining rows prove nothing about that
+missing acquisition. Restore a positive era for every run. Its sealed baseline
+inventory commitment also detects erased eventless rows when the era survives.
+Two credential-free probes distinguish the premises: an actual M3 fixture's
+event-backed row deletion is refused; an admitted eventless legacy shape
+migrates, reads and reopens after row/seal deletion with the surviving run's
+event extent still valid. Both probes exited zero. This is not proof that an
+actual historical writer emitted eventless acquisitions. It is a reachable
+reader-admitted shape the new accounting claim must handle. This corrects the
+design, not a deployed accounting implementation.
 
 ## Authority and scope
 
 This proposal applies ADRs 0012 and 0016 and invariants I1, I4, I7, I8, I9, and
 I13. It does not revise frozen accepted ADRs, any accepted plan, the six run
 statuses, the walker scheduler, or the Codex adapter/protocol. Its documentation
-PR needs one independent cross-review and the normal exact-head gate. Only an
-owner decision can accept it. #132's Stage 3/Stage 4 sequencing remains its own;
+PR needs one independent cross-review and the normal exact-head gate. The
+owner's acceptance is recorded above. #132's Stage 3/Stage 4 sequencing remains its own;
 this proposal introduces no new Stage 4 prerequisite, host action, vendor
 request, credential access, or operator disposal authorization.
