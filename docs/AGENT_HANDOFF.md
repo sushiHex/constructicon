@@ -15,6 +15,23 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #184 — autonomous maintenance accepts data, not self-reported tests
+
+The merged design replaces arbitrary generated Python plus per-contribution
+human coverage review with one bounded JSON input file. Trusted reference
+rules, deterministic rendering and eight named mutants define the finite exam.
+This establishes a design contract, not implementation, native containment or
+live-task evidence. Reference authors inspected the target; no blind-oracle or
+complete-coverage claim is made.
+
+The trusted harness and ordinary repository consumer must precede the candidate
+attempt. Pinning the old target source is not the same as pinning that later
+candidate-tree base: proposing JSON against a tree without its consumer would
+produce unused data. Historical N5 entry points and deployment authority remain
+unchanged.
+
+---
+
 ## #179 — disposal abandons accounting, not physical authority
 
 The ADMIN command seals a bounded exact acquisition set and an ownerless

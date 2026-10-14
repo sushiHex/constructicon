@@ -15,8 +15,38 @@ CONTROL = "tests/runtime/test_materialization_control.py::"
 CLEANUP = "tests/runtime/test_cleanup_obligations.py::"
 MANIFEST = "scripts.regen_plan_manifest:main"
 PLAN_TESTS = "tests/test_regen_plan_manifest.py::"
+MAINTENANCE = "constructicon.substrate.gates.maintenance:"
+VECTOR_TESTS = "tests/substrate/test_maintenance_vectors.py::"
 
 MUTANTS = (
+    (
+        "maintenance target source stays pinned",
+        MAINTENANCE + "render_unittest",
+        "or hashlib.sha256(target_source).hexdigest() != trusted_target_sha256",
+        "or False",
+        VECTOR_TESTS + "test_renderer_is_deterministic_and_revalidates_constructor_inputs",
+    ),
+    (
+        "maintenance runs every fixed mutant",
+        MAINTENANCE + "run_vectors",
+        "for name, _, _ in _MUTANTS:",
+        "for name, _, _ in ():",
+        VECTOR_TESTS + "test_permitting_exam_runs_every_case_and_kills_each_named_mutant",
+    ),
+    (
+        "maintenance requires baseline coverage",
+        MAINTENANCE + "run_vectors",
+        "if not required <= coverage:",
+        "if False:",
+        VECTOR_TESTS + "test_empty_or_refusal_only_suites_cannot_qualify",
+    ),
+    (
+        "maintenance candidate cannot supply expectations",
+        MAINTENANCE + "parse_vectors",
+        'and set(case) == {"kind", "path"}',
+        "",
+        VECTOR_TESTS + "test_closed_wire_refuses_bad_shapes_and_candidate_expectations",
+    ),
     *(
         (name, POLICY, before, after, CORE + test)
         for name, before, after, test in (

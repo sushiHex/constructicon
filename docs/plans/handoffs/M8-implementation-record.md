@@ -5671,3 +5671,60 @@ receipt read now owns a fresh proof context when its caller supplies none.
 The regression observes one history prefetch and one audit index on each of
 two independent reads, proving both within-read reuse and no cross-read cache.
 Disabling that context fails the count assertion; it is not a mutant error.
+
+## Autonomous plan-manifest maintenance application (Refs #183)
+
+The contribution is data, not generated Python: one new regular nonexecutable
+`tests/vectors/plan_manifest.json` supplies bounded inputs to two existing
+manifest-parser functions. A separately specified lexical reference supplies
+expected results, and a trusted renderer creates disposable unittest code.
+Reference authors inspected the target source; independence here means a
+separate specification and implementation, not a blind experiment. Acceptance
+claims agreement over the submitted cases and distinction of eight named
+mutants, never universal correctness or exhaustive coverage. No per-candidate
+human coverage decision is required by this fixed contract.
+
+The repository consumer and trusted harness must land before any contribution
+attempt. The target-source pin and the later candidate-tree base are distinct:
+the latter includes the consumer, so the accepted JSON is used by ordinary
+repository verification rather than becoming inert data. Absence of a candidate
+is an explicit skip, not successful contribution evidence.
+
+One ordinary two-node Graph writes and captures a candidate, then checks it.
+The contained gate's trusted program proves the entire snapshot equals the
+baseline inventory except for the allowed addition before running the exam.
+The final result binds the journal's passing attestation to the exact run,
+manifest, check identity, candidate, base and merge tree. It does not install,
+merge, mint a second acceptance authority or enable a production provider.
+Existing WRITE capture, gate, lease and recovery contracts remain unchanged;
+N5's historical qualification entry points are not repurposed.
+
+Portable focused checks exercised the real Graph's accepting and refusing
+paths, cancellation, restart and ownership loss with controllable providers.
+The trusted gate program itself executed over temporary candidate snapshots.
+The harness executed a permitting suite against the baseline and all eight
+fixed mutants; each mutant failed an assertion with no test errors or skips.
+Four new harness guard mutants were also assertion-killed through the existing
+M8 inventory. A target-raised AssertionError was initially liable to be counted
+as a distinguishing assertion; the observer now classifies target exceptions
+separately, and regressions require both RuntimeError and AssertionError target
+failures to remain errors rather than kills.
+
+Independent review found no demonstrated scope or control-fence defect, but
+correctly identified an unexecuted accepting path in the concrete assembly and
+final result derivation. Five subsequent portable integration cases exercised
+actual capture-pack publication, the real trusted check child, journal minting
+and final result derivation, plus mismatched resource refusals. Only platform
+launch, FD locking/inheritance and guarded removal primitives were substituted.
+Positive report assertions caught a Windows test trampoline falsely treating
+its own exit as the child check's success; the fixture now observes the actual
+child exit. No production gate was weakened to accommodate it.
+
+Three additional Linux cases use the actual launcher for acceptance, an extra
+file refusal and insufficient-vector refusal, asserting counts, named kills,
+hashes, attestation facts, cleanup and unchanged target. They are included in
+the existing foundation proof lane without a workflow change. Their local
+Windows skips are not physical evidence. Exact-head verification and native
+containment results belong to the implementation PR. This slice performs no
+vendor binary execution, credential access, VM operation or live model attempt
+locally.
