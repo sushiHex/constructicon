@@ -24,7 +24,10 @@ SOURCE_HASHES = {
     SOURCE_FILES[1]: "2460fe133113aaf1f6b8756a624fb73e0765295d0912dc9402ac0fc2f396399c",
     SOURCE_FILES[2]: "17cae803579f8ec4ebf1518a2beaa7533d0fc3cd16068c59cac55bbe92c7e28e",
 }
-CONFIG = b"[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = true\n"
+CONFIG = (
+    b"[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = true\n"
+    b"\tsharedRepository = 0600\n"
+)
 MAX_BUNDLE_BYTES = 64 * 1024 * 1024
 
 
@@ -93,7 +96,9 @@ async def git(root: Path, *args: str) -> bytes:
     executable = shutil.which("git")
     if executable is None:
         raise ContractViolation("maintenance trusted Git is unavailable")
-    return await GitProcess(str(Path(executable).resolve()), ProcessLimits()).run(*args, cwd=root)
+    return await GitProcess(str(Path(executable).resolve()), ProcessLimits()).run(
+        *args, cwd=root, creation_mask=0o077,
+    )
 
 
 async def prepare_source(

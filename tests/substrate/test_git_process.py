@@ -10,15 +10,42 @@ import shutil
 import sys
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from constructicon.core.errors import ContractViolation
 from constructicon.core.workspace import acquisition_id_for
 from constructicon.substrate.executors.linux import ProcessLimits
+from constructicon.substrate.git import process as process_module
 from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisition_guard
 from constructicon.substrate.git.process import GitProcess
 from tests.substrate.test_contained_workspace import LINUX
+
+
+@pytest.mark.parametrize("mask", (None, 0o077), ids=("default", "private"))
+async def test_private_creation_mask_reaches_only_the_posix_child(
+    tmp_path, monkeypatch, mask,
+):
+    observed = []
+    spawn = asyncio.create_subprocess_exec
+
+    async def child(*args, **kwargs):
+        observed.append(kwargs.pop("umask"))
+        # Substitute only the POSIX-only spawn option on Windows; actual Git
+        # pumping, result and teardown still execute on every platform.
+        return await spawn(*args, **kwargs)
+
+    monkeypatch.setattr(process_module, "os", SimpleNamespace(
+        name="posix", environ=os.environ, defpath=os.defpath, devnull=os.devnull))
+    monkeypatch.setattr(process_module, "git_interpreter", lambda: None)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", child)
+    output = await GitProcess(shutil.which("git"), ProcessLimits()).run(
+        "--version", cwd=tmp_path, creation_mask=mask,
+    )
+    assert output.startswith(b"git version ")
+    assert observed == [-1 if mask is None else 0o077]
+    assert "os.umask(" not in Path(process_module.__file__).read_text(encoding="utf-8")
 
 
 async def test_cancel_during_real_spawn_joins_before_repeated_cancellation_returns(

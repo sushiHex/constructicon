@@ -19,6 +19,52 @@ MAINTENANCE = "constructicon.substrate.gates.maintenance:"
 VECTOR_TESTS = "tests/substrate/test_maintenance_vectors.py::"
 
 MUTANTS = (
+    (
+        "maintenance Git seals its child creation mask",
+        "constructicon.api._maintenance_source:git",
+        "creation_mask=0o077", "creation_mask=None",
+        "tests/api/test_maintenance_entry.py::"
+        "test_maintenance_git_requests_private_child_creation_without_global_mask",
+    ),
+    (
+        "private Git creation mask reaches the POSIX child",
+        "constructicon.substrate.git.process:GitProcess.run",
+        'umask=creation_mask if os.name == "posix" and creation_mask is not None else -1',
+        "umask=-1",
+        "tests/substrate/test_git_process.py::"
+        "test_private_creation_mask_reaches_only_the_posix_child[private]",
+    ),
+    (
+        "maintenance authority configuration retains private future writes",
+        "constructicon.api._maintenance_source:prepare_source",
+        'write_once(root / "authority.git/config", CONFIG)',
+        'write_once(root / "authority.git/config", '
+        'CONFIG.replace(b"\\tsharedRepository = 0600\\n", b""))',
+        "tests/api/test_maintenance_entry.py::"
+        "test_prepare_accepts_only_new_reviewed_bundle_and_affirms_consumer",
+    ),
+    (
+        "preflight failure preserves its actual stage",
+        "constructicon.api.maintenance_entry:_command",
+        "with _failure_stage(_PreflightStage.ASSEMBLY):",
+        "with _failure_stage(_PreflightStage.SOURCE):",
+        "tests/api/test_maintenance_entry.py::"
+        "test_cli_preflight_failure_publishes_only_actual_bounded_stage[assembly]",
+    ),
+    (
+        "stage diagnostics leave other command failure bytes unchanged",
+        "constructicon.api.maintenance_entry:main",
+        'if args.command == "preflight":', "if True:",
+        "tests/api/test_maintenance_entry.py::test_other_cli_failure_bytes_remain_unchanged[run]",
+    ),
+    (
+        "preflight failure never publishes private exception text",
+        "constructicon.api.maintenance_entry:main",
+        '"accepted": False, "error": "maintenance command refused or incomplete",',
+        '"accepted": False, "error": str(error),',
+        "tests/api/test_maintenance_entry.py::"
+        "test_cli_preflight_failure_publishes_only_actual_bounded_stage[unknown]",
+    ),
     *(
         (
             "maintenance entry binds " + label,

@@ -49,6 +49,7 @@ class GitProcess:
 
     async def run(
         self, *args: str, cwd: Path | str, stdin: bytes = b"", guard: int | None = None,
+        creation_mask: int | None = None,
     ) -> bytes:
         if len(stdin) > self.limits.artifact_bytes:
             raise ContractViolation("trusted Git input exceeds artifact bound")
@@ -71,6 +72,7 @@ class GitProcess:
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE, close_fds=True,
             pass_fds=(guard,) if guard is not None else (),
+            umask=creation_mask if os.name == "posix" and creation_mask is not None else -1,
         ))
         process: asyncio.subprocess.Process | None = None
         tasks: list[asyncio.Task[None]] = []
