@@ -6033,3 +6033,59 @@ Git treated the single-word `!umask` alias as an executable, but `umask`
 is a shell builtin. That run never reached preparation and established
 neither the child's mask nor the corrected preparation behavior. The probe
 must invoke its fixed shell explicitly; its affirmative mask assertion stays.
+
+Final reviewed head `448d763` passed local verification with 5,478 tests and
+764 platform skips. [Repository verification and mutations](https://github.com/sushiHex/constructicon/actions/runs/38646967445),
+[runner qualification](https://github.com/sushiHex/constructicon/actions/runs/38646967327)
+and [all four Linux proof lanes](https://github.com/sushiHex/constructicon/actions/runs/38646967337)
+passed, including the actual permissive-mask preparation/preflight/ref seam.
+The [connector review](https://github.com/sushiHex/constructicon/pull/191#issuecomment-6180866354)
+completed at that head with no published findings; this is not formal approval. PR #191
+merged as `e7d40b139c2a0205f37c7050295a3eca55af9d2c`, with an identical tree.
+This closes the credential-free fix proof; no deployment, qualification or
+application request occurred as part of that implementation.
+
+### Prepared private-maintenance continuation (Refs #186)
+
+The additive [private-maintenance continuation](M8-maintenance-private-continuation.md)
+preserves the stopped q9/g9, a1/m1 and all historical captures and diagnostics.
+Its controller and source base are actual merged
+`e7d40b139c2a0205f37c7050295a3eca55af9d2c`. The prepared immutable bundle is
+3,962,468 bytes with SHA-256
+`ea40e3715bae7fe7f42d3c2ceb5616864d6d71c1ff4346ffec69f6b5a39a8521`, advertising
+only `refs/heads/reviewed-source` at that base. Independent empty-repository
+fetch/fsck, all three source hashes, vector absence and all six launch-input
+equalities passed. This is local preparation, not a resumed host session.
+
+The proposed composition verifies the kept launch against fresh source and
+host facts instead of retiring an already matching installation. All six launch
+inputs must remain identical from installed O to actual merged C; fresh R11
+provenance, current profiles and a positive verify-launch result at C are still
+required. Failure stops without selecting a replacement or repair branch.
+Controller replacement retains LR8's exact conditional LR9 law, followed by
+the existing import and physical preflight checks. A fresh boot still requires
+positive D2 verification and probe, with its current records preserved first.
+
+Historical account continuity is checked against q9/g9 before comparing the
+retained private capture. Fresh q10 records must both affirm strict integer
+maintenance floor nine before publishing g10. Every H7 control and the one
+conditional H8 law remain; application authority and closure use fresh a2/m2
+paths. No old prepared metadata is chmodded, normalized or reused.
+
+The new P8 replacement captures both pipeline statuses before another command,
+retains stdout privately, and displays only the exact bounded refusal stage.
+A saver failure, malformed or incomplete report cannot become a completed-stage
+fact. Success retains the typed authorization and existing bounded pin whitelist.
+The frozen P9/P10 command fences are delegated with explicit current-g10
+prerequisites; their historical g9 prose is not silently copied forward.
+
+Portable fake-only tests exercise accepting and refusing preview publication,
+pipeline status capture, strict generation floors, historical capture comparison,
+the new pin and profile-read stop guards, and preservation metadata changes.
+Read access may change atime; custody and content metadata remain checked.
+These tests are command evidence, not physical host qualification or a vendor
+attempt. The separate kept-launch verifier regression includes a portable
+source comparison and Linux accepting/refusing observations; Windows skips
+are not native proof. Final procedure/package verification and review, plus
+fresh host custody, boot and installation facts, remain required before this
+continuation can execute under the owner's authorized wave.

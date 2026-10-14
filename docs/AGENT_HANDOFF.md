@@ -15,6 +15,29 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #186 — kept launch verification is a measured route
+
+The private-maintenance continuation pins the actual merged controller and a
+separately verified source bundle. It permits a kept launch only after fresh
+provenance and an affirmative installed-tree comparison at the new commit;
+a failed check stops without selecting retirement or repair. Fresh physical
+checks, q10/g10 qualification and a2/m2 application state retain their separate
+authority. Historical q9/g9 and the refused source remain preserved.
+
+The new preflight composition captures both pipeline statuses before another
+command and reports only closed refusal stages. A failed saver or incomplete
+report cannot become a stage-completion fact. Command tests exercise its
+accepting authorization path as well as privacy-preserving refusals; they do
+not establish fresh host qualification or an application result.
+
+Review caught two composition assumptions before execution. Preservation
+must allow reads to change atime while still checking custody and content
+metadata. And delegating P10's old g9 prerequisite with new g10 declarations
+would select the wrong generation: only its command fences are reused, with
+explicit current-generation checks. Frozen historical bytes remain intact.
+
+---
+
 ## #186 — private Git preparation must not inherit ambient permissions
 
 The installed maintenance preflight correctly refused group-writable Git
