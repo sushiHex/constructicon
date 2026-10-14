@@ -5401,3 +5401,82 @@ commitment. Credential-free probes distinguish a real M3 event-backed fixture
 read and reopen still accept after row/seal deletion). Both exited zero; they
 do not establish that an old writer emitted the eventless shape. No runtime
 implementation, physical disposal, account or private-host action occurred.
+
+### #179 — capability provenance foundation (ADR 0022, slice 1)
+
+ADR 0022 was accepted and merged in #178. This slice implements its persistence
+foundation, not its public accounting or administrative command. The
+[state review](ADR0022-provenance-state-review.md) preceded source changes and
+received a focused independent review. There is no new async boundary: the
+proof covers SQLite transaction acquisition, coherent read snapshots, commit,
+failure and restart instead of introducing another coordinator.
+
+Schema 8 gives every run a positively sealed accounting era. New creation
+co-commits its zero-floor empty commitment. The atomic 7-to-8 migration first
+validates the complete old inventory, then binds each retained run's actual
+event floor and exact acquisition inventory. Canonical reads reconstruct that
+floor after later acquisitions and transitions. Migration-only witnesses keep
+historical lost events distinct from initially lost legacy acquisitions.
+Current workers cannot mint lost facts or reactivate historical lost rows.
+This is accounting provenance, never evidence of physical resource cleanup.
+
+Historical fixtures come from actual public writers, not a current database
+with a lowered version. The schema-7 writer at `dfd116b` records repeated lost
+transitions; the schema-6 writer at `181672a` records initial active, closed and
+lost acquisitions. Both SQL fixtures were independently regenerated and
+compared byte-for-byte using the committed generator. Only the process-id
+primitive is fixed for reproducibility; no stored row is repaired afterward.
+
+- `schema7-lost-transitions.sql` SHA-256:
+  `848b9174d537f00e042212d59f49af29c679d282a3ed0035c55762d70501a593`.
+- `schema6-initial-lifecycle.sql` SHA-256:
+  `3d6729cda6da39c70e0d9f596070115c3e95ba8fe46be82948f40e795c90f5ed`.
+
+The eventless legacy erasure case is explicitly synthetic reader-admitted
+history; it is not attributed to either historical writer. Its retained era
+commitment detects erased acquisition/seal pairs, while run-to-era coverage
+detects erasure of the era as well. Initial test-first execution produced six
+assertion failures for missing schema-8 facts and worker guards. The first
+eleven mutation cases then each failed by assertion. A permitting-path mutant
+initially raised instead of asserting and was reported NOT PROVEN; the test
+was sharpened before that mutant was counted as killed. Exact-head final
+verification and review results are recorded on the implementation PR.
+
+One review premise was refuted: deleting a current acquisition row while its
+event survives is already covered by the canonical reverse acquisition query.
+No redundant global scan was added. A separate missing-run path did need its
+retained era checked; it now distinguishes a genuinely absent run from orphan
+accounting evidence. Neither path treats missing evidence as complete history.
+
+The independent implementation review reproduced one introduced gap: the
+nonlegacy active point path returned before proving its era, so an ordinary
+worker close could commit after that era was erased. Era validation now
+precedes the shared point-path return, and new acquisition requires it too.
+Permitting reads and closure still work; point/close/acquire refusal tests
+assert unchanged rows, event extent and ownership. The first correction exposed
+another state boundary in full CI: terminalization reserves an event sequence
+before its capability projection, so a complete event-extent check there
+rejects the transaction's legitimate intermediate state. Point era proof now
+uses the canonical immutable world; the external accounting wrapper adds the
+complete committed extent proof. There is no skip-validation flag. Four
+terminal-status permitting tests affirm the allocated-but-not-inserted state,
+and separate tests retain missing-era refusal and external extent damage.
+No global cache or full inventory validation was added to event allocation.
+Repeated point world validation has a cost, not a constant-time whole-run claim.
+
+The connector review identified two introduced compatibility gaps. A current
+empty store skipped per-run era checks, so altered era-table columns could
+survive open. Schema preflight now checks the exact column-name inventory,
+including generated columns, without depending on retained runs. Tests cover
+empty and populated stores and unchanged bytes after refusal. Separately,
+rejecting `lost` before projection rejected an exact retry of a committed old
+transition. The canonical projection and at-target comparison now precede the
+new-loss refusal. The actual schema-7 fixture proves a no-op retry after
+migration, while damaged witnesses, changed dispositions, new loss and
+reactivation still refuse. Historical lost-to-closed transitions still permit.
+Both corrections have assertion-killed mutants; no historical law was removed.
+
+Issue #179 remains open for truthful result v2/detail accounting and the
+administrative disposal command, including transaction/replay and host
+integration proofs. This slice changes no public result, MCP tool, provider,
+RunHost or walker, and performs no credential, model or private-host operation.

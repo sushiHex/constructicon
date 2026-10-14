@@ -405,6 +405,45 @@ class LegacyResumeCommandPlan(BaseModel):
         return data
 
 
+class CapabilityAccountingEra(BaseModel):
+    """One positive creation or migration observation of a run's accounting."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    run_id: RunId
+    world_hash: Digest
+    source: Literal["schema7-migration", "schema8-creation"]
+    floor: int = Field(ge=0)
+    inventory_hash: Digest
+
+    @model_validator(mode="after")
+    def _creation_starts_at_zero(self) -> Self:
+        if self.source == "schema8-creation" and self.floor != 0:
+            raise ValueError("creation accounting era must start at zero")
+        return self
+
+
+class HistoricalCapabilityLostEvidence(BaseModel):
+    """Migration-only observation of one exact retained lost transition."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    run_id: RunId
+    event_seq: int = Field(gt=0)
+    lease_id: str
+    acquisition_epoch: int = Field(gt=0)
+
+
+class HistoricalCapabilityInitialLostEvidence(BaseModel):
+    """Migration-only observation of a legacy seal's initial lost lifecycle."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    run_id: RunId
+    lease_id: str
+    acquisition_epoch: int = Field(gt=0)
+
+
 class HistoricalPlanEvidence(BaseModel):
     """What the 6→7 migration witnessed about one plan older than its law.
 

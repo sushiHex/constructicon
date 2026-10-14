@@ -1,5 +1,5 @@
 # mypy: disable-error-code="attr-defined"
-"""SQLite schema ownership and atomic migrations through schema 7."""
+"""SQLite schema ownership and atomic migrations through schema 8."""
 
 from __future__ import annotations
 
@@ -30,6 +30,16 @@ from constructicon.substrate.journal._sqlite_base import (
     _durable_text,
     _manifest_semantically_equal,
     read_snapshot,
+)
+from constructicon.substrate.journal._sqlite_capability_provenance import (
+    CAPABILITY_PROVENANCE_FAMILIES,
+    ERA_DDL,
+    CapabilityLeaseHistory,
+    mint_creation_accounting_era,
+    mint_migrated_capability_provenance,
+    require_accounting_absence,
+    require_accounting_era,
+    validate_capability_provenance_inventory,
 )
 from constructicon.substrate.journal._sqlite_channels import (
     CHANNEL_ACK_FACT_FAMILY,
@@ -99,7 +109,7 @@ from constructicon.substrate.journal._sqlite_runs import (
     validated_run_world,
 )
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 _CURRENT_V7_TABLES = frozenset(
     {
@@ -314,7 +324,8 @@ class _SqliteSchemaMixin:
         self._ensure_v7_lease_schema(connection, mode="fresh")
         self._ensure_v7_run_schema(connection, mode="fresh")
         self._ensure_v7_fact_seal_schema(connection, mode="fresh")
-        self._validate_v7_fact_inventory(connection)
+        connection.execute(ERA_DDL)
+        self._validate_v7_fact_inventory(connection, capability_provenance=True)
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         connection.commit()
         return True
@@ -332,6 +343,7 @@ class _SqliteSchemaMixin:
                 )
             if version == SCHEMA_VERSION:
                 self._require_current_v7_tables(connection)
+                self._require_current_v8_tables(connection)
             connection.execute("PRAGMA journal_mode=WAL")
             has_runs = _has_legacy_runs_table(connection)
             if version == 0 and not has_runs:
@@ -360,6 +372,9 @@ class _SqliteSchemaMixin:
             if version == 6:
                 self._migrate_m6_to_m7(connection)
                 version = 7
+            if version == 7:
+                self._migrate_m7_to_m8(connection)
+                version = int(connection.execute("PRAGMA user_version").fetchone()[0])
             if version == SCHEMA_VERSION:
                 connection.executescript(_SCHEMA)
                 connection.executescript(_V5_SCHEMA)
@@ -375,9 +390,48 @@ class _SqliteSchemaMixin:
                 # between two of them makes a healthy store fail to open, and
                 # ADR 0016 forbids healing on open — so that refusal is final.
                 with read_snapshot(connection):
-                    self._validate_v7_fact_inventory(connection)
+                    self._validate_v7_fact_inventory(connection, capability_provenance=True)
         finally:
             connection.close()
+
+    @staticmethod
+    def _require_current_v8_tables(connection: sqlite3.Connection) -> None:
+        if connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table'"
+            " AND name = 'capability_accounting_eras'"
+        ).fetchone() is None:
+            raise JournalDamaged("schema 8 capability accounting eras table is missing")
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_xinfo(capability_accounting_eras)")
+        }
+        if columns != {"run_id", "world_hash", "source", "floor", "inventory_hash"}:
+            raise JournalDamaged("schema 8 capability accounting eras table has changed columns")
+
+    def _migrate_m7_to_m8(self, connection: sqlite3.Connection) -> None:
+        connection.execute("BEGIN IMMEDIATE")
+        if int(connection.execute("PRAGMA user_version").fetchone()[0]) != 7:
+            connection.rollback()
+            return
+        try:
+            self._require_current_v7_tables(connection)
+            if connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table'"
+                " AND name = 'capability_accounting_eras'"
+            ).fetchone() is not None:
+                raise JournalDamaged(
+                    "schema 7 already carries current capability accounting structure"
+                )
+            histories = self._validate_v7_fact_inventory(connection)
+            connection.execute(ERA_DDL)
+            mint_migrated_capability_provenance(connection, histories)
+            self.fault_probe("capability_migration.before_version")
+            self._validate_v7_fact_inventory(connection, capability_provenance=True)
+            connection.execute("PRAGMA user_version = 8")
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        self.fault_probe("capability_migration.after_commit")
 
     @staticmethod
     def _require_current_v7_tables(connection: sqlite3.Connection) -> None:
@@ -874,7 +928,9 @@ class _SqliteSchemaMixin:
             seal_channel_provenance(connection)
 
     @staticmethod
-    def _validate_v7_fact_inventory(connection: sqlite3.Connection) -> None:
+    def _validate_v7_fact_inventory(
+        connection: sqlite3.Connection, *, capability_provenance: bool = False,
+    ) -> dict[RunId, list[CapabilityLeaseHistory]]:
         """Prove the complete current graph after every migration seal exists."""
 
         plan_era_count = validate_command_claim_inventory(connection)
@@ -888,7 +944,13 @@ class _SqliteSchemaMixin:
             stored_approval_fact_from_row(connection, row)
         validate_registry_seal_inventory(connection)
         legacy_effect_outcome_count = validate_effect_fact_inventory(connection)
-        validate_capability_lease_inventory(connection)
+        histories = validate_capability_lease_inventory(
+            connection, require_provenance=capability_provenance,
+        )
+        capability_count = (
+            validate_capability_provenance_inventory(connection, histories)
+            if capability_provenance else 0
+        )
         validate_channel_fact_seal_inventory(connection)
         planned = command_plan_exists("plan_json")
         expected_count = _durable_sequence(
@@ -914,12 +976,19 @@ class _SqliteSchemaMixin:
             fact="durable fact seal expected count",
             allow_zero=True,
             kind="count",
-        ) + legacy_effect_outcome_count + plan_era_count + resume_provenance_count
+        ) + (
+            legacy_effect_outcome_count + plan_era_count
+            + resume_provenance_count + capability_count
+        )
         validate_durable_fact_seal_inventory(
             connection,
-            known_families=_DURABLE_FACT_SEAL_FAMILIES,
+            known_families=(
+                _DURABLE_FACT_SEAL_FAMILIES | CAPABILITY_PROVENANCE_FAMILIES
+                if capability_provenance else _DURABLE_FACT_SEAL_FAMILIES
+            ),
             expected_count=expected_count,
         )
+        return histories
 
     @staticmethod
     def _migrate_m6_to_m7(connection: sqlite3.Connection) -> None:
@@ -1071,6 +1140,7 @@ class _SqliteSchemaMixin:
             ).fetchone()
             if run is not None:
                 validated_run_world(connection, run)
+                require_accounting_era(connection, run)
                 if (
                     run["manifest_hash"] != str(manifest_hash)
                     or run["input_hash"] != str(input_hash)
@@ -1104,6 +1174,7 @@ class _SqliteSchemaMixin:
                 raise JournalDamaged(f"run {run_id!r} has an immutable-world seal without its row")
             register_run_origin_guard(connection)
             validate_no_orphan_run_facts(connection)
+            require_accounting_absence(connection, run_id)
             connection.execute(
                 "INSERT INTO runs (run_id, manifest_hash, input_hash, inputs_json,"
                 " status, created_at, creation_command_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -1131,6 +1202,7 @@ class _SqliteSchemaMixin:
             if created is None:
                 raise JournalDamaged(f"run {run_id!r} disappeared during creation")
             seal_run_world(connection, created)
+            mint_creation_accounting_era(connection, created)
             validated_run_world(connection, created)
         self.fault_probe("create.after_commit")
 

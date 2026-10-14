@@ -652,7 +652,7 @@ input hash and resolved version restores; the first miss resumes live.
 Reproduce starts a new run under a past run's exact manifest and inputs.
 
 One public `SqliteJournal` implements the separate L0 `Journal`,
-`RegistryStore`, and `ControlPlaneStore` contracts over one schema-7 WAL
+`RegistryStore`, and `ControlPlaneStore` contracts over one schema-8 WAL
 database. `ControlPlaneStore` extends the standalone `ControlStore` ledger with
 the transaction that must also own channel facts. Its private modules are named
 by enduring responsibility:
@@ -665,6 +665,7 @@ _sqlite_runs             manifests and the immutable run-creation world
 _sqlite_execution_facts  event/checkpoint and resume-attempt relationship facts
 _sqlite_effects          effect preparation and historical request/outcome eras
 _sqlite_leases           current event provenance and historical lease seals
+_sqlite_capability_provenance  per-run accounting eras and historical lost facts
 _sqlite_attestations     attestation identity and historical provenance eras
 _sqlite_execution        fenced lifecycle writers over those projections
 _sqlite_registry         registrations, promotions, coherent snapshots
@@ -694,12 +695,25 @@ exact relational and JSON scalar under an independently selected key. A
 current open validates the complete bidirectional inventory and never repairs
 or reseals it. An ordinary read uses
 the owner's canonical projector and requires the selected fact's matching
-seal; it does not rescan or weaken that inventory. Only the versioned 6→7
-migration may classify retained historical bytes, and it does so in dependency
-order under closed, named writer eras. Missing current provenance therefore
+seal; it does not rescan or weaken that inventory. Only a versioned migration
+may classify retained historical bytes: 6→7 establishes the original fact
+families, and 7→8 establishes capability-accounting eras and historical lost
+evidence. Each validates its source inventory before classification. Missing
+current provenance therefore
 cannot become legacy compatibility, and deleting a fact cannot turn its
 identity back into permission to create. See
 [ADR 0016](adr/0016-positive-durable-facts-and-provenance-eras.md).
+
+Schema 8 co-commits a positively sealed accounting era with every new run.
+Migration binds each retained run's validated event floor and exact acquisition
+inventory; only a current creation era proves complete history from zero.
+Reads reconstruct that floor after later acquisitions or lifecycle changes,
+so erased legacy evidence cannot become empty accounting. Historical lost
+transitions and initially lost acquisitions have separate migration-only
+witnesses. Current workers cannot mint `lost` or reactivate a historical lost
+acquisition. This implements the provenance foundation of
+[ADR 0022](adr/0022-operator-disposal-records-abandoned-capabilities.md), not its
+public accounting result or administrative disposal command.
 
 Compatibility preserves exact writer bytes rather than normalizing them into
 today's shape. M1/M2 effect requests omit `run_id`, `manifest_hash`, and `mode`;

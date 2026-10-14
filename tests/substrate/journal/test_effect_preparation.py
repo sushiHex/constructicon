@@ -86,6 +86,10 @@ def _downgrade_effect_table_to_v6(database: Path) -> None:
     """Construct the exact pre-provenance effect table for migration tests."""
 
     with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE capability_accounting_eras")
+        connection.execute(
+            "DELETE FROM durable_fact_seals WHERE family = 'capability_accounting_era'"
+        )
         connection.execute("ALTER TABLE effects RENAME TO effects_v7")
         connection.execute(
             "CREATE TABLE effects ("
