@@ -15,6 +15,21 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #186 — completed preservation is not a fresh target
+
+The first maintenance host session preserved its account capture and all
+three D2 records, then stopped on unlisted `cp --no-clobber` warnings despite
+successful byte comparisons. It was parked before installation or any vendor
+request. A continuation validates the retained capture against freshly checked
+historical evidence and the archive against the still-unchanged D2 files; it
+does not rerun either write, delete evidence or infer success from existence.
+The continuation's accepting tests assert both stdout and stderr. Earlier
+copy tests established preservation behavior, not that the operator would see
+only declared diagnostics. This adds no generic resume machinery and supplies
+no installed qualification or live application result.
+
+---
+
 ## #186 — host command composition is not deployment evidence
 
 The additive maintenance procedure pins the merged entry and an immutable
