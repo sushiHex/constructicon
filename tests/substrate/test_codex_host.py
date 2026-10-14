@@ -9,6 +9,8 @@ session runs the assembly against the real generation.
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import os
 import runpy
@@ -409,3 +411,128 @@ def test_mint_pins_the_read_stage_grants_and_record(host, capsys):
     assert printed["stage"] == "qualification-read" and printed["max_epoch"] == 1
     assert printed["attempt_record"] == str(record)
     assert printed["grants"] == codex_host.READ_GRANTS.model_dump(mode="json")
+
+
+def test_maintenance_prepare_and_cli_preflight_accept_group_writable_inherited_umask(host):
+    """The service prepares its own private authority before genuine host assembly.
+
+    Only the child changes umask. The real custody checks and contained Python
+    identification run; no vendor process or application attempt is permitted.
+    """
+    from constructicon.api import _maintenance_source as source_module
+    from constructicon.api.maintenance_entry import WRITE_GRANTS
+    from constructicon.core.maintenance import MaintenanceAttemptAuthorization
+    from constructicon.substrate.executors.linux import ProcessLimits
+    from constructicon.substrate.git.process import GitProcess
+
+    # /tmp is intentionally unsuitable: its writable ancestor fails custody.
+    # The provisioned foundation lane runs this file as m8-service.
+    with tempfile.TemporaryDirectory(
+        prefix="maintenance-preflight-", dir="/home/m8-service",
+    ) as raw:
+        home = Path(raw).resolve()
+        root = home / "application"
+        bundle = home / "reviewed.bundle"
+        seed = home / "reviewed-source.git"
+        seed.mkdir(mode=0o700)
+
+        async def reviewed_bundle():
+            await source_module.git(seed, "init", "--bare", "--template=", ".")
+            commit = (b"commit refs/heads/reviewed\n"
+                      b"committer test <test@example.invalid> 1767225600 +0000\ndata 1\nx\n")
+            repository = Path(__file__).resolve().parents[2]
+            for name in source_module.SOURCE_FILES:
+                blob = (repository / name).read_bytes()
+                assert hashlib.sha256(blob).hexdigest() == source_module.SOURCE_HASHES[name]
+                commit += f"M 100644 inline {name}\ndata {len(blob)}\n".encode() + blob + b"\n"
+            commit += b"\ndone\n"
+            await GitProcess(str(Path(shutil.which("git")).resolve()), ProcessLimits()).run(
+                "fast-import", "--quiet", cwd=seed, stdin=commit,
+            )
+            await source_module.git(seed, "bundle", "create", str(bundle), "refs/heads/reviewed")
+            resolved = await source_module.git(seed, "rev-parse", "refs/heads/reviewed")
+            return resolved.strip().decode()
+
+        base = asyncio.run(reviewed_bundle())
+        # Execute the actual CLI entry in a separate process, so the permissive
+        # inherited mask cannot affect pytest or its other fixture creation.
+        child = """
+import os, runpy, stat, sys
+from pathlib import Path
+os.umask(0o002)
+from constructicon.substrate.executors.linux import LinuxLauncher
+from constructicon.substrate.gates.contained import _CHECK
+calls = []
+original = LinuxLauncher.run
+async def observed(self, command, **kwargs):
+    assert command == ("/usr/bin/python3", "-I", "-c", _CHECK,
+                       "/usr/bin/python3", "--version")
+    calls.append(command)
+    return await original(self, command, **kwargs)
+LinuxLauncher.run = observed
+command = sys.argv[1]
+root = Path(sys.argv[sys.argv.index("--root") + 1])
+if command == "prepare":
+    import asyncio
+    from constructicon.api._maintenance_source import git
+    mask = asyncio.run(git(root.parent / "reviewed-source.git", "-c",
+                          'alias.creation-mask=!"/bin/sh" -c umask', "creation-mask"))
+    assert int(mask.strip(), 8) == 0o077, mask
+sys.argv = ["constructicon.api.maintenance_entry", *sys.argv[1:]]
+runpy.run_module("constructicon.api.maintenance_entry", run_name="__main__")
+assert len(calls) == (1 if command == "preflight" else 0)
+if command == "preflight":
+    import asyncio
+    from constructicon.api._maintenance_source import inspect_source
+    from constructicon.substrate.git.authority import GitAuthority
+    authority = GitAuthority(root / "authority.git", root / "authority-workspaces")
+    base = authority.resolve_ref("refs/heads/maintenance")
+    authority._run("update-ref", "refs/candidates/custody-proof", base)
+    for path in (root / "authority.git").rglob("*"):
+        assert path.stat().st_uid == os.getuid()
+        assert not (path.stat().st_mode & 0o022), path.relative_to(root)
+    assert asyncio.run(inspect_source(root)).base_commit == base
+    probe = root / "workspace-acquisitions" / "parent-mode"
+    probe.write_bytes(b"parent")
+    assert stat.S_IMODE(probe.stat().st_mode) == 0o664
+"""
+        prepared = subprocess.run(
+            [sys.executable, "-B", "-c", child, "prepare", "--root", str(root),
+             "--bundle", str(bundle), "--bundle-sha256",
+             hashlib.sha256(bundle.read_bytes()).hexdigest(),
+             "--base", base],
+            stdin=subprocess.DEVNULL, check=False, capture_output=True, text=True, timeout=60,
+        )
+        assert prepared.returncode == 0, (prepared.stdout, prepared.stderr)
+        assert prepared.stderr == ""
+        pin = source_module.SourcePin.model_validate_json(prepared.stdout)
+        assert pin.base_commit == base and pin.sources == source_module.SOURCE_HASHES
+        # This assertion fails on the previous code's 0775/0664 Git metadata,
+        # before a refusal could be mistaken for a successful preflight.
+        for path in (root, *root.rglob("*")):
+            assert path.stat().st_uid == os.getuid()
+            assert path.stat().st_mode & 0o022 == 0, path.relative_to(root)
+        preview = subprocess.run(
+            [sys.executable, "-B", "-c", child, "preflight", "--root", str(root),
+             *flags(host), "--launch-root", str(host.launch_root),
+             "--authorization-id", "maintenance-preflight", "--actor", "static:maintenance-test",
+             "--key", "maintenance-preflight-once"],
+            stdin=subprocess.DEVNULL, check=False, capture_output=True, text=True, timeout=90,
+        )
+        assert preview.returncode == 0, (preview.stdout, preview.stderr)
+        assert preview.stderr == ""
+        authorization = MaintenanceAttemptAuthorization.model_validate_json(preview.stdout)
+        assert authorization.request.base_commit == base
+        assert authorization.request.target_ref == "refs/heads/maintenance"
+        assert authorization.request.repository == str(root / "authority.git")
+        assert authorization.journal == str(root / "maintenance.sqlite")
+        assert authorization.attempt_record == str(root / "maintenance-attempt.json")
+        assert authorization.grants == WRITE_GRANTS
+        assert authorization.workspace.capability_id == "maintenance-workspace"
+        assert authorization.gate.capability_id == "maintenance-gate"
+        provider = codex_host.operator_provider(host)
+        assert (
+            authorization.operator_binding_digest == provider.identity.store.operator_binding_digest
+        )
+        assert not (root / "maintenance-attempt.json").exists()
+        assert not (root / "maintenance-result.json").exists()

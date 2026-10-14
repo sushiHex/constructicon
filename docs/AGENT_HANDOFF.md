@@ -15,6 +15,28 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #186 — private Git preparation must not inherit ambient permissions
+
+The installed maintenance preflight correctly refused group-writable Git
+metadata created during preparation. Read-only inspection confirmed that
+source-custody failure while the sealed qualification and installed artifact
+facts agreed; the suspected launch-revision mismatch was not observed.
+Preparation reuses N5's child-local private mask, explicit init-time shared
+mode and fixed private Git configuration. The first native accepting test
+refuted the incomplete mask/config-only fix before preflight ran. Existing
+evidence is not chmodded, repaired or reused, and
+the custody guard is unchanged.
+
+Preflight failures publish a finite actual stage without private exception
+text. Successful previews and other command refusal bytes remain unchanged.
+The new accepting seam test runs real preparation through host preflight under
+a permissive child umask, rather than constructing its resources separately.
+This code change is not new installed qualification or a live application
+result. Retained g9 evidence is historical; changed controller/application
+bytes require a reviewed successor procedure and fresh qualification.
+
+---
+
 ## #186 — completed preservation is not a fresh target
 
 The first maintenance host session preserved its account capture and all

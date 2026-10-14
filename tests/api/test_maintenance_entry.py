@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import shutil
+import sys
 from argparse import Namespace
 from datetime import timedelta
 from pathlib import Path
@@ -302,13 +303,37 @@ async def test_prepare_accepts_only_new_reviewed_bundle_and_affirms_consumer(tmp
         assert path.resolve().is_relative_to(tmp_path.resolve())
 
     monkeypatch.setattr(source_module, "private_root", portable_custody)
+    initializations = []
+    original_git = source_module.git
+
+    async def observed_git(repo, *args):
+        if repo == root / "authority.git" and args[:1] == ("init",):
+            initializations.append(args)
+        return await original_git(repo, *args)
+
+    monkeypatch.setattr(source_module, "git", observed_git)
     pin = source_module.SourcePin.model_validate(await entry._command(Namespace(
         command="prepare", root=root, bundle=bundle,
         bundle_sha256=hashlib.sha256(bundle.read_bytes()).hexdigest(),
         base=base, target_ref="refs/heads/maintenance")))
+    assert initializations == [(
+        "init", "--bare", "--shared=0600", "--template=", "--object-format=sha1", ".",
+    )]
+    assert (root / "authority.git/config").read_bytes() == source_module.CONFIG
     assert await source_module.inspect_source(root) == pin
     assert pin.sources == source_module.SOURCE_HASHES
-    assert (root / "authority.git/config").read_bytes() == source_module.CONFIG
+    old_config = source_module.CONFIG.replace(b"\tsharedRepository = 0600\n", b"")
+    (root / "authority.git/config").write_bytes(old_config)
+    old_pin = pin.model_copy(update={
+        "config_sha256": hashlib.sha256(old_config).hexdigest(),
+    })
+    (root / "source-pin.json").write_bytes(old_pin.model_dump_json().encode())
+    with pytest.raises(ContractViolation) as legacy:
+        await source_module.inspect_source(root)
+    assert str(legacy.value) == "maintenance authority configuration differs"
+    (root / "authority.git/config").write_bytes(source_module.CONFIG)
+    (root / "source-pin.json").write_bytes(pin.model_dump_json().encode())
+    assert await source_module.inspect_source(root) == pin
     with pytest.raises(ContractViolation, match="fresh"):
         await source_module.prepare_source(root, bundle, bundle_sha256=pin.bundle_sha256,
             base_commit=base, target_ref=pin.target_ref)
@@ -339,8 +364,11 @@ async def test_prepare_accepts_only_new_reviewed_bundle_and_affirms_consumer(tmp
     def forbidden_constructor(*args, **kwargs):
         pytest.fail("aliased journal reached the SQLite constructor")
     monkeypatch.setattr(entry, "SqliteJournal", forbidden_constructor)
-    with pytest.raises(ContractViolation, match="redirected"):
+    with pytest.raises(entry._CommandFailure) as refusal:
         await entry._command(Namespace(command="preflight", root=root))
+    assert refusal.value.stage is entry._PreflightStage.SOURCE
+    assert isinstance(refusal.value.__cause__, ContractViolation)
+    assert "redirected" in str(refusal.value.__cause__)
     assert sentinel.read_bytes() == b"read-only sentinel"
     (root / "maintenance.sqlite").unlink()
     pin_path = root / "source-pin.json"
@@ -350,6 +378,112 @@ async def test_prepare_accepts_only_new_reviewed_bundle_and_affirms_consumer(tmp
     monkeypatch.setattr(source_module, "git", forbidden_git)
     with pytest.raises(ValueError, match="repeats key"):
         await source_module.inspect_source(root)
+
+
+async def test_maintenance_git_requests_private_child_creation_without_global_mask(
+    tmp_path, monkeypatch,
+):
+    calls = []
+
+    class Child:
+        def __init__(self, *args):
+            pass
+
+        async def run(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            return b"checked"
+
+    monkeypatch.setattr(source_module, "GitProcess", Child)
+    assert await source_module.git(tmp_path, "rev-parse", "HEAD") == b"checked"
+    assert calls == [(("rev-parse", "HEAD"), {"cwd": tmp_path, "creation_mask": 0o077})]
+    assert b"\tsharedRepository = 0600\n" in source_module.CONFIG
+    assert "os.umask(" not in Path(source_module.__file__).read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("stage", ("source", "assembly", "preview", "unknown"))
+def test_cli_preflight_failure_publishes_only_actual_bounded_stage(
+    tmp_path, monkeypatch, capsys, stage,
+):
+    calls = []
+    sentinel = "PRIVATE:/credential/path:SUBPROCESS-TEXT"
+
+    async def source(root):
+        calls.append("source")
+        if stage == "source":
+            raise ContractViolation(sentinel)
+
+    def journal(path):
+        calls.append("journal")
+        return None
+
+    async def assemble(**kwargs):
+        calls.append("assembly")
+        if stage == "assembly":
+            raise RuntimeError(sentinel)
+        return SimpleNamespace(executor=SimpleNamespace(identity=SimpleNamespace(
+            revision="sha256:" + "0" * 64, store=SimpleNamespace(
+                operator_binding_digest="sha256:" + "0" * 64))),
+            resources=SimpleNamespace(request=None,
+                workspace=SimpleNamespace(revision="sha256:" + "0" * 64),
+                gate=SimpleNamespace(revision="sha256:" + "0" * 64)))
+
+    def preview(**kwargs):
+        calls.append("preview")
+        raise ValueError(sentinel)
+
+    async def unknown(args):
+        calls.append("unknown")
+        raise OSError(sentinel)
+
+    monkeypatch.setattr(entry, "inspect_source", source)
+    monkeypatch.setattr(entry, "SqliteJournal", journal)
+    monkeypatch.setattr(entry, "assemble_maintenance", assemble)
+    monkeypatch.setattr(entry, "MaintenanceAttemptAuthorization", preview)
+    if stage == "unknown":
+        monkeypatch.setattr(entry, "_command", unknown)
+    argv = ["maintenance-entry", "preflight"]
+    for name in ("root", "session", "sealed", "qualification", "state", "launch-root"):
+        argv.extend(("--" + name, str(tmp_path)))
+    argv.extend(("--store-key", "fake", "--authorization-id", "fake",
+                 "--actor", "operator:test", "--key", "fake"))
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit) as exit:
+        entry.main()
+    captured = capsys.readouterr()
+    assert exit.value.code == 1 and captured.err == ""
+    assert json.loads(captured.out) == {
+        "accepted": False, "error": "maintenance command refused or incomplete", "stage": stage,
+    }
+    expected = {"source": ["source"], "assembly": ["source", "journal", "assembly"],
+                "preview": ["source", "journal", "assembly", "preview"], "unknown": ["unknown"]}
+    assert calls == expected[stage]
+    assert sentinel not in captured.out and len(captured.out.encode()) <= 128
+
+
+@pytest.mark.parametrize("command", ("prepare", "run", "inspect"))
+def test_other_cli_failure_bytes_remain_unchanged(tmp_path, monkeypatch, capsys, command):
+    async def refused(args):
+        raise entry._CommandFailure(entry._PreflightStage.SOURCE)
+
+    monkeypatch.setattr(entry, "_command", refused)
+    argv = ["maintenance-entry", command]
+    if command == "inspect":
+        argv.extend(("--result", str(tmp_path)))
+    elif command == "prepare":
+        argv.extend(("--root", str(tmp_path), "--bundle", str(tmp_path),
+                     "--bundle-sha256", "0" * 64, "--base", "0" * 40))
+    else:
+        for name in ("root", "session", "sealed", "qualification", "state", "launch-root"):
+            argv.extend(("--" + name, str(tmp_path)))
+        argv.extend(("--store-key", "fake", "--authorization", str(tmp_path)))
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit) as exit:
+        entry.main()
+    captured = capsys.readouterr()
+    assert exit.value.code == 1 and captured.err == ""
+    assert captured.out == (
+        '{"accepted":false,"error":"maintenance command refused or incomplete"}\n'
+    )
 
 
 async def test_retained_run_inputs_and_manifest_are_checked_before_startup(

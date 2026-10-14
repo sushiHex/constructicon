@@ -11,8 +11,11 @@ import asyncio
 import hashlib
 import json
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import timedelta
+from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
@@ -86,6 +89,26 @@ WORKSPACE = "maintenance-workspace"
 GATE = "maintenance-gate"
 WRITER_SCOPE = ScopePath(segments=(GRAPH_NAME, "writer"))
 MAX_RESULT_BYTES = 65536
+
+
+class _PreflightStage(StrEnum):
+    SOURCE = "source"
+    ASSEMBLY = "assembly"
+    PREVIEW = "preview"
+
+
+class _CommandFailure(ContractViolation):
+    def __init__(self, stage: _PreflightStage) -> None:
+        self.stage = stage
+        super().__init__("maintenance command refused or incomplete")
+
+
+@contextmanager
+def _failure_stage(stage: _PreflightStage) -> Iterator[None]:
+    try:
+        yield
+    except Exception as error:
+        raise _CommandFailure(stage) from error
 
 
 @dataclass(frozen=True)
@@ -305,31 +328,35 @@ async def _command(args: argparse.Namespace) -> object:
             base_commit=GitSha(args.base), target_ref=args.target_ref)).model_dump(mode="json")
     if args.command == "inspect":
         return inspect_result(args.result)
-    await inspect_source(args.root)
-    journal_path = args.root / "maintenance.sqlite"
-    authorization = (read_maintenance_authorization(args.authorization)
-                     if args.command == "run" else None)
-    if authorization is not None and Path(authorization.journal) != journal_path:
-        raise ContractViolation("maintenance authorization names another dedicated journal")
-    journal = SqliteJournal(journal_path)
-    assembly = await assemble_maintenance(host=_host(args), root=args.root, journal=journal,
-                                          authorization=authorization)
+    with _failure_stage(_PreflightStage.SOURCE):
+        await inspect_source(args.root)
+    with _failure_stage(_PreflightStage.ASSEMBLY):
+        journal_path = args.root / "maintenance.sqlite"
+        authorization = (read_maintenance_authorization(args.authorization)
+                         if args.command == "run" else None)
+        if authorization is not None and Path(authorization.journal) != journal_path:
+            raise ContractViolation("maintenance authorization names another dedicated journal")
+        journal = SqliteJournal(journal_path)
+        assembly = await assemble_maintenance(host=_host(args), root=args.root, journal=journal,
+                                              authorization=authorization)
     if args.command == "preflight":
-        authorization = MaintenanceAttemptAuthorization(authorization_id=args.authorization_id,
-            actor_id=args.actor, idempotency_key=args.key, scope=WRITER_SCOPE, binding="executor",
-            source_graph_hash=source_graph_hash_for(maintenance_graph(executor_id=EXECUTOR,
-                workspace_id=WORKSPACE, gate_id=GATE, writer_grants=WRITE_GRANTS)),
-            capability_id=EXECUTOR, revision=str(assembly.executor.identity.revision),
-            operator_binding_digest=assembly.executor.identity.store.operator_binding_digest,
-            journal=str(journal_path), max_epoch=1, not_after=utc_now() + timedelta(hours=1),
-            grants=WRITE_GRANTS, attempt_record=str(args.root / "maintenance-attempt.json"),
-            request=assembly.resources.request,
-            application_revision=maintenance_application_revision(),
-            workspace=MaintenanceCapabilityPin(capability_id=WORKSPACE,
-                revision=assembly.resources.workspace.revision),
-            gate=MaintenanceCapabilityPin(capability_id=GATE,
-                                          revision=assembly.resources.gate.revision))
-        return _authorization_preview(authorization)
+        with _failure_stage(_PreflightStage.PREVIEW):
+            authorization = MaintenanceAttemptAuthorization(authorization_id=args.authorization_id,
+                actor_id=args.actor, idempotency_key=args.key, scope=WRITER_SCOPE,
+                binding="executor",
+                source_graph_hash=source_graph_hash_for(maintenance_graph(executor_id=EXECUTOR,
+                    workspace_id=WORKSPACE, gate_id=GATE, writer_grants=WRITE_GRANTS)),
+                capability_id=EXECUTOR, revision=str(assembly.executor.identity.revision),
+                operator_binding_digest=assembly.executor.identity.store.operator_binding_digest,
+                journal=str(journal_path), max_epoch=1, not_after=utc_now() + timedelta(hours=1),
+                grants=WRITE_GRANTS, attempt_record=str(args.root / "maintenance-attempt.json"),
+                request=assembly.resources.request,
+                application_revision=maintenance_application_revision(),
+                workspace=MaintenanceCapabilityPin(capability_id=WORKSPACE,
+                    revision=assembly.resources.workspace.revision),
+                gate=MaintenanceCapabilityPin(capability_id=GATE,
+                                              revision=assembly.resources.gate.revision))
+            return _authorization_preview(authorization)
     if authorization is None:
         raise ContractViolation("maintenance run requires installed authority")
     result = await run_maintenance(resources=assembly.resources, executor=assembly.executor,
@@ -362,9 +389,15 @@ def main() -> None:
     try:
         result = asyncio.run(_command(args))
         print(json.dumps(result, sort_keys=True, separators=(",", ":")))
-    except Exception:
+    except Exception as error:
         # No private path, subprocess text, credentials or uncertain retry advice.
-        print('{"accepted":false,"error":"maintenance command refused or incomplete"}')
+        failure: dict[str, object] = {
+            "accepted": False, "error": "maintenance command refused or incomplete",
+        }
+        if args.command == "preflight":
+            failure["stage"] = (error.stage.value if isinstance(error, _CommandFailure)
+                                and isinstance(error.stage, _PreflightStage) else "unknown")
+        print(json.dumps(failure, sort_keys=True, separators=(",", ":")))
         raise SystemExit(1) from None
 
 

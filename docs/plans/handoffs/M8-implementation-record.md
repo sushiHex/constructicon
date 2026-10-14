@@ -5949,3 +5949,87 @@ seal equality or archive/source equality made the corresponding changed-byte
 case fail by assertion, not error; both probes were restored. The narrow
 review of the output-contract correction found no further defect. These are
 portable command proofs, not evidence of a resumed host session.
+
+### Maintenance preflight: private preparation is not ambient umask
+
+PR #190 merged as `2204f32`, tree-identical to reviewed `48db544`. Its
+exact-head CI passed 5,808 tests with 422 platform skips, all mutation jobs,
+runner qualification and all four Linux proof lanes. The subsequent authorized
+continuation installed controller `01e816e`, completed fresh g9 qualification,
+every H7 control and the one conditional measured explicit refresh, then
+prepared the reviewed source bundle. P8 returned exit one after `NO DRIFT`
+without a preview verdict. The operator stopped and parked; no P9 authority
+installation or P10 application attempt ran. The full bounded evidence is on
+[#186](https://github.com/sushiHex/constructicon/issues/186#issuecomment-6178498401).
+
+A separately authorized read-only inspection on boot
+`d87b39b9-d711-49d2-82e8-70bf4c5c8927` classified the retained preview as the
+entry's exact fixed refusal. Controller verification affirmed the exact
+installed tree, the sealed-account check passed, and every installed artifact
+field matched its qualification. A suspected launch-revision mismatch was
+not observed. Read-only source inspection instead refused authority custody.
+A bounded complete metadata scan identified eight service-owned,
+group-writable Git entries: `0775` directories and `0664` files. The historical
+child's actual umask was not recorded; these permissions alone are not a
+measurement of that mask. The guard correctly refused them.
+
+The inspection used independently reviewed, LF-only, hash-matched scripts and
+closed-stdin strict-host-key transport. It ran no authority constructor,
+contained probe, vendor process, credential inspection, qualification, refresh
+or model request. Source inspection invokes only bounded trusted Git reads.
+Outputs were finite classifications and metadata categories, not private
+record contents. All retained state was left unchanged; no chmod or repair
+was attempted. A fresh final measurement affirmed Off, zero uptime and zero
+checkpoints, and custody was released. Inspection evidence and script hashes
+are recorded on
+[#186](https://github.com/sushiHex/constructicon/issues/186#issuecomment-6179145194).
+
+One diagnostic-test assumption was false: Windows `fstat` and `lstat` returned
+different `st_ctime_ns` values for the same unchanged fixture. Instrumentation
+identified that exact difference before the portable test substituted it;
+production metadata checks were not weakened. Independent scan review also
+caught `os.walk`'s silent error default: a complete scan now requires an
+affirmative error-free walk, and failure emits only an incomplete verdict.
+
+Maintenance preparation follows the already-established N5 fixture
+pattern: an explicit child-only `077` creation mask, `git init --shared=0600`,
+and the pinned `core.sharedRepository = 0600` setting for later Git writes.
+Other trusted Git callers keep their existing default. No process-global
+umask is changed across an await, no existing directory is repaired, and the
+custody guard is unchanged. Old prepared configuration is not silently
+upgraded; a successor procedure must preserve it and use fresh paths.
+
+Preflight refusals add one finite stage (`source`, `assembly`, `preview`, or
+`unknown`) without publishing exception text, paths or subprocess output.
+Stages are scoped to the actual operation, not inferred from missing files.
+Successful previews and the prepare/run/inspect refusal bytes stay unchanged.
+This is not a durable completed-stage ledger: a process death can still leave
+no complete report. A successor P8 must inspect the bounded refusal before
+stopping; the frozen historical procedure remains unchanged.
+
+The accepting integration proof belongs in the existing foundation host
+assembly lane: a child starts under `0002`, prepares a real reviewed bundle,
+passes genuine custody checks and CLI preflight, then creates another Git ref.
+Its only contained process is the fixed Python version probe; no vendor
+process or model attempt is permitted. The test checks both private Git
+metadata and an ordinary parent-created file retaining `0664`, so a global
+mask change cannot masquerade as the fix. Portable tests check forwarding,
+diagnostic stages, publication bounds and legacy refusal bytes; Windows skips
+do not establish the POSIX proof.
+
+The first native run on `f63c599` refuted the initial fix: preparation returned
+success but the new accepting test found `authority.git/objects` at `0775`,
+before preflight ran (54 passed, one failed in the host assembly step).
+That revision pinned the child mask and retained config but omitted N5's
+explicit init-time shared mode. The correction adds that creation-time policy
+without normalizing retained files. A direct child-mask observation separates
+the process-boundary check from the repository's resulting permissions;
+the first failure alone does not prove which mechanism defeated the mask.
+The superseded local full-suite run was deliberately stopped, not counted as
+a pass. Exact-head native evidence remains required after the correction.
+
+The next native run (`06bd1b1`) stopped in the new measurement itself:
+Git treated the single-word `!umask` alias as an executable, but `umask`
+is a shell builtin. That run never reached preparation and established
+neither the child's mask nor the corrected preparation behavior. The probe
+must invoke its fixed shell explicitly; its affirmative mask assertion stays.
