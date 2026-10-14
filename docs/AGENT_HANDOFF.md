@@ -38,6 +38,11 @@ tests. The installed package also has no repository tests or scripts: source
 preparation checks fixed reviewed blob hashes rather than looking for those
 files beside its module. Historical inspection is not an authenticity proof.
 
+Application identity must include its authorization law, not just its API
+assembly. Review reproduced stale authority surviving a change to the core
+law. The explicit revision inventory now includes that contract and both
+authorization readers; source-drift and omission tests pin the boundary.
+
 A pre-existing portable test raced a real multi-phase run against a short
 polling deadline and could cancel a subprocess thread without joining it.
 The concrete tests now await the actual attempt result and worker completion;

@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from constructicon.api import _maintenance_identity as identity_module
 from constructicon.api import _maintenance_source as source_module
 from constructicon.api import maintenance_entry as entry
 from constructicon.api.plan_manifest_application import maintenance_graph
@@ -31,6 +32,38 @@ from tests.api import test_plan_manifest_application as application_tests
 from tests.executorworld import launch_identity
 
 concrete_application = application_tests.concrete_application
+
+AUTHORIZATION_LAW_CHANGES = (
+    ("core/maintenance.py", b"type(epoch) is int and epoch == 1",
+     b"type(epoch) is int and epoch <= 2"),
+    ("substrate/executors/maintenance.py", b"record = parse_json_value(",
+     b"record = dict("),
+    ("substrate/executors/qualification.py", b"info.st_nlink != 1", b"info.st_nlink > 2"),
+)
+
+
+def change_authorization_law(monkeypatch, relative_path, before, after):
+    target = (Path(identity_module.__file__).parents[1] / relative_path).resolve()
+    original = Path.read_bytes
+    raw = original(target)
+    assert raw.count(before) == 1
+
+    def read(path):
+        if path.resolve() == target:
+            return raw.replace(before, after, 1)
+        return original(path)
+
+    monkeypatch.setattr(Path, "read_bytes", read)
+
+
+@pytest.mark.parametrize(("relative_path", "before", "after"), AUTHORIZATION_LAW_CHANGES,
+                         ids=("core-law", "maintenance-reader", "root-custody-reader"))
+def test_application_revision_pins_each_authorization_law(
+    monkeypatch, relative_path, before, after,
+):
+    original = entry.maintenance_application_revision()
+    change_authorization_law(monkeypatch, relative_path, before, after)
+    assert entry.maintenance_application_revision() != original
 
 
 def authorize(resources, executor):
@@ -95,6 +128,38 @@ async def test_real_entry_accepts_publishes_after_join_and_replays(
     assert path.read_bytes() == before
     assert entry.inspect_result(path)["meaning"] == "historical-application-acceptance"
     assert "repository" not in json.dumps(entry.inspect_result(path))
+
+
+@pytest.mark.parametrize(("relative_path", "before", "after"), AUTHORIZATION_LAW_CHANGES,
+                         ids=("core-law", "maintenance-reader", "root-custody-reader"))
+async def test_changed_authorization_law_refuses_old_authority_before_startup(
+    concrete_application, monkeypatch, relative_path, before, after,
+):
+    resources, executor, _system, control, _launch = concrete_application
+    await control.shutdown()
+    authorization = authorize(resources, executor)
+    descriptor = executor.descriptor("executor")
+    change_authorization_law(monkeypatch, relative_path, before, after)
+    entered = []
+
+    async def forbidden(*args, **kwargs):
+        entered.append(True)
+        pytest.fail("changed authorization law reached startup or acquisition")
+
+    monkeypatch.setattr(entry.ControlPlane, "startup", forbidden)
+    monkeypatch.setattr(executor, "acquire", forbidden)
+    with pytest.raises(ContractViolation, match="assembled resources"):
+        await entry.run_maintenance(resources=resources, executor=executor,
+            executor_descriptor=descriptor, authorization=authorization)
+    assert entered == [] and executor.executor.calls == []
+    assert resources.journal.run_state(authorization.run_id) is None
+    assert not Path(authorization.attempt_record).exists()
+    matching = authorization.model_copy(update={
+        "application_revision": entry.maintenance_application_revision(),
+    })
+    executor.maintenance = matching
+    await entry.require_maintenance_attempt(resources, executor, descriptor, matching)
+    assert entered == [] and not Path(authorization.attempt_record).exists()
 
 
 @pytest.mark.parametrize("changed", ["request", "graph", "workspace", "gate", "application",

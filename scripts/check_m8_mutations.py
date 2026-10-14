@@ -742,6 +742,20 @@ MUTANTS = (
             ),
         )
     ),
+    *(
+        (
+            "maintenance application pins " + label,
+            "constructicon.api._maintenance_identity:maintenance_application_revision",
+            '"' + source + '",', "",
+            "tests/api/test_maintenance_entry.py::"
+            "test_application_revision_pins_each_authorization_law[" + label + "]",
+        )
+        for label, source in (
+            ("core-law", "core/maintenance.py"),
+            ("maintenance-reader", "substrate/executors/maintenance.py"),
+            ("root-custody-reader", "substrate/executors/qualification.py"),
+        )
+    ),
 )
 
 if __name__ == "__main__":

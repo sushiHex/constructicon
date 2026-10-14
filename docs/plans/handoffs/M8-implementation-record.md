@@ -5823,6 +5823,19 @@ not counted as passing verification.
 
 No Codex executor binary, operator-store credential, private-host command or
 live application attempt has been used locally in this implementation slice.
+The connector's final-head review found an introduced identity omission:
+the application revision covered its four API modules but not the new core
+authorization law or its readers. Three source-drift tests failed by assertion
+before the fix; an old authorization also reached a forbidden startup probe
+after simulated core-law drift. The explicit owned source inventory now covers
+those four modules plus `core/maintenance.py`, the maintenance reader and the
+shared qualification root-custody reader. Each omission mutant fails an
+assertion. This is a bounded source inventory, not a transitive dependency
+scanner; the store's directory/binding implementation already has its own
+checked source-law identities. Old application authority must be refused before
+startup, acquisition or attempt reservation after any of these three sources
+changes. No previously printed authority is reused under the new revision.
+
 A tool-free Fable advisory recommended keeping end-to-end scripted rehearsal
 in CI and checking genuine installed provider assembly through host preflight,
 rather than shipping another fake-provider selection path. This is a design
