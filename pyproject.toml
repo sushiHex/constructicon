@@ -96,6 +96,7 @@ source_modules = [
     "constructicon.api.cursor",
     "constructicon.api.detail",
     "constructicon.api.introspection",
+    "constructicon.api.plan_manifest_application",
     "constructicon.api.qualification",
     "constructicon.api._qualification_write_graph",
     "constructicon.api._qualification_write_assembly",

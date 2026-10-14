@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import os
 import sys
 import threading
@@ -12,6 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from constructicon.core.address import GitSha
 from constructicon.core.errors import Cancelled, ContractViolation
 from constructicon.core.grants import Posture
 from constructicon.core.identity import digest
@@ -309,6 +312,106 @@ async def test_native_checks_use_exact_prepared_snapshot_and_fixed_runtime(launc
     assert len(runner._journal.drafts) == 2
     await runner.close(acquired, "release")
     assert runner.closure.is_closed(acquired.resource.paths)
+
+
+def maintenance_commits(runner, target_source, vectors, *, extra=False):
+    """Git plumbing builds the fixed nested paths without executing repository code."""
+    authority = runner.authority
+
+    def blob(value):
+        return authority._run("hash-object", "-w", "--stdin",
+                              input_text=value.decode("utf-8")).stdout.strip()
+
+    def tree(entries):
+        return authority._run("mktree", input_text=entries).stdout.strip()
+
+    old = authority.resolve_ref(runner.target_ref)
+    original = authority._run("ls-tree", old).stdout
+    scripts = tree(f"100644 blob {blob(target_source)}\tregen_plan_manifest.py\n")
+    baseline_entries = original + f"040000 tree {scripts}\tscripts\n"
+    baseline_tree = tree(baseline_entries)
+    base = GitSha(authority._run("commit-tree", baseline_tree, "-p", old,
+                                 input_text="maintenance base\n").stdout.strip())
+    authority._run("update-ref", runner.target_ref, base, old)
+    vectors_tree = tree(f"100644 blob {blob(vectors)}\tplan_manifest.json\n")
+    tests_tree = tree(f"040000 tree {vectors_tree}\tvectors\n")
+    candidate_entries = baseline_entries + f"040000 tree {tests_tree}\ttests\n"
+    if extra:
+        candidate_entries += f"100644 blob {blob(b'unrelated change')}\tunrelated.py\n"
+    candidate_tree = tree(candidate_entries)
+    proposed = GitSha(authority._run("commit-tree", candidate_tree, "-p", base,
+                                     input_text="data vector contribution\n").stdout.strip())
+    return base, proposed
+
+
+@pytest.mark.parametrize("case", ["accept", "extra", "weak"])
+async def test_native_maintenance_recipe_runs_its_fixed_exam_and_refuses_scope(
+    launcher, tmp_path, case,
+):
+    from constructicon.api.plan_manifest_application import maintenance_checks
+    from constructicon.substrate.gates.maintenance import parse_vectors, render_unittest
+    from tests.substrate.test_maintenance_vectors import (
+        SOURCE,
+        entries,
+        path,
+        permitting_vectors,
+        wire,
+    )
+
+    vectors = permitting_vectors()
+    if case == "weak":
+        vectors = wire([path("a.md"), path(".md"), entries(b"a" * 64 + b"  a.md\n"),
+                        entries(b"bad"), entries(b"\xff")])
+    journal = RecordingJournal()
+    runner = unqualified(tmp_path, launcher, journal=journal)
+    base, proposed = maintenance_commits(runner, SOURCE, vectors, extra=case == "extra")
+    inventory = runner.authority._run("ls-tree", "-r", "-z", base).stdout.encode()
+    pin = hashlib.sha256(SOURCE).hexdigest()
+    runner.checks = maintenance_checks(SOURCE, pin, inventory,
+                                       runner.authority.environment.object_format)
+    runner = await qualify(runner)
+    acquired = await started(runner)
+    try:
+        result = await acquired.resource.verify(proposed)
+        assert result.subject is not None
+        assert result.subject.candidate == proposed and result.subject.expected_base == base
+        assert result.subject.tested_tree == runner.authority.tree_of(proposed)
+        assert len(result.checks) == 1
+        assert result.checks[0].name == "plan-manifest-trusted-vectors"
+        assert result.checks[0].status == ("passed" if case == "accept" else "failed")
+        assert result.ok is (case == "accept")
+        assert len(journal.drafts) == 1
+        lease, draft = journal.drafts[0]
+        assert lease == acquired.resource.context.run_lease
+        assert draft.subject == result.subject and draft.checks == result.checks
+        assert draft.check_set_hash == runner.check_set_hash
+        assert result.attestation_id == "test-minted-authority"
+        if case == "accept":
+            # These facts came from the real contained driver, rather than inferred exit success.
+            report = json.loads(result.checks[0].detail)
+            assert report["passed"] is True
+            assert report["baseline"] == {"tests_run": 24, "failures": 0, "errors": 0, "skips": 0}
+            assert tuple(mutant["name"] for mutant in report["mutants"]) == (
+                "path_absolute", "path_noncanonical", "path_parent", "path_unsafe_characters",
+                "path_any_suffix", "digest_relaxed", "entries_duplicate_overwrite",
+                "entries_conflict_skip",
+            )
+            for mutant in report["mutants"]:
+                assert mutant["distinguished"] is True
+                assert mutant["counts"]["tests_run"] == 24
+                assert mutant["counts"]["failures"] > 0
+                assert mutant["counts"]["errors"] == mutant["counts"]["skips"] == 0
+            assert report["input_sha256"] == hashlib.sha256(vectors).hexdigest()
+            assert report["target_sha256"] == pin
+            rendered = render_unittest(parse_vectors(vectors), SOURCE, trusted_target_sha256=pin)
+            assert report["render_sha256"] == hashlib.sha256(rendered).hexdigest()
+        assert not acquired.resource.paths.payload.exists()
+        assert runner.authority.resolve_ref(runner.target_ref) == base
+    finally:
+        await runner.close(acquired, "discard")
+    assert runner.closure.is_closed(acquired.resource.paths)
+    assert not acquired.resource.paths.payload.exists()
+    assert runner.authority.resolve_ref(runner.target_ref) == base
 
 
 @pytest.mark.parametrize("stream", ["stdout", "stderr"])
