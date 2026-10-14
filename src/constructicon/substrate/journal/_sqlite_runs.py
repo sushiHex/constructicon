@@ -6,7 +6,10 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from constructicon.substrate.journal._sqlite_capability_disposal import DisposalReadProofs
 
 from pydantic import ValidationError
 
@@ -884,6 +887,7 @@ def _validate_run_integrity_flags(row: sqlite3.Row) -> None:
 def validated_run_fence(
     connection: sqlite3.Connection,
     row: sqlite3.Row,
+    *, disposal_proofs: DisposalReadProofs | None = None,
 ) -> tuple[ValidatedRunWorld, int | None, str | None]:
     """Prove one run's immutable world and the fence a caller is about to use.
 
@@ -915,7 +919,7 @@ def validated_run_fence(
         ).fetchone()
         if latest is None:
             raise lifecycle_damage(durable.run_id, durable.status)
-        event = stored_event_from_row(connection, latest)
+        event = stored_event_from_row(connection, latest, disposal_proofs=disposal_proofs)
         if event.run_id != durable.run_id or event.seq != row["next_event_seq"]:
             raise JournalDamaged(
                 f"latest event for run {durable.run_id!r} contradicts its identity"
@@ -951,10 +955,13 @@ def validated_run_projection(
     *,
     observe: Callable[[], datetime],
     decode_record: Callable[[sqlite3.Row], RunRecord] | None = None,
+    disposal_proofs: DisposalReadProofs | None = None,
 ) -> tuple[RunRecord, ValidatedRunWorld, int | None, str | None]:
     """Project one run through world, relational, and lifecycle proof once."""
 
-    world, event_seq, event_kind = validated_run_fence(connection, row)
+    world, event_seq, event_kind = validated_run_fence(
+        connection, row, disposal_proofs=disposal_proofs,
+    )
     record = (
         decode_record(row)
         if decode_record is not None
@@ -970,6 +977,7 @@ def run_projection_for_id(
     run_id: RunId,
     *,
     observe: Callable[[], datetime],
+    disposal_proofs: DisposalReadProofs | None = None,
 ) -> tuple[RunRecord, ValidatedRunWorld, int | None, str | None] | None:
     """Identity-first exact run lookup through the shared world projector."""
 
@@ -981,7 +989,9 @@ def run_projection_for_id(
     if row is None:
         validate_no_orphan_run_facts(connection)
         return None
-    return validated_run_projection(connection, row, observe=observe)
+    return validated_run_projection(
+        connection, row, observe=observe, disposal_proofs=disposal_proofs,
+    )
 
 
 def run_facts_for_id(

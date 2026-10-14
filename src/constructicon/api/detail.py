@@ -445,6 +445,22 @@ class DetailResolver:
         # through, because a reference minted onto an owner's own response never
         # passes one: `runs_approve` needs approve, not read.
         try:
+            if family == "runs" and len(parts) == 3 and parts[1] == "capability-disposals":
+                run_id = RunId(parts[0])
+                seq = int(parts[2])
+                if seq <= 0 or str(seq) != parts[2]:
+                    return self._not_found(uri, "disposal audit must be a canonical sequence")
+                event = self._journal.event(run_id, seq)
+                if (event is None or event.kind != "CapabilityDisposalRecorded"
+                        or not isinstance(event.payload, dict)):
+                    return self._not_found(uri, "disposal audit does not exist")
+                command_id = event.payload.get("command_id")
+                if not isinstance(command_id, str):
+                    raise JournalDamaged("disposal audit has no command identity")
+                receipt = self._store.capability_disposal_receipt(command_id)
+                if receipt is None or receipt.run_id != run_id or receipt.audit_event_seq != seq:
+                    raise JournalDamaged("disposal reference differs from its canonical receipt")
+                return receipt.model_dump(mode="json")
             if family == "runs" and len(parts) == 3 and parts[1] == "accounting":
                 cut = int(parts[2])
                 if cut < 0 or str(cut) != parts[2]:

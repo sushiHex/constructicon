@@ -6,7 +6,7 @@ Authorize -> Claim -> Plan -> Apply once -> Record -> replay after loss.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Annotated, Any, Literal, TypeVar, cast
 
 from pydantic import (
@@ -52,6 +52,11 @@ from constructicon.core.control import (
     ApprovalCommandResult,
     AuthenticatedActor,
     CancellationResult,
+    CapabilityAcquisitionPair,
+    CapabilityDisposalPlan,
+    CapabilityDisposalRequest,
+    CapabilityDisposalResult,
+    CapabilityDisposalSuperseded,
     ChannelAckResult,
     ChannelReplyResult,
     CommandClaim,
@@ -71,13 +76,17 @@ from constructicon.core.control import (
     RunSubmission,
     SourceRunLock,
     approval_id_for_command,
+    capability_disposal_reference,
+    capability_disposal_superseded_rejection,
     channel_authority_holder,
     command_request_hash,
+    plan_capability_disposal,
     resume_attempt_kind,
     resume_plan_requires_historical_evidence,
     run_id_for_command,
     scope_refusal,
     validate_idempotency_key,
+    validated_capability_disposal_command,
     validated_new_run_creation_plan,
     validated_resume_command_plan,
     validated_resume_status_at_fence,
@@ -306,6 +315,7 @@ def _unfenced_resume_rejection(plan: LegacyResumeCommandPlan) -> ControlRejected
 
 _CommandPlan = Annotated[
     RunCreationPlan
+    | CapabilityDisposalPlan
     | _CancelPlan
     | ResumeCommandPlan
     | ApprovalPlan
@@ -484,6 +494,97 @@ class _CommandExecutor:
         response = self._submission(claim, run_id, origin)
         self._complete_command(claim, response)
         self._launch_new_run(run_id)
+        return response
+
+    async def runs_dispose_capabilities(
+        self, actor: AuthenticatedActor, *, run_id: RunId,
+        pairs: Sequence[CapabilityAcquisitionPair | Mapping[str, object]], reason: str,
+        idempotency_key: str,
+    ) -> CapabilityDisposalResult | ControlRejected:
+        denied = self._authorize(actor, ADMIN_SCOPE)
+        if denied:
+            return denied
+        try:
+            request = CapabilityDisposalRequest.model_validate_json(canonical_json({
+                "run_id": str(run_id),
+                "pairs": [
+                    pair.model_dump(mode="json") if isinstance(pair, CapabilityAcquisitionPair)
+                    else dict(pair) for pair in pairs
+                ], "reason": reason,
+            }))
+        except (TypeError, ValueError):
+            return self._fault(ControlCode.REQUEST_INVALID, "invalid capability disposal request",
+                               "name 1..100 distinct exact acquisition pairs and a bounded reason")
+        begun = self._begin_command(
+            actor, required_scope=ADMIN_SCOPE, operation="runs_dispose_capabilities",
+            idempotency_key=idempotency_key, request=request.model_dump(mode="json"),
+            response_types=(CapabilityDisposalResult, ControlRejected),
+        )
+        if not isinstance(begun, CommandClaim):
+            return cast(CapabilityDisposalResult | ControlRejected, begun)
+        claim = begun
+        session = _CommandSession(self, claim)
+        if session.record.plan is None:
+            snapshot = self._store.capability_disposal_snapshot(run_id, request.pairs)
+            faults = []
+            if snapshot.run is None:
+                faults.append("unknown_run")
+            elif snapshot.run.status is not RunStatus.RUNNING:
+                faults.append("run_not_running")
+            elif snapshot.run.owner_id is not None or snapshot.run.lease_expires_at is not None:
+                faults.append("run_has_owner")
+            observations: list[JsonValue] = []
+            pair_refused = False
+            for row in snapshot.rows:
+                problem: str | None
+                if row.run_id is None:
+                    problem = "missing_pair"
+                elif row.run_id != run_id:
+                    problem = "wrong_run"
+                elif row.state == "closed":
+                    problem = "closed"
+                elif row.state == "lost":
+                    problem = ("already_disposed" if row.disposal_receipt is not None
+                               else "opaque_lost")
+                elif row.state != "active" or row.disposition is not None:
+                    problem = "baseline_mismatch"
+                else:
+                    problem = None
+                observation: dict[str, JsonValue] = {
+                    "lease_id": row.pair.lease_id, "acquisition_epoch": row.pair.acquisition_epoch,
+                    "problem": problem, "state": row.state, "disposition": row.disposition,
+                }
+                if row.disposal_receipt is not None:
+                    observation["disposal_receipt"] = json_value(
+                        row.disposal_receipt.model_dump(mode="json"),
+                    )
+                observations.append(observation)
+                if problem is not None:
+                    pair_refused = True
+            if faults or pair_refused:
+                return self._terminal_control_fault(
+                    claim, ControlCode.REQUEST_INVALID,
+                    "capability disposal baseline is not eligible",
+                    "inspect the named acquisitions and submit a fresh command key",
+                    {"run_id": str(run_id), "run_faults": faults, "pairs": observations},
+                )
+            session.plan(plan_capability_disposal(session.record, snapshot))
+        plan = session.load()
+        if isinstance(plan, _ControlRejectPlan):
+            return self._terminal_rejection(claim, plan.response)
+        if not isinstance(plan, CapabilityDisposalPlan):
+            raise JournalDamaged("disposal command carries another plan family")
+        outcome = self._store.capability_disposal_apply(claim)
+        if isinstance(outcome, CapabilityDisposalSuperseded):
+            self._fault_probe("runs_dispose_capabilities.after_domain_comparison")
+            return self._terminal_rejection(claim, capability_disposal_superseded_rejection(plan))
+        self._fault_probe("runs_dispose_capabilities.after_domain_mutation")
+        response = CapabilityDisposalResult(
+            run_id=plan.run_id, pairs=outcome.pairs, count=len(outcome.pairs),
+            command=CommandMeta(command_id=claim.command_id, replayed=False),
+            receipt=capability_disposal_reference(outcome),
+        )
+        self._complete_command(claim, response)
         return response
 
     async def runs_cancel(
@@ -2015,6 +2116,7 @@ class _CommandExecutor:
         expected: dict[str, tuple[type[BaseModel], ...]] = {
             "runs_start": (RunCreationPlan, _AdmissionRejectPlan, _ControlRejectPlan),
             "runs_cancel": (_CancelPlan, _ControlRejectPlan),
+            "runs_dispose_capabilities": (CapabilityDisposalPlan, _ControlRejectPlan),
             "runs_resume": (ResumeCommandPlan, _ControlRejectPlan),
             "runs_reproduce": (RunCreationPlan, _ControlRejectPlan),
             "runs_counterfactual": (RunCreationPlan, _ControlRejectPlan),
@@ -2159,6 +2261,14 @@ class _CommandExecutor:
                 or (isinstance(plan, _ControlRejectPlan) and plan.operation != claim.operation)
             ):
                 raise JournalDamaged("rejection plan contradicts its command identity")
+            return
+
+        if isinstance(plan, CapabilityDisposalPlan):
+            candidate = record if record.plan is not None else record.model_copy(update={
+                "plan": {"schema_version": 1, "plan": plan.model_dump(mode="json")},
+            })
+            if validated_capability_disposal_command(candidate) != plan:
+                raise JournalDamaged("disposal plan contradicts its immutable command")
             return
 
         if isinstance(plan, RunCreationPlan):
@@ -2486,6 +2596,17 @@ class _CommandExecutor:
         ):
             raise JournalDamaged("successful response has invalid command metadata")
 
+        if isinstance(response, CapabilityDisposalResult):
+            if not isinstance(plan, CapabilityDisposalPlan):
+                raise JournalDamaged("disposal success has another plan family")
+            disposal = self._store.capability_disposal_receipt(record.command_id)
+            if (disposal is None or response.run_id != plan.run_id
+                    or response.pairs != disposal.pairs
+                    or response.count != len(disposal.pairs)
+                    or response.receipt != capability_disposal_reference(disposal)):
+                raise JournalDamaged("disposal success contradicts its positive historical receipt")
+            return None
+
         if isinstance(response, RunSubmission):
             if isinstance(plan, RunCreationPlan):
                 self._validate_created_run_fact(plan)
@@ -2699,6 +2820,16 @@ class _CommandExecutor:
         response: AdmissionRejected | ControlRejected,
     ) -> None:
         """Bind a refusal to the only plan families that can lawfully emit it."""
+
+        if record.operation == "runs_dispose_capabilities":
+            if self._store.capability_disposal_receipt(record.command_id) is not None:
+                raise JournalDamaged("a positively disposed command cannot be rejected")
+            if isinstance(plan, CapabilityDisposalPlan):
+                if not _same_json_fact(response, capability_disposal_superseded_rejection(plan)):
+                    raise JournalDamaged(
+                        "disposal refusal differs from its canonical plan response",
+                    )
+                return
 
         if isinstance(plan, _AdmissionRejectPlan):
             if record.operation != "runs_start" or not _same_json_fact(
@@ -3233,7 +3364,8 @@ class _CommandExecutor:
         failures: list[str] = []
         for model in models:
             try:
-                decoded = model.model_validate(value)
+                decoded = (model.model_validate_json(canonical_json(value))
+                           if model is CapabilityDisposalResult else model.model_validate(value))
             except ValidationError as exc:
                 failures.append(f"{model.__name__}: {exc.error_count()}")
                 continue

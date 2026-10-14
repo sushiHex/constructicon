@@ -135,9 +135,9 @@ def test_accounting_snapshot_keeps_status_and_cut_before_concurrent_commit(tmp_p
     commits = []
     transactions = []
 
-    def interleaved(connection, run_id, *, observe):
+    def interleaved(connection, run_id, *, observe, disposal_proofs=None):
         transactions.append(connection.in_transaction)
-        result = original(connection, run_id, observe=observe)
+        result = original(connection, run_id, observe=observe, disposal_proofs=disposal_proofs)
         if not commits:
             writer.transition_capability_lease(
                 worker,

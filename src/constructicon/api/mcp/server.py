@@ -25,6 +25,8 @@ from constructicon.core.control import (
     ApprovalCommandResult,
     AuthenticatedActor,
     CancellationResult,
+    CapabilityAcquisitionPair,
+    CapabilityDisposalResult,
     ChannelAckResult,
     ChannelMessagePage,
     ChannelMessageSummary,
@@ -238,6 +240,17 @@ def create_mcp_server(
             idempotency_key=idempotency_key,
         )
 
+    @server.tool(
+        description="Record administrative capability disposal without claiming physical cleanup.",
+    )
+    async def runs_dispose_capabilities(
+        run_id: str, pairs: list[CapabilityAcquisitionPair], reason: str, idempotency_key: str,
+    ) -> CapabilityDisposalResult | ControlRejected:
+        return await control.runs_dispose_capabilities(
+            await actor(), run_id=RunId(run_id), pairs=pairs,
+            reason=reason, idempotency_key=idempotency_key,
+        )
+
     @server.tool(description="Record durable cancellation intent for a run.")
     async def runs_cancel(
         run_id: str,
@@ -371,6 +384,15 @@ def _register_detail_resources(
     )
     async def run_accounting(run_id: str, through_event_seq: str) -> str:
         return await chunk(f"constructicon://runs/{run_id}/accounting/{through_event_seq}")
+
+    @server.resource(
+        "constructicon://runs/{run_id}/capability-disposals/{audit_event_seq}",
+        name="run-capability-disposal",
+        description="Public capability disposal receipt; physical cleanup is unverified.",
+        mime_type="application/json",
+    )
+    async def capability_disposal(run_id: str, audit_event_seq: str) -> str:
+        return await chunk(f"constructicon://runs/{run_id}/capability-disposals/{audit_event_seq}")
 
     @server.resource(
         "constructicon://runs/{run_id}/events/{seq}",

@@ -23,7 +23,7 @@ from unittest.mock import patch
 
 def main() -> None:
     sys.stdout.reconfigure(newline="\n")
-    revision, shape = sys.argv[1:]
+    revision, shape, *parameters = sys.argv[1:]
     archive = subprocess.check_output(
         ["git", "archive", revision, "src"],
         stdin=subprocess.DEVNULL,
@@ -77,8 +77,71 @@ def main() -> None:
     from constructicon.substrate.journal.sqlite import SCHEMA_VERSION, SqliteJournal
     from tests.run_worlds import create_test_run, start_test_run
 
+    if shape == "refuse-newer":
+        from constructicon.core.errors import JournalDamaged
+
+        database = Path(parameters[0])
+        connection = sqlite3.connect(database)
+        try:
+            before = tuple(connection.iterdump())
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
+        finally:
+            connection.close()
+        assert version > SCHEMA_VERSION
+        error = None
+        try:
+            SqliteJournal(database)
+        except Exception as exc:
+            error = exc
+        assert isinstance(error, JournalDamaged), error
+        assert "refusing to touch it" in str(error)
+        connection = sqlite3.connect(database)
+        try:
+            assert tuple(connection.iterdump()) == before
+            assert connection.execute("PRAGMA user_version").fetchone()[0] == version
+            assert connection.execute("PRAGMA journal_mode").fetchone()[0] == mode
+        finally:
+            connection.close()
+        print(f"Actual writer {revision} schema {SCHEMA_VERSION} refused schema {version};"
+              " exact logical bytes/version/journal mode unchanged.")
+        return
+
     with tempfile.TemporaryDirectory() as directory:
         database = Path(directory) / "historical.db"
+        if shape == "disposal-baseline":
+            assert SCHEMA_VERSION == 8, "disposal baseline must come from the schema-8 writer"
+            fixture = (Path(__file__).parents[1]
+                       / "fixtures/capability_history/schema7-lost-transitions.sql")
+            connection = sqlite3.connect(database)
+            try:
+                connection.executescript(fixture.read_text(encoding="utf-8"))
+            finally:
+                connection.close()
+            journal = SqliteJournal(database, now_fn=lambda: datetime(2026, 1, 1, tzinfo=UTC))
+            run_id = RunId("run-disposal-fixture")
+            create_test_run(journal, run_id)
+            with patch("os.getpid", return_value=123):
+                worker = start_test_run(journal, run_id, owner_id="fixture-worker")
+            for index in range(2):
+                path = ExecutionPath(scope=ScopePath(segments=(f"leased-{index}",)))
+                journal.record_capability_lease(worker, CapabilityLease(
+                    lease_id=lease_id_for(run_id, path, "workspace"),
+                    acquisition_epoch=worker.epoch, run_id=run_id, binding_id="workspace",
+                    path=path, state="active", resource_ref=f"fake-resource-{index}",
+                ))
+            journal.release_run(worker)
+            assert len(SqliteJournal(database).capability_leases(run_id)) == 2
+            connection = sqlite3.connect(database)
+            try:
+                print(f"-- Actual journal writer {revision}; shape {shape};"
+                      f" schema {SCHEMA_VERSION}.")
+                print("-- Retained schema-7 losses plus a schema-8 creation with two active pairs.")
+                print("\n".join(connection.iterdump()))
+                print("PRAGMA user_version = 8;")
+            finally:
+                connection.close()
+            return
         journal = SqliteJournal(database, now_fn=lambda: datetime(2026, 1, 1, tzinfo=UTC))
         run_id = RunId("run-historical-capabilities")
         create_test_run(journal, run_id)

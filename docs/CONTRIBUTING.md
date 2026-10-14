@@ -421,12 +421,13 @@ with an itemized fault rather than guessing which pair is the exchange.
 
 ## Changing SQLite persistence (L1)
 
-`SqliteJournal` is one schema-8 WAL store assembled from private responsibility
+`SqliteJournal` is one schema-9 WAL store assembled from private responsibility
 modules: `_sqlite_base`, `_sqlite_schema`, `_sqlite_execution`,
 `_sqlite_execution_facts`, `_sqlite_runs`, `_sqlite_effects`, `_sqlite_leases`,
 `_sqlite_attestations`, `_sqlite_registry`, `_sqlite_actors`, `_sqlite_control`,
 `_sqlite_commands`, `_sqlite_approvals`, `_sqlite_channels`,
 `_sqlite_fact_seals`, `_sqlite_capability_provenance`, `_sqlite_accounting`,
+`_sqlite_capability_disposal`,
 and `_sqlite_queries`.
 A Python module move is not a data migration. Preserve SQL shape, transaction boundaries,
 write-once equality, epoch fences, fault-probe positions, canonical bytes, and
@@ -461,6 +462,16 @@ floor when validating later lifecycle changes and acquisitions: hashing only
 today's mutable rows is not the migration commitment. Current workers cannot
 write `lost` or change a historical lost acquisition back to `active`. See
 [ADR 0022](adr/0022-operator-disposal-records-abandoned-capabilities.md).
+
+Schema 9 adds the administrative disposal relationship. Preserve receipt-first
+replay: later run progress cannot invalidate a committed receipt, and a missing
+receipt does not prove supersession. The private relationship binds the exact
+command, plan, audit and transition facts; only the public receipt contributes
+to public detail hashes. Keep structural history proof below receipt attribution
+so a lost transition does not recursively require itself as evidence. Point
+proofs must tolerate a transaction's reserved but not yet inserted event;
+external complete reads additionally validate the committed event extent.
+Operation-local proof reuse is confined to one owned read snapshot.
 
 Schema 7 adds `durable_fact_seals`; `runs.creation_command_id`;
 `effects.outcome_run_id` and `effects.outcome_event_seq`;

@@ -5,11 +5,16 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import timedelta
-from typing import Literal
+from typing import Literal, cast
 
+from constructicon.core.address import RunId
 from constructicon.core.channel import ChannelMessage
 from constructicon.core.control import (
     AuthenticatedActor,
+    CapabilityAcquisitionPair,
+    CapabilityDisposalRecorded,
+    CapabilityDisposalSnapshot,
+    CapabilityDisposalSuperseded,
     CommandClaim,
     CommandClaimResult,
     CommandRecord,
@@ -18,6 +23,7 @@ from constructicon.core.control import (
     command_id_for,
     command_request_hash,
     validate_idempotency_key,
+    validated_capability_disposal_command,
 )
 from constructicon.core.effect import ApprovalRecord
 from constructicon.core.errors import ContractViolation, JournalDamaged
@@ -33,7 +39,7 @@ from constructicon.core.human import (
     validated_standalone_command_approval,
 )
 from constructicon.core.identity import Digest, JsonValue, canonical_json
-from constructicon.core.run import OwnershipLost
+from constructicon.core.run import OwnershipLost, RunStatus
 from constructicon.substrate.journal._sqlite_approvals import (
     approval_fact,
     approval_from_row,
@@ -59,6 +65,7 @@ from constructicon.substrate.journal._sqlite_commands import (
     validate_command_claim_integrity,
 )
 from constructicon.substrate.journal._sqlite_execution_facts import (
+    event_fact_key,
     resume_attempt_owned_by,
 )
 
@@ -75,6 +82,126 @@ _COMMAND_RECOVERY_ANOMALY = """
 
 
 class _SqliteControlMixin:
+    def capability_disposal_snapshot(
+        self, run_id: RunId, pairs: tuple[CapabilityAcquisitionPair, ...],
+    ) -> CapabilityDisposalSnapshot:
+        from constructicon.substrate.journal._sqlite_capability_disposal import disposal_snapshot
+
+        with self._read() as connection:
+            return disposal_snapshot(connection, run_id, pairs, observe=self._now)
+
+    def capability_disposal_receipt(self, command_id: str) -> CapabilityDisposalRecorded | None:
+        from constructicon.substrate.journal._sqlite_capability_disposal import (
+            project_disposal_receipt,
+        )
+
+        with self._read() as connection:
+            return project_disposal_receipt(connection, command_id)
+
+    def capability_disposal_apply(
+        self, claim: CommandClaim,
+    ) -> CapabilityDisposalRecorded | CapabilityDisposalSuperseded:
+        from constructicon.substrate.journal._sqlite_capability_disposal import (
+            DISPOSAL_EVENT,
+            DISPOSAL_FAMILY,
+            disposal_relationship_hash,
+            disposal_snapshot,
+            project_disposal_receipt,
+        )
+        from constructicon.substrate.journal._sqlite_fact_seals import store_durable_fact_seal
+
+        with self._txn() as connection:
+            if connection.execute("PRAGMA user_version").fetchone()[0] != 9:
+                raise ContractViolation("administrative disposal requires persistence schema 9")
+            command = self._command_fenced(connection, claim)
+            plan = validated_capability_disposal_command(command)
+            previous = project_disposal_receipt(connection, command.command_id)
+            if previous is not None:
+                return previous
+            pairs = tuple(row.pair for row in plan.rows)
+            current = disposal_snapshot(connection, plan.run_id, pairs, observe=self._now)
+            if current.run is None or current.owner_epoch is None or current.event_seq is None:
+                raise JournalDamaged("planned disposal run disappeared")
+            if (current.owner_epoch < plan.owner_epoch
+                    or current.event_seq < plan.baseline_event_seq):
+                raise JournalDamaged("disposal baseline fence moved backwards")
+            if (current.owner_epoch > plan.owner_epoch
+                    or current.event_seq > plan.baseline_event_seq):
+                return CapabilityDisposalSuperseded()
+            if (current.run.status is not RunStatus.RUNNING or current.run.owner_id is not None
+                    or current.run.lease_expires_at is not None
+                    or current.run.manifest_hash != plan.manifest_hash
+                    or current.world_hash != plan.world_hash
+                    or current.rows != plan.rows):
+                raise JournalDamaged("disposal baseline changed without a lawful advancing fence")
+            last_seq = plan.baseline_event_seq + len(plan.rows) + 1
+            changed = connection.execute(
+                "UPDATE runs SET next_event_seq = ? WHERE run_id = ? AND status = 'running'"
+                " AND owner_id IS NULL AND lease_expires_at IS NULL"
+                " AND owner_epoch = ? AND next_event_seq = ?",
+                (last_seq, plan.run_id, plan.owner_epoch, plan.baseline_event_seq),
+            )
+            if changed.rowcount != 1:
+                raise JournalDamaged("disposal run fence changed inside its write transaction")
+            observed_at = self._now()
+            transition_rows = []
+            for offset, row in enumerate(plan.rows, 1):
+                pair = row.pair
+                connection.execute(
+                    "UPDATE capability_leases SET state = 'lost',"
+                    " disposition = NULL, updated_at = ?"
+                    " WHERE lease_id = ? AND acquisition_epoch = ? AND run_id = ?",
+                    (observed_at.isoformat(), pair.lease_id, pair.acquisition_epoch, plan.run_id),
+                )
+                payload = {"lease_id": pair.lease_id, "acquisition_epoch": pair.acquisition_epoch,
+                           "from": "active", "to": "lost", "disposition": None,
+                           "observed_at": observed_at.isoformat()}
+                assert row.fact is not None
+                initial = row.fact["initial"]
+                if isinstance(initial, dict) and "base_hash" in initial:
+                    payload["legacy_base_hash"] = initial["base_hash"]
+                seq = plan.baseline_event_seq + offset
+                self._insert_event_fact(
+                    connection, plan.run_id, seq, "LeaseTransition", None, payload,
+                    created_at=observed_at,
+                )
+                transition_rows.append(connection.execute(
+                    "SELECT * FROM events WHERE run_id = ? AND seq = ?", (plan.run_id, seq),
+                ).fetchone())
+                self.fault_probe("capability_disposal.after_transition_insert")
+            receipt = CapabilityDisposalRecorded(
+                command_id=command.command_id, run_id=plan.run_id, manifest_hash=plan.manifest_hash,
+                owner_epoch=plan.owner_epoch, before_event_seq=plan.baseline_event_seq,
+                audit_event_seq=last_seq, pairs=pairs,
+                row_baseline_hashes=tuple(cast(Digest, row.baseline_hash) for row in plan.rows),
+                transition_event_seqs=tuple(plan.baseline_event_seq + offset
+                                            for offset in range(1, len(plan.rows) + 1)),
+            )
+            self._insert_event_fact(
+                connection, plan.run_id, last_seq, DISPOSAL_EVENT, None,
+                receipt.model_dump(mode="json"), created_at=observed_at,
+            )
+            command_row = connection.execute(
+                "SELECT * FROM commands WHERE command_id = ?", (command.command_id,),
+            ).fetchone()
+            audit_row = connection.execute(
+                "SELECT * FROM events WHERE run_id = ? AND seq = ?", (plan.run_id, last_seq),
+            ).fetchone()
+            store_durable_fact_seal(
+                connection, family=DISPOSAL_FAMILY, fact_key=command.command_id,
+                selector=event_fact_key(plan.run_id, last_seq),
+                fact_hash=disposal_relationship_hash(
+                    command_row, audit_row, tuple(transition_rows),
+                ),
+            )
+            self.fault_probe("capability_disposal.before_commit")
+            if project_disposal_receipt(connection, command.command_id) != receipt:
+                raise JournalDamaged(
+                    "disposal application failed its canonical receipt projection",
+                )
+        self.fault_probe("capability_disposal.after_commit")
+        return receipt
+
     def claim_command(
         self,
         *,
@@ -589,6 +716,13 @@ class _SqliteControlMixin:
         """
 
         facts: list[str] = []
+        if command.operation == "runs_dispose_capabilities":
+            from constructicon.substrate.journal._sqlite_capability_disposal import (
+                project_disposal_receipt,
+            )
+
+            if project_disposal_receipt(connection, command.command_id) is not None:
+                return "a capability disposal"
         plan = decoded_human_command_plan(command)
         if isinstance(plan, (ApprovalPlan, ChannelApprovalPlan)):
             approval_rows = connection.execute(

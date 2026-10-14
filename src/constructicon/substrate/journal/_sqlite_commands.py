@@ -704,6 +704,7 @@ def sealed_command_from_row(
     record = _sealed_command_phases_from_row(connection, row)
     for era in _PLAN_ERAS:
         _require_plan_era(connection, row, record, era)
+    _require_disposal_command(connection, record)
     return record
 
 
@@ -717,9 +718,57 @@ def seal_current_command_plan(
     record = _sealed_command_phases_from_row(connection, row)
     validated_new_resume_command_plan(record)
     validated_new_domain_command_plan(record)
+    _require_disposal_command(connection, record)
     for era in _PLAN_ERAS:
         _require_plan_era(connection, row, record, era)
     return record
+
+
+def _require_disposal_command(connection: sqlite3.Connection, record: CommandRecord) -> None:
+    if record.operation != "runs_dispose_capabilities":
+        return
+    from constructicon.core.control import (
+        CapabilityDisposalResult,
+        capability_disposal_reference,
+        capability_disposal_superseded_rejection,
+        validated_capability_disposal_command,
+    )
+    from constructicon.substrate.journal._sqlite_capability_disposal import project_disposal_receipt
+
+    receipt = project_disposal_receipt(connection, record.command_id)
+    if record.plan is None:
+        return
+
+    plan_value = record.plan.get("plan") if isinstance(record.plan, dict) else None
+    # Admission refusals seal their exact response under the existing rejection law.
+    if isinstance(plan_value, dict) and plan_value.get("kind") == "control_reject":
+        if receipt is not None:
+            raise JournalDamaged("disposal admission refusal has a committed domain receipt")
+        return
+    plan = validated_capability_disposal_command(record)
+    if record.state == "committed":
+        try:
+            response = CapabilityDisposalResult.model_validate_json(canonical_json(record.response))
+        except (TypeError, ValueError) as exc:
+            raise JournalDamaged("disposal command has no typed successful response") from exc
+        if (receipt is None or response.run_id != plan.run_id or response.pairs != receipt.pairs
+                or response.command.command_id != record.command_id or response.command.replayed
+                or response.receipt != capability_disposal_reference(receipt)):
+            raise JournalDamaged("disposal response differs from its positive receipt")
+    elif record.state == "rejected":
+        from constructicon.substrate.journal._sqlite_capability_provenance import accounting_run_row
+
+        run = accounting_run_row(connection, plan.run_id)
+        if (receipt is not None or run["owner_epoch"] < plan.owner_epoch
+                or run["next_event_seq"] < plan.baseline_event_seq
+                or (run["owner_epoch"] == plan.owner_epoch
+                    and run["next_event_seq"] == plan.baseline_event_seq)
+                or canonical_json(record.response) != canonical_json(
+                    capability_disposal_superseded_rejection(plan),
+                )):
+            raise JournalDamaged(
+                "disposal rejection has no positive supersession and canonical response",
+            )
 
 
 def _sealed_command_phases_from_row(
@@ -813,7 +862,7 @@ def command_for_id(
         )
     dependent = connection.execute(
         "SELECT 1 FROM durable_fact_seals"
-        " WHERE family IN (?, ?, ?, ?) AND fact_key = ?"
+        " WHERE family IN (?, ?, ?, ?, ?) AND fact_key = ?"
         " UNION ALL SELECT 1 FROM runs WHERE creation_command_id = ?"
         " UNION ALL SELECT 1 FROM run_origins WHERE run_id = ?"
         " UNION ALL SELECT 1 FROM approvals WHERE command_id = ?"
@@ -828,6 +877,7 @@ def command_for_id(
             # Cross-owner absence guard: execution facts own this persisted
             # family; command projection only refuses a missing dependency.
             "resume_attempt",
+            "capability_disposal",
             command_id,
             command_id,
             str(run_id_for_command(command_id)),
@@ -840,6 +890,24 @@ def command_for_id(
         raise JournalDamaged(
             f"command {command_id!r} is missing behind a dependent durable fact"
         )
+    # The audit is an independent ownership link: deleting the private disposal
+    # relationship cannot make a committed public audit disappear. Use sealed
+    # base facts only; a positive absence refusal must not recursively project
+    # a receipt whose missing command is precisely the damage being refused.
+    # This absence proof is linear in audits but uses constant Python memory.
+    from constructicon.substrate.journal._sqlite_execution_facts import (
+        _stored_event_from_row_without_relationship,
+    )
+
+    for row in connection.execute(
+        "SELECT * FROM events WHERE kind = 'CapabilityDisposalRecorded'",
+    ):
+        event = _stored_event_from_row_without_relationship(connection, row)
+        owner = event.payload.get("command_id") if isinstance(event.payload, dict) else None
+        if not isinstance(owner, str) or owner == command_id:
+            raise JournalDamaged(
+                f"command {command_id!r} is missing behind a public disposal audit",
+            )
     return None
 
 

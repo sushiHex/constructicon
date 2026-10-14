@@ -1,5 +1,5 @@
 # mypy: disable-error-code="attr-defined"
-"""SQLite schema ownership and atomic migrations through schema 8."""
+"""SQLite schema ownership and atomic migrations through schema 9."""
 
 from __future__ import annotations
 
@@ -109,7 +109,7 @@ from constructicon.substrate.journal._sqlite_runs import (
     validated_run_world,
 )
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 _CURRENT_V7_TABLES = frozenset(
     {
@@ -343,6 +343,7 @@ class _SqliteSchemaMixin:
                 )
             if version == SCHEMA_VERSION:
                 self._require_current_v7_tables(connection)
+            if version >= 8:
                 self._require_current_v8_tables(connection)
             connection.execute("PRAGMA journal_mode=WAL")
             has_runs = _has_legacy_runs_table(connection)
@@ -375,6 +376,9 @@ class _SqliteSchemaMixin:
             if version == 7:
                 self._migrate_m7_to_m8(connection)
                 version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+            if version == 8:
+                self._migrate_m8_to_m9(connection)
+                version = int(connection.execute("PRAGMA user_version").fetchone()[0])
             if version == SCHEMA_VERSION:
                 connection.executescript(_SCHEMA)
                 connection.executescript(_V5_SCHEMA)
@@ -406,6 +410,42 @@ class _SqliteSchemaMixin:
         }
         if columns != {"run_id", "world_hash", "source", "floor", "inventory_hash"}:
             raise JournalDamaged("schema 8 capability accounting eras table has changed columns")
+
+    def _migrate_m8_to_m9(self, connection: sqlite3.Connection) -> None:
+        from constructicon.substrate.journal._sqlite_capability_disposal import (
+            DISPOSAL_EVENT,
+            DISPOSAL_FAMILY,
+            validate_disposal_inventory,
+        )
+
+        connection.execute("BEGIN IMMEDIATE")
+        if connection.execute("PRAGMA user_version").fetchone()[0] != 8:
+            connection.rollback()
+            return
+        try:
+            self._require_current_v7_tables(connection)
+            self._require_current_v8_tables(connection)
+            self._validate_v7_fact_inventory(connection, capability_provenance=True)
+            audits = connection.execute(
+                "SELECT COUNT(*) FROM events WHERE kind = ?", (DISPOSAL_EVENT,),
+            ).fetchone()[0]
+            relationships = connection.execute(
+                "SELECT COUNT(*) FROM durable_fact_seals WHERE family = ?", (DISPOSAL_FAMILY,),
+            ).fetchone()[0]
+            if audits != 0 or relationships != 0:
+                raise JournalDamaged("schema 8 baseline already contains administrative disposal")
+            connection.execute("PRAGMA user_version = 9")
+            if validate_disposal_inventory(connection) != 0:
+                raise JournalDamaged(
+                    "schema 9 migration did not establish empty disposal inventory",
+                )
+            self.fault_probe("capability_disposal_migration.before_commit")
+            self._validate_v7_fact_inventory(connection, capability_provenance=True)
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        self.fault_probe("capability_disposal_migration.after_commit")
 
     def _migrate_m7_to_m8(self, connection: sqlite3.Connection) -> None:
         connection.execute("BEGIN IMMEDIATE")
@@ -980,13 +1020,22 @@ class _SqliteSchemaMixin:
             legacy_effect_outcome_count + plan_era_count
             + resume_provenance_count + capability_count
         )
+        disposal_count = 0
+        disposal_families: frozenset[str] = frozenset()
+        if capability_provenance and connection.execute("PRAGMA user_version").fetchone()[0] >= 9:
+            from constructicon.substrate.journal._sqlite_capability_disposal import (
+                DISPOSAL_FAMILY,
+                validate_disposal_inventory,
+            )
+            disposal_count = validate_disposal_inventory(connection)
+            disposal_families = frozenset({DISPOSAL_FAMILY})
         validate_durable_fact_seal_inventory(
             connection,
             known_families=(
-                _DURABLE_FACT_SEAL_FAMILIES | CAPABILITY_PROVENANCE_FAMILIES
+                _DURABLE_FACT_SEAL_FAMILIES | CAPABILITY_PROVENANCE_FAMILIES | disposal_families
                 if capability_provenance else _DURABLE_FACT_SEAL_FAMILIES
             ),
-            expected_count=expected_count,
+            expected_count=expected_count + disposal_count,
         )
         return histories
 

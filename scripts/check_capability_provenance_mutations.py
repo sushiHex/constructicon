@@ -55,7 +55,7 @@ MUTANTS = (
     ),
     (
         "migration inventory commitment detects erased eventless acquisitions",
-        PROVENANCE + "validate_accounting_run",
+        PROVENANCE + "validate_accounting_point",
         "if accounting_inventory_hash(histories, era.floor) != era.inventory_hash:",
         "if False:",
         MIGRATION_TESTS + "test_eventless_legacy_erasure_refuses_even_with_valid_event_extent[active-False]",
@@ -119,8 +119,8 @@ MUTANTS = (
     (
         "historical witnesses must lie within the positively recorded floor",
         PROVENANCE + "require_capability_lost_provenance",
-        "if event.run_id != history.lease.run_id or event.seq > era.floor:",
-        "if False:",
+        "disposal_for_transition(connection, history, event, proofs=proofs)",
+        "pass  # above-floor loss needs current receipt authority",
         MIGRATION_TESTS + "test_lost_witness_cannot_lie_above_a_rewritten_migration_floor",
     ),
     (

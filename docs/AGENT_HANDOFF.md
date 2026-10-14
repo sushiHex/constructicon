@@ -15,6 +15,33 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #179 — disposal abandons accounting, not physical authority
+
+The ADMIN command seals a bounded exact acquisition set and an ownerless
+RUNNING baseline. One transaction records its lost/None transitions, public
+receipt and private command relationship. Replay proves that historical receipt
+before comparing current state; only positively advanced fences yield the
+plan-derived supersession refusal. Schema 9 adds the relationship without
+rewriting schema-8 provenance or inventing disposal for old opaque loss.
+
+Disposal does not release a lock, invoke provider cleanup, clear RunHost
+deferral or schedule a worker. Real walker tests distinguish a fresh resume,
+ordinary restarted-host recovery and a stale queued intent. Portable fake
+provider custody remains binding after accounting loss; that test is not a
+native containment measurement. Four child-process crash seams exercise actual
+restart, including comparison before terminal refusal. Public receipt and
+accounting hashes contain no private reason-bearing command/plan hash.
+
+Two absence assumptions were wrong during implementation: a missing plan was
+not evidence of an unplanned command while its receipt survived, and a missing
+command was not a fresh identity while either its private relationship or
+public audit survived. Both point readers now consult the independent evidence.
+A permitting-path failure also distinguished point world/era proof from a
+complete committed event extent: terminalization temporarily reserves an event
+before insertion. No validation-bypass flag was added.
+
+---
+
 ## #179 — truthful accounting is a coherent public read
 
 Result schema 2 adds complete capability counts and cut-pinned chunked detail;
