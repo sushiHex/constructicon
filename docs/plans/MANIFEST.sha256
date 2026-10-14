@@ -1,4 +1,4 @@
-ef75364558d8c1de56008b5e9dba0f33aaba0ea4b129f7e2c7c635dc2b5a626b  README.md
+94268bcf48c11406197c3f9dab1399d9c1ff23be568c00464aa385450c9a7592  README.md
 40dee5d5540368c77bc95818b61d61f9b05780cdfe10776893b8fa44c0fa9966  handoffs/M8-N5-read-session.md
 8b93f511f42d665ddb8d24707a2739d540c9e44c82cc372ac2da616bcacab394  handoffs/M8-N5-stage3-read.md
 f11045d5e3b0f0494f9760f5b31d4c083e5fb6477fe11a513a12d12299f76cad  handoffs/M8-N5-host-session.md
@@ -84,3 +84,4 @@ ee0289d1b64c5ad99509f57d9c25371c3ec6a81ec6ec11613ab866e27a9d4aa9  handoffs/M8-N6
 0d516fe52edcf4f1456af0a35c5b74326cfb4e3bb54c7d33d395f172ede9138a  handoffs/ADR0022-provenance-state-review.md
 428f24a1e30ddd7ad03144dac25ef27fc57d2e98e1482000ea26b51dd553f4a1  handoffs/ADR0022-accounting-state-review.md
 f6afb70a18eb5e148f2b1ebfbddd9fc012281f6993b71f25f16afb18bdca2b42  handoffs/ADR0022-disposal-state-review.md
+b2c6fef5c77605810b39cb2ba8e0cf493dd5c0d91bc61b773479e2d44ab93819  handoffs/M8-maintenance-workflow-state-review.md
