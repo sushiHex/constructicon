@@ -5847,6 +5847,15 @@ qualification, and this implementation alone does not complete #186.
 
 ### Additive maintenance host procedure
 
+The entry merged as `01e816ea441ff8f0cee2fa7b82d83873357e6f51`; its tree equals
+reviewed `c90eb07`. Exact-head CI passed with 5,648 tests and 422 platform
+skips, strict typing, five import contracts, isolated controller import,
+all mutation jobs including 116 M8 mutants, runner qualification and all four
+Linux proof lanes. The additional Windows full run was still in progress at
+merge and is not counted as passing evidence. The source bundle pins this
+actual merge as its base; stock Git verified its complete history, three
+installed consumer/exam hashes and absent vector contribution locally.
+
 `M8-maintenance-session.md` composes the existing controller/launch replacement,
 fresh g9 qualification and exact one-attempt application entry. It preserves
 frozen runbooks and historical g8 bytes. An already-Off host takes one fresh

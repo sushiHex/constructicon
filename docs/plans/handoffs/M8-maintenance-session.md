@@ -1,13 +1,12 @@
 # M8 maintenance: fresh g9 and one application attempt
 
 Status: draft exact procedure for [#186](https://github.com/sushiHex/constructicon/issues/186).
-The deployment controller is **UNMERGED** until PR #187 is merged and its
-actual merge commit and reviewed tree are verified. `bc606c9` is a reviewed
-branch head, not a deployment commit. The bundle, base and bundle digest are
-also unprepared. The guards below refuse these placeholders before transport.
-Replace them with reviewed literal pins, review the resulting complete script
-bytes and procedure revision, then obtain the required session authorization.
-This draft authorizes no VM operation or vendor request.
+The deployment controller is `01e816ea441ff8f0cee2fa7b82d83873357e6f51`,
+the actual squash merge of PR #187. Its tree is byte-identical to reviewed
+head `c90eb07`; exact-head verification, qualification and all four Linux
+proof lanes passed. This procedure's review and checks must pass before host
+execution. The owner's wave authorization remains bounded by its stop rules;
+these source facts alone authorize no VM operation or vendor request.
 
 The owner approved the maintenance implementation and related work; this
 procedure makes the proposed host actions concrete. It continues the
@@ -43,12 +42,12 @@ including old-controller and installer steps. After pin preparation replace
 only its literal declarations; do not supply branch head as `C`:
 
 ```bash
-C=UNMERGED
+C=01e816ea441ff8f0cee2fa7b82d83873357e6f51
 O=59de73bbc9b6f6a9a814b6193f0252e92d1bdd3e
 D=8c1b14eed6f02474abcc1ac998e3bf87f8c6ade3
-BASE=UNPINNED
-BUNDLE_SHA256=UNPINNED
-BUNDLE=/home/m8-service/UNPREPARED.bundle
+BASE=01e816ea441ff8f0cee2fa7b82d83873357e6f51
+BUNDLE_SHA256=8d7fb67e431b2c776ceef9f6002e9f0c87517b1968e31775d0a19a79ba67dd43
+BUNDLE=/home/m8-service/maintenance-source-01e816e.bundle
 [[ "$C" =~ ^[0-9a-f]{40}$ && "$BASE" =~ ^[0-9a-f]{40}$ && "$BUNDLE_SHA256" =~ ^[0-9a-f]{64}$ ]] \
   || { echo 'merged controller and reviewed source pins required; stop' >&2; exit 1; }
 test "$BUNDLE" != /home/m8-service/UNPREPARED.bundle \
@@ -110,6 +109,12 @@ Review that BASE contains the installed consumer/reference/exam bytes and no
 service-owned path, compare its local and remote digest, and retain it private.
 `prepare` checks these bytes before importing them. Unknown pins stop.
 
+The prepared bundle is 3,893,557 bytes, self-contained with complete history,
+and advertises only `refs/remotes/origin/main` at BASE above. Stock Git verified
+it locally. The target, consumer and exam blobs at BASE match all three
+installed `SOURCE_HASHES`; the vector path is absent. Its actual SHA-256 is
+the literal above. This is local source evidence, not an upload or host proof.
+
 ## P1: already Off, one fresh start and historical continuity
 
 Notify before the fresh start. On the Windows host, confirm Off and zero
@@ -117,9 +122,9 @@ checkpoints, then start once. Do not create a checkpoint or run Stop-VM merely
 to mimic the old pre-reboot route. Stop on Saved/Running/unknown state:
 
 ```powershell
-$maintenanceController = 'UNMERGED'
-$maintenanceBase = 'UNPINNED'
-$maintenanceBundleSha256 = 'UNPINNED'
+$maintenanceController = '01e816ea441ff8f0cee2fa7b82d83873357e6f51'
+$maintenanceBase = '01e816ea441ff8f0cee2fa7b82d83873357e6f51'
+$maintenanceBundleSha256 = '8d7fb67e431b2c776ceef9f6002e9f0c87517b1968e31775d0a19a79ba67dd43'
 if ($maintenanceController -cnotmatch '^[0-9a-f]{40}$' -or
     $maintenanceBase -cnotmatch '^[0-9a-f]{40}$' -or
     $maintenanceBundleSha256 -cnotmatch '^[0-9a-f]{64}$') {

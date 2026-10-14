@@ -97,12 +97,14 @@ def test_native_start_guard_requires_prepared_pins_off_and_zero_checkpoints(
     found = re.search(r"```powershell\n(.*?)```", _text(DOCUMENT), re.S)
     assert found is not None
     block = found[1]
-    if pins:
-        block = block.replace("'UNMERGED'", "'" + "a" * 40 + "'")
-        block = block.replace("$maintenanceBase = 'UNPINNED'",
-                              "$maintenanceBase = '" + "b" * 40 + "'")
-        block = block.replace("$maintenanceBundleSha256 = 'UNPINNED'",
-                              "$maintenanceBundleSha256 = '" + "c" * 64 + "'")
+    for name, value in (
+        ("maintenanceController", "a" * 40 if pins else "UNMERGED"),
+        ("maintenanceBase", "b" * 40 if pins else "UNPINNED"),
+        ("maintenanceBundleSha256", "c" * 64 if pins else "UNPINNED"),
+    ):
+        block, count = re.subn(r"(?m)^\$" + name + r" = '[^']*'$",
+                               "$" + name + " = '" + value + "'", block)
+        assert count == 1
     script = "\n".join([
         "$ErrorActionPreference = 'Stop'",
         "function Get-VM { [pscustomobject]@{ State = '" + state + "' } }",
