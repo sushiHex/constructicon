@@ -15,6 +15,43 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #187 — an application attempt is not qualification
+
+The operational maintenance entry uses a separate exact-run authorization and
+the existing Graph, ControlPlane, RunHost and exclusive attempt record. It
+does not repurpose N5 qualification or clear the provider's unavailable
+reasons. Preparation pins a reviewed source bundle; preflight proposes actual
+resource pins; run reassembles and checks them before recovery; inspection
+reads bounded historical evidence without starting recovery. The worker gains
+no installation, push or merge capability.
+
+Credential-free Linux tests exercise the entry with a scripted executor and
+real capture, gate and journal. That is not a live provider or installed-host
+proof. Changed adapter bytes require fresh installation and qualification;
+historical g8 acceptance cannot supply them. No fake-provider mode was added
+to the installed entry solely to repeat CI on the credential host.
+
+Two publication assumptions were corrected: nominal identifier types did not
+constrain stored identifier text, and a JSON byte bound did not include the
+CLI's terminating newline. Both now have accepting and refusing boundary
+tests. The installed package also has no repository tests or scripts: source
+preparation checks fixed reviewed blob hashes rather than looking for those
+files beside its module. Historical inspection is not an authenticity proof.
+
+Application identity must include its authorization law, not just its API
+assembly. Review reproduced stale authority surviving a change to the core
+law. The explicit revision inventory now includes that contract and both
+authorization readers; source-drift and omission tests pin the boundary.
+
+A pre-existing portable test raced a real multi-phase run against a short
+polling deadline and could cancel a subprocess thread without joining it.
+The concrete tests now await the actual attempt result and worker completion;
+the portable launcher joins its child before cancellation escapes. Process
+deadlines are unchanged. The credential-free double must preserve cleanup
+ownership even where it cannot reproduce Linux isolation.
+
+---
+
 ## #185 — a finite autonomous exam has an actual accepting path
 
 An ordinary WRITE/capture/check Graph now returns an immutable one-file

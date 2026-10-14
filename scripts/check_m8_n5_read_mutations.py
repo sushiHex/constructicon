@@ -32,7 +32,7 @@ MUTANTS = (
      CORE_TEST + "test_a_read_acquisition_under_other_grants_is_refused"),
     ("a read acquisition reserves the one attempt",
      CODEX + "CodexOperatorProvider.acquire",
-     "if qualification is not None and qualification.attempt_record is not None:", "if False:",
+     "if authorization is not None and authorization.attempt_record is not None:", "if False:",
      READ_TEST + "test_the_spent_attempt_refuses_every_later_acquisition"),
     ("a read acquisition may dispatch",
      CODEX + "CodexOperatorProvider.acquire",

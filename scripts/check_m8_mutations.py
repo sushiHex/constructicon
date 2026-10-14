@@ -19,6 +19,116 @@ MAINTENANCE = "constructicon.substrate.gates.maintenance:"
 VECTOR_TESTS = "tests/substrate/test_maintenance_vectors.py::"
 
 MUTANTS = (
+    *(
+        (
+            "maintenance entry binds " + label,
+            "constructicon.api.maintenance_entry:require_maintenance_attempt",
+            before, "True",
+            "tests/api/test_maintenance_entry.py::"
+            "test_entry_refuses_mismatched_authority_before_startup[" + label + "]",
+        )
+        for label, before in (
+            ("request", "authorization.request == resources.request"),
+            ("application", "authorization.application_revision == maintenance_application_revision()"),
+            ("graph", "authorization.source_graph_hash == source_graph_hash_for(graph)"),
+            ("executor", "authorization.revision == str(executor.identity.revision)"),
+            ("journal", "journal_path == Path(journal._db_path).resolve()"),
+        )
+    ),
+    *(
+        (
+            "maintenance recovery proves retained " + label,
+            "constructicon.api.maintenance_entry:require_maintenance_attempt",
+            before, "False",
+            "tests/api/test_maintenance_entry.py::"
+            "test_retained_run_inputs_and_manifest_are_checked_before_startup",
+        )
+        for label, before in (
+            ("inputs", "canonical_json(journal.run_inputs(record.run_id)) != canonical_json(inputs)"),
+            ("manifest", "canonical_json(parse_manifest_json(raw)) != canonical_json(expected)"),
+        )
+    ),
+    (
+        "maintenance source configuration is fixed rather than merely self-hashed",
+        "constructicon.api._maintenance_source:inspect_source",
+        "config != CONFIG or hashlib.sha256(config).hexdigest() != pin.config_sha256",
+        "False",
+        "tests/api/test_maintenance_entry.py::"
+        "test_prepare_accepts_only_new_reviewed_bundle_and_affirms_consumer",
+    ),
+    (
+        "maintenance reviewed bundle digest precedes Git",
+        "constructicon.api._maintenance_source:prepare_source",
+        "hashlib.sha256(raw).hexdigest() != bundle_sha256", "False",
+        "tests/api/test_maintenance_entry.py::test_prepare_checks_digest_before_git_or_root_creation",
+    ),
+    *(
+        (label, target, before, "if False:", test)
+        for label, target, before, test in (
+            (
+                "maintenance epoch wire is an exact integer",
+                "constructicon.core.maintenance:MaintenanceAttemptAuthorization._exact_epoch",
+                "if type(value) is not int or value != 1:",
+                "tests/core/test_maintenance_authorization.py::"
+                "test_shape_refuses_missing_weak_or_foreign_authority",
+            ),
+            (
+                "maintenance and qualification authority remain exclusive",
+                "constructicon.substrate.executors.codex:CodexOperatorProvider.__init__",
+                "if qualification is not None and maintenance is not None:",
+                "tests/substrate/test_codex_maintenance_authorization.py::"
+                "test_maintenance_and_qualification_are_exclusive_and_not_interchangeable",
+            ),
+            (
+                "maintenance attempt records its distinct purpose",
+                "constructicon.substrate.executors.codex:CodexOperatorProvider.acquire",
+                "if self.maintenance is not None:",
+                "tests/substrate/test_codex_maintenance_authorization.py::"
+                "test_one_maintenance_turn_records_purpose_and_completed_dispatch",
+            ),
+            (
+                "maintenance attempt is exclusive before handle publication",
+                "constructicon.substrate.executors.codex:CodexOperatorProvider.acquire",
+                "if authorization is not None and authorization.attempt_record is not None:",
+                "tests/substrate/test_codex_maintenance_authorization.py::"
+                "test_a_preexisting_attempt_refuses_before_a_handle_exists",
+            ),
+            (
+                "maintenance expiry gates both sides of durable intent",
+                "constructicon.substrate.executors.codex:CodexOperatorHandle._expired",
+                "if maintenance is not None and datetime.now(UTC) >= maintenance.not_after:",
+                "tests/substrate/test_codex_maintenance_authorization.py::"
+                "test_expiry_on_either_side_of_intent_dispatches_nothing_but_cleanup_still_works",
+            ),
+        )
+    ),
+    (
+        "maintenance retains the fixed native deadline",
+        "constructicon.core.maintenance:MaintenanceAttemptAuthorization._write_grants",
+        "or grants.timeout_s != 300", "or False",
+        "tests/core/test_maintenance_authorization.py::test_grants_keep_the_bounded_write_shape",
+    ),
+    *(
+        (
+            "maintenance acquisition proves " + label,
+            "constructicon.core.maintenance:MaintenanceAttemptAuthorization.acquisition_faults",
+            before,
+            after,
+            "tests/core/test_maintenance_authorization.py::test_every_other_acquisition_refuses",
+        )
+        for label, before, after in (
+            ("run", "run_id == self.run_id", "True"),
+            ("invocation", "path == ExecutionPath(scope=self.scope)", "True"),
+            ("binding", "binding == self.binding", "True"),
+            ("graph", "source_graph_hash == self.source_graph_hash", "True"),
+            ("capability", "capability_id == self.capability_id", "True"),
+            ("revision", "revision == self.revision", "True"),
+            ("store", "operator_binding_digest == self.operator_binding_digest", "True"),
+            ("grants", "canonical_json(grants) == canonical_json(self.grants)", "True"),
+            ("epoch", "type(epoch) is int and epoch == 1", "True"),
+            ("expiry", "now < self.not_after", "True"),
+        )
+    ),
     (
         "maintenance target source stays pinned",
         MAINTENANCE + "render_unittest",
@@ -585,6 +695,66 @@ MUTANTS = (
         "failure = await self._relinquish_acquired(acquired[index:])", "failure = None",
         CLEANUP + "test_second_settle_observation_failure_relinquishes_earlier_siblings"
         "[persistent]",
+    ),
+    (
+        "maintenance preflight proposal fits the installed reader bound",
+        "constructicon.api.maintenance_entry:_authorization_preview",
+        "len(raw) + 1 > MAX_AUTHORIZATION_BYTES", "False",
+        "tests/api/test_maintenance_entry.py::"
+        "test_cli_preflight_never_runs_and_run_delegates_exact_installed_authority",
+    ),
+    (
+        "maintenance preflight counts the emitted newline",
+        "constructicon.api.maintenance_entry:_authorization_preview",
+        "len(raw) + 1 > MAX_AUTHORIZATION_BYTES", "len(raw) > MAX_AUTHORIZATION_BYTES",
+        "tests/api/test_maintenance_entry.py::"
+        "test_cli_preflight_never_runs_and_run_delegates_exact_installed_authority",
+    ),
+    (
+        "maintenance historical inspection bounds identifier shapes",
+        "constructicon.api.maintenance_entry:inspect_result",
+        'if re.fullmatch(r"run-[0-9a-f]{32}", result.run_id) is None or (',
+        "if False and (",
+        "tests/api/test_maintenance_entry.py::"
+        "test_inspect_refuses_unbounded_or_private_text_identifiers",
+    ),
+    *(
+        (
+            "maintenance unavailable assembly binds " + label,
+            "constructicon.api.plan_manifest_application:maintenance_system",
+            before, "False",
+            "tests/api/test_maintenance_entry.py::"
+            "test_unavailable_application_assembly_requires_exact_companion_and_request_pins",
+        )
+        for label, before in (
+            ("request", "authorization.request != resources.request"),
+            ("application", "authorization.application_revision != maintenance_application_revision()"),
+            (
+                "workspace",
+                "authorization.workspace != MaintenanceCapabilityPin(\n"
+                "                capability_id=resources.workspace.provider_id,\n"
+                "                revision=resources.workspace.revision)",
+            ),
+            (
+                "gate",
+                "authorization.gate != MaintenanceCapabilityPin(\n"
+                "                capability_id=resources.gate.provider_id, revision=resources.gate.revision)",
+            ),
+        )
+    ),
+    *(
+        (
+            "maintenance application pins " + label,
+            "constructicon.api._maintenance_identity:maintenance_application_revision",
+            '"' + source + '",', "",
+            "tests/api/test_maintenance_entry.py::"
+            "test_application_revision_pins_each_authorization_law[" + label + "]",
+        )
+        for label, source in (
+            ("core-law", "core/maintenance.py"),
+            ("maintenance-reader", "substrate/executors/maintenance.py"),
+            ("root-custody-reader", "substrate/executors/qualification.py"),
+        )
     ),
 )
 

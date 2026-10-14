@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -47,6 +48,7 @@ from constructicon.core.identity import digest
 from constructicon.core.maintenance import PlanManifestRequest
 from constructicon.core.run import RunStatus
 from constructicon.runtime.registry import CapabilityDescriptor
+from constructicon.substrate._lifetime import finish_owned
 from constructicon.substrate.executors.linux import ProcessLimits, ProcessResult
 from constructicon.substrate.gates.contained import ContainedGateRunner
 from constructicon.substrate.git import acquisition, contained
@@ -408,15 +410,46 @@ class PortableProcessLauncher:
                 argument = argument.replace(before, after)
             translated.append(argument)
         started = time.monotonic()
-        result = await asyncio.to_thread(subprocess.run, translated,
+        result = await finish_owned(asyncio.create_task(asyncio.to_thread(
+            subprocess.run, translated,
             cwd=kwargs.get("workspace"), input=kwargs.get("stdin", b""),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT if combined else subprocess.PIPE,
-            env=environment, timeout=kwargs["timeout_s"], check=False)
+            env=environment, timeout=kwargs["timeout_s"], check=False)))
         assert len(result.stdout) <= self.limits.stdout_bytes
         errors = result.stderr or b""
         assert len(errors) <= self.limits.stderr_bytes
         return ProcessResult(result.returncode, result.stdout, errors,
                              time.monotonic() - started, payload_returncode=result.returncode)
+
+
+async def test_portable_process_cancellation_joins_the_child(tmp_path, monkeypatch):
+    launcher = PortableProcessLauncher(tmp_path / "scratch", sys.executable)
+    loop = asyncio.get_running_loop()
+    started = asyncio.Event()
+    release, finished = threading.Event(), threading.Event()
+
+    def child(command, **kwargs):
+        assert kwargs["timeout"] == 30 and kwargs["input"] == b""
+        loop.call_soon_threadsafe(started.set)
+        release.wait()
+        finished.set()
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr(subprocess, "run", child)
+    with (tmp_path / "guard").open("w+b") as guard:
+        caller = asyncio.create_task(launcher.run(("/usr/bin/python3", "--version"),
+            guard_fds=(guard.fileno(),), timeout_s=30))
+        try:
+            await started.wait()
+            caller.cancel("joined child cancellation")
+            await asyncio.sleep(0)
+            assert not caller.done() and not finished.is_set()
+        finally:
+            release.set()
+            await asyncio.wait((caller,))
+        with pytest.raises(asyncio.CancelledError, match="joined child cancellation"):
+            await caller
+        assert finished.is_set()
 
 
 class PortableVectorWriter(Writer):
@@ -543,8 +576,38 @@ async def concrete_application(tmp_path, monkeypatch):
         await control.shutdown()
 
 
+@pytest.fixture
+async def completed_concrete_attempt(concrete_application, monkeypatch):
+    _resources, _executor, system, _control, _launch = concrete_application
+    completed = asyncio.get_running_loop().create_future()
+    original = system._run_prepared
+
+    async def observe(*args, **kwargs):
+        worker = asyncio.current_task()
+        assert worker is not None
+        try:
+            result = await original(*args, **kwargs)
+        except BaseException as error:
+            completed.set_result((worker, error))
+            raise
+        completed.set_result((worker, result))
+        return result
+
+    monkeypatch.setattr(system, "_run_prepared", observe)
+
+    async def join(run_id):
+        worker, result = await asyncio.shield(completed)
+        await asyncio.shield(worker)
+        if isinstance(result, BaseException):
+            raise result
+        assert result.run_id == run_id
+        return result
+
+    return join
+
+
 async def test_concrete_assembly_real_git_and_journal_affirm_exact_accepted_result(
-    concrete_application,
+    concrete_application, completed_concrete_attempt,
 ):
     resources, executor, system, control, launch = concrete_application
     await require_maintenance_resources(resources)
@@ -552,11 +615,8 @@ async def test_concrete_assembly_real_git_and_journal_affirm_exact_accepted_resu
     submission = await control.runs_start(RUN_ACTOR, proposal=graph,
         inputs={"request": resources.request.model_dump(mode="json")}, idempotency_key="concrete")
     assert isinstance(submission, RunSubmission), submission
-    async with asyncio.timeout(30):
-        while resources.journal.run_state(submission.run_id).status not in {
-            RunStatus.SUCCEEDED, RunStatus.FAILED,
-        }:
-            await asyncio.sleep(0.01)
+    result = await completed_concrete_attempt(submission.run_id)
+    assert result.status is RunStatus.SUCCEEDED, result
     assert resources.journal.run_state(submission.run_id).status is RunStatus.SUCCEEDED, \
         resources.journal.events(submission.run_id, limit=100)
     result = await derive_maintenance_result(system, resources, submission.run_id)
@@ -612,18 +672,17 @@ async def test_concrete_assembly_refuses_mismatched_resources(concrete_applicati
                                  executor_descriptor=descriptor, writer_grants=WRITE_GRANTS)
 
 
-async def test_application_refuses_history_despite_passing_generic_tree_gate(concrete_application):
+async def test_application_refuses_history_despite_passing_generic_tree_gate(
+    concrete_application, completed_concrete_attempt,
+):
     resources, executor, system, control, _launch = concrete_application
     executor.executor.intermediate_commits = True
     graph = await register(control)
     submission = await control.runs_start(RUN_ACTOR, proposal=graph,
         inputs={"request": resources.request.model_dump(mode="json")}, idempotency_key="history")
     assert isinstance(submission, RunSubmission), submission
-    async with asyncio.timeout(30):
-        while resources.journal.run_state(submission.run_id).status not in {
-            RunStatus.SUCCEEDED, RunStatus.FAILED,
-        }:
-            await asyncio.sleep(0.01)
+    result = await completed_concrete_attempt(submission.run_id)
+    assert result.status is RunStatus.SUCCEEDED, result
     assert resources.journal.run_state(submission.run_id).status is RunStatus.SUCCEEDED
     materialized = system.materialize_run(submission.run_id)
     candidate = GitRef.model_validate(materialized["candidate"])

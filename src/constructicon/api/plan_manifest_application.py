@@ -18,6 +18,7 @@ from typing import Any, cast
 
 from pydantic import BaseModel
 
+from constructicon.api._maintenance_identity import maintenance_application_revision
 from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId
 from constructicon.core.component import CapabilityRequirement, ComponentDef, PythonRef
@@ -31,10 +32,14 @@ from constructicon.core.identity import canonical_json, digest
 from constructicon.core.maintenance import (
     TARGET_PATH,
     VECTOR_PATH,
+    MaintenanceAttemptAuthorization,
+    MaintenanceCapabilityPin,
     PlanManifestRequest,
     PlanManifestResult,
 )
+from constructicon.core.manifest import source_graph_hash_for
 from constructicon.core.ports import Port
+from constructicon.core.qualification import QualificationAuthorizing
 from constructicon.core.run import RunStatus
 from constructicon.core.workspace import AsyncWriteWorkspace
 from constructicon.runtime.context import NodeContext, NodeImpl
@@ -306,10 +311,34 @@ async def maintenance_system(
         executor_descriptor.capability_id != executor_id
         or executor_descriptor.kind != "executor" or not executor_descriptor.leased
         or executor_descriptor.executor_incoherence(executor) is not None
-        or executor.unavailable_reasons
+        or (executor.unavailable_reasons and not (
+            isinstance(executor, QualificationAuthorizing)
+            and isinstance(getattr(executor, "maintenance", None), MaintenanceAttemptAuthorization)
+            and executor.authorizes_admission(source_graph_hash=source_graph_hash_for(
+                maintenance_graph(executor_id=executor_id,
+                    workspace_id=resources.workspace.provider_id,
+                    gate_id=resources.gate.provider_id, writer_grants=writer_grants),
+            ), capability_id=executor_id)
+        ))
         or writer_grants.posture is not Posture.WRITE
     ):
         raise ContractViolation("maintenance requires an available, exact leased executor binding")
+    if executor.unavailable_reasons:
+        # The shared exact-admission question alone cannot prove the request or
+        # companion pins. The operational entry separately owns durable run
+        # and recovery checks; assembly enforces these same application pins.
+        authorization = getattr(executor, "maintenance", None)
+        if not isinstance(authorization, MaintenanceAttemptAuthorization) or (
+            authorization.request != resources.request
+            or authorization.application_revision != maintenance_application_revision()
+            or authorization.workspace != MaintenanceCapabilityPin(
+                capability_id=resources.workspace.provider_id,
+                revision=resources.workspace.revision)
+            or authorization.gate != MaintenanceCapabilityPin(
+                capability_id=resources.gate.provider_id, revision=resources.gate.revision)
+            or canonical_json(authorization.grants) != canonical_json(writer_grants)
+        ):
+            raise ContractViolation("maintenance authorization differs from application pins")
     return Constructicon(
         journal=resources.journal, root_grants=writer_grants,
         capabilities={executor_id: executor, resources.workspace.provider_id: resources.workspace,

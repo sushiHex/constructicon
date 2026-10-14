@@ -5750,3 +5750,97 @@ accepted `PlanManifestResult`, even though its generic tree evaluation passes.
 This is an application guard, not a change to generic capture or gate semantics.
 The 32 KiB limit applies to the JSON wire, not the whole Git object graph or its
 metadata. Unaccepted released candidates retain the existing retention policy.
+
+## One operational maintenance attempt (Refs #186)
+
+The owner authorized a narrow adapter-freeze exception for a distinct
+`MaintenanceAttemptAuthorization`. It is not an N5 qualification stage. The
+new closed contract pins the ordinary application's graph, request and source,
+workspace/gate revisions, exact executor/store binding, run and invocation,
+grants, dedicated journal, exclusive attempt record, one epoch and expiry.
+The provider still publishes its unavailable reasons. Only exact authorized
+admission and acquisition are excepted; a resolution lock is not excepted.
+Existing qualification records keep their wire shape; maintenance reservations
+add an explicit purpose to the existing exclusive record rather than adding a
+second ledger. Reservation alone is not dispatch evidence.
+
+The operational entry prepares a fresh private authority from a review-pinned
+bundle. It checks fixed source hashes for the target, ordinary repository
+consumer and trusted exam. These hashes are installed code, not paths into a
+developer checkout: the package-only controller contains neither repository
+tests nor scripts. Preflight prints proposed authority for root installation;
+it does not install that authority or dispatch. Run uses the existing Graph,
+ControlPlane and RunHost, and validates retained inputs and the full manifest
+before recovery can start. Inspection reads bounded historical result evidence
+without constructing a journal, Git authority or executor.
+
+The shared root-custody reader was extracted without changing the historical
+qualification parser. New maintenance parsing rejects duplicate JSON members
+and nonfinite values. The N5 Stage 1 and READ mutation inventories were updated
+only where shared implementation names moved; both ran with every mutant
+assertion-killed. The 32 added authorization, entry, recovery, assembly and
+publication mutants each executed and failed by assertion in targeted runs.
+Review reproduced two publication-boundary defects. Historical result models
+use nominal identifier types that do not themselves enforce lexical shape;
+inspection now requires canonical run and commit identifiers before echoing
+them, rather than publishing arbitrary bounded-file contents as identifiers.
+Preflight's size check also omitted the newline emitted by the CLI. It now
+counts that byte, with the largest permitted serialized record accepted and
+the next byte refused. These checks do not make a historical file authentic.
+Portable entry tests exercised accepting publication, same-key replay,
+checker-checkpoint recovery without another writer acquisition, and uncertain
+writer recovery whose next epoch is refused. Source preparation imports an
+actual minimal reviewed Git bundle, independent of CI checkout depth. Native
+cases exercise the new entry with the real Linux launcher, capture, gate,
+journal minting and cleanup; reconstruction there is a new object graph, not
+a process-crash claim. The executor is a genuine scripted test double, not a
+production Codex account. Full verification and physical execution results
+belong to the PR; targeted runs and Windows skips do not establish them.
+
+At implementation head `bc606c9`, CI verification passed with 5,641 tests and
+422 platform skips; the isolated staged-controller import and Python 3.12
+structural checks also passed. Runner qualification and all four Linux proof
+lanes passed, and the expanded 113-case M8 mutation inventory passed. These
+are credential-free CI observations, not an installed-host or live application
+result. The concurrent Windows full-suite run exposed a pre-existing test
+harness defect: the concrete history-refusal test's 30-second polling deadline
+interrupted a progressing checker, and its portable launcher's unjoined
+subprocess thread could retain a snapshot during cleanup. A standalone run
+reproduced the deadline failure before the intended assertion; retained journal
+events distinguished completed writer work from interrupted checker work.
+The mutation harness was initially suspected of changing source files during
+verification; source inspection disproved that premise. It changes code objects
+only inside isolated child processes.
+
+The two concrete tests now observe the real attempt result and join its worker
+instead of racing its phases against a polling deadline. The portable launcher
+joins its owned subprocess thread before propagating cancellation; subprocess
+deadlines are unchanged. A thread-latched regression proves cancellation stays
+pending until the child finishes, then propagates. Removing that join in an
+isolated code-object mutation failed the pending-caller assertion, with no
+harness error. The old local full run was stopped after reproduction and is
+not counted as passing verification.
+
+No Codex executor binary, operator-store credential, private-host command or
+live application attempt has been used locally in this implementation slice.
+The connector's final-head review found an introduced identity omission:
+the application revision covered its four API modules but not the new core
+authorization law or its readers. Three source-drift tests failed by assertion
+before the fix; an old authorization also reached a forbidden startup probe
+after simulated core-law drift. The explicit owned source inventory now covers
+those four modules plus `core/maintenance.py`, the maintenance reader and the
+shared qualification root-custody reader. Each omission mutant fails an
+assertion. This is a bounded source inventory, not a transitive dependency
+scanner; the store's directory/binding implementation already has its own
+checked source-law identities. Old application authority must be refused before
+startup, acquisition or attempt reservation after any of these three sources
+changes. No previously printed authority is reused under the new revision.
+
+A tool-free Fable advisory recommended keeping end-to-end scripted rehearsal
+in CI and checking genuine installed provider assembly through host preflight,
+rather than shipping another fake-provider selection path. This is a design
+recommendation, not source review or evidence of host execution.
+Adapter bytes change the revision:
+installation and fresh qualification must precede the separately reviewed
+single-attempt host procedure. Historical acceptance is not current deployment
+qualification, and this implementation alone does not complete #186.
