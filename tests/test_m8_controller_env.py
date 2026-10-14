@@ -865,7 +865,7 @@ def test_the_staged_controller_imports_under_isolated_python(tmp_path: Path) -> 
     )  # fmt: skip
     check = subprocess.run(
         [str(python), "-I", "-S", "-B", "-c", artifacts.controller_check(str(copy)),
-         *artifacts.PROOF_MODULES],
+         *artifacts.PROOF_MODULES, "constructicon.api.maintenance_entry"],
         capture_output=True, text=True, timeout=120, env={"PATH": "/usr/bin:/bin"},
     )  # fmt: skip
     assert check.returncode == 0, check

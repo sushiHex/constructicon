@@ -79,6 +79,7 @@ from constructicon.core.executor import (
 )
 from constructicon.core.grants import EffectiveGrants, Posture
 from constructicon.core.identity import Digest, canonical_json, digest, parse_json_value
+from constructicon.core.maintenance import MaintenanceAttemptAuthorization
 from constructicon.core.native_operator import (
     NativeEgressIdentityV1,
     NativeOperatorExecutorProfileV3,
@@ -1745,6 +1746,9 @@ class CodexOperatorHandle:
         qualification = self.provider.qualification
         if qualification is not None and datetime.now(UTC) >= qualification.not_after:
             return "qualification refuses an expired authorization"
+        maintenance = self.provider.maintenance
+        if maintenance is not None and datetime.now(UTC) >= maintenance.not_after:
+            return "maintenance refuses an expired authorization"
         return None
 
     def _settle_attempt(self, outcome: ExecutorOutcome | None) -> None:
@@ -2284,7 +2288,22 @@ class CodexOperatorProvider:
         closure: AcquisitionClosure | None = None,
         egress: EgressPolicy | None = None,
         qualification: QualificationAuthorization | None = None,
+        maintenance: MaintenanceAttemptAuthorization | None = None,
     ) -> None:
+        if qualification is not None and maintenance is not None:
+            raise ContractViolation("qualification and maintenance authorizations are exclusive")
+        if qualification is not None and not isinstance(qualification, QualificationAuthorization):
+            raise ContractViolation("qualification requires its separate authorization")
+        if maintenance is not None:
+            if not isinstance(maintenance, MaintenanceAttemptAuthorization):
+                raise ContractViolation("maintenance requires its separate authorization")
+            # model_copy can bypass validators; assembly trusts only revalidated bytes.
+            try:
+                maintenance = MaintenanceAttemptAuthorization.model_validate_json(
+                    maintenance.model_dump_json(),
+                )
+            except ValueError as exc:
+                raise ContractViolation("the maintenance authorization is invalid") from exc
         if not binary.startswith("/") or "\0" in binary:
             raise ContractViolation("the native client requires a fixed absolute executable")
         if not acquisition_root.is_absolute():
@@ -2406,6 +2425,18 @@ class CodexOperatorProvider:
             raise ContractViolation(
                 "a qualification authorization must name this provider and its physical binding"
             )
+        if maintenance is not None and (
+            binding_store is None
+            or maintenance.revision != identity.revision
+            or maintenance.operator_binding_digest != identity.store.operator_binding_digest
+            or profile.posture is not Posture.WRITE
+            or profile.grant_faults(maintenance.grants)
+            or maintenance.grants.model_selection.model != self.configured_model
+            or maintenance.grants.effort != self.configured_effort
+        ):
+            raise ContractViolation(
+                "a maintenance authorization must name this WRITE provider and its physical binding"
+            )
         self._unavailable = reasons
         self.binding_store = binding_store
         self.closure = closure
@@ -2413,6 +2444,7 @@ class CodexOperatorProvider:
         # Verified by the assembly from a trusted source, never a caller's: it
         # admits and acquires exactly one run without making this available.
         self.qualification = qualification
+        self.maintenance = maintenance
         self.handles: list[CodexOperatorHandle] = []
 
     @property
@@ -2424,7 +2456,8 @@ class CodexOperatorProvider:
         return self._unavailable
 
     def authorizes_admission(self, *, source_graph_hash: Digest, capability_id: str) -> bool:
-        return self.qualification is not None and self.qualification.admits(
+        authorization = self.qualification or self.maintenance
+        return authorization is not None and authorization.admits(
             source_graph_hash=source_graph_hash,
             capability_id=capability_id,
             revision=self.identity.revision,
@@ -2432,13 +2465,14 @@ class CodexOperatorProvider:
 
     async def acquire(self, context: LeaseContext) -> AcquiredCapability:
         qualification = self.qualification
-        if self.unavailable_reasons and qualification is None:
+        authorization = qualification or self.maintenance
+        if self.unavailable_reasons and authorization is None:
             raise ContractViolation("an unavailable operator provider cannot acquire")
         if self.binding_store is None or self.closure is None:
             raise ContractViolation("an available operator provider requires a physical binding")
         if context.check_control is None:
             raise ContractViolation("an operator acquisition requires invocation control")
-        if qualification is not None and (faults := qualification.acquisition_faults(
+        if authorization is not None and (faults := authorization.acquisition_faults(
             run_id=context.run_lease.run_id,
             path=context.path,
             binding=context.binding.binding,
@@ -2454,15 +2488,18 @@ class CodexOperatorProvider:
         logical = lease_id_for(context.run_lease.run_id, context.path, context.binding.binding)
         acquisition = acquisition_id_for(logical, context.run_lease.epoch)
         attempt = None
-        if qualification is not None and qualification.attempt_record is not None:
+        if authorization is not None and authorization.attempt_record is not None:
             # Reserved before any handle exists: a second acquisition, even
             # after a journal reset, finds the record and refuses.
-            attempt = AttemptRecord.reserve(Path(qualification.attempt_record), {
-                "authorization_id": qualification.authorization_id,
+            identity = {
+                "authorization_id": authorization.authorization_id,
                 "run_id": context.run_lease.run_id,
                 "epoch": context.run_lease.epoch,
                 "acquisition_id": acquisition,
-            })
+            }
+            if self.maintenance is not None:
+                identity["purpose"] = self.maintenance.purpose
+            attempt = AttemptRecord.reserve(Path(authorization.attempt_record), identity)
         handle = CodexOperatorHandle(
             self, context, AcquisitionPaths(self._acquisition_root, acquisition),
             dispatch=qualification is None or qualification.dispatches, attempt=attempt,

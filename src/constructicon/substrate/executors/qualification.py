@@ -31,6 +31,15 @@ _UNAVAILABLE = "the qualification authorization is unavailable"
 def read_authorization(path: Path) -> QualificationAuthorization:
     """The owner's authorization, or a refusal that discloses nothing about why."""
 
+    try:
+        return QualificationAuthorization.model_validate_json(_read_authorization_bytes(path))
+    except (ContractViolation, OSError, ValidationError, ValueError) as exc:
+        raise ContractViolation(_UNAVAILABLE) from exc
+
+
+def _read_authorization_bytes(path: Path) -> bytes:
+    """The existing root-custody primitive shared by the separate authorizations."""
+
     if sys.platform != "linux" or not path.is_absolute() or ".." in path.parts:
         raise ContractViolation(_UNAVAILABLE)
     try:
@@ -57,6 +66,6 @@ def read_authorization(path: Path) -> QualificationAuthorization:
             os.close(fd)
         if len(raw) > MAX_AUTHORIZATION_BYTES:
             raise ContractViolation(_UNAVAILABLE)
-        return QualificationAuthorization.model_validate_json(raw)
+        return raw
     except (ContractViolation, OSError, ValidationError, ValueError) as exc:
         raise ContractViolation(_UNAVAILABLE) from exc

@@ -5750,3 +5750,40 @@ accepted `PlanManifestResult`, even though its generic tree evaluation passes.
 This is an application guard, not a change to generic capture or gate semantics.
 The 32 KiB limit applies to the JSON wire, not the whole Git object graph or its
 metadata. Unaccepted released candidates retain the existing retention policy.
+
+## One operational maintenance attempt (Refs #186)
+
+The owner authorized a narrow adapter-freeze exception for a distinct
+`MaintenanceAttemptAuthorization`. It is not an N5 qualification stage. The
+new closed contract pins the ordinary application's graph, request and source,
+workspace/gate revisions, exact executor/store binding, run and invocation,
+grants, dedicated journal, exclusive attempt record, one epoch and expiry.
+The provider still publishes its unavailable reasons. Only exact authorized
+admission and acquisition are excepted; a resolution lock is not excepted.
+Existing qualification records keep their wire shape; maintenance reservations
+add an explicit purpose to the existing exclusive record rather than adding a
+second ledger. Reservation alone is not dispatch evidence.
+
+The operational entry prepares a fresh private authority from a review-pinned
+bundle. It checks fixed source hashes for the target, ordinary repository
+consumer and trusted exam. These hashes are installed code, not paths into a
+developer checkout: the package-only controller contains neither repository
+tests nor scripts. Preflight prints proposed authority for root installation;
+it does not install that authority or dispatch. Run uses the existing Graph,
+ControlPlane and RunHost, and validates retained inputs and the full manifest
+before recovery can start. Inspection reads bounded historical result evidence
+without constructing a journal, Git authority or executor.
+
+The shared root-custody reader was extracted without changing the historical
+qualification parser. New maintenance parsing rejects duplicate JSON members
+and nonfinite values. The N5 Stage 1 and READ mutation inventories were updated
+only where shared implementation names moved; both ran with every mutant
+assertion-killed. New authorization guard mutants likewise fail by assertion.
+The implementation's other verification and physical execution remain pending
+until reported on its PR; these targeted checks are not a full-gate claim.
+
+No vendor binary, credential, private-host command or live application attempt
+has run in this implementation slice. Adapter bytes change the revision:
+installation and fresh qualification must precede the separately reviewed
+single-attempt host procedure. Historical acceptance is not current deployment
+qualification, and this implementation alone does not complete #186.

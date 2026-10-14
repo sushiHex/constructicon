@@ -8,7 +8,8 @@ import json
 import os
 import sys
 import threading
-from dataclasses import replace
+from dataclasses import dataclass, field, fields, replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,7 +20,7 @@ from constructicon.core.errors import Cancelled, ContractViolation
 from constructicon.core.grants import Posture
 from constructicon.core.identity import digest
 from constructicon.core.run import OwnershipLost
-from constructicon.substrate.executors.linux import ProcessLimits, ProcessResult
+from constructicon.substrate.executors.linux import LinuxLauncher, ProcessLimits, ProcessResult
 from constructicon.substrate.gates.contained import ContainedGateRunner
 from constructicon.substrate.gates.runner import CheckSpec
 from constructicon.substrate.git.authority import GitAuthority
@@ -748,3 +749,287 @@ async def test_bound_legacy_gate_cannot_hide_behind_an_unrelated_label(tmp_path)
             capabilities={"executor": executor, "alias": object.__new__(BoundGateRunner)},
             catalog={"executor": executor.descriptor("executor")},
         )
+
+
+@dataclass(frozen=True, kw_only=True)
+class MaintenanceNativeLauncher(LinuxLauncher):
+    """Observe the production boundary; every recorded call really launches."""
+
+    calls: list = field(default_factory=list)
+
+    async def run(self, command, **kwargs):
+        self.calls.append((command, kwargs))
+        return await LinuxLauncher.run(self, command, **kwargs)
+
+
+class MaintenanceNativeWriter:
+    """A contained Python task double, never a vendor or subscription proof."""
+
+    def __init__(self, launcher, vectors, *, extra=False):
+        from constructicon.core.executor import ExecutorGrantPolicy, ExecutorProfile
+        from constructicon.core.grants import IsolationProfile
+
+        self.launcher, self.vectors, self.extra = launcher, vectors, extra
+        self.calls = []
+        self.profile = ExecutorProfile(
+            name="maintenance-contained-scripted-model", structured_output=False,
+            postures=frozenset({Posture.WRITE}), accepted_efforts=frozenset({"test"}),
+            isolation=IsolationProfile(filesystem="workspace_only", process_tree_owned=True,
+                environment_allowlisted=True, network_enforced=True),
+            # The scripted model needs no connection. Even the authorized allow
+            # posture remains physically networkless in this narrower double.
+            grant_policy=ExecutorGrantPolicy(tool_sets=(("contained_python",),),
+                network_modes=("allow",), network_access="none", environment_names=(),
+                workspace_required=True),
+        )
+
+    def validate_grants(self, grants):
+        return self.profile.grant_faults(grants)
+
+    async def execute(self, task, *, workspace, grants):
+        from constructicon.api.plan_manifest_application import WRITE_INSTRUCTION
+        from constructicon.core.executor import ExecutorSuccess
+
+        assert task.instruction == WRITE_INSTRUCTION and task.context == ()
+        assert task.response_schema is None and not self.validate_grants(grants)
+        self.calls.append(task)
+        program = (
+            "from pathlib import Path\n"
+            "assert Path('/proc/net/route').read_text().splitlines()[1:] == []\n"
+            "p=Path('tests/vectors/plan_manifest.json')\n"
+            "p.parent.mkdir(parents=True,exist_ok=True)\n"
+            f"p.write_bytes({self.vectors!r})\n"
+            + ("Path('unrelated.py').write_bytes(b'unrelated change')\n" if self.extra else "")
+            + "print('scripted vector contribution',flush=True)\n"
+        )
+        async with workspace.use() as guard:
+            result = await self.launcher.run(
+                (PYTHON, "-I", "-c", program), workspace=Path(workspace.path),
+                posture=Posture.WRITE, guard_fds=(guard,), timeout_s=grants.timeout_s,
+            )
+        assert result.returncode == result.payload_returncode == 0, result.stderr.decode()
+        assert not result.timed_out and result.bound_exceeded is None
+        assert result.stdout == b"scripted vector contribution\n"
+        return ExecutorSuccess(raw_reply="scripted vector contribution")
+
+
+@pytest.mark.parametrize("case", ["accept", "extra", "weak"])
+async def test_native_maintenance_operational_entry_captures_checks_closes_and_replays(
+    launcher, tmp_path, monkeypatch, case,
+):
+    from constructicon.api.maintenance_entry import (
+        inspect_result,
+        maintenance_application_revision,
+        run_maintenance,
+    )
+    from constructicon.api.plan_manifest_application import (
+        GRAPH_NAME,
+        MaintenanceResources,
+        maintenance_checks,
+        maintenance_graph,
+    )
+    from constructicon.core.address import ExecutionPath, ScopePath
+    from constructicon.core.envelope import GitRef
+    from constructicon.core.grants import EffectiveGrants, ModelSelection
+    from constructicon.core.maintenance import (
+        MaintenanceAttemptAuthorization,
+        MaintenanceCapabilityPin,
+        PlanManifestRequest,
+    )
+    from constructicon.core.manifest import parse_manifest_json, source_graph_hash_for
+    from constructicon.core.run import RunStatus
+    from constructicon.substrate.git.acquisition import AcquisitionPaths
+    from constructicon.substrate.git.capture import ContainedWriteWorkspaceProvider
+    from constructicon.substrate.journal.sqlite import SqliteJournal
+    from tests.executorworld import FakeExecutorProvider, launch_identity
+    from tests.substrate.test_maintenance_vectors import (
+        SOURCE,
+        entries,
+        path,
+        permitting_vectors,
+        wire,
+    )
+
+    vectors = permitting_vectors() if case != "weak" else wire([
+        path("a.md"), path(".md"), entries(b"a" * 64 + b"  a.md\n"),
+        entries(b"bad"), entries(b"\xff"),
+    ])
+    physical = MaintenanceNativeLauncher(
+        **{item.name: getattr(launcher, item.name) for item in fields(LinuxLauncher)},
+    )
+    journal = SqliteJournal(tmp_path / "maintenance.sqlite")
+    minted = []
+    actual_mint = journal.mint_attestation
+
+    def observe_mint(lease, draft):
+        attestation = actual_mint(lease, draft)
+        minted.append(attestation)
+        return attestation
+
+    monkeypatch.setattr(journal, "mint_attestation", observe_mint)
+    runner = unqualified(tmp_path, physical, journal=journal)
+    base, expected_candidate = maintenance_commits(runner, SOURCE, vectors, extra=case == "extra")
+    pin = hashlib.sha256(SOURCE).hexdigest()
+    inventory = runner.authority._run("ls-tree", "-r", "-z", base).stdout.encode()
+    runner.checks = maintenance_checks(SOURCE, pin, inventory,
+                                       runner.authority.environment.object_format)
+    gate = await qualify(runner)
+    workspace = ContainedWriteWorkspaceProvider(
+        runner.authority, root=tmp_path / "writer-acquisitions", target_ref=runner.target_ref,
+        provider_id="maintenance-workspace", posture=Posture.WRITE, launcher=physical,
+    )
+    request = PlanManifestRequest(
+        repository=runner.authority.repository_id, target_ref=runner.target_ref,
+        base_commit=base, target_sha256=pin, check_set_hash=gate.check_set_hash,
+    )
+    resources = MaintenanceResources(journal, runner.authority, workspace, gate, request, SOURCE)
+    executor = FakeExecutorProvider()
+    executor.executor = MaintenanceNativeWriter(physical, vectors, extra=case == "extra")
+    executor._identity = launch_identity(executor.executor.profile)
+    grants = EffectiveGrants(
+        posture=Posture.WRITE, model_selection=ModelSelection(kind="explicit", model="scripted"),
+        effort="test", allowed_tools=("contained_python",), env_allowlist=(), network="allow",
+        timeout_s=300,
+    )
+    graph = maintenance_graph(
+        executor_id="maintenance-executor", workspace_id=workspace.provider_id,
+        gate_id=gate.provider_id, writer_grants=grants,
+    )
+    authorization = MaintenanceAttemptAuthorization(
+        authorization_id="native-maintenance-entry", actor_id="static:native-maintenance",
+        idempotency_key="native-maintenance-once", scope=ScopePath(segments=(GRAPH_NAME, "writer")),
+        binding="executor", source_graph_hash=source_graph_hash_for(graph),
+        capability_id="maintenance-executor", revision=executor.identity.revision,
+        operator_binding_digest=digest("scripted-maintenance-binding", 1, "no-vendor"),
+        journal=str((tmp_path / "maintenance.sqlite").resolve()), max_epoch=1,
+        not_after=datetime.now(UTC) + timedelta(hours=1),
+        grants=grants, attempt_record=str(tmp_path / "maintenance.attempt"), request=request,
+        application_revision=maintenance_application_revision(),
+        workspace=MaintenanceCapabilityPin(capability_id=workspace.provider_id,
+                                           revision=workspace.revision),
+        gate=MaintenanceCapabilityPin(capability_id=gate.provider_id, revision=gate.revision),
+    )
+    executor.maintenance = authorization
+    arguments = dict(resources=resources, executor=executor,
+                     executor_descriptor=executor.descriptor(authorization.capability_id),
+                     authorization=authorization)
+    result = await run_maintenance(**arguments)
+    run_id = authorization.run_id
+    state = journal.run_state(run_id)
+    assert state.status is (RunStatus.SUCCEEDED if case == "accept" else RunStatus.FAILED), \
+        journal.events(run_id, limit=100)
+    assert state.owner_id is None and not journal.cancel_requested(run_id)
+    assert len(executor.executor.calls) == 1
+    manifest = parse_manifest_json(journal.load_manifest_json(journal.run_manifest_hash(run_id)))
+    assert manifest.source_graph == graph
+    assert manifest.source_graph_hash == authorization.source_graph_hash
+    assert journal.run_inputs(run_id) == {"request": request.model_dump(mode="json")}
+    assert {row.component for row in manifest.resolved_components} == {
+        "constructicon.maintenance/plan-manifest-writer",
+        "constructicon.maintenance/plan-manifest-checker",
+    }
+    checkpoint = journal.checkpoint(run_id, ExecutionPath(scope=authorization.scope))
+    assert checkpoint is not None
+    candidate_ref = GitRef.model_validate(checkpoint.outputs["candidate"].payload)
+    assert candidate_ref.diff_against == base and candidate_ref.repository == request.repository
+    assert runner.authority.parents_of(candidate_ref.commit) == (base,)
+    assert runner.authority.tree_of(candidate_ref.commit) \
+        == runner.authority.tree_of(expected_candidate)
+    rows = journal.capability_leases(run_id)
+    assert len(rows) == 3 and all(row.state == "closed" for row in rows)
+    assert {row.binding_id: row.disposition for row in rows} == {
+        "executor": "released", "workspace": "released",
+        "gate": "released" if case == "accept" else "discarded",
+    }
+    for row in rows:
+        if row.binding_id not in {"workspace", "gate"}:
+            continue
+        ref = json.loads(row.resource_ref)
+        provider = workspace if row.binding_id == "workspace" else gate
+        paths = AcquisitionPaths(provider.root, ref["acquisition"])
+        assert provider.closure.is_closed(paths) and not paths.payload.exists()
+    assert all(handle.closed for handle in executor.handles)
+    assert not executor.ledger.resources
+    assert not list(workspace.root.glob("payloads/*")) and not list(gate.root.glob("payloads/*"))
+    assert runner.authority.resolve_ref(request.target_ref) == base
+    assert any("git('add', '--all'" in arg for command, _ in physical.calls for arg in command)
+    assert any(command[:2] == ("/usr/bin/git", "pack-objects") for command, _ in physical.calls)
+    assert sum(gate.checks[0].argv[-1] in command for command, _ in physical.calls) == 1
+    assert len(minted) == 1
+    proof = journal.load_attestation(minted[0].attestation_id)
+    assert proof == minted[0] and proof.created_by_run == run_id
+    assert proof.manifest_hash == manifest.manifest_hash
+    assert proof.check_set_hash == request.check_set_hash
+    assert proof.subject.candidate == candidate_ref.commit and proof.subject.expected_base == base
+    assert len(proof.checks) == 1 and proof.checks[0].name == "plan-manifest-trusted-vectors"
+    assert proof.checks[0].status == ("passed" if case == "accept" else "failed")
+    assert proof.ok is (case == "accept")
+    if case == "accept":
+        assert result is not None and result.run_id == run_id and result.candidate == candidate_ref
+        proof = journal.load_attestation(result.evaluation.attestation_id)
+        assert proof.ok and proof.created_by_run == run_id
+        assert proof.manifest_hash == manifest.manifest_hash
+        assert proof.subject == result.evaluation.subject
+        assert proof.subject.candidate == candidate_ref.commit
+        report = json.loads(result.evaluation.checks[0].detail)
+        assert report["passed"] is True
+        assert report["baseline"] == {"tests_run": 24, "failures": 0, "errors": 0, "skips": 0}
+        assert tuple(item["name"] for item in report["mutants"]) == (
+            "path_absolute", "path_noncanonical", "path_parent", "path_unsafe_characters",
+            "path_any_suffix", "digest_relaxed", "entries_duplicate_overwrite",
+            "entries_conflict_skip",
+        )
+        assert all(item["distinguished"] and item["counts"]["tests_run"] == 24
+                   and item["counts"]["failures"] > 0
+                   and item["counts"]["errors"] == item["counts"]["skips"] == 0
+                   for item in report["mutants"])
+        assert report["input_sha256"] == result.input_sha256 == hashlib.sha256(vectors).hexdigest()
+        assert report["render_sha256"] == result.render_sha256 and report["target_sha256"] == pin
+        published = tmp_path / "maintenance-result.json"
+        assert published.is_file() and published.stat().st_size <= 65536
+        assert inspect_result(published) == {
+            "schema_version": 1, "meaning": "historical-application-acceptance",
+            "run_id": str(run_id), "input_sha256": result.input_sha256,
+            "render_sha256": result.render_sha256, "candidate_commit": str(candidate_ref.commit),
+        }
+    else:
+        assert result is None
+        assert journal.checkpoint(run_id, ExecutionPath(scope=ScopePath(
+            segments=(GRAPH_NAME, "checker"),
+        ))) is None
+        assert not (tmp_path / "maintenance-result.json").exists()
+    calls, event_seq = len(physical.calls), journal.max_event_seq(run_id)
+    replay = await run_maintenance(**arguments)
+    assert replay == result and len(executor.executor.calls) == 1 and len(physical.calls) == calls
+    assert journal.max_event_seq(run_id) == event_seq
+    assert runner.authority.resolve_ref(request.target_ref) == base
+    # Reopen the actual store and reconstruct providers. No in-memory result or
+    # executor handle may supply replay evidence; this is object reconstruction,
+    # not a claim of a separate-process crash measurement.
+    reopened = SqliteJournal(tmp_path / "maintenance.sqlite")
+    reconstructed_gate = await ContainedGateRunner.create(
+        journal=reopened, authority=runner.authority, root=gate.root,
+        target_ref=gate.target_ref, provider_id=gate.provider_id,
+        launcher=physical, checks=gate.checks,
+    )
+    reconstructed_workspace = ContainedWriteWorkspaceProvider(
+        runner.authority, root=workspace.root, target_ref=workspace.target_ref,
+        provider_id=workspace.provider_id, posture=Posture.WRITE, launcher=physical,
+    )
+    reconstructed_executor = FakeExecutorProvider()
+    reconstructed_executor.executor = MaintenanceNativeWriter(
+        physical, vectors, extra=case == "extra",
+    )
+    reconstructed_executor._identity = launch_identity(reconstructed_executor.executor.profile)
+    reconstructed_executor.maintenance = authorization
+    reconstructed = replace(resources, journal=reopened, workspace=reconstructed_workspace,
+                            gate=reconstructed_gate)
+    calls = len(physical.calls)  # Reassembly's mount-free runtime probe is observed separately.
+    assert await run_maintenance(
+        resources=reconstructed, executor=reconstructed_executor,
+        executor_descriptor=reconstructed_executor.descriptor(authorization.capability_id),
+        authorization=authorization,
+    ) == result
+    assert not reconstructed_executor.executor.calls and not reconstructed_executor.handles
+    assert len(physical.calls) == calls and reopened.max_event_seq(run_id) == event_seq
+    assert reopened.capability_leases(run_id) == rows

@@ -6,7 +6,7 @@ each variant differs from the sealed authorization in one respect only.
 
 from _mutations import run
 
-READER = "constructicon.substrate.executors.qualification:read_authorization"
+READER = "constructicon.substrate.executors.qualification:_read_authorization_bytes"
 STORE = "constructicon.substrate.executors.operator_store:"
 TEST = (
     "tests/substrate/test_qualification_linux.py::"
