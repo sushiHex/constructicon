@@ -5844,3 +5844,47 @@ Adapter bytes change the revision:
 installation and fresh qualification must precede the separately reviewed
 single-attempt host procedure. Historical acceptance is not current deployment
 qualification, and this implementation alone does not complete #186.
+
+### Additive maintenance host procedure
+
+`M8-maintenance-session.md` composes the existing controller/launch replacement,
+fresh g9 qualification and exact one-attempt application entry. It preserves
+frozen runbooks and historical g8 bytes. An already-Off host takes one fresh
+start; old-controller continuity requires the specific missing reboot anchor,
+not a fictitious accepted preboot binding. Both controller routes require R19
+before physical preflight. All H7 controls precede the at-most-one conditional
+explicit refresh; installation and dispatch separately require the reviewed
+preview digest and fresh authority paths. Unknown deployment or source pins
+stop before transport or VM start. No script supplies retry or R6 re-baselining.
+
+Credential-free shell tests execute the accepting and refusing guards with
+only platform/transport boundaries substituted. They exercise strict generation
+floors, all H7 controls even with measured refresh, installed CLI shape, source
+pin matching, bounded public preview, exact outcome identity and changed-preview
+refusal before installation or dispatch. PowerShell tests substitute VM commands
+and prove unknown pins, Running state and checkpoints prevent the start call.
+These are composition proofs, not host observations or Linux custody evidence.
+
+Source audit caught an introduced procedure error before execution: a new
+maintenance directory under the launch root violates the artifact verifier's
+exact entry inventory and prevents normal retirement. Authority instead uses a
+fresh `/var/lib/constructicon-m8-maintenance` directory, outside that inventory,
+with its actual root ancestor checked by the existing custody primitive.
+The regression names the real inventory; no installer or verifier rule changes.
+
+Independent review also identified that frozen LR2 rewrites three D2 diagnostic
+files. A separate pre-LR2 step now preserves those fixed files in a fresh
+private archive and compares their bytes before permitting the unchanged
+measurement commands. Missing or linked inputs, an occupied archive and a
+damaged copy stop. Real-shell tests caught an initial `set -e` assumption:
+a failed left side of `&&` inside a loop does not reliably abort. Explicit
+refusal branches replace that negative inference; old source bytes remain
+untouched by the preservation step.
+
+The same review reproduced a refresh-permission inference: an unexpected
+refresh-checker failure was classified as unmeasured and could permit H8.
+The procedure instead reads the explicit verdict from the bounded record whose
+digest the successful active checker returned. Measured refresh still requires
+the existing refresh proof; malformed, changed or failed checks stop rather
+than authorizing a request. This does not change the frozen evidence checker
+or claim that an unmeasured refresh never occurred.
