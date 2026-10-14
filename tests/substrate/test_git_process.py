@@ -50,6 +50,19 @@ async def test_private_creation_mask_reaches_only_the_posix_child(
     assert "os.umask(" not in Path(process_module.__file__).read_text(encoding="utf-8")
 
 
+async def test_fixed_shell_alias_reports_the_actual_private_child_mask(tmp_path):
+    # Quote the fixed interpreter path: Git for Windows expands it to a path
+    # containing spaces. "!umask" alone tries to execute the shell builtin.
+    output = await GitProcess(shutil.which("git"), ProcessLimits()).run(
+        "-c", 'alias.creation-mask=!"/bin/sh" -c umask', "creation-mask",
+        cwd=tmp_path, creation_mask=0o077,
+    )
+    raw = output.strip()
+    assert raw and all(byte in b"01234567" for byte in raw), output
+    if os.name == "posix":
+        assert int(raw, 8) == 0o077
+
+
 async def test_cancel_during_real_spawn_joins_before_repeated_cancellation_returns(
     tmp_path,
     monkeypatch,

@@ -476,7 +476,7 @@ if command == "prepare":
     import asyncio
     from constructicon.api._maintenance_source import git
     mask = asyncio.run(git(root.parent / "reviewed-source.git", "-c",
-                          "alias.creation-mask=!umask", "creation-mask"))
+                          'alias.creation-mask=!"/bin/sh" -c umask', "creation-mask"))
     assert int(mask.strip(), 8) == 0o077, mask
 sys.argv = ["constructicon.api.maintenance_entry", *sys.argv[1:]]
 runpy.run_module("constructicon.api.maintenance_entry", run_name="__main__")

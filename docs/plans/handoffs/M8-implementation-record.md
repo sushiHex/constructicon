@@ -6027,3 +6027,9 @@ the process-boundary check from the repository's resulting permissions;
 the first failure alone does not prove which mechanism defeated the mask.
 The superseded local full-suite run was deliberately stopped, not counted as
 a pass. Exact-head native evidence remains required after the correction.
+
+The next native run (`06bd1b1`) stopped in the new measurement itself:
+Git treated the single-word `!umask` alias as an executable, but `umask`
+is a shell builtin. That run never reached preparation and established
+neither the child's mask nor the corrected preparation behavior. The probe
+must invoke its fixed shell explicitly; its affirmative mask assertion stays.
