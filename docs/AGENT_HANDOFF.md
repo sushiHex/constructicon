@@ -15,6 +15,23 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #186 — host command composition is not deployment evidence
+
+The additive maintenance procedure pins the merged entry and an immutable
+source bundle, reuses the existing replacement and qualification paths, and
+permits one application attempt only after positive current evidence. Shell
+and substituted PowerShell tests establish command guards, not physical host
+qualification or a live result. Frozen runbooks remain unchanged.
+
+Review corrected three composition errors before host execution: maintenance
+authority must stay outside the launch root's exact inventory; D2 records must
+be preserved before its reused check overwrites them; and a refresh-checker
+failure is not an explicit unmeasured verdict. The latter now comes from the
+exact positively checked evidence digest. Failure preserves partial state and
+parks the VM without selecting a cleanup, restore or retry branch.
+
+---
+
 ## #187 — an application attempt is not qualification
 
 The operational maintenance entry uses a separate exact-run authorization and
