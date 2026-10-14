@@ -699,9 +699,24 @@ MUTANTS = (
     (
         "maintenance preflight proposal fits the installed reader bound",
         "constructicon.api.maintenance_entry:_authorization_preview",
-        "len(raw) > MAX_AUTHORIZATION_BYTES", "False",
+        "len(raw) + 1 > MAX_AUTHORIZATION_BYTES", "False",
         "tests/api/test_maintenance_entry.py::"
         "test_cli_preflight_never_runs_and_run_delegates_exact_installed_authority",
+    ),
+    (
+        "maintenance preflight counts the emitted newline",
+        "constructicon.api.maintenance_entry:_authorization_preview",
+        "len(raw) + 1 > MAX_AUTHORIZATION_BYTES", "len(raw) > MAX_AUTHORIZATION_BYTES",
+        "tests/api/test_maintenance_entry.py::"
+        "test_cli_preflight_never_runs_and_run_delegates_exact_installed_authority",
+    ),
+    (
+        "maintenance historical inspection bounds identifier shapes",
+        "constructicon.api.maintenance_entry:inspect_result",
+        'if re.fullmatch(r"run-[0-9a-f]{32}", result.run_id) is None or (',
+        "if False and (",
+        "tests/api/test_maintenance_entry.py::"
+        "test_inspect_refuses_unbounded_or_private_text_identifiers",
     ),
 )
 

@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
@@ -214,6 +215,10 @@ def inspect_result(path: Path) -> dict[str, object]:
     raw = read_bounded(path, MAX_RESULT_BYTES).decode("utf-8", errors="strict")
     stored = _StoredResult.model_validate(parse_json_value(raw))
     result = stored.result
+    if re.fullmatch(r"run-[0-9a-f]{32}", result.run_id) is None or (
+        re.fullmatch(r"[0-9a-f]{40}([0-9a-f]{24})?", result.candidate.commit) is None
+    ):
+        raise ContractViolation("maintenance historical evidence has malformed public identifiers")
     return {"schema_version": 1, "meaning": stored.meaning, "run_id": str(result.run_id),
             "input_sha256": result.input_sha256, "render_sha256": result.render_sha256,
             "candidate_commit": str(result.candidate.commit)}
@@ -289,7 +294,7 @@ def _host(args: argparse.Namespace) -> HostSession:
 def _authorization_preview(authorization: MaintenanceAttemptAuthorization) -> dict[str, object]:
     preview: dict[str, object] = authorization.model_dump(mode="json")
     raw = json.dumps(preview, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    if len(raw) > MAX_AUTHORIZATION_BYTES:
+    if len(raw) + 1 > MAX_AUTHORIZATION_BYTES:
         raise ContractViolation("maintenance proposed authorization exceeds its reader bound")
     return preview
 

@@ -5779,6 +5779,13 @@ qualification parser. New maintenance parsing rejects duplicate JSON members
 and nonfinite values. The N5 Stage 1 and READ mutation inventories were updated
 only where shared implementation names moved; both ran with every mutant
 assertion-killed. New authorization guard mutants likewise fail by assertion.
+Review reproduced two publication-boundary defects. Historical result models
+use nominal identifier types that do not themselves enforce lexical shape;
+inspection now requires canonical run and commit identifiers before echoing
+them, rather than publishing arbitrary bounded-file contents as identifiers.
+Preflight's size check also omitted the newline emitted by the CLI. It now
+counts that byte, with the largest permitted serialized record accepted and
+the next byte refused. These checks do not make a historical file authentic.
 The implementation's other verification and physical execution remain pending
 until reported on its PR; these targeted checks are not a full-gate claim.
 

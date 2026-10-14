@@ -160,6 +160,33 @@ async def test_inspect_never_assembles_recovers_or_writes(concrete_application, 
         entry.inspect_result(path)
 
 
+@pytest.mark.parametrize("field", ["run_id", "candidate.commit"])
+def test_inspect_refuses_unbounded_or_private_text_identifiers(tmp_path, field):
+    record = {"schema_version": 1, "meaning": "historical-application-acceptance",
+        "authorization_digest": str(digest("historical-artifact", 1, 0)), "result": {
+            "run_id": "run-" + "a" * 32,
+            "candidate": {"repository": "private-path", "commit": "b" * 40},
+            "evaluation": {"subject": None, "checks": [], "attestation_id": None},
+            "input_sha256": "c" * 64, "render_sha256": "d" * 64,
+        }}
+    if field == "run_id":
+        record["result"]["run_id"] = "private-text/" * 1000
+    else:
+        record["result"]["candidate"]["commit"] = "private-text/" * 1000
+    # The underlying application contract deliberately carries nominal strings;
+    # the public inspector must independently enforce its finite identifier shape.
+    entry._StoredResult.model_validate(record)
+    path = tmp_path / "historical.json"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    assert path.stat().st_size < entry.MAX_RESULT_BYTES
+    refused = False
+    try:
+        entry.inspect_result(path)
+    except ContractViolation:
+        refused = True
+    assert refused, "arbitrary stored strings must not become public identities"
+
+
 def test_reviewed_consumer_hashes_match_fixed_bytes():
     root = Path(__file__).resolve().parents[2]
     assert set(source_module.SOURCE_HASHES) == set(source_module.SOURCE_FILES)
@@ -373,6 +400,28 @@ async def test_cli_preflight_never_runs_and_run_delegates_exact_installed_author
     except ContractViolation:
         refused = True
     assert refused, "an installable authorization must fit its root-owned reader"
+    boundary = installed
+    remaining = entry.MAX_AUTHORIZATION_BYTES - 1 - len(json.dumps(
+        boundary.model_dump(mode="json"), sort_keys=True, separators=(",", ":"),
+    ).encode())
+    for field in ("journal", "attempt_record"):
+        value = getattr(boundary, field)
+        added = min(4096 - len(value), remaining)
+        boundary = boundary.model_copy(update={field: value + "x" * added})
+        remaining -= added
+    assert remaining == 0
+    MaintenanceAttemptAuthorization.model_validate_json(boundary.model_dump_json())
+    preview = entry._authorization_preview(boundary)
+    assert len(json.dumps(preview, sort_keys=True, separators=(",", ":")).encode()) + 1 \
+        == entry.MAX_AUTHORIZATION_BYTES
+    assert len(boundary.attempt_record) < 4096
+    too_large = boundary.model_copy(update={"attempt_record": boundary.attempt_record + "x"})
+    refused = False
+    try:
+        entry._authorization_preview(too_large)
+    except ContractViolation:
+        refused = True
+    assert refused, "the printed LF is part of the root-owned authorization file"
 
 
 async def test_real_entry_recovers_checker_checkpoint_without_second_writer(
