@@ -95,7 +95,10 @@ Only after reviewed source, exact-head CI and relevant Linux proofs pass:
 1. Confirm current exclusive custody and inspect the host's actual state.
 2. Execute a reviewed exact-revision installation/qualification procedure;
    preserve evidence, notify before reboot and stop on unexpected output.
-3. Rehearse the actual operational path credential-free on that installation.
+3. Verify the installed entry import and its no-model preparation/preflight
+   against the actual provider and companion pins. The exact end-to-end fake
+   rehearsal belongs to the required Linux CI proof, not a second host
+   provider-selection path.
 4. Install the exact application authorization and dispatch at most one task.
 5. Preserve either accepted candidate evidence or the truthful failure. An
    accepted candidate may be proposed in a normal repository PR; the worker
@@ -105,3 +108,12 @@ Only after reviewed source, exact-head CI and relevant Linux proofs pass:
 No host commands or new qualification facts are supplied by this design alone.
 The implementation record carries measured evidence; #186 carries current
 ownership, pending deployment and task state.
+
+These are distinct evidence claims: CI observes the exact entry/Graph with a
+scripted executor and real Linux capture/gate/journal; host qualification and
+preflight observe the installed tree and genuine provider assembly without a
+model turn; the one authorized application attempt first observes that genuine
+provider executing through this entry on the host. Preflight and run use the
+same factory, not the same cached object across processes: run reassembles and
+checks the pinned facts again. Neither a CI pass nor a successful preflight is
+a live application pass. No additional attempt is implied by a bounded failure.

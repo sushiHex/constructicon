@@ -5797,8 +5797,37 @@ a process-crash claim. The executor is a genuine scripted test double, not a
 production Codex account. Full verification and physical execution results
 belong to the PR; targeted runs and Windows skips do not establish them.
 
-No vendor binary, credential, private-host command or live application attempt
-has run in this implementation slice. Adapter bytes change the revision:
+At implementation head `bc606c9`, CI verification passed with 5,641 tests and
+422 platform skips; the isolated staged-controller import and Python 3.12
+structural checks also passed. Runner qualification and all four Linux proof
+lanes passed, and the expanded 113-case M8 mutation inventory passed. These
+are credential-free CI observations, not an installed-host or live application
+result. The concurrent Windows full-suite run exposed a pre-existing test
+harness defect: the concrete history-refusal test's 30-second polling deadline
+interrupted a progressing checker, and its portable launcher's unjoined
+subprocess thread could retain a snapshot during cleanup. A standalone run
+reproduced the deadline failure before the intended assertion; retained journal
+events distinguished completed writer work from interrupted checker work.
+The mutation harness was initially suspected of changing source files during
+verification; source inspection disproved that premise. It changes code objects
+only inside isolated child processes.
+
+The two concrete tests now observe the real attempt result and join its worker
+instead of racing its phases against a polling deadline. The portable launcher
+joins its owned subprocess thread before propagating cancellation; subprocess
+deadlines are unchanged. A thread-latched regression proves cancellation stays
+pending until the child finishes, then propagates. Removing that join in an
+isolated code-object mutation failed the pending-caller assertion, with no
+harness error. The old local full run was stopped after reproduction and is
+not counted as passing verification.
+
+No Codex executor binary, operator-store credential, private-host command or
+live application attempt has been used locally in this implementation slice.
+A tool-free Fable advisory recommended keeping end-to-end scripted rehearsal
+in CI and checking genuine installed provider assembly through host preflight,
+rather than shipping another fake-provider selection path. This is a design
+recommendation, not source review or evidence of host execution.
+Adapter bytes change the revision:
 installation and fresh qualification must precede the separately reviewed
 single-attempt host procedure. Historical acceptance is not current deployment
 qualification, and this implementation alone does not complete #186.
