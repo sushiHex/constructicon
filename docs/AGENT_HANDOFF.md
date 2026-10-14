@@ -15,6 +15,34 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #185 — a finite autonomous exam has an actual accepting path
+
+An ordinary WRITE/capture/check Graph now returns an immutable one-file
+candidate and journal-bound acceptance evidence. Trusted code owns the vector
+schema, reference, renderer, whole-tree scope check and eight named mutants;
+candidate data supplies no expected values or executable code. The normal
+repository consumer is present before any candidate attempt. No production
+provider, live qualification, model attempt, installation or merge capability
+is added, and the finite exam claims neither novelty nor complete coverage.
+
+Concrete portable integration executes capture packs, the gate program and
+journal minting; it does not claim physical containment. Separate native gate
+cases establish acceptance, extra-file refusal and insufficient-vector refusal.
+Positive case counts caught a Windows fixture reporting a trampoline's exit
+instead of its child check's exit. Another accepting-path probe found that
+internal ASCII escaping could enlarge a legal 13 KB wire past its 32 KB bound;
+minimal canonical re-encoding preserves the allowed domain without duplicating
+its validator. Both defects are pinned by permitting-path assertions.
+
+A tree-only check did not establish data-only candidate history: a worker could
+commit and remove another file before capture. Generic capture intentionally
+preserves that history. Final application acceptance now additionally requires
+the candidate's sole parent to be the pinned base; a passing generic tree
+evaluation alone is insufficient. The JSON byte limit is not a whole-Git-store
+budget, and refused released candidates retain the existing retention policy.
+
+---
+
 ## #184 — autonomous maintenance accepts data, not self-reported tests
 
 The merged design replaces arbitrary generated Python plus per-contribution

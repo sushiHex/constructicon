@@ -5728,3 +5728,25 @@ Windows skips are not physical evidence. Exact-head verification and native
 containment results belong to the implementation PR. This slice performs no
 vendor binary execution, credential access, VM operation or live model attempt
 locally.
+
+Before merge, an independent accepting-path probe found an introduced wire-law
+mismatch: a valid 13,439-byte, 64-case document containing ASCII DEL characters
+parsed successfully, but the constructor-validation round trip expanded those
+characters and then refused its own oversized representation. The received wire
+was not oversized. Minimal canonical JSON (no unnecessary ASCII escaping or
+spacing) now reuses the same closed parser without inventing a stricter input
+domain. A full permitting exam covers this representation, and a mutant that
+restores the old expansion must fail the accepting assertion rather than error.
+
+The connector then identified an introduced application-history proof gap.
+Source tracing and a concrete reproduction confirmed that generic WRITE capture
+intentionally preserves worker commits: a worker committed an unrelated Python
+file, removed it in another commit, and left only the allowed JSON at the tip.
+The tree exam passed, but the released candidate still retained that history.
+Final application derivation now requires exactly one candidate parent equal to
+the pinned base, in addition to the existing merge-parent, tree and delta proof.
+The permitting case remains valid; the reproduced chain cannot produce an
+accepted `PlanManifestResult`, even though its generic tree evaluation passes.
+This is an application guard, not a change to generic capture or gate semantics.
+The 32 KiB limit applies to the JSON wire, not the whole Git object graph or its
+metadata. Unaccepted released candidates retain the existing retention policy.

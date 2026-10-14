@@ -47,6 +47,21 @@ MUTANTS = (
         "",
         VECTOR_TESTS + "test_closed_wire_refuses_bad_shapes_and_candidate_expectations",
     ),
+    (
+        "maintenance preserves valid compact ASCII vectors during revalidation",
+        MAINTENANCE + "_validated",
+        'ensure_ascii=False, separators=(",", ":")',
+        "ensure_ascii=True",
+        VECTOR_TESTS + "test_compact_ascii_vectors_remain_accepted_when_renderer_revalidates",
+    ),
+    (
+        "maintenance application rejects intermediate candidate history",
+        "constructicon.api.plan_manifest_application:derive_maintenance_result",
+        "if candidate_parents != [request.base_commit.encode()]:",
+        "if False:",
+        "tests/api/test_plan_manifest_application.py::"
+        "test_application_refuses_history_despite_passing_generic_tree_gate",
+    ),
     *(
         (name, POLICY, before, after, CORE + test)
         for name, before, after, test in (

@@ -420,13 +420,29 @@ class PortableProcessLauncher:
 
 
 class PortableVectorWriter(Writer):
+    intermediate_commits = False
+
     async def execute(self, task, *, workspace, grants):
         from tests.substrate.test_maintenance_vectors import permitting_vectors
 
         assert task.instruction == WRITE_INSTRUCTION and not self.validate_grants(grants)
         self.calls.append(task)
+        history = (
+            "import os,subprocess\n"
+            "os.environ.update(GIT_AUTHOR_NAME='test',GIT_AUTHOR_EMAIL='test@example.invalid',"
+            "GIT_COMMITTER_NAME='test',GIT_COMMITTER_EMAIL='test@example.invalid')\n"
+            "extra=Path('forbidden.py')\n"
+            "extra.write_bytes(b'# outside the approved data surface\\n')\n"
+            "subprocess.run(['/usr/bin/git','add','--all'],check=True)\n"
+            "subprocess.run(['/usr/bin/git','commit','-qm','worker intermediate'],check=True)\n"
+            "extra.unlink()\n"
+            "subprocess.run(['/usr/bin/git','add','--all'],check=True)\n"
+            "subprocess.run(['/usr/bin/git','commit','-qm','worker removes extra'],check=True)\n"
+        ) if self.intermediate_commits else ""
         program = (
             "from pathlib import Path\n"
+            + history
+            +
             "p=Path('tests/vectors/plan_manifest.json')\n"
             "p.parent.mkdir(parents=True,exist_ok=True)\n"
             f"p.write_bytes({permitting_vectors()!r})\n"
@@ -594,3 +610,38 @@ async def test_concrete_assembly_refuses_mismatched_resources(concrete_applicati
     with pytest.raises(ContractViolation):
         await maintenance_system(resources, executor_id="executor", executor=executor,
                                  executor_descriptor=descriptor, writer_grants=WRITE_GRANTS)
+
+
+async def test_application_refuses_history_despite_passing_generic_tree_gate(concrete_application):
+    resources, executor, system, control, _launch = concrete_application
+    executor.executor.intermediate_commits = True
+    graph = await register(control)
+    submission = await control.runs_start(RUN_ACTOR, proposal=graph,
+        inputs={"request": resources.request.model_dump(mode="json")}, idempotency_key="history")
+    assert isinstance(submission, RunSubmission), submission
+    async with asyncio.timeout(30):
+        while resources.journal.run_state(submission.run_id).status not in {
+            RunStatus.SUCCEEDED, RunStatus.FAILED,
+        }:
+            await asyncio.sleep(0.01)
+    assert resources.journal.run_state(submission.run_id).status is RunStatus.SUCCEEDED
+    materialized = system.materialize_run(submission.run_id)
+    candidate = GitRef.model_validate(materialized["candidate"])
+    evaluation = MergeEvaluation.model_validate(materialized["evaluation"])
+    proof = resources.journal.load_attestation(evaluation.attestation_id)
+    assert evaluation.ok and proof.ok
+    assert proof.subject.candidate == candidate.commit
+    parents = resources.authority.parents_of(candidate.commit)
+    assert len(parents) == 1 and parents != (resources.request.base_commit,)
+    intermediate = resources.authority.parents_of(parents[0])[0]
+    assert resources.authority._run("show", f"{intermediate}:forbidden.py").stdout \
+        == "# outside the approved data surface\n"
+    assert resources.authority._run("cat-file", "-e", f"{candidate.commit}:forbidden.py",
+                                   check=False).returncode != 0
+    rejected = False
+    try:
+        await derive_maintenance_result(system, resources, submission.run_id)
+    except ContractViolation as error:
+        assert "sole parent" in str(error)
+        rejected = True
+    assert rejected, "passing the generic tree gate must not accept intermediate worker code"

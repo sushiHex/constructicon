@@ -194,11 +194,36 @@ def test_renderer_is_deterministic_and_revalidates_constructor_inputs() -> None:
     forged_blob = maintenance.PlanManifestVectors((maintenance.EntriesCase(b"x" * 1025),))
     with pytest.raises(maintenance.VectorRefusal):
         maintenance.render_unittest(forged_blob, SOURCE, trusted_target_sha256=SHA)
+    forged_surrogate = maintenance.PlanManifestVectors((maintenance.PlanPathCase("\ud800"),))
+    with pytest.raises(maintenance.VectorRefusal, match="path_domain"):
+        maintenance.render_unittest(forged_surrogate, SOURCE, trusted_target_sha256=SHA)
     with pytest.raises(maintenance.VectorRefusal, match="target_hash"):
         maintenance.render_unittest(vectors, SOURCE, trusted_target_sha256="0" * 64)
     with pytest.raises(maintenance.VectorRefusal, match="mutant_name"):
         maintenance.render_unittest(vectors, SOURCE, trusted_target_sha256=SHA,
                                     mutant="caller_code")
+
+
+def test_compact_ascii_vectors_remain_accepted_when_renderer_revalidates() -> None:
+    value = json.loads(permitting_vectors())
+    value["cases"].extend([path("\x7f" * 253 + ".md")] * 40)
+    blob = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()
+    assert len(blob) == 13439
+    vectors = maintenance.parse_vectors(blob)
+    assert len(vectors.cases) == 64
+    try:
+        rendered = maintenance.render_unittest(vectors, SOURCE, trusted_target_sha256=SHA)
+        report = maintenance.run_vectors(blob, SOURCE, SHA)
+    except maintenance.VectorRefusal as exc:
+        raise AssertionError("valid compact ASCII vectors refused during revalidation") from exc
+    assert len(rendered) <= 262144
+    assert report.passed
+    assert report.baseline == maintenance.RunCounts(64, 0, 0, 0)
+    assert len(report.mutants) == 8
+    for mutant in report.mutants:
+        assert mutant.distinguished
+        assert mutant.counts.tests_run == 64 and mutant.counts.failures > 0
+        assert mutant.counts.errors == mutant.counts.skips == 0
 
 
 def test_surviving_mutants_are_reported_as_not_proven() -> None:

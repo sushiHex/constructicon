@@ -30,7 +30,10 @@ class PlanManifestRequest(BaseModel):
 
 
 class PlanManifestResult(BaseModel):
-    """Accepted candidate evidence; no installation, merge, or artifact claim."""
+    """Application acceptance proves one base parent plus the gated data tree.
+
+    This does not claim installation, merge, or durable rendered-artifact storage.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

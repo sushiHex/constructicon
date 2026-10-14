@@ -2,6 +2,8 @@
 
 The components consume L0 contracts. Concrete containment and Git evidence are
 checked here at the L4 injection boundary, outside the ordinary walker.
+The Graph's generic MergeEvaluation proves the candidate tree. Application
+acceptance additionally requires derive_maintenance_result's history proof.
 """
 
 from __future__ import annotations
@@ -329,7 +331,11 @@ async def maintenance_system(
 async def derive_maintenance_result(
     system: Constructicon, resources: MaintenanceResources, run_id: RunId,
 ) -> PlanManifestResult:
-    """Affirm the exact candidate/tree, journal proof, and sole new data file."""
+    """Accept only the one-base-parent candidate, exact tree and journal proof.
+
+    A successful generic tree gate alone is not application acceptance: its
+    subject does not constrain the candidate's reachable intermediate history.
+    """
     from constructicon.substrate.gates.maintenance import parse_vectors, render_unittest
 
     await require_maintenance_resources(resources)
@@ -389,6 +395,13 @@ async def derive_maintenance_result(
         or subject.candidate != candidate.commit or subject.expected_base != request.base_commit
     ):
         raise ContractViolation("maintenance attestation does not affirm this run and candidate")
+    candidate_parents = (await _git(
+        authority, "rev-list", "--parents", "-n", "1", candidate.commit,
+    )).split()[1:]
+    if candidate_parents != [request.base_commit.encode()]:
+        raise ContractViolation(
+            "maintenance candidate must have the pinned base as its sole parent",
+        )
     tree = (await _git(authority, "rev-parse", f"{candidate.commit}^{{tree}}")).strip().decode()
     merged_tree = (await _git(authority, "rev-parse", f"{subject.merge_commit}^{{tree}}"))
     parents = (await _git(authority, "rev-list", "--parents", "-n", "1", subject.merge_commit))

@@ -232,7 +232,12 @@ def _validated(vectors: PlanManifestVectors) -> PlanManifestVectors:
             wire.append({"kind": "entries", "blob_hex": case.blob.hex()})
         else:
             raise VectorRefusal("case_shape")
-    return parse_vectors(json.dumps({"version": 1, "cases": wire}, ensure_ascii=True).encode())
+    try:
+        encoded = json.dumps({"version": 1, "cases": wire},
+                             ensure_ascii=False, separators=(",", ":")).encode()
+    except UnicodeEncodeError as exc:
+        raise VectorRefusal("path_domain") from exc
+    return parse_vectors(encoded)
 
 
 def _expected(case: PlanPathCase | EntriesCase) -> tuple[str, object]:
