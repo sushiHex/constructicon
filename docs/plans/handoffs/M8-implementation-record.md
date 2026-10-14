@@ -5897,3 +5897,11 @@ digest the successful active checker returned. Measured refresh still requires
 the existing refresh proof; malformed, changed or failed checks stop rather
 than authorizing a request. This does not change the frozen evidence checker
 or claim that an unmeasured refresh never occurred.
+
+The source bundle crosses users through an explicit reviewed data handoff:
+the operator verifies its fresh uploaded package, and the service writes a
+fresh private destination without root write authority or a home-permission
+change. Exact size and source/destination hashes precede preparation. Tests
+execute the shell block and refuse occupied or linked destinations, missing
+or changed sources, and failed or truncated transfers; partial destinations
+remain evidence, not permission to overwrite or retry.

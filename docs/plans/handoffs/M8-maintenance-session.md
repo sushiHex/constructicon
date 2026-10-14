@@ -75,6 +75,7 @@ Do not generate scripts with `sed`, `eval` or runtime substitutions.
 | P3 qualification | HS H2; OC S1; OC S4 followed by P3 comparison; OC S6a unchanged |
 | P4/P5 | Complete g9 floor-8 and H7 replacements below |
 | P6 | New common and P6 declarations, ER R1 unchanged; ER R0/R2 apply |
+| P7 bundle handoff | Fresh operator `$HOME/maintenance-p7-package` contains common, step, SHA-256 manifest covering common/step/bundle, and `maintenance-source-01e816e.bundle`; retain the manifest's own local SHA-256, then execute P7 handoff and preparation blocks below |
 | Application | New common, P7 declarations, P7-P10 blocks below, each in its own reviewed step file |
 
 Prepare LF-only local common/step files and record source revision,
@@ -105,8 +106,13 @@ equals the final reviewed head. Record those facts and exact-head CI/native
 proof links. Prepare a new immutable git bundle containing the reviewed BASE;
 record its actual SHA-256, size (at most 64 MiB), base and bundle ref inventory.
 Review that BASE contains the installed consumer/reference/exam bytes and no
-`tests/vectors/plan_manifest.json`. Upload the bundle to the literal absent
-service-owned path, compare its local and remote digest, and retain it private.
+`tests/vectors/plan_manifest.json`. Include the bundle in P7's fresh operator
+package at `$HOME/maintenance-p7-package/maintenance-source-01e816e.bundle`:
+the package's SHA-256 manifest covers the common, step and bundle, and the
+manifest itself is uploaded with them under the same fresh-directory transport.
+P7's reviewed data handoff below transfers it into the literal absent
+service-owned path, compares both digests, and retains it private. No operator
+SCP into the private service home or change to that home's permissions is used.
 `prepare` checks these bytes before importing them. Unknown pins stop.
 
 The prepared bundle is 3,893,557 bytes, self-contained with complete history,
@@ -379,7 +385,34 @@ HOST=(--session "$W" --store-key "$K" --sealed "$W/g9.sealed.json"
 ```
 
 In this separate step repeat HS H2, load_final_qualification and
-binding_check of g9 accepted, then run:
+binding_check of g9 accepted. P7's fresh uploaded package and its manifest
+have already been checked by the reviewed transport. First run this complete
+operator-to-service handoff block. It checks the exact prepared byte count
+and digest, regular nonsymlink source and absent/nonlink destination. The
+fixed service shell writes only bundle data, as m8-service, with no root
+writer. This reviewed file-data redirect is not stdin script transport:
+
+```bash
+SOURCE_UPLOAD="$HOME/maintenance-p7-package/maintenance-source-01e816e.bundle"
+test -f "$SOURCE_UPLOAD"
+test ! -L "$SOURCE_UPLOAD"
+test "$(/usr/bin/stat -c %s -- "$SOURCE_UPLOAD")" -eq 3893557
+/usr/bin/sha256sum --binary -- "$SOURCE_UPLOAD" < /dev/null \
+  | /usr/bin/grep -qxF "$BUNDLE_SHA256 *$SOURCE_UPLOAD"
+"${SERVICE[@]}" /usr/bin/test ! -e "$BUNDLE" < /dev/null
+"${SERVICE[@]}" /usr/bin/test ! -L "$BUNDLE" < /dev/null
+"${SERVICE[@]}" /bin/sh -c 'set -Ceu; umask 077; cat >"$1"' sh "$BUNDLE" < "$SOURCE_UPLOAD"
+"${SERVICE[@]}" /usr/bin/test -f "$BUNDLE" < /dev/null
+"${SERVICE[@]}" /usr/bin/test ! -L "$BUNDLE" < /dev/null
+"${SERVICE[@]}" /usr/bin/sha256sum --binary -- "$BUNDLE" < /dev/null \
+  | /usr/bin/grep -qxF "$BUNDLE_SHA256 *$BUNDLE"
+echo maintenance-bundle-transferred
+```
+
+Only `maintenance-bundle-transferred` permits preparation below. A failed or
+incomplete transfer preserves its partial service-owned destination and stops;
+no deletion, overwrite, retry, chmod or home-custody change is supplied. Keep
+the operator upload and service copy as evidence. Then run:
 
 ```bash
 "${SERVICE[@]}" "${PY[@]}" constructicon.api.maintenance_entry --help < /dev/null > /dev/null

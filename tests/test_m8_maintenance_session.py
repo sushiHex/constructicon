@@ -375,6 +375,72 @@ def test_fresh_authority_is_outside_the_exact_launch_entry_inventory():
     assert '\"$S/preflight.json\" \"$PREVIEW_SHA256\" \"$A\"' in install
 
 
+@pytest.mark.parametrize("failure", [
+    "none", "occupied", "dangling-link", "bad-digest", "bad-size",
+    "missing-source", "failed-transfer", "incomplete-transfer",
+])
+def test_real_bundle_data_handoff_verifies_both_users_before_prepare(
+    tmp_path: Path, failure: str,
+):
+    package = tmp_path / "maintenance-p7-package"
+    package.mkdir()
+    upload = package / "maintenance-source-01e816e.bundle"
+    data = (b"reviewed-fixture-bundle\n" * 180000)[:3893557]
+    assert len(data) == 3893557
+    upload.write_bytes(data)
+    expected = hashlib.sha256(data).hexdigest()
+    if failure == "bad-digest":
+        expected = "0" * 64
+    elif failure == "bad-size":
+        upload.write_bytes(data[:-1])
+        expected = hashlib.sha256(data[:-1]).hexdigest()
+    elif failure == "missing-source":
+        upload.unlink()
+    service_home = tmp_path / "service"
+    service_home.mkdir()
+    destination = service_home / "bundle"
+    if failure == "occupied":
+        destination.write_bytes(b"preserved-destination")
+    elif failure == "dangling-link" and os.name != "nt":
+        destination.symlink_to(service_home / "absent")
+    block = _blocks("P7: installed entry, fresh closure and reviewed application source")[1]
+    upload_before = upload.read_bytes() if upload.exists() else None
+    result = _run("\n".join([
+        'set -Eeuo pipefail; BUNDLE="$DESTINATION"; BUNDLE_SHA256="$EXPECTED_SHA"',
+        'SERVICE=(service)',
+        'service() { local program="$1"; shift; case "$program" in',
+        '/usr/bin/test) if test "$FAILURE" = dangling-link && test "$NATIVE_WINDOWS" = 1',
+        'then test "$*" = "! -L $BUNDLE" && return 1; fi; command /usr/bin/test "$@" ;;',
+        '/bin/sh) if test "$FAILURE" = failed-transfer; then',
+        'command /usr/bin/head -c 128 > "${@: -1}"; return 1;',
+        'elif test "$FAILURE" = incomplete-transfer; then',
+        'command /usr/bin/head -c 128 > "${@: -1}"; return 0;',
+        'else command /bin/sh "$@"; fi ;;',
+        '/usr/bin/sha256sum) command /usr/bin/sha256sum "$@" ;;',
+        '*) return 97 ;; esac; }', block, 'echo prepare-permitted',
+    ]), HOME=tmp_path.as_posix(), DESTINATION=destination.as_posix(),
+        EXPECTED_SHA=expected, FAILURE=failure, NATIVE_WINDOWS="1" if os.name == "nt" else "0")
+    assert (result.returncode == 0) is (failure == "none"), result.stderr
+    assert (upload.read_bytes() if upload.exists() else None) == upload_before
+    if failure == "none":
+        assert result.stdout.splitlines() == ["maintenance-bundle-transferred", "prepare-permitted"]
+        assert destination.read_bytes() == data
+    else:
+        assert "maintenance-bundle-transferred" not in result.stdout
+        assert "prepare-permitted" not in result.stdout
+        if failure == "occupied":
+            assert destination.read_bytes() == b"preserved-destination"
+        elif failure in {"failed-transfer", "incomplete-transfer"}:
+            assert destination.read_bytes() == data[:128]
+        elif failure == "dangling-link" and os.name != "nt":
+            assert destination.is_symlink() and not destination.exists()
+        else:
+            assert not destination.exists()
+    text = _text(DOCUMENT)
+    assert "$HOME/maintenance-p7-package/maintenance-source-01e816e.bundle" in text
+    assert 'sh "$BUNDLE" < "$SOURCE_UPLOAD"' in block
+
+
 def _preview(tmp_path: Path, **changes: object) -> Path:
     app = "/private/application"
     a = authorization(
