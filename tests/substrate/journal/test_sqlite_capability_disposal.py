@@ -146,6 +146,80 @@ def test_overlapping_disposal_plans_have_one_receipt_and_explicit_supersession(t
     assert sum(event.kind == "CapabilityDisposalRecorded" for event in journal.events(RUN)) == 1
 
 
+@pytest.mark.parametrize("reader", ("receipt", "command", "reject"))
+def test_replaced_audit_slot_cannot_hide_planned_irreversible_lost_facts(tmp_path, reader):
+    from tests.durable_seals import reseal_primary_fact
+
+    from constructicon.core.errors import JournalDamaged
+    from constructicon.substrate.journal._sqlite_execution_facts import (
+        event_fact_hash,
+        event_fact_key,
+    )
+
+    database, journal, _clock = database_world(tmp_path)
+    claim, plan = planned(journal)
+    receipt = journal.capability_disposal_apply(claim)
+    with sqlite3.connect(database) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("DELETE FROM durable_fact_seals WHERE family = 'capability_disposal'"
+                           " AND fact_key = ?", (claim.command_id,))
+        connection.execute("UPDATE events SET kind = 'OperatorObservation', payload = ?"
+                           " WHERE run_id = ? AND seq = ?",
+                           (canonical_json({"observation": "coherently resealed replacement"}),
+                            RUN, receipt.audit_event_seq))
+        audit = connection.execute("SELECT * FROM events WHERE run_id = ? AND seq = ?",
+                                   (RUN, receipt.audit_event_seq)).fetchone()
+        reseal_primary_fact(connection, family="event", fact_key=event_fact_key(RUN, audit["seq"]),
+                            fact=event_fact_hash(audit))
+        assert connection.execute("SELECT COUNT(*) FROM events WHERE kind = 'LeaseTransition'"
+                                  " AND run_id = ?", (RUN,)).fetchone()[0] == len(receipt.pairs)
+    before = retained_bytes(database)
+    error = None
+    try:
+        if reader == "receipt":
+            journal.capability_disposal_receipt(claim.command_id)
+        elif reader == "command":
+            journal.command(claim.command_id)
+        else:
+            journal.reject_command(
+                claim,
+                contracts.capability_disposal_superseded_rejection(plan).model_dump(mode="json"),
+            )
+    except Exception as exc:
+        error = exc
+    assert isinstance(error, JournalDamaged), error
+    assert retained_bytes(database) == before
+
+
+@pytest.mark.parametrize("later_observation", (False, True))
+def test_competing_subset_disposal_receipt_permits_superseded_plan_with_other_audit_slot(
+    tmp_path, later_observation,
+):
+    _database, journal, _clock = database_world(tmp_path)
+    loser, loser_plan = planned(journal, key="larger-losing-plan")
+    winner, _winner_plan = planned(
+        journal, key="subset-winning-plan", pairs=[loser_plan.rows[0].pair.model_dump(mode="json")],
+    )
+    winning_receipt = journal.capability_disposal_apply(winner)
+    if later_observation:
+        worker = journal.claim_run(RUN, owner_id="observation-worker", ttl_s=30)
+        observed = journal.append_event(
+            worker, "OperatorObservation", payload={"observation": "later"},
+        )
+        journal.release_run(worker)
+        assert observed.seq == loser_plan.baseline_event_seq + len(loser_plan.rows) + 1
+    error = None
+    try:
+        absent = journal.capability_disposal_receipt(loser.command_id)
+        superseded = journal.capability_disposal_apply(loser)
+    except Exception as exc:
+        error = exc
+    assert error is None, error
+    assert absent is None
+    assert isinstance(superseded, contracts.CapabilityDisposalSuperseded)
+    assert journal.capability_disposal_receipt(winner.command_id) == winning_receipt
+
+
 def test_worker_claim_heartbeat_and_release_do_not_restore_planned_baseline(tmp_path):
     _database, journal, clock = database_world(tmp_path)
     claim, _plan = planned(journal)
@@ -678,3 +752,40 @@ def test_fresh_command_absence_streams_audit_proof_without_materializing_history
     )
     assert result.status == "claimed"
     assert len(seen) == len(pairs) == 2
+
+
+def test_losing_hundred_pair_receipt_point_owns_one_fresh_structural_proof(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    from tests.run_worlds import create_test_run, start_test_run
+    from tests.substrate.journal.test_capability_accounting_snapshot import acquire
+
+    journal = SqliteJournal(tmp_path / "hundred-pair-race.db")
+    create_test_run(journal, RUN)
+    worker = start_test_run(journal, RUN, owner_id="worker")
+    for index in range(100):
+        acquire(journal, worker, index)
+    journal.release_run(worker)
+    winner, _plan = planned(journal, key="hundred-pair-winner")
+    loser, _plan = planned(journal, key="hundred-pair-loser")
+    journal.capability_disposal_apply(winner)
+    queries = []
+    original = journal._read
+
+    @contextmanager
+    def traced():
+        with original() as connection:
+            connection.set_trace_callback(queries.append)
+            yield connection
+
+    monkeypatch.setattr(journal, "_read", traced)
+    for _ in range(2):
+        queries.clear()
+        assert journal.capability_disposal_receipt(loser.command_id) is None
+        # Every public point call starts an independent owned read proof. Each
+        # loss reuses the already-proven winning receipt inside that call only.
+        assert sum(query == "SELECT * FROM capability_leases" for query in queries) == 1
+        assert sum(
+            query == "SELECT * FROM events WHERE kind = 'CapabilityDisposalRecorded'"
+            for query in queries
+        ) == 1

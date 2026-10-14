@@ -91,14 +91,14 @@ MUTANTS = (
     ),
     (
         "point receipt proof permits a lawful staged terminal-event transaction",
-        DISPOSAL_STORE + "_project_disposal_receipt",
+        DISPOSAL_STORE + "_project_present_disposal_receipt",
         "run = capability_run_world_row(connection, plan.run_id)",
         "run = accounting_run_row(connection, plan.run_id)",
         STORE_TEST + "test_disposed_acquisitions_permit_a_lawful_terminal_transition",
     ),
     (
         "receipt point reads prove the private disposal relationship hash",
-        DISPOSAL_STORE + "_project_disposal_receipt",
+        DISPOSAL_STORE + "_project_present_disposal_receipt",
         "require_durable_fact_seal(\n"
         "        connection,\n"
         "        family=DISPOSAL_FAMILY,\n"
@@ -120,7 +120,7 @@ MUTANTS = (
     ),
     (
         "receipt baseline is reconstructed rather than trusted from resealed plan bytes",
-        DISPOSAL_STORE + "_project_disposal_receipt",
+        DISPOSAL_STORE + "_project_present_disposal_receipt",
         "if canonical_json(baseline) != canonical_json(planned.fact):",
         "if False:",
         STORE_TEST + "test_disposal_relationship_rejects_resealed_primary_fact_contradictions"
@@ -151,6 +151,20 @@ MUTANTS = (
         "    receipt = project_disposal_receipt(connection, record.command_id)",
         STORE_TEST + "test_disposal_damage_refuses_every_independent_public_projection"
         "[command-plan_and_seal]",
+    ),
+    (
+        "an occupied audit slot cannot hide retained irreversible lost facts",
+        DISPOSAL_STORE + "_project_disposal_receipt",
+        "disposal_for_transition(connection, history, event, proofs=proofs)",
+        "pass",
+        STORE_TEST + "test_replaced_audit_slot_cannot_hide_planned_irreversible_lost_facts[receipt]",
+    ),
+    (
+        "a losing receipt point read owns one fresh operation-local proof context",
+        DISPOSAL_STORE + "project_disposal_receipt",
+        "proofs = DisposalReadProofs(connection)",
+        "return _project_disposal_receipt(connection, command_id, None)",
+        STORE_TEST + "test_losing_hundred_pair_receipt_point_owns_one_fresh_structural_proof",
     ),
 )
 

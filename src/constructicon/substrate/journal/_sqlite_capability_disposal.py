@@ -167,13 +167,13 @@ def project_disposal_receipt(
 ) -> CapabilityDisposalRecorded | None:
     """Command/event/pair point and batch readers use this one independent projector."""
 
-    if proofs is not None:
-        if connection is not proofs.connection:
-            raise JournalDamaged("disposal proof context crosses owned SQLite snapshots")
-        if command_id not in proofs.receipts:
-            proofs.receipts[command_id] = _project_disposal_receipt(connection, command_id, proofs)
-        return proofs.receipts[command_id]
-    return _project_disposal_receipt(connection, command_id, None)
+    if proofs is None:
+        proofs = DisposalReadProofs(connection)
+    if connection is not proofs.connection:
+        raise JournalDamaged("disposal proof context crosses owned SQLite snapshots")
+    if command_id not in proofs.receipts:
+        proofs.receipts[command_id] = _project_disposal_receipt(connection, command_id, proofs)
+    return proofs.receipts[command_id]
 
 
 def _project_disposal_receipt(
@@ -196,32 +196,75 @@ def _project_disposal_receipt(
             raw_plan = command.plan.get("plan") if isinstance(command.plan, dict) else None
             if isinstance(raw_plan, dict) and raw_plan.get("kind") == "capability_disposal":
                 plan = validated_capability_disposal_command(command)
-                audit_position = plan.baseline_event_seq + len(plan.rows) + 1
-                audit = connection.execute(
-                    "SELECT * FROM events WHERE run_id = ? AND seq = ?",
-                    (plan.run_id, audit_position),
-                ).fetchone()
-                if audit is None:
-                    for offset, planned in enumerate(plan.rows, 1):
-                        row = connection.execute(
-                            "SELECT * FROM events WHERE run_id = ? AND seq = ?",
-                            (plan.run_id, plan.baseline_event_seq + offset),
-                        ).fetchone()
-                        if row is None:
-                            continue
-                        event = _stored_event_from_row_without_relationship(connection, row)
-                        if (
-                            event.kind == "LeaseTransition"
-                            and isinstance(event.payload, dict)
-                            and event.payload.get("to") == "lost"
-                            and event.payload.get("lease_id") == planned.pair.lease_id
-                            and event.payload.get("acquisition_epoch")
-                            == planned.pair.acquisition_epoch
-                        ):
-                            raise JournalDamaged(
-                                "planned lost fact retained without its disposal audit"
+                histories = None
+                for offset, planned in enumerate(plan.rows, 1):
+                    row = connection.execute(
+                        "SELECT * FROM events WHERE run_id = ? AND seq = ?",
+                        (plan.run_id, plan.baseline_event_seq + offset),
+                    ).fetchone()
+                    if row is None:
+                        continue
+                    event = _stored_event_from_row_without_relationship(connection, row)
+                    if (
+                        event.kind == "LeaseTransition"
+                        and isinstance(event.payload, dict)
+                        and event.payload.get("to") == "lost"
+                        and event.payload.get("lease_id") == planned.pair.lease_id
+                        and event.payload.get("acquisition_epoch") == planned.pair.acquisition_epoch
+                    ):
+                        # An occupied audit slot proves nothing. A genuine
+                        # competing batch may own this exact transition, even
+                        # if its smaller audit precedes our would-be slot.
+                        if histories is None:
+                            histories = (
+                                capability_lease_histories(connection, plan.run_id)
+                                if proofs is None
+                                else proofs.run_histories(connection, plan.run_id)
                             )
+                        history = next(
+                            (
+                                item for item in histories
+                                if item.lease.lease_id == planned.pair.lease_id
+                                and item.lease.acquisition_epoch == planned.pair.acquisition_epoch
+                            ),
+                            None,
+                        )
+                        if history is None:
+                            raise JournalDamaged("planned lost fact has no retained acquisition")
+                        disposal_for_transition(connection, history, event, proofs=proofs)
         return None
+    return _present_disposal_receipt(connection, command_id, proofs)
+
+
+def _present_disposal_receipt(
+    connection: sqlite3.Connection, command_id: str, proofs: DisposalReadProofs | None,
+) -> CapabilityDisposalRecorded:
+    """Memo the positive validator only; attribution never enters absence proof."""
+
+    if proofs is not None:
+        if connection is not proofs.connection:
+            raise JournalDamaged("disposal proof context crosses owned SQLite snapshots")
+        if command_id in proofs.receipts:
+            receipt = proofs.receipts[command_id]
+            if receipt is None:
+                raise JournalDamaged("disposal audit contradicts its proven receipt absence")
+            return receipt
+    receipt = _project_present_disposal_receipt(connection, command_id, proofs)
+    if proofs is not None:
+        proofs.receipts[command_id] = receipt
+    return receipt
+
+
+def _project_present_disposal_receipt(
+    connection: sqlite3.Connection, command_id: str, proofs: DisposalReadProofs | None,
+) -> CapabilityDisposalRecorded:
+    """The one positive relationship law, above sealed facts and structural history."""
+
+    relationship = durable_fact_seal(connection, family=DISPOSAL_FAMILY, fact_key=command_id)
+    candidates = _audit_candidates(connection, command_id, proofs)
+    command_row = connection.execute(
+        "SELECT * FROM commands WHERE command_id = ?", (command_id,),
+    ).fetchone()
     if command_row is None or relationship is None or len(candidates) != 1:
         raise JournalDamaged("disposal relationship has no exact command and unique public audit")
     command = _sealed_command_phases_from_row(connection, command_row)
@@ -349,9 +392,7 @@ def disposal_for_transition(
         event = _stored_event_from_row_without_relationship(connection, row)
         if not isinstance(event.payload, dict) or type(event.payload.get("command_id")) is not str:
             raise JournalDamaged("disposal audit has no exact command identity")
-        receipt = project_disposal_receipt(connection, event.payload["command_id"], proofs=proofs)
-        if receipt is None:
-            raise JournalDamaged("disposal audit has no positively sealed receipt")
+        receipt = _present_disposal_receipt(connection, event.payload["command_id"], proofs)
         for pair, seq in zip(receipt.pairs, receipt.transition_event_seqs, strict=True):
             if (
                 pair.lease_id == history.lease.lease_id

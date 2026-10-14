@@ -5652,3 +5652,22 @@ plan-erasure refusal also passed. Missing-command audit proof streams base
 sealed events, avoiding receipt recursion and whole-audit-list allocation;
 its SQL/CPU work still grows with retained disposal history. No indexed-cost
 claim is made for that independent absence proof.
+
+The connector review found one further introduced absence error: deleting the
+private relationship and coherently replacing the expected audit with an
+unrelated event bypassed the planned-loss check. Receipt lookup, command lookup
+and rejection recording each reproduced the defect. An occupied event position
+is not disposal evidence. Each matching retained loss now requires canonical
+positive attribution regardless of that slot. This still permits a competing
+command's valid disposal, including a smaller winning batch whose audit occurs
+before the losing plan's expected audit position. The positive receipt validator
+is factored once below attribution; it cannot call the absence dispatcher.
+Refusing regressions and same-batch/subset competing-winner cases pin both sides,
+and a mutant removing the attribution check fails by assertion.
+
+The correction's permitting path exposed repeated proof work: a 100-pair
+losing point read reloaded whole acquisition histories 101 times. Each public
+receipt read now owns a fresh proof context when its caller supplies none.
+The regression observes one history prefetch and one audit index on each of
+two independent reads, proving both within-read reuse and no cross-read cache.
+Disabling that context fails the count assertion; it is not a mutant error.
