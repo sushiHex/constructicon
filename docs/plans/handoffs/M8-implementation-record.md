@@ -5522,6 +5522,13 @@ lease-event prefetch. Raw global rows/seals/events remain linear in retained
 history, followed by canonical selected-pair proof. No indexed-cost claim or
 extra persistence structure is made.
 
+Full CI found one introduced compatibility miss: the executable README
+example still asserted the unversioned result type. Reproduction reached that
+exact assertion; the example now consumes result v2, while old-decoder fixtures
+remain unchanged. The README test also reports its child's stderr on failure
+instead of hiding it behind a subprocess wrapper exception. This is a client
+upgrade, not weakening the strict old response model.
+
 Public accounting hashes contain only the typed public payload, not a command
 request, plan or private reason. Disposal receipts and accepting-path reason
 privacy remain obligations of the separate administrative command slice.

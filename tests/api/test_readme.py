@@ -25,8 +25,9 @@ def test_readme_workflow_completes_and_replays(tmp_path: Path) -> None:
             capture_output=True,
             text=True,
             timeout=60,
-            check=True,
+            check=False,
         )
+        assert completed.returncode == 0, completed.stderr
         assert completed.stdout == expected
         assert completed.stderr == ""
 
