@@ -718,6 +718,30 @@ MUTANTS = (
         "tests/api/test_maintenance_entry.py::"
         "test_inspect_refuses_unbounded_or_private_text_identifiers",
     ),
+    *(
+        (
+            "maintenance unavailable assembly binds " + label,
+            "constructicon.api.plan_manifest_application:maintenance_system",
+            before, "False",
+            "tests/api/test_maintenance_entry.py::"
+            "test_unavailable_application_assembly_requires_exact_companion_and_request_pins",
+        )
+        for label, before in (
+            ("request", "authorization.request != resources.request"),
+            ("application", "authorization.application_revision != maintenance_application_revision()"),
+            (
+                "workspace",
+                "authorization.workspace != MaintenanceCapabilityPin(\n"
+                "                capability_id=resources.workspace.provider_id,\n"
+                "                revision=resources.workspace.revision)",
+            ),
+            (
+                "gate",
+                "authorization.gate != MaintenanceCapabilityPin(\n"
+                "                capability_id=resources.gate.provider_id, revision=resources.gate.revision)",
+            ),
+        )
+    ),
 )
 
 if __name__ == "__main__":

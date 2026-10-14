@@ -341,6 +341,36 @@ async def test_unavailable_qualification_cannot_authorize_application_assembly(
             executor_descriptor=executor.descriptor("executor"), writer_grants=WRITE_GRANTS)
 
 
+async def test_unavailable_application_assembly_requires_exact_companion_and_request_pins(
+    concrete_application,
+):
+    resources, executor, _system, _control, _launcher = concrete_application
+    auth = authorize(resources, executor)
+    executor.qualified_graph = auth.source_graph_hash
+    executor._unavailable_reasons = ("not generally available",)
+    system = await entry.maintenance_system(resources, executor_id="executor", executor=executor,
+        executor_descriptor=executor.descriptor("executor"), writer_grants=WRITE_GRANTS)
+    capability = next(item for item in system.describe().capabilities
+                      if item.capability_id == "executor")
+    assert capability.available is False and capability.unavailable_reasons
+    for field in ("request", "application_revision", "workspace", "gate"):
+        if field == "request":
+            updates = {field: auth.request.model_copy(update={"target_sha256": "0" * 64})}
+        elif field == "application_revision":
+            updates = {field: digest("foreign-application", 1, 0)}
+        else:
+            updates = {field: getattr(auth, field).model_copy(update={
+                "revision": digest("foreign-companion", 1, 0)})}
+        executor.maintenance = auth.model_copy(update=updates)
+        refused = False
+        try:
+            await entry.maintenance_system(resources, executor_id="executor", executor=executor,
+                executor_descriptor=executor.descriptor("executor"), writer_grants=WRITE_GRANTS)
+        except ContractViolation:
+            refused = True
+        assert refused, f"unavailable application assembly must check its {field} pin"
+
+
 async def test_cli_preflight_never_runs_and_run_delegates_exact_installed_authority(
     concrete_application, monkeypatch,
 ):

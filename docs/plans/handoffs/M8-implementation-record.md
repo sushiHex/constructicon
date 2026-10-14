@@ -5778,7 +5778,8 @@ The shared root-custody reader was extracted without changing the historical
 qualification parser. New maintenance parsing rejects duplicate JSON members
 and nonfinite values. The N5 Stage 1 and READ mutation inventories were updated
 only where shared implementation names moved; both ran with every mutant
-assertion-killed. New authorization guard mutants likewise fail by assertion.
+assertion-killed. The 32 added authorization, entry, recovery, assembly and
+publication mutants each executed and failed by assertion in targeted runs.
 Review reproduced two publication-boundary defects. Historical result models
 use nominal identifier types that do not themselves enforce lexical shape;
 inspection now requires canonical run and commit identifiers before echoing
@@ -5786,8 +5787,15 @@ them, rather than publishing arbitrary bounded-file contents as identifiers.
 Preflight's size check also omitted the newline emitted by the CLI. It now
 counts that byte, with the largest permitted serialized record accepted and
 the next byte refused. These checks do not make a historical file authentic.
-The implementation's other verification and physical execution remain pending
-until reported on its PR; these targeted checks are not a full-gate claim.
+Portable entry tests exercised accepting publication, same-key replay,
+checker-checkpoint recovery without another writer acquisition, and uncertain
+writer recovery whose next epoch is refused. Source preparation imports an
+actual minimal reviewed Git bundle, independent of CI checkout depth. Native
+cases exercise the new entry with the real Linux launcher, capture, gate,
+journal minting and cleanup; reconstruction there is a new object graph, not
+a process-crash claim. The executor is a genuine scripted test double, not a
+production Codex account. Full verification and physical execution results
+belong to the PR; targeted runs and Windows skips do not establish them.
 
 No vendor binary, credential, private-host command or live application attempt
 has run in this implementation slice. Adapter bytes change the revision:
