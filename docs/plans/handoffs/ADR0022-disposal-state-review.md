@@ -128,7 +128,7 @@ The dependency direction is sealed primary facts -> exact structural histories
 -> disposal relationships -> lost attribution -> complete inventories/public
 projections. It is not lease projection -> receipt projection -> lease projection.
 
-1. Project sealed command identity/request/plan, run world/extent and exact event
+1. Project sealed command identity/request/plan, immutable run world and exact event
    bytes with the existing canonical fact primitives. A base fact is internally
    validated data, not a public disposal receipt or permission to skip proof.
 2. Construct exact acquisition/lifecycle histories once with the shared row
@@ -150,6 +150,15 @@ projections. It is not lease projection -> receipt projection -> lease projectio
 5. Validate audit-to-relationship, relationship-to-complete-batch and reverse
    event-to-row inventories. All public point/batch/detail reads, private command
    reads, retries and open use these composed canonical projectors.
+
+Keep the point proof separate from complete committed event-extent proof.
+Existing terminalization allocates its next sequence before projecting every
+capability, including disposed rows. A receipt point proof must validate its
+immutable historical facts in that lawful intermediate transaction. It cannot
+demand that an allocated-but-not-yet-inserted terminal event already exists.
+The external accounting snapshot and open inventory still require complete
+committed extent. Test all terminal permitting paths after disposal and retain
+external extent-damage refusals; use proof layering, not a bypass flag.
 
 Factor the structural constructor rather than adding `trusted`, `skip_receipt`
 or recursion-guard parameters. Receipt internals consume sealed command/event
