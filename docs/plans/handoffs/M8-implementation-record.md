@@ -5905,3 +5905,47 @@ change. Exact size and source/destination hashes precede preparation. Tests
 execute the shell block and refuse occupied or linked destinations, missing
 or changed sources, and failed or truncated transfers; partial destinations
 remain evidence, not permission to overwrite or retry.
+
+### Maintenance continuation after completed preservation
+
+PR #188 merged as `06d5bf6`, tree-identical to reviewed `3b7d89e`.
+Exact-head CI passed with 5,756 tests and 422 platform skips, all mutation
+jobs, runner qualification and all four Linux proof lanes. The connector
+review completed with no findings. The additional Windows full run had no
+reported failure at its last observation, but its final result was not
+recovered after the session runtime changed; it is not passing evidence.
+
+The authorized host session started from measured Off with zero checkpoints.
+On boot `dc1d75b8-48a7-440c-b8f6-e24e0e1fd07f`, the drift check passed and
+the historical controller at `59de73b` verified installed with zero differences.
+The specific reboot-anchor refusal, retained qualification checks and private
+account capture completed. D2 preservation copied all three fixed records,
+compared their bytes and printed its positive marker. GNU `cp --no-clobber`
+also emitted three unlisted portability warnings. The declared stop rule was
+applied; the VM was cleanly parked and confirmed Off with zero checkpoints.
+No LR2 overwrite, installation, store maintenance, vendor or model request
+followed. The preserved archive is not a failed copy or a fresh target.
+
+The local tests had established copying behavior but not the complete success
+diagnostic contract: they checked stdout and exit status without asserting
+stderr. The additive continuation uses read-only comparisons rather than
+repeating either preservation write. Its accepting-path tests check both
+streams; broader auditing of earlier runbooks is tracked in #189. This does
+not introduce a warning allowlist, generic resume framework or altered runtime
+authority. Frozen procedure bytes and the controller/source pins stay fixed.
+
+Independent review found one introduced output-contract ambiguity: C1's
+composition includes HS H2's `NO DRIFT` before the capture marker, whereas
+the first draft described marker-only stdout without scoping that statement
+to the replacement block. The correction distinguishes the two outputs and
+tests their composition. Review did not require private modes on individual
+archive members: the original `cp -p` preserves source modes, while the
+archive directory is private. Nor does equality prove independently hashed
+historical authenticity; that limit is stated, and fresh LR2 remains required.
+
+The focused continuation/session run passed 160 tests, including 52 new
+continuation cases, and persisted its JUnit result. Removing either retained
+seal equality or archive/source equality made the corresponding changed-byte
+case fail by assertion, not error; both probes were restored. The narrow
+review of the output-contract correction found no further defect. These are
+portable command proofs, not evidence of a resumed host session.
