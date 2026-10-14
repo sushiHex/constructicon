@@ -29,6 +29,8 @@ from constructicon.core.control import (
     ApprovalCommandResult,
     AuthenticatedActor,
     CancellationResult,
+    CapabilityAcquisitionPair,
+    CapabilityDisposalResult,
     ChannelAckResult,
     ChannelMessagePage,
     ChannelMessageSummary,
@@ -491,6 +493,16 @@ class ControlPlane:
             proposal=proposal,
             inputs=inputs,
             idempotency_key=idempotency_key,
+        )
+
+    @_facade_mutation(ADMIN_SCOPE)
+    async def runs_dispose_capabilities(
+        self, actor: AuthenticatedActor, *, run_id: RunId,
+        pairs: Sequence[CapabilityAcquisitionPair | Mapping[str, object]], reason: str,
+        idempotency_key: str,
+    ) -> CapabilityDisposalResult | ControlRejected:
+        return await self._commands.runs_dispose_capabilities(
+            actor, run_id=run_id, pairs=pairs, reason=reason, idempotency_key=idempotency_key,
         )
 
     @_facade_mutation(OPERATE_SCOPE)

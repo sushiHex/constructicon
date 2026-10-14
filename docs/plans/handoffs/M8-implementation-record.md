@@ -5546,3 +5546,128 @@ privacy remain obligations of the separate administrative command slice.
 Accounting alone never calls a provider, releases a physical guard, clears
 RunHost deferral or proves cleanup. Issue #179 remains open for that command
 and its transaction, replay, receipt and integration proofs.
+
+### #179 — administrative capability disposal (ADR 0022, slice 3)
+
+The [state review](ADR0022-disposal-state-review.md) precedes implementation
+and separates admission, command ownership, atomic domain application and
+terminal recording. Supersession is an explicit store outcome after a positive
+epoch/event comparison, not an interpretation of an absent receipt. Historical
+receipt replay comes first. The command leaves physical authority and RunHost
+deferral unchanged; its only domain mutation is the exact administrative
+accounting batch and its evidence.
+
+Schema 8 was released by the provenance slice, so the new receipt relationship
+advances persistence to schema 9 rather than changing what an existing version
+means. The schema-8 fixture was emitted by the actual writer at `4730981` and
+independently reproduced byte-for-byte. It retains both migrated history and a
+schema-8-created run. Migration preserves the original eras, witnesses and
+events; no historical loss is reclassified as disposal.
+
+Implementation checks exposed three boundary mistakes before publication.
+First, receipt validation could expand an attacker-sized event range before
+checking the batch bound. The extent must match the bounded pair count before
+range construction; the regression observes that no expansion occurs on the
+refusing path. Second, exact positive acquisition epochs are not limited by the
+request contract to SQLite integers. An out-of-range selector now produces the
+ordinary positively checked missing-pair observation rather than a binding
+overflow; the contract was not silently tightened. Third, selected absence
+must check independent retained evidence even when the selected pair belonged
+to another run. A surviving acquisition event cannot become a missing-pair
+refusal merely because its row was erased.
+
+The permitting path also exposed a staged-transaction distinction: terminal
+transition allocates its next event before projecting capabilities. A receipt
+reader requiring a complete external event extent at that point rejected a
+lawful terminal transition after disposal. Shared point proof establishes the
+immutable world, era and floor inventory; the external accounting wrapper
+additionally establishes the complete committed extent. This is not a
+validation-bypass flag. A permitting terminal-transition regression covers the
+intermediate state.
+
+A 100-pair accepting accounting test initially observed 302 whole acquisition
+table reads. One owned-read proof context now reuses canonical histories and
+receipts through run projection, latest audit and pair attribution; the same
+test observes one acquisition and one legacy-history prefetch. Standalone
+receipt reads still invoke the same canonical projector. No proof is retained
+across a writer or an await, and global prefetch remains linear in retained
+history rather than an indexed-cost guarantee.
+
+Independent API and official in-memory MCP tests exercised the accepting path,
+all three command commit seams, later lawful worker handoff, immutable
+supersession after comparison/release, complete per-pair refusals and private
+command authorization. Recursive READ-only walks and equal-public-facts worlds
+with different private reasons assert identical public records and reference
+hashes. The tests exposed a response constructor mismatch, strict JSON replay
+decoding mismatch and missing public MCP receipt resource; these were fixed
+before a publication claim. Exact-head gate, complete mutation inventory,
+adversarial review and remaining integration evidence belong to the PR, not to
+an inference from these focused passing tests.
+
+The orchestrator independently reproduced a fourth introduced proof gap:
+after domain commit but before command completion, deleting both the plan and
+its seal let direct command lookup return `prepared` with no plan, despite the
+surviving receipt. The command reader's unplanned early return now follows the
+canonical receipt check. The same reproduction then refused with
+`JournalDamaged`; the damage matrix includes direct command reads and paired
+plan/seal erasure. Absence of a plan cannot overrule positive domain evidence.
+
+An independent integration pass executed twelve host/restart cases with no
+skips. Actual ControlPlane, RunHost and walker paths preserve cleanup-failure
+deferral, distinguish stale queued intent from ordinary recovery, restore
+checkpoints, observe retained cancellation and refuse terminalization while an
+unnamed active acquisition remains. Disposal/replay leave the fake provider's
+acquire/close/reconcile ledger unchanged; a retained custody guard still refuses
+a fresh acquisition. This is portable provider-double evidence, not a native
+containment or store-unlock measurement. Four child-interpreter crash cases
+cover the three successful command seams and comparison-before-refusal,
+including later worker claim/release and exact response replay after restart.
+The queued-intent test's first failure was a fixture assumption: it forbade
+ordinary recovery after correctly dropping the stale explicit intent. Its
+assertions now distinguish both decisions instead of treating recovery as
+evidence that the stale intent survived.
+
+The independent Astra authority review ran 96 focused tests and reproduced two
+introduced findings. Removing a command and its own phase seals still left
+disposal evidence, but the missing-command projector omitted that dependency
+and allowed reclaiming the same identity. Both the private relationship and
+public audit now independently refuse that absence, using base facts rather
+than recursively projecting a receipt whose command is missing. The second
+finding was diagnostic: `not_active` conflated closed, opaque-lost and disposed
+rows. Per-pair observations now distinguish those states and carry the public
+receipt only when positively established. Run-level faults remain separate.
+Tests assert each distinction, unchanged refusal facts and no replacement
+command claim.
+
+The review rejected four proposed concerns after source tracing: historical
+command epochs, point proof during a staged terminal event, lawful historical
+lost-to-closed compatibility and advancing the already-released schema 8 to 9.
+Those are accepted design properties, not guards to remove. Follow-up evidence
+for the two fixes is recorded separately from the review of their prior head.
+
+The narrow follow-up reran the original deletion probes and fifteen targeted
+regressions. Both command lookup and reclaim now refuse, without recreating a
+row, when either ownership link survives. Diagnostic distinctions and the
+plan-erasure refusal also passed. Missing-command audit proof streams base
+sealed events, avoiding receipt recursion and whole-audit-list allocation;
+its SQL/CPU work still grows with retained disposal history. No indexed-cost
+claim is made for that independent absence proof.
+
+The connector review found one further introduced absence error: deleting the
+private relationship and coherently replacing the expected audit with an
+unrelated event bypassed the planned-loss check. Receipt lookup, command lookup
+and rejection recording each reproduced the defect. An occupied event position
+is not disposal evidence. Each matching retained loss now requires canonical
+positive attribution regardless of that slot. This still permits a competing
+command's valid disposal, including a smaller winning batch whose audit occurs
+before the losing plan's expected audit position. The positive receipt validator
+is factored once below attribution; it cannot call the absence dispatcher.
+Refusing regressions and same-batch/subset competing-winner cases pin both sides,
+and a mutant removing the attribution check fails by assertion.
+
+The correction's permitting path exposed repeated proof work: a 100-pair
+losing point read reloaded whole acquisition histories 101 times. Each public
+receipt read now owns a fresh proof context when its caller supplies none.
+The regression observes one history prefetch and one audit index on each of
+two independent reads, proving both within-read reuse and no cross-read cache.
+Disabling that context fails the count assertion; it is not a mutant error.

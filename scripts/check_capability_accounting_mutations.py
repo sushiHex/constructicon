@@ -3,6 +3,7 @@
 from _mutations import run
 
 ACCOUNTING = "constructicon.substrate.journal._sqlite_accounting:capability_accounting_snapshot"
+HISTORIES = "constructicon.substrate.journal._sqlite_accounting:capability_lease_histories"
 QUERY = "constructicon.api._control_queries:_ControlQueries.runs_result"
 SNAPSHOT_TEST = "tests/substrate/journal/test_capability_accounting_snapshot.py::"
 API_TEST = "tests/api/test_capability_accounting_result.py::"
@@ -31,23 +32,23 @@ MUTANTS = (
     ),
     (
         "accounting reverse inventory includes transition events",
-        ACCOUNTING,
-        "for row in selected_events:",
-        "for row in ():",
+        HISTORIES,
+        "for row in [*seals, *event_rows]:",
+        "for row in seals:",
         SNAPSHOT_TEST + "test_snapshot_scoped_reverse_edges_refuse_missing_pair[LeaseTransition]",
     ),
     (
         "batch prefetch retains foreign events naming the selected pair",
-        ACCOUNTING,
+        HISTORIES,
         "for row in event_rows:\n        identity =",
-        "for row in selected_events:\n        identity =",
+        'for row in (row for row in event_rows if row["run_id"] == run_id):\n        identity =',
         SNAPSHOT_TEST + "test_snapshot_retains_exact_foreign_pair_contradictions[LeaseTransition]",
     ),
     (
         "accounting compares its complete committed migration inventory",
-        ACCOUNTING,
-        "validate_accounting_run(connection, run_id, histories, through_event_seq=cut)",
-        "pass  # missing legacy facts are not a complete empty inventory",
+        "constructicon.substrate.journal._sqlite_capability_provenance:validate_accounting_point",
+        "if accounting_inventory_hash(histories, era.floor) != era.inventory_hash:",
+        "if False:",
         SNAPSHOT_TEST + "test_snapshot_refuses_erased_eventless_history",
     ),
     (
@@ -81,8 +82,8 @@ MUTANTS = (
     (
         "a clean missing run is proved before unrelated history is materialized",
         ACCOUNTING,
-        "if projection is None:",
-        "if projection is None:\n"
+        "if candidate is None:",
+        "if candidate is None:\n"
         '        connection.execute("SELECT * FROM capability_leases").fetchall()',
         "tests/substrate/journal/test_accounting_missing_run.py::"
         "test_missing_accounting_run_does_not_materialize_unrelated_history",

@@ -122,7 +122,7 @@ def test_new_runs_co_commit_positive_creation_eras(tmp_path: Path) -> None:
     database = tmp_path / "creation-era.db"
     journal = SqliteJournal(database)
     create_test_run(journal, RUN)
-    assert SCHEMA_VERSION == 8
+    assert SCHEMA_VERSION == 9
     with sqlite3.connect(database) as connection:
         row = connection.execute("SELECT * FROM capability_accounting_eras").fetchone()
         assert row is not None
@@ -154,7 +154,8 @@ def test_current_workers_cannot_mint_lost_facts(
     journal.record_capability_lease(worker, acquisition)
     before = journal.run_head(RUN)
     assert before is not None
-    with pytest.raises(ContractViolation, match="lost"):
+    refusal = None
+    try:
         journal.transition_capability_lease(
             worker,
             lease_id=acquisition.lease_id,
@@ -163,6 +164,10 @@ def test_current_workers_cannot_mint_lost_facts(
             target="lost",
             disposition=disposition,
         )
+    except Exception as exc:
+        refusal = exc
+    assert isinstance(refusal, ContractViolation), refusal
+    assert "lost" in str(refusal)
     assert journal.capability_leases(RUN) == [acquisition]
     assert journal.run_head(RUN) == before
     # The refusal does not disable ordinary closure or creation evidence.
@@ -407,7 +412,7 @@ def test_empty_current_accounting_database_reopens(tmp_path: Path) -> None:
         assert connection.execute("SELECT COUNT(*) FROM capability_accounting_eras").fetchone() == (
             0,
         )
-        assert connection.execute("PRAGMA user_version").fetchone() == (8,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (9,)
 
 
 @pytest.mark.parametrize("populated", (False, True))

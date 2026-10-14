@@ -56,6 +56,7 @@ from constructicon.substrate.journal._sqlite_base import (
 )
 from constructicon.substrate.journal._sqlite_capability_provenance import (
     CapabilityLeaseHistory,
+    accounting_run_row,
     capability_run_world_row,
     require_accounting_absence,
     require_accounting_era,
@@ -73,6 +74,7 @@ from constructicon.substrate.journal._sqlite_effects import (
     stored_effect_request,
 )
 from constructicon.substrate.journal._sqlite_execution_facts import (
+    _stored_event_from_row_without_relationship,
     event_fact_hash,
     event_fact_key,
     seal_checkpoint,
@@ -189,6 +191,24 @@ class _SqliteExecutionMixin:
         *,
         created_at: datetime | None = None,
     ) -> JournalEvent:
+        self._insert_event_fact(conn, run_id, seq, kind, path, payload, created_at=created_at)
+        row = conn.execute(
+            "SELECT * FROM events WHERE run_id = ? AND seq = ?", (run_id, seq),
+        ).fetchone()
+        assert row is not None
+        return stored_event_from_row(conn, row)
+
+    def _insert_event_fact(
+        self,
+        conn: sqlite3.Connection,
+        run_id: RunId,
+        seq: int,
+        kind: str,
+        path: ExecutionPath | None,
+        payload: dict[str, Any] | None,
+        *,
+        created_at: datetime | None = None,
+    ) -> JournalEvent:
         observed_at = created_at if created_at is not None else self._now()
         conn.execute(
             "INSERT INTO events (run_id, seq, kind, path_json, payload, created_at)"
@@ -210,7 +230,7 @@ class _SqliteExecutionMixin:
             raise JournalDamaged(f"event {run_id!r}/{seq} disappeared before sealing")
         seal_event(conn, row)
         seal_resume_attempt_relationship(conn, row)
-        return stored_event_from_row(conn, row)
+        return _stored_event_from_row_without_relationship(conn, row)
 
     def claim_run(
         self,
@@ -780,17 +800,29 @@ class _SqliteExecutionMixin:
                 raise ContractViolation(
                     f"capability lease {lease_id!r} epoch {acquisition_epoch} is not recorded"
                 )
+            histories: list[CapabilityLeaseHistory] = []
             stored = _capability_lease_from_row(
                 row,
                 connection=conn,
                 expected_run_id=lease.run_id,
                 expected_lease_id=lease_id,
                 expected_acquisition_epoch=acquisition_epoch,
+                histories=histories,
             )
             if stored.state == target and stored.disposition == disposition:
                 return  # idempotent at-target: crash-interrupted transition re-runs
             if target == "lost":
                 raise ContractViolation("worker capability writes cannot mint lost accounting")
+            if stored.state == "lost":
+                from constructicon.substrate.journal._sqlite_capability_disposal import (
+                    disposal_receipt_at_cut,
+                )
+                history = histories[0]
+                cut = accounting_run_row(conn, stored.run_id)["next_event_seq"]
+                if disposal_receipt_at_cut(conn, history, cut) is not None:
+                    raise ContractViolation(
+                        "worker cannot change an administratively disposed pair",
+                    )
             if stored.state == "lost" and target == "active":
                 raise ContractViolation(
                     "worker capability writes cannot reactivate lost accounting"
@@ -1454,12 +1486,17 @@ def _capability_lease_row(
 
     _register_lease_identity_functions(connection)
     identity = _lease_event_identity(lease_id, acquisition_epoch)
+    # Request epochs are exact positive Python integers, not SQLite bindings.
+    # A decimal selector outside SQLite's INTEGER range can have no integer row,
+    # while independent JSON lifecycle proof still must be checked below.
+    sql_epoch = (acquisition_epoch if -(2 ** 63) <= acquisition_epoch < 2 ** 63
+                 else str(acquisition_epoch))
     rows = connection.execute(
         "SELECT * FROM capability_leases"
         " WHERE (lease_id = ? AND acquisition_epoch = ?)"
         " OR constructicon_lease_identity(lease_id, acquisition_epoch) = ?"
         " LIMIT 2",
-        (lease_id, acquisition_epoch, identity),
+        (lease_id, sql_epoch, identity),
     ).fetchall()
     if len(rows) > 1:
         raise JournalDamaged(
@@ -1476,7 +1513,7 @@ def _capability_lease_row(
     legacy = connection.execute(
         "SELECT 1 FROM legacy_capability_lease_seals"
         " WHERE lease_id = ? AND acquisition_epoch = ? LIMIT 1",
-        (lease_id, acquisition_epoch),
+        (lease_id, sql_epoch),
     ).fetchone()
     if lifecycle is not None or legacy is not None:
         raise JournalDamaged(
@@ -1554,7 +1591,7 @@ def _validate_capability_lease_history(
             " ORDER BY seq ASC",
             (*_LEASE_EVENT_KINDS, identity),
         ).fetchall()
-        events = [stored_event_from_row(connection, row) for row in rows]
+        events = [_stored_event_from_row_without_relationship(connection, row) for row in rows]
     else:
         events = list(prefetched_events)
     if legacy_seal is not None:
@@ -1685,6 +1722,27 @@ def _capability_lease_from_row(
     prefetched_events: tuple[JournalEvent, ...] | None = None,
     accounting_era: CapabilityAccountingEra | None = None,
 ) -> CapabilityLease:
+    history = _capability_lease_history_from_row(
+        row, connection=connection, expected_run_id=expected_run_id,
+        expected_lease_id=expected_lease_id, expected_acquisition_epoch=expected_acquisition_epoch,
+        prefetched_events=prefetched_events,
+    )
+    if require_provenance:
+        require_capability_lost_provenance(connection, history, era=accounting_era)
+    if histories is not None:
+        histories.append(history)
+    return history.lease
+
+
+def _capability_lease_history_from_row(
+    row: sqlite3.Row,
+    *,
+    connection: sqlite3.Connection,
+    expected_run_id: RunId | None = None,
+    expected_lease_id: str | None = None,
+    expected_acquisition_epoch: int | None = None,
+    prefetched_events: tuple[JournalEvent, ...] | None = None,
+) -> CapabilityLeaseHistory:
     """Project one lease row without normalizing any durable relational fact."""
 
     identity = f"capability lease {row['lease_id']!r} epoch {row['acquisition_epoch']!r}"
@@ -1761,12 +1819,7 @@ def _capability_lease_from_row(
             updated_at_text=updated_at_text,
             prefetched_events=prefetched_events,
         )
-        history = CapabilityLeaseHistory(row, stored, events, legacy_seal)
-        if require_provenance:
-            require_capability_lost_provenance(connection, history, era=accounting_era)
-        if histories is not None:
-            histories.append(history)
-        return stored
+        return CapabilityLeaseHistory(row, stored, events, legacy_seal)
     except JournalDamaged:
         raise
     except (TypeError, ValueError, ValidationError) as exc:

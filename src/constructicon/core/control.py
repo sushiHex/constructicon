@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal, Protocol, Self, runtime_checkable
+from urllib.parse import quote
 
 from pydantic import (
     AwareDatetime,
@@ -26,7 +27,7 @@ from pydantic import (
 
 from constructicon.core.address import ExecutionPath, RunId, ScopePath
 from constructicon.core.channel import ChannelInteraction, ChannelMessage
-from constructicon.core.errors import JournalDamaged
+from constructicon.core.errors import ContractViolation, JournalDamaged
 from constructicon.core.graph import Graph, parse_graph_json
 from constructicon.core.identity import (
     ActorId,
@@ -1508,9 +1509,237 @@ class ControlStore(Protocol):
     def approval(self, approval_id: str) -> ApprovalRecord | None: ...
 
 
+class CapabilityAcquisitionPair(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    lease_id: str = Field(min_length=1, max_length=200)
+    acquisition_epoch: int = Field(gt=0)
+
+    @field_validator("lease_id")
+    @classmethod
+    def _scalar_identity(cls, value: str) -> str:
+        value.encode("utf-8", errors="strict")
+        return value
+
+
+class CapabilityDisposalRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    run_id: RunId
+    pairs: tuple[CapabilityAcquisitionPair, ...] = Field(min_length=1, max_length=100)
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def _administrative_text(cls, value: str) -> str:
+        if len(value.encode("utf-8", errors="strict")) > 4000:
+            raise ValueError("reason exceeds 4000 UTF-8 bytes")
+        if any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value):
+            raise ValueError("reason contains control characters")
+        return value
+
+    @field_validator("pairs")
+    @classmethod
+    def _canonical_pairs(
+        cls, value: tuple[CapabilityAcquisitionPair, ...],
+    ) -> tuple[CapabilityAcquisitionPair, ...]:
+        identities = [(pair.lease_id, pair.acquisition_epoch) for pair in value]
+        if len(set(identities)) != len(identities):
+            raise ValueError("disposal pairs must be unique")
+        return tuple(sorted(value, key=lambda pair: (pair.lease_id, pair.acquisition_epoch)))
+
+
+class CapabilityDisposalRow(BaseModel):
+    """Private complete baseline or a positively observed selector refusal."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+    pair: CapabilityAcquisitionPair
+    run_id: RunId | None
+    state: Literal["active", "closed", "lost"] | None
+    disposition: Literal["released", "discarded"] | None
+    fact: dict[str, JsonValue] | None
+    baseline_hash: Digest | None
+    disposal_receipt: DetailRef | None = None
+
+
+class CapabilityDisposalSnapshot(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+    run: RunRecord | None
+    world_hash: Digest | None
+    owner_epoch: int | None = Field(ge=0)
+    event_seq: int | None = Field(ge=0)
+    rows: tuple[CapabilityDisposalRow, ...] = Field(min_length=1, max_length=100)
+
+
+class CapabilityDisposalPlan(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+    kind: Literal["capability_disposal"] = "capability_disposal"
+    command_id: str
+    actor: AuthenticatedActor
+    request_hash: Digest
+    run_id: RunId
+    manifest_hash: Digest
+    world_hash: Digest
+    owner_epoch: int = Field(ge=0)
+    baseline_event_seq: int = Field(ge=0)
+    reason: str
+    rows: tuple[CapabilityDisposalRow, ...] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def _admitted_baseline(self) -> Self:
+        request = CapabilityDisposalRequest(
+            run_id=self.run_id, pairs=tuple(row.pair for row in self.rows), reason=self.reason,
+        )
+        if request.pairs != tuple(row.pair for row in self.rows):
+            raise ValueError("disposal plan rows are not canonical")
+        if ADMIN_SCOPE not in self.actor.scopes:
+            raise ValueError("disposal plan requires ADMIN")
+        for row in self.rows:
+            if (row.run_id != self.run_id or row.state != "active" or row.disposition is not None
+                    or row.fact is None or row.baseline_hash is None or row.disposal_receipt):
+                raise ValueError("disposal plan contains an unadmitted acquisition")
+            if row.baseline_hash != digest("capability-disposal-baseline", 1, row.fact):
+                raise ValueError("disposal plan baseline hash does not bind its complete fact")
+        return self
+
+
+class CapabilityDisposalRecorded(BaseModel):
+    """Public receipt bytes contain no reason-bearing command or plan digest."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+    command_id: str
+    run_id: RunId
+    manifest_hash: Digest
+    owner_epoch: int = Field(ge=0)
+    before_event_seq: int = Field(ge=0)
+    audit_event_seq: int = Field(ge=1)
+    pairs: tuple[CapabilityAcquisitionPair, ...] = Field(min_length=1, max_length=100)
+    row_baseline_hashes: tuple[Digest, ...] = Field(min_length=1, max_length=100)
+    transition_event_seqs: tuple[int, ...] = Field(min_length=1, max_length=100)
+    physical_cleanup: Literal["unverified"] = "unverified"
+
+    @model_validator(mode="after")
+    def _complete_contiguous_batch(self) -> Self:
+        identities = [(pair.lease_id, pair.acquisition_epoch) for pair in self.pairs]
+        if identities != sorted(set(identities)):
+            raise ValueError("disposal receipt pairs must be canonical")
+        if len(self.row_baseline_hashes) != len(self.pairs):
+            raise ValueError("disposal receipt omits a row baseline")
+        if self.audit_event_seq - self.before_event_seq != len(self.pairs) + 1:
+            raise ValueError("disposal receipt extent does not match its bounded batch")
+        expected = tuple(self.before_event_seq + offset + 1 for offset in range(len(self.pairs)))
+        if self.transition_event_seqs != expected:
+            raise ValueError("disposal receipt does not bind its exact contiguous batch")
+        return self
+
+
+class CapabilityDisposalSuperseded(BaseModel):
+    """Positive store outcome after a validated irreversible baseline mismatch."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+    status: Literal["superseded"] = "superseded"
+
+
+def capability_disposal_superseded_rejection(plan: CapabilityDisposalPlan) -> ControlRejected:
+    """The terminal refusal is solely a function of the sealed baseline."""
+
+    return ControlRejected.one_fault(
+        ControlCode.REQUEST_INVALID, "capability disposal baseline was superseded",
+        "inspect the current run and submit a fresh command key",
+        {"run_id": str(plan.run_id), "owner_epoch": plan.owner_epoch,
+         "baseline_event_seq": plan.baseline_event_seq,
+         "pairs": [row.pair.model_dump(mode="json") for row in plan.rows]},
+    )
+
+
+def capability_disposal_reference(receipt: CapabilityDisposalRecorded) -> DetailRef:
+    """One public URI/hash vocabulary available to substrate accounting and API."""
+
+    public = receipt.model_dump(mode="json")
+    return DetailRef(
+        uri=(f"constructicon://runs/{quote(str(receipt.run_id), safe='')}"
+             f"/capability-disposals/{receipt.audit_event_seq}"),
+        digest=digest("detail", 1, public),
+    )
+
+
+class CapabilityDisposalResult(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+    schema_version: Literal[3] = 3
+    status: Literal["disposed"] = "disposed"
+    run_id: RunId
+    pairs: tuple[CapabilityAcquisitionPair, ...] = Field(min_length=1, max_length=100)
+    count: int = Field(ge=1, le=100)
+    command: CommandMeta
+    receipt: DetailRef
+    physical_cleanup: Literal["unverified"] = "unverified"
+
+    @model_validator(mode="after")
+    def _count_is_exact(self) -> Self:
+        if self.count != len(self.pairs):
+            raise ValueError("disposal result count does not describe its exact pairs")
+        return self
+
+
+def plan_capability_disposal(
+    command: CommandRecord, snapshot: CapabilityDisposalSnapshot,
+) -> CapabilityDisposalPlan:
+    request = CapabilityDisposalRequest.model_validate_json(canonical_json(command.request))
+    run = snapshot.run
+    if (command.operation != "runs_dispose_capabilities" or ADMIN_SCOPE not in command.actor.scopes
+            or run is None or run.run_id != request.run_id or run.status is not RunStatus.RUNNING
+            or run.owner_id is not None or run.lease_expires_at is not None
+            or snapshot.world_hash is None or snapshot.owner_epoch is None
+            or snapshot.event_seq is None):
+        raise ContractViolation("disposal command has no admitted ADMIN idle RUNNING baseline")
+    if tuple(row.pair for row in snapshot.rows) != request.pairs:
+        raise JournalDamaged("disposal snapshot contradicts requested pairs")
+    return CapabilityDisposalPlan(
+        command_id=command.command_id, actor=command.actor, request_hash=command.request_hash,
+        run_id=request.run_id, manifest_hash=run.manifest_hash, world_hash=snapshot.world_hash,
+        owner_epoch=snapshot.owner_epoch, baseline_event_seq=snapshot.event_seq,
+        reason=request.reason, rows=snapshot.rows,
+    )
+
+
+def validated_capability_disposal_command(command: CommandRecord) -> CapabilityDisposalPlan:
+    try:
+        raw = command.plan
+        if not isinstance(raw, dict) or set(raw) != {"schema_version", "plan"}:
+            raise ValueError("disposal command has no strict plan envelope")
+        if type(raw["schema_version"]) is not int or raw["schema_version"] != 1:
+            raise ValueError("disposal command has an unsupported plan envelope")
+        plan = CapabilityDisposalPlan.model_validate_json(canonical_json(raw["plan"]))
+        request = CapabilityDisposalRequest.model_validate_json(canonical_json(command.request))
+        if (canonical_json(raw["plan"]) != canonical_json(plan)
+                or canonical_json(command.request) != canonical_json(request)
+                or command.operation != "runs_dispose_capabilities"
+                or command.actor != plan.actor or command.command_id != plan.command_id
+                or command.request_hash != plan.request_hash
+                or command.request_hash != command_request_hash(request.model_dump(mode="json"))
+                or plan.run_id != request.run_id or plan.reason != request.reason
+                or tuple(row.pair for row in plan.rows) != request.pairs):
+            raise ValueError("disposal plan contradicts its immutable command request/actor")
+        return plan
+    except (TypeError, ValueError) as exc:
+        raise JournalDamaged("disposal command has no exact typed ADMIN plan") from exc
+
+
 @runtime_checkable
 class ControlPlaneStore(ControlStore, Protocol):
     """A control ledger co-located with the channel facts it must commit."""
+
+    def capability_disposal_snapshot(
+        self, run_id: RunId, pairs: tuple[CapabilityAcquisitionPair, ...],
+    ) -> CapabilityDisposalSnapshot: ...
+
+    def capability_disposal_apply(
+        self, claim: CommandClaim,
+    ) -> CapabilityDisposalRecorded | CapabilityDisposalSuperseded: ...
+
+    def capability_disposal_receipt(
+        self, command_id: str,
+    ) -> CapabilityDisposalRecorded | None: ...
 
     def capability_accounting_snapshot(
         self,

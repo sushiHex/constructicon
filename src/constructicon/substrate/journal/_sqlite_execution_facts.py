@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from typing import cast
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from constructicon.substrate.journal._sqlite_capability_disposal import DisposalReadProofs
 
 from pydantic import ValidationError
 
@@ -142,12 +145,46 @@ def seal_event(connection: sqlite3.Connection, row: sqlite3.Row) -> None:
 def stored_event_from_row(
     connection: sqlite3.Connection,
     row: sqlite3.Row,
+    *, disposal_proofs: DisposalReadProofs | None = None,
 ) -> JournalEvent:
     """Project one event beside its exact seal and attempt relationship."""
 
     event = _stored_event_from_row_without_relationship(connection, row)
     attempt = _validated_resume_attempt(connection, row, event=event)
     _require_resume_attempt_relationship(connection, event, attempt)
+    if connection.execute("PRAGMA user_version").fetchone()[0] >= 9:
+        from constructicon.substrate.journal._sqlite_capability_disposal import (
+            DISPOSAL_EVENT,
+            project_disposal_receipt,
+        )
+        if event.kind == DISPOSAL_EVENT:
+            if (not isinstance(event.payload, dict)
+                    or not isinstance(event.payload.get("command_id"), str)):
+                raise JournalDamaged("disposal event has no exact command identity")
+            receipt = project_disposal_receipt(
+                connection, event.payload["command_id"], proofs=disposal_proofs,
+            )
+            if (receipt is None or receipt.run_id != event.run_id
+                    or receipt.audit_event_seq != event.seq):
+                raise JournalDamaged("disposal event differs from its positive relationship")
+        elif (event.kind == "LeaseTransition" and isinstance(event.payload, dict)
+              and event.payload.get("to") == "lost"):
+            from constructicon.substrate.journal._sqlite_execution import (
+                _capability_lease_from_row,
+                _capability_lease_row,
+            )
+            lease_id = event.payload.get("lease_id")
+            epoch = event.payload.get("acquisition_epoch")
+            if not isinstance(lease_id, str) or type(epoch) is not int:
+                raise JournalDamaged("lost event has no exact acquisition identity")
+            lease_row = _capability_lease_row(
+                connection, lease_id=lease_id, acquisition_epoch=epoch,
+            )
+            if lease_row is None:
+                raise JournalDamaged("lost event has no retained acquisition")
+            _capability_lease_from_row(
+                lease_row, connection=connection, expected_run_id=event.run_id,
+            )
     return event
 
 

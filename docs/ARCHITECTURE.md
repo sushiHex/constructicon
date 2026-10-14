@@ -652,7 +652,7 @@ input hash and resolved version restores; the first miss resumes live.
 Reproduce starts a new run under a past run's exact manifest and inputs.
 
 One public `SqliteJournal` implements the separate L0 `Journal`,
-`RegistryStore`, and `ControlPlaneStore` contracts over one schema-8 WAL
+`RegistryStore`, and `ControlPlaneStore` contracts over one schema-9 WAL
 database. `ControlPlaneStore` extends the standalone `ControlStore` ledger with
 the transaction that must also own channel facts. Its private modules are named
 by enduring responsibility:
@@ -676,6 +676,7 @@ _sqlite_control          command transactions and approval application
 _sqlite_channels         messages, acknowledgements, provenance, bounded reads
 _sqlite_queries          bounded run/event projections
 _sqlite_accounting       coherent run/status and historical capability accounting
+_sqlite_capability_disposal  administrative receipt relationship and inventory
 ```
 
 This is implementation decomposition, not multiple stores.
@@ -730,9 +731,34 @@ outputs retain their existing read semantics; this is not a whole-result
 snapshot promise. The accounting reader prefetches retained lease facts once,
 then uses the canonical pair projection: it avoids repeated whole-journal
 identity queries, but still has linear global prefetch cost. Existing opaque
-legacy-event interpretation is unchanged. The administrative disposal command
-from [ADR 0022](adr/0022-operator-disposal-records-abandoned-capabilities.md)
-is a separate slice, not implemented by these reads.
+legacy-event interpretation is unchanged.
+
+`runs_dispose_capabilities` is an ADMIN command over 1–100 distinct exact
+acquisition pairs, not a cleanup operation. It admits an ownerless RUNNING run
+and active acquisitions from one coherent snapshot. Its sealed plan binds the
+run world, owner epoch, event extent and complete selected histories. The
+application transaction either records every selected acquisition as `lost`
+with no disposition, its contiguous transitions, one public audit and a private
+command/receipt relationship, or records none. It does not increment the run's
+owner epoch, contact a provider or release a physical guard. An expired but
+non-null worker owner still refuses admission.
+
+Replay proves the historical receipt before comparing current state. A
+positively advanced epoch or event extent yields a plan-derived supersession
+refusal; absence of a receipt alone is never that verdict. Public receipt and
+accounting hashes exclude the private reason and reason-bearing command/plan
+hashes. Disposal reports physical cleanup as `unverified`, never successful.
+Disposed acquisitions cannot subsequently close; opaque historical loss keeps
+its established compatibility law. RunHost deferrals and scheduling are not
+changed by disposal. See
+[ADR 0022](adr/0022-operator-disposal-records-abandoned-capabilities.md).
+
+Schema 9 introduces the disposal relationship without rewriting schema-8 eras
+or historical witnesses. Its migration validates the retained inventory and
+requires an empty disposal inventory before advancing the version atomically.
+Receipt, event, command and accounting readers share one relationship projector.
+A complete read may reuse its proven histories and receipts within that owned
+SQLite snapshot; no proof cache survives a writer or an `await`.
 
 Compatibility preserves exact writer bytes rather than normalizing them into
 today's shape. M1/M2 effect requests omit `run_id`, `manifest_hash`, and `mode`;

@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from pydantic import ValidationError
 
@@ -19,15 +19,18 @@ from constructicon.core.errors import ContractViolation, JournalDamaged
 from constructicon.core.identity import Digest, canonical_json, digest
 from constructicon.core.journal import JournalEvent
 from constructicon.core.manifest import CapabilityLease
+
+if TYPE_CHECKING:
+    from constructicon.substrate.journal._sqlite_capability_disposal import DisposalReadProofs
 from constructicon.substrate.journal._sqlite_base import (
     _durable_digest,
     _durable_sequence,
     _durable_text,
 )
 from constructicon.substrate.journal._sqlite_execution_facts import (
+    _stored_event_from_row_without_relationship,
     event_fact_hash,
     event_fact_key,
-    stored_event_from_row,
 )
 from constructicon.substrate.journal._sqlite_fact_seals import (
     durable_fact_hash,
@@ -305,7 +308,7 @@ def _lost_event_fact(connection: sqlite3.Connection, event: JournalEvent) -> Dig
         "SELECT * FROM events WHERE run_id = ? AND seq = ?",
         (event.run_id, event.seq),
     ).fetchone()
-    if row is None or stored_event_from_row(connection, row) != event:
+    if row is None or _stored_event_from_row_without_relationship(connection, row) != event:
         raise JournalDamaged("historical capability lost witness has no exact event")
     return durable_fact_hash(LOST_PRE_V8_FAMILY, {"event": str(event_fact_hash(row))})
 
@@ -389,11 +392,42 @@ def mint_migrated_capability_provenance(
                 )
 
 
+def require_historical_lost_event(
+    connection: sqlite3.Connection, history: CapabilityLeaseHistory,
+    event: JournalEvent, era: CapabilityAccountingEra,
+) -> None:
+    if (era.source != "schema7-migration" or event.run_id != history.lease.run_id
+            or event.seq > era.floor):
+        raise JournalDamaged("capability lost witness lies outside its historical floor")
+    require_durable_fact_seal(
+        connection, family=LOST_PRE_V8_FAMILY,
+        fact_key=event_fact_key(event.run_id, event.seq),
+        selector=canonical_json(_lost_evidence(history, event).model_dump(mode="json")),
+        fact_hash=_lost_event_fact(connection, event),
+    )
+
+
+def require_historical_initial_lost(
+    connection: sqlite3.Connection, history: CapabilityLeaseHistory,
+    era: CapabilityAccountingEra,
+) -> None:
+    if (era.source != "schema7-migration" or history.legacy is None
+            or history.legacy.state != "lost"):
+        raise JournalDamaged("initial capability loss has no exact historical era")
+    require_durable_fact_seal(
+        connection, family=INITIAL_LOST_PRE_V8_FAMILY,
+        fact_key=_initial_lost_key(history.lease.lease_id, history.lease.acquisition_epoch),
+        selector=canonical_json(_initial_evidence(history).model_dump(mode="json")),
+        fact_hash=_initial_lost_fact(history),
+    )
+
+
 def require_capability_lost_provenance(
     connection: sqlite3.Connection,
     history: CapabilityLeaseHistory,
     *,
     era: CapabilityAccountingEra | None = None,
+    proofs: DisposalReadProofs | None = None,
 ) -> int:
     lost_events = _lost_events(history)
     initial_lost = history.legacy is not None and history.legacy.state == "lost"
@@ -405,7 +439,7 @@ def require_capability_lost_provenance(
         raise JournalDamaged("capability point era crosses run identities")
     if not lost_events and not initial_lost and history.legacy is None:
         return 0
-    if era.source != "schema7-migration":
+    if history.legacy is not None and era.source != "schema7-migration":
         raise JournalDamaged(
             "capability lost facts have no historical migration era or disposal receipt"
         )
@@ -418,23 +452,15 @@ def require_capability_lost_provenance(
             "current capability event cannot imitate an opaque historical lease event"
         )
     for event in lost_events:
-        if event.run_id != history.lease.run_id or event.seq > era.floor:
-            raise JournalDamaged("capability lost witness lies outside its historical floor")
-        require_durable_fact_seal(
-            connection,
-            family=LOST_PRE_V8_FAMILY,
-            fact_key=event_fact_key(event.run_id, event.seq),
-            selector=canonical_json(_lost_evidence(history, event).model_dump(mode="json")),
-            fact_hash=_lost_event_fact(connection, event),
-        )
+        if era.source == "schema7-migration" and event.seq <= era.floor:
+            require_historical_lost_event(connection, history, event, era)
+        else:
+            from constructicon.substrate.journal._sqlite_capability_disposal import (
+                disposal_for_transition,
+            )
+            disposal_for_transition(connection, history, event, proofs=proofs)
     if initial_lost:
-        require_durable_fact_seal(
-            connection,
-            family=INITIAL_LOST_PRE_V8_FAMILY,
-            fact_key=_initial_lost_key(history.lease.lease_id, history.lease.acquisition_epoch),
-            selector=canonical_json(_initial_evidence(history).model_dump(mode="json")),
-            fact_hash=_initial_lost_fact(history),
-        )
+        require_historical_initial_lost(connection, history, era)
     return len(lost_events) + int(initial_lost)
 
 
@@ -446,13 +472,7 @@ def validate_accounting_run(
     through_event_seq: int | None = None,
 ) -> CapabilityAccountingEra:
     run = accounting_run_row(connection, run_id)
-    era = require_accounting_era(connection, run)
-    if any(history.lease.run_id != run_id for history in histories):
-        raise JournalDamaged("capability accounting inventory crosses run identities")
-    if accounting_inventory_hash(histories, era.floor) != era.inventory_hash:
-        raise JournalDamaged(
-            f"capability accounting inventory for run {run_id!r} changed at its floor"
-        )
+    era = validate_accounting_point(connection, run_id, histories)
     if through_event_seq is not None:
         cut = _durable_sequence(
             through_event_seq,
@@ -463,6 +483,23 @@ def validate_accounting_run(
             raise ContractViolation(
                 "capability accounting cut lies outside its proven floor/extent"
             )
+    return era
+
+
+def validate_accounting_point(
+    connection: sqlite3.Connection,
+    run_id: RunId,
+    histories: Sequence[CapabilityLeaseHistory],
+) -> CapabilityAccountingEra:
+    """Prove immutable world, era and floor inventory independently of staged extent."""
+
+    era = require_accounting_era(connection, capability_run_world_row(connection, run_id))
+    if any(history.lease.run_id != run_id for history in histories):
+        raise JournalDamaged("capability accounting inventory crosses run identities")
+    if accounting_inventory_hash(histories, era.floor) != era.inventory_hash:
+        raise JournalDamaged(
+            f"capability accounting inventory for run {run_id!r} changed at its floor"
+        )
     return era
 
 
@@ -478,8 +515,12 @@ def validate_capability_provenance_inventory(
     for members in histories.values():
         for history in members:
             require_capability_lost_provenance(connection, history)
+            era = require_accounting_era(
+                connection, capability_run_world_row(connection, history.lease.run_id),
+            )
             required[LOST_PRE_V8_FAMILY].update(
                 event_fact_key(event.run_id, event.seq) for event in _lost_events(history)
+                if era.source == "schema7-migration" and event.seq <= era.floor
             )
             if history.legacy is not None and history.legacy.state == "lost":
                 required[INITIAL_LOST_PRE_V8_FAMILY].add(
