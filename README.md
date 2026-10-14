@@ -186,7 +186,7 @@ from constructicon.core.control import (
     AuthenticatedActor,
     PromotionCommandResult,
     RegistrationCommandResult,
-    RunResultPreview,
+    RunResultPreviewV2,
     RunSubmission,
 )
 from constructicon.core.run import RunStatus
@@ -234,7 +234,7 @@ async def main() -> None:
         async with asyncio.timeout(30):
             while True:
                 result = control.runs_result(launcher, submitted.run_id)
-                assert isinstance(result, RunResultPreview)
+                assert isinstance(result, RunResultPreviewV2)
                 if result.status not in (RunStatus.PENDING, RunStatus.RUNNING):
                     break
                 await asyncio.sleep(0.05)

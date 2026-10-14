@@ -5480,3 +5480,69 @@ Issue #179 remains open for truthful result v2/detail accounting and the
 administrative disposal command, including transaction/replay and host
 integration proofs. This slice changes no public result, MCP tool, provider,
 RunHost or walker, and performs no credential, model or private-host operation.
+
+### #179 — coherent public capability accounting (ADR 0022, slice 2)
+
+The [state review](ADR0022-accounting-state-review.md) was reviewed before
+implementation. One operation-specific SQLite read returns canonical run
+status and capability accounting together. It reuses the existing pair/history
+projector and positive era law; no second store abstraction or scheduler was
+introduced. Result schema 2 publishes complete counts and a cut-pinned chunked
+public detail. The original unversioned decoder preserves its exact shape and
+does not synthesize zero accounting. Failure previews explicitly report either
+their 1,000-event scan bound or 20-item bound being exceeded.
+
+Initial test-first execution produced ten assertion failures, including a
+101-pair fixture that reached the completeness assertion. Permitting tests
+cover public summaries/details beyond 100 pairs, official in-memory MCP calls,
+multibyte chunking after closure/resume/reopen, and actual historical loss
+without a fabricated receipt. Refusals cover authorization before lookup,
+invalid version types, reverse event edges, foreign current pair events,
+erased eventless history, and cuts outside the positive era. A concurrent
+commit test positively observes the SQLite read transaction and preserves the
+earlier status/accounting snapshot. Written tests are not credited without
+execution; exact-head gate and inventory results belong to the implementation
+PR.
+
+An independent focused review found no introduced defect in these reads. It
+executed current reverse-edge tests and a historical fixture probe for the
+floor, unknown acquisition sequence and relocated seals. A later qualification
+is deliberately narrower than universal foreign-event refusal: the established
+legacy projector treats old unmarked events as opaque. An explicitly synthetic
+reader-admitted modification of the real schema-6 fixture proves both old and
+new readers preserve that law. Current exact-pair foreign events still refuse,
+and positive floor commitments still detect deletion. No new owner-validation
+law was silently applied to legacy bytes.
+
+On one local 101-pair fixture, the existing complete lease read executed 1,032
+SQL statements in 0.644 seconds; the new accounting read executed 332 in 0.038
+seconds. These are local measurements, not latency guarantees. The old path
+performed 101 identity-history scans; the new path performs one global
+lease-event prefetch. Raw global rows/seals/events remain linear in retained
+history, followed by canonical selected-pair proof. No indexed-cost claim or
+extra persistence structure is made.
+
+Full CI found one introduced compatibility miss: the executable README
+example still asserted the unversioned result type. Reproduction reached that
+exact assertion; the example now consumes result v2, while old-decoder fixtures
+remain unchanged. The README test also reports its child's stderr on failure
+instead of hiding it behind a subprocess wrapper exception. This is a client
+upgrade, not weakening the strict old response model.
+
+The connector review reproduced another introduced cost: an unknown run still
+materialized every capability row, legacy seal and lease event before returning
+its absence. The canonical run lookup now precedes an early absence branch
+with accounting-era proof and run-scoped existence probes. A query-trace test
+uses more than 100 unrelated acquisitions and retained legacy seals; it failed
+on the original three global materializations and passes after the change.
+Six independent orphan-fact cases still refuse, rather than converting missing
+rows into clean absence. The established global SQL orphan-integrity probe is
+unchanged; this removes the added Python materialization, not all global SQL
+cost or a claim of constant-time missing-run lookup.
+
+Public accounting hashes contain only the typed public payload, not a command
+request, plan or private reason. Disposal receipts and accepting-path reason
+privacy remain obligations of the separate administrative command slice.
+Accounting alone never calls a provider, releases a physical guard, clears
+RunHost deferral or proves cleanup. Issue #179 remains open for that command
+and its transaction, replay, receipt and integration proofs.

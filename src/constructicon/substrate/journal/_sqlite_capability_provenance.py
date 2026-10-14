@@ -66,39 +66,61 @@ class CapabilityLeaseHistory:
     legacy: LegacyLeaseSeal | None
 
 
+@dataclass(frozen=True)
+class CapabilityLifecycleAtCut:
+    state: str
+    disposition: object
+    updated_at: str
+    acquisition_event_seq: int | None
+    initial: object
+
+
+def capability_lifecycle_at_cut(
+    history: CapabilityLeaseHistory, cut: int,
+) -> CapabilityLifecycleAtCut | None:
+    """Replay the canonical chain, never inventing a legacy acquisition sequence."""
+
+    legacy = history.legacy
+    if legacy is None:
+        acquired = history.events[0]
+        if acquired.seq > cut:
+            return None
+        state, disposition, updated_at = "active", None, history.row["created_at"]
+        applicable = history.events[1:]
+        initial: object = {"event_seq": acquired.seq, "payload": acquired.payload}
+        acquisition_event_seq: int | None = acquired.seq
+    else:
+        state, disposition, updated_at = legacy.state, legacy.disposition, legacy.updated_at
+        applicable = tuple(
+            event for event in history.events
+            if isinstance(event.payload, dict) and "legacy_base_hash" in event.payload
+        )
+        initial = {
+            "base_hash": str(legacy.base_hash), "state": legacy.state,
+            "disposition": legacy.disposition, "updated_at": legacy.updated_at,
+        }
+        acquisition_event_seq = None
+    for event in applicable:
+        if event.seq <= cut:
+            assert isinstance(event.payload, dict)
+            state = str(event.payload["to"])
+            disposition = event.payload["disposition"]
+            updated_at = event.created_at.isoformat()
+    return CapabilityLifecycleAtCut(
+        state, disposition, updated_at, acquisition_event_seq, initial,
+    )
+
+
 def accounting_inventory_hash(histories: Sequence[CapabilityLeaseHistory], floor: int) -> Digest:
     inventory: list[dict[str, object]] = []
     for history in sorted(
         histories, key=lambda item: (item.lease.lease_id, item.lease.acquisition_epoch)
     ):
-        row, lease, legacy = history.row, history.lease, history.legacy
+        row, lease = history.row, history.lease
         events = history.events
-        if legacy is None:
-            acquired = events[0]
-            if acquired.seq > floor:
-                continue
-            state, disposition, updated_at = "active", None, row["created_at"]
-            applicable = events[1:]
-            initial: object = {"event_seq": acquired.seq, "payload": acquired.payload}
-        else:
-            state, disposition, updated_at = legacy.state, legacy.disposition, legacy.updated_at
-            applicable = tuple(
-                event
-                for event in events
-                if isinstance(event.payload, dict) and "legacy_base_hash" in event.payload
-            )
-            initial = {
-                "base_hash": str(legacy.base_hash),
-                "state": legacy.state,
-                "disposition": legacy.disposition,
-                "updated_at": legacy.updated_at,
-            }
-        for event in applicable:
-            if event.seq <= floor:
-                assert isinstance(event.payload, dict)
-                state = str(event.payload["to"])
-                disposition = event.payload["disposition"]
-                updated_at = event.created_at.isoformat()
+        lifecycle = capability_lifecycle_at_cut(history, floor)
+        if lifecycle is None:
+            continue
         inventory.append(
             {
                 "lease_id": lease.lease_id,
@@ -109,10 +131,10 @@ def accounting_inventory_hash(histories: Sequence[CapabilityLeaseHistory], floor
                 "lifetime": row["lifetime"],
                 "resource_ref": row["resource_ref"],
                 "created_at": row["created_at"],
-                "initial": initial,
-                "state": state,
-                "disposition": disposition,
-                "updated_at": updated_at,
+                "initial": lifecycle.initial,
+                "state": lifecycle.state,
+                "disposition": lifecycle.disposition,
+                "updated_at": lifecycle.updated_at,
                 "events": [
                     {
                         "seq": event.seq,
@@ -370,12 +392,17 @@ def mint_migrated_capability_provenance(
 def require_capability_lost_provenance(
     connection: sqlite3.Connection,
     history: CapabilityLeaseHistory,
+    *,
+    era: CapabilityAccountingEra | None = None,
 ) -> int:
     lost_events = _lost_events(history)
     initial_lost = history.legacy is not None and history.legacy.state == "lost"
-    era = require_accounting_era(
-        connection, capability_run_world_row(connection, history.lease.run_id),
-    )
+    if era is None:
+        era = require_accounting_era(
+            connection, capability_run_world_row(connection, history.lease.run_id),
+        )
+    if era.run_id != history.lease.run_id:
+        raise JournalDamaged("capability point era crosses run identities")
     if not lost_events and not initial_lost and history.legacy is None:
         return 0
     if era.source != "schema7-migration":

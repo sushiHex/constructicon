@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from constructicon.core.address import ExecutionPath, RunId
 from constructicon.core.channel import CHANNEL_SEND_EFFECT, ChannelSendIntent
+from constructicon.core.control import CapabilityAccountingEra
 from constructicon.core.effect import (
     Attestation,
     AttestationDraft,
@@ -1540,18 +1541,22 @@ def _validate_capability_lease_history(
     created_at: datetime,
     updated_at: datetime,
     updated_at_text: str,
+    prefetched_events: tuple[JournalEvent, ...] | None = None,
 ) -> tuple[JournalEvent, ...]:
     """Prove a lease row is the final state of its exact append-only event chain."""
 
-    _register_lease_identity_functions(connection)
-    identity = _lease_event_identity(lease.lease_id, lease.acquisition_epoch)
-    rows = connection.execute(
-        "SELECT * FROM events WHERE kind IN (?, ?)"
-        " AND constructicon_lease_event_identity(payload) = ?"
-        " ORDER BY seq ASC",
-        (*_LEASE_EVENT_KINDS, identity),
-    ).fetchall()
-    events = [stored_event_from_row(connection, row) for row in rows]
+    if prefetched_events is None:
+        _register_lease_identity_functions(connection)
+        identity = _lease_event_identity(lease.lease_id, lease.acquisition_epoch)
+        rows = connection.execute(
+            "SELECT * FROM events WHERE kind IN (?, ?)"
+            " AND constructicon_lease_event_identity(payload) = ?"
+            " ORDER BY seq ASC",
+            (*_LEASE_EVENT_KINDS, identity),
+        ).fetchall()
+        events = [stored_event_from_row(connection, row) for row in rows]
+    else:
+        events = list(prefetched_events)
     if legacy_seal is not None:
         legacy_state = legacy_seal.state
         legacy_disposition = legacy_seal.disposition
@@ -1677,6 +1682,8 @@ def _capability_lease_from_row(
     expected_acquisition_epoch: int | None = None,
     require_provenance: bool = True,
     histories: list[CapabilityLeaseHistory] | None = None,
+    prefetched_events: tuple[JournalEvent, ...] | None = None,
+    accounting_era: CapabilityAccountingEra | None = None,
 ) -> CapabilityLease:
     """Project one lease row without normalizing any durable relational fact."""
 
@@ -1752,10 +1759,11 @@ def _capability_lease_from_row(
             created_at=created_at,
             updated_at=updated_at,
             updated_at_text=updated_at_text,
+            prefetched_events=prefetched_events,
         )
         history = CapabilityLeaseHistory(row, stored, events, legacy_seal)
         if require_provenance:
-            require_capability_lost_provenance(connection, history)
+            require_capability_lost_provenance(connection, history, era=accounting_era)
         if histories is not None:
             histories.append(history)
         return stored

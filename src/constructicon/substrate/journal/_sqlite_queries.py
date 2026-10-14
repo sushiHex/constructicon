@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from constructicon.core.address import RunId
 from constructicon.core.channel import reply_message_id
 from constructicon.core.control import (
+    CapabilityAccountingSnapshot,
     CommandRecord,
     RunHead,
     RunOrigin,
@@ -36,6 +37,7 @@ from constructicon.core.run import (
     ParkedWait,
     RunStatus,
 )
+from constructicon.substrate.journal._sqlite_accounting import capability_accounting_snapshot
 from constructicon.substrate.journal._sqlite_approvals import (
     stored_approval_fact_from_row,
 )
@@ -112,6 +114,14 @@ def _lifecycle_event_row(
 
 
 class _SqliteQueriesMixin:
+    def capability_accounting_snapshot(
+        self, run_id: RunId, *, through_event_seq: int | None = None,
+    ) -> CapabilityAccountingSnapshot | None:
+        with self._read() as connection:
+            return capability_accounting_snapshot(
+                connection, run_id, observe=self._now, through_event_seq=through_event_seq,
+            )
+
     def run_record(self, run_id: RunId) -> RunRecord | None:
         with self._read() as connection:
             register_run_origin_guard(connection)

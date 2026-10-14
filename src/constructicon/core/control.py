@@ -24,7 +24,7 @@ from pydantic import (
     model_validator,
 )
 
-from constructicon.core.address import RunId, ScopePath
+from constructicon.core.address import ExecutionPath, RunId, ScopePath
 from constructicon.core.channel import ChannelInteraction, ChannelMessage
 from constructicon.core.errors import JournalDamaged
 from constructicon.core.graph import Graph, parse_graph_json
@@ -35,6 +35,7 @@ from constructicon.core.identity import (
     canonical_json,
     digest,
     json_value,
+    parse_json_value,
 )
 from constructicon.core.manifest import ExecutionManifest, validated_manifest_identity
 from constructicon.core.run import TERMINAL_EVENT_STATUSES, Liveness, RunStatus
@@ -1101,6 +1102,132 @@ class RunResultPreview(BaseModel):
     detail: DetailRef | None = None
 
 
+class CapabilityAccountingItem(BaseModel):
+    """Public acquisition identity and lifecycle at one positively supported cut."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    lease_id: str
+    acquisition_epoch: int = Field(gt=0)
+    binding_id: str
+    path: ExecutionPath
+    state: Literal["active", "closed", "lost"]
+    disposition: Literal["released", "discarded"] | None
+    acquisition_event_seq: int | None = Field(ge=1)
+    loss: Literal["opaque_lost", "disposed"] | None
+    physical_cleanup: Literal["unknown", "unverified"] | None
+    disposal_receipt: DetailRef | None
+
+    @model_validator(mode="after")
+    def _loss_provenance_is_exact(self) -> Self:
+        if self.state != "lost":
+            if self.loss is not None or self.physical_cleanup is not None or self.disposal_receipt:
+                raise ValueError("nonlost accounting cannot claim a loss receipt or cleanup result")
+        elif self.loss == "opaque_lost":
+            if self.physical_cleanup != "unknown" or self.disposal_receipt is not None:
+                raise ValueError(
+                    "opaque lost accounting has unknown cleanup and no disposal receipt"
+                )
+        elif self.loss == "disposed":
+            if self.physical_cleanup != "unverified" or self.disposal_receipt is None:
+                raise ValueError(
+                    "disposed accounting requires a public receipt and unverified cleanup"
+                )
+        else:
+            raise ValueError("lost accounting requires explicit provenance")
+        return self
+
+
+class CapabilityAccountingDetail(BaseModel):
+    """Only public bytes enter this immutable cut's content hash."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    run_id: RunId
+    through_event_seq: int = Field(ge=0)
+    items: tuple[CapabilityAccountingItem, ...]
+
+    @model_validator(mode="after")
+    def _members_are_canonical(self) -> Self:
+        identities = [(item.lease_id, item.acquisition_epoch) for item in self.items]
+        if identities != sorted(set(identities)):
+            raise ValueError("accounting identities must be unique and canonically ordered")
+        if any(item.acquisition_event_seq is not None
+               and item.acquisition_event_seq > self.through_event_seq for item in self.items):
+            raise ValueError("accounting contains an acquisition after its cut")
+        return self
+
+
+class CapabilityAccountingSnapshot(BaseModel):
+    """Internal co-located read: current run/status and selected public accounting."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    run: RunRecord
+    latest_event_seq: int = Field(ge=0)
+    detail: CapabilityAccountingDetail
+
+    @model_validator(mode="after")
+    def _one_run_and_extent(self) -> Self:
+        if self.run.run_id != self.detail.run_id:
+            raise ValueError("accounting snapshot crosses run identities")
+        if self.detail.through_event_seq > self.latest_event_seq:
+            raise ValueError("accounting snapshot cut exceeds its observed extent")
+        return self
+
+
+class CapabilityAccountingSummary(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    active_count: int = Field(ge=0)
+    disposed_count: int = Field(ge=0)
+    opaque_lost_count: int = Field(ge=0)
+    lost_count: int = Field(ge=0)
+    through_event_seq: int = Field(ge=0)
+    detail: DetailRef
+
+    @model_validator(mode="after")
+    def _loss_counts_add_up(self) -> Self:
+        if self.lost_count != self.disposed_count + self.opaque_lost_count:
+            raise ValueError("lost_count must equal disposed_count plus opaque_lost_count")
+        return self
+
+
+class RunResultPreviewV2(BaseModel):
+    """Versioned live result; global control schema 3 is unchanged."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    result_schema_version: Literal[2]
+    run_id: RunId
+    status: RunStatus
+    outputs: dict[str, JsonValue] = Field(default_factory=dict)
+    failures: dict[str, str] = Field(default_factory=dict, max_length=20)
+    detail: DetailRef | None = None
+    capability_accounting: CapabilityAccountingSummary
+    failures_partial: bool
+
+    @field_validator("result_schema_version", mode="before")
+    @classmethod
+    def _exact_result_version(cls, value: object) -> object:
+        if type(value) is not int or value != 2:
+            raise ValueError("result_schema_version must be exact integer 2")
+        return value
+
+
+def parse_run_result_preview(raw: str | JsonValue) -> RunResultPreview | RunResultPreviewV2:
+    """Missing version names the old shape; it never fabricates zero accounting."""
+
+    value = parse_json_value(raw) if isinstance(raw, str) else raw
+    if not isinstance(value, dict):
+        raise ValueError("run result preview must be an object")
+    if "result_schema_version" not in value:
+        return RunResultPreview.model_validate_json(canonical_json(value))
+    if type(value["result_schema_version"]) is not int or value["result_schema_version"] != 2:
+        raise ValueError("unknown or inexact run result preview version")
+    return RunResultPreviewV2.model_validate_json(canonical_json(value))
+
+
 class VersionSummary(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -1384,6 +1511,15 @@ class ControlStore(Protocol):
 @runtime_checkable
 class ControlPlaneStore(ControlStore, Protocol):
     """A control ledger co-located with the channel facts it must commit."""
+
+    def capability_accounting_snapshot(
+        self,
+        run_id: RunId,
+        *,
+        through_event_seq: int | None = None,
+    ) -> CapabilityAccountingSnapshot | None:
+        """One coherent run/status/accounting read, with an optional supported cut."""
+        ...
 
     def store_approval_exchange(
         self,

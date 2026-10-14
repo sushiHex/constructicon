@@ -62,8 +62,8 @@ MUTANTS = (
     ),
     (
         "later acquisitions cannot rewrite a migration inventory",
-        PROVENANCE + "accounting_inventory_hash",
-        "if acquired.seq > floor:",
+        PROVENANCE + "capability_lifecycle_at_cut",
+        "if acquired.seq > cut:",
         "if False:",
         MIGRATION_TESTS + "test_migration_floor_digest_survives_later_closure_and_new_acquisition",
     ),
@@ -133,16 +133,10 @@ MUTANTS = (
     (
         "ordinary active point paths cannot skip positive era evidence",
         PROVENANCE + "require_capability_lost_provenance",
-        "    era = require_accounting_era(\n"
-        "        connection, capability_run_world_row(connection, history.lease.run_id),\n"
-        "    )\n"
-        "    if not lost_events and not initial_lost and history.legacy is None:\n"
-        "        return 0",
+        "    if era is None:",
         "    if not lost_events and not initial_lost and history.legacy is None:\n"
         "        return 0\n"
-        "    era = require_accounting_era(\n"
-        "        connection, capability_run_world_row(connection, history.lease.run_id),\n"
-        "    )",
+        "    if era is None:",
         JOURNAL_TESTS + "test_current_active_capability_paths_require_positive_era[close]",
     ),
     (
