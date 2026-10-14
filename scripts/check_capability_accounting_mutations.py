@@ -78,6 +78,15 @@ MUTANTS = (
         "RunId(parts[0]), through_event_seq=None,",
         API_TEST + "test_accounting_chunks_keep_old_cut_after_close_resume_and_reopen",
     ),
+    (
+        "a clean missing run is proved before unrelated history is materialized",
+        ACCOUNTING,
+        "if projection is None:",
+        "if projection is None:\n"
+        '        connection.execute("SELECT * FROM capability_leases").fetchall()',
+        "tests/substrate/journal/test_accounting_missing_run.py::"
+        "test_missing_accounting_run_does_not_materialize_unrelated_history",
+    ),
 )
 
 

@@ -5529,6 +5529,17 @@ remain unchanged. The README test also reports its child's stderr on failure
 instead of hiding it behind a subprocess wrapper exception. This is a client
 upgrade, not weakening the strict old response model.
 
+The connector review reproduced another introduced cost: an unknown run still
+materialized every capability row, legacy seal and lease event before returning
+its absence. The canonical run lookup now precedes an early absence branch
+with accounting-era proof and run-scoped existence probes. A query-trace test
+uses more than 100 unrelated acquisitions and retained legacy seals; it failed
+on the original three global materializations and passes after the change.
+Six independent orphan-fact cases still refuse, rather than converting missing
+rows into clean absence. The established global SQL orphan-integrity probe is
+unchanged; this removes the added Python materialization, not all global SQL
+cost or a claim of constant-time missing-run lookup.
+
 Public accounting hashes contain only the typed public payload, not a command
 request, plan or private reason. Disposal receipts and accepting-path reason
 privacy remain obligations of the separate administrative command slice.

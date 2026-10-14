@@ -47,6 +47,21 @@ def capability_accounting_snapshot(
     """
 
     projection = run_projection_for_id(connection, run_id, observe=observe)
+    if projection is None:
+        require_accounting_absence(connection, run_id)
+        orphan = connection.execute(
+            "SELECT 1 FROM capability_leases WHERE run_id = ? LIMIT 1", (run_id,),
+        ).fetchone()
+        legacy_orphan = connection.execute(
+            "SELECT 1 FROM legacy_capability_lease_seals WHERE run_id = ? LIMIT 1", (run_id,),
+        ).fetchone()
+        event_orphan = connection.execute(
+            "SELECT 1 FROM events WHERE run_id = ? AND kind IN (?, ?) LIMIT 1",
+            (run_id, *_LEASE_EVENT_KINDS),
+        ).fetchone()
+        if orphan is not None or legacy_orphan is not None or event_orphan is not None:
+            raise JournalDamaged("capability accounting facts have no retained run")
+        return None
     rows = connection.execute("SELECT * FROM capability_leases").fetchall()
     seals = connection.execute("SELECT * FROM legacy_capability_lease_seals").fetchall()
     event_rows = connection.execute(
@@ -56,11 +71,6 @@ def capability_accounting_snapshot(
     selected = [row for row in rows if row["run_id"] == run_id]
     selected_events = [row for row in event_rows if row["run_id"] == run_id]
     selected_seals = [row for row in seals if row["run_id"] == run_id]
-    if projection is None:
-        require_accounting_absence(connection, run_id)
-        if selected or selected_events or selected_seals:
-            raise JournalDamaged("capability accounting facts have no retained run")
-        return None
     record, _world, latest, _kind = projection
     latest_seq = latest or 0
     cut = latest_seq if through_event_seq is None else through_event_seq
