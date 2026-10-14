@@ -31,9 +31,11 @@ async def test_private_creation_mask_reaches_only_the_posix_child(
     spawn = asyncio.create_subprocess_exec
 
     async def child(*args, **kwargs):
-        observed.append(kwargs.pop("umask"))
+        observed.append(kwargs["umask"])
         # Substitute only the POSIX-only spawn option on Windows; actual Git
         # pumping, result and teardown still execute on every platform.
+        if os.name != "posix":
+            kwargs.pop("umask")
         return await spawn(*args, **kwargs)
 
     monkeypatch.setattr(process_module, "os", SimpleNamespace(

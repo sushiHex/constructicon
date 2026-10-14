@@ -5991,9 +5991,9 @@ production metadata checks were not weakened. Independent scan review also
 caught `os.walk`'s silent error default: a complete scan now requires an
 affirmative error-free walk, and failure emits only an incomplete verdict.
 
-Maintenance preparation now follows the already-established N5 fixture
-pattern: an explicit child-only `077` creation mask, plus the pinned
-`core.sharedRepository = 0600` repository setting for later Git writes.
+Maintenance preparation follows the already-established N5 fixture
+pattern: an explicit child-only `077` creation mask, `git init --shared=0600`,
+and the pinned `core.sharedRepository = 0600` setting for later Git writes.
 Other trusted Git callers keep their existing default. No process-global
 umask is changed across an await, no existing directory is repaired, and the
 custody guard is unchanged. Old prepared configuration is not silently
@@ -6016,3 +6016,14 @@ metadata and an ordinary parent-created file retaining `0664`, so a global
 mask change cannot masquerade as the fix. Portable tests check forwarding,
 diagnostic stages, publication bounds and legacy refusal bytes; Windows skips
 do not establish the POSIX proof.
+
+The first native run on `f63c599` refuted the initial fix: preparation returned
+success but the new accepting test found `authority.git/objects` at `0775`,
+before preflight ran (54 passed, one failed in the host assembly step).
+That revision pinned the child mask and retained config but omitted N5's
+explicit init-time shared mode. The correction adds that creation-time policy
+without normalizing retained files. A direct child-mask observation separates
+the process-boundary check from the repository's resulting permissions;
+the first failure alone does not prove which mechanism defeated the mask.
+The superseded local full-suite run was deliberately stopped, not counted as
+a pass. Exact-head native evidence remains required after the correction.

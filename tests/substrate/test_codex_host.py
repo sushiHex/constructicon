@@ -472,10 +472,18 @@ async def observed(self, command, **kwargs):
 LinuxLauncher.run = observed
 command = sys.argv[1]
 root = Path(sys.argv[sys.argv.index("--root") + 1])
+if command == "prepare":
+    import asyncio
+    from constructicon.api._maintenance_source import git
+    mask = asyncio.run(git(root.parent / "reviewed-source.git", "-c",
+                          "alias.creation-mask=!umask", "creation-mask"))
+    assert int(mask.strip(), 8) == 0o077, mask
 sys.argv = ["constructicon.api.maintenance_entry", *sys.argv[1:]]
 runpy.run_module("constructicon.api.maintenance_entry", run_name="__main__")
 assert len(calls) == (1 if command == "preflight" else 0)
 if command == "preflight":
+    import asyncio
+    from constructicon.api._maintenance_source import inspect_source
     from constructicon.substrate.git.authority import GitAuthority
     authority = GitAuthority(root / "authority.git", root / "authority-workspaces")
     base = authority.resolve_ref("refs/heads/maintenance")
@@ -483,6 +491,7 @@ if command == "preflight":
     for path in (root / "authority.git").rglob("*"):
         assert path.stat().st_uid == os.getuid()
         assert not (path.stat().st_mode & 0o022), path.relative_to(root)
+    assert asyncio.run(inspect_source(root)).base_commit == base
     probe = root / "workspace-acquisitions" / "parent-mode"
     probe.write_bytes(b"parent")
     assert stat.S_IMODE(probe.stat().st_mode) == 0o664
@@ -500,7 +509,7 @@ if command == "preflight":
         assert pin.base_commit == base and pin.sources == source_module.SOURCE_HASHES
         # This assertion fails on the previous code's 0775/0664 Git metadata,
         # before a refusal could be mistaken for a successful preflight.
-        for path in (root / "authority.git").rglob("*"):
+        for path in (root, *root.rglob("*")):
             assert path.stat().st_uid == os.getuid()
             assert path.stat().st_mode & 0o022 == 0, path.relative_to(root)
         preview = subprocess.run(

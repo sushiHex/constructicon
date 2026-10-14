@@ -120,7 +120,7 @@ async def prepare_source(
     for name in ("authority.git", "authority-workspaces", "workspace-acquisitions",
                  "gate-acquisitions"):
         (root / name).mkdir(mode=0o700)
-    await git(root / "authority.git", "init", "--bare", "--template=",
+    await git(root / "authority.git", "init", "--bare", "--shared=0600", "--template=",
               "--object-format=sha1", ".")
     (root / "authority.git/hooks").mkdir(mode=0o700)
     (root / "authority.git/config").unlink()

@@ -21,8 +21,10 @@ The installed maintenance preflight correctly refused group-writable Git
 metadata created during preparation. Read-only inspection confirmed that
 source-custody failure while the sealed qualification and installed artifact
 facts agreed; the suspected launch-revision mismatch was not observed.
-Preparation now reuses N5's child-local private mask and fixed private Git
-configuration. Existing evidence is not chmodded, repaired or reused, and
+Preparation reuses N5's child-local private mask, explicit init-time shared
+mode and fixed private Git configuration. The first native accepting test
+refuted the incomplete mask/config-only fix before preflight ran. Existing
+evidence is not chmodded, repaired or reused, and
 the custody guard is unchanged.
 
 Preflight failures publish a finite actual stage without private exception

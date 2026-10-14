@@ -65,6 +65,13 @@ MUTANTS = (
         "tests/api/test_maintenance_entry.py::"
         "test_cli_preflight_failure_publishes_only_actual_bounded_stage[unknown]",
     ),
+    (
+        "maintenance init applies private policy before creating Git metadata",
+        "constructicon.api._maintenance_source:prepare_source",
+        '"--shared=0600", ', "",
+        "tests/api/test_maintenance_entry.py::"
+        "test_prepare_accepts_only_new_reviewed_bundle_and_affirms_consumer",
+    ),
     *(
         (
             "maintenance entry binds " + label,

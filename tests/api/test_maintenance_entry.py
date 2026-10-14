@@ -303,13 +303,37 @@ async def test_prepare_accepts_only_new_reviewed_bundle_and_affirms_consumer(tmp
         assert path.resolve().is_relative_to(tmp_path.resolve())
 
     monkeypatch.setattr(source_module, "private_root", portable_custody)
+    initializations = []
+    original_git = source_module.git
+
+    async def observed_git(repo, *args):
+        if repo == root / "authority.git" and args[:1] == ("init",):
+            initializations.append(args)
+        return await original_git(repo, *args)
+
+    monkeypatch.setattr(source_module, "git", observed_git)
     pin = source_module.SourcePin.model_validate(await entry._command(Namespace(
         command="prepare", root=root, bundle=bundle,
         bundle_sha256=hashlib.sha256(bundle.read_bytes()).hexdigest(),
         base=base, target_ref="refs/heads/maintenance")))
+    assert initializations == [(
+        "init", "--bare", "--shared=0600", "--template=", "--object-format=sha1", ".",
+    )]
     assert (root / "authority.git/config").read_bytes() == source_module.CONFIG
     assert await source_module.inspect_source(root) == pin
     assert pin.sources == source_module.SOURCE_HASHES
+    old_config = source_module.CONFIG.replace(b"\tsharedRepository = 0600\n", b"")
+    (root / "authority.git/config").write_bytes(old_config)
+    old_pin = pin.model_copy(update={
+        "config_sha256": hashlib.sha256(old_config).hexdigest(),
+    })
+    (root / "source-pin.json").write_bytes(old_pin.model_dump_json().encode())
+    with pytest.raises(ContractViolation) as legacy:
+        await source_module.inspect_source(root)
+    assert str(legacy.value) == "maintenance authority configuration differs"
+    (root / "authority.git/config").write_bytes(source_module.CONFIG)
+    (root / "source-pin.json").write_bytes(pin.model_dump_json().encode())
+    assert await source_module.inspect_source(root) == pin
     with pytest.raises(ContractViolation, match="fresh"):
         await source_module.prepare_source(root, bundle, bundle_sha256=pin.bundle_sha256,
             base_commit=base, target_ref=pin.target_ref)
