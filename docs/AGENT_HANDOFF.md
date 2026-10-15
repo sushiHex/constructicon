@@ -46,6 +46,15 @@ unchanged. A real-Git regression admits that source and still refuses an
 unrelated repository under the same exception. Native completion requires the
 corrected head's physical lane.
 
+## #186 — current diagnostic source is not a historical helper pin
+
+The bounded reader recognizes the five fixed capture-comparison messages while
+keeping the old grouped refusal ambiguous. Unknown text still cannot escape
+the closed category set. A successor uses this reader from its freshly verified
+controller; the old procedure and helper pins remain historical bytes, not a
+license to inject new code under an old digest. No host result or explanation
+of the g10 failure follows from this source change.
+
 ## #198 — reviewed helper bytes survive Windows checkout
 
 The two byte-pinned maintenance helpers require LF through exact-path Git
