@@ -6207,3 +6207,14 @@ isolation error: undoing the output-bound patch also undid the Windows
 timestamp substitution, allowing an unrelated earlier refusal. A nested patch
 context now preserves the platform seam; the two helper test files passed
 57 tests with seven skips after that correction. No production bound changed.
+
+The connector review identified an introduced test-fixture defect: accepting
+capture fixtures exercised the real positive-UID requirement on root runners,
+so they refused before reaching their intended assertions. The accepting
+fixtures now share an explicit platform substitution; on UID 0 it removes only
+the positive-UID prerequisite, preserving actual owner and write-mode checks.
+The production helper still refuses root, with an independent refusing test.
+Normal non-root Linux runs retain the real custody predicate. CI additionally
+runs both helper suites under an affirmatively checked UID 0; its result must
+be observed on the reviewed head, not inferred from the Windows tests. Helper
+and host-procedure bytes are unchanged by this correction.

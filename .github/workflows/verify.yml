@@ -14,6 +14,14 @@ jobs:
         with:
           python-version: "3.11"
       - run: uv sync --dev
+      - name: Check maintenance diagnosis fixtures under UID 0
+        run: |
+          sudo -n -H env PYTHONPATH="$PWD/src" PYTHONIOENCODING=utf-8 "$PWD/.venv/bin/python" -c '
+          import os
+          import pytest
+          assert os.getuid() == 0
+          raise SystemExit(pytest.main(["-q", "tests/substrate/journal/test_maintenance_evidence.py", "tests/substrate/journal/test_maintenance_diagnostic.py"]))
+          '
       - run: uv run verify
       - run: uv run python scripts/check_m8_host_artifact_mutations.py
       # The controller tree from the locked wheels, imported under the host's

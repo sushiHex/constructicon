@@ -463,14 +463,10 @@ def test_successful_attempt_cannot_claim_incomplete_callback_responses(
 
 
 def test_real_capture_analysis_and_cli_preserve_wal_fact_and_originals(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    portable_capture_custody: None, capsys: pytest.CaptureFixture[str],
 ) -> None:
     from constructicon.substrate.journal import maintenance_evidence as evidence
 
-    if os.name == "nt":
-        monkeypatch.setattr(evidence, "_custody", lambda info, *, private: True)
-        metadata = evidence._metadata
-        monkeypatch.setattr(evidence, "_metadata", lambda info: {**metadata(info), "ctime_ns": 0})
     with tempfile.TemporaryDirectory(prefix="maintenance-composition-test-",
                                      dir=Path.home()) as temporary:
         parent = Path(temporary).resolve()
@@ -519,14 +515,8 @@ def test_real_capture_analysis_and_cli_preserve_wal_fact_and_originals(
 
 
 def test_invalid_run_identity_refuses_before_claiming_capture_destination(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    portable_capture_custody: None, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    from constructicon.substrate.journal import maintenance_evidence as evidence
-
-    if os.name == "nt":
-        monkeypatch.setattr(evidence, "_custody", lambda info, *, private: True)
-        metadata = evidence._metadata
-        monkeypatch.setattr(evidence, "_metadata", lambda info: {**metadata(info), "ctime_ns": 0})
     with tempfile.TemporaryDirectory(prefix="maintenance-invalid-identity-test-",
                                      dir=Path.home()) as temporary:
         parent = Path(temporary).resolve()

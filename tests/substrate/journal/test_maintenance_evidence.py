@@ -16,16 +16,7 @@ from constructicon.substrate.journal.sqlite import SqliteJournal
 
 
 @pytest.fixture
-def layout(monkeypatch):
-    if os.name == "nt":
-        monkeypatch.setattr(evidence, "_custody", lambda info, *, private: True)
-        original = evidence._metadata
-
-        def metadata(info):
-            # Windows fstat and lstat disagree on ctime; retain every other real field.
-            return {**original(info), "ctime_ns": 0}
-
-        monkeypatch.setattr(evidence, "_metadata", metadata)
+def layout(portable_capture_custody):
     with tempfile.TemporaryDirectory(prefix="maintenance-evidence-test-", dir=Path.home()) as temp:
         parent = Path(temp).resolve()
         parent.chmod(0o700)
@@ -117,6 +108,33 @@ def test_owner_and_private_mode_predicate_is_closed(monkeypatch):
     assert not evidence._custody(SimpleNamespace(st_uid=1001, st_mode=0o100664), private=True)
     assert evidence._custody(SimpleNamespace(st_uid=0, st_mode=0o40755), private=False)
     assert not evidence._custody(SimpleNamespace(st_uid=0, st_mode=0o40775), private=False)
+
+
+def test_production_custody_refuses_root_even_with_safe_owner_and_modes(monkeypatch):
+    monkeypatch.setattr(evidence, "os", SimpleNamespace(name="posix", getuid=lambda: 0))
+    for private in (False, True):
+        for mode in (0o100600, 0o100644, 0o40700, 0o40750):
+            assert not evidence._custody(SimpleNamespace(st_uid=0, st_mode=mode), private=private)
+
+
+def test_root_fixture_substitutes_only_positive_uid_precondition(monkeypatch):
+    from tests.substrate.journal import conftest as capture_fixtures
+
+    monkeypatch.setattr(capture_fixtures, "os", SimpleNamespace(name="posix", getuid=lambda: 0))
+    capture_fixtures.portable_capture_custody.__wrapped__(monkeypatch)
+    for private in (False, True):
+        assert evidence._custody(SimpleNamespace(st_uid=0, st_mode=0o100644), private=private)
+        assert not evidence._custody(SimpleNamespace(st_uid=1, st_mode=0o100600), private=private)
+        assert not evidence._custody(SimpleNamespace(st_uid=0, st_mode=0o100664), private=private)
+
+
+def test_nonroot_posix_fixture_does_not_substitute_custody_or_metadata(monkeypatch):
+    from tests.substrate.journal import conftest as capture_fixtures
+
+    custody, metadata = evidence._custody, evidence._metadata
+    monkeypatch.setattr(capture_fixtures, "os", SimpleNamespace(name="posix", getuid=lambda: 1001))
+    capture_fixtures.portable_capture_custody.__wrapped__(monkeypatch)
+    assert evidence._custody is custody and evidence._metadata is metadata
 
 
 def test_real_sqlite_created_under_shared_umask_captures_without_original_chmod(layout):
