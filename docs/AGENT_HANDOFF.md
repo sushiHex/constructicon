@@ -15,6 +15,29 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #186 — rehearse the mediated task on a complete repository tree
+
+The operational-entry witness now joins the genuine Codex provider and callback
+mediation to real worker execution, capture, the fixed exam, result publication
+and the ordinary consumer loaded from the accepted snapshot. Its native peer
+and operator store are credential-free doubles; Linux cases use the existing
+physical process lane. The provider uses the current production WRITE profile,
+model, effort and grants. This is feasibility evidence, never a live result.
+
+An independent data family exercises nonadjacent duplicate paths with different
+digests across eight ASCII line boundaries, with valid controls. It distinguishes
+a regression the older equal-digest fixture permits. These are test inputs,
+not a prescribed model answer or an addition to the fixed eight-mutant exam.
+No contribution is added to the real repository's candidate path.
+
+The baseline has synthetic parentless history and a captured committed checkout
+tree, excluding only the allowed output path if it already exists. Every other
+blob and mode stays exact; shallow CI needs no ancestor fetch. Full-tree testing
+exposed ambient Windows Git conversion in the portable launcher: stage checkout
+inherited autocrlf, then isolated capture retained converted blobs. The test
+launcher now excludes host Git configuration and attributes. The gate's refusal
+was correct, and this says nothing about the historical host predicate.
+
 ## #198 — reviewed helper bytes survive Windows checkout
 
 The two byte-pinned maintenance helpers require LF through exact-path Git

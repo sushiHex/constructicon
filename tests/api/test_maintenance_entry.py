@@ -31,6 +31,7 @@ from constructicon.substrate.executors.linux import ProcessLimits
 from constructicon.substrate.git.process import GitProcess
 from tests.api import test_plan_manifest_application as application_tests
 from tests.executorworld import launch_identity
+from tests.substrate.test_codex_adapter import portable_binding as portable_binding
 
 concrete_application = application_tests.concrete_application
 
@@ -129,6 +130,51 @@ async def test_real_entry_accepts_publishes_after_join_and_replays(
     assert path.read_bytes() == before
     assert entry.inspect_result(path)["meaning"] == "historical-application-acceptance"
     assert "repository" not in json.dumps(entry.inspect_result(path))
+
+
+@pytest.mark.parametrize("concrete_application", ["committed-tree"], indirect=True)
+@pytest.mark.parametrize("change", [True, False], ids=["contribution", "successful-noop"])
+async def test_full_tree_entry_mediates_callback_and_runs_retained_consumer(
+    concrete_application, portable_binding, tmp_path, monkeypatch, change,
+):
+    from tests.maintenance_task_world import exercise_task_entry
+
+    resources, _executor, _system, control, launch = concrete_application
+    await control.shutdown()
+    await exercise_task_entry(resources, launch, portable_binding, tmp_path, monkeypatch,
+                              change=change)
+
+
+@pytest.mark.parametrize("contribution_exists", [False, True])
+async def test_task_fixture_preserves_inventory_when_contribution_exists(
+    tmp_path, contribution_exists,
+):
+    from constructicon.substrate.git.authority import GitAuthority
+    from tests.gitworld import seed_authority
+    from tests.maintenance_task_world import import_fixture_tree
+
+    files = {"retained.txt": "unchanged\n", "tests/retained.txt": "also unchanged\n"}
+    if contribution_exists:
+        files["tests/vectors/plan_manifest.json"] = "old contribution\n"
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    source = GitAuthority(seed_authority(source_root), source_root / "workspaces")
+    source._run("read-tree", "--empty")
+    for name, content in files.items():
+        oid = source._run("hash-object", "-w", "--stdin", input_text=content).stdout.strip()
+        source._run("update-index", "--add", "--cacheinfo", f"100644,{oid},{name}")
+    tree = source._run("write-tree").stdout.strip()
+    commit = source._run("commit-tree", tree, input_text="inventory fixture\n").stdout.strip()
+    source._run("update-ref", "refs/heads/main", commit)
+    source_base = source.resolve_ref("refs/heads/main")
+    source_tree = source.tree_of(source_base).encode()
+    destination_root = tmp_path / "destination"
+    destination_root.mkdir()
+    destination = GitAuthority(seed_authority(destination_root), destination_root / "workspaces")
+    base = await import_fixture_tree(destination, Path(source.repository_id), source_tree)
+    assert destination.parents_of(base) == ()
+    assert source.resolve_ref("refs/heads/main") == source_base
+    assert source.tree_of(source_base).encode() == source_tree
 
 
 @pytest.mark.parametrize(("relative_path", "before", "after"), AUTHORIZATION_LAW_CHANGES,
