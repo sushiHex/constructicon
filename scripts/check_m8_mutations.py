@@ -23,6 +23,19 @@ DIAGNOSTIC_MODULE = "constructicon.substrate.journal.maintenance_diagnostic:"
 DIAGNOSTIC_TESTS = "tests/substrate/journal/test_maintenance_diagnostic.py::"
 
 MUTANTS = (
+    ("safe original read bits remain acceptable behind private containers", EVIDENCE_MODULE + "_custody",
+     "and not info.st_mode & 0o022", "and not info.st_mode & (0o077 if private else 0o022)",
+     EVIDENCE_TESTS + "test_owner_and_private_mode_predicate_is_closed"),
+    ("destination parent is ancestry not a private capture container", EVIDENCE_MODULE + "capture_evidence",
+     "chains.append((destination.parent, False, _directories(destination.parent, private=False)))",
+     "chains.append((destination.parent, True, _directories(destination.parent, private=True)))",
+     EVIDENCE_TESTS + "test_safe_destination_ancestry_is_distinct_from_private_containers"),
+    ("source and capture containers still require exact private mode", EVIDENCE_MODULE + "_directories",
+     'if private and entry == path and stat.S_IMODE(info.st_mode) != 0o700 and os.name == "posix":',
+     "if False:", EVIDENCE_TESTS + "test_directory_mode_boundary_preserves_private_source_and_capture_guards"),
+    ("protected originals remain service-owned not merely trusted-owner", EVIDENCE_MODULE + "_custody",
+     "info.st_uid == uid if private else info.st_uid in {0, uid}", "info.st_uid in {0, uid}",
+     EVIDENCE_TESTS + "test_owner_and_private_mode_predicate_is_closed"),
     ("completed callback responses are positive", DIAGNOSTIC_MODULE + "_attempt",
      "or callbacks.responses_complete)", "or True)",
      DIAGNOSTIC_TESTS + "test_successful_attempt_cannot_claim_incomplete_callback_responses"),

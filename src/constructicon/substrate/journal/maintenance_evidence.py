@@ -36,11 +36,16 @@ def _refuse() -> None:
 
 
 def _custody(info: os.stat_result, *, private: bool) -> bool:
-    """Only platform-bound ownership/mode predicate; portable tests substitute this."""
+    """Service-only ownership for protected evidence; no other-principal writes.
+
+    Read bits on original files are safe behind the separately checked 0700
+    source containers. Private directory mode is enforced by _directories.
+    Portable tests substitute only this platform-bound ownership predicate.
+    """
     uid = getattr(os, "getuid", lambda: -1)()
     return os.name == "posix" and uid > 0 and (
         info.st_uid == uid if private else info.st_uid in {0, uid}
-    ) and not info.st_mode & (0o077 if private else 0o022)
+    ) and not info.st_mode & 0o022
 
 
 def _metadata(info: os.stat_result) -> dict[str, int]:
@@ -50,15 +55,15 @@ def _metadata(info: os.stat_result) -> dict[str, int]:
                      info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns), strict=True))
 
 
-def _directories(path: Path) -> dict[Path, tuple[int, ...]]:
+def _directories(path: Path, *, private: bool = True) -> dict[Path, tuple[int, ...]]:
     if not path.is_absolute() or path.resolve(strict=True) != path:
         _refuse()
     result: dict[Path, tuple[int, ...]] = {}
     for entry in (path, *path.parents):
         info = entry.lstat()
-        if not stat.S_ISDIR(info.st_mode) or not _custody(info, private=entry == path):
+        if not stat.S_ISDIR(info.st_mode) or not _custody(info, private=private and entry == path):
             _refuse()
-        if entry == path and stat.S_IMODE(info.st_mode) != 0o700 and os.name == "posix":
+        if private and entry == path and stat.S_IMODE(info.st_mode) != 0o700 and os.name == "posix":
             _refuse()
         # Ancestor timestamps can change when creating the distinct destination.
         result[entry] = (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid)
@@ -144,7 +149,8 @@ def capture_evidence(root: Path, destination: Path, *, command_report: Path) -> 
     """
     try:
         roots = {root, command_report.parent}
-        chains = {entry: _directories(entry) for entry in roots | {destination.parent}}
+        chains = [(entry, True, _directories(entry)) for entry in roots]
+        chains.append((destination.parent, False, _directories(destination.parent, private=False)))
         if not destination.is_absolute() or destination.parent / destination.name != destination:
             _refuse()
         if any(destination.is_relative_to(entry) or entry.is_relative_to(destination)
@@ -175,7 +181,7 @@ def capture_evidence(root: Path, destination: Path, *, command_report: Path) -> 
                 _read(path, info, None) != files[name].get("sha256")
             ):
                 _refuse()
-        if any(_directories(entry) != chain for entry, chain in chains.items()):
+        if any(_directories(entry, private=private) != chain for entry, private, chain in chains):
             _refuse()
         if any(_inventory(entry) != names for entry, names in inventories.items()):
             _refuse()

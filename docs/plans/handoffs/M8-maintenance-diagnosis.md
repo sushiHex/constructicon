@@ -32,8 +32,11 @@ the fixed journal, existing WAL/SHM/rollback sidecars, main and pending attempt
 records and published result, plus the separately retained raw application-run
 report, into a new private directory. The latter distinguishes normal false
 from a generic command refusal but cannot recover the unpersisted raw exit.
-Refuse links,
-nonregular files, unsafe ownership/modes and byte limits. Record each known
+Refuse links, nonregular files, unsafe ownership/modes and byte limits. Originals
+must be service-owned and not group/world writable inside their checked 0700
+containers; safe readable SQLite file modes are not rewritten. Destination
+ancestry must be trusted and non-writable by other principals, but need not be
+0700; the newly created capture itself must be service-owned 0700. Record each known
 file's presence or absence; compare bounded bytes and custody metadata before
 and after capture, excluding atime. A mismatch refuses without deleting the
 partial evidence. Missing data is not an unused attempt.
@@ -137,7 +140,7 @@ set -Eeuo pipefail
 SSH_OPTIONS=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o "HostKeyAlias=$SSH_HOST_KEY_ALIAS")
 case "${STEP:-}" in d1|d2|d3) ;; *) exit 1 ;; esac
 D1_STEP_SHA256=64dc148e880e7296af8b95bd07f5b09189ef0127acb1116a3a94566e6e831acd
-D2_STEP_SHA256=ad0f0bc37cbad24502be91becfdff018a9c7362b4bcbb0d54683d92611d5893b
+D2_STEP_SHA256=bf0b34fa3ec6fbdeddc9cbcd9ddf611082da3e48449028fb3873119bf5f9f546
 D3_STEP_SHA256=b6ecdb443137bd5d31b79e14ebf9158539d91ae52c533ae22c9a0cd0d72460e1
 COMMON_TEMPLATE_SHA256=2d627b81641de4e5609e99bfc838cc13bec7988e87e1775a9e53aed3e7c1f49f
 cd "$LOCAL_PACKAGE"
@@ -254,7 +257,7 @@ checked by the tests; do not derive the expected values from guest files.
 set -Eeuo pipefail
 umask 077
 . "$HOME/maintenance-diagnosis-d2-package/common.sh"
-EVIDENCE_SHA256=76c17c93d878988238aef630d23bd27369276bd7e05dd45fe1d4e3c5328acff5
+EVIDENCE_SHA256=2f654a218fcb55eee65a59c1c8ae63bc8a761db3fe71143f41dff69e22a1b578
 DIAGNOSTIC_SHA256=f0555df16b076b7a5d65d786d9ffd5febb9878b3065e1a2fbc7565d0197a6c69
 [[ "$EVIDENCE_SHA256" =~ ^[0-9a-f]{64}$ ]]
 [[ "$DIAGNOSTIC_SHA256" =~ ^[0-9a-f]{64}$ ]]

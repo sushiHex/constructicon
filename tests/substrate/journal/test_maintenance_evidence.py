@@ -5,12 +5,14 @@ import json
 import os
 import sqlite3
 import tempfile
+from contextlib import suppress
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from constructicon.substrate.journal import maintenance_evidence as evidence
+from constructicon.substrate.journal.sqlite import SqliteJournal
 
 
 @pytest.fixture
@@ -110,9 +112,89 @@ def test_owner_and_private_mode_predicate_is_closed(monkeypatch):
     monkeypatch.setattr(evidence, "os", SimpleNamespace(name="posix", getuid=lambda: 1001))
     assert evidence._custody(SimpleNamespace(st_uid=1001, st_mode=0o100600), private=True)
     assert not evidence._custody(SimpleNamespace(st_uid=1002, st_mode=0o100600), private=True)
-    assert not evidence._custody(SimpleNamespace(st_uid=1001, st_mode=0o100640), private=True)
+    assert evidence._custody(SimpleNamespace(st_uid=1001, st_mode=0o100644), private=True)
+    assert not evidence._custody(SimpleNamespace(st_uid=0, st_mode=0o100644), private=True)
+    assert not evidence._custody(SimpleNamespace(st_uid=1001, st_mode=0o100664), private=True)
     assert evidence._custody(SimpleNamespace(st_uid=0, st_mode=0o40755), private=False)
     assert not evidence._custody(SimpleNamespace(st_uid=0, st_mode=0o40775), private=False)
+
+
+def test_real_sqlite_created_under_shared_umask_captures_without_original_chmod(layout):
+    old_root, destination, report = layout
+    root = old_root.with_name("real-sqlite-app")
+    root.mkdir(mode=0o700)
+    previous_mask = os.umask(0o002)
+    try:
+        journal = SqliteJournal(root / "maintenance.sqlite")
+    finally:
+        os.umask(previous_mask)
+    assert journal._db_path == str(root / "maintenance.sqlite")
+    if os.name == "posix":
+        assert (root / "maintenance.sqlite").stat().st_mode & 0o777 == 0o644
+    before = original_snapshot((root, destination, report))
+    observed = None
+    with suppress(evidence.EvidenceCaptureError):
+        observed = evidence.capture_evidence(root, destination, command_report=report)
+    assert observed == destination, "genuine safe SQLite output must be capturable"
+    assert (destination / "maintenance.sqlite").read_bytes() == (
+        root / "maintenance.sqlite").read_bytes()
+    assert original_snapshot((root, destination, report)) == before
+
+
+def test_safe_destination_ancestry_is_distinct_from_private_containers(layout, monkeypatch):
+    root, destination, report = layout
+    parent = destination.parent
+    parent.chmod(0o750)
+    checks = []
+    directories = evidence._directories
+
+    def checked(path, *, private=True):
+        checks.append((path, private))
+        return directories(path, private=private)
+
+    monkeypatch.setattr(evidence, "_directories", checked)
+    before = original_snapshot(layout)
+    observed = None
+    with suppress(evidence.EvidenceCaptureError):
+        observed = capture(layout)
+    assert observed == destination, "safe ancestry need not be a private evidence container"
+    assert (parent, False) in checks
+    assert (root, True) in checks and (report.parent, True) in checks
+    assert (destination, True) in checks
+    if os.name == "posix":
+        assert parent.stat().st_mode & 0o777 == 0o750
+        assert destination.stat().st_mode & 0o777 == 0o700
+    assert original_snapshot(layout) == before
+
+
+def test_directory_mode_boundary_preserves_private_source_and_capture_guards(monkeypatch):
+    monkeypatch.setattr(evidence, "os", SimpleNamespace(name="posix", getuid=lambda: 1001))
+
+    class Directory:
+        parents = ()
+
+        def __init__(self, mode, uid=1001):
+            self.mode = mode
+            self.uid = uid
+
+        def is_absolute(self):
+            return True
+
+        def resolve(self, *, strict):
+            return self
+
+        def lstat(self):
+            return SimpleNamespace(st_uid=self.uid, st_gid=1001, st_mode=0o40000 | self.mode,
+                                   st_dev=1, st_ino=2)
+
+    safe_parent = Directory(0o750)
+    assert evidence._directories(safe_parent, private=False)
+    assert evidence._directories(Directory(0o755, uid=0), private=False)
+    for path, private in [(safe_parent, True), (Directory(0o770), False),
+                          (Directory(0o700, uid=0), True), (Directory(0o700, uid=1002), False)]:
+        with pytest.raises(evidence.EvidenceCaptureError):
+            evidence._directories(path, private=private)
+    assert evidence._directories(Directory(0o700), private=True)
 
 
 def test_final_source_bytes_are_compared_even_if_metadata_repeats(layout, monkeypatch):

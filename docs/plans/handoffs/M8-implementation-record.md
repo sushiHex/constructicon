@@ -6185,3 +6185,25 @@ cover positive observations, bounds, identity and privacy. Final full-gate,
 integrated inventory and Linux results are reported on the PR, not inferred
 from the portable skips. No vendor binary, credential or model was used by
 these new tests.
+
+The final host-procedure review identified two introduced compatibility
+assumptions before any host execution: source files were required to be 0600
+despite the installed application's service-owner/no-group-or-world-write
+predicate, and the destination parent was required to be 0700 despite only
+the new capture requiring that privacy. The source remains inside a checked
+0700 container; readable file bits do not grant traversal through that
+container. The correction preserves service ownership, single links and
+non-writability, and separates trusted destination ancestry from the private
+new capture. No retained file is chmodded. Tests must exercise an actual
+SqliteJournal created under its ordinary mask and a safe 0750 parent, rather
+than normalize fixture permissions into the desired outcome. The corrected
+focused suite passed 68 tests with seven Windows-specific skips; four further
+assertion-killed mutants pin safe readable originals, destination ancestry,
+private containers and service ownership. Actual Linux permission assertions
+still require CI. The superseded full-gate/CI runs were cancelled; they are not
+reported as passing evidence.
+The narrow follow-up found no new permission defect, but reproduced a test
+isolation error: undoing the output-bound patch also undid the Windows
+timestamp substitution, allowing an unrelated earlier refusal. A nested patch
+context now preserves the platform seam; the two helper test files passed
+57 tests with seven skips after that correction. No production bound changed.

@@ -431,10 +431,10 @@ def test_output_bound_binds_and_orphan_sidecars_are_not_silently_ignored(
     source = tmp_path / "source"
     source.mkdir()
     snapshot = _snapshot(source, tmp_path / "capture")
-    monkeypatch.setattr(diagnostic, "MAX_REPORT_BYTES", 1)
-    report = diagnostic.analyze_snapshot(snapshot, RUN, AUTH)
-    assert report["complete"] is False and report["stage"] == "output"
-    monkeypatch.undo()
+    with monkeypatch.context() as bounded:
+        bounded.setattr(diagnostic, "MAX_REPORT_BYTES", 1)
+        report = diagnostic.analyze_snapshot(snapshot, RUN, AUTH)
+        assert report["complete"] is False and report["stage"] == "output"
     (source / "maintenance.sqlite-wal").write_bytes(b"private orphan WAL")
     report = diagnostic.analyze_snapshot(_snapshot(source, tmp_path / "second-capture"), RUN, AUTH)
     assert report["complete"] is False and report["stage"] == "journal"
