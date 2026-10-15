@@ -83,6 +83,23 @@ def test_permitting_exam_runs_every_case_and_kills_each_named_mutant() -> None:
     assert len(json.dumps(asdict(report))) <= 4096
 
 
+def test_task_family_adds_unequal_digest_nonadjacent_duplicate_sensitivity() -> None:
+    from tests.maintenance_task_world import task_vectors
+
+    before = b"if path in found:"
+    assert SOURCE.count(before) == 1
+    changed = SOURCE.replace(before, b"if path in found and found[path] == digest:")
+    pin = hashlib.sha256(changed).hexdigest()
+    # This supplemental fixture comparison is not a ninth acceptance mutant.
+    # The old equal-digest examples still refuse under this regression.
+    old = maintenance._run(maintenance.render_unittest(
+        maintenance.parse_vectors(permitting_vectors()), changed, trusted_target_sha256=pin), 24)
+    assert old == maintenance.RunCounts(24, 0, 0, 0)
+    new = maintenance._run(maintenance.render_unittest(
+        maintenance.parse_vectors(task_vectors()), changed, trusted_target_sha256=pin), 34)
+    assert new.tests_run == 34 and new.failures == 8 and new.errors == new.skips == 0
+
+
 @pytest.mark.parametrize(("value", "expected"), [
     ("", False), (".", False), (".md", False), ("a/.md", False), ("..md", True),
     ("...md", True), (".hidden.md", True), (" a.md", True), ("a\0.md", True),

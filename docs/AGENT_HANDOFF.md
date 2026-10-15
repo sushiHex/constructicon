@@ -15,6 +15,37 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #186 — rehearse the mediated task on a complete repository tree
+
+The operational-entry witness now joins the genuine Codex provider and callback
+mediation to real worker execution, capture, the fixed exam, result publication
+and the ordinary consumer loaded from the accepted snapshot. Its native peer
+and operator store are credential-free doubles; Linux cases use the existing
+physical process lane. The provider uses the current production WRITE profile,
+model, effort and grants. This is feasibility evidence, never a live result.
+
+An independent data family exercises nonadjacent duplicate paths with different
+digests across eight ASCII line boundaries, with valid controls. It distinguishes
+a regression the older equal-digest fixture permits. These are test inputs,
+not a prescribed model answer or an addition to the fixed eight-mutant exam.
+No contribution is added to the real repository's candidate path.
+
+The baseline has synthetic parentless history and a captured committed checkout
+tree, excluding only the allowed output path if it already exists. Every other
+blob and mode stays exact; shallow CI needs no ancestor fetch. Full-tree testing
+exposed ambient Windows Git conversion in the portable launcher: stage checkout
+inherited autocrlf, then isolated capture retained converted blobs. The test
+launcher now excludes host Git configuration and attributes. The gate's refusal
+was correct, and this says nothing about the historical host predicate.
+
+The first native run stopped both new cases before worker execution because
+the service user could not read the runner-owned source checkout through Git's
+ownership guard. Fixture source reads now trust only that exact resolved
+checkout, per child command; global configuration and production Git remain
+unchanged. A real-Git regression admits that source and still refuses an
+unrelated repository under the same exception. Native completion requires the
+corrected head's physical lane.
+
 ## #186 — current diagnostic source is not a historical helper pin
 
 The bounded reader recognizes the five fixed capture-comparison messages while
