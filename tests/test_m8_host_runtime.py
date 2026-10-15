@@ -1331,7 +1331,7 @@ def test_new_commit_verifies_kept_launch_or_refuses_mismatch_without_mutation(
     assert record["first_parent"] is True and record["script_matches_commit"] is True
     if changed_launch:
         assert status == 1 and record["installed"] is False, record
-        assert record["failure"] == PROFILE_PATH + " is not the reviewed content"
+        assert record["failure"] == "ValueError: " + PROFILE_PATH + " is not the reviewed content"
     else:
         assert status == 0 and record["installed"] is True, record
         assert record["replacement"] is False

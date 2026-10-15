@@ -6089,3 +6089,11 @@ source comparison and Linux accepting/refusing observations; Windows skips
 are not native proof. Final procedure/package verification and review, plus
 fresh host custody, boot and installation facts, remain required before this
 continuation can execute under the owner's authorized wave.
+
+The first PR #192 Linux verification at `040c124` exposed an introduced test
+expectation error: the kept-launch mismatch correctly refused, but its exact
+failure assertion omitted the CLI serializer's `ValueError: ` prefix. The
+assertion now requires that full existing serialized value; no verifier or
+refusal rule changed. Both native cases had been skipped on Windows, so the
+earlier portable pass did not establish their execution. Fresh corrected-head
+Linux evidence remains required.
