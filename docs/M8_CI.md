@@ -124,7 +124,7 @@ The ordinary repository `verify` workflow still runs on every PR.
 
 ### Stable merge checks
 
-The merge ruleset's proposed required contexts are `verify-complete`, `qualify`
+The main merge ruleset's required contexts are `verify-complete`, `qualify`
 and `containment`. These are job check names, not workflow titles or individual
 matrix entries:
 
@@ -142,12 +142,47 @@ exact-base policy described above. None of the workflows has a PR path filter,
 so these stable contexts are emitted for both code and documentation changes.
 
 Required-check configuration is a separate repository setting, not established
-by these workflow bytes. Before enabling it, observe both code and docs-only
-PRs, then verify the main ruleset's exact contexts and GitHub App source, pending
-or failed-check refusal, and a valid green merge. Preserve resolved review
-conversations and the absence of bypass actors. A green aggregate does not grant
-merge authority or replace independent review. Workflow definitions remain
-reviewed CI policy, not a security boundary against arbitrary PR-head rewrites.
+by these workflow bytes. [PR #202](https://github.com/sushiHex/constructicon/pull/202)
+merged the portable aggregate on 2026-10-15 as `ad6d52d`; its final reviewed
+head `e634699` supplied the code-change proof with all three stable checks and
+all four physical lanes successful. Docs validation was correctly skipped in
+that run. At that merge, main's ruleset required resolved review conversations
+but contained no required status checks; #202 changed no repository settings.
+[Issue #201](https://github.com/sushiHex/constructicon/issues/201) owns the
+current rollout evidence and acceptance state.
+
+The separate docs-only [PR #207](https://github.com/sushiHex/constructicon/pull/207)
+at `af58a8a380d2acfa3908cf8f619c90d5f8d72fc1` supplied the pre-enable docs
+proof. [Containment run 38719708232](https://github.com/sushiHex/constructicon/actions/runs/38719708232)
+recorded `SCOPE=docs`, `CLASSIFICATION=success`, `DOCS=success` and
+`PROOFS=skipped`, then passed `containment` with the explicit summary
+"physical proofs not required: verified prose-only changes".
+[Qualification](https://github.com/sushiHex/constructicon/actions/runs/38719708110)
+and [verification attempt 2](https://github.com/sushiHex/constructicon/actions/runs/38719708184/attempts/2)
+also passed, including `verify-complete` and every portable mutation job.
+Attempt 1 failed correctly because a fixture's local Git clone exited 128,
+making a mutation result NOT PROVEN. The cause remains unknown and missing
+diagnostics are tracked in [#208](https://github.com/sushiHex/constructicon/issues/208);
+attempt 2 does not explain the earlier failure. This docs proof demonstrates
+the exemption, not new physical containment evidence.
+
+The [settings readback](https://github.com/sushiHex/constructicon/issues/201#issuecomment-6190367884)
+at 2026-10-15 10:52:58 UTC confirmed active ruleset `23742805` requires these
+exact three contexts, each bound to GitHub Actions (App ID `15368`).
+`strict_required_status_checks_policy=true` requires testing against the latest
+base. Both the ruleset and effective main-branch APIs matched the reviewed
+configuration. The complete existing pull-request rule, including mandatory
+resolved review conversations, was preserved. The bypass list remains empty
+and the API reported `current_user_can_bypass: never`.
+
+Configuration readback does not by itself prove GitHub blocks an otherwise-ready
+PR while an applicable check is pending or failed, or permits its merge after
+positive completion. Those behavioral observations and the final merged docs
+record remain separate acceptance evidence in #201. Passing workflow-policy
+unit tests proves aggregate logic, not GitHub enforcement. A green aggregate
+does not grant merge authority or replace independent review. Workflow
+definitions remain reviewed CI policy, not a security boundary against
+arbitrary PR-head rewrites.
 
 This avoids rebuilding a physical lab for prose-only changes. Runner isolation
 reduces the serial critical path for code changes, at the cost of repeated host
