@@ -86,7 +86,46 @@ pause. Notify before starting. Use this complete P1 start replacement; require
 fresh Off and zero checkpoints. No Save-VM, checkpoint, R6, reboot or second
 start is supplied:
 
-Reuse diagnosis D0 fixed PowerShell file verbatim, invoked directly from Python with an argument vector. Require fresh Off/zero checkpoints then one Start-VM. No inline PowerShell or generic lifecycle framework.
+Copy the frozen diagnosis D0 PowerShell fence verbatim, including its final LF, to maintenance-g11-d0.ps1. The source is the unchanged diagnosis document accepted at 2ce8338abd5110c6514672243cc6ff06d9286c93. Save the exact Python fence below as maintenance-g11-d0.py, include both in the reviewed local package/hash inventory, and invoke once from the checked repository root with /c/Python314/python.exe -I -S -B maintenance-g11-d0.py. The C0 guard must pass first. This binds the frozen source and exact LF step bytes before any VM operation; every output file is opened exclusively before the fixed process starts. No inline PowerShell or generic lifecycle framework.
+
+```python
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from contextlib import ExitStack
+from pathlib import Path
+
+try:
+    source = Path("docs/plans/handoffs/M8-maintenance-diagnosis.md").read_bytes()
+    assert b"\r" not in source
+    assert hashlib.sha256(source).hexdigest() == "41f76f299999fbd4af5a41da6b1142f11c89cc8a57f60b68f6d1d252811d1e45"
+    step = Path("maintenance-g11-d0.ps1")
+    raw = step.read_bytes()
+    assert b"\r" not in raw
+    assert hashlib.sha256(raw).hexdigest() == "a0078c72bcb376a605a3c8e6aa8117a3aa262a92f6ff135758c3d05333f9fc6b"
+    with ExitStack() as stack:
+        stdout = stack.enter_context(Path("maintenance-g11-d0.stdout").open("x+b"))
+        stderr = stack.enter_context(Path("maintenance-g11-d0.stderr").open("x+b"))
+        status = stack.enter_context(Path("maintenance-g11-d0.status.json").open("xb"))
+        result = subprocess.run([
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            "-NoLogo", "-NoProfile", "-NonInteractive", "-File", str(step.resolve()),
+        ], stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, check=False)
+        status.write(json.dumps({"returncode": result.returncode}, sort_keys=True).encode() + b"\n")
+        for output in (stdout, stderr, status):
+            output.flush()
+            os.fsync(output.fileno())
+        assert result.returncode == 0
+        assert os.fstat(stdout.fileno()).st_size == 0 and os.fstat(stderr.fileno()).st_size == 0
+except Exception:
+    sys.stdout.buffer.write(b"g11-vm-start-refused\n")
+    raise SystemExit(1) from None
+sys.stdout.buffer.write(b"g11-vm-start-checked\n")
+```
+
+Require exit zero, exactly g11-vm-start-checked plus LF and empty stderr. The preserved D0 stock commands themselves must exit zero with empty stdout/stderr; all full private output bytes and the numeric exit are retained locally. Any refusal, occupied output or unexpected output stops and parks without invoking D0 again. Keep partial files; never reuse their names.
 
 
 Before D0 verify scripts/m8_vm_address.py against the discovery continuation's literal SHA-256 9473d05e19e5d0e3161eafd172981e56bfabbb425df1f7aec0e7e7c1f8bdb059. After D0 invoke that pinned Python helper once using its exact reviewed command; require its complete successful closed output and empty stderr. Keep the address private. Use the discovery continuation's strict host-key transport once to record the full boot UUID. No discovery/SSH retry or port probe; unexpected output stops and parks. Before
@@ -487,24 +526,33 @@ a = read_maintenance_authorization(Path(sys.argv[3]))
 assert read_bounded(Path(sys.argv[3]), 8192) == preview and str(a.run_id) == sys.argv[4]
 print("reviewed-installed-authority-checked")' "$S/preflight.json" "$PREVIEW_SHA256" "$A" "$RUN_ID" < /dev/null \
   | /usr/bin/grep -qxF reviewed-installed-authority-checked
-"${SERVICE[@]}" /usr/bin/test ! -e "$S/application-run.json" < /dev/null
-"${SERVICE[@]}" /usr/bin/test ! -L "$S/application-run.json" < /dev/null
-"${SERVICE[@]}" /usr/bin/test ! -e "$S/application-status.json" < /dev/null
-"${SERVICE[@]}" /usr/bin/test ! -L "$S/application-status.json" < /dev/null
-RUN_STDERR="$HOME/maintenance-g11-c10-package/application.stderr"
-SAVER_STDERR="$HOME/maintenance-g11-c10-package/saver.stderr"
+"${SERVICE[@]}" /bin/bash -c 'set -Eeuo pipefail
+umask 077
 set -C
-if "${SERVICE[@]}" "${ENTRY[@]}" run --root "$APP" "${HOST[@]}" --authorization "$A" \
-  < /dev/null 2> "$RUN_STDERR" | save_sealed "$S/application-run.json" 2> "$SAVER_STDERR"
+CAPTURE_ROOT=$1
+shift
+for NAME in application-run.json application-status.json application.stderr saver.stderr; do
+    test ! -e "$CAPTURE_ROOT/$NAME"
+    test ! -L "$CAPTURE_ROOT/$NAME"
+done
+exec 3>"$CAPTURE_ROOT/application-run.json"
+exec 4>"$CAPTURE_ROOT/application-status.json"
+exec 5>"$CAPTURE_ROOT/application.stderr"
+exec 6>"$CAPTURE_ROOT/saver.stderr"
+if "$@" < /dev/null 2>&5 | /usr/bin/cat >&3 2>&6
 then P10_STATUS=("${PIPESTATUS[@]}"); else P10_STATUS=("${PIPESTATUS[@]}"); fi
 test "${#P10_STATUS[@]}" -eq 2
+exec 3>&- 5>&- 6>&-
 RUN_DIAGNOSTICS=unexpected
-if test -f "$RUN_STDERR" && test ! -L "$RUN_STDERR" && test ! -s "$RUN_STDERR" \
-  && test -f "$SAVER_STDERR" && test ! -L "$SAVER_STDERR" && test ! -s "$SAVER_STDERR"
+if test -f "$CAPTURE_ROOT/application.stderr" && test ! -L "$CAPTURE_ROOT/application.stderr" \
+  && test ! -s "$CAPTURE_ROOT/application.stderr" \
+  && test -f "$CAPTURE_ROOT/saver.stderr" && test ! -L "$CAPTURE_ROOT/saver.stderr" \
+  && test ! -s "$CAPTURE_ROOT/saver.stderr"
 then RUN_DIAGNOSTICS=clean; fi
-printf '{"application":%s,"saver":%s,"diagnostics":"%s"}\n' \
-  "${P10_STATUS[0]}" "${P10_STATUS[1]}" "$RUN_DIAGNOSTICS" \
-  | save_sealed "$S/application-status.json"
+printf "{\"application\":%s,\"saver\":%s,\"diagnostics\":\"%s\"}\n" \
+    "${P10_STATUS[0]}" "${P10_STATUS[1]}" "$RUN_DIAGNOSTICS" >&4
+exec 4>&-' g11-application-capture "$S" \
+  "${ENTRY[@]}" run --root "$APP" "${HOST[@]}" --authorization "$A" < /dev/null
 "${SERVICE[@]}" /usr/bin/python3 -I -S -B -c 'import json, sys
 from pathlib import Path
 sys.path.insert(0, "/opt/constructicon-m8-controller")
@@ -539,7 +587,7 @@ raise SystemExit(0 if result["command"] == "normal-completed" else 1)' \
   "$S/application-run.json" "$A" "$S/application-status.json" "$RUN_ID" < /dev/null
 ```
 
-Producer/saver statuses are copied before any other command, then privately retained separately. This status file is evidence, not an attempt ledger. Interrupted/missing capture remains unknown. Both stderr files must be empty; no private diagnostics are printed. Failed saver means unknown, never command refusal or normal completion.
+The fixed capture shell runs as the service identity. It checks every destination and exclusively opens all four owned output descriptors before dispatch; a stale target, symlink, open failure or race stops before the application starts. Partial empty files remain occupied. The producer and saver use only those open descriptors. Their statuses are copied before any other command, then retained separately in the preopened status file. All capture descriptors close before output validation, and the service identity checks both stderr paths as regular, nonsymlink and empty. This status file is evidence, not an attempt ledger. Interrupted/missing capture remains unknown. No private diagnostics are printed. Failed saver means unknown, never command refusal or normal completion.
 
 Only command=normal-completed and checker exit zero establish positive normal application return; run_maintenance joins shutdown before its normal return. accepted=false remains nonacceptance. Refused/unknown exits one and stops/parks; it establishes neither admission nor joined cleanup and permits no result inspection or diagnosis. No retry, recovery dispatch, reset or budget refund follows any outcome.
 
@@ -548,6 +596,8 @@ Only accepted=true permits the frozen session P10 inspect block, with empty stde
 ## C11: one same-session installed diagnosis, then preserve and park
 
 Only after C10 positively established normal-completed, repeat HS H2 and fresh same-boot/custody checks. No application/recovery daemon or other service session may start. Normal return plus this positive process observation supply quiescence; metadata equality is not a substitute. Fill only RUN_ID from the approved preview and EXPECTED_BOOT from this session's measured UUID. Never use the old helper bootstrap or stage new helpers. The verified installed controller must include PR #203's five fixed categories.
+
+Quiescence stdout/stderr descriptors open exclusively before the conditional probe, so an open refusal cannot become pgrep status one. Both close before judging the actual probe status and positive regular/nonsymlink/empty stderr facts. The separate diagnostic capture runs as service and preopens every report/status/stderr descriptor before invoking the installed module; it closes them before service-owned inspection. All open failures stop without invocation and retain partial files.
 
 ```bash
 RUN_ID=UNREVIEWED
@@ -574,25 +624,55 @@ print("normal-application-completion-checked")' \
   "$S/application-status.json" "$S/application-run.json" "$A" "$RUN_ID" "$ID" < /dev/null \
   | /usr/bin/grep -qxF normal-application-completion-checked
 set -C
-if /usr/bin/pgrep -u m8-service > "$HOME/maintenance-g11-c11-package/quiescence.private"
-then echo 'service identity is active; stop' >&2; exit 1
-else QUIESCENCE_STATUS=$?; test "$QUIESCENCE_STATUS" -eq 1; fi
+QUIESCENCE_CAPTURE="$HOME/maintenance-g11-c11-package/quiescence.private"
+QUIESCENCE_STDERR="$HOME/maintenance-g11-c11-package/quiescence.stderr"
+test ! -e "$QUIESCENCE_CAPTURE"
+test ! -L "$QUIESCENCE_CAPTURE"
+test ! -e "$QUIESCENCE_STDERR"
+test ! -L "$QUIESCENCE_STDERR"
+exec {QUIESCENCE_FD}>"$QUIESCENCE_CAPTURE"
+exec {QUIESCENCE_ERR_FD}>"$QUIESCENCE_STDERR"
+if /usr/bin/pgrep -u m8-service >&"$QUIESCENCE_FD" 2>&"$QUIESCENCE_ERR_FD"
+then QUIESCENCE_STATUS=0; else QUIESCENCE_STATUS=$?; fi
+exec {QUIESCENCE_FD}>&-
+exec {QUIESCENCE_ERR_FD}>&-
+test "$QUIESCENCE_STATUS" -eq 1
+test -f "$QUIESCENCE_STDERR"
+test ! -L "$QUIESCENCE_STDERR"
+test ! -s "$QUIESCENCE_STDERR"
 printf '%s\n' diagnosis-quiescence-checked
 /usr/local/bin/m8-host-drift < /dev/null
-DIAG_STDERR="$HOME/maintenance-g11-c11-package/diagnostic.stderr"
-DIAG_SAVER_STDERR="$HOME/maintenance-g11-c11-package/saver.stderr"
-"${SERVICE[@]}" /usr/bin/test ! -e "$S/diagnostic-report.json" < /dev/null
-"${SERVICE[@]}" /usr/bin/test ! -L "$S/diagnostic-report.json" < /dev/null
-if "${SERVICE[@]}" "${PY[@]}" constructicon.substrate.journal.maintenance_diagnostic \
-  --root "$APP" --out /home/m8-service/m8-maint-diagnosis-3-evidence \
-  --command-report "$S/application-run.json" --run-id "$RUN_ID" --authorization-id "$ID" \
-  < /dev/null 2> "$DIAG_STDERR" | save_sealed "$S/diagnostic-report.json" 2> "$DIAG_SAVER_STDERR"
+"${SERVICE[@]}" /bin/bash -c 'set -Eeuo pipefail
+umask 077
+set -C
+CAPTURE_ROOT=$1
+shift
+test ! -e /home/m8-service/m8-maint-diagnosis-3-evidence
+test ! -L /home/m8-service/m8-maint-diagnosis-3-evidence
+for NAME in diagnostic-report.json diagnostic-status.json diagnostic.stderr diagnostic-saver.stderr; do
+    test ! -e "$CAPTURE_ROOT/$NAME"
+    test ! -L "$CAPTURE_ROOT/$NAME"
+done
+exec 3>"$CAPTURE_ROOT/diagnostic-report.json"
+exec 4>"$CAPTURE_ROOT/diagnostic-status.json"
+exec 5>"$CAPTURE_ROOT/diagnostic.stderr"
+exec 6>"$CAPTURE_ROOT/diagnostic-saver.stderr"
+if "$@" < /dev/null 2>&5 | /usr/bin/cat >&3 2>&6
 then P11_STATUS=("${PIPESTATUS[@]}"); else P11_STATUS=("${PIPESTATUS[@]}"); fi
 test "${#P11_STATUS[@]}" -eq 2
+exec 3>&- 5>&- 6>&-
 DIAG_DIAGNOSTICS=unexpected
-if test -f "$DIAG_STDERR" && test ! -L "$DIAG_STDERR" && test ! -s "$DIAG_STDERR" \
-  && test -f "$DIAG_SAVER_STDERR" && test ! -L "$DIAG_SAVER_STDERR" && test ! -s "$DIAG_SAVER_STDERR"
+if test -f "$CAPTURE_ROOT/diagnostic.stderr" && test ! -L "$CAPTURE_ROOT/diagnostic.stderr" \
+  && test ! -s "$CAPTURE_ROOT/diagnostic.stderr" \
+  && test -f "$CAPTURE_ROOT/diagnostic-saver.stderr" && test ! -L "$CAPTURE_ROOT/diagnostic-saver.stderr" \
+  && test ! -s "$CAPTURE_ROOT/diagnostic-saver.stderr"
 then DIAG_DIAGNOSTICS=clean; fi
+printf "{\"diagnostic\":%s,\"saver\":%s,\"diagnostics\":\"%s\"}\n" \
+    "${P11_STATUS[0]}" "${P11_STATUS[1]}" "$DIAG_DIAGNOSTICS" >&4
+exec 4>&-' g11-diagnostic-capture "$S" \
+  "${PY[@]}" constructicon.substrate.journal.maintenance_diagnostic \
+  --root "$APP" --out /home/m8-service/m8-maint-diagnosis-3-evidence \
+  --command-report "$S/application-run.json" --run-id "$RUN_ID" --authorization-id "$ID" < /dev/null
 "${SERVICE[@]}" /usr/bin/python3 -I -S -B -c 'import json, re, sys
 from pathlib import Path
 sys.path.insert(0, "/opt/constructicon-m8-controller")
@@ -607,16 +687,19 @@ def count(value, bound):
     assert type(value) is int and 0 <= value <= bound
 result = {"schema_version": 1, "complete": False, "stage": "output", "error": "diagnostic refused or incomplete"}
 try:
-    assert sys.argv[4] == "0" and sys.argv[5] == "clean"
+    s = parse_json_value(read_bounded(Path(sys.argv[3]), 256).decode("utf-8", errors="strict"))
+    exact(s, {"diagnostic", "saver", "diagnostics"})
+    assert type(s["diagnostic"]) is int and s["diagnostic"] in (0, 1)
+    assert type(s["saver"]) is int and s["saver"] == 0 and s["diagnostics"] == "clean"
     r = parse_json_value(read_bounded(Path(sys.argv[1]), 8192).decode("utf-8", errors="strict"))
     assert type(r) is dict and type(r.get("schema_version")) is int and r["schema_version"] == 1
     assert type(r.get("complete")) is bool
     if r["complete"] is False:
         exact(r, {"schema_version", "complete", "stage", "error"})
         enum(r["stage"], {"capture", "snapshot", "journal", "attempt", "command", "result", "output"})
-        assert r["error"] == "diagnostic refused or incomplete" and sys.argv[3] == "1"
+        assert r["error"] == "diagnostic refused or incomplete" and s["diagnostic"] == 1
     else:
-        assert sys.argv[3] == "0" and re.fullmatch(r"run-[0-9a-f]{32}", sys.argv[2])
+        assert s["diagnostic"] == 0 and re.fullmatch(r"run-[0-9a-f]{32}", sys.argv[2])
         exact(r, {"schema_version", "complete", "meaning", "run_id", "journal", "attempt", "pending_attempt", "command", "result"})
         assert r["meaning"] == "selected-historical-facts-only" and r["run_id"] == sys.argv[2]
         enum(r["pending_attempt"], {"missing", "identity-matched-not-published"})
@@ -678,11 +761,50 @@ except Exception:
     pass
 print(json.dumps(result, sort_keys=True, separators=(",", ":")))
 raise SystemExit(0 if result["complete"] is True else 1)' \
-  "$S/diagnostic-report.json" "$RUN_ID" "${P11_STATUS[0]}" "${P11_STATUS[1]}" "$DIAG_DIAGNOSTICS" < /dev/null
+  "$S/diagnostic-report.json" "$RUN_ID" "$S/diagnostic-status.json" < /dev/null
 ```
 
 Require the prerequisite markers, affirmative NO DRIFT, one complete closed-schema report of at most 8192 stdout bytes including LF, and empty stderr. A validated incomplete report exits one; malformed, oversized, private extra fields, duplicate keys, unknown schema, wrong identity/status or nonempty diagnostics emit only the fixed output refusal and stop. No raw exception, path, payload or unrecognized category is published. Every nested field is checked before publication. Missing/unknown selected facts remain unknown; selected-facts validation is not full-store health, independent backend proof or application acceptance. Keep the fresh capture even on refusal. No second diagnostic or application is supplied.
 
-Every C11 outcome ends in preservation and clean park. Any earlier unexpected output stops without continuing dependent steps. Retain all old/new authorities, journals/sidecars, attempts, candidates, results, previews, bundles, stderr, reports, captures and packages. Reuse diagnosis D4 fixed PowerShell file verbatim from Python: clean Stop-VM, affirmative fresh Off/zero checkpoints. No Save-VM, checkpoint, R6 or repair. Notify/release custody only after that measurement. Publish only bounded observed facts under #186 session authority; private source records/seals/transcripts/locators stay private. An accepted contribution PR is a separate ordinary repository action, not worker merge authority.
+Every C11 outcome ends in preservation and clean park. Any earlier unexpected output stops without continuing dependent steps. Retain all old/new authorities, journals/sidecars, attempts, candidates, results, previews, bundles, stderr, reports, captures and packages. Copy the frozen diagnosis D4 PowerShell fence verbatim, including final LF, to maintenance-g11-d4.ps1; save this exact Python fence as maintenance-g11-d4.py and include both in the reviewed local hash inventory. Invoke once from the checked repository root with /c/Python314/python.exe -I -S -B maintenance-g11-d4.py. It verifies the same frozen source and exact D4 bytes before clean Stop-VM and fresh Off/zero-checkpoint checks:
+
+```python
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from contextlib import ExitStack
+from pathlib import Path
+
+try:
+    source = Path("docs/plans/handoffs/M8-maintenance-diagnosis.md").read_bytes()
+    assert b"\r" not in source
+    assert hashlib.sha256(source).hexdigest() == "41f76f299999fbd4af5a41da6b1142f11c89cc8a57f60b68f6d1d252811d1e45"
+    step = Path("maintenance-g11-d4.ps1")
+    raw = step.read_bytes()
+    assert b"\r" not in raw
+    assert hashlib.sha256(raw).hexdigest() == "2c26ff58c3a9fa3f1ec4995764725e96d818401205c8140a2ca7ecbf5b540381"
+    with ExitStack() as stack:
+        stdout = stack.enter_context(Path("maintenance-g11-d4.stdout").open("x+b"))
+        stderr = stack.enter_context(Path("maintenance-g11-d4.stderr").open("x+b"))
+        status = stack.enter_context(Path("maintenance-g11-d4.status.json").open("xb"))
+        result = subprocess.run([
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            "-NoLogo", "-NoProfile", "-NonInteractive", "-File", str(step.resolve()),
+        ], stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, check=False)
+        status.write(json.dumps({"returncode": result.returncode}, sort_keys=True).encode() + b"\n")
+        for output in (stdout, stderr, status):
+            output.flush()
+            os.fsync(output.fileno())
+        assert result.returncode == 0
+        assert os.fstat(stdout.fileno()).st_size == 0 and os.fstat(stderr.fileno()).st_size == 0
+except Exception:
+    sys.stdout.buffer.write(b"g11-vm-park-refused\n")
+    raise SystemExit(1) from None
+sys.stdout.buffer.write(b"g11-vm-park-checked\n")
+```
+
+Require exit zero, exactly g11-vm-park-checked plus LF and empty stderr, after closed descriptors and the preserved D4 stock commands' zero exit/empty stdout/stderr. Keep full private outputs/status and any partial files. Refusal is not a parked-state fact; report the uncertainty without retrying. No Save-VM, checkpoint, R6 or repair. Notify/release custody only after the affirmative measurement. Publish only bounded observed facts under #186 session authority; private source records/seals/transcripts/locators stay private. An accepted contribution PR is a separate ordinary repository action, not worker merge authority.
 
 Before host execution record final procedure/package hashes, actual merged controller/base/bundle facts, exact-head gates, renewed owner scope and fresh custody. This source-only draft provides no installation, qualification, application or diagnostic evidence.

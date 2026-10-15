@@ -16,6 +16,7 @@ import pytest
 from constructicon.core.identity import digest
 from constructicon.substrate.executors import maintenance
 from constructicon.substrate.executors.codex_lane import EVIDENCE_DOMAIN
+from constructicon.substrate.journal.maintenance_diagnostic import _FAILURES
 from tests.test_m8_maintenance_continuation import _portable
 from tests.test_m8_n5_g6_session import _run
 from tests.test_m8_n5_host_session import HANDOFFS, _fences, _section, _text
@@ -263,7 +264,8 @@ def test_new_paths_and_frozen_blocks_preserve_existing_source_laws():
     assert "maintenance-g9-account.seal" in doc and "maintenance-g11-d2-prior" in doc
     assert "HR R19 on both routes" in doc and "no retirement" in doc
     assert "No discovery/SSH retry or port probe" in doc
-    assert "fixed PowerShell file verbatim" in doc
+    assert "Copy the frozen diagnosis D0 PowerShell fence verbatim" in doc
+    assert "Copy the frozen diagnosis D4 PowerShell fence verbatim" in doc
     assert hashlib.sha256((Path(__file__).parents[1] / "scripts/m8_vm_address.py")
                           .read_bytes()).hexdigest() in doc
     old = _text(HANDOFFS / "M8-maintenance-private-continuation.md")
@@ -298,30 +300,18 @@ def test_actual_diagnosis_pipeline_keeps_report_statuses_and_private_stderr(
     record = (_diagnostic() if cli == 0 else
               {"schema_version": 1, "complete": False, "stage": "capture",
                "error": "diagnostic refused or incomplete"})
-    fixture = tmp_path / "fixture.json"
-    fixture.write_bytes(json.dumps(record).encode())
-    (tmp_path / "maintenance-g11-c11-package").mkdir()
-    block = _blocks(C11)[0]
-    capture = block[block.index("DIAG_STDERR="):]
-    capture = capture.split('"${SERVICE[@]}" /usr/bin/python3', 1)[0]
-    prefix = "\n".join((
-        "set -Eeuo pipefail; umask 077; set -C; SERVICE=(); PY=(diagnose)",
-        'S="$TEST_OUT"; APP=fake; ID=fake; RUN_ID=fake',
-        'diagnose() { /usr/bin/cat "$FIXTURE"; printf "%s" "$PRIVATE_DIAGNOSTICS" >&2; '
-        'return "$CLI_STATUS"; }',
-        'save_sealed() { /usr/bin/cat >"$1"; return "$SAVER_STATUS"; }',
-    ))
-    ran = _run(prefix + "\n" + capture
-               + '\nprintf "%s %s %s\\n" "${P11_STATUS[0]}" "${P11_STATUS[1]}" '
-               '"$DIAG_DIAGNOSTICS"', TEST_OUT=tmp_path.as_posix(), HOME=tmp_path.as_posix(),
-               FIXTURE=fixture.as_posix(), CLI_STATUS=str(cli), SAVER_STATUS=str(saver),
-               PRIVATE_DIAGNOSTICS=diagnostics)
-    assert ran.returncode == 0 and ran.stderr == ""
+    raw = json.dumps(record)
+    ran = _run_capture(C11, tmp_path, raw, cli, saver, diagnostics)
+    assert ran.returncode == 0 and ran.stdout == "" and ran.stderr == ""
     category = "unexpected" if diagnostics else "clean"
-    assert ran.stdout == f"{cli} {saver} {category}\n"
     report = tmp_path / "diagnostic-report.json"
-    assert report.read_bytes() == fixture.read_bytes()
-    code, out = _exec(_programs(C11)[1], [report, RUN, cli, saver, category], monkeypatch, capsys)
+    statuses = tmp_path / "diagnostic-status.json"
+    assert report.read_bytes() == raw.encode()
+    assert json.loads(statuses.read_bytes()) == {
+        "diagnostic": cli, "saver": saver, "diagnostics": category,
+    }
+    assert (tmp_path / "calls").read_text() == "called\n"
+    code, out = _exec(_programs(C11)[1], [report, RUN, statuses], monkeypatch, capsys)
     result = json.loads(out)
     assert len(out.encode()) <= 8192
     if saver or diagnostics:
@@ -329,13 +319,15 @@ def test_actual_diagnosis_pipeline_keeps_report_statuses_and_private_stderr(
     else:
         assert code == cli and result == record
 
-
 def _diagnose(tmp_path, monkeypatch, capsys, record, cli="0", saver="0", diagnostics="clean",
               raw=None):
     path = tmp_path / "diagnostic-report.json"
     path.write_bytes(json.dumps(record).encode() if raw is None else raw)
     before = path.read_bytes()
-    status, out = _exec(_programs(C11)[1], [path, RUN, cli, saver, diagnostics],
+    statuses = tmp_path / "diagnostic-status.json"
+    statuses.write_bytes(json.dumps({"diagnostic": int(cli), "saver": int(saver),
+                                     "diagnostics": diagnostics}).encode())
+    status, out = _exec(_programs(C11)[1], [path, RUN, statuses],
                         monkeypatch, capsys)
     assert path.read_bytes() == before
     assert len(out.encode()) <= 8192 and out.endswith("\n") and out.count("\n") == 1
@@ -433,27 +425,14 @@ def test_g10_checks_precede_preserved_g9_capture_comparison(tmp_path, failure):
 @pytest.mark.parametrize(("cli", "saver"), ((0, 0), (1, 0), (0, 1), (1, 1), (143, 0)))
 @pytest.mark.parametrize("stderr", ("", "private"))
 def test_actual_run_pipeline_retains_independent_statuses_and_stderr(tmp_path, cli, saver, stderr):
-    (tmp_path / "maintenance-g11-c10-package").mkdir()
-    block = _blocks(C10)[0]
-    capture = block[block.index('"${SERVICE[@]}" /usr/bin/test ! -e'):]
-    capture = capture.split('"${SERVICE[@]}" /usr/bin/python3', 1)[0]
-    prefix = "\n".join((
-        "set -Eeuo pipefail; umask 077; SERVICE=(); ENTRY=(entry); HOST=()",
-        'S="$TEST_OUT"; APP=fake; A=authority',
-        'entry() { printf "retained-private-output\\n"; '
-        'if test "$DIAGNOSTIC" = private; then printf "PRIVATE" >&2; fi; return "$CLI_STATUS"; }',
-        'save_sealed() { /usr/bin/cat >"$1"; '
-        'case "$1" in */application-run.json) return "$SAVER_STATUS";; *) return 0;; esac; }',
-    ))
-    ran = _run(prefix + "\n" + capture, TEST_OUT=tmp_path.as_posix(),
-               HOME=tmp_path.as_posix(), CLI_STATUS=str(cli), SAVER_STATUS=str(saver),
-               DIAGNOSTIC=stderr)
+    raw = "retained-private-output\n"
+    ran = _run_capture(C10, tmp_path, raw, cli, saver, "PRIVATE" if stderr else "")
     assert ran.returncode == 0 and ran.stdout == "" and ran.stderr == ""
     assert json.loads((tmp_path / "application-status.json").read_bytes()) == {
         "application": cli, "saver": saver, "diagnostics": "unexpected" if stderr else "clean",
     }
-    assert (tmp_path / "application-run.json").read_bytes() == b"retained-private-output\n"
-
+    assert (tmp_path / "application-run.json").read_bytes() == raw.encode()
+    assert (tmp_path / "calls").read_text() == "called\n"
 
 @pytest.mark.parametrize(("accepted", "command", "cli", "exit_code"), (
     (True, "normal-completed", 0, 0), (False, "normal-completed", 0, 0),
@@ -714,3 +693,250 @@ def test_actual_preflight_whitelist_and_closed_failure_stages(tmp_path, monkeypa
             "preflight": False, "stage": "unknown" if stage == "private" else stage,
         }
         assert len(out.encode()) <= 64
+
+
+def _capture_program(heading):
+    match = re.search(
+        r"/bin/bash -c '(.*?)' g11-(?:application|diagnostic)-capture",
+        _blocks(heading)[0], re.S,
+    )
+    assert match is not None
+    return match[1]
+
+
+def _run_capture(heading, root, raw, cli=0, saver=0, stderr="", boundary="", mutation="",
+                 mutation_kind="directory"):
+    body = _capture_program(heading).replace("/usr/bin/cat", "saver")
+    body = body.replace("/home/m8-service/m8-maint-diagnosis-3-evidence",
+                        (root / "capture-evidence").as_posix())
+    prefix = "\n".join((
+        "set -Eeuo pipefail; umask 077",
+        'producer() { printf "called\\n" >>"$TEST_OUT/calls"; '
+        'printf "%s" "$PRODUCER_STDOUT"; printf "%s" "$PRODUCER_STDERR" >&2; '
+        'if test -n "$MUTATION"; then /usr/bin/rm -- "$MUTATION"; '
+        'if test "$MUTATION_KIND" = directory; then /usr/bin/mkdir -- "$MUTATION"; fi; '
+        'fi; return "$CLI_STATUS"; }',
+        'saver() { /usr/bin/cat; return "$SAVER_STATUS"; }',
+        boundary,
+        'set -- "$TEST_OUT" producer',
+    ))
+    closed = "\n".join((
+        "for FD in 3 4 5 6; do",
+        'if (: >&"$FD") 2>/dev/null; then echo capture-descriptor-leaked; exit 91; fi',
+        "done",
+    ))
+    return _run(prefix + "\n" + body + "\n" + closed, TEST_OUT=root.as_posix(),
+                PRODUCER_STDOUT=raw, PRODUCER_STDERR=stderr, CLI_STATUS=str(cli),
+                SAVER_STATUS=str(saver), MUTATION=mutation, MUTATION_KIND=mutation_kind)
+
+
+@pytest.mark.parametrize("heading", (C10, C11))
+@pytest.mark.parametrize("index", range(4))
+@pytest.mark.parametrize("damage", ("occupied", "symlink", "open-race"))
+def test_every_capture_output_open_failure_precedes_producer(
+    tmp_path, heading, index, damage,
+):
+    names = (("application-run.json", "application-status.json", "application.stderr",
+              "saver.stderr")
+             if heading == C10 else
+             ("diagnostic-report.json", "diagnostic-status.json", "diagnostic.stderr",
+              "diagnostic-saver.stderr"))
+    blocked = tmp_path / names[index]
+    boundary = ""
+    if damage == "occupied":
+        blocked.write_bytes(b"retained")
+    elif damage == "symlink" and os.name != "nt":
+        blocked.symlink_to(tmp_path / "absent-link-target")
+    elif damage == "symlink":
+        # Substitute only the Linux lstat predicate for native Windows.
+        boundary = (
+            'test() { if builtin test "$1 $2 $3" = "! -L $TEST_OUT/' + names[index]
+            + '"; then return 1; fi; builtin test "$@"; }'
+        )
+    else:
+        # A target appears after the final absent-path precheck. The actual
+        # noclobber descriptor open must refuse before any producer runs.
+        boundary = (
+            'test() { builtin test "$@" || return $?; '
+            'if builtin test "$1 $2 $3" = "! -L $TEST_OUT/' + names[-1]
+            + '"; then printf retained >"$TEST_OUT/' + names[index]
+            + '"; fi; return 0; }'
+        )
+    ran = _run_capture(heading, tmp_path, "{}", boundary=boundary)
+    assert ran.returncode != 0 and ran.stdout == ""
+    assert not (tmp_path / "calls").exists()
+    assert PRIVATE not in ran.stderr
+    if damage in {"occupied", "open-race"}:
+        assert blocked.read_bytes() == b"retained"
+    elif os.name != "nt":
+        assert blocked.is_symlink() and not (tmp_path / "absent-link-target").exists()
+
+
+@pytest.mark.parametrize("heading", (C10, C11))
+def test_missing_capture_parent_stops_before_dispatch(tmp_path, heading):
+    root = tmp_path / "absent-parent"
+    ran = _run_capture(heading, root, "{}")
+    assert ran.returncode != 0 and ran.stdout == ""
+    assert not root.exists() and not (root / "calls").exists()
+
+
+@pytest.mark.parametrize("heading", (C10, C11))
+@pytest.mark.parametrize("mutation_kind", ("removed", "directory"))
+def test_removed_or_replaced_stderr_cannot_be_classified_clean(tmp_path, heading, mutation_kind):
+    name = "application.stderr" if heading == C10 else "diagnostic.stderr"
+    ran = _run_capture(heading, tmp_path, "{}", stderr=PRIVATE,
+                       mutation=(tmp_path / name).as_posix(), mutation_kind=mutation_kind)
+    assert ran.returncode == 0 and ran.stdout == "" and ran.stderr == ""
+    status_name = "application-status.json" if heading == C10 else "diagnostic-status.json"
+    assert json.loads((tmp_path / status_name).read_bytes())["diagnostics"] == "unexpected"
+    assert (tmp_path / "calls").read_text() == "called\n"
+    assert (tmp_path / name).is_dir() is (mutation_kind == "directory")
+    assert (tmp_path / name).exists() is (mutation_kind == "directory")
+
+
+def _quiescence_block():
+    block = _blocks(C11)[0]
+    return block[block.index("set -C"):block.index("/usr/local/bin/m8-host-drift")]
+
+
+@pytest.mark.parametrize("damage", (
+    "none", "occupied", "stderr-occupied", "symlink", "open-race", "missing-parent",
+    "active", "probe-error", "stderr",
+))
+def test_quiescence_requires_probe_execution_after_exclusive_opens(tmp_path, damage):
+    package = tmp_path / "maintenance-g11-c11-package"
+    if damage != "missing-parent":
+        package.mkdir()
+    path = package / "quiescence.private"
+    boundary = ""
+    if damage == "occupied":
+        path.write_bytes(b"retained")
+    elif damage == "stderr-occupied":
+        (package / "quiescence.stderr").write_bytes(b"retained")
+    elif damage == "symlink" and os.name != "nt":
+        path.symlink_to(tmp_path / "absent-link-target")
+    elif damage == "symlink":
+        boundary = (
+            'test() { if builtin test "$1 $2 $3" = "! -L $HOME/'
+            'maintenance-g11-c11-package/quiescence.private"; then return 1; fi; '
+            'builtin test "$@"; }'
+        )
+    elif damage == "open-race":
+        boundary = (
+            'test() { builtin test "$@" || return $?; '
+            'if builtin test "$1 $2 $3" = "! -L $HOME/'
+            'maintenance-g11-c11-package/quiescence.stderr"; then '
+            'printf retained >"$HOME/maintenance-g11-c11-package/quiescence.private"; '
+            'fi; return 0; }'
+        )
+    script = "\n".join((
+        "set -Eeuo pipefail; umask 077",
+        boundary,
+        'probe() { printf "called\\n" >>"$HOME/calls"; '
+        'printf "%s" "$PROBE_STDERR" >&2; return "$PROBE_STATUS"; }',
+        _quiescence_block().replace("/usr/bin/pgrep", "probe"),
+    ))
+    ran = _run(script, HOME=tmp_path.as_posix(),
+               PROBE_STDERR="PRIVATE" if damage == "stderr" else "",
+               PROBE_STATUS="0" if damage == "active" else "2" if damage == "probe-error" else "1")
+    executed = damage in {"none", "active", "probe-error", "stderr"}
+    assert (tmp_path / "calls").exists() is executed
+    assert ran.stdout == ("diagnosis-quiescence-checked\n" if damage == "none" else "")
+    assert (ran.returncode == 0) is (damage == "none")
+    assert PRIVATE not in ran.stdout and PRIVATE not in ran.stderr
+    if damage in {"occupied", "open-race"}:
+        assert path.read_bytes() == b"retained"
+    elif damage == "stderr-occupied":
+        assert (package / "quiescence.stderr").read_bytes() == b"retained"
+
+
+def _lifecycle_program(kind):
+    programs = re.findall(chr(96) * 3 + r"python\n(.*?)" + chr(96) * 3, _text(DOCUMENT), re.S)
+    assert len(programs) == 2
+    return programs[0 if kind == "d0" else 1]
+
+
+@pytest.mark.parametrize("kind", ("d0", "d4"))
+@pytest.mark.parametrize("damage", (
+    "none", "source", "step", "stdout", "stderr", "returncode",
+    "stdout-occupied", "stderr-open", "status-open",
+))
+def test_exact_lifecycle_file_invocation_is_hash_bound_and_byte_clean(tmp_path, kind, damage):
+    source = (HANDOFFS / "M8-maintenance-diagnosis.md").read_bytes()
+    section = re.search(
+        rb"### " + kind.upper().encode() + rb":.*?" + b"\x60" * 3
+        + rb"powershell\n(.*?)" + b"\x60" * 3, source, re.S,
+    )
+    assert section is not None
+    folder = tmp_path / "docs/plans/handoffs"
+    folder.mkdir(parents=True)
+    (folder / "M8-maintenance-diagnosis.md").write_bytes(
+        source + (b"x" if damage == "source" else b""))
+    step = tmp_path / f"maintenance-g11-{kind}.ps1"
+    step.write_bytes(section[1] + (b"x" if damage == "step" else b""))
+    if damage == "stdout-occupied":
+        (tmp_path / f"maintenance-g11-{kind}.stdout").write_bytes(b"retained")
+    elif damage in {"stderr-open", "status-open"}:
+        name = "stderr" if damage == "stderr-open" else "status.json"
+        (tmp_path / f"maintenance-g11-{kind}.{name}").mkdir()
+    raw_stdout = PRIVATE.encode() if damage == "stdout" else b""
+    raw_stderr = PRIVATE.encode() if damage == "stderr" else b""
+    returncode = 2 if damage == "returncode" else 0
+    fake = "\n".join((
+        "import subprocess",
+        "from pathlib import Path",
+        "from types import SimpleNamespace",
+        "def fake_run(argv, **kwargs):",
+        '    assert argv == [r"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",',
+        '        "-NoLogo", "-NoProfile", "-NonInteractive", "-File",',
+        f'        str(Path("maintenance-g11-{kind}.ps1").resolve())]',
+        '    assert kwargs["stdin"] == subprocess.DEVNULL and kwargs["check"] is False',
+        '    assert not kwargs["stdout"].closed and not kwargs["stderr"].closed',
+        '    Path("invocations").write_bytes(b"called\\n")',
+        f'    kwargs["stdout"].write({raw_stdout!r})',
+        f'    kwargs["stderr"].write({raw_stderr!r})',
+        f"    return SimpleNamespace(returncode={returncode})",
+        "subprocess.run = fake_run",
+    ))
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", "-B", "-c", fake + "\n" + _lifecycle_program(kind)],
+        cwd=tmp_path, stdin=subprocess.DEVNULL, capture_output=True, timeout=30, check=False,
+    )
+    marker = "start" if kind == "d0" else "park"
+    verdict = "checked" if damage == "none" else "refused"
+    assert result.stdout == f"g11-vm-{marker}-{verdict}\n".encode()
+    assert result.stderr == b"" and result.returncode == (0 if damage == "none" else 1)
+    executed = damage in {"none", "stdout", "stderr", "returncode"}
+    assert (tmp_path / "invocations").exists() is executed
+    assert PRIVATE.encode() not in result.stdout and PRIVATE.encode() not in result.stderr
+    if executed:
+        assert (tmp_path / f"maintenance-g11-{kind}.stdout").read_bytes() == raw_stdout
+        assert (tmp_path / f"maintenance-g11-{kind}.stderr").read_bytes() == raw_stderr
+        assert json.loads((tmp_path / f"maintenance-g11-{kind}.status.json").read_bytes()) == {
+            "returncode": returncode,
+        }
+    elif damage == "stdout-occupied":
+        assert (tmp_path / f"maintenance-g11-{kind}.stdout").read_bytes() == b"retained"
+
+
+def test_diagnostic_cause_enum_exactly_matches_installed_source():
+    import ast
+
+    tree = ast.parse(_programs(C11)[1])
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Name) and node.func.id == "enum"
+             and isinstance(node.args[0], ast.Subscript)
+             and isinstance(node.args[0].slice, ast.Constant)
+             and node.args[0].slice.value == "cause"]
+    assert len(calls) == 1
+    assert ast.literal_eval(calls[0].args[1]) == set(_FAILURES.values()) | {"unknown"}
+
+
+@pytest.mark.parametrize("cause", sorted(set(_FAILURES.values()) | {"unknown"}))
+def test_every_installed_source_cause_is_accepted_by_actual_checker(
+    tmp_path, monkeypatch, capsys, cause,
+):
+    record = _diagnostic()
+    record["journal"]["nodes"]["writer"]["failures"][0]["cause"] = cause
+    status, result = _diagnose(tmp_path, monkeypatch, capsys, record)
+    assert status == 0 and result == record
