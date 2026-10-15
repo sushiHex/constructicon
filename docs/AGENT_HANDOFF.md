@@ -15,6 +15,16 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #198 — reviewed helper bytes survive Windows checkout
+
+The two byte-pinned maintenance helpers require LF through exact-path Git
+attributes. A real autocrlf-enabled checkout must retain their canonical bytes
+while converting an unrestricted control to CRLF. The original Windows gate
+failed its CR-byte assertion despite matching canonical blob pins; this was
+checkout conversion, not corrupted committed source. The frozen procedure,
+helper blobs and direct-file refusal remain unchanged. This establishes no
+host diagnosis or vendor result.
+
 ## #186 — capture refusal names its first failed comparison
 
 The writer retains all five capture guards and their evaluation order, with
