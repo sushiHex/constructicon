@@ -13,6 +13,23 @@ From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-
 and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
 subscription route; see the dated section at the end of this record.
 
+## 2026-10-15 — installed capture diagnostics for the next maintenance session
+
+Refs #186. The existing bounded historical reader recognizes the five exact
+capture-comparison messages from PR #200. It retains the grouped historical
+category and closes unknown or extended text to `unknown`. Five independent
+mutants each remove one recognition and fail by assertion; 52 focused
+diagnostic/bootstrap/checkout tests passed on Windows. Source/test Ruff passed.
+The full gate and native proofs are required separately before merge/use.
+
+The additive [installed-reader note](M8-maintenance-installed-diagnostics.md)
+separates the old procedure's immutable helper pins from current source bytes.
+The successor must use a newly installed, verified controller module rather
+than the old missing-module bootstrap. No staged override, second reader,
+callback telemetry, new persistence structure or relaxed capture check exists.
+The source change does not diagnose the old grouped g10 failure or establish
+another installation, qualification, dispatch or accepted contribution.
+
 ## PR A — contracts, coherence, and publication
 
 The implementation adds no launcher, model adapter, credential handling,
