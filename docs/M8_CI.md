@@ -122,6 +122,33 @@ it cannot grant a docs-only exemption. This does not make a modified workflow
 definition trustworthy: workflow changes still require review as CI policy.
 The ordinary repository `verify` workflow still runs on every PR.
 
+### Stable merge checks
+
+The merge ruleset's proposed required contexts are `verify-complete`, `qualify`
+and `containment`. These are job check names, not workflow titles or individual
+matrix entries:
+
+| Check | Required successful evidence |
+| --- | --- |
+| `verify-complete` | `windows-discovery`, `verify` (including its host-artifact mutation inventory), and every entry of the portable `mutations` matrix |
+| `qualify` | The unconditional hosted-runner qualification job, including evidence publication |
+| `containment` | Successful exact-base classification and either successful docs validation with physical lanes skipped, or all four successful physical lanes with docs validation skipped |
+
+The portable aggregate runs with `always()` and accepts only explicit success
+from every dependency. Failed, cancelled, skipped, missing or unknown portable
+results refuse; the matrix keeps `fail-fast: false`. Qualification runs on
+every PR, including prose-only changes. The containment exemption remains the
+exact-base policy described above. None of the workflows has a PR path filter,
+so these stable contexts are emitted for both code and documentation changes.
+
+Required-check configuration is a separate repository setting, not established
+by these workflow bytes. Before enabling it, observe both code and docs-only
+PRs, then verify the main ruleset's exact contexts and GitHub App source, pending
+or failed-check refusal, and a valid green merge. Preserve resolved review
+conversations and the absence of bypass actors. A green aggregate does not grant
+merge authority or replace independent review. Workflow definitions remain
+reviewed CI policy, not a security boundary against arbitrary PR-head rewrites.
+
 This avoids rebuilding a physical lab for prose-only changes. Runner isolation
 reduces the serial critical path for code changes, at the cost of repeated host
 provisioning. The pre-split baselines are runs
