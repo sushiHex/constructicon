@@ -15,6 +15,19 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #186 — bind g11 capture validation to its open files
+
+The additive g11 procedure keeps all four application/diagnostic capture
+descriptors open through regular-file, nonsymlink and same-object checks for
+every pathname. Stderr emptiness is checked on the retained descriptors;
+identity loss stops nonzero before status publication or result validation.
+Fake-boundary tests reproduce the former empty-replacement gap and exercise
+both accepting captures, all four replacement destinations and guard removal.
+
+This is source-procedure evidence, not a live application, host qualification
+or execution authorization. Frozen procedures, controller/bundle pins and the
+fixed task/exam remain unchanged. The historical g10 predicate remains unknown.
+
 ## #201 — portable verification has a positive aggregate
 
 [PR #202](https://github.com/sushiHex/constructicon/pull/202) merged as
