@@ -259,7 +259,10 @@ def test_input_byte_bound_binds_and_maximum_nested_counts_are_accepted(
 
 def test_new_paths_and_frozen_blocks_preserve_existing_source_laws():
     doc = _text(DOCUMENT)
-    assert "C=UNPREPARED" in doc and "BASE=UNPREPARED" in doc
+    assert "C=5793ef98ef5597c9ee9811a0d1f031554eb7f514" in doc
+    assert "BASE=5793ef98ef5597c9ee9811a0d1f031554eb7f514" in doc
+    assert "BUNDLE_SIZE=4191531" in doc
+    assert "BUNDLE_SHA256=6a2939a54dd209c36be43250ef0110594d10ef88ba813dca22382d3643751fab" in doc
     assert "q11/a3/m3" in doc and "maintenance-3/application-3.json" in doc
     assert "maintenance-g9-account.seal" in doc and "maintenance-g11-d2-prior" in doc
     assert "HR R19 on both routes" in doc and "no retirement" in doc
@@ -344,10 +347,13 @@ def test_every_new_shell_block_parses_with_actual_common():
         assert ran.returncode == 0 and ran.stdout == "" and ran.stderr == ""
 
 
-@pytest.mark.parametrize("damage", ("draft", "none", "base", "bound", "bundle"))
+@pytest.mark.parametrize("damage", ("actual", "draft", "none", "base", "bound", "bundle"))
 def test_pin_guard_is_nonexecutable_until_all_literals_are_prepared(damage):
     guard = _blocks(C0)[0]
-    if damage != "draft":
+    if damage == "draft":
+        guard, count = re.subn(r"(?m)^C=.*$", "C=UNPREPARED", guard)
+        assert count == 1
+    elif damage != "actual":
         for name, value in {
             "C": "a" * 40, "BASE": "a" * 40, "BUNDLE_SHA256": "b" * 64,
             "BUNDLE_SIZE": "1", "BUNDLE": "/reviewed.bundle",
@@ -362,8 +368,8 @@ def test_pin_guard_is_nonexecutable_until_all_literals_are_prepared(damage):
         guard = guard.replace("BUNDLE=/reviewed.bundle",
                               "BUNDLE=/home/m8-service/UNPREPARED.bundle")
     ran = _run("set +e\n" + guard + "\necho transport-permitted")
-    assert ran.stdout == ("transport-permitted\n" if damage == "none" else "")
-    assert (ran.returncode == 0) is (damage == "none")
+    assert ran.stdout == ("transport-permitted\n" if damage in {"none", "actual"} else "")
+    assert (ran.returncode == 0) is (damage in {"none", "actual"})
 
 
 @pytest.mark.parametrize("record", ("s4", "s6a"))

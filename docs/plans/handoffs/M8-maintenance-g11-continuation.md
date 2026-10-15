@@ -1,6 +1,6 @@
 # M8 maintenance: g11 and one fresh application attempt
 
-Draft additive successor for [#186](https://github.com/sushiHex/constructicon/issues/186). Source-only and nonexecutable while any pin is UNPREPARED. Root owns final pins, approval, merges and execution. Before preparation require exact-head local/CI/native/mutation evidence and independent review for the merge safeguard PR #202, installed diagnostic PR #203 and credential-free full-repository ordinary-consumer/contained-callback proof.
+Prepared additive successor for [#186](https://github.com/sushiHex/constructicon/issues/186). Preparation is not execution authorization: final procedure review, CI, merge and the C0 owner decision remain required. The merge safeguard PR #202, installed diagnostic PR #203 and credential-free full-repository ordinary-consumer/contained-callback proof PR #204 are merged. Their exact-head evidence is recorded in the PRs; the latter's reviewed tree equals merged controller C below.
 
 The frozen [private continuation](M8-maintenance-private-continuation.md), [session](M8-maintenance-session.md), [preservation continuation](M8-maintenance-continuation.md) and [diagnosis](M8-maintenance-diagnosis.md) retain their bytes. Installed controller O is e7d40b139c2a0205f37c7050295a3eca55af9d2c; installed D is 8c1b14eed6f02474abcc1ac998e3bf87f8c6ade3. g10/q10 and a2/m2 are used. g10 was not accepted; read-only diagnosis recorded normal nonacceptance and grouped capture-mismatch. Its exact predicate remains unknown. A no-change reproduction proves a possible path, not its historical cause. VM Off/zero checkpoints and released custody are historical facts, not this session's readiness.
 
@@ -17,16 +17,16 @@ paths, and one exact application attempt. Existing model/callback/byte/epoch,
 1200 seconds and joined cleanup has no overall wall-clock claim. Token/spend
 observations do not supply a finite monetary ceiling.
 
-Before every workstation transport and executed step use this literal guard. C/BASE/bundle remain UNPREPARED until the actual relevant merges exist:
+Before every workstation transport and executed step use this literal guard:
 
 ```bash
-C=UNPREPARED
+C=5793ef98ef5597c9ee9811a0d1f031554eb7f514
 O=e7d40b139c2a0205f37c7050295a3eca55af9d2c
 D=8c1b14eed6f02474abcc1ac998e3bf87f8c6ade3
-BASE=UNPREPARED
-BUNDLE_SHA256=UNPREPARED
-BUNDLE_SIZE=UNPREPARED
-BUNDLE=/home/m8-service/UNPREPARED.bundle
+BASE=5793ef98ef5597c9ee9811a0d1f031554eb7f514
+BUNDLE_SHA256=6a2939a54dd209c36be43250ef0110594d10ef88ba813dca22382d3643751fab
+BUNDLE_SIZE=4191531
+BUNDLE=/home/m8-service/maintenance-g11-5793ef98.bundle
 [[ "$C" =~ ^[0-9a-f]{40}$ && "$O" =~ ^[0-9a-f]{40}$ && "$D" =~ ^[0-9a-f]{40}$ \
    && "$BASE" =~ ^[0-9a-f]{40}$ && "$BUNDLE_SHA256" =~ ^[0-9a-f]{64}$ \
    && "$BUNDLE_SIZE" =~ ^[1-9][0-9]{0,7}$ ]] \
@@ -52,6 +52,14 @@ the final reviewed head. Recompare all six launch blobs from O to C:
 `scripts/ci/m8_host_artifacts.py`, the launch AppArmor policy, `_supervisor.py`,
 `_egress_bridge.py`, `linux.py` and `.github/workflows/m8-containment.yml`.
 Recheck that equality at final C. Equality from installed e7d40b1 to e9b83e8 is only local source evidence. Require a new self-contained bundle at BASE=C, exact ref inventory, actual size at most 64 MiB and SHA-256. Stock Git must independently import it into an empty repository and fsck. Recheck all three SOURCE_HASHES at final C and absence of tests/vectors/plan_manifest.json. Fill only reviewed literal declarations after relevant merges; no anticipated pins or old bundle reuse.
+
+Preparation evidence at C=5793ef98: all six named launch blobs exist and are
+byte-identical to O. Stock Git verified the fresh bundle's complete history,
+sole refs/heads/maintenance ref at C, and an independent empty-repository
+import plus full fsck. Its measured bytes and SHA-256 are the literals above.
+All three committed source hashes equal SOURCE_HASHES; the candidate vector
+path is absent at C.
+This is local source/artifact evidence, not installed-host qualification.
 
 Reuse frozen [OC](M8-N4-operator-commands.md),
 [LR](M8-N4-launch-replacement.md), [HR](M8-N4-host-runtime.md),
@@ -389,7 +397,7 @@ step, bundle and their SHA-256 manifest. Transfer the prepared literal artifact
 as service, without changing home custody:
 
 ```bash
-SOURCE_UPLOAD="$HOME/maintenance-g11-c7-package/UNPREPARED.bundle"
+SOURCE_UPLOAD="$HOME/maintenance-g11-c7-package/maintenance-g11-5793ef98.bundle"
 test "$SOURCE_UPLOAD" != "$HOME/maintenance-g11-c7-package/UNPREPARED.bundle" \
   || { echo 'reviewed upload literal required; stop' >&2; exit 1; }
 test -f "$SOURCE_UPLOAD" && test ! -L "$SOURCE_UPLOAD"
