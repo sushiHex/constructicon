@@ -15,6 +15,35 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #210 — lane boundaries accept exactly the CLI's own summary
+
+The g11 session stopped at its first S4 lane. g11's blanket "empty stderr at every
+boundary" rule contradicts `codex_lane.main`, which always prints its
+`{evidence_digest, faults}` summary to stderr after publishing evidence, on
+success too. The additive [lane output contract](plans/handoffs/M8-maintenance-lane-output.md)
+replaces that rule at the five boundaries a source audit found affected:
+- S4;
+- H7 active, S6b and S6c;
+- ER R1.
+
+At each one, the captured stderr must equal the summary rebuilt from the
+published evidence. That evidence must pass the frozen `check_evidence`, except
+explicit refresh, which gets a closed-field consistency check. The exit must be 1 exactly when there
+are faults, and stdout carries only the declared verdict. Command status,
+capture success and the ssh transport status are recorded separately.
+Credential-free tests drive the real CLI in a subprocess through those blocks.
+
+What this does not establish:
+- **No host evidence:** it qualifies nothing and authorizes no resume of the stopped g11 session.
+- **S6a stays frozen:** its lane output already goes to `/dev/null`.
+- **Explicit refresh is bound for consistency only:** no semantic schema-5
+  checker was added.
+- **C10's `run` stderr remains UNKNOWN:** its only implicit writer, asyncio's
+  default exception logging, fires after a failed walker drive.
+
+The live S4 exit and qualification remain unknown. A reported "S4 exit 1" was
+the outer transport's exit, as the #186 correction records.
+
 ## #186 — bind g11 capture validation to its open files
 
 The additive g11 procedure keeps all four application/diagnostic capture
