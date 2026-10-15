@@ -15,6 +15,15 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #195 — verifier failure preserves child status
+
+The verification summary retains each failed stage's exact numeric child
+return code, without changing stage ordering or the aggregate failure exit.
+Fake subprocess tests cover ordinary failures and signed/unsigned native
+statuses. This supplies evidence, not an explanation for the earlier Windows
+pytest interruption. The contributor guide gives one explicit local verbose
+diagnostic run; a missing parent status line still means unknown, not success.
+
 ## #186 — historical diagnosis is not recovery
 
 The maintenance evidence helper captures a fixed private file set, including
