@@ -23,8 +23,38 @@ DIAGNOSTIC_MODULE = "constructicon.substrate.journal.maintenance_diagnostic:"
 DIAGNOSTIC_TESTS = "tests/substrate/journal/test_maintenance_diagnostic.py::"
 VM_ADDRESS_MODULE = "scripts.m8_vm_address:"
 VM_ADDRESS_TESTS = "tests/test_m8_vm_address.py::"
+WRITER = "constructicon.api.plan_manifest_application:maintenance_writer"
+WRITER_TESTS = "tests/api/test_plan_manifest_application.py::"
 
 MUTANTS = (
+    *(
+        ("maintenance capture preserves " + name, WRITER, condition, "if False:",
+         WRITER_TESTS + "test_writer_capture_guards_keep_acceptance_and_first_failure["
+         + name + "]")
+        for name, condition in (
+            ("commit", "if candidate.commit != captured:"),
+            ("base", "if candidate.commit == request.base_commit:"),
+            ("repository", "if candidate.repository != request.repository:"),
+            ("paths", "if candidate.paths:"),
+            ("comparison-base", "if candidate.diff_against != request.base_commit:"),
+        )
+    ),
+    ("maintenance capture diagnoses first comparison before base", WRITER,
+     'if candidate.commit != captured:\n'
+     '        raise ContractViolation('
+     '"maintenance captured candidate differs from capture return")\n'
+     '    if candidate.commit == request.base_commit:\n'
+     '        raise ContractViolation("maintenance captured candidate equals the pinned base")',
+     'if candidate.commit == request.base_commit:\n'
+     '        raise ContractViolation("maintenance captured candidate equals the pinned base")\n'
+     '    if candidate.commit != captured:\n'
+     '        raise ContractViolation('
+     '"maintenance captured candidate differs from capture return")',
+     WRITER_TESTS + "test_writer_capture_guards_keep_acceptance_and_first_failure[commit-first]"),
+    ("maintenance capture diagnosis never includes candidate values", WRITER,
+     'ContractViolation("maintenance captured candidate equals the pinned base")',
+     'ContractViolation(str(candidate))',
+     WRITER_TESTS + "test_writer_capture_guards_keep_acceptance_and_first_failure[base]"),
     ("VM address requires exact identity", VM_ADDRESS_MODULE + "_parse",
      'if value["name"] != VM_NAME:', "if False:",
      VM_ADDRESS_TESTS + "test_source_refusals_are_closed"),

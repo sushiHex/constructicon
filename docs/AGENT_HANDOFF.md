@@ -15,6 +15,17 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #186 — capture refusal names its first failed comparison
+
+The writer retains all five capture guards and their evaluation order, with
+fixed journal messages for the first failed comparison. Acceptance and async
+boundaries are unchanged. A genuine-provider, real-Git regression reproduces
+refusal after a successful no-op executor returns a base candidate; it does not
+establish that explanation for the historical run. The frozen bounded reader
+still reports new messages as `unknown` and the historical grouped reason as
+`capture-mismatch`. Installed code remains unchanged, the VM is parked with
+custody released, and this source change grants no new attempt authority.
+
 ## #186 — review the command boundary before the host session
 
 The first diagnostic session stopped before SSH: an improvised inline address

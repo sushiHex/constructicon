@@ -13,6 +13,7 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -26,10 +27,11 @@ from constructicon.api.plan_manifest_application import (
     maintenance_definitions,
     maintenance_graph,
     maintenance_system,
+    maintenance_writer,
     require_maintenance_resources,
 )
 from constructicon.api.system import Constructicon
-from constructicon.core.address import GitSha
+from constructicon.core.address import ExecutionPath, GitSha, RunId, ScopePath
 from constructicon.core.control import RegistrationCommandResult, RunSubmission
 from constructicon.core.effect import AttestationDraft, CheckResult, MergeSubject
 from constructicon.core.envelope import GitRef
@@ -47,6 +49,7 @@ from constructicon.core.graph import Graph
 from constructicon.core.identity import digest
 from constructicon.core.maintenance import PlanManifestRequest
 from constructicon.core.run import RunStatus
+from constructicon.runtime.context import NodeContext
 from constructicon.runtime.registry import CapabilityDescriptor
 from constructicon.substrate._lifetime import finish_owned
 from constructicon.substrate.executors.linux import ProcessLimits, ProcessResult
@@ -57,7 +60,7 @@ from constructicon.substrate.git.capture import ContainedWriteWorkspaceProvider
 from constructicon.substrate.git.process import GitProcess
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.api.test_control_response_loss import LOCAL_ADMIN, RUN_ACTOR
-from tests.captureworld import ControlledWorkspaceProvider
+from tests.captureworld import ControlledAsyncWorkspace, ControlledWorkspaceProvider
 from tests.conftest import LEASE_TTL_S, FakeClock
 from tests.executorworld import FakeExecutorProvider, launch_identity
 from tests.gateworld import ControlledGate, ControlledGateProvider
@@ -114,6 +117,63 @@ class WorkspaceProvider(ControlledWorkspaceProvider):
         )
         acquired.resource.commit_allowed.set()
         return acquired
+
+
+@pytest.mark.parametrize(("changes", "captured", "message"), [
+    ({}, CANDIDATE, None),
+    ({"commit": TREE}, CANDIDATE, "maintenance captured candidate differs from capture return"),
+    ({"commit": BASE}, BASE, "maintenance captured candidate equals the pinned base"),
+    ({"repository": "private-repository"}, CANDIDATE,
+     "maintenance captured candidate has another repository"),
+    ({"paths": ("private-path",)}, CANDIDATE,
+     "maintenance captured candidate has path restrictions"),
+    ({"diff_against": TREE}, CANDIDATE,
+     "maintenance captured candidate has another comparison base"),
+    ({"commit": BASE, "repository": "private-repository", "paths": ("private-path",),
+      "diff_against": TREE}, CANDIDATE,
+     "maintenance captured candidate differs from capture return"),
+    ({"commit": BASE, "repository": "private-repository", "paths": ("private-path",),
+      "diff_against": TREE}, BASE,
+     "maintenance captured candidate equals the pinned base"),
+    ({"repository": "private-repository", "paths": ("private-path",), "diff_against": TREE},
+     CANDIDATE, "maintenance captured candidate has another repository"),
+    ({"paths": ("private-path",), "diff_against": TREE}, CANDIDATE,
+     "maintenance captured candidate has path restrictions"),
+], ids=["accepted", "commit", "base", "repository", "paths", "comparison-base",
+        "commit-first", "base-first", "repository-first", "paths-first"])
+async def test_writer_capture_guards_keep_acceptance_and_first_failure(
+    monkeypatch, changes, captured, message,
+):
+    workspace = ControlledAsyncWorkspace(SimpleNamespace(check_control=lambda: None))
+    workspace.reference = GitRef(repository=REQUEST.repository, commit=BASE, diff_against=BASE)
+    workspace.ready = True
+    workspace.commit_allowed.set()
+    original = workspace.commit_all
+    capture_calls = []
+
+    async def capture(text):
+        capture_calls.append(text)
+        await original(text)
+        workspace.reference = workspace.reference.model_copy(update=changes)
+        return captured
+
+    monkeypatch.setattr(workspace, "commit_all", capture)
+    executor = Writer()
+    ctx = NodeContext(run_id=RunId("run-" + "1" * 32),
+        path=ExecutionPath(scope=ScopePath(segments=("capture-guard", "writer"))),
+        capabilities={"workspace": workspace, "executor": executor},
+        grants=WRITE_GRANTS, effect=lambda *args, **kwargs: pytest.fail("unexpected effect"))
+    if message is None:
+        result = await maintenance_writer(ctx, INPUTS)
+        assert result == {"candidate": GitRef(repository=REQUEST.repository, commit=CANDIDATE,
+                                             diff_against=BASE).model_dump(mode="json")}
+    else:
+        with pytest.raises(ContractViolation) as refusal:
+            await maintenance_writer(ctx, INPUTS)
+        assert str(refusal.value) == message
+        assert "private-" not in str(refusal.value)
+    assert len(executor.calls) == 1
+    assert capture_calls == ["constructicon plan-manifest regression vectors"]
 
 
 class Gate(ControlledGate):
@@ -650,6 +710,49 @@ async def test_concrete_assembly_real_git_and_journal_affirm_exact_accepted_resu
     with pytest.raises(ContractViolation, match="exact assembled system world"):
         foreign = Constructicon(journal=resources.journal)
         await derive_maintenance_result(foreign, resources, submission.run_id)
+
+
+async def test_concrete_successful_noop_is_refused_after_real_capture(
+    concrete_application, completed_concrete_attempt, monkeypatch,
+):
+    resources, executor, _system, control, _launch = concrete_application
+    executor.executor = Writer()
+    captured = []
+    original = resources.workspace.capture
+
+    async def observe_capture(workspace, message):
+        oid = await original(workspace, message)
+        captured.append((oid, workspace.git_ref()))
+        return oid
+
+    monkeypatch.setattr(resources.workspace, "capture", observe_capture)
+    graph = await register(control)
+    submitted = await control.runs_start(RUN_ACTOR, proposal=graph,
+        inputs={"request": resources.request.model_dump(mode="json")}, idempotency_key="noop")
+    assert isinstance(submitted, RunSubmission), submitted
+    result = await completed_concrete_attempt(submitted.run_id)
+    assert result.status is RunStatus.FAILED
+    assert resources.journal.run_state(submitted.run_id).status is RunStatus.FAILED
+    assert captured == [(resources.request.base_commit, GitRef(
+        repository=resources.request.repository, commit=resources.request.base_commit,
+        diff_against=resources.request.base_commit))]
+    events = resources.journal.events(submitted.run_id, limit=100)
+    failures = [event for event in events if event.kind == "NodeFailed"]
+    assert len(failures) == 1
+    assert failures[0].payload == {
+        "error_type": "ContractViolation",
+        "error": "maintenance captured candidate equals the pinned base",
+    }
+    writer_path = failures[0].path
+    assert writer_path is not None and writer_path.scope.segments[-1] == "writer"
+    assert resources.journal.checkpoint(submitted.run_id, writer_path) is None
+    assert not any(event.kind == "NodeStarted" and event.path is not None
+                   and event.path.scope.segments[-1] == "checker" for event in events)
+    assert len(executor.executor.calls) == 1
+    rows = resources.journal.capability_leases(submitted.run_id)
+    assert rows and all(row.state == "closed" for row in rows)
+    assert resources.authority.resolve_ref(resources.request.target_ref) \
+        == resources.request.base_commit
 
 
 @pytest.mark.parametrize("change", ["journal", "authority", "checks", "descriptor"])
