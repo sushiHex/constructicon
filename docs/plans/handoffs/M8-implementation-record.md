@@ -6231,15 +6231,33 @@ checkpoints. This is no diagnostic result or application-failure explanation.
 The [additive discovery continuation](M8-maintenance-diagnosis-discovery.md)
 keeps all prior helper and procedure bytes unchanged. A stdlib Python entry
 owns discovery and closed output validation; its fixed minimal PowerShell query
-uses the native bounded IP-address wait, then fresh VM identity/state and
-adapter facts. No nested shell, caller command, start/stop, SSH, application
+reads fresh VM identity/state and adapter facts. Python uses the same address
+predicate for readiness and acceptance within one bounded observation budget.
+No nested shell, caller command, start/stop, SSH, application
 retry or provider action lives in the helper. Exactly one deduplicated RFC1918
-IPv4 is required. Missing or ambiguous addresses, malformed data, stderr,
-process failure and timeout refuse once. The source-size cap is post-capture,
+IPv4 is required. Readiness exhaustion, ambiguous addresses, malformed data,
+stderr, process failure and timeout refuse. The source-size cap is post-capture,
 not a streaming-memory guarantee; address discovery is not SSH readiness.
 
-Fifty focused tests passed on Windows, including seven actual PowerShell
+The initial fifty focused tests passed on Windows, including seven PowerShell
 process tests with fake Hyper-V commands and no VM access. Independent narrow
 review reproduced all fifty and found no blocking defect. A dedicated Windows
 CI job exercises this boundary; exact-head CI and mutation results are recorded
 on the PR. These implementation tests do not establish another host session.
+
+The peer's narrow procedure review raised a plausible one-shot readiness gap:
+the native generic IP-address wait might observe IPv6 link-local before the
+required private IPv4. This was not measured on the guest. The design therefore
+moved readiness into Python rather than duplicating its address law in
+PowerShell. Only valid no-suitable-address observations may wait; all other
+refusals stop. One monotonic deadline and a finite observation count bound that
+interval, and late responses cannot become acceptance. The superseded CI runs
+were cancelled, not reported as passing final-head evidence.
+
+The corrected helper passed 69 Windows tests, including eight actual
+PowerShell process tests with fake Hyper-V commands. All 22 discovery mutants
+failed assertions, and all 38 inventory checks passed. A narrow independent
+review reproduced the 69 helper tests and found no blocker. Deadline tests use
+an injected clock; process-launch/cleanup overhead is not a hard wall-clock
+guarantee. Exhaustion records its own fact rather than asserting that the last
+observation lacked an address. No guest was queried by these tests.

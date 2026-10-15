@@ -14,6 +14,26 @@ from scripts import m8_vm_address as discovery
 PRIVATE_MARKER = "private-marker-should-never-be-published"
 
 
+class Clock:
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, duration: float) -> None:
+        self.sleeps.append(duration)
+        self.now += duration
+
+
+@pytest.fixture(autouse=True)
+def clock(monkeypatch: pytest.MonkeyPatch) -> Clock:
+    clock = Clock()
+    monkeypatch.setattr(discovery, "time", clock, raising=False)
+    return clock
+
+
 def _source(**changes: object) -> bytes:
     fields: dict[str, object] = {
         "name": discovery.VM_NAME,
@@ -27,7 +47,7 @@ def _source(**changes: object) -> bytes:
 def _fake_process(
     monkeypatch: pytest.MonkeyPatch,
     *,
-    stdout: bytes | None = None,
+    stdout: bytes | list[bytes] | None = None,
     stderr: bytes = b"",
     returncode: int = 0,
     error: Exception | None = None,
@@ -38,8 +58,10 @@ def _fake_process(
         calls.append((argv, kwargs))
         if error is not None:
             raise error
+        source = (stdout[min(len(calls) - 1, len(stdout) - 1)]
+                  if isinstance(stdout, list) else stdout)
         return subprocess.CompletedProcess(
-            argv, returncode, _source() if stdout is None else stdout, stderr,
+            argv, returncode, _source() if source is None else source, stderr,
         )
 
     # Patch the module binding, not os.name globally (which changes pathlib).
@@ -81,7 +103,7 @@ def test_acceptance_uses_only_fixed_argv_and_closed_stdin(
         [r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
          "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", discovery.QUERY],
         {"shell": False, "stdin": subprocess.DEVNULL, "capture_output": True,
-         "timeout": 75, "check": False},
+         "timeout": 60, "check": False},
     )]
 
 
@@ -111,10 +133,10 @@ def test_all_rfc1918_ranges_are_accepted(monkeypatch: pytest.MonkeyPatch, addres
     ({"state": "Off"}, "vm_state"),
     ({"state": "Paused"}, "vm_state"),
     ({"state": None}, "vm_state"),
-    ({"addresses": []}, "no_suitable_address"),
-    ({"addresses": ["172.15.255.255", "172.32.0.1"]}, "no_suitable_address"),
+    ({"addresses": []}, "readiness_exhausted"),
+    ({"addresses": ["172.15.255.255", "172.32.0.1"]}, "readiness_exhausted"),
     ({"addresses": ["127.0.0.1", "169.254.1.1", "::ffff:192.168.44.2"]},
-     "no_suitable_address"),
+     "readiness_exhausted"),
     ({"addresses": ["192.168.44.2", "10.0.0.2"]}, "ambiguous_address"),
     ({"addresses": ["192.168.44.2", PRIVATE_MARKER]}, "malformed_source"),
     ({"addresses": [None]}, "malformed_source"),
@@ -164,7 +186,7 @@ def test_post_capture_source_bound_binds(
     ({"stderr": b"\n"}, "query_stderr"),
     ({"error": FileNotFoundError(PRIVATE_MARKER)}, "query_unavailable"),
     ({"error": PermissionError(PRIVATE_MARKER)}, "query_unavailable"),
-    ({"error": subprocess.TimeoutExpired(PRIVATE_MARKER, 75,
+    ({"error": subprocess.TimeoutExpired(PRIVATE_MARKER, 60,
                                          output=PRIVATE_MARKER, stderr=PRIVATE_MARKER)},
      "query_timeout"),
 ])
@@ -174,6 +196,176 @@ def test_process_faults_refuse_without_retry_or_private_details(
 ) -> None:
     calls = _fake_process(monkeypatch, **kwargs)  # type: ignore[arg-type]
     assert _main_report(capsys, 1)["reason"] == reason
+    assert len(calls) == 1
+
+
+def test_ipv6_pending_then_dhcp_accepts_in_one_invocation(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], clock: Clock,
+) -> None:
+    calls = _fake_process(monkeypatch, stdout=[_source(addresses=["fe80::1234"]), _source()])
+    _main_report(capsys, 0)
+    assert len(calls) == 2
+    assert clock.sleeps == [1]
+
+
+def test_pending_predicate_is_distinct_from_public_exhaustion(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    pending = _source(addresses=["fe80::1234"])
+    assert discovery._parse(pending) == {"status": "refused", "reason": "no_suitable_address"}
+    _fake_process(monkeypatch, stdout=pending)
+    assert _main_report(capsys, 1)["reason"] == "readiness_exhausted"
+
+
+@pytest.mark.parametrize(("changes", "reason"), [
+    ({"name": PRIVATE_MARKER}, "vm_identity"),
+    ({"state": "Off"}, "vm_state"),
+    ({"addresses": [PRIVATE_MARKER]}, "malformed_source"),
+    ({"addresses": ["192.168.44.2", "10.0.0.2"]}, "ambiguous_address"),
+])
+def test_pending_then_invalid_observation_stops_immediately(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], clock: Clock,
+    changes: dict[str, object], reason: str,
+) -> None:
+    calls = _fake_process(
+        monkeypatch, stdout=[_source(addresses=["fe80::1234"]), _source(**changes), _source()],
+    )
+    assert _main_report(capsys, 1)["reason"] == reason
+    assert len(calls) == 2
+    assert clock.sleeps == [1]
+
+
+@pytest.mark.parametrize(("fault", "reason"), [
+    ("exit", "query_failed"), ("stderr", "query_stderr"),
+    ("timeout", "query_timeout"), ("unavailable", "query_unavailable"),
+    ("source_limit", "source_limit"),
+])
+def test_pending_then_process_fault_stops_immediately(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], clock: Clock,
+    fault: str, reason: str,
+) -> None:
+    calls = _fake_process(monkeypatch, stdout=[_source(addresses=[]), _source()])
+    fake_run = discovery.subprocess.run
+
+    def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        completed = fake_run(argv, **kwargs)
+        if len(calls) == 2:
+            if fault == "timeout":
+                raise subprocess.TimeoutExpired(PRIVATE_MARKER, 59)
+            if fault == "unavailable":
+                raise OSError(PRIVATE_MARKER)
+            if fault == "exit":
+                completed.returncode = 1
+            if fault == "stderr":
+                completed.stderr = PRIVATE_MARKER.encode()
+            if fault == "source_limit":
+                completed.stdout = b" " * (discovery.MAX_SOURCE_BYTES + 1)
+        return completed
+
+    monkeypatch.setattr(discovery.subprocess, "run", run)
+    assert _main_report(capsys, 1)["reason"] == reason
+    assert len(calls) == 2
+    assert clock.sleeps == [1]
+
+
+def test_observation_limit_binds_even_when_clock_does_not_advance(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], clock: Clock,
+) -> None:
+    calls = _fake_process(monkeypatch, stdout=_source(addresses=[]))
+    monkeypatch.setattr(clock, "sleep", clock.sleeps.append)
+    assert _main_report(capsys, 1)["reason"] == "readiness_exhausted"
+    assert len(calls) == 60
+    assert clock.sleeps == [1] * 59
+
+
+def test_deadline_checked_before_query_and_sleep_is_remaining_bounded(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], clock: Clock,
+) -> None:
+    calls = _fake_process(monkeypatch, stdout=_source(addresses=[]))
+    fake_run = discovery.subprocess.run
+
+    def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        completed = fake_run(argv, **kwargs)
+        clock.now = 59.75
+        return completed
+
+    monkeypatch.setattr(discovery.subprocess, "run", run)
+    assert _main_report(capsys, 1)["reason"] == "readiness_exhausted"
+    assert len(calls) == 1
+    assert clock.sleeps == [0.25]
+    assert clock.now == 60
+
+
+def test_query_timeout_shrinks_to_remaining_budget(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], clock: Clock,
+) -> None:
+    calls = _fake_process(monkeypatch, stdout=[_source(addresses=[]), _source()])
+    fake_run = discovery.subprocess.run
+
+    def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        completed = fake_run(argv, **kwargs)
+        if len(calls) == 1:
+            clock.now = 58.75
+        return completed
+
+    monkeypatch.setattr(discovery.subprocess, "run", run)
+    _main_report(capsys, 0)
+    assert [call[1]["timeout"] for call in calls] == [60, 0.25]
+    assert clock.sleeps == [1]
+
+
+@pytest.mark.parametrize("elapsed", [60, 61])
+def test_late_valid_query_never_accepts(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], clock: Clock,
+    elapsed: float,
+) -> None:
+    calls = _fake_process(monkeypatch)
+    fake_run = discovery.subprocess.run
+
+    def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        completed = fake_run(argv, **kwargs)
+        clock.now = elapsed
+        return completed
+
+    monkeypatch.setattr(discovery.subprocess, "run", run)
+    assert _main_report(capsys, 1)["reason"] == "readiness_exhausted"
+    assert len(calls) == 1
+    assert clock.sleeps == []
+
+
+def test_late_query_is_not_parsed(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], clock: Clock,
+) -> None:
+    calls = _fake_process(monkeypatch)
+    fake_run = discovery.subprocess.run
+
+    def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        completed = fake_run(argv, **kwargs)
+        clock.now = 60
+        return completed
+
+    def parse(_source: bytes) -> dict[str, str]:
+        pytest.fail("a late query must be refused before inspecting its source")
+
+    monkeypatch.setattr(discovery.subprocess, "run", run)
+    monkeypatch.setattr(discovery, "_parse", parse)
+    assert _main_report(capsys, 1)["reason"] == "readiness_exhausted"
+    assert len(calls) == 1
+
+
+def test_deadline_expiring_during_parse_cannot_accept(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], clock: Clock,
+) -> None:
+    calls = _fake_process(monkeypatch)
+    real_parse = discovery._parse
+
+    def parse(source: bytes) -> dict[str, str]:
+        report = real_parse(source)
+        clock.now = 60
+        return report
+
+    monkeypatch.setattr(discovery, "_parse", parse)
+    assert _main_report(capsys, 1)["reason"] == "readiness_exhausted"
     assert len(calls) == 1
 
 
@@ -215,7 +407,6 @@ def test_isolated_script_rejects_arguments_without_loading_repo() -> None:
 @pytest.mark.parametrize(("state", "addresses", "expected"), [
     ("Running", ["fe80::1234", "192.168.44.2", "192.168.44.2"], "ok"),
     ("Off", ["192.168.44.2"], "vm_state"),
-    ("Running", [], "no_suitable_address"),
     ("Running", ["192.168.44.2", "10.0.0.2"], "ambiguous_address"),
 ])
 def test_actual_windows_argv_boundary_with_fake_hyperv(
@@ -224,17 +415,8 @@ def test_actual_windows_argv_boundary_with_fake_hyperv(
 ) -> None:
     # Only the Hyper-V cmdlets are substituted. The production query, executable,
     # argv construction and subprocess boundary really execute on Windows.
-    fake = """$script:waitFinished = $false
-function Wait-VM {
-    param($Name, $For, $Timeout, $ErrorAction)
-    if ($Name -cne 'constructicon-m8' -or $For -cne 'IPAddress' -or
-        $Timeout -ne 60 -or $ErrorAction -cne 'Stop') { throw 'Wrong wait arguments' }
-    $script:waitFinished = $true
-    'This wait output must be suppressed'
-}
-function Get-VM {
+    fake = """function Get-VM {
     param($Name, $ErrorAction)
-    if (-not $script:waitFinished) { throw 'Query before readiness wait' }
     if ($Name -cne 'constructicon-m8' -or $ErrorAction -cne 'Stop') { throw 'Wrong VM query' }
     [pscustomobject]@{Name='constructicon-m8'; State='STATE'}
 }
@@ -259,38 +441,11 @@ function Get-VMNetworkAdapter {
 
 
 @pytest.mark.skipif(os.name != "nt", reason="actual Windows PowerShell process boundary")
-def test_actual_wait_failure_stops_before_vm_query(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake = """function Wait-VM {
-    param($Name, $For, $Timeout, $ErrorAction)
-    throw 'private wait failure'
-}
-function Get-VM { [Console]::Out.WriteLine('QUERY-MUST-NOT-RUN'); exit 0 }
-function Get-VMNetworkAdapter { [Console]::Out.WriteLine('QUERY-MUST-NOT-RUN'); exit 0 }
-"""
-    real_run = subprocess.run
-    observed = []
-
-    def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-        assert argv == discovery.powershell_argv()
-        completed = real_run([*argv[:-1], fake + argv[-1]], **kwargs)
-        observed.append(completed)
-        return completed
-
-    monkeypatch.setattr(discovery.subprocess, "run", run)
-    assert discovery.discover() == {"status": "refused", "reason": "query_failed"}
-    assert len(observed) == 1
-    assert observed[0].returncode != 0
-    assert observed[0].stdout == b""
-    assert b"private wait failure" in observed[0].stderr
-
-
-@pytest.mark.skipif(os.name != "nt", reason="actual Windows PowerShell process boundary")
 @pytest.mark.parametrize("vm_count", [0, 2])
 def test_actual_missing_or_multiple_vms_stop_before_adapter_query(
     monkeypatch: pytest.MonkeyPatch, vm_count: int,
 ) -> None:
-    fake = """function Wait-VM { param($Name, $For, $Timeout, $ErrorAction) }
-function Get-VM {
+    fake = """function Get-VM {
     param($Name, $ErrorAction)
     for ($i=0; $i -lt VM_COUNT; $i++) {
         [pscustomobject]@{Name='constructicon-m8'; State='Running'}
@@ -312,3 +467,40 @@ function Get-VMNetworkAdapter { [Console]::Out.WriteLine('QUERY-MUST-NOT-RUN'); 
     assert observed[0].returncode != 0
     assert observed[0].stdout == b""
     assert b"Unexpected VM cardinality" in observed[0].stderr
+
+
+@pytest.mark.skipif(os.name != "nt", reason="actual Windows PowerShell process boundary")
+@pytest.mark.parametrize("second_addresses", [
+    ["192.168.44.2"], [PRIVATE_MARKER], ["192.168.44.2", "10.0.0.2"],
+])
+def test_actual_windows_ipv6_pending_sequence(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], clock: Clock,
+    second_addresses: list[str],
+) -> None:
+    real_run = subprocess.run
+    observed = []
+
+    def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        assert argv == discovery.powershell_argv()
+        assert "Wait-VM" not in argv[-1]
+        addresses = ["fe80::1234"] if not observed else second_addresses
+        fake = """function Get-VM {
+    param($Name, $ErrorAction)
+    [pscustomobject]@{Name='constructicon-m8'; State='Running'}
+}
+function Get-VMNetworkAdapter {
+    param($VM, $ErrorAction)
+    [pscustomobject]@{IPAddresses=@(ADDRESSES)}
+}
+""".replace("ADDRESSES", ",".join(f"'{a}'" for a in addresses))
+        completed = real_run([*argv[:-1], fake + argv[-1]], **kwargs)
+        observed.append(completed)
+        return completed
+
+    monkeypatch.setattr(discovery.subprocess, "run", run)
+    expected = ("ok" if second_addresses == ["192.168.44.2"] else
+                "malformed_source" if second_addresses == [PRIVATE_MARKER] else "ambiguous_address")
+    report = _main_report(capsys, 0 if expected == "ok" else 1)
+    assert (report["status"] if expected == "ok" else report["reason"]) == expected
+    assert len(observed) == 2
+    assert clock.sleeps == [1]

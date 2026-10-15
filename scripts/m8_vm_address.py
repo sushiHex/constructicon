@@ -3,8 +3,10 @@
 Run directly with isolated Python: ``python -I -S -B scripts/m8_vm_address.py``.
 The JSON result contains private transport metadata and must stay local. The
 source byte limit is checked after subprocess capture, not a streaming memory
-bound. The child is a fixed, trusted, read-only Windows PowerShell query. Its
-single bounded IP-address wait does not establish SSH readiness or identity.
+bound. Python observes the same private-address predicate for at most 60 seconds
+and 60 queries; only absence of a suitable address remains pending. This does
+not establish SSH readiness or identity. The child is a fixed, trusted,
+read-only Windows PowerShell query.
 """
 
 from __future__ import annotations
@@ -14,10 +16,12 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 VM_NAME = "constructicon-m8"
 POWERSHELL = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
-TIMEOUT_SECONDS = 75
+READINESS_SECONDS = 60
+MAX_OBSERVATIONS = 60
 MAX_SOURCE_BYTES = 16_384
 MAX_REPORT_BYTES = 256
 PRIVATE_NETWORKS = tuple(
@@ -25,7 +29,6 @@ PRIVATE_NETWORKS = tuple(
 )
 QUERY = """$ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-Wait-VM -Name 'constructicon-m8' -For IPAddress -Timeout 60 -ErrorAction Stop | Out-Null
 $vms = @(Get-VM -Name 'constructicon-m8' -ErrorAction Stop)
 if ($vms.Count -ne 1) { throw 'Unexpected VM cardinality' }
 $vm = $vms[0]
@@ -89,26 +92,42 @@ def _parse(source: bytes) -> dict[str, str]:
 def discover() -> dict[str, str]:
     if os.name != "nt":
         return _refused("unsupported_platform")
-    try:
-        completed = subprocess.run(
-            powershell_argv(),
-            shell=False,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            timeout=TIMEOUT_SECONDS,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return _refused("query_timeout")
-    except OSError:
-        return _refused("query_unavailable")
-    if completed.returncode != 0:
-        return _refused("query_failed")
-    if completed.stderr:
-        return _refused("query_stderr")
-    if len(completed.stdout) > MAX_SOURCE_BYTES:
-        return _refused("source_limit")
-    return _parse(completed.stdout)
+    deadline = time.monotonic() + READINESS_SECONDS
+    for observation in range(MAX_OBSERVATIONS):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            completed = subprocess.run(
+                powershell_argv(),
+                shell=False,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                timeout=remaining,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return _refused("query_timeout")
+        except OSError:
+            return _refused("query_unavailable")
+        if time.monotonic() >= deadline:
+            break
+        if completed.returncode != 0:
+            return _refused("query_failed")
+        if completed.stderr:
+            return _refused("query_stderr")
+        if len(completed.stdout) > MAX_SOURCE_BYTES:
+            return _refused("source_limit")
+        report = _parse(completed.stdout)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        if report.get("reason") != "no_suitable_address":
+            return report
+        if observation + 1 < MAX_OBSERVATIONS:
+            time.sleep(min(1, remaining))
+    # Exhaustion describes the observation budget, not the last address fact.
+    return _refused("readiness_exhausted")
 
 
 def main(argv: list[str] | None = None) -> int:

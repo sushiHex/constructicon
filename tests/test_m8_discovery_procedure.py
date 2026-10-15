@@ -38,7 +38,9 @@ def test_local_discovery_and_boot_transport_have_closed_stdin_and_parse():
         checked = subprocess.run([_bash(), "-n", "-c", block],
                                  stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
         assert checked.returncode == 0, checked.stderr
-    assert blocks[1] == "exec </dev/null\npython -I -S -B scripts/m8_vm_address.py\n"
+    assert blocks[1] == (
+        "exec </dev/null\n/c/Python314/python.exe -I -S -B scripts/m8_vm_address.py\n"
+    )
     assert "-o BatchMode=yes -o StrictHostKeyChecking=yes" in blocks[2]
     assert '"HostKeyAlias=$SSH_HOST_KEY_ALIAS"' in blocks[2]
     assert '"$SSH_TARGET" /usr/bin/cat /proc/sys/kernel/random/boot_id' in blocks[2]
