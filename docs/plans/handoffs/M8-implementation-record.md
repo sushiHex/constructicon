@@ -6218,3 +6218,28 @@ Normal non-root Linux runs retain the real custody predicate. CI additionally
 runs both helper suites under an affirmatively checked UID 0; its result must
 be observed on the reviewed head, not inferred from the Windows tests. Helper
 and host-procedure bytes are unchanged by this correction.
+
+### Diagnostic discovery boundary (Refs #186)
+
+PR #194 merged with final-head Linux verification (5,946 passed / 423 skipped),
+67 passing UID-0 helper tests, all mutation jobs and four native lanes. Its
+authorized host session started once but stopped before SSH when a local
+inline address lookup failed shell parsing. D1–D3 did not execute; the exact
+park procedure and a fresh measurement confirmed Off, uptime zero and zero
+checkpoints. This is no diagnostic result or application-failure explanation.
+
+The [additive discovery continuation](M8-maintenance-diagnosis-discovery.md)
+keeps all prior helper and procedure bytes unchanged. A stdlib Python entry
+owns discovery and closed output validation; its fixed minimal PowerShell query
+uses the native bounded IP-address wait, then fresh VM identity/state and
+adapter facts. No nested shell, caller command, start/stop, SSH, application
+retry or provider action lives in the helper. Exactly one deduplicated RFC1918
+IPv4 is required. Missing or ambiguous addresses, malformed data, stderr,
+process failure and timeout refuse once. The source-size cap is post-capture,
+not a streaming-memory guarantee; address discovery is not SSH readiness.
+
+Fifty focused tests passed on Windows, including seven actual PowerShell
+process tests with fake Hyper-V commands and no VM access. Independent narrow
+review reproduced all fifty and found no blocking defect. A dedicated Windows
+CI job exercises this boundary; exact-head CI and mutation results are recorded
+on the PR. These implementation tests do not establish another host session.

@@ -15,6 +15,17 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #186 — review the command boundary before the host session
+
+The first diagnostic session stopped before SSH: an improvised inline address
+lookup failed at the Windows shell-quoting boundary. No guest helper or capture
+was created, and the VM was freshly confirmed Off with zero checkpoints.
+The continuation uses a fixed Python address helper, with the minimal Hyper-V
+query passed directly as a subprocess argument rather than nested shell code.
+Native fake-cmdlet tests exercise that exact Windows boundary. Address readiness
+is not SSH identity or qualification; the unchanged diagnostic still requires
+strict host-key checks, current custody and its one-session stop rule.
+
 ## #186 — historical diagnosis is not recovery
 
 The maintenance evidence helper captures a fixed private file set, including
