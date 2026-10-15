@@ -177,6 +177,37 @@ async def test_task_fixture_preserves_inventory_when_contribution_exists(
     assert source.tree_of(source_base).encode() == source_tree
 
 
+async def test_task_fixture_trusts_only_its_exact_checkout_for_git_reads(tmp_path, monkeypatch):
+    from constructicon.substrate.git import process as process_module
+    from constructicon.substrate.git.authority import GitAuthority
+    from tests.gitworld import seed_authority
+    from tests.maintenance_task_world import import_fixture_tree
+
+    repositories = []
+    for name in ("checkout", "unrelated", "authority"):
+        root = tmp_path / name
+        root.mkdir()
+        repositories.append(GitAuthority(seed_authority(root), root / "workspaces"))
+    checkout, unrelated, authority = repositories
+    tree = checkout.tree_of(checkout.resolve_ref("refs/heads/main")).encode()
+    real_spawn = asyncio.create_subprocess_exec
+
+    async def different_owner(*args, **kwargs):
+        if Path(kwargs["cwd"]) in {Path(checkout.repository_id), Path(unrelated.repository_id)}:
+            kwargs["env"] = {**kwargs["env"], "GIT_TEST_ASSUME_DIFFERENT_OWNER": "1"}
+        return await real_spawn(*args, **kwargs)
+
+    monkeypatch.setattr(process_module.asyncio, "create_subprocess_exec", different_owner)
+    git = GitProcess(authority.git_executable, ProcessLimits())
+    with pytest.raises(ContractViolation, match="dubious ownership"):
+        await git.run("rev-parse", "HEAD", cwd=checkout.repository_id)
+    base = await import_fixture_tree(authority, Path(checkout.repository_id), tree)
+    assert authority.tree_of(base).encode() == tree
+    with pytest.raises(ContractViolation, match="dubious ownership"):
+        await git.run("-c", f"safe.directory={Path(checkout.repository_id).as_posix()}",
+                      "rev-parse", "HEAD", cwd=unrelated.repository_id)
+
+
 @pytest.mark.parametrize(("relative_path", "before", "after"), AUTHORIZATION_LAW_CHANGES,
                          ids=("core-law", "maintenance-reader", "root-custody-reader"))
 async def test_changed_authorization_law_refuses_old_authority_before_startup(

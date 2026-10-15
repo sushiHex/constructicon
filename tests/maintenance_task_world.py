@@ -72,13 +72,14 @@ def task_vectors() -> bytes:
 async def committed_tree_base(authority) -> str:
     repository = Path(__file__).resolve().parents[1]
     git = GitProcess(authority.git_executable, ProcessLimits())
+    checkout = ("-c", f"safe.directory={repository.resolve().as_posix()}")
     # Resolve once: all later reads use this immutable tree, ignoring index and
     # working-copy edits. Shallow CI has the tree and blobs, but not old commits.
-    tree = (await git.run("rev-parse", "HEAD^{tree}", cwd=repository)).strip()
-    inventory = await git.run("ls-tree", "-r", "-z", tree.decode(), cwd=repository)
+    tree = (await git.run(*checkout, "rev-parse", "HEAD^{tree}", cwd=repository)).strip()
+    inventory = await git.run(*checkout, "ls-tree", "-r", "-z", tree.decode(), cwd=repository)
     assert inventory
     for name in SOURCE_FILES:
-        source = await git.run("show", tree.decode() + ":" + name, cwd=repository)
+        source = await git.run(*checkout, "show", tree.decode() + ":" + name, cwd=repository)
         assert hashlib.sha256(source).hexdigest() == SOURCE_HASHES[name]
     return await import_fixture_tree(authority, repository, tree)
 
@@ -86,10 +87,13 @@ async def committed_tree_base(authority) -> str:
 async def import_fixture_tree(authority, repository, tree: bytes) -> str:
     """Keep every committed blob/mode except the application's one output path."""
     git = GitProcess(authority.git_executable, ProcessLimits())
-    inventory = await git.run("ls-tree", "-r", "-z", tree.decode(), cwd=repository)
+    # CI's checked-out source belongs to runner while the physical lane runs as
+    # m8-service. Trust this exact read-only fixture source for this child only.
+    checkout = ("-c", f"safe.directory={repository.resolve().as_posix()}")
+    inventory = await git.run(*checkout, "ls-tree", "-r", "-z", tree.decode(), cwd=repository)
     expected = b"\0".join(record for record in inventory.split(b"\0")
         if not record.endswith(b"\ttests/vectors/plan_manifest.json"))
-    pack = await git.run("pack-objects", "--stdout", "--revs", cwd=repository,
+    pack = await git.run(*checkout, "pack-objects", "--stdout", "--revs", cwd=repository,
                          stdin=tree + b"\n")
     await git.run("index-pack", "--stdin", cwd=authority.repository_id, stdin=pack)
     # This index belongs only to the fresh scratch authority. A future retained

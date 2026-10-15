@@ -38,6 +38,14 @@ inherited autocrlf, then isolated capture retained converted blobs. The test
 launcher now excludes host Git configuration and attributes. The gate's refusal
 was correct, and this says nothing about the historical host predicate.
 
+The first native run stopped both new cases before worker execution because
+the service user could not read the runner-owned source checkout through Git's
+ownership guard. Fixture source reads now trust only that exact resolved
+checkout, per child command; global configuration and production Git remain
+unchanged. A real-Git regression admits that source and still refuses an
+unrelated repository under the same exception. Native completion requires the
+corrected head's physical lane.
+
 ## #198 — reviewed helper bytes survive Windows checkout
 
 The two byte-pinned maintenance helpers require LF through exact-path Git

@@ -6378,3 +6378,20 @@ the existing provisioned Linux launcher. Native results belong to exact-head
 CI; local Windows skips are not physical proof. No VM operation, vendor binary,
 qualification, recovery of retained evidence, new model attempt or installation
 is part of this slice. The historical capture predicate remains unproven.
+
+The initial physical foundation run at `5756eed` failed only the two new cases
+(347 existing cases passed). Both stopped at the source `HEAD^{tree}` read:
+the service identity reads a checkout owned by runner, and trusted Git's
+deliberate suppression of global configuration left its ownership guard in
+force. Neither new native callback ran. This is an introduced fixture defect,
+not a production refusal or native acceptance result.
+
+Fixture source Git commands now receive `-c safe.directory=<resolved source>`
+for that child only. No wildcard, global configuration, workflow ownership
+change or production `GitProcess` exception is added; fresh authority operations
+retain the normal ownership guard. A real-Git test injects Git's different-owner
+test condition into source-read child environments: an unexcepted read refuses,
+the exact source import accepts with identical tree, and the same exact-source
+exception still refuses an unrelated repository. That regression passed locally
+on Windows; corrected native acceptance and no-op execution remain unproved
+until the new head's physical lane completes.
