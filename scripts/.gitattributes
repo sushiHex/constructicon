@@ -1,0 +1,2 @@
+# The operator verifies this script's committed bytes before execution.
+m8_vm_address.py text eol=lf

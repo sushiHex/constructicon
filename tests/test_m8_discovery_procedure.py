@@ -19,6 +19,16 @@ def test_discovery_helper_pin_matches_reviewed_bytes():
     assert "UNREVIEWED" not in text
 
 
+def test_discovery_checkout_preserves_pinned_lf_bytes():
+    attributes = subprocess.run(
+        ["git", "check-attr", "eol", "--", "scripts/m8_vm_address.py"], cwd=ROOT,
+        stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10,
+    )
+    assert attributes.returncode == 0, attributes.stderr
+    assert attributes.stdout.strip() == "scripts/m8_vm_address.py: eol: lf"
+    assert b"\r" not in (ROOT / "scripts/m8_vm_address.py").read_bytes()
+
+
 def test_local_discovery_and_boot_transport_have_closed_stdin_and_parse():
     text = DOCUMENT.read_text(encoding="utf-8")
     blocks = re.findall(r"```bash\n(.*?)```", text, re.S)
