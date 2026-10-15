@@ -208,6 +208,37 @@ async def test_task_fixture_trusts_only_its_exact_checkout_for_git_reads(tmp_pat
                       "rev-parse", "HEAD", cwd=unrelated.repository_id)
 
 
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+async def test_task_witness_substitutes_only_non_linux_executor_guards(
+    tmp_path, monkeypatch, platform,
+):
+    from contextlib import asynccontextmanager
+
+    from constructicon.substrate.executors import codex
+    from constructicon.substrate.git.acquisition import AcquisitionPaths
+    from tests import maintenance_task_world as task_world
+
+    physical_calls = []
+
+    @asynccontextmanager
+    async def physical_guard(paths):
+        assert platform == "linux", "non-Linux POSIX reached the physical Linux guard"
+        physical_calls.append(paths)
+        with (tmp_path / "physical-guard").open("w+b") as stream:
+            yield stream.fileno()
+
+    monkeypatch.setattr(codex, "acquisition_guard", physical_guard)
+    # Replace only this helper's platform observations, not global os/sys or
+    # asyncio/Git's actual process platform. Both simulated hosts are POSIX.
+    monkeypatch.setattr(task_world, "os", SimpleNamespace(name="posix"))
+    monkeypatch.setattr(task_world, "sys", SimpleNamespace(platform=platform))
+    task_world.configure_executor_guard(monkeypatch)
+    paths = AcquisitionPaths(tmp_path / "guard-root", "acq-" + "1" * 32)
+    async with codex.acquisition_guard(paths) as descriptor:
+        os.fstat(descriptor)
+    assert physical_calls == ([paths] if platform == "linux" else [])
+
+
 @pytest.mark.parametrize(("relative_path", "before", "after"), AUTHORIZATION_LAW_CHANGES,
                          ids=("core-law", "maintenance-reader", "root-custody-reader"))
 async def test_changed_authorization_law_refuses_old_authority_before_startup(

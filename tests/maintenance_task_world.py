@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import runpy
+import sys
 import tempfile
 from dataclasses import dataclass, replace
 from datetime import timedelta
@@ -124,6 +125,14 @@ class ScriptedWorkerLauncher(ScriptedLauncher):
         return await self.process_launcher.run(command, **kwargs)
 
 
+def configure_executor_guard(monkeypatch):
+    from constructicon.substrate.executors import codex
+    from tests.substrate.test_codex_write import portable_guard
+
+    if sys.platform != "linux":
+        monkeypatch.setattr(codex, "acquisition_guard", portable_guard)
+
+
 async def exercise_task_entry(
     resources, process_launcher, binding, tmp_path, monkeypatch, *, change,
 ):
@@ -185,11 +194,7 @@ async def exercise_task_entry(
                                      revision=resources.gate.revision),
     )
     executor.maintenance = authorization
-    from constructicon.substrate.executors import codex
-    from tests.substrate.test_codex_write import portable_guard
-
-    if os.name != "posix":
-        monkeypatch.setattr(codex, "acquisition_guard", portable_guard)
+    configure_executor_guard(monkeypatch)
     capture = []
     original_capture = resources.workspace.capture
 

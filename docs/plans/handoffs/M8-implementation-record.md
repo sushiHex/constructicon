@@ -6412,3 +6412,19 @@ the exact source import accepts with identical tree, and the same exact-source
 exception still refuses an unrelated repository. That regression passed locally
 on Windows; corrected native acceptance and no-op execution remain unproved
 until the new head's physical lane completes.
+
+At `82f03ba`, exact-head verification passed 6,047 tests with 433 platform
+skips, all mutation jobs and all four Linux lanes. Foundation passed 349 tests,
+including both new full-tree contribution and successful-no-op cases. Those
+Linux observations did not establish portability on other POSIX systems.
+
+The connector's P2 was reproduced against source: the test helper retained the
+physical guard whenever `os.name == "posix"`, but the production guard admits
+only `sys.platform == "linux"`. This introduced fixture defect affected macOS.
+Selection now uses the same exact Linux boundary. A module-local platform double
+leaves the interpreter's real platform untouched; both Darwin and Linux cases
+enter an actual file-descriptor context, with Darwin using the portable guard
+and Linux retaining the supplied physical-boundary double. Before the fix,
+Darwin failed its physical-boundary assertion while Linux passed; afterward both
+passed. This is portable boundary-selection evidence, not an executed macOS
+host or a change to production containment.
