@@ -6269,3 +6269,55 @@ connection stops and parks even if SSH was merely not ready. No new port-polling
 facility was added. The fake transport assertion failed without the timeout
 argument and passed with it. A readiness-budget subprocess timeout is not
 reported as proof of a guest fault.
+
+### Capture refusal diagnostics after retained-outcome diagnosis (Refs #186)
+
+The [completed read-only session](https://github.com/sushiHex/constructicon/issues/186#issuecomment-6186507897)
+verified unchanged installed controller `e7d40b139c2a0205f37c7050295a3eca55af9d2c`
+and projected the retained application outcome. The command took the normal
+nonacceptance branch. Nine validated journal events established a failed run,
+writer start and a recorded ContractViolation classified as `capture-mismatch`,
+with no writer checkpoint observed. The identity-matched attempt recorded its
+outcome as completed dispatch and executor success; both of two callbacks were
+started/completed and both worker results were success, without recorded timeout
+or exceeded bound. Checker start was unrecorded, its checkpoint missing, checks
+empty and published result missing. Missing observations do not establish that
+an operation never happened; adapter success is not application acceptance or
+independent backend proof. The VM was freshly measured Off, uptime zero and
+zero checkpoints, then custody released. All retained evidence remains preserved;
+no retry, recovery, qualification, repair or new model attempt followed.
+
+The historical capture message groups five predicates and does not identify
+which failed. Source inspection and a credential-free reproduction showed that
+a successful no-op executor can reach that same refusal after genuine capture
+returns the pinned base. That proves a possible execution path, not the
+historical candidate OID or absence of filesystem activity. The checked-in
+regression runs the real Graph, workspace provider, Git capture/publication and
+journal with a portable launcher and successful no-op executor double; it joins
+the worker and observes the base candidate before the writer refuses. The
+existing concrete accepting path remains exercised separately.
+
+Prospective writer diagnostics now retain a distinct fixed message for the
+first failed comparison: capture return, pinned base, repository, path
+restrictions or comparison base. All five guards retain their order and
+acceptance meaning, and no async boundary changes. Messages contain no candidate
+values, paths, payloads or hashes. Single-fault, overlapping-fault and accepting
+cases pin those distinctions; the pinned-base message describes commit identity,
+not whether the worker touched files.
+
+The two pinned diagnostic helpers and frozen procedures are unchanged. Their
+existing reader still categorizes the legacy grouped message as
+`capture-mismatch`, with the actual predicate unknown; it reports each new
+message as `unknown`. Precise prospective messages remain in the canonical
+journal. Upgrading that frozen reader would be a separate reviewed revision,
+not an implicit change here. Changed application/component identity requires a
+future reviewed installation and qualification before any new live attempt;
+this source-only slice grants no such authority.
+
+Against the unchanged grouped implementation, the new predicate/precedence
+tests failed nine assertions while their accepting case passed. After the
+change, the focused application, diagnostic and mutation-inventory suites
+passed 111 tests on Windows. Seven new mutants were killed by assertions,
+without harness errors: all five guard removals, swapped commit/base precedence
+and candidate-value disclosure. Full verification and exact-head CI remain PR
+evidence; no additional Windows full gate was launched concurrently.
