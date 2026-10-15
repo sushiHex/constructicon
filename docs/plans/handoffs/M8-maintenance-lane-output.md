@@ -29,7 +29,7 @@ This is a source audit at C, not a host measurement.
 | OC S1 `prepare`, the frozen helpers, C4 `publish`/`activate`, C5 checks and policy writer | Declared stdout only; `operator_store` writes `operator_store: ...` to stderr only on refusal (`operator_store.py:1635-1636`) | CLEAN |
 | C7 transfer, `git init --bare -q`, `maintenance_entry prepare` | No stderr; Git's default-branch advice is suppressed under `-q`; entry children capture their stderr | CLEAN |
 | C8 `maintenance_entry preflight` and checker | Preview or closed refusal on stdout only (`maintenance_entry.py:389-401`) | CLEAN |
-| C10 `maintenance_entry run` capture | No explicit stderr writer. `RunHost._report_failure` can log through asyncio's default handler only after a walker drive already failed. C10's capture then records `unexpected`, a non-normal outcome | UNKNOWN; empty-stderr rule kept |
+| C10 `maintenance_entry run` capture | No explicit stderr writer. Two RunHost failure reports reach asyncio's default exception handler, which logs to stderr: a run-host failure (`run_host.py:667-677`) and a recovery-pump failure (`run_host.py:584-599`). Both report a failure that has already happened. C10's capture then records `unexpected`, a non-normal outcome | UNKNOWN; empty-stderr rule kept |
 | C11 `pgrep`, installed diagnostic and validator | Stderr preopened and checked empty, or none; the diagnostic writes stdout only (`maintenance_diagnostic.py:363-381`) | CLEAN |
 | `m8-host-drift`, `sudo`, the host's Python 3.12 warnings | Not in the repository | UNKNOWN; observed clean live through C2 |
 
@@ -58,7 +58,7 @@ Append this block to the reviewed new common, after OC's two Setup blocks and th
 
 ```bash
 lane_capture() {
-  test "$#" -ge 2
+  test "$#" -ge 2 || return 1
   /usr/bin/python3 -I -S -B -c 'import json, os, stat, subprocess, sys
 from pathlib import Path
 try:
@@ -97,7 +97,7 @@ except Exception:
     raise SystemExit(1) from None' "$@" < /dev/null
 }
 lane_expectation() {
-  test "$#" -eq 3
+  test "$#" -eq 3 || return 1
   "${SERVICE[@]}" /usr/bin/python3 -I -S -B -c 'import json, os, re, stat, sys
 from pathlib import Path
 sys.path.insert(0, "/opt/constructicon-m8-controller")
@@ -134,7 +134,7 @@ else:
 print(json.dumps({"evidence_digest": d, "faults": faults, "refresh": refresh}, sort_keys=True))' "$@" < /dev/null
 }
 lane_boundary() {
-  test "$#" -eq 3
+  test "$#" -eq 3 || return 1
   /usr/bin/python3 -I -S -B -c 'import json, os, re, stat, sys
 from pathlib import Path
 def unique(pairs):
@@ -185,6 +185,8 @@ except Exception:
 
 Each step that captures a lane declares one fresh absent operator directory `LANES` beside its package. It creates `LANES` with `/usr/bin/mkdir -m 0700` before the first capture. Capture names are unique within the step. An occupied `LANES` or capture path stops before dispatch. Assign every expectation to a variable before passing it on, so that `errexit` stops on a failed check. `lane_boundary` prints exactly one line per boundary. That line is part of the step's declared stdout.
 
+Only `lane_capture`'s own zero exit establishes a complete capture. A status file alone does not: a failed final status or directory sync leaves a complete-looking status file, but the capture exits nonzero and `errexit` stops before any boundary check.
+
 ## L1: qualification boundary
 
 This replaces only OC S4's two lane lines and the following `read_seal`. Any S4 comparison declared by the continuation follows in the same shell. Frozen OC S6a then runs verbatim.
@@ -202,13 +204,14 @@ lane_boundary "$LANES/s4" clean "$S4_EXPECTED"
 S4_SEAL="$(read_seal "$W/s4-qualification.json")"
 ```
 
-The declared stdout is exactly `lane-boundary-checked` plus LF. `maintain` returns its lane's exit and adds no output on success. Its own refusal (`operator_store: ...`) lands in the capture and fails the stderr equality.
+The declared stdout is exactly `lane-boundary-checked` plus LF. `maintain` returns its lane's exit and adds no output on success. Its own refusal lands in the capture and fails the stderr equality. That refusal is an `operator_store: ...` line or, on the lane path, which has no handler, a traceback.
 
 ## L2: H7 controls
 
-This replaces g11 C5's three lane invocations and their checks. Every other line of g11 C5 is copied verbatim in its place, and the active-refresh selection keeps its exact `refresh-measured` or `refresh-unmeasured` line. The first two blocks replace the active startup and its `ACTIVE_Q` line:
+This complete block replaces all of g11 C5. Every C5 control, its order and its verdict law are preserved; only the three lane invocations change, and the generation becomes a declared literal. The continuation declares `GEN` (this generation, for example `g12`), `GEN_PRIOR` (the generation it supersedes) and `W_PRIOR` (that generation's session) as reviewed literals:
 
 ```bash
+load_final_qualification
 /usr/bin/mkdir -m 0700 -- "$LANES"
 lane_capture "$LANES/h7-active" "${SERVICE[@]}" "${LANE[@]}" startup --custody active \
   --store-root "$R" --key "$K" --sealed "$W/$GEN.sealed.json" --expected "$SEAL" \
@@ -217,11 +220,34 @@ lane_capture "$LANES/h7-active" "${SERVICE[@]}" "${LANE[@]}" startup --custody a
 ACTIVE_Q="$(check_evidence active "$W/h7-$GEN-active.json" active "$SEAL" "$W/startup-policy.json")"
 ACTIVE_EXPECTED="$(lane_expectation "$W/h7-$GEN-active.json" checked "$ACTIVE_Q")"
 lane_boundary "$LANES/h7-active" clean "$ACTIVE_EXPECTED"
-```
-
-Then the two refusal controls replace the `if ... --expect-denial` and wrong-plan blocks and their `check_evidence ... > /dev/null` lines:
-
-```bash
+ACTIVE_REFRESH="$("${SERVICE[@]}" /usr/bin/python3 -I -S -B -c 'import sys
+from pathlib import Path
+sys.path.insert(0, "/opt/constructicon-m8-controller")
+from constructicon.api._maintenance_source import read_bounded
+from constructicon.core.identity import digest, parse_json_value
+from constructicon.substrate.executors.codex_lane import EVIDENCE_DOMAIN
+r = parse_json_value(read_bounded(Path(sys.argv[1]), 1048576).decode("utf-8", errors="strict"))
+assert str(digest(EVIDENCE_DOMAIN, 1, r)) == sys.argv[2]
+assert type(r) is dict and type(r.get("refresh")) is str and r["refresh"] in ("measured", "unmeasured")
+print(r["refresh"])' "$W/h7-$GEN-active.json" "$ACTIVE_Q" < /dev/null)"
+case "$ACTIVE_REFRESH" in
+  measured)
+    REFRESH_Q="$(check_evidence refresh "$W/h7-$GEN-active.json" active "$SEAL" "$W/startup-policy.json")"
+    test "$REFRESH_Q" = "$ACTIVE_Q"
+    echo refresh-measured ;;
+  unmeasured) echo refresh-unmeasured ;;
+  *) echo 'unexpected active refresh verdict; stop' >&2; exit 1 ;;
+esac
+"${SERVICE[@]}" /usr/bin/python3 -I -S -B -c 'import json, os, sys
+from pathlib import Path
+p = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert p["connections"] == 8 and len(p["destinations"]) == 2
+assert [x[0] for x in p["destinations"]] == ["auth.openai.com", "chatgpt.com"]
+p["destinations"] = p["destinations"][:1]
+os.umask(0o077)
+with open(sys.argv[2], "x", encoding="utf-8") as stream:
+    json.dump(p, stream, sort_keys=True); stream.write("\n"); stream.flush(); os.fsync(stream.fileno())' \
+  "$W/startup-policy.json" "$W/h7-$GEN-no-chatgpt-policy.json" < /dev/null
 lane_capture "$LANES/h7-s6b" "${SERVICE[@]}" "${LANE[@]}" startup --custody active \
   --store-root "$R" --key "$K" --sealed "$W/$GEN.sealed.json" --expected "$SEAL" \
   --launch-root "$L" --configuration "$W/config.toml" \
@@ -237,9 +263,10 @@ lane_capture "$LANES/h7-s6c" "${SERVICE[@]}" "${LANE[@]}" startup --custody acti
 WRONGPLAN_Q="$(check_evidence wrongplan "$W/h7-$GEN-s6c-plan-refusal.json" active "$SEAL" "$W/startup-policy.json")"
 WRONGPLAN_EXPECTED="$(lane_expectation "$W/h7-$GEN-s6c-plan-refusal.json" checked "$WRONGPLAN_Q")"
 lane_boundary "$LANES/h7-s6c" refusal "$WRONGPLAN_EXPECTED"
+binding_check "$W_PRIOR/$GEN_PRIOR.sealed.json" stale-generation "$W/$GEN.sealed.json"
 ```
 
-`GEN` is the continuation's reviewed literal generation label, for example `g12`. The declared stdout is three `lane-boundary-checked` lines with the active-refresh verdict line in its g11 position. The frozen checker still requires S6b's exact denial facts and four faults, and S6c's exact wrong-plan refusal. A declared refusal that exits 0, prints no summary or carries other faults stops. Every control still runs when active refresh was measured.
+The declared stdout is exactly four lines: `lane-boundary-checked`, the active verdict (`refresh-measured` or `refresh-unmeasured`), then `lane-boundary-checked` twice. A checker failure never means unmeasured refresh. The frozen checker still requires S6b's exact denial facts and four faults, and S6c's exact wrong-plan refusal. A declared refusal that exits 0, prints no summary or carries other faults stops. Every control still runs when active refresh was measured.
 
 ## L3: explicit refresh
 

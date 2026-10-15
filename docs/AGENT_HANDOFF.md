@@ -26,8 +26,9 @@ replaces that rule at the five boundaries a source audit found affected:
 - H7 active, S6b and S6c;
 - ER R1.
 
-At each one, the captured stderr must equal the summary rebuilt from evidence
-that the frozen `check_evidence` accepted. The exit must be 1 exactly when there
+At each one, the captured stderr must equal the summary rebuilt from the
+published evidence. That evidence must pass the frozen `check_evidence`, except
+explicit refresh, which gets a closed-field consistency check. The exit must be 1 exactly when there
 are faults, and stdout carries only the declared verdict. Command status,
 capture success and the ssh transport status are recorded separately.
 Credential-free tests drive the real CLI in a subprocess through those blocks.

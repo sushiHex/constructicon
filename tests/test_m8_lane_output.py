@@ -22,8 +22,9 @@ from pathlib import Path
 
 import pytest
 
-from constructicon.substrate.executors.codex_lane import write_evidence
+from constructicon.substrate.executors.codex_lane import run_startup, write_evidence
 from constructicon.substrate.executors.codex_protocol import ExpectedAccount
+from constructicon.substrate.executors.egress import EgressPolicy
 from tests import test_m8_operator_commands as operator_commands
 from tests.substrate import test_codex_lane as fake_lane
 from tests.substrate.test_codex_protocol import IDENTITY
@@ -133,6 +134,28 @@ async def _record(case: str, directory: Path) -> dict:
         _, evidence = await fake_lane.startup(
             directory, lane=_active_lane(directory, fake_lane.plan_native("pro")), expected=pro,
         )
+    elif case == "active-measured":
+        def renewed(lane: fake_lane.Lane) -> None:
+            fake_lane.FakeRelay.instances[-1].destinations["accepted:auth.openai.com:443"] += 1
+
+        lane = _active_lane(directory, fake_lane.plan_native("pro"), during=renewed, writes=True)
+        _, evidence = await fake_lane.startup(directory, lane=lane, expected=pro)
+        assert evidence["refresh"] == "measured"
+    elif case == "denial-derived":
+        # S6b as L2 composes it: the lane runs under the derived auth-only policy.
+        def denied_derived(lane: fake_lane.Lane) -> None:
+            fake_lane.FakeRelay.instances[-1].observed["denied:destination"] += 1
+
+        native = fake_lane.plan_native("pro")
+        native.accounts = [{"error": {"code": -32603,
+                                      "message": "workspace routing discovery failed"}}]
+        lane = _active_lane(directory, native, during=denied_derived)
+        evidence = await run_startup(
+            lane.custody(), lane.launcher(),
+            EgressPolicy(fake_lane.POLICY.destinations[:1], fake_lane.POLICY.connections),
+            executable=fake_lane.EXECUTABLE, configuration=fake_lane.CONFIGURATION,
+            expected=pro, lane_dir=directory / "lane", deadline_s=30, expect_denial=True,
+        )
     elif case == "wrongplan":
         _, evidence = await fake_lane.startup(
             directory, lane=_active_lane(directory, fake_lane.plan_native("pro")),
@@ -159,7 +182,7 @@ async def _record(case: str, directory: Path) -> dict:
         _, evidence = await fake_lane.startup(directory, lane=lane, expected=pro,
                                               request_refresh=True)
         assert evidence["refresh"] == case
-    assert bool(evidence["faults"]) is (CASES[case][2] == "refusal")
+    assert bool(evidence["faults"]) is (case in ("denial", "denial-derived", "wrongplan"))
     return evidence
 
 
@@ -373,6 +396,45 @@ def _command(program: str, *argv: object) -> list[str]:
     return [sys.executable, "-I", "-S", "-B", "-c", program, *map(str, argv)]
 
 
+DIGEST = "sha256:" + "a" * 64
+
+
+def _captured_summary(tmp_path: Path, faults: list[str]) -> Path:
+    """A capture whose stderr is exactly the CLI summary for these faults."""
+
+    summary = tmp_path / "summary"
+    summary.write_bytes((json.dumps({"evidence_digest": DIGEST, "faults": faults}) + "\n").encode())
+    lanes = tmp_path / "lanes"
+    lanes.mkdir(mode=0o700)
+    out = lanes / "bound"
+    captured = _capture(out, *_command(
+        "import pathlib, sys; sys.stderr.buffer.write(pathlib.Path(sys.argv[1]).read_bytes()); "
+        "raise SystemExit(int(sys.argv[2]))", summary, 1 if faults else 0))
+    assert captured.returncode == 0
+    return out
+
+
+@pytest.mark.parametrize("excess", (0, 1))
+def test_stderr_bound_binds_at_its_limit(tmp_path, excess):
+    base = len(json.dumps({"evidence_digest": DIGEST, "faults": [""]})) + 1
+    faults = ["x" * (8192 - base + excess)]
+    out = _captured_summary(tmp_path, faults)
+    assert (out / "stderr").stat().st_size == 8192 + excess
+    result = _boundary(out, "refusal", json.dumps(
+        {"evidence_digest": DIGEST, "faults": faults, "refresh": "unmeasured"}))
+    assert result.stdout == (REFUSED if excess else CHECKED)
+
+
+@pytest.mark.parametrize("excess", (0, 1))
+def test_status_bound_binds_at_its_limit(tmp_path, excess):
+    out = _captured_summary(tmp_path, [])
+    # Whitespace-padded JSON is still a well-formed status; only the bound refuses it.
+    (out / "status.json").write_bytes(b'{"returncode": 0}'.ljust(63 + excess) + b"\n")
+    result = _boundary(out, "clean", json.dumps(
+        {"evidence_digest": DIGEST, "faults": [], "refresh": "unmeasured"}))
+    assert result.stdout == (REFUSED if excess else CHECKED)
+
+
 def test_capture_records_command_status_separately_from_capture_success(tmp_path):
     lanes = tmp_path / "lanes"
     lanes.mkdir(mode=0o700)
@@ -480,7 +542,7 @@ def _common() -> str:
 
 def test_every_block_parses_after_the_composed_common():
     blocks = _fences(_text(DOCUMENT))
-    assert len(blocks) == 5
+    assert len(blocks) == 4
     for block in blocks:
         composed = _common() + "\n" + _helper_block() + "\n" + block
         ran = subprocess.run([_bash(), "-n"], input=composed,
@@ -488,13 +550,12 @@ def test_every_block_parses_after_the_composed_common():
         assert ran.returncode == 0 and ran.stdout == "" and ran.stderr == ""
 
 
-def _shell_helpers() -> str:
-    """L0 as composed, with the stock interpreter and search path substituted."""
+def _composable(text: str) -> str:
+    """Document shell as composed, with the stock interpreter and search path substituted."""
 
-    helpers = _helper_block()
-    for program in PYTHON_PROGRAM.findall(helpers):
-        helpers = helpers.replace(program, _portable(program))
-    return helpers.replace("/usr/bin/python3", '"$TEST_PY"')
+    for program in PYTHON_PROGRAM.findall(text):
+        text = text.replace(program, _portable(program))
+    return text.replace("/usr/bin/python3", '"$TEST_PY"')
 
 
 def _run_blocks(blocks: str, directory: Path, policy: Path, maintain: str = "",
@@ -505,6 +566,8 @@ def _run_blocks(blocks: str, directory: Path, policy: Path, maintain: str = "",
     prefix = "\n".join((
         "set -Eeuo pipefail; umask 077; SERVICE=(); R=/s; K=k; L=/r",
         'W="$TEST_W"; LANES="$TEST_LANES"; GEN=g12; SEAL="$TEST_SEAL"',
+        "GEN_PRIOR=g11; W_PRIOR=historical-q11; load_final_qualification() { :; }",
+        'binding_check() { printf "%s\\n" "$*" >>"$TEST_W/binding"; }',
         'LANE=("$TEST_PY" -I -S -B "$TEST_DOUBLE" "$TEST_SOURCE" "$TEST_PURELIB" '
         '"$TEST_RECORDS" --)',
         'ROOT_STORE=("$TEST_PY" -I -S -B "$TEST_W/maintain.py")',
@@ -522,8 +585,11 @@ def _run_blocks(blocks: str, directory: Path, policy: Path, maintain: str = "",
         "raise SystemExit(subprocess.run([*lane, '--store-root=/s', '--key=k',",
         "    '--custody=maintenance', '--lock-fd=7', '--floor=3']).returncode)",
     )), encoding="utf-8")
+    # A script file, not `bash -c`: native Windows argv quoting would rewrite it.
+    script = directory / "composed-step.sh"
+    script.write_bytes((prefix + "\n" + _composable(_helper_block() + "\n" + blocks)).encode())
     return subprocess.run(
-        [_bash(), "-c", prefix + "\n" + _shell_helpers() + "\n" + blocks],
+        [_bash(), script.as_posix()],
         stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120, check=False,
         env={**os.environ, "TEST_PY": Path(sys.executable).as_posix(),
              "TEST_DOUBLE": DOUBLE.as_posix(), "TEST_SOURCE": SOURCE, "TEST_PURELIB": PURELIB,
@@ -561,32 +627,46 @@ async def test_qualification_block_accepts_only_the_real_summary(evidence_world,
         "returncode": 0}
 
 
-async def test_h7_blocks_accept_the_real_active_denial_and_wrong_plan_lanes(evidence_world):
+def _h7_block() -> str:
+    block, = _fences(_section(_text(DOCUMENT), L2))
+    return block
+
+
+@pytest.mark.parametrize(("active", "verdict"), (
+    ("active", "refresh-unmeasured"), ("active-measured", "refresh-measured"),
+))
+async def test_complete_h7_block_runs_every_control_in_its_declared_order(
+    evidence_world, active, verdict,
+):
     directory, policy = evidence_world
     assert policy == directory / "startup-policy.json"
-    (directory / "h7-g12-no-chatgpt-policy.json").write_bytes(policy.read_bytes())
     (directory / "g12.sealed.json").write_text("{}", encoding="utf-8")
-    await _records(directory, **{"h7-g12-active.json": "active",
-                                 "h7-g12-s6b-denial.json": "denial",
+    await _records(directory, **{"h7-g12-active.json": active,
+                                 "h7-g12-s6b-denial.json": "denial-derived",
                                  "h7-g12-s6c-plan-refusal.json": "wrongplan"})
-    ran = _run_blocks("\n".join(_fences(_section(_text(DOCUMENT), L2))), directory, policy)
-    assert (ran.returncode, ran.stdout, ran.stderr) == (0, CHECKED * 3, "")
+    ran = _run_blocks(_h7_block(), directory, policy)
+    assert (ran.returncode, ran.stderr) == (0, ""), ran.stderr
+    assert ran.stdout == CHECKED + verdict + "\n" + CHECKED * 2
     statuses = [json.loads((directory / "lanes" / name / "status.json").read_bytes())
                 for name in ("h7-active", "h7-s6b", "h7-s6c")]
     assert statuses == [{"returncode": 0}, {"returncode": 1}, {"returncode": 1}]
+    derived = json.loads((directory / "h7-g12-no-chatgpt-policy.json").read_bytes())
+    assert [destination[0] for destination in derived["destinations"]] == ["auth.openai.com"]
+    assert (directory / "binding").read_text() == (
+        f"historical-q11/g11.sealed.json stale-generation {directory.as_posix()}/g12.sealed.json\n")
 
 
 async def test_h7_refusal_control_that_was_accepted_stops(evidence_world):
     directory, policy = evidence_world
     assert policy == directory / "startup-policy.json"
-    (directory / "h7-g12-no-chatgpt-policy.json").write_bytes(policy.read_bytes())
     (directory / "g12.sealed.json").write_text("{}", encoding="utf-8")
     # The S6b control returns a clean active record: its frozen checker refuses.
     await _records(directory, **{"h7-g12-active.json": "active",
                                  "h7-g12-s6b-denial.json": "active",
                                  "h7-g12-s6c-plan-refusal.json": "wrongplan"})
-    ran = _run_blocks("\n".join(_fences(_section(_text(DOCUMENT), L2))), directory, policy)
-    assert ran.returncode != 0 and ran.stdout == CHECKED
+    ran = _run_blocks(_h7_block(), directory, policy)
+    assert ran.returncode != 0 and ran.stdout == CHECKED + "refresh-unmeasured\n"
+    assert not (directory / "binding").exists()
     assert not (directory / "lanes" / "h7-s6c").exists()
 
 
