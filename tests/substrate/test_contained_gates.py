@@ -25,6 +25,7 @@ from constructicon.substrate.gates.contained import ContainedGateRunner
 from constructicon.substrate.gates.runner import CheckSpec
 from constructicon.substrate.git.authority import GitAuthority
 from tests.gitworld import push_to_main, seed_authority
+from tests.substrate.test_codex_adapter import portable_binding as portable_binding
 from tests.substrate.test_contained_workspace import context, stale_row
 from tests.substrate.test_linux_containment import launcher as launcher
 
@@ -1033,3 +1034,43 @@ async def test_native_maintenance_operational_entry_captures_checks_closes_and_r
     assert not reconstructed_executor.executor.calls and not reconstructed_executor.handles
     assert len(physical.calls) == calls and reopened.max_event_seq(run_id) == event_seq
     assert reopened.capability_leases(run_id) == rows
+
+
+@pytest.mark.parametrize("change", [True, False], ids=["contribution", "successful-noop"])
+async def test_native_full_tree_entry_mediates_real_worker_capture_and_consumer(
+    launcher, portable_binding, tmp_path, monkeypatch, change,
+):
+    from constructicon.api.plan_manifest_application import MaintenanceResources, maintenance_checks
+    from constructicon.core.maintenance import TARGET_PATH, PlanManifestRequest
+    from constructicon.substrate.git.capture import ContainedWriteWorkspaceProvider
+    from constructicon.substrate.journal.sqlite import SqliteJournal
+    from tests.maintenance_task_world import committed_tree_base, exercise_task_entry
+
+    physical = MaintenanceNativeLauncher(
+        **{item.name: getattr(launcher, item.name) for item in fields(LinuxLauncher)},
+    )
+    journal = SqliteJournal(tmp_path / "full-tree.sqlite")
+    runner = unqualified(tmp_path, physical, journal=journal)
+    base = await committed_tree_base(runner.authority)
+    git = runner.authority
+    source = git._run("show", f"{base}:{TARGET_PATH}").stdout.encode()
+    inventory = git._run("ls-tree", "-r", "-z", base).stdout.encode()
+    target_sha256 = hashlib.sha256(source).hexdigest()
+    runner.checks = maintenance_checks(source, target_sha256, inventory,
+                                       git.environment.object_format)
+    gate = await qualify(runner)
+    workspace = ContainedWriteWorkspaceProvider(
+        git, root=tmp_path / "writer-acquisitions", target_ref=runner.target_ref,
+        provider_id="maintenance-workspace", posture=Posture.WRITE, launcher=physical,
+    )
+    request = PlanManifestRequest(repository=git.repository_id, target_ref=runner.target_ref,
+        base_commit=base, target_sha256=target_sha256, check_set_hash=gate.check_set_hash)
+    resources = MaintenanceResources(journal, git, workspace, gate, request, source)
+    await exercise_task_entry(resources, physical, portable_binding, tmp_path, monkeypatch,
+                              change=change)
+    # The peer and credential store are doubles. The callback payload, capture
+    # and gate all went through the provisioned Linux process boundary.
+    workers = [(command, kwargs) for command, kwargs in physical.calls
+               if kwargs.get("input_kind") == "task"]
+    assert len(workers) == 1 and workers[0][1]["posture"] is Posture.WRITE
+    assert b"task callback completed" in workers[0][1]["stdin"]
