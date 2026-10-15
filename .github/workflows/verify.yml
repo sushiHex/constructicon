@@ -71,3 +71,24 @@ jobs:
           python-version: "3.11"
       - run: uv sync --dev
       - run: uv run python scripts/${{ matrix.inventory }}
+
+  verify-complete:
+    # A stable merge check for every portable job, including the entire matrix.
+    # always() exposes failures instead of publishing a successful skipped job.
+    if: always()
+    needs: [windows-discovery, verify, mutations]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every portable job to succeed
+        shell: bash
+        env:
+          WINDOWS_DISCOVERY: ${{ needs.windows-discovery.result }}
+          VERIFY: ${{ needs.verify.result }}
+          MUTATIONS: ${{ needs.mutations.result }}
+        run: |
+          set -euo pipefail
+          test "$WINDOWS_DISCOVERY" = success
+          test "$VERIFY" = success
+          test "$MUTATIONS" = success
+          printf '%s\n' 'all portable verification and mutation jobs succeeded'
