@@ -15,14 +15,32 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
-## #186 — a joined command can return application-not-accepted
+## #186 — historical diagnosis is not recovery
+
+The maintenance evidence helper captures a fixed private file set, including
+SQLite sidecars and the separate raw command report. The diagnostic reads only
+a disposable duplicate through canonical selected-fact projectors. It does not
+construct a journal, migrate, recover, qualify or dispatch. Its observations
+describe retained selected facts, not whole-store health or present authority.
+Missing facts remain unknown; a pending attempt is never promoted.
+
+The accepting path includes real fake-first application runs and committed
+WAL-only evidence. Review caught a completed outcome paired with incomplete
+callback responses; the existing cross-fact law now refuses that contradiction.
+The separate reviewed host procedure keeps the installed application unchanged
+and requires its own gates and fresh custody. Implementation evidence alone
+establishes no host diagnosis or explanation of the g10 nonacceptance.
+
+## #186 — a checker verdict is not the application command's exit
 
 PR #192 merged the private-maintenance continuation with matching reviewed
 bytes and passing local, CI and native proofs. Its authorized host session
 passed fresh g10/H7, measured the conditional H8 refresh and passed genuine
-preflight. The one C10 command then completed and joined with a validated
-`application-not-accepted` outcome. Exit zero described the reporting command,
-not acceptance. No result inspection or retry followed; evidence was retained,
+preflight. The C10 checker then completed with a validated
+`application-not-accepted` outcome. It maps both normal non-success and command
+refusal to that report. The initial handoff incorrectly claimed joined
+application completion: exit zero described the checker, not the application
+command. No result inspection or retry followed; evidence was retained,
 the VM was freshly confirmed Off with zero checkpoints and custody released.
 
 The bounded outcome does not establish vendor dispatch, failure cause or

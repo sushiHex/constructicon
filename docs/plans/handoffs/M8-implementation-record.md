@@ -6123,16 +6123,98 @@ initially differed because of CRLF conversion; verified Git LF bytes corrected
 the local measurement, not the host. This establishes installed assembly and
 the reviewed preview, not application acceptance.
 
-C10 completed and joined. The reviewed script exited zero and validated
+C10's checker completed. The reviewed script exited zero and validated
 `accepted:false`, `meaning:application-not-accepted`, and
 `run_id:run-8658a41ba5866cd73faef4f9575903be`. There was no result inspection or
 retry. That bounded result does not establish actual vendor dispatch, the
 failure cause or whether a candidate exists; none is inferred from exit zero
 or omitted fields. It supplies no accepted contribution or completed #186
-acceptance claim.
+acceptance claim. The initial record incorrectly described the application as
+joined: P10's checker maps both a normal non-success result (command exit zero)
+and a command refusal (exit one) into the same bounded report. The outer exit
+therefore establishes neither admission nor joined application completion.
+The retained raw report and selected journal facts must distinguish these paths.
 
 The operator retained the evidence, cleanly stopped the VM, freshly confirmed
 Off with zero checkpoints and released custody. The g10 observations are now
 historical; they do not supply readiness for another boot or authority for
 another attempt. Frozen procedures, retained source and application state were
 not edited by this documentation follow-up.
+
+### Private-maintenance diagnosis: selected historical facts (Refs #186)
+
+The [read-only diagnosis design and operator sequence](M8-maintenance-diagnosis.md)
+was source-reviewed before implementation. It does not change the installed
+application identity, accepted procedures, provider availability or attempt
+authority. Two standalone substrate helpers capture fixed private evidence and
+project existing selected journal facts. The host sequence requires final-head
+review, Linux CI and fresh exclusive custody before one start, one diagnosis
+and clean park. No host execution is established by these implementation tests.
+
+Capture retains the database and every recognized SQLite sidecar, published
+and pending attempt records, result and separate raw command report. It uses
+fresh private destinations, finite file/aggregate bounds, no-follow ownership
+checks and a second source comparison before affirmatively sealing completion.
+Original files are never opened with SQLite. Projection uses an independent
+disposable copy, read-only SQLite with WAL enabled, selected canonical
+projectors, instruction/event/value limits and a whole-report byte limit. It
+does not run journal initialization, migrations, recovery or a provider.
+
+The raw command report distinguishes the two P10 branches that the historical
+public summary collapsed. Missing evidence stays missing; a reservation is not
+dispatch, a recorded executor outcome is not independent backend confirmation,
+and a historical result is not current acceptance authority. Pending attempt
+bytes are retained without promotion. Stable source metadata is a capture
+cross-check, not a substitute for exclusive custody and quiescence.
+
+Independent implementation review reproduced one introduced contradiction:
+an outcome could report completed/success while retained callback responses
+were incomplete. The diagnostic now applies the existing qualification
+cross-fact law, with a refusing regression and an assertion-killed mutant.
+Missing legacy callback observations remain explicitly unrecorded. The narrow
+follow-up review exercised nine affected cases and found no new consequence.
+Procedure review also distinguished transfer integrity from reviewed script
+identity; local reviewed-byte checks must precede upload integrity checks.
+
+The focused portable implementation/bootstrap suite passed 63 tests with seven
+Windows-specific skips before the final transport additions. Genuine fake-first
+application runs cover acceptance, writer partial and gate refusal; a committed
+WAL-only fact has a base-only negative control. Capture-to-projection-to-CLI is
+exercised without replacing capture. Seventeen new assertion-based mutations
+cover positive observations, bounds, identity and privacy. Final full-gate,
+integrated inventory and Linux results are reported on the PR, not inferred
+from the portable skips. No vendor binary, credential or model was used by
+these new tests.
+
+The final host-procedure review identified two introduced compatibility
+assumptions before any host execution: source files were required to be 0600
+despite the installed application's service-owner/no-group-or-world-write
+predicate, and the destination parent was required to be 0700 despite only
+the new capture requiring that privacy. The source remains inside a checked
+0700 container; readable file bits do not grant traversal through that
+container. The correction preserves service ownership, single links and
+non-writability, and separates trusted destination ancestry from the private
+new capture. No retained file is chmodded. Tests must exercise an actual
+SqliteJournal created under its ordinary mask and a safe 0750 parent, rather
+than normalize fixture permissions into the desired outcome. The corrected
+focused suite passed 68 tests with seven Windows-specific skips; four further
+assertion-killed mutants pin safe readable originals, destination ancestry,
+private containers and service ownership. Actual Linux permission assertions
+still require CI. The superseded full-gate/CI runs were cancelled; they are not
+reported as passing evidence.
+The narrow follow-up found no new permission defect, but reproduced a test
+isolation error: undoing the output-bound patch also undid the Windows
+timestamp substitution, allowing an unrelated earlier refusal. A nested patch
+context now preserves the platform seam; the two helper test files passed
+57 tests with seven skips after that correction. No production bound changed.
+
+The connector review identified an introduced test-fixture defect: accepting
+capture fixtures exercised the real positive-UID requirement on root runners,
+so they refused before reaching their intended assertions. The accepting
+fixtures now share an explicit platform substitution; on UID 0 it removes only
+the positive-UID prerequisite, preserving actual owner and write-mode checks.
+The production helper still refuses root, with an independent refusing test.
+Normal non-root Linux runs retain the real custody predicate. CI additionally
+runs both helper suites under an affirmatively checked UID 0; its result must
+be observed on the reviewed head, not inferred from the Windows tests. Helper
+and host-procedure bytes are unchanged by this correction.
