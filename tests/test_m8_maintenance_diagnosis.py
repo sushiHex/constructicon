@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -157,11 +158,38 @@ def test_reviewed_helper_pins_match_source_bytes():
         assert hashlib.sha256(raw).hexdigest() == match.group(1)
 
 
-def test_pinned_helpers_keep_reviewed_bytes_in_autocrlf_checkout(tmp_path):
-    def git(*arguments: str) -> bytes:
+@pytest.mark.parametrize("hostile_attributes", ["none", "configured", "default"])
+def test_pinned_helpers_keep_reviewed_bytes_in_autocrlf_checkout(
+    tmp_path, monkeypatch, hostile_attributes,
+):
+    if hostile_attributes == "configured":
+        attributes = tmp_path / "hostile-attributes"
+        attributes.write_text("* text eol=lf\n", encoding="utf-8")
+        config = tmp_path / "hostile-gitconfig"
+        config.write_text(
+            f'[core]\n\tattributesFile = "{attributes.as_posix()}"\n', encoding="utf-8",
+        )
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+    elif hostile_attributes == "default":
+        config_home = tmp_path / "xdg"
+        attributes = config_home / "git" / "attributes"
+        attributes.parent.mkdir(parents=True)
+        attributes.write_text("* text eol=lf\n", encoding="utf-8")
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+    empty_attributes = tmp_path / "empty-attributes"
+    empty_attributes.write_bytes(b"")
+    git_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    git_env.update({
+        "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_ATTR_NOSYSTEM": "1",
+    })
+
+    def git(*arguments: str, cwd: Path = tmp_path) -> bytes:
         return subprocess.run(
-            ["git", "-C", str(tmp_path), *arguments], stdin=subprocess.DEVNULL,
-            capture_output=True, check=True, timeout=20,
+            ["git", "-c", f"core.attributesFile={empty_attributes}", "-C", str(cwd), *arguments],
+            stdin=subprocess.DEVNULL,
+            capture_output=True, check=True, timeout=20, env=git_env,
         ).stdout
 
     git("init", "--quiet")
@@ -172,10 +200,7 @@ def test_pinned_helpers_keep_reviewed_bytes_in_autocrlf_checkout(tmp_path):
     reviewed = {}
     for path in paths:
         # Compare a real checkout with canonical Git blobs, not a normalized copy.
-        reviewed[path] = subprocess.run(
-            ["git", "-C", str(ROOT), "show", f"HEAD:{path}"],
-            stdin=subprocess.DEVNULL, capture_output=True, check=True, timeout=20,
-        ).stdout
+        reviewed[path] = git("show", f"HEAD:{path}", cwd=ROOT)
         target = tmp_path / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(reviewed[path])

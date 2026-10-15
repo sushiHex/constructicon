@@ -55,3 +55,19 @@ final-head CI evidence on the PR, not a second claimed Windows full run.
 After integrating main `eff68fb`, all 72 targeted Windows diagnosis, checkout,
 and CI-scope/manifest tests passed. The pin-sensitive helpers and accepted
 procedure bytes remain identical to that main baseline.
+
+Connector review identified an introduced test-isolation defect: inherited
+global attributes could keep the unrestricted control LF. A disposable
+`core.attributesFile` configuration reproduced that assertion failure (one
+failure, one pass). Disabling global/system configuration alone still failed
+with default XDG global attributes (one failure, two passes). Both findings
+were adopted; the repository's two helper attributes were not at fault.
+
+All Git calls in the checkout test, including canonical HEAD blob reads, now
+use the same isolated environment and explicit empty attributes file. Inherited
+`GIT_*` overrides are removed, global/system configuration is disabled, and
+system attributes are disabled. Three real-checkout cases cover ordinary,
+configured-global and default-global attributes without editing user settings.
+All 74 focused Windows diagnosis and CI-scope/manifest tests passed after the
+correction. Earlier full-gate and CI results remain evidence for their named
+heads, not for this test correction.
