@@ -25,7 +25,7 @@ def main() -> None:
         print(f"== {name}: {' '.join(command)}", flush=True)
         result = subprocess.run(command, check=False)
         if result.returncode != 0:
-            failures.append(name)
+            failures.append(f"{name} (returncode={result.returncode})")
     if failures:
         print(f"verify FAILED: {', '.join(failures)}")
         sys.exit(1)

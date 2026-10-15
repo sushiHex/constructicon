@@ -11,6 +11,41 @@ Green locally is the goal `verify` serves; CI runs the same command. The full
 lifecycle runs with zero credentials (I7) — if your change needs a secret to be
 tested, the design is wrong.
 
+If a full pytest run stops without an assertion summary, preserve its output
+and the numeric child return code; the cause remains unknown until evidence
+establishes it. `verify` reports each failed stage's exact child `returncode`
+while still finishing all stages and exiting 1. For one diagnostic full-suite
+run, use existing pytest verbose output to retain collected counts, completed
+tests, and the last started test. In Git Bash (including on Windows), from the
+repository root:
+
+```bash
+PYTHONIOENCODING=utf-8 uv run python - <<'PY'
+import subprocess
+import sys
+
+with open("pytest-interruption.log", "x", encoding="utf-8") as log:
+    result = subprocess.run(
+        [sys.executable, "-u", "-m", "pytest", "-vv"],
+        stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+        check=False,
+    )
+    log.write(f"\npytest child returncode={result.returncode}\n")
+print(f"pytest child returncode={result.returncode}")
+sys.exit(int(result.returncode != 0))
+PY
+```
+
+The exclusive log creation refuses to overwrite retained evidence. Keep that
+log privately with the commit, OS and Python version; review it for test data
+before sharing. It has no byte cap. Do not automatically retry until
+green. The last started test is a location clue, not proof of the cause or of
+completion. A negative POSIX signal code or a Windows native status is retained
+as Python observed it, without normalization or diagnosis. If the diagnostic
+parent itself is terminated, its final status line may be absent: that absence
+is unknown child status, not success. A diagnostic run does not replace the
+complete verification gate.
+
 Before writing anything new, inspect `system.describe()` and check for an
 existing component or contract to compose or extend. Use
 `describe_component(name)` for one stable contract and `rdeps(name)` before
