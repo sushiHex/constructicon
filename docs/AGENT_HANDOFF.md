@@ -26,19 +26,61 @@ and [all four physical containment lanes](https://github.com/sushiHex/constructi
 The stable `verify-complete` check requires explicit success from Windows
 discovery, verification and the complete portable mutation matrix. Its tests
 execute the accepting shell path and refuse missing, failed, cancelled,
-skipped, pending and unknown prerequisites. The three proposed merge checks
+skipped, pending and unknown prerequisites. The three stable merge checks
 are `verify-complete`, `qualify` and `containment`, emitted by GitHub Actions
 (App ID `15368`).
 
-This established workflow policy and a green code-change path, not GitHub
-merge enforcement. No repository setting changed in #202, and its full-proof
-run skipped docs validation. A docs-only PR must still demonstrate successful
-docs validation and containment aggregation with physical lanes skipped;
-ruleset refusal and an allowed green merge need separate observed evidence.
-The existing resolved-conversation rule and no-bypass posture must survive
-that settings rollout. The [rollout guidance](M8_CI.md#stable-merge-checks)
-distinguishes those proofs; [#201](https://github.com/sushiHex/constructicon/issues/201)
-owns the current acceptance state.
+No repository setting changed in #202, and its full-proof run skipped docs
+validation. The docs-only [PR #207](https://github.com/sushiHex/constructicon/pull/207)
+at `af58a8a380d2acfa3908cf8f619c90d5f8d72fc1` then passed all applicable
+checks on verification attempt 2, with successful docs classification,
+validation and containment aggregation and the physical matrix skipped.
+Attempt 1 correctly failed: a fixture's local Git clone errored, so a mutation
+was not proven killed even though its intended assertions failed. The cause
+remains unknown; [#208](https://github.com/sushiHex/constructicon/issues/208)
+records the missing diagnostic evidence. The rerun does not explain that error.
+
+On 2026-10-15 at 10:52:58 UTC, the existing main ruleset was updated and read
+back through both ruleset and effective-branch APIs. It requires the three
+checks from App `15368`, with strict latest-base testing. The complete existing
+pull-request rule, mandatory resolved conversations and empty bypass list
+were preserved; the API reported `current_user_can_bypass: never`.
+That configuration readback alone does not establish observed pending-check
+refusal or an allowed green merge. The
+[rollout guidance](M8_CI.md#stable-merge-checks) distinguishes those proofs;
+[#201](https://github.com/sushiHex/constructicon/issues/201) owns the current
+acceptance state.
+
+## #186 — rehearse the mediated task on a complete repository tree
+
+The operational-entry witness now joins the genuine Codex provider and callback
+mediation to real worker execution, capture, the fixed exam, result publication
+and the ordinary consumer loaded from the accepted snapshot. Its native peer
+and operator store are credential-free doubles; Linux cases use the existing
+physical process lane. The provider uses the current production WRITE profile,
+model, effort and grants. This is feasibility evidence, never a live result.
+
+An independent data family exercises nonadjacent duplicate paths with different
+digests across eight ASCII line boundaries, with valid controls. It distinguishes
+a regression the older equal-digest fixture permits. These are test inputs,
+not a prescribed model answer or an addition to the fixed eight-mutant exam.
+No contribution is added to the real repository's candidate path.
+
+The baseline has synthetic parentless history and a captured committed checkout
+tree, excluding only the allowed output path if it already exists. Every other
+blob and mode stays exact; shallow CI needs no ancestor fetch. Full-tree testing
+exposed ambient Windows Git conversion in the portable launcher: stage checkout
+inherited autocrlf, then isolated capture retained converted blobs. The test
+launcher now excludes host Git configuration and attributes. The gate's refusal
+was correct, and this says nothing about the historical host predicate.
+
+The first native run stopped both new cases before worker execution because
+the service user could not read the runner-owned source checkout through Git's
+ownership guard. Fixture source reads now trust only that exact resolved
+checkout, per child command; global configuration and production Git remain
+unchanged. A real-Git regression admits that source and still refuses an
+unrelated repository under the same exception. Native completion requires the
+corrected head's physical lane.
 
 ## #186 — current diagnostic source is not a historical helper pin
 

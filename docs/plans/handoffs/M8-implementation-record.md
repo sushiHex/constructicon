@@ -6338,3 +6338,93 @@ passed 111 tests on Windows. Seven new mutants were killed by assertions,
 without harness errors: all five guard removals, swapped commit/base precedence
 and candidate-value disclosure. Full verification and exact-head CI remain PR
 evidence; no additional Windows full gate was launched concurrently.
+
+### Complete-tree mediated task witness (Refs #186)
+
+The earlier accepting tests already exercised the fixed Graph, actual portable
+capture and journal, the operational entry and joined publication, and a Linux
+entry with a scripted executor. They wrote the 24-case permitting fixture into
+a minimal synthetic base. Separate maintenance-provider tests exercised native
+callback mediation but returned a canned worker result. Repeating either test
+would not establish the missing joined seam.
+
+The new shared witness uses the genuine `CodexOperatorProvider` with the current
+production WRITE profile, grants, model and effort. Its scripted native peer
+offers one `contained_python` callback; that callback executes an actual Python
+child which adds the permitted JSON file. Capture, immutable pack import,
+the trusted fixed exam, journal-minted attestation, sole-parent application
+result and publication remain real. The ordinary consumer is loaded from its
+SHA-checked file in the accepted snapshot and executes against the retained
+data. The companion no-op callback positively completes successfully, capture
+returns the base, and the unchanged writer guard refuses before a checkpoint
+or checker start, with no published acceptance.
+
+Fixture source comes from one captured immutable committed checkout tree,
+ignoring dirty worktree and index bytes. Tree closure is packed locally without
+history or network, then imported into a fresh authority under deterministic
+parentless metadata. Its baseline excludes only `tests/vectors/plan_manifest.json`
+if a future contribution already exists; all other blob/mode records compare
+exactly, all three frozen source hashes match, and baseline vector absence is
+affirmed. Small absent/present fixture cases exercise that exclusion without
+changing the source repository. This is a full repository-tree fixture with
+synthetic history, not reproduction of an actual deployment commit or permission
+to prepare a live base that already contains a contribution.
+
+The independently authored 34-case feasibility family includes permitted paths,
+refusals, valid multi-record controls and nonadjacent repeated paths with
+different digests across all eight ASCII line boundaries. A supplemental
+regression that rejects only equal-digest duplicates passes the previous 24-case
+fixture; the new family records eight assertion failures, no errors or skips.
+This demonstrates useful additional input sensitivity. It neither changes the
+trusted eight-mutant exam nor prescribes a model answer. The actual candidate
+path remains absent; no live contribution is supplied by these tests.
+
+The first complete-tree portable run correctly failed its exact tree exam:
+Windows global `core.autocrlf=true` had reached staging checkout through the
+portable launcher's inherited environment, while capture already suppresses
+global configuration. Raw comparison showed the consumer changing from 1,390
+LF bytes to 1,430 CRLF bytes; ignoring line endings left only the vector delta.
+The portable process primitive now removes inherited `GIT_*`, suppresses global
+and system Git configuration and attributes, and supplies an empty user
+attributes file. Production capture, guards and acceptance are unchanged.
+
+The native peer and operator-store syscalls remain doubles, not credentials or
+vendor observations. Portable workers execute on the host without claiming
+Linux isolation; native cases delegate worker, capture and gate processes to
+the existing provisioned Linux launcher. Native results belong to exact-head
+CI; local Windows skips are not physical proof. No VM operation, vendor binary,
+qualification, recovery of retained evidence, new model attempt or installation
+is part of this slice. The historical capture predicate remains unproven.
+
+The initial physical foundation run at `5756eed` failed only the two new cases
+(347 existing cases passed). Both stopped at the source `HEAD^{tree}` read:
+the service identity reads a checkout owned by runner, and trusted Git's
+deliberate suppression of global configuration left its ownership guard in
+force. Neither new native callback ran. This is an introduced fixture defect,
+not a production refusal or native acceptance result.
+
+Fixture source Git commands now receive `-c safe.directory=<resolved source>`
+for that child only. No wildcard, global configuration, workflow ownership
+change or production `GitProcess` exception is added; fresh authority operations
+retain the normal ownership guard. A real-Git test injects Git's different-owner
+test condition into source-read child environments: an unexcepted read refuses,
+the exact source import accepts with identical tree, and the same exact-source
+exception still refuses an unrelated repository. That regression passed locally
+on Windows; corrected native acceptance and no-op execution remain unproved
+until the new head's physical lane completes.
+
+At `82f03ba`, exact-head verification passed 6,047 tests with 433 platform
+skips, all mutation jobs and all four Linux lanes. Foundation passed 349 tests,
+including both new full-tree contribution and successful-no-op cases. Those
+Linux observations did not establish portability on other POSIX systems.
+
+The connector's P2 was reproduced against source: the test helper retained the
+physical guard whenever `os.name == "posix"`, but the production guard admits
+only `sys.platform == "linux"`. This introduced fixture defect affected macOS.
+Selection now uses the same exact Linux boundary. A module-local platform double
+leaves the interpreter's real platform untouched; both Darwin and Linux cases
+enter an actual file-descriptor context, with Darwin using the portable guard
+and Linux retaining the supplied physical-boundary double. Before the fix,
+Darwin failed its physical-boundary assertion while Linux passed; afterward both
+passed. This is portable boundary-selection evidence, not an executed macOS
+host or a change to production containment.

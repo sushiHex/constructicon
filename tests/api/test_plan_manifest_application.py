@@ -452,7 +452,14 @@ class PortableProcessLauncher:
         for descriptor in kwargs["guard_fds"]:
             os.fstat(descriptor)
         self.calls.append((command, kwargs))
-        environment = dict(os.environ)
+        environment = {name: value for name, value in os.environ.items()
+                       if not name.upper().startswith("GIT_")}
+        # The Linux boundary exposes no host Git configuration. Inheriting a
+        # Windows autocrlf setting changes full-tree checkout bytes before the
+        # capture program (correctly) disables globals for staging.
+        environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+            GIT_ATTR_NOSYSTEM="1", GIT_CONFIG_COUNT="1",
+            GIT_CONFIG_KEY_0="core.attributesFile", GIT_CONFIG_VALUE_0=os.devnull)
         combined = command[1:4] == ("-I", "-c", _CHECK)
         if combined:
             # Windows os.execv does not preserve this Linux trampoline's
@@ -551,9 +558,13 @@ class PortableVectorWriter(Writer):
 
 
 @pytest.fixture
-async def concrete_application(tmp_path, monkeypatch):
+async def concrete_application(tmp_path, monkeypatch, request):
     from constructicon.substrate.gates import contained as gate_module
 
+    if getattr(request, "param", None) == "committed-tree":
+        # Seed the callback's fake store before this fixture substitutes its
+        # narrowly scoped guarded-removal primitive below.
+        request.getfixturevalue("portable_binding")
     source = (Path(__file__).resolve().parents[2] / "scripts/regen_plan_manifest.py").read_bytes()
     repo = seed_authority(tmp_path, {"seed.txt": "trusted fixture seed\n"})
     authority = GitAuthority(repo.resolve(), tmp_path / "authority-workspaces")
@@ -565,6 +576,18 @@ async def concrete_application(tmp_path, monkeypatch):
         "commit-tree", tree, input_text="trusted maintenance base\n",
     ).stdout.strip()
     authority._run("update-ref", "refs/heads/main", base)
+    if getattr(request, "param", None) == "committed-tree":
+        from tests.maintenance_task_world import committed_tree_base
+
+        base = await committed_tree_base(authority)
+        attributes = tmp_path / "ambient.attributes"
+        attributes.write_text("* text eol=crlf\n", encoding="ascii")
+        for name, value in {
+            "GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_0": "core.autocrlf",
+            "GIT_CONFIG_VALUE_0": "true", "GIT_CONFIG_KEY_1": "core.attributesFile",
+            "GIT_CONFIG_VALUE_1": str(attributes),
+        }.items():
+            monkeypatch.setenv(name, value)
     journal = SqliteJournal(tmp_path / "application.sqlite")
     launch = PortableProcessLauncher(tmp_path / "scratch", authority.git_executable)
     locks = {}
