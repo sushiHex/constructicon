@@ -21,8 +21,109 @@ EVIDENCE_MODULE = "constructicon.substrate.journal.maintenance_evidence:"
 EVIDENCE_TESTS = "tests/substrate/journal/test_maintenance_evidence.py::"
 DIAGNOSTIC_MODULE = "constructicon.substrate.journal.maintenance_diagnostic:"
 DIAGNOSTIC_TESTS = "tests/substrate/journal/test_maintenance_diagnostic.py::"
+VM_ADDRESS_MODULE = "scripts.m8_vm_address:"
+VM_ADDRESS_TESTS = "tests/test_m8_vm_address.py::"
+WRITER = "constructicon.api.plan_manifest_application:maintenance_writer"
+WRITER_TESTS = "tests/api/test_plan_manifest_application.py::"
 
 MUTANTS = (
+    *(
+        ("maintenance capture preserves " + name, WRITER, condition, "if False:",
+         WRITER_TESTS + "test_writer_capture_guards_keep_acceptance_and_first_failure["
+         + name + "]")
+        for name, condition in (
+            ("commit", "if candidate.commit != captured:"),
+            ("base", "if candidate.commit == request.base_commit:"),
+            ("repository", "if candidate.repository != request.repository:"),
+            ("paths", "if candidate.paths:"),
+            ("comparison-base", "if candidate.diff_against != request.base_commit:"),
+        )
+    ),
+    ("maintenance capture diagnoses first comparison before base", WRITER,
+     'if candidate.commit != captured:\n'
+     '        raise ContractViolation('
+     '"maintenance captured candidate differs from capture return")\n'
+     '    if candidate.commit == request.base_commit:\n'
+     '        raise ContractViolation("maintenance captured candidate equals the pinned base")',
+     'if candidate.commit == request.base_commit:\n'
+     '        raise ContractViolation("maintenance captured candidate equals the pinned base")\n'
+     '    if candidate.commit != captured:\n'
+     '        raise ContractViolation('
+     '"maintenance captured candidate differs from capture return")',
+     WRITER_TESTS + "test_writer_capture_guards_keep_acceptance_and_first_failure[commit-first]"),
+    ("maintenance capture diagnosis never includes candidate values", WRITER,
+     'ContractViolation("maintenance captured candidate equals the pinned base")',
+     'ContractViolation(str(candidate))',
+     WRITER_TESTS + "test_writer_capture_guards_keep_acceptance_and_first_failure[base]"),
+    ("VM address requires exact identity", VM_ADDRESS_MODULE + "_parse",
+     'if value["name"] != VM_NAME:', "if False:",
+     VM_ADDRESS_TESTS + "test_source_refusals_are_closed"),
+    ("VM address requires fresh Running state", VM_ADDRESS_MODULE + "_parse",
+     'if value["state"] != "Running":', "if False:",
+     VM_ADDRESS_TESTS + "test_source_refusals_are_closed"),
+    ("VM address refuses ambiguous suitable targets", VM_ADDRESS_MODULE + "_parse",
+     "if len(suitable) != 1:", "if False:",
+     VM_ADDRESS_TESTS + "test_source_refusals_are_closed"),
+    ("VM address deduplicates after filtering", VM_ADDRESS_MODULE + "_parse",
+     "if len(suitable) != 1:", "if len(suitable) != 1 or len(addresses) != 1:",
+     VM_ADDRESS_TESTS + "test_filter_then_deduplicate"),
+    ("VM address selects only RFC1918 IPv4", VM_ADDRESS_MODULE + "_parse",
+     "parsed in network for network in PRIVATE_NETWORKS", "True for network in PRIVATE_NETWORKS",
+     VM_ADDRESS_TESTS + "test_source_refusals_are_closed"),
+    ("VM address post-capture source bound binds", VM_ADDRESS_MODULE + "discover",
+     "if len(completed.stdout) > MAX_SOURCE_BYTES:", "if False:",
+     VM_ADDRESS_TESTS + "test_post_capture_source_bound_binds"),
+    ("VM address nonzero query exit refuses", VM_ADDRESS_MODULE + "discover",
+     "if completed.returncode != 0:", "if False:",
+     VM_ADDRESS_TESTS + "test_process_faults_refuse_without_retry_or_private_details"),
+    ("VM address any query stderr refuses", VM_ADDRESS_MODULE + "discover",
+     "if completed.stderr:", "if False:",
+     VM_ADDRESS_TESTS + "test_process_faults_refuse_without_retry_or_private_details"),
+    ("VM address closes query stdin", VM_ADDRESS_MODULE + "discover",
+     "stdin=subprocess.DEVNULL", "stdin=None",
+     VM_ADDRESS_TESTS + "test_acceptance_uses_only_fixed_argv_and_closed_stdin"),
+    ("VM address query never uses an outer shell", VM_ADDRESS_MODULE + "discover",
+     "shell=False", "shell=True",
+     VM_ADDRESS_TESTS + "test_acceptance_uses_only_fixed_argv_and_closed_stdin"),
+    ("VM address uses the fixed PowerShell executable", VM_ADDRESS_MODULE + "powershell_argv",
+     "[POWERSHELL,", '["powershell.exe",',
+     VM_ADDRESS_TESTS + "test_acceptance_uses_only_fixed_argv_and_closed_stdin"),
+    ("VM address retains its bounded process timeout", VM_ADDRESS_MODULE + "discover",
+     "timeout=remaining", "timeout=None",
+     VM_ADDRESS_TESTS + "test_acceptance_uses_only_fixed_argv_and_closed_stdin"),
+    ("VM address readiness waits through IPv6-only observations", VM_ADDRESS_MODULE + "discover",
+     'if report.get("reason") != "no_suitable_address":', "if True:",
+     VM_ADDRESS_TESTS + "test_ipv6_pending_then_dhcp_accepts_in_one_invocation"),
+    ("VM address readiness never waits through invalid observations", VM_ADDRESS_MODULE + "discover",
+     'if report.get("reason") != "no_suitable_address":',
+     'if report.get("status") == "ok":',
+     VM_ADDRESS_TESTS + "test_pending_then_invalid_observation_stops_immediately"),
+    ("VM address readiness has at most sixty observations", VM_ADDRESS_MODULE + "discover",
+     "range(MAX_OBSERVATIONS)", "range(MAX_OBSERVATIONS + 1)",
+     VM_ADDRESS_TESTS + "test_observation_limit_binds_even_when_clock_does_not_advance"),
+    ("VM address checks deadline before each query", VM_ADDRESS_MODULE + "discover",
+     "if remaining <= 0:\n            break\n        try:",
+     "if False:\n            break\n        try:",
+     VM_ADDRESS_TESTS + "test_deadline_checked_before_query_and_sleep_is_remaining_bounded"),
+    ("VM address refuses late completion before parsing", VM_ADDRESS_MODULE + "discover",
+     "if time.monotonic() >= deadline:", "if False:",
+     VM_ADDRESS_TESTS + "test_late_query_is_not_parsed"),
+    ("VM address never accepts when parsing exhausts deadline", VM_ADDRESS_MODULE + "discover",
+     'if remaining <= 0:\n            break\n        if report.get("reason")',
+     'if False:\n            break\n        if report.get("reason")',
+     VM_ADDRESS_TESTS + "test_deadline_expiring_during_parse_cannot_accept"),
+    ("VM address child timeout uses the remaining single budget", VM_ADDRESS_MODULE + "discover",
+     "timeout=remaining", "timeout=READINESS_SECONDS",
+     VM_ADDRESS_TESTS + "test_query_timeout_shrinks_to_remaining_budget"),
+    ("VM address sleep cannot exceed remaining budget", VM_ADDRESS_MODULE + "discover",
+     "time.sleep(min(1, remaining))", "time.sleep(1)",
+     VM_ADDRESS_TESTS + "test_deadline_checked_before_query_and_sleep_is_remaining_bounded"),
+    ("VM address sleep cannot exceed one second", VM_ADDRESS_MODULE + "discover",
+     "time.sleep(min(1, remaining))", "time.sleep(remaining)",
+     VM_ADDRESS_TESTS + "test_ipv6_pending_then_dhcp_accepts_in_one_invocation"),
+    ("VM address exhaustion does not assert an absent address", VM_ADDRESS_MODULE + "discover",
+     'return _refused("readiness_exhausted")', 'return _refused("no_suitable_address")',
+     VM_ADDRESS_TESTS + "test_pending_predicate_is_distinct_from_public_exhaustion"),
     ("safe original read bits remain acceptable behind private containers", EVIDENCE_MODULE + "_custody",
      "and not info.st_mode & 0o022", "and not info.st_mode & (0o077 if private else 0o022)",
      EVIDENCE_TESTS + "test_owner_and_private_mode_predicate_is_closed"),

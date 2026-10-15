@@ -94,12 +94,16 @@ async def maintenance_writer(ctx: NodeContext, inputs: Mapping[str, Any]) -> Map
         raise ContractViolation("maintenance writer did not positively succeed")
     captured = await workspace.commit_all("constructicon plan-manifest regression vectors")
     candidate = workspace.git_ref()
-    if (
-        candidate.commit != captured or candidate.commit == request.base_commit
-        or candidate.repository != request.repository or candidate.paths
-        or candidate.diff_against != request.base_commit
-    ):
-        raise ContractViolation("maintenance capture differs from the requested candidate")
+    if candidate.commit != captured:
+        raise ContractViolation("maintenance captured candidate differs from capture return")
+    if candidate.commit == request.base_commit:
+        raise ContractViolation("maintenance captured candidate equals the pinned base")
+    if candidate.repository != request.repository:
+        raise ContractViolation("maintenance captured candidate has another repository")
+    if candidate.paths:
+        raise ContractViolation("maintenance captured candidate has path restrictions")
+    if candidate.diff_against != request.base_commit:
+        raise ContractViolation("maintenance captured candidate has another comparison base")
     return {"candidate": candidate.model_dump(mode="json")}
 
 

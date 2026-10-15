@@ -6,6 +6,19 @@ on:
   pull_request:
 
 jobs:
+  windows-discovery:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --dev
+      - name: Prove the Windows argument boundary with fake Hyper-V cmdlets
+        env:
+          PYTHONIOENCODING: utf-8
+        run: uv run pytest -q tests/test_m8_vm_address.py tests/test_m8_discovery_procedure.py
+
   verify:
     runs-on: ubuntu-latest
     steps:

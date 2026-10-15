@@ -44,3 +44,14 @@ clean working files must be rematerialized to apply newly added attributes;
 the regression removes only its disposable files before checkout so an
 unchanged-index optimization cannot substitute for observing converted bytes.
 Full gate and exact-head CI results remain PR evidence.
+
+The original implementation head `ced23b4` completed the Windows full gate:
+5,606 tests passed and 773 skipped in 2,410.47 seconds, with verifier exit 0.
+Its CI also passed all selected checks and four physical proof lanes.
+Independent review reproduced the 12 focused tests and real checkout
+conversion and found no blocking defect. These are original-head results;
+integration with subsequent main changes uses separate focused Windows and
+final-head CI evidence on the PR, not a second claimed Windows full run.
+After integrating main `eff68fb`, all 72 targeted Windows diagnosis, checkout,
+and CI-scope/manifest tests passed. The pin-sensitive helpers and accepted
+procedure bytes remain identical to that main baseline.

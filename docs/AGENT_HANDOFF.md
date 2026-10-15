@@ -25,6 +25,28 @@ checkout conversion, not corrupted committed source. The frozen procedure,
 helper blobs and direct-file refusal remain unchanged. This establishes no
 host diagnosis or vendor result.
 
+## #186 — capture refusal names its first failed comparison
+
+The writer retains all five capture guards and their evaluation order, with
+fixed journal messages for the first failed comparison. Acceptance and async
+boundaries are unchanged. A genuine-provider, real-Git regression reproduces
+refusal after a successful no-op executor returns a base candidate; it does not
+establish that explanation for the historical run. The frozen bounded reader
+still reports new messages as `unknown` and the historical grouped reason as
+`capture-mismatch`. Installed code remains unchanged, the VM is parked with
+custody released, and this source change grants no new attempt authority.
+
+## #186 — review the command boundary before the host session
+
+The first diagnostic session stopped before SSH: an improvised inline address
+lookup failed at the Windows shell-quoting boundary. No guest helper or capture
+was created, and the VM was freshly confirmed Off with zero checkpoints.
+The continuation uses a fixed Python address helper, with the minimal Hyper-V
+query passed directly as a subprocess argument rather than nested shell code.
+Native fake-cmdlet tests exercise that exact Windows boundary. Address readiness
+is not SSH identity or qualification; the unchanged diagnostic still requires
+strict host-key checks, current custody and its one-session stop rule.
+
 ## #195 — verifier failure preserves child status
 
 The verification summary retains each failed stage's exact numeric child

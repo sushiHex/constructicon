@@ -6218,3 +6218,106 @@ Normal non-root Linux runs retain the real custody predicate. CI additionally
 runs both helper suites under an affirmatively checked UID 0; its result must
 be observed on the reviewed head, not inferred from the Windows tests. Helper
 and host-procedure bytes are unchanged by this correction.
+
+### Diagnostic discovery boundary (Refs #186)
+
+PR #194 merged with final-head Linux verification (5,946 passed / 423 skipped),
+67 passing UID-0 helper tests, all mutation jobs and four native lanes. Its
+authorized host session started once but stopped before SSH when a local
+inline address lookup failed shell parsing. D1–D3 did not execute; the exact
+park procedure and a fresh measurement confirmed Off, uptime zero and zero
+checkpoints. This is no diagnostic result or application-failure explanation.
+
+The [additive discovery continuation](M8-maintenance-diagnosis-discovery.md)
+keeps all prior helper and procedure bytes unchanged. A stdlib Python entry
+owns discovery and closed output validation; its fixed minimal PowerShell query
+reads fresh VM identity/state and adapter facts. Python uses the same address
+predicate for readiness and acceptance within one bounded observation budget.
+No nested shell, caller command, start/stop, SSH, application
+retry or provider action lives in the helper. Exactly one deduplicated RFC1918
+IPv4 is required. Readiness exhaustion, ambiguous addresses, malformed data,
+stderr, process failure and timeout refuse. The source-size cap is post-capture,
+not a streaming-memory guarantee; address discovery is not SSH readiness.
+
+The initial fifty focused tests passed on Windows, including seven PowerShell
+process tests with fake Hyper-V commands and no VM access. Independent narrow
+review reproduced all fifty and found no blocking defect. A dedicated Windows
+CI job exercises this boundary; exact-head CI and mutation results are recorded
+on the PR. These implementation tests do not establish another host session.
+
+The peer's narrow procedure review raised a plausible one-shot readiness gap:
+the native generic IP-address wait might observe IPv6 link-local before the
+required private IPv4. This was not measured on the guest. The design therefore
+moved readiness into Python rather than duplicating its address law in
+PowerShell. Only valid no-suitable-address observations may wait; all other
+refusals stop. One monotonic deadline and a finite observation count bound that
+interval, and late responses cannot become acceptance. The superseded CI runs
+were cancelled, not reported as passing final-head evidence.
+
+The corrected helper passed 69 Windows tests, including eight actual
+PowerShell process tests with fake Hyper-V commands. All 22 discovery mutants
+failed assertions, and all 38 inventory checks passed. A narrow independent
+review reproduced the 69 helper tests and found no blocker. Deadline tests use
+an injected clock; process-launch/cleanup overhead is not a hard wall-clock
+guarantee. Exhaustion records its own fact rather than asserting that the last
+observation lacked an address. No guest was queried by these tests.
+
+The final peer check confirmed the helper pin and readiness semantics. Its
+remaining timing concern is recorded as a deliberate limit: the one SSH boot
+read has a 15-second connection/handshake timeout and no retry; a refused first
+connection stops and parks even if SSH was merely not ready. No new port-polling
+facility was added. The fake transport assertion failed without the timeout
+argument and passed with it. A readiness-budget subprocess timeout is not
+reported as proof of a guest fault.
+
+### Capture refusal diagnostics after retained-outcome diagnosis (Refs #186)
+
+The [completed read-only session](https://github.com/sushiHex/constructicon/issues/186#issuecomment-6186507897)
+verified unchanged installed controller `e7d40b139c2a0205f37c7050295a3eca55af9d2c`
+and projected the retained application outcome. The command took the normal
+nonacceptance branch. Nine validated journal events established a failed run,
+writer start and a recorded ContractViolation classified as `capture-mismatch`,
+with no writer checkpoint observed. The identity-matched attempt recorded its
+outcome as completed dispatch and executor success; both of two callbacks were
+started/completed and both worker results were success, without recorded timeout
+or exceeded bound. Checker start was unrecorded, its checkpoint missing, checks
+empty and published result missing. Missing observations do not establish that
+an operation never happened; adapter success is not application acceptance or
+independent backend proof. The VM was freshly measured Off, uptime zero and
+zero checkpoints, then custody released. All retained evidence remains preserved;
+no retry, recovery, qualification, repair or new model attempt followed.
+
+The historical capture message groups five predicates and does not identify
+which failed. Source inspection and a credential-free reproduction showed that
+a successful no-op executor can reach that same refusal after genuine capture
+returns the pinned base. That proves a possible execution path, not the
+historical candidate OID or absence of filesystem activity. The checked-in
+regression runs the real Graph, workspace provider, Git capture/publication and
+journal with a portable launcher and successful no-op executor double; it joins
+the worker and observes the base candidate before the writer refuses. The
+existing concrete accepting path remains exercised separately.
+
+Prospective writer diagnostics now retain a distinct fixed message for the
+first failed comparison: capture return, pinned base, repository, path
+restrictions or comparison base. All five guards retain their order and
+acceptance meaning, and no async boundary changes. Messages contain no candidate
+values, paths, payloads or hashes. Single-fault, overlapping-fault and accepting
+cases pin those distinctions; the pinned-base message describes commit identity,
+not whether the worker touched files.
+
+The two pinned diagnostic helpers and frozen procedures are unchanged. Their
+existing reader still categorizes the legacy grouped message as
+`capture-mismatch`, with the actual predicate unknown; it reports each new
+message as `unknown`. Precise prospective messages remain in the canonical
+journal. Upgrading that frozen reader would be a separate reviewed revision,
+not an implicit change here. Changed application/component identity requires a
+future reviewed installation and qualification before any new live attempt;
+this source-only slice grants no such authority.
+
+Against the unchanged grouped implementation, the new predicate/precedence
+tests failed nine assertions while their accepting case passed. After the
+change, the focused application, diagnostic and mutation-inventory suites
+passed 111 tests on Windows. Seven new mutants were killed by assertions,
+without harness errors: all five guard removals, swapped commit/base precedence
+and candidate-value disclosure. Full verification and exact-head CI remain PR
+evidence; no additional Windows full gate was launched concurrently.
