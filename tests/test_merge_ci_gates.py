@@ -57,6 +57,7 @@ def test_portable_gate_positively_accepts_all_successful_jobs() -> None:
     )
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout == "all portable verification and mutation jobs succeeded\n"
+    assert completed.stderr == ""
 
 
 @pytest.mark.parametrize("job", ["WINDOWS_DISCOVERY", "VERIFY", "MUTATIONS"])
