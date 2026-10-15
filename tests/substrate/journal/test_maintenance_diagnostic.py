@@ -166,13 +166,14 @@ def test_real_committed_wal_only_failure_is_observed(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(("message", "cause"), [
     ("maintenance capture differs from the requested candidate", "capture-mismatch"),
-    ("maintenance captured candidate differs from capture return", "unknown"),
-    ("maintenance captured candidate equals the pinned base", "unknown"),
-    ("maintenance captured candidate has another repository", "unknown"),
-    ("maintenance captured candidate has path restrictions", "unknown"),
-    ("maintenance captured candidate has another comparison base", "unknown"),
+    ("maintenance captured candidate differs from capture return", "capture-return"),
+    ("maintenance captured candidate equals the pinned base", "capture-unchanged"),
+    ("maintenance captured candidate has another repository", "capture-repository"),
+    ("maintenance captured candidate has path restrictions", "capture-paths"),
+    ("maintenance captured candidate has another comparison base", "capture-base"),
+    ("maintenance captured candidate equals the pinned base " + PRIVATE, "unknown"),
 ])
-def test_frozen_reader_keeps_grouped_history_and_does_not_guess_new_capture_reasons(
+def test_reader_keeps_grouped_history_and_classifies_only_exact_capture_reasons(
     tmp_path: Path, message: str, cause: str,
 ) -> None:
     source = tmp_path / "original"

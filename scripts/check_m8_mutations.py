@@ -28,6 +28,20 @@ WRITER_TESTS = "tests/api/test_plan_manifest_application.py::"
 
 MUTANTS = (
     *(
+        ("installed diagnostic recognizes " + reason, DIAGNOSTIC_MODULE + "_journal",
+         '_FAILURES.get(error, "unknown")',
+         '_FAILURES.get(None if error == ' + repr(message) + ' else error, "unknown")',
+         DIAGNOSTIC_TESTS
+         + "test_reader_keeps_grouped_history_and_classifies_only_exact_capture_reasons")
+        for reason, message in (
+            ("capture-return", "maintenance captured candidate differs from capture return"),
+            ("capture-unchanged", "maintenance captured candidate equals the pinned base"),
+            ("capture-repository", "maintenance captured candidate has another repository"),
+            ("capture-paths", "maintenance captured candidate has path restrictions"),
+            ("capture-base", "maintenance captured candidate has another comparison base"),
+        )
+    ),
+    *(
         ("maintenance capture preserves " + name, WRITER, condition, "if False:",
          WRITER_TESTS + "test_writer_capture_guards_keep_acceptance_and_first_failure["
          + name + "]")

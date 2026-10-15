@@ -53,6 +53,11 @@ _FAILURES = {
     "maintenance workspace differs from the pinned base": "writer-base",
     "maintenance writer did not positively succeed": "writer-not-positive",
     "maintenance capture differs from the requested candidate": "capture-mismatch",
+    "maintenance captured candidate differs from capture return": "capture-return",
+    "maintenance captured candidate equals the pinned base": "capture-unchanged",
+    "maintenance captured candidate has another repository": "capture-repository",
+    "maintenance captured candidate has path restrictions": "capture-paths",
+    "maintenance captured candidate has another comparison base": "capture-base",
     "maintenance checker received another candidate or gate": "checker-input",
     "maintenance candidate failed its exact gate": "gate-not-positive",
 }
