@@ -1,0 +1,3 @@
+# These reviewed helpers cross a byte-pinned transport boundary.
+/src/constructicon/substrate/journal/maintenance_evidence.py text eol=lf
+/src/constructicon/substrate/journal/maintenance_diagnostic.py text eol=lf

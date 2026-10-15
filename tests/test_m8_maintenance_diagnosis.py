@@ -157,6 +157,43 @@ def test_reviewed_helper_pins_match_source_bytes():
         assert hashlib.sha256(raw).hexdigest() == match.group(1)
 
 
+def test_pinned_helpers_keep_reviewed_bytes_in_autocrlf_checkout(tmp_path):
+    def git(*arguments: str) -> bytes:
+        return subprocess.run(
+            ["git", "-C", str(tmp_path), *arguments], stdin=subprocess.DEVNULL,
+            capture_output=True, check=True, timeout=20,
+        ).stdout
+
+    git("init", "--quiet")
+    git("config", "core.autocrlf", "true")
+    (tmp_path / ".gitattributes").write_bytes((ROOT / ".gitattributes").read_bytes())
+    paths = [f"src/constructicon/substrate/journal/{name}.py" for name in
+             ("maintenance_evidence", "maintenance_diagnostic")]
+    reviewed = {}
+    for path in paths:
+        # Compare a real checkout with canonical Git blobs, not a normalized copy.
+        reviewed[path] = subprocess.run(
+            ["git", "-C", str(ROOT), "show", f"HEAD:{path}"],
+            stdin=subprocess.DEVNULL, capture_output=True, check=True, timeout=20,
+        ).stdout
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(reviewed[path])
+    control = tmp_path / "unrestricted.txt"
+    control.write_bytes(b"checkout control\n")
+    git("add", ".gitattributes", "unrestricted.txt", *paths)
+    attributes = git("check-attr", "text", "eol", "--", *paths).decode().splitlines()
+    assert attributes == [line for path in paths for line in
+                          (f"{path}: text: set", f"{path}: eol: lf")]
+    for path in [*paths, "unrestricted.txt"]:
+        (tmp_path / path).unlink()
+    git("checkout-index", "--force", "--all")
+    assert control.read_bytes() == b"checkout control\r\n"
+    for path in paths:
+        assert (tmp_path / path).read_bytes() == reviewed[path]
+        assert b"\r" not in (tmp_path / path).read_bytes()
+
+
 def test_transport_pins_exact_step_and_common_fences(tmp_path):
     boot = "f19f633d-b2bc-459f-ba7c-2ceabed9ca7a"
     assert hashlib.sha256(_fence("COMMON").encode()).hexdigest() == _pinned_fence_hash(

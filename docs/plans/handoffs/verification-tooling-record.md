@@ -19,3 +19,28 @@ retry until green. The transcript has no byte cap and should stay private until
 reviewed for test data. A last-started test is a location clue, not a cause;
 parent termination can leave the child's final status unknown. The earlier
 Windows full-suite interruption remains unexplained by this tooling change.
+
+## Pinned helper checkout bytes (Refs #198)
+
+The additional Windows full gate at `029910f` completed with one failure,
+5,604 passes and 773 skips in 2,619.67 seconds. The existing direct-file pin
+test rejected CR bytes in `maintenance_evidence.py`; the verifier retained
+`pytest (returncode=1)`. Both diagnostic helpers had canonical LF Git blobs
+matching the frozen procedure pins, but CRLF working files under
+`core.autocrlf=true` with no explicit LF attributes. This was a pre-existing
+checkout conversion defect, not corrupted committed helper bytes.
+
+Two exact-path attributes now require LF for those helpers. Their committed
+bytes, frozen procedure and refusing direct-file hash assertion are unchanged.
+The regression checks both attributes and performs a real temporary-repository
+checkout with `core.autocrlf=true`: an unrestricted control converts to CRLF,
+while both helpers must equal their canonical Git blobs byte for byte.
+This prevents fresh-checkout recurrence; it does not turn the historical gate
+into a pass or establish any host, VM or vendor result.
+
+All 12 focused maintenance-diagnosis tests passed on Windows, including the
+original direct-file pin assertion and the real checkout regression. Existing
+clean working files must be rematerialized to apply newly added attributes;
+the regression removes only its disposable files before checkout so an
+unchanged-index optimization cannot substitute for observing converted bytes.
+Full gate and exact-head CI results remain PR evidence.
