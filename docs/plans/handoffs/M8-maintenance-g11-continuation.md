@@ -550,16 +550,20 @@ exec 6>"$CAPTURE_ROOT/saver.stderr"
 if "$@" < /dev/null 2>&5 | /usr/bin/cat >&3 2>&6
 then P10_STATUS=("${PIPESTATUS[@]}"); else P10_STATUS=("${PIPESTATUS[@]}"); fi
 test "${#P10_STATUS[@]}" -eq 2
-exec 3>&- 5>&- 6>&-
+FD=3
+for NAME in application-run.json application-status.json application.stderr saver.stderr; do
+    test -f "/dev/fd/$FD"
+    test -f "$CAPTURE_ROOT/$NAME"
+    test ! -L "$CAPTURE_ROOT/$NAME"
+    test "$CAPTURE_ROOT/$NAME" -ef "/dev/fd/$FD"
+    FD=$((FD + 1))
+done
 RUN_DIAGNOSTICS=unexpected
-if test -f "$CAPTURE_ROOT/application.stderr" && test ! -L "$CAPTURE_ROOT/application.stderr" \
-  && test ! -s "$CAPTURE_ROOT/application.stderr" \
-  && test -f "$CAPTURE_ROOT/saver.stderr" && test ! -L "$CAPTURE_ROOT/saver.stderr" \
-  && test ! -s "$CAPTURE_ROOT/saver.stderr"
+if test ! -s /dev/fd/5 && test ! -s /dev/fd/6
 then RUN_DIAGNOSTICS=clean; fi
 printf "{\"application\":%s,\"saver\":%s,\"diagnostics\":\"%s\"}\n" \
     "${P10_STATUS[0]}" "${P10_STATUS[1]}" "$RUN_DIAGNOSTICS" >&4
-exec 4>&-' g11-application-capture "$S" \
+exec 3>&- 4>&- 5>&- 6>&-' g11-application-capture "$S" \
   "${ENTRY[@]}" run --root "$APP" "${HOST[@]}" --authorization "$A" < /dev/null
 "${SERVICE[@]}" /usr/bin/python3 -I -S -B -c 'import json, sys
 from pathlib import Path
@@ -595,7 +599,7 @@ raise SystemExit(0 if result["command"] == "normal-completed" else 1)' \
   "$S/application-run.json" "$A" "$S/application-status.json" "$RUN_ID" < /dev/null
 ```
 
-The fixed capture shell runs as the service identity. It checks every destination and exclusively opens all four owned output descriptors before dispatch; a stale target, symlink, open failure or race stops before the application starts. Partial empty files remain occupied. The producer and saver use only those open descriptors. Their statuses are copied before any other command, then retained separately in the preopened status file. All capture descriptors close before output validation, and the service identity checks both stderr paths as regular, nonsymlink and empty. This status file is evidence, not an attempt ledger. Interrupted/missing capture remains unknown. No private diagnostics are printed. Failed saver means unknown, never command refusal or normal completion.
+The fixed capture shell runs as the service identity. It checks every destination and exclusively opens all four owned output descriptors before dispatch; a stale target, symlink, open failure or race stops before the application starts. Partial empty files remain occupied. The producer and saver use only those open descriptors. Their statuses are copied before any other command. With every descriptor still open, the shell requires each destination to remain a regular nonsymlink identifying its original regular descriptor. Any identity/type/symlink loss exits nonzero before writing status or running the result validator, including replacement of the status pathname itself. Both stderr sizes are checked on the retained descriptors, never replacement paths. Only then are independent statuses retained in the preopened status file and all four descriptors closed. This status file is evidence, not an attempt ledger. Interrupted/missing capture remains unknown. No private diagnostics are printed. Failed saver means unknown, never command refusal or normal completion. These checks rely on exclusive custody and joined producer/saver completion; they do not claim to exclude another concurrent same-identity writer.
 
 Only command=normal-completed and checker exit zero establish positive normal application return; run_maintenance joins shutdown before its normal return. accepted=false remains nonacceptance. Refused/unknown exits one and stops/parks; it establishes neither admission nor joined cleanup and permits no result inspection or diagnosis. No retry, recovery dispatch, reset or budget refund follows any outcome.
 
@@ -605,7 +609,7 @@ Only accepted=true permits the frozen session P10 inspect block, with empty stde
 
 Only after C10 positively established normal-completed, repeat HS H2 and fresh same-boot/custody checks. No application/recovery daemon or other service session may start. Normal return plus this positive process observation supply quiescence; metadata equality is not a substitute. Fill only RUN_ID from the approved preview and EXPECTED_BOOT from this session's measured UUID. Never use the old helper bootstrap or stage new helpers. The verified installed controller must include PR #203's five fixed categories.
 
-Quiescence stdout/stderr descriptors open exclusively before the conditional probe, so an open refusal cannot become pgrep status one. Both close before judging the actual probe status and positive regular/nonsymlink/empty stderr facts. The separate diagnostic capture runs as service and preopens every report/status/stderr descriptor before invoking the installed module; it closes them before service-owned inspection. All open failures stop without invocation and retain partial files.
+Quiescence stdout/stderr descriptors open exclusively before the conditional probe, so an open refusal cannot become pgrep status one. Both close before judging the actual probe status and positive regular/nonsymlink/empty stderr facts. The separate diagnostic capture runs as service and preopens every report/status/stderr descriptor before invoking the installed module. It applies C10's same retained-descriptor regular/nonsymlink/identity invariant to all four destinations, stopping nonzero before status publication or report validation on any loss, and checks stderr emptiness on the open descriptors before closing them. All open failures stop without invocation and retain partial files.
 
 ```bash
 RUN_ID=UNREVIEWED
@@ -668,16 +672,20 @@ exec 6>"$CAPTURE_ROOT/diagnostic-saver.stderr"
 if "$@" < /dev/null 2>&5 | /usr/bin/cat >&3 2>&6
 then P11_STATUS=("${PIPESTATUS[@]}"); else P11_STATUS=("${PIPESTATUS[@]}"); fi
 test "${#P11_STATUS[@]}" -eq 2
-exec 3>&- 5>&- 6>&-
+FD=3
+for NAME in diagnostic-report.json diagnostic-status.json diagnostic.stderr diagnostic-saver.stderr; do
+    test -f "/dev/fd/$FD"
+    test -f "$CAPTURE_ROOT/$NAME"
+    test ! -L "$CAPTURE_ROOT/$NAME"
+    test "$CAPTURE_ROOT/$NAME" -ef "/dev/fd/$FD"
+    FD=$((FD + 1))
+done
 DIAG_DIAGNOSTICS=unexpected
-if test -f "$CAPTURE_ROOT/diagnostic.stderr" && test ! -L "$CAPTURE_ROOT/diagnostic.stderr" \
-  && test ! -s "$CAPTURE_ROOT/diagnostic.stderr" \
-  && test -f "$CAPTURE_ROOT/diagnostic-saver.stderr" && test ! -L "$CAPTURE_ROOT/diagnostic-saver.stderr" \
-  && test ! -s "$CAPTURE_ROOT/diagnostic-saver.stderr"
+if test ! -s /dev/fd/5 && test ! -s /dev/fd/6
 then DIAG_DIAGNOSTICS=clean; fi
 printf "{\"diagnostic\":%s,\"saver\":%s,\"diagnostics\":\"%s\"}\n" \
     "${P11_STATUS[0]}" "${P11_STATUS[1]}" "$DIAG_DIAGNOSTICS" >&4
-exec 4>&-' g11-diagnostic-capture "$S" \
+exec 3>&- 4>&- 5>&- 6>&-' g11-diagnostic-capture "$S" \
   "${PY[@]}" constructicon.substrate.journal.maintenance_diagnostic \
   --root "$APP" --out /home/m8-service/m8-maint-diagnosis-3-evidence \
   --command-report "$S/application-run.json" --run-id "$RUN_ID" --authorization-id "$ID" < /dev/null

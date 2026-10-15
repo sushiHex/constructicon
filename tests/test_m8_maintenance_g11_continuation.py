@@ -711,7 +711,7 @@ def _capture_program(heading):
 
 
 def _run_capture(heading, root, raw, cli=0, saver=0, stderr="", boundary="", mutation="",
-                 mutation_kind="directory"):
+                 mutation_kind="directory", after="", saver_stderr=""):
     body = _capture_program(heading).replace("/usr/bin/cat", "saver")
     body = body.replace("/home/m8-service/m8-maint-diagnosis-3-evidence",
                         (root / "capture-evidence").as_posix())
@@ -719,10 +719,16 @@ def _run_capture(heading, root, raw, cli=0, saver=0, stderr="", boundary="", mut
         "set -Eeuo pipefail; umask 077",
         'producer() { printf "called\\n" >>"$TEST_OUT/calls"; '
         'printf "%s" "$PRODUCER_STDOUT"; printf "%s" "$PRODUCER_STDERR" >&2; '
-        'if test -n "$MUTATION"; then /usr/bin/rm -- "$MUTATION"; '
+        'if test -n "$MUTATION"; then '
+        'if test "$MUTATION_KIND" = symlink; then '
+        'if test "$FAKE_SYMLINK" = no; then '
+        '/usr/bin/mv -- "$MUTATION" "$MUTATION-target"; '
+        '/usr/bin/ln -s "$MUTATION-target" "$MUTATION"; fi; '
+        'else /usr/bin/rm -- "$MUTATION"; '
         'if test "$MUTATION_KIND" = directory; then /usr/bin/mkdir -- "$MUTATION"; fi; '
+        'if test "$MUTATION_KIND" = regular; then (set +C; : >"$MUTATION"); fi; fi; '
         'fi; return "$CLI_STATUS"; }',
-        'saver() { /usr/bin/cat; return "$SAVER_STATUS"; }',
+        'saver() { /usr/bin/cat; printf "%s" "$SAVER_STDERR" >&2; return "$SAVER_STATUS"; }',
         boundary,
         'set -- "$TEST_OUT" producer',
     ))
@@ -731,9 +737,10 @@ def _run_capture(heading, root, raw, cli=0, saver=0, stderr="", boundary="", mut
         'if (: >&"$FD") 2>/dev/null; then echo capture-descriptor-leaked; exit 91; fi',
         "done",
     ))
-    return _run(prefix + "\n" + body + "\n" + closed, TEST_OUT=root.as_posix(),
+    return _run(prefix + "\n" + body + "\n" + closed + "\n" + after, TEST_OUT=root.as_posix(),
                 PRODUCER_STDOUT=raw, PRODUCER_STDERR=stderr, CLI_STATUS=str(cli),
-                SAVER_STATUS=str(saver), MUTATION=mutation, MUTATION_KIND=mutation_kind)
+                SAVER_STATUS=str(saver), MUTATION=mutation, MUTATION_KIND=mutation_kind,
+                FAKE_SYMLINK="yes" if os.name == "nt" else "no", SAVER_STDERR=saver_stderr)
 
 
 @pytest.mark.parametrize("heading", (C10, C11))
@@ -787,17 +794,68 @@ def test_missing_capture_parent_stops_before_dispatch(tmp_path, heading):
 
 
 @pytest.mark.parametrize("heading", (C10, C11))
-@pytest.mark.parametrize("mutation_kind", ("removed", "directory"))
-def test_removed_or_replaced_stderr_cannot_be_classified_clean(tmp_path, heading, mutation_kind):
-    name = "application.stderr" if heading == C10 else "diagnostic.stderr"
+@pytest.mark.parametrize("index", range(4))
+@pytest.mark.parametrize("mutation_kind", ("removed", "directory", "regular", "symlink"))
+def test_every_capture_identity_loss_stops_before_validation(
+    tmp_path, heading, index, mutation_kind,
+):
+    names = (("application-run.json", "application-status.json", "application.stderr",
+              "saver.stderr") if heading == C10 else
+             ("diagnostic-report.json", "diagnostic-status.json", "diagnostic.stderr",
+              "diagnostic-saver.stderr"))
+    name = names[index]
+    boundary = ""
+    if mutation_kind == "symlink" and os.name == "nt":
+        # Native Windows lacks symlink privilege. Substitute only the lstat
+        # predicate after dispatch; Linux replaces the path with a real symlink
+        # to the retained inode, so same-object alone cannot reject it.
+        boundary = (
+            'test() { if builtin test -e "$TEST_OUT/calls" '
+            '&& builtin test "$1 $2 ${3-}" = "! -L $TEST_OUT/' + name
+            + '"; then return 1; fi; builtin test "$@"; }'
+        )
     ran = _run_capture(heading, tmp_path, "{}", stderr=PRIVATE,
-                       mutation=(tmp_path / name).as_posix(), mutation_kind=mutation_kind)
+                       mutation=(tmp_path / name).as_posix(), mutation_kind=mutation_kind,
+                       boundary=boundary, after="echo post-capture-validation-permitted")
+    assert ran.returncode != 0, "capture continued after identity loss"
+    assert ran.stdout == "" and ran.stderr == ""
+    assert (tmp_path / "calls").read_text() == "called\n"
+    assert (tmp_path / name).is_dir() is (mutation_kind == "directory")
+    if mutation_kind == "regular":
+        assert (tmp_path / name).read_bytes() == b""
+    elif mutation_kind == "removed":
+        assert not (tmp_path / name).exists()
+    elif mutation_kind == "symlink" and os.name != "nt":
+        assert (tmp_path / name).is_symlink()
+    if index != 1:
+        assert (tmp_path / names[1]).read_bytes() == b""
+
+
+@pytest.mark.parametrize("heading", (C10, C11))
+@pytest.mark.parametrize("index", range(4))
+def test_capture_identity_guard_removal_fails_the_regression(tmp_path, monkeypatch, heading, index):
+    actual = _capture_program(heading)
+    mutant, count = re.subn(r"FD=3\nfor NAME .*?\ndone\n", "", actual, flags=re.S)
+    assert count == 1
+    monkeypatch.setattr(sys.modules[__name__], "_capture_program", lambda selected: mutant)
+    # The regression must fail its refusal assertion, not error in a fake or
+    # during setup. Exercise the actual extracted block with only its guard gone.
+    with pytest.raises(AssertionError, match="capture continued after identity loss"):
+        test_every_capture_identity_loss_stops_before_validation(
+            tmp_path, heading, index, "regular")
+
+
+@pytest.mark.parametrize("heading", (C10, C11))
+@pytest.mark.parametrize("index", (2, 3))
+def test_capture_checks_both_retained_stderr_descriptors(tmp_path, heading, index):
+    ran = _run_capture(heading, tmp_path, "{}", stderr=PRIVATE if index == 2 else "",
+                       saver_stderr=PRIVATE if index == 3 else "")
     assert ran.returncode == 0 and ran.stdout == "" and ran.stderr == ""
     status_name = "application-status.json" if heading == C10 else "diagnostic-status.json"
     assert json.loads((tmp_path / status_name).read_bytes())["diagnostics"] == "unexpected"
-    assert (tmp_path / "calls").read_text() == "called\n"
-    assert (tmp_path / name).is_dir() is (mutation_kind == "directory")
-    assert (tmp_path / name).exists() is (mutation_kind == "directory")
+    name = (("application.stderr", "saver.stderr") if heading == C10 else
+            ("diagnostic.stderr", "diagnostic-saver.stderr"))[index - 2]
+    assert (tmp_path / name).read_bytes() == PRIVATE.encode()
 
 
 def _quiescence_block():
