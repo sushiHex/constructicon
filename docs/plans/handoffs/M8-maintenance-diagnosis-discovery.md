@@ -53,10 +53,17 @@ exec </dev/null
 : "${SSH_TARGET:?Private operator and discovered address required}"
 : "${SSH_HOST_KEY_ALIAS:?Previously recorded host-key alias required}"
 ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes -o "HostKeyAlias=$SSH_HOST_KEY_ALIAS" \
-  "$SSH_TARGET" /usr/bin/cat /proc/sys/kernel/random/boot_id
+  -o ConnectTimeout=15 "$SSH_TARGET" /usr/bin/cat /proc/sys/kernel/random/boot_id
 ```
 
 Require exactly one complete UUID and no extra output. Use it as the sole
 permitted `common.sh` replacement, then execute the original reviewed transport
 and D1–D4. Keep the target, address and raw local metadata private. Send the
 peer a start notice and a release after fresh Off/zero-checkpoint confirmation.
+
+The 15-second SSH connection timeout bounds connection establishment and the
+initial protocol handshake, not the remote command's runtime. There is no SSH
+retry or separate port probe. If the first connection is refused because SSH
+is not ready yet, deliberately stop and park; address readiness does not waive
+that rule. A discovery `query_timeout` can consume the same overall readiness
+budget; it does not by itself identify a guest fault.

@@ -6261,3 +6261,11 @@ review reproduced the 69 helper tests and found no blocker. Deadline tests use
 an injected clock; process-launch/cleanup overhead is not a hard wall-clock
 guarantee. Exhaustion records its own fact rather than asserting that the last
 observation lacked an address. No guest was queried by these tests.
+
+The final peer check confirmed the helper pin and readiness semantics. Its
+remaining timing concern is recorded as a deliberate limit: the one SSH boot
+read has a 15-second connection/handshake timeout and no retry; a refused first
+connection stops and parks even if SSH was merely not ready. No new port-polling
+facility was added. The fake transport assertion failed without the timeout
+argument and passed with it. A readiness-budget subprocess timeout is not
+reported as proof of a guest fault.

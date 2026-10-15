@@ -49,14 +49,15 @@ def test_local_discovery_and_boot_transport_have_closed_stdin_and_parse():
 def test_boot_transport_invokes_only_fixed_read_with_explicit_identity():
     block = re.findall(r"```bash\n(.*?)```", DOCUMENT.read_text(encoding="utf-8"), re.S)[2]
     fake = """ssh() {
-        test "$#" -eq 10 || return 42
+        test "$#" -eq 12 || return 42
         test "$1" = -T || return 42
         test "$2" = -o && test "$3" = BatchMode=yes || return 42
         test "$4" = -o && test "$5" = StrictHostKeyChecking=yes || return 42
         test "$6" = -o && test "$7" = HostKeyAlias=pinned-alias || return 42
-        test "$8" = operator@192.168.1.2 || return 42
-        test "$9" = /usr/bin/cat || return 42
-        test "${10}" = /proc/sys/kernel/random/boot_id || return 42
+        test "$8" = -o && test "$9" = ConnectTimeout=15 || return 42
+        test "${10}" = operator@192.168.1.2 || return 42
+        test "${11}" = /usr/bin/cat || return 42
+        test "${12}" = /proc/sys/kernel/random/boot_id || return 42
         if read -r unexpected; then return 42; fi
         printf '%s\\n' 11111111-2222-3333-4444-555555555555
     }
