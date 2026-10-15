@@ -31,7 +31,9 @@ from tests.test_m8_host_artifacts import (
     FAKE_BWRAP,
     KERNEL_LIST,
     bare,
+    commit,
     feed,
+    git,
     sha256,
     work_repository,
 )
@@ -1253,6 +1255,93 @@ def test_a_valid_installation_verifies_with_staging_deleted(
     shutil.rmtree(launch_host.staged())
     status, verified = launch_host.run("verify-launch", capsys)
     assert status == 0 and verified["installed"] is True, verified
+
+
+def test_new_controller_commit_proves_unchanged_launch_inputs_in_a_fresh_workspace(
+    tmp_path: Path,
+) -> None:
+    """Portable provenance proof; installed launch custody is exercised below."""
+    files = launch_blobs(archive_bytes())
+    work, prior = work_repository(tmp_path, files)
+    controller = work / "src/constructicon/api/maintenance_entry.py"
+    controller.parent.mkdir(parents=True)
+    controller.write_bytes(b"# controller-only successor\n")
+    current = commit(work, "controller-only successor")
+    assert current != prior and git(work, "rev-parse", f"{current}^") == prior
+    source = bare(work, tmp_path / "fresh-source.git")
+    record: dict[str, object] = {}
+    assert artifacts.prove(current, source, record, artifacts.LAUNCH_BLOBS) == files
+    assert record["main"] == current and record["first_parent"] is True
+    assert record["script_matches_commit"] is True
+
+
+@LINUX
+@pytest.mark.parametrize("changed_launch", (False, True), ids=("kept", "mismatch"))
+def test_new_commit_verifies_kept_launch_or_refuses_mismatch_without_mutation(
+    launch_host: LaunchHost, capsys: pytest.CaptureFixture[str], changed_launch: bool,
+) -> None:
+    """Fresh C provenance accepts the identical installed launch, without staging.
+
+    A changed launch input refuses instead of granting a replacement route.
+    Both paths retain every launch/store byte and metadata identity.
+    """
+    installed(launch_host, capsys)
+    sentinel = launch_host.launch() / artifacts.STORE / "binding"
+    sentinel.write_bytes(b"credential-free retained binding\n")
+    sentinel.chmod(0o600)
+    prior = launch_host.commit
+    old_workspace = launch_host.workspace
+
+    def snapshot():
+        top = launch_host.launch()
+        metadata = []
+        for path in (top, *sorted(top.rglob("*"))):
+            info = os.lstat(path)
+            # The fixture's uid view reconstructs stat_result and loses its
+            # nanosecond fields. Read only timestamps from the real primitive.
+            times = os.stat(path, follow_symlinks=False)
+            metadata.append((path.relative_to(top).as_posix(), info.st_dev, info.st_ino,
+                             info.st_gid, info.st_nlink, times.st_mtime_ns, times.st_ctime_ns))
+        profile = launch_host.root / artifacts.LAUNCH_PROFILE_DESTINATION
+        info = os.lstat(profile)
+        times = os.stat(profile, follow_symlinks=False)
+        return (artifacts.tree_inventory(top), metadata, profile.read_bytes(),
+                (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+                 info.st_nlink, times.st_mtime_ns, times.st_ctime_ns))
+
+    before = snapshot()
+    controller = launch_host.work / "src/constructicon/api/maintenance_entry.py"
+    controller.parent.mkdir(parents=True)
+    controller.write_bytes(b"# controller-only successor\n")
+    if changed_launch:
+        profile = launch_host.work / artifacts.LAUNCH_PROFILE
+        profile.write_bytes(profile.read_bytes() + b"# changed launch policy\n")
+    current = commit(launch_host.work, "successor to installed launch")
+    assert current != prior and git(launch_host.work, "rev-parse", f"{current}^") == prior
+    fresh = launch_host.home / "kept-launch-verification"
+    fresh.mkdir(mode=0o700)
+    (fresh / artifacts.TARBALL).write_bytes(launch_host.archive)
+    (fresh / artifacts.CATALOG).write_bytes(CATALOG_BYTES)
+    bare(launch_host.work, fresh / artifacts.REPOSITORY)
+    assert not (fresh / artifacts.STAGING).exists()
+    assert not (fresh / artifacts.RETIREMENT).exists()
+    launch_host.workspace, launch_host.commit = fresh, current
+    status, record = launch_host.run("verify-launch", capsys)
+    assert record["commit"] == current and record["main"] == current
+    assert record["first_parent"] is True and record["script_matches_commit"] is True
+    if changed_launch:
+        assert status == 1 and record["installed"] is False, record
+        assert record["failure"] == "ValueError: " + PROFILE_PATH + " is not the reviewed content"
+    else:
+        assert status == 0 and record["installed"] is True, record
+        assert record["replacement"] is False
+        assert record["observed"][LAUNCH_PATH + "/runtime"]["different"] == 0
+        assert record["observed"][LAUNCH_PATH + "/native-codex"]["different"] == 0
+    assert snapshot() == before
+    assert sentinel.read_bytes() == b"credential-free retained binding\n"
+    assert (old_workspace / artifacts.STAGING).is_dir()
+    assert not (fresh / artifacts.STAGING).exists()
+    assert not (fresh / artifacts.RETIREMENT).exists()
 
 
 @LINUX
