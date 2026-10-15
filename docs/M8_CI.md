@@ -142,12 +142,33 @@ exact-base policy described above. None of the workflows has a PR path filter,
 so these stable contexts are emitted for both code and documentation changes.
 
 Required-check configuration is a separate repository setting, not established
-by these workflow bytes. Before enabling it, observe both code and docs-only
-PRs, then verify the main ruleset's exact contexts and GitHub App source, pending
-or failed-check refusal, and a valid green merge. Preserve resolved review
-conversations and the absence of bypass actors. A green aggregate does not grant
-merge authority or replace independent review. Workflow definitions remain
-reviewed CI policy, not a security boundary against arbitrary PR-head rewrites.
+by these workflow bytes. [PR #202](https://github.com/sushiHex/constructicon/pull/202)
+merged the portable aggregate on 2026-10-15 as `ad6d52d`; its final reviewed
+head `e634699` supplied the code-change proof with all three stable checks and
+all four physical lanes successful. Docs validation was correctly skipped in
+that run. At that merge, main's ruleset required resolved review conversations
+but contained no required status checks; #202 changed no repository settings.
+[Issue #201](https://github.com/sushiHex/constructicon/issues/201) owns the
+current rollout evidence and acceptance state.
+
+Before enabling required checks, a separate docs-only PR must show exact-base
+classification selecting `docs`, successful docs validation, all physical
+lanes skipped, and successful `containment`. `verify-complete` and `qualify`
+must also succeed on that exact head. This proves the docs exemption works
+with the proposed checks; it does not supply new physical containment proof.
+
+Then configure the reviewed main ruleset with these exact three contexts,
+each bound to GitHub Actions (App ID `15368`), and enable
+`strict_required_status_checks_policy` so the PR must be tested against the
+latest base. Preserve resolved review conversations and no bypass actors.
+Read back the effective main rules and observe GitHub block merging while an
+applicable check is pending or failed, then permit a valid green PR to merge.
+Passing workflow-policy unit tests proves the
+aggregate logic, not that GitHub settings enforce it. Record the settings
+readback and actual merge outcomes in #201 before claiming that rollout is
+complete. A green aggregate does not grant merge authority or replace
+independent review. Workflow definitions remain reviewed CI policy, not a
+security boundary against arbitrary PR-head rewrites.
 
 This avoids rebuilding a physical lab for prose-only changes. Runner isolation
 reduces the serial critical path for code changes, at the cost of repeated host

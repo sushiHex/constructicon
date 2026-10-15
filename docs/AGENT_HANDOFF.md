@@ -15,6 +15,31 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #201 — portable verification has a positive aggregate
+
+[PR #202](https://github.com/sushiHex/constructicon/pull/202) merged as
+`ad6d52dd595430045ba330352f8b8945a64b3671` on 2026-10-15 UTC. Its final
+head `e634699a61528aa2348ccefe5958405057e507a8` passed
+[portable verification and all ten mutation jobs](https://github.com/sushiHex/constructicon/actions/runs/38712790663),
+[qualification](https://github.com/sushiHex/constructicon/actions/runs/38712790794),
+and [all four physical containment lanes](https://github.com/sushiHex/constructicon/actions/runs/38712790718).
+The stable `verify-complete` check requires explicit success from Windows
+discovery, verification and the complete portable mutation matrix. Its tests
+execute the accepting shell path and refuse missing, failed, cancelled,
+skipped, pending and unknown prerequisites. The three proposed merge checks
+are `verify-complete`, `qualify` and `containment`, emitted by GitHub Actions
+(App ID `15368`).
+
+This established workflow policy and a green code-change path, not GitHub
+merge enforcement. No repository setting changed in #202, and its full-proof
+run skipped docs validation. A docs-only PR must still demonstrate successful
+docs validation and containment aggregation with physical lanes skipped;
+ruleset refusal and an allowed green merge need separate observed evidence.
+The existing resolved-conversation rule and no-bypass posture must survive
+that settings rollout. The [rollout guidance](M8_CI.md#stable-merge-checks)
+distinguishes those proofs; [#201](https://github.com/sushiHex/constructicon/issues/201)
+owns the current acceptance state.
+
 ## #186 — current diagnostic source is not a historical helper pin
 
 The bounded reader recognizes the five fixed capture-comparison messages while
