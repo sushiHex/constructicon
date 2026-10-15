@@ -15,6 +15,15 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #186 — current diagnostic source is not a historical helper pin
+
+The bounded reader recognizes the five fixed capture-comparison messages while
+keeping the old grouped refusal ambiguous. Unknown text still cannot escape
+the closed category set. A successor uses this reader from its freshly verified
+controller; the old procedure and helper pins remain historical bytes, not a
+license to inject new code under an old digest. No host result or explanation
+of the g10 failure follows from this source change.
+
 ## #198 — reviewed helper bytes survive Windows checkout
 
 The two byte-pinned maintenance helpers require LF through exact-path Git

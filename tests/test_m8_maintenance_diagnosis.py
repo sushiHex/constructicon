@@ -147,15 +147,25 @@ def test_diagnosis_shell_blocks_parse_and_unprepared_pins_stop():
         assert result.returncode != 0 and result.stdout == "" and result.stderr == ""
 
 
-def test_reviewed_helper_pins_match_source_bytes():
+def test_historical_helper_pins_and_successor_source_are_distinct():
     text = DOCUMENT.read_text(encoding="utf-8")
+    successor = (ROOT / "docs/plans/handoffs/M8-maintenance-installed-diagnostics.md").read_text(
+        encoding="utf-8")
+    historical = {
+        "EVIDENCE": "2f654a218fcb55eee65a59c1c8ae63bc8a761db3fe71143f41dff69e22a1b578",
+        "DIAGNOSTIC": "f0555df16b076b7a5d65d786d9ffd5febb9878b3065e1a2fbc7565d0197a6c69",
+    }
     for label, name in (("EVIDENCE", "maintenance_evidence"),
                         ("DIAGNOSTIC", "maintenance_diagnostic")):
         match = re.search(rf"^{label}_SHA256=([0-9a-f]{{64}})$", text, re.M)
         assert match is not None
+        assert match.group(1) == historical[label]
+        assert historical[label] in successor
         raw = (ROOT / f"src/constructicon/substrate/journal/{name}.py").read_bytes()
         assert b"\r" not in raw
-        assert hashlib.sha256(raw).hexdigest() == match.group(1)
+        current = re.search(rf"^CURRENT_{label}_SHA256=([0-9a-f]{{64}})$", successor, re.M)
+        assert current is not None
+        assert hashlib.sha256(raw).hexdigest() == current.group(1)
 
 
 @pytest.mark.parametrize("hostile_attributes", ["none", "configured", "default"])
