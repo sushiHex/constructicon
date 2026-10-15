@@ -15,6 +15,25 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #186 — a joined command can return application-not-accepted
+
+PR #192 merged the private-maintenance continuation with matching reviewed
+bytes and passing local, CI and native proofs. Its authorized host session
+passed fresh g10/H7, measured the conditional H8 refresh and passed genuine
+preflight. The one C10 command then completed and joined with a validated
+`application-not-accepted` outcome. Exit zero described the reporting command,
+not acceptance. No result inspection or retry followed; evidence was retained,
+the VM was freshly confirmed Off with zero checkpoints and custody released.
+
+The bounded outcome does not establish vendor dispatch, failure cause or
+candidate absence. Those remain unknown, and g10 is historical after parking.
+The Linux verifier regression also corrected a test-only assumption: exact
+failure output includes its exception-type prefix; the earlier Windows skips
+had never exercised that assertion. Full evidence and limits are in the
+[M8 implementation record](plans/handoffs/M8-implementation-record.md).
+
+---
+
 ## #186 — kept launch verification is a measured route
 
 The private-maintenance continuation pins the actual merged controller and a

@@ -6097,3 +6097,42 @@ assertion now requires that full existing serialized value; no verifier or
 refusal rule changed. Both native cases had been skipped on Windows, so the
 earlier portable pass did not establish their execution. Fresh corrected-head
 Linux evidence remains required.
+
+### Private-maintenance session: validated non-acceptance (Refs #186)
+
+[PR #192](https://github.com/sushiHex/constructicon/pull/192) merged as
+`6582232f4144ccc69dc0454238a3d811c9313489`, tree-identical to reviewed head
+`aabf1614ab339a3204f3bf7cf44cbaa7bb6f8257`. Exact-head local verification passed
+5,525 tests with 766 skips; [CI verification and mutations](https://github.com/sushiHex/constructicon/actions/runs/38657867685)
+passed, with 5,868 tests and 423 skips in verification. Runner qualification
+and [all four native proof lanes](https://github.com/sushiHex/constructicon/actions/runs/38657867795)
+passed. The first Linux mismatch test had omitted the existing `ValueError: `
+serialization prefix; its corrected strict assertion passed without changing
+the verifier. The earlier Windows skips were not evidence of that native case.
+
+The [authorized session evidence](https://github.com/sushiHex/constructicon/issues/186#issuecomment-6182038551)
+records the fresh boot, detailed control digests and preservation. The
+continuation preserved the old state, installed controller
+`e7d40b139c2a0205f37c7050295a3eca55af9d2c`, and reached fresh g10 qualification.
+Every H7 control passed and the one conditional H8 refresh was measured.
+Genuine C8 preflight passed; its exact private preview had approved SHA-256
+`0b789f76142c9571a969c666d81a3c2eda4de944c13a8915fb8f2de1967570ad`.
+Independent computation from exact Git source bytes matched the application
+and graph identities and fixed grant law. Windows working/archive copies
+initially differed because of CRLF conversion; verified Git LF bytes corrected
+the local measurement, not the host. This establishes installed assembly and
+the reviewed preview, not application acceptance.
+
+C10 completed and joined. The reviewed script exited zero and validated
+`accepted:false`, `meaning:application-not-accepted`, and
+`run_id:run-8658a41ba5866cd73faef4f9575903be`. There was no result inspection or
+retry. That bounded result does not establish actual vendor dispatch, the
+failure cause or whether a candidate exists; none is inferred from exit zero
+or omitted fields. It supplies no accepted contribution or completed #186
+acceptance claim.
+
+The operator retained the evidence, cleanly stopped the VM, freshly confirmed
+Off with zero checkpoints and released custody. The g10 observations are now
+historical; they do not supply readiness for another boot or authority for
+another attempt. Frozen procedures, retained source and application state were
+not edited by this documentation follow-up.
