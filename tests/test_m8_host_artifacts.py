@@ -65,7 +65,8 @@ class FixtureGitError(subprocess.CalledProcessError):
 
     def __str__(self) -> str:
         return (
-            f"fixture git failed: argv={self.cmd!r} returncode={self.returncode}\n"
+            f"fixture git failed: argv={_diagnostic_tail(repr(self.cmd))} "
+            f"returncode={self.returncode}\n"
             f"stderr (last {GIT_DIAGNOSTIC_BYTES} bytes):\n{_diagnostic_tail(self.stderr)}\n"
             f"stdout (last {GIT_DIAGNOSTIC_BYTES} bytes):\n{_diagnostic_tail(self.stdout)}"
         )
@@ -173,6 +174,8 @@ def test_fixture_git_failure_truncates_oversized_diagnostics() -> None:
     assert len(message) < 2 * GIT_DIAGNOSTIC_BYTES
     redacted = str(FixtureGitError(1, ["git"], b"", b"fatal: https://user:secret@host/r"))
     assert "secret" not in redacted
+    in_argv = str(FixtureGitError(1, ["git", "clone", "https://alice:topsecret@x.invalid/r"]))
+    assert "topsecret" not in in_argv and "clone" in in_argv
 
 
 def test_script_imports_only_the_standard_library() -> None:
