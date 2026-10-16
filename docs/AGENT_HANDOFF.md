@@ -108,10 +108,15 @@ its exact declared stdout, LF only, into a directory it claims with an
 exclusive `mkdir`. It writes the manifest last, so a package without one is
 incomplete.
 
-It refuses rather than guessing or repairing. Every check made after a step's
-name is read names the step. Source checks name the source, and heading checks
-name the heading. Document and schema checks name neither, for example an
-unclosed fence, a malformed label table or a step's shape. It refuses:
+It refuses rather than guessing or repairing. Not every refusal says where:
+- **Named step:** every check made after a step's name is read, except the
+  heading lookup.
+- **Heading only:** an absent or repeated heading, even inside a step.
+- **Source only:** source checks.
+- **Nothing:** document and schema checks, for example an unclosed fence, a
+  malformed label table or a step's shape.
+
+It refuses:
 - **Schema and sources:** unknown keys, a changed pin, CRLF, an absent or
   repeated heading, a missing, empty or non-`bash` fence. Headings inside
   fences do not count.
