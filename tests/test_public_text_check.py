@@ -251,6 +251,7 @@ def test_sweep_covers_commits_comments_reviews_and_updated_pull_requests():
                     merge_commit("cccccccccccccccc", "topic work")],
         "commits/aaaaaaaaaaaaaaaa": {"files": []},
         "commits/bbbbbbbbbbbbbbbb": {"files": []},
+        "commits/dddddddddddddddd": {"files": []},
         "commits/cccccccccccccccc": {"files": [
             {"filename": "notes.md", "status": "added", "patch": f"+{LEAK}"}]},
         "comments": [{"id": 70, "body": LEAK, "updated_at": "2026-10-15T00:00:00Z"},
@@ -266,7 +267,7 @@ def test_sweep_covers_commits_comments_reviews_and_updated_pull_requests():
                             "diff_hunk": "@@ 10.9.8.4"}],
         **clean_pull_routes(),
         # The pull request carries a branch commit, fetched once per sweep, and
-        # an old commit its push event already scanned, not fetched again.
+        # an old-dated commit, still fetched: its date says nothing of its push.
         "pulls/7": pull(commits=2),
         "pulls/7/commits": [merge_commit("dddddddddddddddd", "old", "2026-01-01T00:00:00Z"),
                             merge_commit("cccccccccccccccc", "topic work")],
@@ -284,14 +285,7 @@ def test_sweep_covers_commits_comments_reviews_and_updated_pull_requests():
     assert "issues?state=all&since=2026-10-16T00:00:00Z&per_page=100&page=1" in api.seen
     assert "commits?sha=topic%2Fx&since=2026-10-16T00:00:00Z&per_page=100&page=1" in api.seen
     assert sum(path.startswith("commits/cccccccccccccccc") for path in api.seen) == 1
-    assert not any(path.startswith("commits/dddddddddddddddd") for path in api.seen)
-
-
-def test_commit_dates_bound_the_sweep_with_offsets_honoured():
-    since = "2026-10-16T00:00:00Z"
-    assert check._dated_since(merge_commit("a", "m", "2026-10-16T08:00:00+09:00"), since) is False
-    assert check._dated_since(merge_commit("a", "m", "2026-10-16T09:00:00+09:00"), since) is True
-    assert check._dated_since(merge_commit("a", "m"), since) is True  # undated: scanned
+    assert sum(path.startswith("commits/dddddddddddddddd") for path in api.seen) == 1
 
 
 def test_manual_backfill_skips_the_cursor_and_reports_its_request_count(

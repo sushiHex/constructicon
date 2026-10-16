@@ -7,8 +7,8 @@ Run by ``.github/workflows/public-text.yml`` from the default branch only:
 - ``sweep`` (hourly) scans everything updated since its cursor, less an
   overlap: every branch's new commits with their own diffs (including squash
   and merge messages), commit comments, issue and pull-request titles and
-  bodies, issue comments, reviews, review dismissals, review comments, and the
-  new commits of updated pull requests with their own diffs. It also covers
+  bodies, issue comments, reviews, review dismissals, review comments, and
+  every commit of an updated pull request with its own diff. It also covers
   text that no event reaches, such as reviews and anything posted with
   ``GITHUB_TOKEN``. A delayed or dropped schedule widens the next window; it
   never skips one.
@@ -32,10 +32,10 @@ detection after posting: GitHub keeps edited text in the item's history until
 that revision is deleted by hand. Only current text is scanned, never edit
 history. Text posted and then edited away with ``GITHUB_TOKEN``, which raises no
 event, before the next sweep is therefore missed; such a workflow must run this
-check before posting (AGENTS.md "Public text"). The sweep selects commits by
-date, so a commit dated before the cursor but first pushed after it is missed
-by the sweep until a ref-update cursor replaces the date filter (#216); in a
-pull request, the ``pull_request_target`` event scans every commit. Commit
+check before posting (AGENTS.md "Public text"). Branch commits are selected by
+date, so a commit dated before the cursor but first pushed to a branch after it
+is missed until a ref-update cursor replaces the date filter (#216); a pull
+request's commits are all scanned whenever it is updated. Commit
 comments cannot be filtered by the API, so all of them are listed each sweep,
 within the page bound.
 """
@@ -128,16 +128,6 @@ def _stamp(moment: datetime) -> str:
     return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _dated_since(commit: dict, since: str) -> bool:
-    """Whether a commit's author or committer date is at or after ``since``.
-
-    An undated commit counts as new, so it is scanned rather than skipped.
-    """
-    detail = commit.get("commit") or {}
-    dates = [str((detail.get(role) or {}).get("date") or "") for role in ("author", "committer")]
-    return not all(dates) or any(_stamp(utc(date)) >= since for date in dates)
-
-
 def commit_items(github: GitHub, commit: dict, kind: str, ident: str) -> Iterator[Item]:
     """A commit's message, identities and its own complete diff.
 
@@ -184,13 +174,12 @@ def commit_items(github: GitHub, commit: dict, kind: str, ident: str) -> Iterato
     raise Incomplete("commit file listing exceeds the page bound")
 
 
-def pull_request(github: GitHub, pull: dict, seen: set[str] | None = None,
-                 since: str | None = None) -> Iterator[Item]:
+def pull_request(github: GitHub, pull: dict, seen: set[str] | None = None) -> Iterator[Item]:
     """A pull request's branch, commits and every commit's diff, completely.
 
     A commit already in ``seen`` was scanned in full this sweep and is skipped.
-    With ``since`` (the sweep), only commits dated at or after it are fetched;
-    the event that announced each push scanned the whole pull request.
+    Commit dates are not trusted to skip the rest: an old-dated commit can be
+    pushed late, and its push event's run may have failed.
     """
     number = str(pull["number"])
     head = pull.get("head") or {}
@@ -202,7 +191,7 @@ def pull_request(github: GitHub, pull: dict, seen: set[str] | None = None,
     seen = set() if seen is None else seen
     for commit in commits:
         sha = str(commit.get("sha", ""))
-        if sha not in seen and (since is None or _dated_since(commit, since)):
+        if sha not in seen:
             yield from commit_items(github, commit, "pull request", number)
             seen.add(sha)  # only once its scan is complete
 
@@ -263,7 +252,7 @@ def sweep(github: GitHub, since_time: datetime) -> Iterator[Item]:
         if "pull_request" in issue:
             pull = github.get(f"pulls/{issue['number']}")
             assert isinstance(pull, dict)
-            yield from pull_request(github, pull, seen, since)
+            yield from pull_request(github, pull, seen)
             for review in github.pages(f"pulls/{issue['number']}/reviews"):
                 yield from _fields("review", review, "body")
             for event in github.pages(f"issues/{issue['number']}/timeline"):
