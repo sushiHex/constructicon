@@ -40,7 +40,8 @@ naming the step, and never guesses or repairs:
   comes from an allowlisted, reviewed lane-boundary block; literals never may;
 - **labels:** an undeclared generation/session label, or a historical one in a
   step not marked historical. This is a spelling check, not proof of fresh paths;
-- **placeholders:** an ``=UNREVIEWED``/``=UNPREPARED`` assignment, unless ``--template``;
+- **placeholders:** ``UNREVIEWED`` or ``UNPREPARED`` (other than the
+  ``UNPREPARED.bundle`` sentinel) in any shell spelling, unless ``--template``;
 - **bytes:** any CR in a built file, a declared stdout over 65,536 bytes.
 """
 
@@ -56,7 +57,11 @@ from pathlib import Path
 HEADING = re.compile(r"^(?P<level>#{1,6}) (?P<title>.+?)[ \t]*$")
 OPEN_FENCE = re.compile(r"^(?P<indent> {0,3})(?P<ticks>`{3,})(?P<lang>[A-Za-z]*)[ \t]*$")
 LABEL = re.compile(r"(?<![0-9A-Za-z])[gq][0-9]{1,3}(?![0-9A-Za-z])")
-PLACEHOLDER = re.compile(r"""=["']?(?:UNREVIEWED|UNPREPARED)\b""")
+# Matched after removing quotes, backslashes and `$`, so shell concatenation and
+# escaping ($'X', "UNRE""VIEWED", UNRE\VIEWED) cannot hide a placeholder. The
+# `UNPREPARED.bundle` refusal sentinel is a comparison target, not a value.
+PLACEHOLDER = re.compile(r"\bUNREVIEWED\b|\bUNPREPARED\b(?!\.bundle)")
+SHELL_QUOTING = re.compile(r"[\"'\\$]")
 LANE_NAME = re.compile(r"\bLANE\b")
 NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
 MAX_STDOUT = 65_536
@@ -184,9 +189,11 @@ def _part(name: str, part: object, sources: dict, paths: dict) -> tuple[str, str
     if not isinstance(part, dict):
         raise Refused(f"step {name}: a part must be a table")
     if set(part) == {"literal"} and isinstance(part["literal"], str):
-        if not part["literal"].strip():
+        literal = part["literal"]
+        if not literal.strip():
             raise Refused(f"step {name}: a literal part is empty")
-        return part["literal"].rstrip("\n") + "\n", None
+        # Exact bytes: only a missing final newline is supplied.
+        return literal if literal.endswith("\n") else literal + "\n", None
     if set(part) != {"source", "heading", "fences"}:
         raise Refused(f"step {name}: a part is exactly a literal or a fence selection")
     source, heading, selected = part["source"], part["heading"], part["fences"]
@@ -272,7 +279,7 @@ def assemble(path: Path, template: bool = False) -> list[Step]:
         stray = sorted({label for label in LABEL.findall(joined) if label not in allowed})
         if stray:
             raise Refused(f"step {name}: undeclared or historical labels {stray}")
-        if not template and PLACEHOLDER.search(joined):
+        if not template and PLACEHOLDER.search(SHELL_QUOTING.sub("", joined)):
             raise Refused(f"step {name}: an unreviewed placeholder remains")
         stdout = tuple(_strings(entry["stdout"], f"step {name}: stdout"))
         rendered = "".join(line + "\n" for line in stdout)

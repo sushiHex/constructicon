@@ -251,6 +251,23 @@ def test_wrong_container_and_selector_types_refuse_without_a_traceback(tmp_path)
         package.assemble(procedure(tmp_path, listed))
 
 
+@pytest.mark.parametrize("spelling", [
+    "RUN_ID=$'UNREVIEWED'", "RUN_ID=UNRE\\\\VIEWED", 'RUN_ID=\\"UNRE\\"\\"VIEWED\\"',
+    "--run UNREVIEWED", "C=UNPREPARED",
+])
+def test_every_shell_spelling_of_a_placeholder_refuses(tmp_path, spelling):
+    escaped = QUALIFICATION.replace("m8-maint-q12", f"m8-maint-q12\\n{spelling}")
+    with pytest.raises(package.Refused, match="unreviewed placeholder"):
+        package.assemble(procedure(tmp_path, escaped))
+
+
+def test_literals_keep_their_exact_trailing_newlines(tmp_path):
+    exact = QUALIFICATION.replace('{literal = "W=/home/m8-service/m8-maint-q12"}',
+                                  '{literal = "W=/home/m8-service/m8-maint-q12\\n\\n\\n"}')
+    text = package.assemble(procedure(tmp_path, exact))[0].text
+    assert text.startswith("W=/home/m8-service/m8-maint-q12\n\n\nset -Eeuo pipefail\n")
+
+
 def test_split_placeholders_empty_fences_and_double_labels_refuse(tmp_path):
     split = QUALIFICATION.replace("m8-maint-q12", "m8-maint-q12\\nRUN_ID=UNRE\\\\\\nVIEWED")
     with pytest.raises(package.Refused, match="unreviewed placeholder"):
