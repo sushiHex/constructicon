@@ -123,10 +123,17 @@ def commit_items(github: GitHub, commit: dict, kind: str, ident: str) -> Iterato
         for changed in files:
             names = f"{changed.get('filename', '')}\n{changed.get('previous_filename', '')}"
             patch = changed.get("patch")
-            if patch is None and changed.get("status") != "removed":
-                # Large or binary diffs carry no patch: scan the file itself, or fail.
+            if patch is None:
+                # Large or binary diffs carry no patch: scan the file itself, or
+                # fail. A removed file is read at the parent, where it still lives.
+                ref = sha
+                if changed.get("status") == "removed":
+                    parents = detail.get("parents") or []
+                    if len(parents) != 1:
+                        raise Incomplete("a removed file has no single parent to read")
+                    ref = str(parents[0].get("sha", ""))
                 path = urllib.parse.quote(str(changed.get("filename", "")))
-                data = github.get(f"contents/{path}?ref={sha}", raw=True)
+                data = github.get(f"contents/{path}?ref={ref}", raw=True)
                 try:
                     patch = data.decode("utf-8")  # type: ignore[union-attr]
                 except UnicodeDecodeError:

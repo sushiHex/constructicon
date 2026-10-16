@@ -60,7 +60,8 @@ def one_commit_pull(files: list[dict], **extra) -> dict:
     """Routes for a PR whose single commit changes ``files``."""
     commit = {"sha": "c1", "commit": {"message": "m", "author": {"name": "a", "email": "a@x"},
                                       "committer": {"name": "c", "email": "c@x"}}}
-    return clean_pull_routes(**{"pulls/7/commits": [commit], "commits/c1": {"files": files},
+    return clean_pull_routes(**{"pulls/7/commits": [commit],
+                                "commits/c1": {"files": files, "parents": [{"sha": "p1"}]},
                                 **extra})
 
 
@@ -138,10 +139,27 @@ def test_text_added_then_removed_inside_a_pull_request_is_found(tmp_path, monkey
 def test_a_clean_pull_request_with_a_large_text_file_passes(tmp_path, monkeypatch, capsys):
     files = [{"filename": "big.txt", "status": "added", "patch": None},
              {"filename": "gone.txt", "status": "removed", "patch": None}]
-    routes = one_commit_pull(files, **{"contents/big.txt": b"clean text\n"})
+    routes = one_commit_pull(files, **{"contents/big.txt": b"clean text\n",
+                                       "contents/gone.txt": b"also clean\n"})
     status, out, _ = run(tmp_path, monkeypatch, capsys,
                          event_args(tmp_path, {"pull_request": pull(commits=1)}), routes)
     assert (status, out) == (0, "")
+
+
+def test_a_large_removed_file_is_read_at_its_parent(tmp_path, monkeypatch, capsys):
+    """Deleted without a patch, the file still lives in the parent commit."""
+    files = [{"filename": "old.md", "status": "removed", "patch": None}]
+    routes = one_commit_pull(files, **{"contents/old.md": LEAK.encode()})
+    status, out, api = run(tmp_path, monkeypatch, capsys,
+                           event_args(tmp_path, {"pull_request": pull(commits=1)}), routes)
+    assert status == 1 and "pull request file 7 matches" in out
+    assert "contents/old.md?ref=p1" in api.seen
+    orphan = clean_pull_routes(**{
+        "pulls/7/commits": [{"sha": "c1", "commit": {}}],
+        "commits/c1": {"files": files, "parents": []}})
+    status, out, _ = run(tmp_path, monkeypatch, capsys,
+                         event_args(tmp_path, {"pull_request": pull(commits=1)}), orphan)
+    assert status == 1 and "incomplete (Incomplete)" in out
 
 
 @pytest.mark.parametrize("files", ["binary", "missing"])
