@@ -108,14 +108,16 @@ its exact declared stdout, LF only, into a directory it claims with an
 exclusive `mkdir`. It writes the manifest last, so a package without one is
 incomplete.
 
-It refuses rather than guessing or repairing. Step-level refusals name the
-step. Document, schema, source-pin and heading refusals name the source or
-heading instead:
+It refuses rather than guessing or repairing. Every check made after a step's
+name is read names the step. Source checks name the source, and heading checks
+name the heading. Document and schema checks name neither, for example an
+unclosed fence, a malformed label table or a step's shape. It refuses:
 - **Schema and sources:** unknown keys, a changed pin, CRLF, an absent or
   repeated heading, a missing, empty or non-`bash` fence. Headings inside
   fences do not count.
 - **Lane boundary (#210):** only allowlisted, reviewed lane-boundary blocks may
-  name the lane CLI. A literal never may.
+  contain the word `LANE`, the array that names the lane CLI. A literal never
+  may.
 - **Labels:** an undeclared generation or session label, or a historical label
   in a step not marked historical. Labels are checked after shell
   normalization.
@@ -128,6 +130,10 @@ What this does not establish:
 - **`self` is unpinned:** the procedure document's own bytes are trusted as
   read. Its review or manifest entry is what pins it.
 - **Label checks are spelling checks:** they do not prove fresh paths.
+- **The lane lint is a token lint:** a step that invokes the lane module
+  directly, without `LANE`, is not refused.
+  [#220](https://github.com/sushiHex/constructicon/issues/220) tracks widening
+  it.
 - **Shell obfuscation is left to review:** ANSI-C quoting and escaped
   delimiters can still disguise a token.
 
