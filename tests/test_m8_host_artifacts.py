@@ -55,9 +55,10 @@ GIT_DIAGNOSTIC_BYTES = 4096
 
 def _diagnostic_tail(data: bytes | str | None) -> str:
     raw = data.encode() if isinstance(data, str) else (data or b"")
-    text = raw[-GIT_DIAGNOSTIC_BYTES:].decode("utf-8", "replace")
     # Fixture remotes are local paths, but never echo userinfo if one appears.
-    return re.sub(r"(://)[^/@\s]+@", r"\1<redacted>@", text)
+    # Redact before truncating, so a URL cut at the bound cannot hide its secret.
+    text = re.sub(r"(://)[^/@\s]+@", r"\1<redacted>@", raw.decode("utf-8", "replace"))
+    return text.encode("utf-8")[-GIT_DIAGNOSTIC_BYTES:].decode("utf-8", "replace")
 
 
 class FixtureGitError(subprocess.CalledProcessError):
@@ -176,6 +177,8 @@ def test_fixture_git_failure_truncates_oversized_diagnostics() -> None:
     assert "secret" not in redacted
     in_argv = str(FixtureGitError(1, ["git", "clone", "https://alice:topsecret@x.invalid/r"]))
     assert "topsecret" not in in_argv and "clone" in in_argv
+    straddling = b"https://alice:topsecret@host/repo " + b"x" * 4070
+    assert "topsecret" not in str(FixtureGitError(1, ["git"], b"", straddling))
 
 
 def test_script_imports_only_the_standard_library() -> None:
