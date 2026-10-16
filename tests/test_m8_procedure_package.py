@@ -121,9 +121,15 @@ def test_build_writes_exact_step_bytes_and_a_manifest_atomically(tmp_path):
     for line in manifest.decode().splitlines():
         expected, name = line.split("  ")
         assert hashlib.sha256((out / name).read_bytes()).hexdigest() == expected
-    assert "\r" not in script and not list(tmp_path.glob(".package.partial-*"))
+    assert "\r" not in script
     with pytest.raises(package.Refused, match="already exists"):
         package.build(procedure(tmp_path, QUALIFICATION), out)
+    # An empty directory that appeared first is never replaced.
+    claimed = tmp_path / "claimed"
+    claimed.mkdir()
+    with pytest.raises(package.Refused, match="already exists"):
+        package.build(procedure(tmp_path, QUALIFICATION), claimed)
+    assert list(claimed.iterdir()) == []
 
 
 @pytest.mark.parametrize("change", [
@@ -187,6 +193,8 @@ def test_a_changed_or_crlf_frozen_source_is_refused(tmp_path):
      "exactly a literal or a fence selection"),
     (('{literal = "W=/home/m8-service/m8-maint-q12"}', '{literal = "true\\r\\n"}'),
      "not be LF-only"),
+    (('{literal = "W=/home/m8-service/m8-maint-q12"}', '{literal = "  \\n"}'),
+     "a literal part is empty"),
 ])
 def test_unresolvable_or_ambiguous_compositions_refuse(tmp_path, change, message):
     with pytest.raises(package.Refused, match=message):
@@ -216,6 +224,24 @@ def test_repeated_steps_and_assigned_placeholders_refuse_sentinels_do_not(tmp_pa
     sentinel = QUALIFICATION.replace(
         "m8-maint-q12", "m8-maint-q12\\ntest \\\"$B\\\" != /h/UNPREPARED.bundle")
     assert "UNPREPARED.bundle" in package.assemble(procedure(tmp_path, sentinel))[0].text
+    for quoted in ('RUN_ID=\\\"UNREVIEWED\\\"', "RUN_ID='UNPREPARED'"):
+        assigned = QUALIFICATION.replace("m8-maint-q12", f"m8-maint-q12\\n{quoted}")
+        with pytest.raises(package.Refused, match="unreviewed placeholder"):
+            package.assemble(procedure(tmp_path, assigned))
+
+
+@pytest.mark.parametrize("sources", [
+    "sources = []",
+    '[sources.oc]\npath = 7\nsha256 = "x"',
+    '[sources.self]\npath = "frozen.md"\nsha256 = "x"',
+])
+def test_malformed_sources_refuse_without_a_traceback(tmp_path, sources):
+    document = (f"# P\n\n## Composition\n\n```toml\n{sources}\n"
+                '[[steps]]\nname = "s"\nstdout = []\nparts = [{literal = "true"}]\n```\n')
+    path = tmp_path / "procedure.md"
+    path.write_bytes(document.encode())
+    with pytest.raises(package.Refused, match=r"sources must be a table|string path and sha256"):
+        package.assemble(path)
 
 
 def test_crlf_document_and_missing_composition_refuse(tmp_path):

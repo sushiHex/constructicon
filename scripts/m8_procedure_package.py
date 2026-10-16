@@ -27,8 +27,9 @@ Usage, with isolated Python from the repository root::
     python -I -S -B scripts/m8_procedure_package.py build DOC OUT [--template]
 
 ``build`` writes ``<step>.sh`` and ``<step>.stdout`` (LF only) and ``MANIFEST.sha256``
-(``sha256sum --check`` format) into the absent directory ``OUT``, atomically by
-renaming a completed sibling, then prints the manifest's own SHA-256. It refuses,
+(``sha256sum --check`` format) into ``OUT``, which it claims with an exclusive
+``mkdir``. The manifest is written last, so a package without one is incomplete. It
+prints the manifest's own SHA-256 and refuses,
 naming the step, and never guesses or repairs:
 
 - **schema:** unknown keys, wrong types, empty parts or selections, a part that
@@ -46,7 +47,6 @@ naming the step, and never guesses or repairs:
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 import sys
 import tomllib
@@ -56,7 +56,7 @@ from pathlib import Path
 HEADING = re.compile(r"^(?P<level>#{1,6}) (?P<title>.+?)[ \t]*$")
 OPEN_FENCE = re.compile(r"^(?P<indent> {0,3})(?P<ticks>`{3,})(?P<lang>[A-Za-z]*)[ \t]*$")
 LABEL = re.compile(r"(?<![0-9A-Za-z])[gq][0-9]{1,3}(?![0-9A-Za-z])")
-PLACEHOLDER = re.compile(r"=(?:UNREVIEWED|UNPREPARED)\b")
+PLACEHOLDER = re.compile(r"""=["']?(?:UNREVIEWED|UNPREPARED)\b""")
 LANE_NAME = re.compile(r"\bLANE\b")
 NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
 MAX_STDOUT = 65_536
@@ -184,6 +184,8 @@ def _part(name: str, part: object, sources: dict, paths: dict) -> tuple[str, str
     if not isinstance(part, dict):
         raise Refused(f"step {name}: a part must be a table")
     if set(part) == {"literal"} and isinstance(part["literal"], str):
+        if not part["literal"].strip():
+            raise Refused(f"step {name}: a literal part is empty")
         return part["literal"].rstrip("\n") + "\n", None
     if set(part) != {"source", "heading", "fences"}:
         raise Refused(f"step {name}: a part is exactly a literal or a fence selection")
@@ -212,9 +214,14 @@ def assemble(path: Path, template: bool = False) -> list[Step]:
         raise Refused("the procedure document is not LF-only")
     spec = composition(document)
     sources, paths = {"self": document}, {"self": path.name}
-    for key, source in spec.get("sources", {}).items():
-        if not isinstance(source, dict) or set(source) != {"path", "sha256"}:
-            raise Refused(f"source {key} needs exactly path and sha256")
+    declared = spec.get("sources", {})
+    if not isinstance(declared, dict):
+        raise Refused("sources must be a table")
+    for key, source in declared.items():
+        if (not isinstance(source, dict) or set(source) != {"path", "sha256"}
+                or not all(isinstance(source[field], str) for field in ("path", "sha256"))
+                or key == "self"):
+            raise Refused(f"source {key} needs exactly a string path and sha256")
         raw = (path.parent / source["path"]).read_bytes()
         if hashlib.sha256(raw).hexdigest() != source["sha256"]:
             raise Refused(f"source {key} does not match its pinned SHA-256")
@@ -269,20 +276,22 @@ def assemble(path: Path, template: bool = False) -> list[Step]:
 
 def build(path: Path, out: Path, template: bool = False) -> str:
     steps = assemble(path, template)
-    if os.path.lexists(out):
-        raise Refused("the output directory already exists")
-    partial = out.with_name(f".{out.name}.partial-{os.getpid()}")
-    partial.mkdir()
+    try:
+        out.mkdir()  # an exclusive claim: refuses an existing path, never replaces one
+    except FileExistsError:
+        raise Refused("the output directory already exists") from None
     lines = []
     for step in steps:
         for suffix, body in ((".sh", step.text),
                              (".stdout", "".join(line + "\n" for line in step.stdout))):
             raw = body.encode("utf-8")
-            (partial / (step.name + suffix)).write_bytes(raw)
+            with open(out / (step.name + suffix), "xb") as stream:
+                stream.write(raw)
             lines.append(f"{hashlib.sha256(raw).hexdigest()}  {step.name}{suffix}\n")
     manifest = "".join(lines).encode("utf-8")
-    (partial / "MANIFEST.sha256").write_bytes(manifest)
-    os.rename(partial, out)  # refuses if OUT appeared meanwhile; the partial stays visible
+    # Written last: a package without its manifest is visibly incomplete.
+    with open(out / "MANIFEST.sha256", "xb") as stream:
+        stream.write(manifest)
     return hashlib.sha256(manifest).hexdigest()
 
 
