@@ -45,6 +45,28 @@ MUTANTS = (
     ("review standing is the fence's exact bytes", MODULE + "_part",
      'hashlib.sha256(body.encode("utf-8")).hexdigest() in LANE_BLOCKS', "True",
      TESTS + "test_review_standing_follows_exact_bytes_not_file_or_heading_names"),
+    ("an unfilled documented declaration is a placeholder", MODULE + "assemble",
+     "PLACEHOLDER.search(joined) or DECLARATION.search(text)", "PLACEHOLDER.search(joined)",
+     TESTS + "test_unfilled_or_unsafe_declarations_refuse[{source = \"oc\", "
+     "heading = \"LR8. Controller\", fences = [0]}-unreviewed placeholder]"),
+    ("only a 40-hex commit fills a declaration", MODULE + "_part",
+     "isinstance(value, str) and COMMIT.fullmatch(value)", "isinstance(value, str)",
+     TESTS + "test_unfilled_or_unsafe_declarations_refuse[{source = \"oc\", "
+     "heading = \"LR8. Controller\", fences = [0], set = {O = \"$(id)\", C = \"x\"}}"
+     "-40-hex commits]"),
+    ("each name fills exactly one declaration", MODULE + "_part",
+     "if len(where) != 1:", "if not where:",
+     TESTS + "test_unfilled_or_unsafe_declarations_refuse[{source = \"oc\", "
+     "heading = \"LR8. Controller\", fences = [0, 0], set = {O = "
+     "\"e7d40b139c2a0205f37c7050295a3eca55af9d2c\", C = "
+     "\"5793ef98ef5597c9ee9811a0d1f031554eb7f514\"}}-declares O 2 times]"),
+    ("a session value has its name's exact shape", MODULE + "session_values",
+     "isinstance(value, str) and SESSION_VALUES[key].fullmatch(value)", "isinstance(value, str)",
+     TESTS + "test_session_values_are_only_the_three_names_in_their_shapes"
+     "[RUN_ID = \"run-$(id)\"]"),
+    ("a session value that fills no line refuses", MODULE + "assemble",
+     "if set(values or {}) - used:", "if False:",
+     TESTS + "test_measured_session_values_fill_exact_unreviewed_lines"),
     ("shell normalization joins continued lines", MODULE + "_normalized",
      'SHELL_QUOTING.sub("", text.replace("\\\\\\n", ""))', "text",
      INVOKE + "[change2]"),

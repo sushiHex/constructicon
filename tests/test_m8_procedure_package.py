@@ -43,6 +43,15 @@ wait "$H"
 ```text
 not a command
 ```
+
+### LR8. Controller
+
+```bash
+umask 077
+O=<40-hex commit the old controller workspace was made at>
+C=<40-hex merge commit named in LR0>
+test "$O" != "$C"
+```
 """
 SELF_BLOCKS = """## L1: qualification boundary
 
@@ -366,6 +375,98 @@ def test_every_shell_spelling_of_a_placeholder_refuses(tmp_path, spelling):
     escaped = QUALIFICATION.replace("m8-maint-q12", f"m8-maint-q12\\n{spelling}")
     with pytest.raises(package.Refused, match="unreviewed placeholder"):
         package.assemble(procedure(tmp_path, escaped))
+
+
+OLD, NEW = "e7d40b139c2a0205f37c7050295a3eca55af9d2c", "5793ef98ef5597c9ee9811a0d1f031554eb7f514"
+CONTROLLER = '{source = "oc", heading = "LR8. Controller", fences = [0]'
+
+
+def controller(selection: str) -> str:
+    return QUALIFICATION.replace('{source = "oc", heading = "S6a. Held", fences = [0]},',
+                                 '{source = "oc", heading = "S6a. Held", fences = [0]},\n  '
+                                 + selection + ",")
+
+
+def test_set_fills_each_documented_declaration_exactly_once(tmp_path):
+    filled = controller(CONTROLLER + f', set = {{O = "{OLD}", C = "{NEW}"}}}}')
+    text = package.assemble(procedure(tmp_path, filled))[0].text
+    assert f"umask 077\nO={OLD}\nC={NEW}\ntest " in text and "=<" not in text
+
+
+@pytest.mark.parametrize(("selection", "message"), [
+    # A documented declaration left unfilled is a placeholder.
+    (CONTROLLER + "}", "unreviewed placeholder"),
+    (CONTROLLER + f', set = {{O = "{OLD}"}}}}', "unreviewed placeholder"),
+    # Only a 40-hex commit fills a declaration; nothing else is a single inert word.
+    (CONTROLLER + ', set = {O = "$(id)", C = "x"}}', "40-hex commits"),
+    (CONTROLLER + f', set = {{O = "{OLD.upper()}", C = "{NEW}"}}}}', "40-hex commits"),
+    (CONTROLLER + ', set = {O = 7}}', "40-hex commits"),
+    (CONTROLLER + f', set = "{OLD}"}}', "40-hex commits"),
+    # Each name fills exactly one declaration line in the selection.
+    (CONTROLLER + f', set = {{D = "{OLD}", O = "{OLD}", C = "{NEW}"}}}}', "declares D 0 times"),
+    ('{source = "oc", heading = "LR8. Controller", fences = [0, 0]'
+     f', set = {{O = "{OLD}", C = "{NEW}"}}}}', "declares O 2 times"),
+    (CONTROLLER + f', set = {{"O=<" = "{OLD}"}}}}', "declares O=< 0 times"),
+])
+def test_unfilled_or_unsafe_declarations_refuse(tmp_path, selection, message):
+    with pytest.raises(package.Refused, match=message):
+        package.assemble(procedure(tmp_path, controller(selection)))
+
+
+def test_template_mode_keeps_unfilled_declarations(tmp_path):
+    path = procedure(tmp_path, controller(CONTROLLER + "}"))
+    assert "O=<40-hex" in package.assemble(path, template=True)[0].text
+
+
+def test_a_set_on_a_literal_is_not_a_part(tmp_path):
+    literal = QUALIFICATION.replace('{literal = "W=/home/m8-service/m8-maint-q12"}',
+                                    f'{{literal = "W=x", set = {{O = "{OLD}"}}}}')
+    with pytest.raises(package.Refused, match="exactly a literal or a fence selection"):
+        package.assemble(procedure(tmp_path, literal))
+
+
+PREVIEW, RUN = "ab" * 32, "run-" + "cd" * 16
+SESSION = QUALIFICATION.replace("m8-maint-q12", "m8-maint-q12\\nPREVIEW_SHA256=UNREVIEWED"
+                                "\\nRUN_ID=UNREVIEWED")
+
+
+def values(tmp_path: Path, text: str) -> dict[str, str]:
+    path = tmp_path / "values.toml"
+    path.write_bytes(text.encode())
+    return package.session_values(path)
+
+
+def test_measured_session_values_fill_exact_unreviewed_lines(tmp_path):
+    filled = values(tmp_path, f'PREVIEW_SHA256 = "{PREVIEW}"\nRUN_ID = "{RUN}"\n')
+    text = package.assemble(procedure(tmp_path, SESSION), values=filled)[0].text
+    assert f"PREVIEW_SHA256={PREVIEW}\nRUN_ID={RUN}\n" in text and "UNREVIEWED" not in text
+    # A partial fill leaves a placeholder; a quoted spelling is not an exact line.
+    with pytest.raises(package.Refused, match="unreviewed placeholder"):
+        package.assemble(procedure(tmp_path, SESSION), values={"RUN_ID": RUN})
+    quoted = SESSION.replace("RUN_ID=UNREVIEWED", "RUN_ID=\\\"UNREVIEWED\\\"")
+    with pytest.raises(package.Refused, match="unreviewed placeholder"):
+        package.assemble(procedure(tmp_path, quoted), values=filled)
+    with pytest.raises(package.Refused, match=r"values \['RUN_ID'\] fill no line"):
+        package.assemble(procedure(tmp_path, QUALIFICATION), values={"RUN_ID": RUN})
+
+
+@pytest.mark.parametrize("text", [
+    f'RUN_ID = "{RUN}x"', 'RUN_ID = "run-$(id)"', f'PREVIEW_SHA256 = "{PREVIEW[:-1]}"',
+    'EXPECTED_BOOT = "934acecb-9042-4e02-845e-050a4d07126"', f'C = "{PREVIEW[:40]}"',
+    "RUN_ID = 7", "", "RUN_ID = ",
+])
+def test_session_values_are_only_the_three_names_in_their_shapes(tmp_path, text):
+    with pytest.raises(package.Refused, match=r"values are only|not valid TOML"):
+        values(tmp_path, text)
+
+
+def test_cli_builds_with_a_values_file(tmp_path):
+    path = procedure(tmp_path, SESSION)
+    (tmp_path / "values.toml").write_bytes(f'PREVIEW_SHA256 = "{PREVIEW}"\nRUN_ID = "{RUN}"\n'
+                                           .encode())
+    assert package.main(["x", "build", str(path), str(tmp_path / "out"), "--values",
+                         str(tmp_path / "values.toml")]) == 0
+    assert f"RUN_ID={RUN}\n" in (tmp_path / "out" / "c3-qualification.sh").read_text()
 
 
 def test_literals_keep_their_exact_trailing_newlines(tmp_path):

@@ -17,6 +17,7 @@ hand::
     parts = [
       {literal = "C=..."},
       {source = "oc", heading = "Setup: fixed controller and evidence checks", fences = [0, 1]},
+      {source = "lr", heading = "LR8. Controller", fences = [0], set = {O = "...", C = "..."}},
       {source = "lane", heading = "L1: qualification boundary", fences = [0]},
     ]
 
@@ -24,7 +25,12 @@ hand::
 Usage, with isolated Python from the repository root::
 
     python -I -S -B scripts/m8_procedure_package.py check DOC [--template]
-    python -I -S -B scripts/m8_procedure_package.py build DOC OUT [--template]
+    python -I -S -B scripts/m8_procedure_package.py build DOC OUT [--values FILE] [--template]
+
+``--values`` fills values measured mid-session (``PREVIEW_SHA256``, ``RUN_ID``,
+``EXPECTED_BOOT``) into exact ``NAME=UNREVIEWED`` lines, each checked against its
+shape; a value that fills no line refuses. Later steps are built again, into a
+fresh ``OUT``, once their values are measured and reviewed.
 
 ``build`` writes ``<step>.sh`` and ``<step>.stdout`` (LF only) and ``MANIFEST.sha256``
 (``sha256sum --check`` format) into ``OUT``, which it claims with an exclusive
@@ -50,7 +56,10 @@ step, source or heading, some do not. It refuses:
 - **labels:** an undeclared generation/session label, or a historical one in a
   step not marked historical. This is a spelling check, not proof of fresh paths;
 - **placeholders:** ``UNREVIEWED`` or ``UNPREPARED`` (other than the
-  ``UNPREPARED.bundle`` sentinel) in any shell spelling, unless ``--template``;
+  ``UNPREPARED.bundle`` sentinel) in any shell spelling, or a frozen fence's
+  documented ``NAME=<...>`` declaration left unfilled, unless ``--template``. A fence
+  selection fills declarations with ``set = {NAME = "<40-hex commit>"}``; each name
+  must match exactly one declaration line in the selection;
 - **bytes:** any CR in a built file, a declared stdout over 65,536 bytes.
 """
 
@@ -116,6 +125,37 @@ def _continues(body: str) -> bool:
     the final newline (an even run is literal backslashes)."""
     run = len(body) - 1 - len(body[:-1].rstrip("\\"))
     return body.endswith("\n") and run % 2 == 1
+
+
+# A frozen fence's documented placeholder declaration, such as
+# `D=<40-hex commit the qualification set was installed at>`. Only a fence
+# selection's `set` fills one, and only with a 40-hex commit (every documented
+# placeholder is one); an unfilled one in a built step is refused.
+DECLARATION = re.compile(r"^(?P<name>[A-Z_][A-Z0-9_]*)=<[^<>\n]+>$", re.MULTILINE)
+COMMIT = re.compile(r"[0-9a-f]{40}")
+# Values measured mid-session (C8's preview and run, this boot's UUID). A
+# `--values` file fills only these names, only on an exact `NAME=UNREVIEWED` line,
+# and only with a value of the name's own shape.
+SESSION_VALUES = {
+    "PREVIEW_SHA256": re.compile(r"[0-9a-f]{64}"),
+    "RUN_ID": re.compile(r"run-[0-9a-f]{32}"),
+    "EXPECTED_BOOT": re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"),
+}
+
+
+def session_values(path: Path) -> dict[str, str]:
+    """A TOML file of measured session values, each checked against its shape."""
+    try:
+        values = tomllib.loads(path.read_bytes().decode("utf-8"))
+    except tomllib.TOMLDecodeError:
+        raise Refused("the values file is not valid TOML") from None
+    if not values or not set(values) <= set(SESSION_VALUES) or not all(
+            isinstance(value, str) and SESSION_VALUES[key].fullmatch(value)
+            for key, value in values.items()):
+        raise Refused(f"values are only {sorted(SESSION_VALUES)}, each in its exact shape")
+    return values
+
+
 NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
 MAX_STDOUT = 65_536
 # The only reviewed fences that may invoke the lane CLI, keyed by the SHA-256 of
@@ -261,9 +301,13 @@ def _part(name: str, part: object, sources: dict) -> list[tuple[str, bool]]:
             raise Refused(f"step {name}: a literal part is empty")
         # Exact bytes: only a missing final newline is supplied.
         return [(literal if literal.endswith("\n") else literal + "\n", False)]
-    if set(part) != {"source", "heading", "fences"}:
+    if not {"source", "heading", "fences"} <= set(part) <= {"source", "heading", "fences", "set"}:
         raise Refused(f"step {name}: a part is exactly a literal or a fence selection")
     source, heading, selected = part["source"], part["heading"], part["fences"]
+    filled = part.get("set", {})
+    if not isinstance(filled, dict) or not all(
+            isinstance(value, str) and COMMIT.fullmatch(value) for value in filled.values()):
+        raise Refused(f"step {name}: set fills documented declarations with 40-hex commits")
     if not isinstance(source, str) or source not in sources or not isinstance(heading, str):
         raise Refused(f"step {name}: unknown source {source!r}")
     if not isinstance(selected, list) or not selected or not all(
@@ -280,6 +324,16 @@ def _part(name: str, part: object, sources: dict) -> list[tuple[str, bool]]:
         if not body.strip():
             raise Refused(f"step {name}: {heading!r} fence {index} is empty")
         pieces.append((body, hashlib.sha256(body.encode("utf-8")).hexdigest() in LANE_BLOCKS))
+    # Review standing was decided on the reviewed bytes; filling replaces only the
+    # declared line, with a value that cannot be a shell word other than itself.
+    for declared, value in filled.items():
+        where = [index for index, (body, _) in enumerate(pieces)
+                 for match in DECLARATION.finditer(body) if match["name"] == declared]
+        if len(where) != 1:
+            raise Refused(f"step {name}: {heading!r} declares {declared} {len(where)} times")
+        body, reviewed = pieces[where[0]]
+        line = re.compile(rf"^{declared}=<[^<>\n]+>$", re.MULTILINE)
+        pieces[where[0]] = (line.sub(f"{declared}={value}", body, count=1), reviewed)
     return pieces
 
 
@@ -288,7 +342,8 @@ def _normalized(text: str) -> str:
     return SHELL_QUOTING.sub("", text.replace("\\\n", ""))
 
 
-def assemble(path: Path, template: bool = False) -> list[Step]:
+def assemble(path: Path, template: bool = False,
+             values: dict[str, str] | None = None) -> list[Step]:
     # Raw bytes: text-mode reading would silently translate CRLF and hide it.
     document = path.read_bytes().decode("utf-8")
     if "\r" in document:
@@ -317,7 +372,7 @@ def assemble(path: Path, template: bool = False) -> list[Step]:
     if current & historical_labels:
         raise Refused(f"labels {sorted(current & historical_labels)} are both current "
                       "and historical")
-    steps, names = [], set()
+    steps, names, used = [], set(), set()
     declared_steps = spec.get("steps", [])
     if not isinstance(declared_steps, list):
         raise Refused("steps must be a list of tables")
@@ -348,12 +403,17 @@ def assemble(path: Path, template: bool = False) -> list[Step]:
             raise Refused(f"step {name}: only a reviewed lane-boundary block may invoke "
                           "the lane CLI (#210 lane-output contract)")
         text = "".join(body for body, _ in pieces)
+        for key, value in (values or {}).items():
+            text, count = re.subn(rf"^{key}=UNREVIEWED$", f"{key}={value}", text,
+                                  flags=re.MULTILINE)
+            if count:
+                used.add(key)
         allowed = current | (historical_labels if historical else set())
         joined = _normalized(text)
         stray = sorted({label for label in LABEL.findall(joined) if label not in allowed})
         if stray:
             raise Refused(f"step {name}: undeclared or historical labels {stray}")
-        if not template and PLACEHOLDER.search(joined):
+        if not template and (PLACEHOLDER.search(joined) or DECLARATION.search(text)):
             raise Refused(f"step {name}: an unreviewed placeholder remains")
         stdout = tuple(_strings(entry["stdout"], f"step {name}: stdout"))
         rendered = "".join(line + "\n" for line in stdout)
@@ -364,11 +424,14 @@ def assemble(path: Path, template: bool = False) -> list[Step]:
         steps.append(Step(name, text, stdout))
     if not steps:
         raise Refused("the composition declares no steps")
+    if set(values or {}) - used:
+        raise Refused(f"values {sorted(set(values or {}) - used)} fill no line")
     return steps
 
 
-def build(path: Path, out: Path, template: bool = False) -> str:
-    steps = assemble(path, template)
+def build(path: Path, out: Path, template: bool = False,
+          values: dict[str, str] | None = None) -> str:
+    steps = assemble(path, template, values)
     try:
         out.mkdir()  # an exclusive claim: refuses an existing path, never replaces one
     except FileExistsError:
@@ -394,13 +457,18 @@ def main(argv: list[str]) -> int:
         template = arguments[-1:] == ["--template"]
         if template:
             arguments = arguments[:-1]
+        values = None
+        if arguments[:1] == ["build"] and len(arguments) == 5 and arguments[3] == "--values":
+            values = session_values(Path(arguments[4]))
+            arguments = arguments[:3]
         if arguments[:1] == ["check"] and len(arguments) == 2:
             steps = assemble(Path(arguments[1]), template)
             print(f"composition-checked {len(steps)} steps")
         elif arguments[:1] == ["build"] and len(arguments) == 3:
-            print(build(Path(arguments[1]), Path(arguments[2]), template))
+            print(build(Path(arguments[1]), Path(arguments[2]), template, values))
         else:
-            raise Refused("usage: check DOC [--template] | build DOC OUT [--template]")
+            raise Refused("usage: check DOC [--template] | "
+                          "build DOC OUT [--values FILE] [--template]")
     except (Refused, OSError, UnicodeDecodeError) as error:
         print(f"composition refused: {error}", file=sys.stderr)
         return 1
