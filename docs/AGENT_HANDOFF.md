@@ -24,20 +24,23 @@ event, not an Actions trigger. The only trace was a jobless failed run
 attributed to `push`, and no required check failed.
 [PR #217](https://github.com/sushiHex/constructicon/pull/217) fixed it, merged
 as `84a54d7488b6888cc52b9e2051c2d1a7359ee96d` on 2026-10-16 UTC.
-`tests/test_workflow_triggers.py` now pins every workflow's triggers to the
-documented Actions events, and
+`tests/test_workflow_triggers.py` now checks every workflow's trigger event
+names against the documented Actions events, and
 [#218](https://github.com/sushiHex/constructicon/issues/218) tracks full
 workflow linting.
 
 The `public-text` workflow runs `scripts/ci/check_public_text.py` from the
 default branch only, with read-only permissions and no persisted credentials.
 Patterns come from the `PUBLIC_TEXT_PATTERNS` secret, so no private value
-enters the repository. Findings print only a kind and a numeric id or digest,
-never the text, URL, filename or pattern. Anything that cannot be scanned
-completely fails the run, and findings already made are still printed.
+enters the repository. A finding prints a kind and an identifier (a number, id
+or digest), not the text, URL, filename or pattern. A run that reaches an item
+it cannot scan completely fails. It still prints the findings it already made,
+unless the job is cancelled or times out
+([#221](https://github.com/sushiHex/constructicon/issues/221)).
 
-- **Events** scan issues, comments and pull requests (every commit's own diff)
-  as they are posted or edited.
+- **Events** scan issues, issue comments and pull requests (each commit's own
+  diff) as they are posted or edited. Review comments and commit comments reach
+  only the sweep.
 - **The hourly sweep** covers:
   - every branch name, and each new branch commit with its own diff, read on
     both sides when GitHub omits the patch;
@@ -49,7 +52,8 @@ completely fails the run, and findings already made are still printed.
   variable (a manual backfill's start time). With neither, it fails rather than
   invent a window.
 - **Budget:** `GITHUB_TOKEN` allows 1,000 requests per hour per repository, and
-  each run prints its request count. A backlog over that budget fails every run.
+  each run that reaches the API prints its request count. A backlog over that
+  budget fails every sweep.
   The recovery is a complete local `sweep --since` backfill, after which the
   owner sets the variable to the backfill's start. `--since` only picks the
   window; it does not set the variable.
@@ -75,7 +79,9 @@ run this check before posting, since such posts raise no event.
 What this does not establish:
 - **Detection, not prevention:** text is found after it is public. GitHub keeps
   an edited item's earlier revisions until they are deleted by hand, and only
-  current text is scanned.
+  current text is scanned. A pending event run is cancelled when a newer event
+  for the same item queues. The skipped revision is scanned only if it is still
+  current when a sweep reads it.
 - **Commit-date window:** two kinds of commit are missed unless they belong to
   a pull request updated in the window, which supplies all its commits:
   - a branch commit dated before the cursor but pushed after it;
@@ -84,17 +90,19 @@ What this does not establish:
   [#216](https://github.com/sushiHex/constructicon/issues/216) tracks a
   ref-update cursor.
 - **Unverified review coverage:** reviews and dismissals are reached through
-  each pull request's `updated_at`. Nobody has verified that every review edit
-  advances it.
+  the issues listing's `since` filter, which uses the `updated_at` of each pull
+  request's issue. Nobody has verified that every review edit advances it.
 - **Commit-comment bound:** commit comments are all listed every sweep, so
   3,000 of them would hit the page bound.
 - **Inputs that fail closed:**
   - a pull request with more commits than the 250 its endpoint lists;
   - a patchless changed file that is not UTF-8;
-  - a patchless modification without exactly one parent.
+  - a patchless change, other than an added file, in a commit without exactly
+    one parent.
 
-  Each makes the run incomplete, and every later run fails until the input
-  changes or the owner moves the anchor past it.
+  Each makes the run incomplete. Every later sweep fails until the input changes
+  or the owner moves the anchor past it, and so does any event run that reaches
+  it.
 
 ## #186 — operator procedures are assembled from named fences
 
@@ -103,21 +111,21 @@ What this does not establish:
 `scripts/m8_procedure_package.py` reads a procedure's TOML `Composition`
 block. It builds each step from literals and from named fenced blocks, and
 never runs a step. The blocks come from the procedure document itself (`self`,
-which is not hash-pinned) or from SHA-256-pinned sources. `build` writes each step's script and
-its exact declared stdout, LF only, into a directory it claims with an
-exclusive `mkdir`. It writes the manifest last, so a package without one is
-incomplete.
+which is not hash-pinned) or from SHA-256-pinned sources. `build` writes each
+step's script and its exact declared stdout, LF only, into a directory it
+claims with an exclusive `mkdir`. It writes the manifest last, so a package
+without one is incomplete.
 
-It refuses rather than guessing or repairing. A refusal's message is a
-diagnostic, not a location: many name the step, source or heading involved, but
-others do not. Examples are an absent heading, a source that is not UTF-8, and
-a malformed step. It refuses:
+It refuses rather than guessing. Its one repair is to supply a literal's
+missing final newline. A refusal's message is a diagnostic, not a location.
+Many name the step, source or heading involved, but not all do: an absent
+heading names only the heading, and a source that is not UTF-8 or a malformed
+step names nothing. It refuses:
 - **Schema and sources:** unknown keys, a changed pin, CRLF, an absent or
-  repeated heading, a missing, empty or non-`bash` fence. Headings inside
-  fences do not count.
-- **Lane boundary (#210):** only allowlisted, reviewed lane-boundary blocks may
-  contain the word `LANE`, the array that names the lane CLI. A literal never
-  may.
+  repeated heading, a missing, empty or non-`bash` fence.
+- **Lane boundary (#210):** a part containing the word `LANE`, the array that
+  names the lane CLI, unless it is a block whose file name and heading are on
+  the reviewed allowlist. A literal containing it is always refused.
 - **Labels:** an undeclared generation or session label, or a historical label
   in a step not marked historical. Labels are checked after shell
   normalization.
@@ -130,10 +138,17 @@ What this does not establish:
 - **`self` is unpinned:** the procedure document's own bytes are trusted as
   read. Its review or manifest entry is what pins it.
 - **Label checks are spelling checks:** they do not prove fresh paths.
-- **The lane lint is a token lint:** a step that invokes the lane module
-  directly, without `LANE`, is not refused.
-  [#220](https://github.com/sushiHex/constructicon/issues/220) tracks widening
-  it.
+- **The lane lint is a per-part token lint, keyed by name:** it does not
+  refuse two things:
+  - a step that invokes the lane module directly, without `LANE`;
+  - a `LANE` spliced from two parts by a line continuation.
+
+  The allowlist matches a source's file name and heading, not its content, and
+  the procedure declares the pin itself.
+  [#220](https://github.com/sushiHex/constructicon/issues/220) tracks these.
+- **Fence recognition is narrow:** only backtick fences whose info string is
+  letters only are recognised. A heading inside any other fence counts as a
+  heading.
 - **Shell obfuscation is left to review:** ANSI-C quoting and escaped
   delimiters can still disguise a token.
 
@@ -142,9 +157,9 @@ What this does not establish:
 [PR #215](https://github.com/sushiHex/constructicon/pull/215) merged as
 `cf215f56bd8c4837e71c9f948357546abc912b33` on 2026-10-16 UTC. The fixture
 `git` helper raises `FixtureGitError`, a `CalledProcessError`, on a nonzero
-exit. Its text carries the last 4 KiB of the argv's repr, the return code, and
-the last 4 KiB of stderr and of stdout. URL userinfo is redacted before
-truncation. It stays an error, never an `AssertionError`, so
+exit. Its text carries the argv's repr, the return code, stderr and stdout. Each
+of the four is decoded as UTF-8 with replacement and cut to its last 4 KiB.
+Userinfo of the form `scheme://user@` is redacted before the cut. It stays an error, never an `AssertionError`, so
 `scripts/_mutations.py` still classifies it as NOT PROVEN, not as a kill. No
 retry or timeout changed, and a timeout still raises a bare `TimeoutExpired`.
 
@@ -160,13 +175,14 @@ observable; it does not explain the earlier one.
 - `idle-observed` (exit 0) only when `constructicon-m8` is Off, its operational
   status is exactly `Ok`, its uptime is 0, it has no checkpoints, and no local
   `vmconnect` runs;
-- `in-use` (exit 1) for any other well-formed state;
-- `unknown` (exit 2) when the query fails or its output is not exactly the
-  record.
+- `in-use` (exit 1) for any other well-formed record of `constructicon-m8`;
+- `unknown` (exit 2) otherwise: the query fails or is not run, the record
+  names another VM, or the output is not exactly the record.
 
 The query never changes VM state. Its tests run in the Windows verification job.
-They execute the real PowerShell query with only the Hyper-V and process cmdlets
-faked, so no test observed a real VM. The additive
+Most fake the subprocess. A few execute the real PowerShell query with only
+`Get-VM`, `Get-VMCheckpoint` and `Get-Process` faked. No test observed a real
+VM. The additive
 [custody rules](plans/handoffs/M8-vm-custody.md) keep three things apart:
 - observation;
 - cooperative custody over hardline, by start and release notices;
