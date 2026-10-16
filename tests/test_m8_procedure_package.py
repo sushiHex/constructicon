@@ -230,6 +230,34 @@ def test_repeated_steps_and_assigned_placeholders_refuse_sentinels_do_not(tmp_pa
             package.assemble(procedure(tmp_path, assigned))
 
 
+def test_an_allowlisted_name_outside_the_procedure_directory_is_not_reviewed(tmp_path):
+    """A pinned copy at fake/frozen.md shares the reviewed name, never its standing."""
+    (tmp_path / "fake").mkdir()
+    (tmp_path / "fake" / "frozen.md").write_bytes(FROZEN.encode())
+    path = procedure(tmp_path, QUALIFICATION)
+    path.write_bytes(path.read_bytes().replace(b'path = "frozen.md"', b'path = "fake/frozen.md"'))
+    with pytest.raises(package.Refused, match="only a reviewed lane-boundary block"):
+        package.assemble(path)
+
+
+def test_wrong_container_and_selector_types_refuse_without_a_traceback(tmp_path):
+    scalar = tmp_path / "scalar.md"
+    scalar.write_bytes(b"# P\n\n## Composition\n\n```toml\nsteps = 1\n```\n")
+    with pytest.raises(package.Refused, match="steps must be a list"):
+        package.assemble(scalar)
+    listed = QUALIFICATION.replace('{source = "oc", heading = "Setup"',
+                                   '{source = ["oc"], heading = "Setup"')
+    with pytest.raises(package.Refused, match="unknown source"):
+        package.assemble(procedure(tmp_path, listed))
+
+
+def test_a_label_split_by_a_line_continuation_is_still_seen(tmp_path):
+    split = QUALIFICATION.replace('"W=/home/m8-service/m8-maint-q12"',
+                                  '"W=/home/m8-service/m8-maint-q\\\\\\n11"')
+    with pytest.raises(package.Refused, match=r"\['q11'\]"):
+        package.assemble(procedure(tmp_path, split))
+
+
 @pytest.mark.parametrize("sources", [
     "sources = []",
     '[sources.oc]\npath = 7\nsha256 = "x"',

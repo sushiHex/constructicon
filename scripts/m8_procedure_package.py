@@ -190,7 +190,7 @@ def _part(name: str, part: object, sources: dict, paths: dict) -> tuple[str, str
     if set(part) != {"source", "heading", "fences"}:
         raise Refused(f"step {name}: a part is exactly a literal or a fence selection")
     source, heading, selected = part["source"], part["heading"], part["fences"]
-    if source not in sources or not isinstance(heading, str):
+    if not isinstance(source, str) or source not in sources or not isinstance(heading, str):
         raise Refused(f"step {name}: unknown source {source!r}")
     if not isinstance(selected, list) or not selected or not all(
             type(index) is int for index in selected):
@@ -227,14 +227,20 @@ def assemble(path: Path, template: bool = False) -> list[Step]:
             raise Refused(f"source {key} does not match its pinned SHA-256")
         if b"\r" in raw:
             raise Refused(f"source {key} is not LF-only")
-        sources[key], paths[key] = raw.decode("utf-8"), Path(source["path"]).name
+        # Only a sibling of the procedure (a bare file name) can be an allowlisted
+        # reviewed source; a pinned copy elsewhere never matches the allowlist.
+        bare = Path(source["path"]).name == source["path"]
+        sources[key], paths[key] = raw.decode("utf-8"), source["path"] if bare else None
     labels = spec.get("labels", {})
     if not isinstance(labels, dict) or not set(labels) <= {"current", "historical"}:
         raise Refused("labels has only current and historical lists")
     current = set(_strings(labels.get("current", []), "labels.current"))
     historical_labels = set(_strings(labels.get("historical", []), "labels.historical"))
     steps, names = [], set()
-    for entry in spec.get("steps", []):
+    declared_steps = spec.get("steps", [])
+    if not isinstance(declared_steps, list):
+        raise Refused("steps must be a list of tables")
+    for entry in declared_steps:
         if not isinstance(entry, dict) or not set(entry) <= STEP_KEYS or not {
                 "name", "stdout", "parts"} <= set(entry):
             raise Refused("a step has exactly name, stdout, parts and optional historical")
@@ -257,7 +263,8 @@ def assemble(path: Path, template: bool = False) -> list[Step]:
             pieces.append(text)
         text = "".join(pieces)
         allowed = current | (historical_labels if historical else set())
-        stray = sorted({label for label in LABEL.findall(text) if label not in allowed})
+        joined = text.replace("\\\n", "")  # Bash joins continued lines into one token
+        stray = sorted({label for label in LABEL.findall(joined) if label not in allowed})
         if stray:
             raise Refused(f"step {name}: undeclared or historical labels {stray}")
         if not template and PLACEHOLDER.search(text):
