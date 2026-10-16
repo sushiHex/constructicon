@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import re
@@ -199,7 +200,7 @@ def merge_commit(sha: str, message: str) -> dict:
 def test_sweep_covers_commits_comments_reviews_and_updated_pull_requests():
     since = datetime(2026, 10, 16, 0, 0, tzinfo=UTC)
     routes = {
-        "branches": [{"name": "main"}, {"name": "topic/x"}],
+        "branches": [{"name": "main"}, {"name": "topic/x"}, {"name": f"wip-{SECRET}"}],
         # The same listing answers both branches: shared commits are scanned once.
         "commits": [merge_commit("aaaaaaaaaaaaaaaa", "clean"),
                     merge_commit("bbbbbbbbbbbbbbbb", f"squash: {LEAK} (#9)"),
@@ -227,7 +228,9 @@ def test_sweep_covers_commits_comments_reviews_and_updated_pull_requests():
                            check.patterns(PATTERNS))
     # The old commit comment (70) is outside the window; the rest is covered,
     # including a topic branch's pushed file.
+    leaky_branch = hashlib.sha256(f"wip-{SECRET}".encode()).hexdigest()[:12]
     assert found == [("branch commit", "bbbbbbbbbbbb"), ("branch file", "cccccccccccc"),
+                     ("branch name", leaky_branch),
                      ("commit comment", "71"), ("review", "900"), ("review dismissal", "7"),
                      ("review comment", "61")]
     assert "issues?state=all&since=2026-10-16T00:00:00Z&per_page=100&page=1" in api.seen

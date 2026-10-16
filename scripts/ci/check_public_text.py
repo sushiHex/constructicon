@@ -22,11 +22,14 @@ detection after posting: GitHub keeps edited text in the item's history until
 that revision is deleted by hand. Only current text is scanned, never edit
 history. Text posted and then edited away with ``GITHUB_TOKEN``, which raises no
 event, before the next sweep is therefore missed; such a workflow must run this
-check before posting (AGENTS.md "Public text").
+check before posting (AGENTS.md "Public text"). Branch commits are listed by
+commit date, so a commit dated before the cursor but first pushed after it is
+also missed until a ref-update cursor replaces the date filter.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -182,8 +185,11 @@ def sweep(github: GitHub, since_time: datetime) -> Iterator[Item]:
     seen: set[str] = set()
     for branch in github.pages("branches"):
         # Every branch, not only the default: a pushed topic branch is public,
-        # and squash or merge commits carry text written at merge time.
-        name = urllib.parse.quote(str(branch.get("name", "")), safe="")
+        # and squash or merge commits carry text written at merge time. The
+        # name is public too; it is reported by a digest, never spelled out.
+        raw_name = str(branch.get("name", ""))
+        yield "branch name", hashlib.sha256(raw_name.encode()).hexdigest()[:12], raw_name
+        name = urllib.parse.quote(raw_name, safe="")
         for commit in github.pages(f"commits?sha={name}&since={since}"):
             sha = str(commit.get("sha", ""))
             if sha not in seen:
