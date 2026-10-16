@@ -4,19 +4,24 @@ Run by ``.github/workflows/public-text.yml`` from the default branch only:
 
 - ``event PATH`` scans one issue, comment or pull-request event as it happens
   (commit comments raise no workflow event; only the sweep sees them);
-- ``sweep`` (hourly) scans everything updated since the last successful
-  scheduled sweep, less an overlap: every branch's new commits with their own
-  diffs (including squash and merge messages), commit comments, issue and
-  pull-request titles and bodies, issue comments, reviews, review dismissals,
-  review comments, and pull-request commits with their own diffs.
-  It also covers text that no event reaches, such as reviews and anything
-  posted with ``GITHUB_TOKEN``. A delayed or dropped schedule widens the next
-  window; it never skips one. Each commit is fetched once per sweep, however
-  many branches and pull requests carry it, and the request count is printed:
-  ``GITHUB_TOKEN`` allows 1,000 requests per hour per repository, so a window
-  that exceeds it fails rather than passes.
+- ``sweep`` (hourly) scans everything updated since its cursor, less an
+  overlap: every branch's new commits with their own diffs (including squash
+  and merge messages), commit comments, issue and pull-request titles and
+  bodies, issue comments, reviews, review dismissals, review comments, and the
+  new commits of updated pull requests with their own diffs. It also covers
+  text that no event reaches, such as reviews and anything posted with
+  ``GITHUB_TOKEN``. A delayed or dropped schedule widens the next window; it
+  never skips one.
 - ``sweep --since TIME`` is a manual backfill from an ISO time, run locally with
   a personal token; the workflow never passes it.
+
+The cursor is the later of the last successful scheduled sweep's start and the
+``PUBLIC_TEXT_SWEPT_THROUGH`` repository variable, which the owner sets to the
+start time of a successful manual backfill. With neither, the sweep fails: it
+never invents a window. ``GITHUB_TOKEN`` allows 1,000 requests per hour per
+repository, so each commit is fetched once per sweep and every API-backed run
+prints its request count. A backlog too large for one hour fails every run
+until a manual backfill moves the variable.
 
 Patterns come from the ``PUBLIC_TEXT_PATTERNS`` secret, one case-insensitive
 regular expression per line, so private values never enter the repository.
@@ -27,9 +32,12 @@ detection after posting: GitHub keeps edited text in the item's history until
 that revision is deleted by hand. Only current text is scanned, never edit
 history. Text posted and then edited away with ``GITHUB_TOKEN``, which raises no
 event, before the next sweep is therefore missed; such a workflow must run this
-check before posting (AGENTS.md "Public text"). Branch commits are listed by
-commit date, so a commit dated before the cursor but first pushed after it is
-also missed until a ref-update cursor replaces the date filter.
+check before posting (AGENTS.md "Public text"). The sweep selects commits by
+date, so a commit dated before the cursor but first pushed after it is missed
+by the sweep until a ref-update cursor replaces the date filter (#216); in a
+pull request, the ``pull_request_target`` event scans every commit. Commit
+comments cannot be filtered by the API, so all of them are listed each sweep,
+within the page bound.
 """
 
 from __future__ import annotations
@@ -48,9 +56,6 @@ from pathlib import Path
 API = "https://api.github.com"
 MAX_PAGES = 30
 OVERLAP = timedelta(minutes=30)
-
-# Kept within one hour's GITHUB_TOKEN budget; older text needs ``--since``.
-FIRST_WINDOW = timedelta(days=1)
 Item = tuple[str, str, str]  # (kind, numeric id, text)
 
 
@@ -113,6 +118,26 @@ def _commit_text(commit: dict) -> str:
                      + [f"{p.get('name', '')} {p.get('email', '')}" for p in people])
 
 
+def utc(value: str) -> datetime:
+    """An ISO time as UTC; a time without an offset is taken as UTC."""
+    parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+
+
+def _stamp(moment: datetime) -> str:
+    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _dated_since(commit: dict, since: str) -> bool:
+    """Whether a commit's author or committer date is at or after ``since``.
+
+    An undated commit counts as new, so it is scanned rather than skipped.
+    """
+    detail = commit.get("commit") or {}
+    dates = [str((detail.get(role) or {}).get("date") or "") for role in ("author", "committer")]
+    return not all(dates) or any(_stamp(utc(date)) >= since for date in dates)
+
+
 def commit_items(github: GitHub, commit: dict, kind: str, ident: str) -> Iterator[Item]:
     """A commit's message, identities and its own complete diff.
 
@@ -159,10 +184,13 @@ def commit_items(github: GitHub, commit: dict, kind: str, ident: str) -> Iterato
     raise Incomplete("commit file listing exceeds the page bound")
 
 
-def pull_request(github: GitHub, pull: dict, seen: set[str] | None = None) -> Iterator[Item]:
+def pull_request(github: GitHub, pull: dict, seen: set[str] | None = None,
+                 since: str | None = None) -> Iterator[Item]:
     """A pull request's branch, commits and every commit's diff, completely.
 
     A commit already in ``seen`` was scanned in full this sweep and is skipped.
+    With ``since`` (the sweep), only commits dated at or after it are fetched;
+    the event that announced each push scanned the whole pull request.
     """
     number = str(pull["number"])
     head = pull.get("head") or {}
@@ -174,9 +202,9 @@ def pull_request(github: GitHub, pull: dict, seen: set[str] | None = None) -> It
     seen = set() if seen is None else seen
     for commit in commits:
         sha = str(commit.get("sha", ""))
-        if sha not in seen:
-            seen.add(sha)
+        if sha not in seen and (since is None or _dated_since(commit, since)):
             yield from commit_items(github, commit, "pull request", number)
+            seen.add(sha)  # only once its scan is complete
 
 
 def event(payload: dict, github: GitHub | None) -> Iterator[Item]:
@@ -190,27 +218,30 @@ def event(payload: dict, github: GitHub | None) -> Iterator[Item]:
         yield from pull_request(github, pull)
 
 
-def cursor(github: GitHub, now: datetime | None = None) -> datetime:
-    """Where the sweep starts: the last successful sweep's start, less an overlap.
+def cursor(github: GitHub, anchor: str = "") -> datetime:
+    """Where the sweep starts, less an overlap: the later of the last successful
+    scheduled sweep's start and ``anchor``, a manual backfill's start time.
 
     The workflow's own run history is the cursor, so a delayed or dropped
     schedule widens the next window instead of skipping it, and a failing sweep
-    never advances it. Without any earlier success, the first window is
-    ``FIRST_WINDOW``.
+    never advances it. With neither a success nor an anchor there is no window
+    to scan, which is a failure: a window measured back from now would let
+    unscanned text slide out of coverage.
     """
     runs = github.get(
         "actions/workflows/public-text.yml/runs?status=success&event=schedule&per_page=100")
     assert isinstance(runs, dict)
-    starts = [run["run_started_at"] for run in runs.get("workflow_runs", [])
+    starts = [utc(run["run_started_at"]) for run in runs.get("workflow_runs", [])
               if run.get("event") == "schedule"]
+    if anchor.strip():
+        starts.append(utc(anchor))
     if not starts:
-        return (now or datetime.now(UTC)) - FIRST_WINDOW
-    latest = max(datetime.fromisoformat(start.replace("Z", "+00:00")) for start in starts)
-    return latest - OVERLAP
+        raise Incomplete("no successful sweep and no PUBLIC_TEXT_SWEPT_THROUGH")
+    return max(starts) - OVERLAP
 
 
 def sweep(github: GitHub, since_time: datetime) -> Iterator[Item]:
-    since = since_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+    since = _stamp(since_time)
     seen: set[str] = set()
     for branch in github.pages("branches"):
         # Every branch, not only the default: a pushed topic branch is public,
@@ -222,8 +253,8 @@ def sweep(github: GitHub, since_time: datetime) -> Iterator[Item]:
         for commit in github.pages(f"commits?sha={name}&since={since}"):
             sha = str(commit.get("sha", ""))
             if sha not in seen:
-                seen.add(sha)
                 yield from commit_items(github, commit, "branch", sha[:12])
+                seen.add(sha)  # only once its scan is complete
     for comment in github.pages("comments"):
         if str(comment.get("updated_at", "")) >= since:
             yield from _fields("commit comment", comment, "body", "path")
@@ -232,7 +263,7 @@ def sweep(github: GitHub, since_time: datetime) -> Iterator[Item]:
         if "pull_request" in issue:
             pull = github.get(f"pulls/{issue['number']}")
             assert isinstance(pull, dict)
-            yield from pull_request(github, pull, seen)
+            yield from pull_request(github, pull, seen, since)
             for review in github.pages(f"pulls/{issue['number']}/reviews"):
                 yield from _fields("review", review, "body")
             for event in github.pages(f"issues/{issue['number']}/timeline"):
@@ -246,8 +277,11 @@ def sweep(github: GitHub, since_time: datetime) -> Iterator[Item]:
         yield from _fields("review comment", comment, "body", "path", "diff_hunk")
 
 
-def findings(items: Iterator[Item], compiled: list[re.Pattern[str]]) -> list[tuple[str, str]]:
-    found: list[tuple[str, str]] = []
+def findings(items: Iterator[Item], compiled: list[re.Pattern[str]],
+             found: list[tuple[str, str]] | None = None) -> list[tuple[str, str]]:
+    """Matching (kind, id) pairs, appended to ``found`` as they are met, so a
+    later failure does not hide what was already found."""
+    found = [] if found is None else found
     for kind, ident, text in items:
         if any(pattern.search(text) for pattern in compiled) and (kind, ident) not in found:
             found.append((kind, ident))
@@ -255,7 +289,9 @@ def findings(items: Iterator[Item], compiled: list[re.Pattern[str]]) -> list[tup
 
 
 def main(argv: list[str], opener: Callable = urllib.request.urlopen) -> int:
-    github = None
+    github: GitHub | None = None
+    found: list[tuple[str, str]] = []
+    complete = False
     try:
         compiled = patterns(os.environ.get("PUBLIC_TEXT_PATTERNS", ""))
         repository = os.environ.get("GITHUB_REPOSITORY", "")
@@ -263,10 +299,9 @@ def main(argv: list[str], opener: Callable = urllib.request.urlopen) -> int:
         if argv[1:] == ["sweep"] or (argv[1:3] == ["sweep", "--since"] and len(argv) == 4):
             github = GitHub(repository, token, opener)
             if len(argv) == 4:
-                since = datetime.fromisoformat(argv[3])
-                since = since if since.tzinfo else since.replace(tzinfo=UTC)
+                since = utc(argv[3])
             else:
-                since = cursor(github)
+                since = cursor(github, os.environ.get("PUBLIC_TEXT_SWEPT_THROUGH", ""))
             items = sweep(github, since)
         elif argv[1:2] == ["event"] and len(argv) == 3:
             payload = json.loads(Path(argv[2]).read_text(encoding="utf-8"))
@@ -274,16 +309,15 @@ def main(argv: list[str], opener: Callable = urllib.request.urlopen) -> int:
             items = event(payload, github)
         else:
             raise Incomplete("usage: check_public_text.py event PATH | sweep [--since TIME]")
-        found = findings(items, compiled)
+        findings(items, compiled, found)
+        complete = True
     except Exception as error:  # report the class, never the content
         print(f"::error::public text check incomplete ({type(error).__name__})")
-        return 1
-    finally:
-        if github is not None:
-            print(f"::notice::public text check made {github.requests} API requests")
     for kind, ident in found:
         print(f"::error::{kind} {ident} matches a private pattern")
-    return 1 if found else 0
+    if github is not None:
+        print(f"::notice::public text check made {github.requests} API requests")
+    return 0 if complete and not found else 1
 
 
 if __name__ == "__main__":

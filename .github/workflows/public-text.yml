@@ -44,6 +44,7 @@ jobs:
         shell: bash
         env:
           PUBLIC_TEXT_PATTERNS: ${{ secrets.PUBLIC_TEXT_PATTERNS }}
+          PUBLIC_TEXT_SWEPT_THROUGH: ${{ vars.PUBLIC_TEXT_SWEPT_THROUGH }}
           GITHUB_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
         run: |

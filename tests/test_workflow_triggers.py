@@ -26,10 +26,20 @@ ACTIONS_EVENTS = frozenset({
 
 
 def triggers(text: str) -> list[str]:
-    """The event names of a workflow written in the mapping form, ``on:`` alone."""
+    """The event names of a workflow in the one supported spelling: ``on:``
+    alone, then each event as a bare two-space-indented key. Anything else at
+    that indentation is refused rather than skipped."""
     block = re.search(r"^on:\n((?:[ #].*\n|\n)*)", text, re.M)
     assert block is not None, "write triggers in the mapping form: `on:` on its own line"
-    return re.findall(r"^  ([A-Za-z_]+):", block[1], re.M)
+    events = []
+    for line in block[1].splitlines():
+        if not line.strip() or line.lstrip().startswith("#") or line.startswith("   "):
+            continue
+        key = re.fullmatch(r"  ([a-z_]+):( *#.*)?", line)
+        assert key is not None, f"unsupported trigger spelling: {line!r}"
+        events.append(key[1])
+    assert events, "no triggers found"
+    return events
 
 
 def test_the_workflow_set_is_not_empty() -> None:
@@ -43,7 +53,10 @@ def test_every_trigger_is_an_actions_event(workflow: Path) -> None:
     assert set(events) <= ACTIONS_EVENTS, set(events) - ACTIONS_EVENTS
 
 
-def test_an_unknown_event_and_the_scalar_form_are_refused() -> None:
-    assert triggers("on:\n  commit_comment:\n  push:\n\njobs:\n") == ["commit_comment", "push"]
-    with pytest.raises(AssertionError):
-        triggers("on: push\n")
+def test_an_unknown_event_and_unsupported_spellings_are_refused() -> None:
+    assert triggers("on:\n  commit_comment:\n  push:\n    branches: [main]\n\njobs:\n") == [
+        "commit_comment", "push"]
+    for text in ("on: push\n", 'on:\n  push:\n  "commit_comment":\n', "on:\n  push: {}\n",
+                 "on:\n  check-run:\n", "on:\n\tpush:\n"):
+        with pytest.raises(AssertionError):
+            triggers(text)

@@ -234,9 +234,11 @@ def test_listing_bound_binds_at_exactly_its_limit(tmp_path, monkeypatch, capsys)
         assert status == expected, pages
 
 
-def merge_commit(sha: str, message: str) -> dict:
-    return {"sha": sha, "commit": {"message": message, "author": {"name": "a", "email": "a@x"},
-                                   "committer": {"name": "c", "email": "c@x"}}}
+def merge_commit(sha: str, message: str, date: str | None = None) -> dict:
+    dated = {"date": date} if date else {}
+    return {"sha": sha, "commit": {"message": message,
+                                   "author": {"name": "a", "email": "a@x", **dated},
+                                   "committer": {"name": "c", "email": "c@x", **dated}}}
 
 
 def test_sweep_covers_commits_comments_reviews_and_updated_pull_requests():
@@ -263,9 +265,11 @@ def test_sweep_covers_commits_comments_reviews_and_updated_pull_requests():
         "pulls/comments": [{"id": 61, "body": "ok", "path": "a.py",
                             "diff_hunk": "@@ 10.9.8.4"}],
         **clean_pull_routes(),
-        # The pull request carries a branch commit: fetched once per sweep.
-        "pulls/7": pull(commits=1),
-        "pulls/7/commits": [merge_commit("cccccccccccccccc", "topic work")],
+        # The pull request carries a branch commit, fetched once per sweep, and
+        # an old commit its push event already scanned, not fetched again.
+        "pulls/7": pull(commits=2),
+        "pulls/7/commits": [merge_commit("dddddddddddddddd", "old", "2026-01-01T00:00:00Z"),
+                            merge_commit("cccccccccccccccc", "topic work")],
     }
     api = FakeAPI(routes)
     found = check.findings(check.sweep(check.GitHub("owner/repo", "token", api), since),
@@ -280,14 +284,23 @@ def test_sweep_covers_commits_comments_reviews_and_updated_pull_requests():
     assert "issues?state=all&since=2026-10-16T00:00:00Z&per_page=100&page=1" in api.seen
     assert "commits?sha=topic%2Fx&since=2026-10-16T00:00:00Z&per_page=100&page=1" in api.seen
     assert sum(path.startswith("commits/cccccccccccccccc") for path in api.seen) == 1
+    assert not any(path.startswith("commits/dddddddddddddddd") for path in api.seen)
+
+
+def test_commit_dates_bound_the_sweep_with_offsets_honoured():
+    since = "2026-10-16T00:00:00Z"
+    assert check._dated_since(merge_commit("a", "m", "2026-10-16T08:00:00+09:00"), since) is False
+    assert check._dated_since(merge_commit("a", "m", "2026-10-16T09:00:00+09:00"), since) is True
+    assert check._dated_since(merge_commit("a", "m"), since) is True  # undated: scanned
 
 
 def test_manual_backfill_skips_the_cursor_and_reports_its_request_count(
         tmp_path, monkeypatch, capsys):
-    status, out, api = run(tmp_path, monkeypatch, capsys, ["sweep", "--since", "2026-09-01"])
+    status, out, api = run(tmp_path, monkeypatch, capsys,
+                           ["sweep", "--since", "2026-09-01T00:00:00+09:00"])
     assert status == 0
     assert not any(path.startswith("actions/") for path in api.seen)
-    assert "issues?state=all&since=2026-09-01T00:00:00Z&per_page=100&page=1" in api.seen
+    assert "issues?state=all&since=2026-08-31T15:00:00Z&per_page=100&page=1" in api.seen
     assert f"made {len(api.seen)} API requests" in out
     for args in (["sweep", "--since", "yesterday"], ["sweep", "--since"],
                  ["sweep", "extra"], ["event"]):
@@ -295,20 +308,36 @@ def test_manual_backfill_skips_the_cursor_and_reports_its_request_count(
 
 
 def test_cursor_starts_at_the_last_successful_sweep_and_never_skips():
-    now = datetime(2026, 10, 16, 6, 0, tzinfo=UTC)
-
     def runs(*entries):
-        return FakeAPI({"actions/workflows/public-text.yml/runs": {"workflow_runs": [
-            {"event": event, "run_started_at": started} for event, started in entries]}})
+        return check.GitHub("owner/repo", "token", FakeAPI({
+            "actions/workflows/public-text.yml/runs": {"workflow_runs": [
+                {"event": event, "run_started_at": started} for event, started in entries]}}))
 
-    github = check.GitHub("owner/repo", "token", runs(
-        ("schedule", "2026-10-16T01:00:00Z"), ("workflow_dispatch", "2026-10-16T02:00:00Z"),
-        ("issue_comment", "2026-10-16T05:00:00Z")))
+    github = runs(("schedule", "2026-10-16T01:00:00Z"),
+                  ("workflow_dispatch", "2026-10-16T02:00:00Z"),
+                  ("issue_comment", "2026-10-16T05:00:00Z"))
     # A five-hour gap since the last scheduled sweep is scanned in full, with an
     # overlap; no other run, dispatched or event-triggered, advances the cursor.
-    assert check.cursor(github, now) == datetime(2026, 10, 16, 0, 30, tzinfo=UTC)
-    assert check.cursor(check.GitHub("owner/repo", "token", runs()), now) == (
-        now - check.FIRST_WINDOW)
+    assert check.cursor(github) == datetime(2026, 10, 16, 0, 30, tzinfo=UTC)
+    # An earlier manual backfill does not move it back; a later one moves it on.
+    assert check.cursor(github, "2026-10-16T09:00:00+09:00") == datetime(
+        2026, 10, 16, 0, 30, tzinfo=UTC)
+    assert check.cursor(github, "2026-10-16T04:00:00Z") == datetime(
+        2026, 10, 16, 3, 30, tzinfo=UTC)
+    # Without either there is no window: never one measured back from now.
+    assert check.cursor(runs(), "2026-10-01T00:00:00Z") == datetime(
+        2026, 9, 30, 23, 30, tzinfo=UTC)
+    for anchor in ("", "  "):
+        with pytest.raises(check.Incomplete):
+            check.cursor(runs(), anchor)
+
+
+def test_a_failure_still_reports_what_was_already_found(tmp_path, monkeypatch, capsys):
+    routes = {"actions/workflows/public-text.yml/runs": {"workflow_runs": []},
+              "branches": [{"name": f"wip-{SECRET}"}], "commits": {"not": "a listing"}}
+    monkeypatch.setenv("PUBLIC_TEXT_SWEPT_THROUGH", "2026-10-16T00:00:00Z")
+    status, out, _ = run(tmp_path, monkeypatch, capsys, ["sweep"], routes)
+    assert status == 1 and "incomplete" in out and "branch name" in out
 
 
 @pytest.mark.parametrize("declared", [251, 0, None])
