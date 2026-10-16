@@ -49,8 +49,10 @@ completely fails the run, and findings already made are still printed.
   variable (a manual backfill's start time). With neither, it fails rather than
   invent a window.
 - **Budget:** `GITHUB_TOKEN` allows 1,000 requests per hour per repository, and
-  each run prints its request count. A backlog over that budget fails every run
-  until a local `sweep --since` backfill moves the variable.
+  each run prints its request count. A backlog over that budget fails every run.
+  The recovery is a complete local `sweep --since` backfill, after which the
+  owner sets the variable to the backfill's start. `--since` only picks the
+  window; it does not set the variable.
 
 Live evidence on 2026-10-16:
 - **Backfill:** a local backfill since repository creation, with a personal
@@ -63,8 +65,9 @@ Live evidence on 2026-10-16:
   the log. Both probe comments were then deleted.
 - **Scheduled sweep:** GitHub runs schedules on a best-effort basis. No
   scheduled run had started by 09:09 UTC, more than 90 minutes after the merge.
-  The cursor advances only from a successful scheduled run, so a skipped slot
-  widens the next window; it loses nothing.
+  Neither a skipped slot nor a failed run moves the cursor, so the next window
+  widens instead of skipping time. Any delay still lets text be edited away, or
+  a branch be deleted, before a sweep reads it.
 
 AGENTS.md "Public text" requires a workflow that posts with `GITHUB_TOKEN` to
 run this check before posting, since such posts raise no event.
@@ -73,8 +76,11 @@ What this does not establish:
 - **Detection, not prevention:** text is found after it is public. GitHub keeps
   an edited item's earlier revisions until they are deleted by hand, and only
   current text is scanned.
-- **Commit-date window:** a branch commit dated before the cursor but pushed
-  after it is missed, and so is a commit reachable only from a tag.
+- **Commit-date window:** two kinds of commit are missed unless they belong to
+  a pull request updated in the window, which supplies all its commits:
+  - a branch commit dated before the cursor but pushed after it;
+  - a commit reachable only from a tag.
+
   [#216](https://github.com/sushiHex/constructicon/issues/216) tracks a
   ref-update cursor.
 - **Unverified review coverage:** reviews and dismissals are reached through
@@ -82,19 +88,29 @@ What this does not establish:
   advances it.
 - **Commit-comment bound:** commit comments are all listed every sweep, so
   3,000 of them would hit the page bound.
+- **Inputs that fail closed:**
+  - a pull request with more commits than the 250 its endpoint lists;
+  - a patchless changed file that is not UTF-8;
+  - a patchless modification without exactly one parent.
+
+  Each makes the run incomplete, and every later run fails until the input
+  changes or the owner moves the anchor past it.
 
 ## #186 — operator procedures are assembled from named fences
 
 [PR #214](https://github.com/sushiHex/constructicon/pull/214) merged as
 `8fbfc9a420bec000000d36e3364b43962f922071` on 2026-10-16 UTC.
 `scripts/m8_procedure_package.py` reads a procedure's TOML `Composition`
-block. It builds each step from named fenced blocks in SHA-256-pinned sources,
-plus literals, and never runs a step. `build` writes each step's script and
+block. It builds each step from literals and from named fenced blocks, and
+never runs a step. The blocks come from the procedure document itself (`self`,
+which is not hash-pinned) or from SHA-256-pinned sources. `build` writes each step's script and
 its exact declared stdout, LF only, into a directory it claims with an
 exclusive `mkdir`. It writes the manifest last, so a package without one is
 incomplete.
 
-It refuses, naming the step, rather than guessing or repairing:
+It refuses rather than guessing or repairing. Step-level refusals name the
+step. Document, schema, source-pin and heading refusals name the source or
+heading instead:
 - **Schema and sources:** unknown keys, a changed pin, CRLF, an absent or
   repeated heading, a missing, empty or non-`bash` fence. Headings inside
   fences do not count.
@@ -109,6 +125,8 @@ It refuses, naming the step, rather than guessing or repairing:
 
 What this does not establish:
 - **No procedure uses it yet:** no step was built or run against a host.
+- **`self` is unpinned:** the procedure document's own bytes are trusted as
+  read. Its review or manifest entry is what pins it.
 - **Label checks are spelling checks:** they do not prove fresh paths.
 - **Shell obfuscation is left to review:** ANSI-C quoting and escaped
   delimiters can still disguise a token.
@@ -117,11 +135,12 @@ What this does not establish:
 
 [PR #215](https://github.com/sushiHex/constructicon/pull/215) merged as
 `cf215f56bd8c4837e71c9f948357546abc912b33` on 2026-10-16 UTC. The fixture
-`git` helper raises `FixtureGitError`, a `CalledProcessError`. Its text carries
-the argv, the return code and the last 4 KiB of stderr and stdout, with URL
-userinfo redacted in the argv and the output before truncation. It stays an
-error, never an `AssertionError`, so `scripts/_mutations.py` still classifies it
-as NOT PROVEN, not as a kill. No retry or timeout changed.
+`git` helper raises `FixtureGitError`, a `CalledProcessError`, on a nonzero
+exit. Its text carries the last 4 KiB of the argv's repr, the return code, and
+the last 4 KiB of stderr and of stdout. URL userinfo is redacted before
+truncation. It stays an error, never an `AssertionError`, so
+`scripts/_mutations.py` still classifies it as NOT PROVEN, not as a kill. No
+retry or timeout changed, and a timeout still raises a bare `TimeoutExpired`.
 
 The cause of the clone failure in [#207](https://github.com/sushiHex/constructicon/pull/207)'s
 first attempt remains unknown. This change makes the next such failure
@@ -140,10 +159,16 @@ observable; it does not explain the earlier one.
   record.
 
 The query never changes VM state. Its tests run in the Windows verification job.
-The additive [custody rules](plans/handoffs/M8-vm-custody.md) keep three things
-apart: observation, cooperative custody over hardline (start and release
-notices), and the owner's authorization. An unreleased claim whose holder's
-liveness is unknown escalates to the owner. Absence is never read as release.
+They execute the real PowerShell query with only the Hyper-V and process cmdlets
+faked, so no test observed a real VM. The additive
+[custody rules](plans/handoffs/M8-vm-custody.md) keep three things apart:
+- observation;
+- cooperative custody over hardline, by start and release notices;
+- the owner's authorization.
+
+A procedure is bound by them only by naming them, and they add no lock. An
+unreleased claim whose holder's liveness is unknown escalates to the owner.
+Absence is never read as release.
 
 What this does not establish:
 - **Local observation only:** `idle-observed` does not see a remote console
