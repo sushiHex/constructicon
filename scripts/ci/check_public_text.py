@@ -39,6 +39,7 @@ from pathlib import Path
 API = "https://api.github.com"
 MAX_PAGES = 30
 OVERLAP = timedelta(minutes=30)
+COMMIT_FILE_CAP = 300  # the commit endpoint lists at most 300 files
 FIRST_WINDOW = timedelta(days=30)
 Item = tuple[str, str, str]  # (kind, numeric id, text)
 
@@ -111,18 +112,26 @@ def pull_request(github: GitHub, pull: dict) -> Iterator[Item]:
         raise Incomplete("pull request commit listing is not complete")
     for commit in commits:
         yield "pull request commit", number, _commit_text(commit)
-    for changed in github.pages(f"pulls/{number}/files"):
-        names = f"{changed.get('filename', '')}\n{changed.get('previous_filename', '')}"
-        patch = changed.get("patch")
-        if patch is None and changed.get("status") != "removed":
-            # Large or binary diffs carry no patch: scan the file itself, or fail.
-            path = urllib.parse.quote(str(changed.get("filename", "")))
-            data = github.get(f"contents/{path}?ref={head.get('sha', '')}", raw=True)
-            try:
-                patch = data.decode("utf-8")  # type: ignore[union-attr]
-            except UnicodeDecodeError:
-                raise Incomplete("a changed file is not text") from None
-        yield "pull request file", number, names + "\n" + str(patch or "")
+        # Every commit's own diff, not the PR's final one: text added by one
+        # commit and removed by the next stays public in the PR's history.
+        sha = str(commit.get("sha", ""))
+        detail = github.get(f"commits/{sha}")
+        assert isinstance(detail, dict)
+        files = detail.get("files")
+        if not isinstance(files, list) or len(files) >= COMMIT_FILE_CAP:
+            raise Incomplete("commit file listing is not complete")
+        for changed in files:
+            names = f"{changed.get('filename', '')}\n{changed.get('previous_filename', '')}"
+            patch = changed.get("patch")
+            if patch is None and changed.get("status") != "removed":
+                # Large or binary diffs carry no patch: scan the file itself, or fail.
+                path = urllib.parse.quote(str(changed.get("filename", "")))
+                data = github.get(f"contents/{path}?ref={sha}", raw=True)
+                try:
+                    patch = data.decode("utf-8")  # type: ignore[union-attr]
+                except UnicodeDecodeError:
+                    raise Incomplete("a changed file is not text") from None
+            yield "pull request file", number, names + "\n" + str(patch or "")
 
 
 def event(payload: dict, github: GitHub | None) -> Iterator[Item]:
@@ -170,6 +179,11 @@ def sweep(github: GitHub, since_time: datetime) -> Iterator[Item]:
             yield from pull_request(github, pull)
             for review in github.pages(f"pulls/{issue['number']}/reviews"):
                 yield from _fields("review", review, "body")
+            for event in github.pages(f"issues/{issue['number']}/timeline"):
+                dismissed = event.get("dismissed_review") or {}
+                if dismissed.get("dismissal_message"):
+                    yield ("review dismissal", str(issue["number"]),
+                           str(dismissed["dismissal_message"]))
     for comment in github.pages(f"issues/comments?since={since}"):
         yield from _fields("comment", comment, "body")
     for comment in github.pages(f"pulls/comments?since={since}"):

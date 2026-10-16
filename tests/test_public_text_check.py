@@ -32,6 +32,8 @@ class FakeAPI:
         number = re.search(r"(?:^|&)page=(\d+)", query)
         page = int(number.group(1)) if number else None
         value = self.routes.get(base, [] if page else None)
+        if value is None and base.startswith("commits/") and "commits/*" in self.routes:
+            value = self.routes["commits/*"]
         if isinstance(value, bytes):
             return io.BytesIO(value)
         if page is not None and isinstance(value, list) and value and isinstance(value[0], list):
@@ -46,7 +48,15 @@ def pull(number: int = 7, **fields) -> dict:
 
 
 def clean_pull_routes(number: int = 7, **extra) -> dict:
-    return {f"pulls/{number}/commits": [], f"pulls/{number}/files": [], **extra}
+    return {f"pulls/{number}/commits": [], **extra}
+
+
+def one_commit_pull(files: list[dict], **extra) -> dict:
+    """Routes for a PR whose single commit changes ``files``."""
+    commit = {"sha": "c1", "commit": {"message": "m", "author": {"name": "a", "email": "a@x"},
+                                      "committer": {"name": "c", "email": "c@x"}}}
+    return clean_pull_routes(**{"pulls/7/commits": [commit], "commits/c1": {"files": files},
+                                **extra})
 
 
 def run(tmp_path, monkeypatch, capsys, args, routes=None, patterns=PATTERNS, token="token"):
@@ -89,37 +99,62 @@ def test_pull_request_event_scans_branch_commits_and_every_file(
 ):
     payload = {"pull_request": pull(title=LEAK if where == "title" else "t", commits=1,
                                     head={"ref": LEAK if where == "branch" else "f", "sha": "abc"})}
-    commit = {"commit": {"message": LEAK if where == "commit message" else "m",
-                         "author": {"name": SECRET if where == "commit author" else "a",
-                                    "email": "a@x"},
-                         "committer": {"name": "c", "email": "c@x"}}}
+    commit = {"sha": "c1", "commit": {
+        "message": LEAK if where == "commit message" else "m",
+        "author": {"name": SECRET if where == "commit author" else "a", "email": "a@x"},
+        "committer": {"name": "c", "email": "c@x"}}}
     files = [{"filename": f"docs/{SECRET}.md" if where == "filename" else "docs/a.md",
               "previous_filename": f"old/{SECRET}" if where == "previous filename" else "",
               "status": "modified",
               "patch": LEAK if where == "patch" else ("+x" if where != "file contents" else None)}]
-    routes = clean_pull_routes(**{"pulls/7/commits": [commit], "pulls/7/files": files,
+    routes = clean_pull_routes(**{"pulls/7/commits": [commit], "commits/c1": {"files": files},
                                   "contents/docs/a.md": LEAK.encode()})
     status, out, api = run(tmp_path, monkeypatch, capsys, event_args(tmp_path, payload), routes)
     assert status == 1 and " 7 matches" in out
     if where == "file contents":
-        assert "contents/docs/a.md?ref=abc" in api.seen
+        assert "contents/docs/a.md?ref=c1" in api.seen
+
+
+def test_text_added_then_removed_inside_a_pull_request_is_found(tmp_path, monkeypatch, capsys):
+    """The PR's final diff is clean; its first commit's diff is not."""
+    commits = [{"sha": sha, "commit": {"message": "m", "author": {}, "committer": {}}}
+               for sha in ("c1", "c2")]
+    routes = clean_pull_routes(**{
+        "pulls/7/commits": commits,
+        "commits/c1": {"files": [{"filename": "a.md", "status": "added", "patch": f"+{LEAK}"}]},
+        "commits/c2": {"files": [{"filename": "a.md", "status": "modified",
+                                  "patch": f"-{LEAK}\n+clean"}]},
+    })
+    status, out, _ = run(tmp_path, monkeypatch, capsys,
+                         event_args(tmp_path, {"pull_request": pull(commits=2)}), routes)
+    assert status == 1 and "pull request file 7 matches" in out
 
 
 def test_a_clean_pull_request_with_a_large_text_file_passes(tmp_path, monkeypatch, capsys):
     files = [{"filename": "big.txt", "status": "added", "patch": None},
              {"filename": "gone.txt", "status": "removed", "patch": None}]
-    routes = clean_pull_routes(**{"pulls/7/files": files, "contents/big.txt": b"clean text\n"})
+    routes = one_commit_pull(files, **{"contents/big.txt": b"clean text\n"})
     status, out, _ = run(tmp_path, monkeypatch, capsys,
-                         event_args(tmp_path, {"pull_request": pull()}), routes)
+                         event_args(tmp_path, {"pull_request": pull(commits=1)}), routes)
     assert (status, out) == (0, "")
 
 
-def test_unscannable_binary_file_fails_closed(tmp_path, monkeypatch, capsys):
-    files = [{"filename": "image.png", "status": "added", "patch": None}]
-    routes = clean_pull_routes(**{"pulls/7/files": files, "contents/image.png": b"\x89PNG\xff\xfe"})
+@pytest.mark.parametrize("files", ["binary", "capped", "missing"])
+def test_unscannable_commit_files_fail_closed(tmp_path, monkeypatch, capsys, files):
+    listing = {
+        "binary": [{"filename": "image.png", "status": "added", "patch": None}],
+        "capped": [{"filename": "a.txt", "status": "added", "patch": "+x"}]
+        * check.COMMIT_FILE_CAP,
+        "missing": None,
+    }[files]
+    routes = one_commit_pull(listing, **{"contents/image.png": b"\x89PNG\xff\xfe"})
     status, out, _ = run(tmp_path, monkeypatch, capsys,
-                         event_args(tmp_path, {"pull_request": pull()}), routes)
+                         event_args(tmp_path, {"pull_request": pull(commits=1)}), routes)
     assert status == 1 and "incomplete (Incomplete)" in out
+    if files == "capped":
+        under = one_commit_pull(listing[:-1])
+        assert run(tmp_path, monkeypatch, capsys,
+                   event_args(tmp_path, {"pull_request": pull(commits=1)}), under)[0] == 0
 
 
 def test_pull_request_event_without_token_fails_closed(tmp_path, monkeypatch, capsys):
@@ -129,11 +164,13 @@ def test_pull_request_event_without_token_fails_closed(tmp_path, monkeypatch, ca
 
 
 def test_listing_bound_binds_at_exactly_its_limit(tmp_path, monkeypatch, capsys):
-    page = [{"filename": "a.txt", "status": "modified", "patch": "+x"}] * 100
+    page = [{"sha": "c", "commit": {"message": "m", "author": {}, "committer": {}}}] * 100
     for pages, expected in ((check.MAX_PAGES - 1, 0), (check.MAX_PAGES, 1)):
-        routes = clean_pull_routes(**{"pulls/7/files": [page] * pages + [page[:1]]})
+        routes = clean_pull_routes(**{"pulls/7/commits": [page] * pages + [page[:1]],
+                                      "commits/*": {"files": []}})
+        declared = pull(commits=100 * pages + 1)
         status, _, _ = run(tmp_path, monkeypatch, capsys,
-                           event_args(tmp_path, {"pull_request": pull()}), routes)
+                           event_args(tmp_path, {"pull_request": declared}), routes)
         assert status == expected, pages
 
 
@@ -154,6 +191,8 @@ def test_sweep_covers_commits_comments_reviews_and_updated_pull_requests():
                    {"number": 7, "title": "t", "body": "b", "pull_request": {}}],
         "pulls/7": pull(),
         "pulls/7/reviews": [{"id": 900, "body": f"see {LEAK}"}],
+        "issues/7/timeline": [{"event": "labeled"}, {
+            "event": "review_dismissed", "dismissed_review": {"dismissal_message": LEAK}}],
         "issues/comments": [{"id": 51, "body": "ok"}],
         "pulls/comments": [{"id": 61, "body": "ok", "path": "a.py",
                             "diff_hunk": "@@ 10.9.8.4"}],
@@ -164,7 +203,7 @@ def test_sweep_covers_commits_comments_reviews_and_updated_pull_requests():
                            check.patterns(PATTERNS))
     # The old commit comment (70) is outside the window; the rest is covered.
     assert found == [("commit", "bbbbbbbbbbbb"), ("commit comment", "71"),
-                     ("review", "900"), ("review comment", "61")]
+                     ("review", "900"), ("review dismissal", "7"), ("review comment", "61")]
     assert "issues?state=all&since=2026-10-16T00:00:00Z&per_page=100&page=1" in api.seen
     assert "commits?since=2026-10-16T00:00:00Z&per_page=100&page=1" in api.seen
 
@@ -190,7 +229,7 @@ def test_cursor_starts_at_the_last_successful_sweep_and_never_skips():
 def test_a_capped_or_unknown_commit_listing_fails_closed(tmp_path, monkeypatch, capsys,
                                                          declared):
     commits = [merge_commit(f"{n:040x}", "clean") for n in range(3)]
-    routes = clean_pull_routes(**{"pulls/7/commits": commits})
+    routes = clean_pull_routes(**{"pulls/7/commits": commits, "commits/*": {"files": []}})
     status, out, _ = run(tmp_path, monkeypatch, capsys,
                          event_args(tmp_path, {"pull_request": pull(commits=declared)}), routes)
     assert status == 1 and "incomplete (Incomplete)" in out
