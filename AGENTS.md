@@ -156,6 +156,22 @@ absence of evidence read as a positive result. Each rule below was bought.
   fails when a *new* site appears, a site-by-site fix only after someone finds
   it.
 
+## Public text
+
+Issues, pull requests, comments, reviews, commit messages and committed files
+are public and permanent: editing a comment keeps the old text in its history
+until each revision is deleted by hand.
+
+- **Never publish private operator facts.** That means account or user names,
+  home or workstation paths, addresses, host keys, credentials and raw host
+  output such as listings, logs or transcripts. Publish the checked fact in
+  words ("installed true, zero differences"), never the listing it came from.
+- **Private transport metadata travels privately**, over hardline, and stays out
+  of committed files.
+- **Enforcement is a backstop, not a licence.** The `Public text` workflow flags
+  matches against private patterns held in a repository secret after posting;
+  it cannot un-post.
+
 ## Review
 
 - **A review is a claim.** Reproduce its premise against source before acting.
