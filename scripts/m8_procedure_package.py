@@ -203,6 +203,8 @@ def _part(name: str, part: object, sources: dict, paths: dict) -> tuple[str, str
         lang, body = found[index]
         if lang != "bash":
             raise Refused(f"step {name}: {heading!r} fence {index} is not bash")
+        if not body.strip():
+            raise Refused(f"step {name}: {heading!r} fence {index} is empty")
         text.append(body)
     return "".join(text), (paths[source], heading)
 
@@ -236,6 +238,9 @@ def assemble(path: Path, template: bool = False) -> list[Step]:
         raise Refused("labels has only current and historical lists")
     current = set(_strings(labels.get("current", []), "labels.current"))
     historical_labels = set(_strings(labels.get("historical", []), "labels.historical"))
+    if current & historical_labels:
+        raise Refused(f"labels {sorted(current & historical_labels)} are both current "
+                      "and historical")
     steps, names = [], set()
     declared_steps = spec.get("steps", [])
     if not isinstance(declared_steps, list):
@@ -267,7 +272,7 @@ def assemble(path: Path, template: bool = False) -> list[Step]:
         stray = sorted({label for label in LABEL.findall(joined) if label not in allowed})
         if stray:
             raise Refused(f"step {name}: undeclared or historical labels {stray}")
-        if not template and PLACEHOLDER.search(text):
+        if not template and PLACEHOLDER.search(joined):
             raise Refused(f"step {name}: an unreviewed placeholder remains")
         stdout = tuple(_strings(entry["stdout"], f"step {name}: stdout"))
         rendered = "".join(line + "\n" for line in stdout)

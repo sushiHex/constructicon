@@ -251,6 +251,21 @@ def test_wrong_container_and_selector_types_refuse_without_a_traceback(tmp_path)
         package.assemble(procedure(tmp_path, listed))
 
 
+def test_split_placeholders_empty_fences_and_double_labels_refuse(tmp_path):
+    split = QUALIFICATION.replace("m8-maint-q12", "m8-maint-q12\\nRUN_ID=UNRE\\\\\\nVIEWED")
+    with pytest.raises(package.Refused, match="unreviewed placeholder"):
+        package.assemble(procedure(tmp_path, split))
+    empty = FROZEN + "\n### Empty\n\n```bash\n\n```\n"
+    selected = QUALIFICATION.replace('heading = "Setup"', 'heading = "Empty"')
+    with pytest.raises(package.Refused, match="'Empty' fence 0 is empty"):
+        package.assemble(procedure(tmp_path, selected, frozen=empty))
+    path = procedure(tmp_path, QUALIFICATION)
+    path.write_bytes(path.read_bytes().replace(b'historical = ["g10", "q11"]',
+                                               b'historical = ["g10", "q12"]'))
+    with pytest.raises(package.Refused, match=r"\['q12'\] are both current and historical"):
+        package.assemble(path)
+
+
 def test_a_label_split_by_a_line_continuation_is_still_seen(tmp_path):
     split = QUALIFICATION.replace('"W=/home/m8-service/m8-maint-q12"',
                                   '"W=/home/m8-service/m8-maint-q\\\\\\n11"')
