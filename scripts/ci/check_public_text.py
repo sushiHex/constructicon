@@ -5,9 +5,10 @@ Run by ``.github/workflows/public-text.yml`` from the default branch only:
 - ``event PATH`` scans one issue, comment, commit comment or pull-request event
   as it happens;
 - ``sweep`` (scheduled) scans everything updated since the last successful
-  sweep, less an overlap: repository commits (including squash and merge
-  messages), commit comments, issue and pull-request titles and bodies, issue
-  comments, reviews, review comments, pull-request commits and changed files.
+  scheduled sweep, less an overlap: every branch's new commits with their own
+  diffs (including squash and merge messages), commit comments, issue and
+  pull-request titles and bodies, issue comments, reviews, review dismissals,
+  review comments, and pull-request commits with their own diffs.
   It also covers text that no event reaches, such as reviews and anything
   posted with ``GITHUB_TOKEN``. A delayed or dropped schedule widens the next
   window; it never skips one.
@@ -39,7 +40,7 @@ from pathlib import Path
 API = "https://api.github.com"
 MAX_PAGES = 30
 OVERLAP = timedelta(minutes=30)
-COMMIT_FILE_CAP = 300  # the commit endpoint lists at most 300 files
+
 FIRST_WINDOW = timedelta(days=30)
 Item = tuple[str, str, str]  # (kind, numeric id, text)
 
@@ -101,24 +102,20 @@ def _commit_text(commit: dict) -> str:
                      + [f"{p.get('name', '')} {p.get('email', '')}" for p in people])
 
 
-def pull_request(github: GitHub, pull: dict) -> Iterator[Item]:
-    """A pull request's branch, commits and every changed file, completely."""
-    number = str(pull["number"])
-    head = pull.get("head") or {}
-    yield "pull request branch", number, str(head.get("ref") or "")
-    commits = list(github.pages(f"pulls/{number}/commits"))
-    # The endpoint stops at 250 commits; a short listing is not completeness.
-    if type(pull.get("commits")) is not int or len(commits) != pull["commits"]:
-        raise Incomplete("pull request commit listing is not complete")
-    for commit in commits:
-        yield "pull request commit", number, _commit_text(commit)
-        # Every commit's own diff, not the PR's final one: text added by one
-        # commit and removed by the next stays public in the PR's history.
-        sha = str(commit.get("sha", ""))
-        detail = github.get(f"commits/{sha}")
+def commit_items(github: GitHub, commit: dict, kind: str, ident: str) -> Iterator[Item]:
+    """A commit's message, identities and its own complete diff.
+
+    Each commit's own diff, never a final cumulative one: text added by one
+    commit and removed by the next stays public in history. The file list is
+    paged (the endpoint returns 30 files by default and at most 3000).
+    """
+    yield f"{kind} commit", ident, _commit_text(commit)
+    sha = str(commit.get("sha", ""))
+    for page in range(1, MAX_PAGES + 1):
+        detail = github.get(f"commits/{sha}?per_page=100&page={page}")
         assert isinstance(detail, dict)
         files = detail.get("files")
-        if not isinstance(files, list) or len(files) >= COMMIT_FILE_CAP:
+        if not isinstance(files, list):
             raise Incomplete("commit file listing is not complete")
         for changed in files:
             names = f"{changed.get('filename', '')}\n{changed.get('previous_filename', '')}"
@@ -131,7 +128,23 @@ def pull_request(github: GitHub, pull: dict) -> Iterator[Item]:
                     patch = data.decode("utf-8")  # type: ignore[union-attr]
                 except UnicodeDecodeError:
                     raise Incomplete("a changed file is not text") from None
-            yield "pull request file", number, names + "\n" + str(patch or "")
+            yield f"{kind} file", ident, names + "\n" + str(patch or "")
+        if len(files) < 100:
+            return
+    raise Incomplete("commit file listing exceeds the page bound")
+
+
+def pull_request(github: GitHub, pull: dict) -> Iterator[Item]:
+    """A pull request's branch, commits and every commit's diff, completely."""
+    number = str(pull["number"])
+    head = pull.get("head") or {}
+    yield "pull request branch", number, str(head.get("ref") or "")
+    commits = list(github.pages(f"pulls/{number}/commits"))
+    # The endpoint stops at 250 commits; a short listing is not completeness.
+    if type(pull.get("commits")) is not int or len(commits) != pull["commits"]:
+        raise Incomplete("pull request commit listing is not complete")
+    for commit in commits:
+        yield from commit_items(github, commit, "pull request", number)
 
 
 def event(payload: dict, github: GitHub | None) -> Iterator[Item]:
@@ -153,10 +166,11 @@ def cursor(github: GitHub, now: datetime | None = None) -> datetime:
     never advances it. Without any earlier success, the first window is
     ``FIRST_WINDOW``.
     """
-    runs = github.get("actions/workflows/public-text.yml/runs?status=success&per_page=50")
+    runs = github.get(
+        "actions/workflows/public-text.yml/runs?status=success&event=schedule&per_page=100")
     assert isinstance(runs, dict)
     starts = [run["run_started_at"] for run in runs.get("workflow_runs", [])
-              if run.get("event") in ("schedule", "workflow_dispatch")]
+              if run.get("event") == "schedule"]
     if not starts:
         return (now or datetime.now(UTC)) - FIRST_WINDOW
     latest = max(datetime.fromisoformat(start.replace("Z", "+00:00")) for start in starts)
@@ -165,9 +179,16 @@ def cursor(github: GitHub, now: datetime | None = None) -> datetime:
 
 def sweep(github: GitHub, since_time: datetime) -> Iterator[Item]:
     since = since_time.strftime("%Y-%m-%dT%H:%M:%SZ")
-    for commit in github.pages(f"commits?since={since}"):
-        # Squash and merge commits carry text written at merge time.
-        yield "commit", str(commit.get("sha", "?"))[:12], _commit_text(commit)
+    seen: set[str] = set()
+    for branch in github.pages("branches"):
+        # Every branch, not only the default: a pushed topic branch is public,
+        # and squash or merge commits carry text written at merge time.
+        name = urllib.parse.quote(str(branch.get("name", "")), safe="")
+        for commit in github.pages(f"commits?sha={name}&since={since}"):
+            sha = str(commit.get("sha", ""))
+            if sha not in seen:
+                seen.add(sha)
+                yield from commit_items(github, commit, "branch", sha[:12])
     for comment in github.pages("comments"):
         if str(comment.get("updated_at", "")) >= since:
             yield from _fields("commit comment", comment, "body", "path")

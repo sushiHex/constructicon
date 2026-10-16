@@ -31,9 +31,13 @@ class FakeAPI:
         base, _, query = path.partition("?")
         number = re.search(r"(?:^|&)page=(\d+)", query)
         page = int(number.group(1)) if number else None
-        value = self.routes.get(base, [] if page else None)
+        value = self.routes.get(base)
         if value is None and base.startswith("commits/") and "commits/*" in self.routes:
             value = self.routes["commits/*"]
+        if value is None and page:
+            value = []
+        if isinstance(value, dict) and "pages" in value:  # a paged object such as a commit
+            value = value["pages"][page - 1] if page <= len(value["pages"]) else {"files": []}
         if isinstance(value, bytes):
             return io.BytesIO(value)
         if page is not None and isinstance(value, list) and value and isinstance(value[0], list):
@@ -139,22 +143,35 @@ def test_a_clean_pull_request_with_a_large_text_file_passes(tmp_path, monkeypatc
     assert (status, out) == (0, "")
 
 
-@pytest.mark.parametrize("files", ["binary", "capped", "missing"])
+@pytest.mark.parametrize("files", ["binary", "missing"])
 def test_unscannable_commit_files_fail_closed(tmp_path, monkeypatch, capsys, files):
     listing = {
         "binary": [{"filename": "image.png", "status": "added", "patch": None}],
-        "capped": [{"filename": "a.txt", "status": "added", "patch": "+x"}]
-        * check.COMMIT_FILE_CAP,
         "missing": None,
     }[files]
     routes = one_commit_pull(listing, **{"contents/image.png": b"\x89PNG\xff\xfe"})
     status, out, _ = run(tmp_path, monkeypatch, capsys,
                          event_args(tmp_path, {"pull_request": pull(commits=1)}), routes)
     assert status == 1 and "incomplete (Incomplete)" in out
-    if files == "capped":
-        under = one_commit_pull(listing[:-1])
-        assert run(tmp_path, monkeypatch, capsys,
-                   event_args(tmp_path, {"pull_request": pull(commits=1)}), under)[0] == 0
+
+
+def test_commit_file_pages_are_followed_and_bounded(tmp_path, monkeypatch, capsys):
+    """The commit endpoint pages its files: a leak on page 2 is found, and a
+    listing that never ends within the page bound fails closed."""
+    full = [{"filename": "a.txt", "status": "added", "patch": "+x"}] * 100
+    leaked = [{"filename": "b.txt", "status": "added", "patch": f"+{LEAK}"}]
+    commit = {"sha": "c1", "commit": {"message": "m", "author": {}, "committer": {}}}
+    paged = clean_pull_routes(**{"pulls/7/commits": [commit],
+                                 "commits/c1": {"pages": [{"files": full}, {"files": leaked}]}})
+    status, out, api = run(tmp_path, monkeypatch, capsys,
+                           event_args(tmp_path, {"pull_request": pull(commits=1)}), paged)
+    assert status == 1 and "pull request file 7 matches" in out
+    assert "commits/c1?per_page=100&page=2" in api.seen
+    endless = clean_pull_routes(**{"pulls/7/commits": [commit], "commits/c1": {
+        "pages": [{"files": full}] * check.MAX_PAGES}})
+    status, out, _ = run(tmp_path, monkeypatch, capsys,
+                         event_args(tmp_path, {"pull_request": pull(commits=1)}), endless)
+    assert status == 1 and "incomplete (Incomplete)" in out
 
 
 def test_pull_request_event_without_token_fails_closed(tmp_path, monkeypatch, capsys):
@@ -182,8 +199,15 @@ def merge_commit(sha: str, message: str) -> dict:
 def test_sweep_covers_commits_comments_reviews_and_updated_pull_requests():
     since = datetime(2026, 10, 16, 0, 0, tzinfo=UTC)
     routes = {
+        "branches": [{"name": "main"}, {"name": "topic/x"}],
+        # The same listing answers both branches: shared commits are scanned once.
         "commits": [merge_commit("aaaaaaaaaaaaaaaa", "clean"),
-                    merge_commit("bbbbbbbbbbbbbbbb", f"squash: {LEAK} (#9)")],
+                    merge_commit("bbbbbbbbbbbbbbbb", f"squash: {LEAK} (#9)"),
+                    merge_commit("cccccccccccccccc", "topic work")],
+        "commits/aaaaaaaaaaaaaaaa": {"files": []},
+        "commits/bbbbbbbbbbbbbbbb": {"files": []},
+        "commits/cccccccccccccccc": {"files": [
+            {"filename": "notes.md", "status": "added", "patch": f"+{LEAK}"}]},
         "comments": [{"id": 70, "body": LEAK, "updated_at": "2026-10-15T00:00:00Z"},
                      {"id": 71, "body": f"on a commit {LEAK}",
                       "updated_at": "2026-10-16T01:00:00Z"}],
@@ -201,11 +225,14 @@ def test_sweep_covers_commits_comments_reviews_and_updated_pull_requests():
     api = FakeAPI(routes)
     found = check.findings(check.sweep(check.GitHub("owner/repo", "token", api), since),
                            check.patterns(PATTERNS))
-    # The old commit comment (70) is outside the window; the rest is covered.
-    assert found == [("commit", "bbbbbbbbbbbb"), ("commit comment", "71"),
-                     ("review", "900"), ("review dismissal", "7"), ("review comment", "61")]
+    # The old commit comment (70) is outside the window; the rest is covered,
+    # including a topic branch's pushed file.
+    assert found == [("branch commit", "bbbbbbbbbbbb"), ("branch file", "cccccccccccc"),
+                     ("commit comment", "71"), ("review", "900"), ("review dismissal", "7"),
+                     ("review comment", "61")]
     assert "issues?state=all&since=2026-10-16T00:00:00Z&per_page=100&page=1" in api.seen
-    assert "commits?since=2026-10-16T00:00:00Z&per_page=100&page=1" in api.seen
+    assert "commits?sha=topic%2Fx&since=2026-10-16T00:00:00Z&per_page=100&page=1" in api.seen
+    assert sum(path.startswith("commits/cccccccccccccccc") for path in api.seen) == 1
 
 
 def test_cursor_starts_at_the_last_successful_sweep_and_never_skips():
@@ -218,9 +245,9 @@ def test_cursor_starts_at_the_last_successful_sweep_and_never_skips():
     github = check.GitHub("owner/repo", "token", runs(
         ("schedule", "2026-10-16T01:00:00Z"), ("workflow_dispatch", "2026-10-16T02:00:00Z"),
         ("issue_comment", "2026-10-16T05:00:00Z")))
-    # A five-hour gap since the last sweep is scanned in full, with an overlap;
-    # event-triggered runs never advance the sweep's cursor.
-    assert check.cursor(github, now) == datetime(2026, 10, 16, 1, 30, tzinfo=UTC)
+    # A five-hour gap since the last scheduled sweep is scanned in full, with an
+    # overlap; no other run, dispatched or event-triggered, advances the cursor.
+    assert check.cursor(github, now) == datetime(2026, 10, 16, 0, 30, tzinfo=UTC)
     assert check.cursor(check.GitHub("owner/repo", "token", runs()), now) == (
         now - check.FIRST_WINDOW)
 
@@ -266,9 +293,9 @@ def test_workflow_runs_only_default_branch_code_and_reads_only_the_secret():
     workflow = WORKFLOW.read_text(encoding="utf-8")
     triggers = workflow.split("\non:", 1)[1].split("\npermissions:", 1)[0]
     assert "pull_request_review" not in triggers and "\n  pull_request:" not in triggers
+    assert "workflow_dispatch" not in triggers
     for name in ("issues:", "issue_comment:", "commit_comment:", "pull_request_target:",
-                 "schedule:",
-                 "workflow_dispatch:"):
+                 "schedule:"):
         assert name in triggers
     steps = workflow.split("steps:", 1)[1]
     assert "ref: ${{ github.event.repository.default_branch }}" in steps

@@ -4,7 +4,8 @@ name: Public text
 # keys) in public repository text. Patterns live in the PUBLIC_TEXT_PATTERNS
 # secret, never in the repository. Every trigger below runs the default
 # branch's copy of this file; none checks out or executes pull-request code.
-# Review events are deliberately absent: they would run the PR's copy. The
+# Review events and workflow_dispatch are deliberately absent: they would run a
+# branch-controlled copy of this file with the secret. The
 # scheduled sweep covers reviews, commits, edits and GITHUB_TOKEN-posted text.
 
 on:
@@ -17,7 +18,6 @@ on:
     types: [opened, edited, synchronize, reopened]
   schedule:
     - cron: "*/15 * * * *"
-  workflow_dispatch:
 
 permissions:
   actions: read
@@ -47,7 +47,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          if [ "$EVENT_NAME" = schedule ] || [ "$EVENT_NAME" = workflow_dispatch ]; then
+          if [ "$EVENT_NAME" = schedule ]; then
             python3 -I -S -B scripts/ci/check_public_text.py sweep
           else
             python3 -I -S -B scripts/ci/check_public_text.py event "$GITHUB_EVENT_PATH"
