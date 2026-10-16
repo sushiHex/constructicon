@@ -50,16 +50,41 @@ def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+GIT_DIAGNOSTIC_BYTES = 4096
+
+
+def _diagnostic_tail(data: bytes | str | None) -> str:
+    raw = data.encode() if isinstance(data, str) else (data or b"")
+    text = raw[-GIT_DIAGNOSTIC_BYTES:].decode("utf-8", "replace")
+    # Fixture remotes are local paths, but never echo userinfo if one appears.
+    return re.sub(r"(://)[^/@\s]+@", r"\1<redacted>@", text)
+
+
+class FixtureGitError(subprocess.CalledProcessError):
+    """A fixture git failure: still an error (not an AssertionError), now with its diagnostics."""
+
+    def __str__(self) -> str:
+        return (
+            f"fixture git failed: argv={self.cmd!r} returncode={self.returncode}\n"
+            f"stderr (last {GIT_DIAGNOSTIC_BYTES} bytes):\n{_diagnostic_tail(self.stderr)}\n"
+            f"stdout (last {GIT_DIAGNOSTIC_BYTES} bytes):\n{_diagnostic_tail(self.stdout)}"
+        )
+
+
 def git(cwd: Path, *arguments: str, stdin: bytes | None = None) -> str:
     completed = subprocess.run(
         ["git", "-c", "core.autocrlf=false", "-c", "commit.gpgsign=false", *arguments],
         cwd=cwd,
         input=stdin,
-        check=True,
+        check=False,
         capture_output=True,
         env={**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull},
         timeout=30,
     )
+    if completed.returncode != 0:
+        raise FixtureGitError(
+            completed.returncode, completed.args, completed.stdout, completed.stderr
+        )
     return completed.stdout.decode().strip()
 
 
@@ -127,6 +152,27 @@ def stock_git(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # --- the repository side ---------------------------------------------------
+
+
+def test_fixture_git_failure_surfaces_bounded_stderr(tmp_path: Path) -> None:
+    with pytest.raises(FixtureGitError) as caught:
+        git(tmp_path, "clone", "--bare", str(tmp_path / "missing"), str(tmp_path / "out"))
+    message = str(caught.value)
+    assert not isinstance(caught.value, AssertionError)
+    assert caught.value.returncode == 128
+    assert "returncode=128" in message
+    assert "clone" in message
+    assert "missing" in message  # git's own stderr names the absent source
+
+
+def test_fixture_git_failure_truncates_oversized_diagnostics() -> None:
+    stderr = b"HEAD-MARKER" + b"x" * 10_000 + b"TAIL-MARKER"
+    message = str(FixtureGitError(128, ["git", "clone"], b"", stderr))
+    assert "TAIL-MARKER" in message
+    assert "HEAD-MARKER" not in message
+    assert len(message) < 2 * GIT_DIAGNOSTIC_BYTES
+    redacted = str(FixtureGitError(1, ["git"], b"", b"fatal: https://user:secret@host/r"))
+    assert "secret" not in redacted
 
 
 def test_script_imports_only_the_standard_library() -> None:
