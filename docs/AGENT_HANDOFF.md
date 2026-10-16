@@ -157,8 +157,8 @@ What this does not establish:
 [PR #215](https://github.com/sushiHex/constructicon/pull/215) merged as
 `cf215f56bd8c4837e71c9f948357546abc912b33` on 2026-10-16 UTC. The fixture
 `git` helper raises `FixtureGitError`, a `CalledProcessError`, on a nonzero
-exit. Its text carries the argv's repr, the return code, stderr and stdout. Each
-of the four is decoded as UTF-8 with replacement and cut to its last 4 KiB.
+exit. Its text carries the return code, plus the argv's repr, stderr and stdout.
+Those three are decoded as UTF-8 with replacement and cut to their last 4 KiB.
 Userinfo of the form `scheme://user@` is redacted before the cut. It stays an error, never an `AssertionError`, so
 `scripts/_mutations.py` still classifies it as NOT PROVEN, not as a kill. No
 retry or timeout changed, and a timeout still raises a bare `TimeoutExpired`.
