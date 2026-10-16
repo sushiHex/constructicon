@@ -1,16 +1,20 @@
 """Flag public repository text that matches a private pattern; never print the match.
 
-Run by ``.github/workflows/public-text.yml`` on every issue, comment, review and
-pull-request event. Patterns come from the ``PUBLIC_TEXT_PATTERNS`` secret, one
-case-insensitive regular expression per line, so the private values never
-appear in the repository. Pull-request events also scan the changed files'
-patches, read through the API without checking out the head.
+Run by ``.github/workflows/public-text.yml`` from the default branch only:
 
-Exit 1 with one ``::error`` line naming only the event's kind and public URL;
-the matched text, the pattern and its position are never written to the public
-log. An unset or invalid pattern list is itself a failure, not a pass. This is
-detection after posting: it cannot un-post, and GitHub keeps edited text in
-the comment's history until that revision is deleted.
+- ``event PATH`` scans one issue, comment or pull-request event as it happens;
+- ``sweep MINUTES`` (scheduled) scans everything updated in that lookback window:
+  issue and pull-request titles and bodies, issue comments, reviews, review
+  comments, pull-request commits and changed files. It also covers text that
+  no event reaches, such as reviews and anything posted with ``GITHUB_TOKEN``.
+
+Patterns come from the ``PUBLIC_TEXT_PATTERNS`` secret, one case-insensitive
+regular expression per line, so private values never enter the repository.
+Findings print only a kind and a numeric id: no text, URL, filename or pattern.
+Anything that cannot be scanned completely, such as a missing token, a
+non-UTF-8 file or an over-long listing, is a failure, never a pass. This is
+detection after posting: GitHub keeps edited text in the item's history until
+that revision is deleted by hand.
 """
 
 from __future__ import annotations
@@ -19,16 +23,23 @@ import json
 import os
 import re
 import sys
+import urllib.parse
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 API = "https://api.github.com"
-MAX_PATCH_PAGES = 30
+MAX_PAGES = 30
+Item = tuple[str, str, str]  # (kind, numeric id, text)
 
 
-class PatternsNotConfigured(ValueError):
-    """The secret is unset or empty: a failure, never a pass."""
+class Incomplete(ValueError):
+    """Something could not be scanned completely: a failure, never a pass."""
+
+
+class PatternsNotConfigured(Incomplete):
+    """The secret is unset or empty."""
 
 
 def patterns(raw: str) -> list[re.Pattern[str]]:
@@ -38,63 +49,121 @@ def patterns(raw: str) -> list[re.Pattern[str]]:
     return [re.compile(line, re.IGNORECASE) for line in lines]
 
 
-def texts(event: dict) -> Iterator[tuple[str, str, str]]:
-    """(kind, public url, text) for every user-written field in the event."""
-    for kind in ("issue", "pull_request", "comment", "review"):
-        item = event.get(kind)
-        if not isinstance(item, dict):
-            continue
-        url = str(item.get("html_url") or "")
-        for field in ("title", "body"):
-            value = item.get(field)
-            if isinstance(value, str) and value:
-                yield kind, url, value
+class GitHub:
+    """Read-only REST access with the workflow token; JSON or raw bytes."""
+
+    def __init__(self, repository: str, token: str, opener: Callable = urllib.request.urlopen):
+        if not repository or not token:
+            raise Incomplete("repository or token missing")
+        self.repository, self.token, self.opener = repository, token, opener
+
+    def get(self, path: str, raw: bool = False) -> object:
+        request = urllib.request.Request(f"{API}/repos/{self.repository}/{path}", headers={
+            "Authorization": f"Bearer {self.token}",
+            "Accept": "application/vnd.github.raw" if raw else "application/vnd.github+json",
+        })
+        with self.opener(request, timeout=30) as response:
+            body = response.read()
+        return body if raw else json.loads(body)
+
+    def pages(self, path: str) -> Iterator[dict]:
+        joiner = "&" if "?" in path else "?"
+        for page in range(1, MAX_PAGES + 1):
+            items = self.get(f"{path}{joiner}per_page=100&page={page}")
+            assert isinstance(items, list)
+            yield from items
+            if len(items) < 100:
+                return
+        raise Incomplete("listing exceeds the page bound")
 
 
-def patches(
-    event: dict, token: str, opener=urllib.request.urlopen,
-) -> Iterator[tuple[str, str, str]]:
-    """Changed-file patches of a pull-request event, read through the API."""
-    pull = event.get("pull_request")
-    repository = (event.get("repository") or {}).get("full_name")
-    if not isinstance(pull, dict) or not repository or not token:
-        return
-    url = str(pull.get("html_url") or "")
-    for page in range(1, MAX_PATCH_PAGES + 1):
-        request = urllib.request.Request(
-            f"{API}/repos/{repository}/pulls/{pull['number']}/files?per_page=100&page={page}",
-            headers={"Authorization": f"Bearer {token}",
-                     "Accept": "application/vnd.github+json"},
-        )
-        with opener(request, timeout=30) as response:
-            files = json.load(response)
-        for changed in files:
-            yield "pull_request file", url, str(changed.get("filename", "")) + "\n" + str(
-                changed.get("patch") or "")
-        if len(files) < 100:
-            return
-    raise ValueError("pull request has too many changed files to scan")
+def _fields(kind: str, item: dict, *names: str) -> Iterator[Item]:
+    ident = str(item.get("number") or item.get("id") or "?")
+    text = "\n".join(str(item.get(name) or "") for name in names)
+    if text.strip():
+        yield kind, ident, text
 
 
-def findings(event: dict, compiled: list[re.Pattern[str]], token: str = "",
-             opener=urllib.request.urlopen) -> list[tuple[str, str]]:
-    found = []
-    for kind, url, text in [*texts(event), *patches(event, token, opener)]:
-        if any(pattern.search(text) for pattern in compiled) and (kind, url) not in found:
-            found.append((kind, url))
+def pull_request(github: GitHub, pull: dict) -> Iterator[Item]:
+    """A pull request's branch, commits and every changed file, completely."""
+    number = str(pull["number"])
+    head = pull.get("head") or {}
+    yield "pull request branch", number, str(head.get("ref") or "")
+    for commit in github.pages(f"pulls/{number}/commits"):
+        detail = commit.get("commit") or {}
+        people = [detail.get(role) or {} for role in ("author", "committer")]
+        yield "pull request commit", number, "\n".join(
+            [str(detail.get("message") or "")]
+            + [f"{p.get('name', '')} {p.get('email', '')}" for p in people])
+    for changed in github.pages(f"pulls/{number}/files"):
+        names = f"{changed.get('filename', '')}\n{changed.get('previous_filename', '')}"
+        patch = changed.get("patch")
+        if patch is None and changed.get("status") != "removed":
+            # Large or binary diffs carry no patch: scan the file itself, or fail.
+            path = urllib.parse.quote(str(changed.get("filename", "")))
+            data = github.get(f"contents/{path}?ref={head.get('sha', '')}", raw=True)
+            try:
+                patch = data.decode("utf-8")  # type: ignore[union-attr]
+            except UnicodeDecodeError:
+                raise Incomplete("a changed file is not text") from None
+        yield "pull request file", number, names + "\n" + str(patch or "")
+
+
+def event(payload: dict, github: GitHub | None) -> Iterator[Item]:
+    yield from _fields("issue", payload.get("issue") or {}, "title", "body")
+    yield from _fields("comment", payload.get("comment") or {}, "body", "path", "diff_hunk")
+    pull = payload.get("pull_request")
+    if isinstance(pull, dict):
+        yield from _fields("pull request", pull, "title", "body")
+        if github is None:
+            raise Incomplete("pull request event without API access")
+        yield from pull_request(github, pull)
+
+
+def sweep(github: GitHub, minutes: int, now: datetime | None = None) -> Iterator[Item]:
+    since = ((now or datetime.now(UTC)) - timedelta(minutes=minutes)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
+    for issue in github.pages(f"issues?state=all&since={since}"):
+        yield from _fields("issue", issue, "title", "body")
+        if "pull_request" in issue:
+            pull = github.get(f"pulls/{issue['number']}")
+            assert isinstance(pull, dict)
+            yield from pull_request(github, pull)
+            for review in github.pages(f"pulls/{issue['number']}/reviews"):
+                yield from _fields("review", review, "body")
+    for comment in github.pages(f"issues/comments?since={since}"):
+        yield from _fields("comment", comment, "body")
+    for comment in github.pages(f"pulls/comments?since={since}"):
+        yield from _fields("review comment", comment, "body", "path", "diff_hunk")
+
+
+def findings(items: Iterator[Item], compiled: list[re.Pattern[str]]) -> list[tuple[str, str]]:
+    found: list[tuple[str, str]] = []
+    for kind, ident, text in items:
+        if any(pattern.search(text) for pattern in compiled) and (kind, ident) not in found:
+            found.append((kind, ident))
     return found
 
 
-def main(argv: list[str]) -> int:
+def main(argv: list[str], opener: Callable = urllib.request.urlopen) -> int:
     try:
         compiled = patterns(os.environ.get("PUBLIC_TEXT_PATTERNS", ""))
-        event = json.loads(Path(argv[1]).read_text(encoding="utf-8"))
-        found = findings(event, compiled, os.environ.get("GITHUB_TOKEN", ""))
+        repository = os.environ.get("GITHUB_REPOSITORY", "")
+        token = os.environ.get("GITHUB_TOKEN", "")
+        if argv[1:2] == ["sweep"]:
+            items = sweep(GitHub(repository, token, opener), int(argv[2]))
+        elif argv[1:2] == ["event"]:
+            payload = json.loads(Path(argv[2]).read_text(encoding="utf-8"))
+            github = GitHub(repository, token, opener) if token else None
+            items = event(payload, github)
+        else:
+            raise Incomplete("usage: check_public_text.py event PATH | sweep MINUTES")
+        found = findings(items, compiled)
     except Exception as error:  # report the class, never the content
-        print(f"::error::public text check could not run ({type(error).__name__})")
+        print(f"::error::public text check incomplete ({type(error).__name__})")
         return 1
-    for kind, url in found:
-        print(f"::error::{kind} at {url or 'this event'} matches a private pattern")
+    for kind, ident in found:
+        print(f"::error::{kind} {ident} matches a private pattern")
     return 1 if found else 0
 
 
