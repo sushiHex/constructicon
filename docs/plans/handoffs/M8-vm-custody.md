@@ -6,15 +6,16 @@ adopts them by naming this document. They add no scheduler, daemon or lock servi
 ## Three distinct things
 
 - **Observation** is a fact at one instant: `scripts/m8_vm_usage.py` reports whether
-  `constructicon-m8` is Off with zero uptime, zero checkpoints and zero `vmconnect`
-  processes.
+  `constructicon-m8` is Off with operational status exactly `Ok`, zero uptime, zero
+  checkpoints and no local `vmconnect` process.
 - **Cooperative custody** is a claim among agents over hardline: who holds the VM
   for which work.
 - **Owner authorization** is the owner's current approval of the session's exact work.
 
-None substitutes for another. `idle-observed` proves no running guest activity and no
-console at that instant. It does not prove exclusive custody, the absence of another
-administrator's intent, or authorization.
+None substitutes for another. `idle-observed` proves no running guest, no disk merge
+or import, and no local console at that instant. It does not observe a remote
+VMConnect or Hyper-V Manager session on another machine. It does not prove
+exclusive custody, the absence of another administrator's intent, or authorization.
 
 ## Preflight
 
@@ -24,13 +25,13 @@ Before any VM session, run:
 
 | Verdict | Exit | Meaning | Action |
 | --- | --- | --- | --- |
-| `idle-observed` | 0 | Off, uptime 0, 0 checkpoints, 0 vmconnect | Check custody, then proceed if authorized |
-| `in-use` | 1 | Anything else well-formed, including Running, Saved, Paused | Stop and escalate to the owner |
+| `idle-observed` | 0 | Off, status `Ok`, uptime 0, 0 checkpoints, no local vmconnect | Check custody, then proceed if authorized |
+| `in-use` | 1 | Anything else well-formed, including Running, Saved, Paused, merging | Stop and escalate to the owner |
 | `unknown` | 2 | Query failed, timed out, or output was not exactly the record | Stop and escalate to the owner |
 
 A running VM is never silently classified idle. The record is closed
-(`schema_version`, `vm`, `verdict`, then `state`, `uptime_seconds`, `checkpoints`,
-`vmconnect`, or `reason` for `unknown`) and carries no raw query output.
+(`schema_version`, `vm`, `verdict`, then `state`, `operational`, `uptime_seconds`,
+`checkpoints`, `vmconnect`, or `reason` for `unknown`) and carries no raw query output.
 
 ## Maintenance window without asking
 
@@ -48,8 +49,7 @@ routinely when all three are positively established.
 - **Start notice**, sent to the peers before touching the VM: the session, the boot
   (the planned start) and the scope of work.
 - **Release notice**, sent only after an affirmative park measurement: a fresh
-  helper run showing state Off, zero uptime and zero checkpoints (and zero
-  `vmconnect`). Stopping the VM is not itself the release.
+  helper run printing `idle-observed`. Stopping the VM is not itself the release.
 - Between the two notices peers stay hands-off: no start, stop, checkpoint or
   console connection.
 

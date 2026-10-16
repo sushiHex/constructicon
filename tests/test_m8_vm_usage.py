@@ -18,6 +18,7 @@ def _source(**changes: object) -> bytes:
     fields: dict[str, object] = {
         "name": usage.VM_NAME,
         "state": "Off",
+        "operational": ["Ok"],
         "uptime_seconds": 0,
         "checkpoints": 0,
         "vmconnect": 0,
@@ -69,7 +70,7 @@ def _main_report(
         assert report["verdict"] == "unknown"
     else:
         assert set(report) == {
-            "schema_version", "vm", "verdict", "state", "uptime_seconds",
+            "schema_version", "vm", "verdict", "state", "operational", "uptime_seconds",
             "checkpoints", "vmconnect",
         }
     return report
@@ -81,7 +82,8 @@ def test_idle_path_and_exact_invocation(
     calls = _fake_process(monkeypatch)
     assert _main_report(capsys, 0) == {
         "schema_version": 1, "vm": "constructicon-m8", "verdict": "idle-observed",
-        "state": "Off", "uptime_seconds": 0, "checkpoints": 0, "vmconnect": 0,
+        "state": "Off", "operational": ["Ok"], "uptime_seconds": 0, "checkpoints": 0,
+        "vmconnect": 0,
     }
     assert calls == [(
         [r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
@@ -95,7 +97,9 @@ def test_query_is_read_only_and_names_every_dimension() -> None:
     for fragment in (
         "Get-VM -Name 'constructicon-m8'",
         "@(Get-VMCheckpoint -VM $vm).Count",
-        "@(Get-Process -Name vmconnect -ErrorAction SilentlyContinue).Count",
+        "$processes = @(Get-Process -ErrorAction Stop)",
+        "@($processes | Where-Object { $_.ProcessName -eq 'vmconnect' }).Count",
+        "@([string[]]$vm.OperationalStatus)",
     ):
         assert fragment in usage.QUERY
     for forbidden in ("Start-", "Stop-", "Set-", "Remove-", "Restore-", "Checkpoint-", "Connect"):
@@ -110,6 +114,8 @@ def test_query_is_read_only_and_names_every_dimension() -> None:
     {"uptime_seconds": 1},
     {"checkpoints": 1},
     {"vmconnect": 1},
+    {"operational": ["MergingDisks"]},
+    {"operational": ["Ok", "InService"]},
     {"state": "Running", "uptime_seconds": 3600, "checkpoints": 2, "vmconnect": 1},
 ])
 def test_each_in_use_dimension_is_in_use(
@@ -145,6 +151,12 @@ def test_each_in_use_dimension_is_in_use(
     ({"vmconnect": "0"}, "malformed_source"),
     ({"vmconnect": usage.MAX_COUNT + 1}, "malformed_source"),
     ({"extra": PRIVATE_MARKER}, "malformed_source"),
+    ({"operational": []}, "malformed_source"),
+    ({"operational": "Ok"}, "malformed_source"),
+    ({"operational": [True]}, "malformed_source"),
+    ({"operational": ["x" * 25]}, "malformed_source"),
+    ({"operational": ["Ok", "Ok", "Ok"]}, "malformed_source"),
+    ({"operational": [PRIVATE_MARKER]}, "malformed_source"),
 ])
 def test_source_refusals_are_closed(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
@@ -205,7 +217,8 @@ def test_widest_accepted_record_fits_the_output_bound(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
     _fake_process(monkeypatch, stdout=_source(
-        state="x" * 32, uptime_seconds=usage.MAX_UPTIME_SECONDS,
+        state="x" * 32, operational=["y" * 24] * usage.MAX_OPERATIONAL,
+        uptime_seconds=usage.MAX_UPTIME_SECONDS,
         checkpoints=usage.MAX_COUNT, vmconnect=usage.MAX_COUNT,
     ))
     _main_report(capsys, 1)
@@ -261,7 +274,7 @@ FAKE_HYPERV = """function Get-VM {
     if ($Name -cne 'constructicon-m8' -or $ErrorAction -cne 'Stop') { throw 'Wrong VM query' }
     for ($i=0; $i -lt VMS; $i++) {
         [pscustomobject]@{Name='constructicon-m8'; State='STATE';
-          Uptime=[timespan]::FromSeconds(UPTIME)}
+          OperationalStatus=@(OPERATIONAL); Uptime=[timespan]::FromSeconds(UPTIME)}
     }
 }
 function Get-VMCheckpoint {
@@ -270,24 +283,27 @@ function Get-VMCheckpoint {
     for ($i=0; $i -lt CHECKPOINTS; $i++) { [pscustomobject]@{Name="checkpoint$i"} }
 }
 function Get-Process {
-    param($Name, $ErrorAction)
-    if ($Name -cne 'vmconnect' -or $ErrorAction -cne 'SilentlyContinue') {
-        throw 'Wrong process query'
-    }
-    for ($i=0; $i -lt CONSOLES; $i++) { [pscustomobject]@{Name='vmconnect'} }
+    param($ErrorAction)
+    if ($ErrorAction -cne 'Stop') { throw 'Wrong process query' }
+    if (PROCESS_ERROR) { Write-Error 'process enumeration denied' }
+    [pscustomobject]@{ProcessName='explorer'}
+    for ($i=0; $i -lt CONSOLES; $i++) { [pscustomobject]@{ProcessName='vmconnect'} }
 }
 """
 
 
 def _actual_powershell(
     monkeypatch: pytest.MonkeyPatch, *, vms: int = 1, state: str = "Off",
-    uptime: float = 0, checkpoints: int = 0, consoles: int = 0,
+    operational: tuple[str, ...] = ("Ok",), uptime: float = 0, checkpoints: int = 0,
+    consoles: int = 0, process_error: bool = False,
 ) -> list[subprocess.CompletedProcess[bytes]]:
     # Only the Hyper-V and process cmdlets are substituted; the production query,
     # executable, argv construction and subprocess boundary really execute.
     fake = (FAKE_HYPERV.replace("VMS", str(vms)).replace("STATE", state)
+            .replace("OPERATIONAL", ",".join(f"'{item}'" for item in operational))
             .replace("UPTIME", repr(uptime)).replace("CHECKPOINTS", str(checkpoints))
-            .replace("CONSOLES", str(consoles)))
+            .replace("CONSOLES", str(consoles))
+            .replace("PROCESS_ERROR", "$true" if process_error else "$false"))
     real_run = subprocess.run
     observed: list[subprocess.CompletedProcess[bytes]] = []
 
@@ -312,6 +328,7 @@ ACTUAL = pytest.mark.skipif(os.name != "nt", reason="actual Windows PowerShell p
     ({"checkpoints": 2}, "in-use"),
     ({"consoles": 1}, "in-use"),
     ({"state": "Saved"}, "in-use"),
+    ({"operational": ("MergingDisks",)}, "in-use"),
 ])
 def test_actual_windows_query_with_fake_hyperv(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
@@ -323,6 +340,16 @@ def test_actual_windows_query_with_fake_hyperv(
     assert report["uptime_seconds"] == int(dimensions.get("uptime", 0))  # floored seconds
     assert report["checkpoints"] == dimensions.get("checkpoints", 0)
     assert report["vmconnect"] == dimensions.get("consoles", 0)
+
+
+@ACTUAL
+def test_actual_process_enumeration_error_is_unknown_never_idle(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    # The review's reproduction: a nonterminating process error once read as zero consoles.
+    observed = _actual_powershell(monkeypatch, process_error=True)
+    assert _main_report(capsys, 2)["reason"] == "query_failed"
+    assert observed[0].returncode != 0 and observed[0].stdout == b""
 
 
 @ACTUAL
