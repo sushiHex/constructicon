@@ -1,0 +1,54 @@
+name: Public text
+
+# Detect private operator text (account names, host paths, addresses, host
+# keys) in public repository text. Patterns live in the PUBLIC_TEXT_PATTERNS
+# secret, never in the repository. Every trigger below runs the default
+# branch's copy of this file; none checks out or executes pull-request code.
+# Review events and workflow_dispatch are deliberately absent: they would run a
+# branch-controlled copy of this file with the secret. The
+# scheduled sweep covers reviews, commits, edits and GITHUB_TOKEN-posted text.
+
+on:
+  issues:
+    types: [opened, edited]
+  issue_comment:
+    types: [created, edited]
+  commit_comment:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+  schedule:
+    - cron: "*/15 * * * *"
+
+permissions:
+  actions: read
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: public-text-${{ github.event_name }}-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
+
+jobs:
+  scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: scripts/ci/check_public_text.py
+          sparse-checkout-cone-mode: false
+      - name: Scan public text
+        shell: bash
+        env:
+          PUBLIC_TEXT_PATTERNS: ${{ secrets.PUBLIC_TEXT_PATTERNS }}
+          GITHUB_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = schedule ]; then
+            python3 -I -S -B scripts/ci/check_public_text.py sweep
+          else
+            python3 -I -S -B scripts/ci/check_public_text.py event "$GITHUB_EVENT_PATH"
+          fi
