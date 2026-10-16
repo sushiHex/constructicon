@@ -38,10 +38,13 @@ step, source or heading, some do not. It refuses:
 - **sources:** a changed pin, a CRLF source, an absent or repeated heading, a
   missing fence, a fence that is not ``bash``;
 - **lane boundary (#210, #220):** a step whose text outside reviewed lane-boundary
-  fences invokes the lane CLI (``LANE``, ``LANE_MODULE``, ``-m ...codex_lane`` or
-  ``codex_lane.py``). The check runs on the step's joined text after shell
-  normalization, so a name split across parts is seen. A fence is reviewed only when
-  its exact bytes are on the allowlist, wherever it is read from;
+  fences invokes the lane CLI (``LANE``, ``LANE_MODULE``, the module name as a
+  command word, or ``codex_lane.py``), and a part ending in a line continuation.
+  Each unreviewed part is checked after shell normalization, without whole-line
+  comments; with no trailing continuation, no word spans two parts. A fence is reviewed
+  only when its exact bytes are on the allowlist, wherever it is read from. Bytes
+  do not freeze shell context: an earlier unreviewed part can still redefine a
+  function or variable a reviewed fence uses, which is the review's job;
 - **labels:** an undeclared generation/session label, or a historical one in a
   step not marked historical. This is a spelling check, not proof of fresh paths;
 - **placeholders:** ``UNREVIEWED`` or ``UNPREPARED`` (other than the
@@ -70,11 +73,14 @@ LABEL = re.compile(r"(?<![0-9A-Za-z])[gq][0-9]{1,3}(?![0-9A-Za-z])")
 PLACEHOLDER = re.compile(r"\bUNREVIEWED\b|\bUNPREPARED\b(?!\.bundle(?:$|[\s;)|&]))",
                          re.MULTILINE)
 SHELL_QUOTING = re.compile(r"[\"'\\$]")
-# Ways a step can invoke the lane CLI. Importing a name from the module (as the
-# evidence checkers do) is not an invocation and is not matched.
+# Ways a step can invoke the lane CLI: the array, its module variable, the module
+# name as a command word (`-m` or OC's runpy wrapper `"${PY[@]}" <module>`) or its
+# file. Importing from the module, as the evidence checkers do, is not matched.
 LANE_INVOCATION = re.compile(
-    r"\bLANE\b|\bLANE_MODULE\b|-m\s*constructicon\.substrate\.executors\.codex_lane\b"
-    r"|codex_lane\.py\b")
+    r"\bLANE\b|\bLANE_MODULE\b|codex_lane\.py\b"
+    r"|(?<!from )(?<!import )\bconstructicon\.substrate\.executors\.codex_lane\b"
+    r"(?![ \t]+import\b)")
+COMMENT_LINE = re.compile(r"^[ \t]*#.*$", re.MULTILINE)
 NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
 MAX_STDOUT = 65_536
 # The only reviewed fences that may invoke the lane CLI, keyed by the SHA-256 of
@@ -95,6 +101,9 @@ LANE_BLOCKS = {
         ("M8-N4-operator-commands.md", "S1. Prepare", 0),
     "cbeff595f802b4576cc663dd8fbf7f1deba139831a2754c8fd9891ab759f5eae":
         ("M8-N4-operator-commands.md", "S6a. Maintenance-lock positive control", 0),
+    # Names the module only in its import check; it never runs the CLI.
+    "f7dc20309ff8bc803def1d9e808a573ffa59e4c0b2a5c1dc592ef684a3a7d429":
+        ("M8-N4-host-runtime.md", "R19 — Import check as `m8-service`", 0),
 }
 TOP_KEYS = {"labels", "sources", "steps"}
 STEP_KEYS = {"name", "stdout", "historical", "parts"}
@@ -289,13 +298,17 @@ def assemble(path: Path, template: bool = False) -> list[Step]:
         if not isinstance(parts, list) or not parts:
             raise Refused(f"step {name}: parts must be a non-empty list")
         pieces = [piece for part in parts for piece in _part(name, part, sources)]
-        text = "".join(body for body, _ in pieces)
-        # Reviewed fences become a line break, so the rest is checked as bash would
-        # join it: a name split across two unreviewed parts is still one word.
-        unreviewed = "".join("\n" if reviewed else body for body, reviewed in pieces)
-        if LANE_INVOCATION.search(_normalized(unreviewed)):
+        # A piece ending in a line continuation would splice into the next piece,
+        # rewriting a reviewed fence's first command (`IGNORED=\` before S1).
+        if any(body.endswith("\\\n") for body, _ in pieces):
+            raise Refused(f"step {name}: a part ends in a line continuation")
+        # Every piece then ends at a line break, so no word spans two pieces and each
+        # is checked alone. Whole-line comments never run; their prose is not a call.
+        if any(LANE_INVOCATION.search(COMMENT_LINE.sub("", _normalized(body)))
+               for body, reviewed in pieces if not reviewed):
             raise Refused(f"step {name}: only a reviewed lane-boundary block may invoke "
                           "the lane CLI (#210 lane-output contract)")
+        text = "".join(body for body, _ in pieces)
         allowed = current | (historical_labels if historical else set())
         joined = _normalized(text)
         stray = sorted({label for label in LABEL.findall(joined) if label not in allowed})
