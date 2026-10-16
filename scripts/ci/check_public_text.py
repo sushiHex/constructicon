@@ -2,16 +2,21 @@
 
 Run by ``.github/workflows/public-text.yml`` from the default branch only:
 
-- ``event PATH`` scans one issue, comment, commit comment or pull-request event
-  as it happens;
-- ``sweep`` (scheduled) scans everything updated since the last successful
+- ``event PATH`` scans one issue, comment or pull-request event as it happens
+  (commit comments raise no workflow event; only the sweep sees them);
+- ``sweep`` (hourly) scans everything updated since the last successful
   scheduled sweep, less an overlap: every branch's new commits with their own
   diffs (including squash and merge messages), commit comments, issue and
   pull-request titles and bodies, issue comments, reviews, review dismissals,
   review comments, and pull-request commits with their own diffs.
   It also covers text that no event reaches, such as reviews and anything
   posted with ``GITHUB_TOKEN``. A delayed or dropped schedule widens the next
-  window; it never skips one.
+  window; it never skips one. Each commit is fetched once per sweep, however
+  many branches and pull requests carry it, and the request count is printed:
+  ``GITHUB_TOKEN`` allows 1,000 requests per hour per repository, so a window
+  that exceeds it fails rather than passes.
+- ``sweep --since TIME`` is a manual backfill from an ISO time, run locally with
+  a personal token; the workflow never passes it.
 
 Patterns come from the ``PUBLIC_TEXT_PATTERNS`` secret, one case-insensitive
 regular expression per line, so private values never enter the repository.
@@ -44,7 +49,8 @@ API = "https://api.github.com"
 MAX_PAGES = 30
 OVERLAP = timedelta(minutes=30)
 
-FIRST_WINDOW = timedelta(days=30)
+# Kept within one hour's GITHUB_TOKEN budget; older text needs ``--since``.
+FIRST_WINDOW = timedelta(days=1)
 Item = tuple[str, str, str]  # (kind, numeric id, text)
 
 
@@ -70,8 +76,10 @@ class GitHub:
         if not repository or not token:
             raise Incomplete("repository or token missing")
         self.repository, self.token, self.opener = repository, token, opener
+        self.requests = 0
 
     def get(self, path: str, raw: bool = False) -> object:
+        self.requests += 1
         request = urllib.request.Request(f"{API}/repos/{self.repository}/{path}", headers={
             "Authorization": f"Bearer {self.token}",
             "Accept": "application/vnd.github.raw" if raw else "application/vnd.github+json",
@@ -151,8 +159,11 @@ def commit_items(github: GitHub, commit: dict, kind: str, ident: str) -> Iterato
     raise Incomplete("commit file listing exceeds the page bound")
 
 
-def pull_request(github: GitHub, pull: dict) -> Iterator[Item]:
-    """A pull request's branch, commits and every commit's diff, completely."""
+def pull_request(github: GitHub, pull: dict, seen: set[str] | None = None) -> Iterator[Item]:
+    """A pull request's branch, commits and every commit's diff, completely.
+
+    A commit already in ``seen`` was scanned in full this sweep and is skipped.
+    """
     number = str(pull["number"])
     head = pull.get("head") or {}
     yield "pull request branch", number, str(head.get("ref") or "")
@@ -160,8 +171,12 @@ def pull_request(github: GitHub, pull: dict) -> Iterator[Item]:
     # The endpoint stops at 250 commits; a short listing is not completeness.
     if type(pull.get("commits")) is not int or len(commits) != pull["commits"]:
         raise Incomplete("pull request commit listing is not complete")
+    seen = set() if seen is None else seen
     for commit in commits:
-        yield from commit_items(github, commit, "pull request", number)
+        sha = str(commit.get("sha", ""))
+        if sha not in seen:
+            seen.add(sha)
+            yield from commit_items(github, commit, "pull request", number)
 
 
 def event(payload: dict, github: GitHub | None) -> Iterator[Item]:
@@ -217,7 +232,7 @@ def sweep(github: GitHub, since_time: datetime) -> Iterator[Item]:
         if "pull_request" in issue:
             pull = github.get(f"pulls/{issue['number']}")
             assert isinstance(pull, dict)
-            yield from pull_request(github, pull)
+            yield from pull_request(github, pull, seen)
             for review in github.pages(f"pulls/{issue['number']}/reviews"):
                 yield from _fields("review", review, "body")
             for event in github.pages(f"issues/{issue['number']}/timeline"):
@@ -240,23 +255,32 @@ def findings(items: Iterator[Item], compiled: list[re.Pattern[str]]) -> list[tup
 
 
 def main(argv: list[str], opener: Callable = urllib.request.urlopen) -> int:
+    github = None
     try:
         compiled = patterns(os.environ.get("PUBLIC_TEXT_PATTERNS", ""))
         repository = os.environ.get("GITHUB_REPOSITORY", "")
         token = os.environ.get("GITHUB_TOKEN", "")
-        if argv[1:] == ["sweep"]:
+        if argv[1:] == ["sweep"] or (argv[1:3] == ["sweep", "--since"] and len(argv) == 4):
             github = GitHub(repository, token, opener)
-            items = sweep(github, cursor(github))
-        elif argv[1:2] == ["event"]:
+            if len(argv) == 4:
+                since = datetime.fromisoformat(argv[3])
+                since = since if since.tzinfo else since.replace(tzinfo=UTC)
+            else:
+                since = cursor(github)
+            items = sweep(github, since)
+        elif argv[1:2] == ["event"] and len(argv) == 3:
             payload = json.loads(Path(argv[2]).read_text(encoding="utf-8"))
             github = GitHub(repository, token, opener) if token else None
             items = event(payload, github)
         else:
-            raise Incomplete("usage: check_public_text.py event PATH | sweep")
+            raise Incomplete("usage: check_public_text.py event PATH | sweep [--since TIME]")
         found = findings(items, compiled)
     except Exception as error:  # report the class, never the content
         print(f"::error::public text check incomplete ({type(error).__name__})")
         return 1
+    finally:
+        if github is not None:
+            print(f"::notice::public text check made {github.requests} API requests")
     for kind, ident in found:
         print(f"::error::{kind} {ident} matches a private pattern")
     return 1 if found else 0

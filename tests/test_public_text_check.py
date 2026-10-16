@@ -144,7 +144,7 @@ def test_a_clean_pull_request_with_a_large_text_file_passes(tmp_path, monkeypatc
                                        "contents/gone.txt": b"also clean\n"})
     status, out, _ = run(tmp_path, monkeypatch, capsys,
                          event_args(tmp_path, {"pull_request": pull(commits=1)}), routes)
-    assert (status, out) == (0, "")
+    assert (status, out) == (0, "::notice::public text check made 4 API requests\n")
 
 
 def test_a_large_modification_is_read_on_both_sides(tmp_path, monkeypatch, capsys):
@@ -256,7 +256,6 @@ def test_sweep_covers_commits_comments_reviews_and_updated_pull_requests():
                       "updated_at": "2026-10-16T01:00:00Z"}],
         "issues": [{"number": 3, "title": "t", "body": "b"},
                    {"number": 7, "title": "t", "body": "b", "pull_request": {}}],
-        "pulls/7": pull(),
         "pulls/7/reviews": [{"id": 900, "body": f"see {LEAK}"}],
         "issues/7/timeline": [{"event": "labeled"}, {
             "event": "review_dismissed", "dismissed_review": {"dismissal_message": LEAK}}],
@@ -264,6 +263,9 @@ def test_sweep_covers_commits_comments_reviews_and_updated_pull_requests():
         "pulls/comments": [{"id": 61, "body": "ok", "path": "a.py",
                             "diff_hunk": "@@ 10.9.8.4"}],
         **clean_pull_routes(),
+        # The pull request carries a branch commit: fetched once per sweep.
+        "pulls/7": pull(commits=1),
+        "pulls/7/commits": [merge_commit("cccccccccccccccc", "topic work")],
     }
     api = FakeAPI(routes)
     found = check.findings(check.sweep(check.GitHub("owner/repo", "token", api), since),
@@ -278,6 +280,18 @@ def test_sweep_covers_commits_comments_reviews_and_updated_pull_requests():
     assert "issues?state=all&since=2026-10-16T00:00:00Z&per_page=100&page=1" in api.seen
     assert "commits?sha=topic%2Fx&since=2026-10-16T00:00:00Z&per_page=100&page=1" in api.seen
     assert sum(path.startswith("commits/cccccccccccccccc") for path in api.seen) == 1
+
+
+def test_manual_backfill_skips_the_cursor_and_reports_its_request_count(
+        tmp_path, monkeypatch, capsys):
+    status, out, api = run(tmp_path, monkeypatch, capsys, ["sweep", "--since", "2026-09-01"])
+    assert status == 0
+    assert not any(path.startswith("actions/") for path in api.seen)
+    assert "issues?state=all&since=2026-09-01T00:00:00Z&per_page=100&page=1" in api.seen
+    assert f"made {len(api.seen)} API requests" in out
+    for args in (["sweep", "--since", "yesterday"], ["sweep", "--since"],
+                 ["sweep", "extra"], ["event"]):
+        assert run(tmp_path, monkeypatch, capsys, args)[0] == 1, args
 
 
 def test_cursor_starts_at_the_last_successful_sweep_and_never_skips():
@@ -310,12 +324,6 @@ def test_a_capped_or_unknown_commit_listing_fails_closed(tmp_path, monkeypatch, 
     assert accepted[0] == 0
 
 
-def test_commit_comment_event_is_scanned(tmp_path, monkeypatch, capsys):
-    payload = {"comment": {"id": 72, "body": "fine", "path": f"docs/{SECRET}.md"}}
-    status, out, _ = run(tmp_path, monkeypatch, capsys, event_args(tmp_path, payload))
-    assert status == 1 and "comment 72 matches" in out
-
-
 @pytest.mark.parametrize("patterns", (None, "", "  \n\n"))
 def test_unset_patterns_fail_instead_of_passing(tmp_path, monkeypatch, capsys, patterns):
     status, out, _ = run(tmp_path, monkeypatch, capsys,
@@ -339,9 +347,10 @@ def test_workflow_runs_only_default_branch_code_and_reads_only_the_secret():
     triggers = workflow.split("\non:", 1)[1].split("\npermissions:", 1)[0]
     assert "pull_request_review" not in triggers and "\n  pull_request:" not in triggers
     assert "workflow_dispatch" not in triggers
-    for name in ("issues:", "issue_comment:", "commit_comment:", "pull_request_target:",
-                 "schedule:"):
+    for name in ("issues:", "issue_comment:", "pull_request_target:", "schedule:"):
         assert name in triggers
+    # Hourly: one window's requests must fit GITHUB_TOKEN's hourly budget.
+    assert re.findall(r'cron: "(.*)"', triggers) == ["17 * * * *"]
     steps = workflow.split("steps:", 1)[1]
     assert "ref: ${{ github.event.repository.default_branch }}" in steps
     assert "persist-credentials: false" in steps and "head" not in steps

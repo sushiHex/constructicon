@@ -5,19 +5,20 @@ name: Public text
 # secret, never in the repository. Every trigger below runs the default
 # branch's copy of this file; none checks out or executes pull-request code.
 # Review events and workflow_dispatch are deliberately absent: they would run a
-# branch-controlled copy of this file with the secret. The
-# scheduled sweep covers reviews, commits, edits and GITHUB_TOKEN-posted text.
+# branch-controlled copy of this file with the secret. Commit comments raise no
+# workflow event at all. The hourly sweep covers reviews, commits, commit
+# comments, edits and GITHUB_TOKEN-posted text within GITHUB_TOKEN's
+# 1,000-requests-per-hour repository budget.
 
 on:
   issues:
     types: [opened, edited]
   issue_comment:
     types: [created, edited]
-  commit_comment:
   pull_request_target:
     types: [opened, edited, synchronize, reopened]
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "17 * * * *"
 
 permissions:
   actions: read
