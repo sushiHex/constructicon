@@ -253,7 +253,8 @@ def test_wrong_container_and_selector_types_refuse_without_a_traceback(tmp_path)
 
 @pytest.mark.parametrize("spelling", [
     "RUN_ID=$'UNREVIEWED'", "RUN_ID=UNRE\\\\VIEWED", 'RUN_ID=\\"UNRE\\"\\"VIEWED\\"',
-    "--run UNREVIEWED", "C=UNPREPARED",
+    "--run UNREVIEWED", "C=UNPREPARED", "RUN_ID=UNPREPARED.bundle.old",
+    "RUN_ID=UNPREPARED.bundlex",
 ])
 def test_every_shell_spelling_of_a_placeholder_refuses(tmp_path, spelling):
     escaped = QUALIFICATION.replace("m8-maint-q12", f"m8-maint-q12\\n{spelling}")
@@ -281,6 +282,13 @@ def test_split_placeholders_empty_fences_and_double_labels_refuse(tmp_path):
                                                b'historical = ["g10", "q12"]'))
     with pytest.raises(package.Refused, match=r"\['q12'\] are both current and historical"):
         package.assemble(path)
+
+
+def test_a_label_split_by_shell_quoting_is_still_seen(tmp_path):
+    quoted = QUALIFICATION.replace('"W=/home/m8-service/m8-maint-q12"',
+                                   "\"W=/home/m8-service/m8-maint-q'1'1\"")
+    with pytest.raises(package.Refused, match=r"\['q11'\]"):
+        package.assemble(procedure(tmp_path, quoted))
 
 
 def test_a_label_split_by_a_line_continuation_is_still_seen(tmp_path):

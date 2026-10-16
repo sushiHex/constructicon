@@ -57,10 +57,14 @@ from pathlib import Path
 HEADING = re.compile(r"^(?P<level>#{1,6}) (?P<title>.+?)[ \t]*$")
 OPEN_FENCE = re.compile(r"^(?P<indent> {0,3})(?P<ticks>`{3,})(?P<lang>[A-Za-z]*)[ \t]*$")
 LABEL = re.compile(r"(?<![0-9A-Za-z])[gq][0-9]{1,3}(?![0-9A-Za-z])")
-# Matched after removing quotes, backslashes and `$`, so shell concatenation and
-# escaping ($'X', "UNRE""VIEWED", UNRE\VIEWED) cannot hide a placeholder. The
-# `UNPREPARED.bundle` refusal sentinel is a comparison target, not a value.
-PLACEHOLDER = re.compile(r"\bUNREVIEWED\b|\bUNPREPARED\b(?!\.bundle)")
+# Matched after removing quotes, backslashes and `$`, so ordinary shell
+# concatenation and escaping ($'X', "UNRE""VIEWED", UNRE\VIEWED) cannot hide a
+# placeholder or a label. The exact `UNPREPARED.bundle` refusal sentinel is a
+# comparison target, not a value. These lints catch honest composition mistakes
+# in reviewed documents; deliberate obfuscation (ANSI-C hex escapes, eval,
+# indirection) is the review's job, not a shell interpreter's here.
+PLACEHOLDER = re.compile(r"\bUNREVIEWED\b|\bUNPREPARED\b(?!\.bundle(?:$|[\s;)|&]))",
+                         re.MULTILINE)
 SHELL_QUOTING = re.compile(r"[\"'\\$]")
 LANE_NAME = re.compile(r"\bLANE\b")
 NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
@@ -275,11 +279,12 @@ def assemble(path: Path, template: bool = False) -> list[Step]:
             pieces.append(text)
         text = "".join(pieces)
         allowed = current | (historical_labels if historical else set())
-        joined = text.replace("\\\n", "")  # Bash joins continued lines into one token
+        # Bash joins continued lines and adjacent quoted fragments into one word.
+        joined = SHELL_QUOTING.sub("", text.replace("\\\n", ""))
         stray = sorted({label for label in LABEL.findall(joined) if label not in allowed})
         if stray:
             raise Refused(f"step {name}: undeclared or historical labels {stray}")
-        if not template and PLACEHOLDER.search(SHELL_QUOTING.sub("", joined)):
+        if not template and PLACEHOLDER.search(joined):
             raise Refused(f"step {name}: an unreviewed placeholder remains")
         stdout = tuple(_strings(entry["stdout"], f"step {name}: stdout"))
         rendered = "".join(line + "\n" for line in stdout)
