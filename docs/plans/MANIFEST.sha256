@@ -1,4 +1,4 @@
-481ff3c870206d1cb3d9d74adaedeb9af1290b2782c7bc65d42c8cb3d135e9e1  README.md
+d1accb856d92b1af043c3d23c46e6f501d9fbf1148c4322f7069860c12997abe  README.md
 40dee5d5540368c77bc95818b61d61f9b05780cdfe10776893b8fa44c0fa9966  handoffs/M8-N5-read-session.md
 8b93f511f42d665ddb8d24707a2739d540c9e44c82cc372ac2da616bcacab394  handoffs/M8-N5-stage3-read.md
 f11045d5e3b0f0494f9760f5b31d4c083e5fb6477fe11a513a12d12299f76cad  handoffs/M8-N5-host-session.md
@@ -95,3 +95,4 @@ d6e884574cb1aac512cc7607c08ad803f4c89fbd6ce1e7aec9f1e9a92dc160a3  handoffs/M8-ma
 f8c4b87400772731433230c7470047d97dbe24915130dd221924329f2eb8e2b5  handoffs/M8-maintenance-g11-continuation.md
 6ff83ca43b4b9d20f554958658d1f48c8f7fe571363008ef0549de678a1ac458  handoffs/M8-maintenance-installed-diagnostics.md
 a44983423444271ef56a17295edca3309af34e27fb54ff2d968e1b7bbe2ea0e9  handoffs/M8-maintenance-lane-output.md
+1d7731fb33e594badd698f802310028777e4ff150f427fa1d2051fe60ad25855  handoffs/M8-vm-custody.md
