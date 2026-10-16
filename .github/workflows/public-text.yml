@@ -12,6 +12,7 @@ on:
     types: [opened, edited]
   issue_comment:
     types: [created, edited]
+  commit_comment:
   pull_request_target:
     types: [opened, edited, synchronize, reopened]
   schedule:
@@ -19,6 +20,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
   issues: read
   pull-requests: read
@@ -46,7 +48,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = schedule ] || [ "$EVENT_NAME" = workflow_dispatch ]; then
-            python3 -I -S -B scripts/ci/check_public_text.py sweep 120
+            python3 -I -S -B scripts/ci/check_public_text.py sweep
           else
             python3 -I -S -B scripts/ci/check_public_text.py event "$GITHUB_EVENT_PATH"
           fi

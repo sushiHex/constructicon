@@ -41,7 +41,7 @@ class FakeAPI:
 
 
 def pull(number: int = 7, **fields) -> dict:
-    return {"number": number, "title": "t", "body": "b",
+    return {"number": number, "title": "t", "body": "b", "commits": 0,
             "head": {"ref": "feature", "sha": "abc"}, **fields}
 
 
@@ -87,7 +87,7 @@ def test_every_user_written_event_field_is_scanned(tmp_path, monkeypatch, capsys
 def test_pull_request_event_scans_branch_commits_and_every_file(
     tmp_path, monkeypatch, capsys, where,
 ):
-    payload = {"pull_request": pull(title=LEAK if where == "title" else "t",
+    payload = {"pull_request": pull(title=LEAK if where == "title" else "t", commits=1,
                                     head={"ref": LEAK if where == "branch" else "f", "sha": "abc"})}
     commit = {"commit": {"message": LEAK if where == "commit message" else "m",
                          "author": {"name": SECRET if where == "commit author" else "a",
@@ -137,9 +137,19 @@ def test_listing_bound_binds_at_exactly_its_limit(tmp_path, monkeypatch, capsys)
         assert status == expected, pages
 
 
-def test_sweep_covers_reviews_comments_and_updated_pull_requests(tmp_path, monkeypatch, capsys):
-    now = datetime(2026, 10, 16, 2, 0, tzinfo=UTC)
+def merge_commit(sha: str, message: str) -> dict:
+    return {"sha": sha, "commit": {"message": message, "author": {"name": "a", "email": "a@x"},
+                                   "committer": {"name": "c", "email": "c@x"}}}
+
+
+def test_sweep_covers_commits_comments_reviews_and_updated_pull_requests():
+    since = datetime(2026, 10, 16, 0, 0, tzinfo=UTC)
     routes = {
+        "commits": [merge_commit("aaaaaaaaaaaaaaaa", "clean"),
+                    merge_commit("bbbbbbbbbbbbbbbb", f"squash: {LEAK} (#9)")],
+        "comments": [{"id": 70, "body": LEAK, "updated_at": "2026-10-15T00:00:00Z"},
+                     {"id": 71, "body": f"on a commit {LEAK}",
+                      "updated_at": "2026-10-16T01:00:00Z"}],
         "issues": [{"number": 3, "title": "t", "body": "b"},
                    {"number": 7, "title": "t", "body": "b", "pull_request": {}}],
         "pulls/7": pull(),
@@ -150,10 +160,49 @@ def test_sweep_covers_reviews_comments_and_updated_pull_requests(tmp_path, monke
         **clean_pull_routes(),
     }
     api = FakeAPI(routes)
-    found = check.findings(check.sweep(check.GitHub("owner/repo", "token", api), 120, now),
+    found = check.findings(check.sweep(check.GitHub("owner/repo", "token", api), since),
                            check.patterns(PATTERNS))
-    assert found == [("review", "900"), ("review comment", "61")]
+    # The old commit comment (70) is outside the window; the rest is covered.
+    assert found == [("commit", "bbbbbbbbbbbb"), ("commit comment", "71"),
+                     ("review", "900"), ("review comment", "61")]
     assert "issues?state=all&since=2026-10-16T00:00:00Z&per_page=100&page=1" in api.seen
+    assert "commits?since=2026-10-16T00:00:00Z&per_page=100&page=1" in api.seen
+
+
+def test_cursor_starts_at_the_last_successful_sweep_and_never_skips():
+    now = datetime(2026, 10, 16, 6, 0, tzinfo=UTC)
+
+    def runs(*entries):
+        return FakeAPI({"actions/workflows/public-text.yml/runs": {"workflow_runs": [
+            {"event": event, "run_started_at": started} for event, started in entries]}})
+
+    github = check.GitHub("owner/repo", "token", runs(
+        ("schedule", "2026-10-16T01:00:00Z"), ("workflow_dispatch", "2026-10-16T02:00:00Z"),
+        ("issue_comment", "2026-10-16T05:00:00Z")))
+    # A five-hour gap since the last sweep is scanned in full, with an overlap;
+    # event-triggered runs never advance the sweep's cursor.
+    assert check.cursor(github, now) == datetime(2026, 10, 16, 1, 30, tzinfo=UTC)
+    assert check.cursor(check.GitHub("owner/repo", "token", runs()), now) == (
+        now - check.FIRST_WINDOW)
+
+
+@pytest.mark.parametrize("declared", [251, 0, None])
+def test_a_capped_or_unknown_commit_listing_fails_closed(tmp_path, monkeypatch, capsys,
+                                                         declared):
+    commits = [merge_commit(f"{n:040x}", "clean") for n in range(3)]
+    routes = clean_pull_routes(**{"pulls/7/commits": commits})
+    status, out, _ = run(tmp_path, monkeypatch, capsys,
+                         event_args(tmp_path, {"pull_request": pull(commits=declared)}), routes)
+    assert status == 1 and "incomplete (Incomplete)" in out
+    accepted = run(tmp_path, monkeypatch, capsys,
+                   event_args(tmp_path, {"pull_request": pull(commits=3)}), routes)
+    assert accepted[0] == 0
+
+
+def test_commit_comment_event_is_scanned(tmp_path, monkeypatch, capsys):
+    payload = {"comment": {"id": 72, "body": "fine", "path": f"docs/{SECRET}.md"}}
+    status, out, _ = run(tmp_path, monkeypatch, capsys, event_args(tmp_path, payload))
+    assert status == 1 and "comment 72 matches" in out
 
 
 @pytest.mark.parametrize("patterns", (None, "", "  \n\n"))
@@ -178,7 +227,8 @@ def test_workflow_runs_only_default_branch_code_and_reads_only_the_secret():
     workflow = WORKFLOW.read_text(encoding="utf-8")
     triggers = workflow.split("\non:", 1)[1].split("\npermissions:", 1)[0]
     assert "pull_request_review" not in triggers and "\n  pull_request:" not in triggers
-    for name in ("issues:", "issue_comment:", "pull_request_target:", "schedule:",
+    for name in ("issues:", "issue_comment:", "commit_comment:", "pull_request_target:",
+                 "schedule:",
                  "workflow_dispatch:"):
         assert name in triggers
     steps = workflow.split("steps:", 1)[1]
@@ -186,4 +236,4 @@ def test_workflow_runs_only_default_branch_code_and_reads_only_the_secret():
     assert "persist-credentials: false" in steps and "head" not in steps
     assert "PUBLIC_TEXT_PATTERNS: ${{ secrets.PUBLIC_TEXT_PATTERNS }}" in steps
     permissions = workflow.split("\npermissions:", 1)[1].split("\nconcurrency:", 1)[0]
-    assert "write" not in permissions
+    assert "write" not in permissions and "actions: read" in permissions

@@ -2,11 +2,15 @@
 
 Run by ``.github/workflows/public-text.yml`` from the default branch only:
 
-- ``event PATH`` scans one issue, comment or pull-request event as it happens;
-- ``sweep MINUTES`` (scheduled) scans everything updated in that lookback window:
-  issue and pull-request titles and bodies, issue comments, reviews, review
-  comments, pull-request commits and changed files. It also covers text that
-  no event reaches, such as reviews and anything posted with ``GITHUB_TOKEN``.
+- ``event PATH`` scans one issue, comment, commit comment or pull-request event
+  as it happens;
+- ``sweep`` (scheduled) scans everything updated since the last successful
+  sweep, less an overlap: repository commits (including squash and merge
+  messages), commit comments, issue and pull-request titles and bodies, issue
+  comments, reviews, review comments, pull-request commits and changed files.
+  It also covers text that no event reaches, such as reviews and anything
+  posted with ``GITHUB_TOKEN``. A delayed or dropped schedule widens the next
+  window; it never skips one.
 
 Patterns come from the ``PUBLIC_TEXT_PATTERNS`` secret, one case-insensitive
 regular expression per line, so private values never enter the repository.
@@ -31,6 +35,8 @@ from pathlib import Path
 
 API = "https://api.github.com"
 MAX_PAGES = 30
+OVERLAP = timedelta(minutes=30)
+FIRST_WINDOW = timedelta(days=30)
 Item = tuple[str, str, str]  # (kind, numeric id, text)
 
 
@@ -84,17 +90,24 @@ def _fields(kind: str, item: dict, *names: str) -> Iterator[Item]:
         yield kind, ident, text
 
 
+def _commit_text(commit: dict) -> str:
+    detail = commit.get("commit") or {}
+    people = [detail.get(role) or {} for role in ("author", "committer")]
+    return "\n".join([str(detail.get("message") or "")]
+                     + [f"{p.get('name', '')} {p.get('email', '')}" for p in people])
+
+
 def pull_request(github: GitHub, pull: dict) -> Iterator[Item]:
     """A pull request's branch, commits and every changed file, completely."""
     number = str(pull["number"])
     head = pull.get("head") or {}
     yield "pull request branch", number, str(head.get("ref") or "")
-    for commit in github.pages(f"pulls/{number}/commits"):
-        detail = commit.get("commit") or {}
-        people = [detail.get(role) or {} for role in ("author", "committer")]
-        yield "pull request commit", number, "\n".join(
-            [str(detail.get("message") or "")]
-            + [f"{p.get('name', '')} {p.get('email', '')}" for p in people])
+    commits = list(github.pages(f"pulls/{number}/commits"))
+    # The endpoint stops at 250 commits; a short listing is not completeness.
+    if type(pull.get("commits")) is not int or len(commits) != pull["commits"]:
+        raise Incomplete("pull request commit listing is not complete")
+    for commit in commits:
+        yield "pull request commit", number, _commit_text(commit)
     for changed in github.pages(f"pulls/{number}/files"):
         names = f"{changed.get('filename', '')}\n{changed.get('previous_filename', '')}"
         patch = changed.get("patch")
@@ -120,9 +133,32 @@ def event(payload: dict, github: GitHub | None) -> Iterator[Item]:
         yield from pull_request(github, pull)
 
 
-def sweep(github: GitHub, minutes: int, now: datetime | None = None) -> Iterator[Item]:
-    since = ((now or datetime.now(UTC)) - timedelta(minutes=minutes)).strftime(
-        "%Y-%m-%dT%H:%M:%SZ")
+def cursor(github: GitHub, now: datetime | None = None) -> datetime:
+    """Where the sweep starts: the last successful sweep's start, less an overlap.
+
+    The workflow's own run history is the cursor, so a delayed or dropped
+    schedule widens the next window instead of skipping it, and a failing sweep
+    never advances it. Without any earlier success, the first window is
+    ``FIRST_WINDOW``.
+    """
+    runs = github.get("actions/workflows/public-text.yml/runs?status=success&per_page=50")
+    assert isinstance(runs, dict)
+    starts = [run["run_started_at"] for run in runs.get("workflow_runs", [])
+              if run.get("event") in ("schedule", "workflow_dispatch")]
+    if not starts:
+        return (now or datetime.now(UTC)) - FIRST_WINDOW
+    latest = max(datetime.fromisoformat(start.replace("Z", "+00:00")) for start in starts)
+    return latest - OVERLAP
+
+
+def sweep(github: GitHub, since_time: datetime) -> Iterator[Item]:
+    since = since_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+    for commit in github.pages(f"commits?since={since}"):
+        # Squash and merge commits carry text written at merge time.
+        yield "commit", str(commit.get("sha", "?"))[:12], _commit_text(commit)
+    for comment in github.pages("comments"):
+        if str(comment.get("updated_at", "")) >= since:
+            yield from _fields("commit comment", comment, "body", "path")
     for issue in github.pages(f"issues?state=all&since={since}"):
         yield from _fields("issue", issue, "title", "body")
         if "pull_request" in issue:
@@ -150,14 +186,15 @@ def main(argv: list[str], opener: Callable = urllib.request.urlopen) -> int:
         compiled = patterns(os.environ.get("PUBLIC_TEXT_PATTERNS", ""))
         repository = os.environ.get("GITHUB_REPOSITORY", "")
         token = os.environ.get("GITHUB_TOKEN", "")
-        if argv[1:2] == ["sweep"]:
-            items = sweep(GitHub(repository, token, opener), int(argv[2]))
+        if argv[1:] == ["sweep"]:
+            github = GitHub(repository, token, opener)
+            items = sweep(github, cursor(github))
         elif argv[1:2] == ["event"]:
             payload = json.loads(Path(argv[2]).read_text(encoding="utf-8"))
             github = GitHub(repository, token, opener) if token else None
             items = event(payload, github)
         else:
-            raise Incomplete("usage: check_public_text.py event PATH | sweep MINUTES")
+            raise Incomplete("usage: check_public_text.py event PATH | sweep")
         found = findings(items, compiled)
     except Exception as error:  # report the class, never the content
         print(f"::error::public text check incomplete ({type(error).__name__})")
