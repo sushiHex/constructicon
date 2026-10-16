@@ -170,7 +170,9 @@ until each revision is deleted by hand.
   of committed files.
 - **Enforcement is a backstop, not a licence.** The `Public text` workflow flags
   matches against private patterns held in a repository secret after posting;
-  it cannot un-post.
+  it cannot un-post. It scans current text, not edit history. A workflow that
+  posts or edits text with `GITHUB_TOKEN` triggers no event, so it must run
+  `scripts/ci/check_public_text.py` on its text before posting.
 
 ## Review
 

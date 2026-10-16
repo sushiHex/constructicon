@@ -18,7 +18,10 @@ Findings print only a kind and a numeric id: no text, URL, filename or pattern.
 Anything that cannot be scanned completely, such as a missing token, a
 non-UTF-8 file or an over-long listing, is a failure, never a pass. This is
 detection after posting: GitHub keeps edited text in the item's history until
-that revision is deleted by hand.
+that revision is deleted by hand. Only current text is scanned, never edit
+history. Text posted and then edited away with ``GITHUB_TOKEN``, which raises no
+event, before the next sweep is therefore missed; such a workflow must run this
+check before posting (AGENTS.md "Public text").
 """
 
 from __future__ import annotations
