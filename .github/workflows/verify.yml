@@ -17,7 +17,7 @@ jobs:
       - name: Prove the Windows argument boundary with fake Hyper-V cmdlets
         env:
           PYTHONIOENCODING: utf-8
-        run: uv run pytest -q tests/test_m8_vm_address.py tests/test_m8_discovery_procedure.py
+        run: uv run pytest -q tests/test_m8_vm_address.py tests/test_m8_vm_usage.py tests/test_m8_discovery_procedure.py
 
   verify:
     runs-on: ubuntu-latest
