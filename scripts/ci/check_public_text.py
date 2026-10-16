@@ -124,20 +124,27 @@ def commit_items(github: GitHub, commit: dict, kind: str, ident: str) -> Iterato
             names = f"{changed.get('filename', '')}\n{changed.get('previous_filename', '')}"
             patch = changed.get("patch")
             if patch is None:
-                # Large or binary diffs carry no patch: scan the file itself, or
-                # fail. A removed file is read at the parent, where it still lives.
-                ref = sha
-                if changed.get("status") == "removed":
+                # Large or binary diffs carry no patch: scan the file itself on
+                # both sides, or fail. Text deleted from a file, or a removed
+                # file, still lives in the parent.
+                status = changed.get("status")
+                sides = []
+                if status != "removed":
+                    sides.append((str(changed.get("filename", "")), sha))
+                if status != "added":
                     parents = detail.get("parents") or []
                     if len(parents) != 1:
-                        raise Incomplete("a removed file has no single parent to read")
-                    ref = str(parents[0].get("sha", ""))
-                path = urllib.parse.quote(str(changed.get("filename", "")))
-                data = github.get(f"contents/{path}?ref={ref}", raw=True)
-                try:
-                    patch = data.decode("utf-8")  # type: ignore[union-attr]
-                except UnicodeDecodeError:
-                    raise Incomplete("a changed file is not text") from None
+                        raise Incomplete("a patchless change has no single parent to read")
+                    before = changed.get("previous_filename") or changed.get("filename", "")
+                    sides.append((str(before), str(parents[0].get("sha", ""))))
+                texts = []
+                for name, ref in sides:
+                    data = github.get(f"contents/{urllib.parse.quote(name)}?ref={ref}", raw=True)
+                    try:
+                        texts.append(data.decode("utf-8"))  # type: ignore[union-attr]
+                    except UnicodeDecodeError:
+                        raise Incomplete("a changed file is not text") from None
+                patch = "\n".join(texts)
             yield f"{kind} file", ident, names + "\n" + str(patch or "")
         if len(files) < 100:
             return

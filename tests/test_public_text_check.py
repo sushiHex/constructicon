@@ -113,7 +113,8 @@ def test_pull_request_event_scans_branch_commits_and_every_file(
               "previous_filename": f"old/{SECRET}" if where == "previous filename" else "",
               "status": "modified",
               "patch": LEAK if where == "patch" else ("+x" if where != "file contents" else None)}]
-    routes = clean_pull_routes(**{"pulls/7/commits": [commit], "commits/c1": {"files": files},
+    routes = clean_pull_routes(**{"pulls/7/commits": [commit],
+                                  "commits/c1": {"files": files, "parents": [{"sha": "p1"}]},
                                   "contents/docs/a.md": LEAK.encode()})
     status, out, api = run(tmp_path, monkeypatch, capsys, event_args(tmp_path, payload), routes)
     assert status == 1 and " 7 matches" in out
@@ -144,6 +145,29 @@ def test_a_clean_pull_request_with_a_large_text_file_passes(tmp_path, monkeypatc
     status, out, _ = run(tmp_path, monkeypatch, capsys,
                          event_args(tmp_path, {"pull_request": pull(commits=1)}), routes)
     assert (status, out) == (0, "")
+
+
+def test_a_large_modification_is_read_on_both_sides(tmp_path, monkeypatch, capsys):
+    """Text deleted from a patchless file is still public in the parent."""
+    files = [{"filename": "big.md", "status": "modified", "patch": None}]
+    seen_refs = []
+
+    class Sided(FakeAPI):
+        def __call__(self, request, timeout):
+            if "contents/big.md" in request.full_url:
+                ref = request.full_url.rsplit("ref=", 1)[1]
+                seen_refs.append(ref)
+                return io.BytesIO((LEAK if ref == "p1" else "clean now").encode())
+            return super().__call__(request, timeout)
+
+    monkeypatch.setenv("PUBLIC_TEXT_PATTERNS", PATTERNS)
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    api = Sided(one_commit_pull(files))
+    status = check.main(["check", *event_args(tmp_path, {"pull_request": pull(commits=1)})],
+                        opener=api)
+    assert status == 1 and "pull request file 7 matches" in capsys.readouterr().out
+    assert seen_refs == ["c1", "p1"]
 
 
 def test_a_large_removed_file_is_read_at_its_parent(tmp_path, monkeypatch, capsys):
