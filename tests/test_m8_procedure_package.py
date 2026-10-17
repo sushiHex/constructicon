@@ -12,6 +12,8 @@ from pathlib import Path
 import pytest
 from scripts import m8_procedure_package as package
 
+from tests.test_m8_operator_commands import _bash
+
 HANDOFFS = Path(__file__).parents[1] / "docs" / "plans" / "handoffs"
 REAL_LANE_BLOCKS = package.LANE_BLOCKS
 FROZEN = """# Frozen
@@ -441,7 +443,8 @@ def values(tmp_path: Path, text: str) -> dict[str, str]:
 def test_measured_session_values_fill_exact_unreviewed_lines(tmp_path):
     filled = values(tmp_path, f'PREVIEW_SHA256 = "{PREVIEW}"\nRUN_ID = "{RUN}"\n')
     text = package.assemble(procedure(tmp_path, SESSION), values=filled)[0].text
-    assert f"PREVIEW_SHA256={PREVIEW}\nRUN_ID={RUN}\n" in text and "UNREVIEWED" not in text
+    assert f"readonly PREVIEW_SHA256={PREVIEW}\nreadonly RUN_ID={RUN}\n" in text
+    assert "UNREVIEWED" not in text
     # A partial fill leaves a placeholder; a quoted spelling is not an exact line.
     with pytest.raises(package.Refused, match="unreviewed placeholder"):
         package.assemble(procedure(tmp_path, SESSION), values={"RUN_ID": RUN})
@@ -507,7 +510,7 @@ def test_a_deferred_step_waits_only_for_session_values(tmp_path):
     second = tmp_path / "second"
     package.build(procedure(tmp_path, DEFERRED), second, values={"PREVIEW_SHA256": PREVIEW,
                                                                 "RUN_ID": RUN})
-    assert f"RUN_ID={RUN}\n" in (second / "c3-qualification.sh").read_text()
+    assert f"readonly RUN_ID={RUN}\n" in (second / "c3-qualification.sh").read_text()
     # Anything else unreviewed still refuses, deferred or not.
     other = DEFERRED.replace("m8-maint-q12", "m8-maint-q12\\nC=UNREVIEWED")
     with pytest.raises(package.Refused, match="may wait only for session values"):
@@ -523,7 +526,25 @@ def test_cli_builds_with_a_values_file(tmp_path):
                                            .encode())
     assert package.main(["x", "build", str(path), str(tmp_path / "out"), "--values",
                          str(tmp_path / "values.toml")]) == 0
-    assert f"RUN_ID={RUN}\n" in (tmp_path / "out" / "c3-qualification.sh").read_text()
+    assert f"readonly RUN_ID={RUN}\n" in (tmp_path / "out" / "c3-qualification.sh").read_text()
+
+
+@pytest.mark.parametrize("write", [
+    "suffix=ID; printf -v RUN_${suffix} %s run-x",
+    "eval RUN_ID=run-x",
+    "RUN_ID+=x",
+])
+def test_bash_refuses_any_later_write_to_a_filled_session_value(tmp_path, write):
+    """The filled line is readonly, so even a write the text checks cannot see (a name
+    built at run time) fails in bash, with stderr that T5 refuses (connector review)."""
+    built = package.assemble(procedure(tmp_path, SESSION),
+                             values={"PREVIEW_SHA256": PREVIEW, "RUN_ID": RUN})[0].text
+    filled = [line for line in built.splitlines() if line.startswith("readonly ")]
+    script = tmp_path / "write.sh"
+    script.write_bytes(("\n".join(filled) + f"\n{write}\nprintf '%s\\n' \"$RUN_ID\"\n").encode())
+    ran = subprocess.run([_bash(), script.as_posix()], stdin=subprocess.DEVNULL,
+                         capture_output=True, text=True, timeout=30, check=False)
+    assert "readonly" in ran.stderr and ran.stdout.strip() == RUN
 
 
 BRANCHED = QUALIFICATION.replace(

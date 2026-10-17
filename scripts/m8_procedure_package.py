@@ -28,8 +28,9 @@ Usage, with isolated Python from the repository root::
     python -I -S -B scripts/m8_procedure_package.py build DOC OUT [--values FILE] [--template]
 
 ``--values`` fills values measured mid-session (``PREVIEW_SHA256``, ``RUN_ID``,
-``EXPECTED_BOOT``) into exact ``NAME=UNREVIEWED`` lines, each checked against its
-shape; a value that fills no line refuses. A step marked ``deferred = true`` may wait
+``EXPECTED_BOOT``) into exact ``NAME=UNREVIEWED`` lines as ``readonly NAME=value``,
+each checked against its shape, so bash refuses any later write however its name is
+built; a value that fills no line refuses. A step marked ``deferred = true`` may wait
 only for those values: without ``--values`` it is checked but not written, and the CLI
 names it. Once the values are measured and reviewed, everything is built again into a
 fresh ``OUT``, where no placeholder may remain.
@@ -473,7 +474,10 @@ def assemble(path: Path, template: bool = False,
                           "the lane CLI (#210 lane-output contract)")
         text = "".join(body for body, _ in pieces)
         for key, value in (values or {}).items():
-            text, count = re.subn(rf"^{key}=UNREVIEWED$", f"{key}={value}", text,
+            # readonly: bash itself then refuses any later write, however its name is
+            # spelled or built at run time (`printf -v RUN_${suffix}`, `+=`, `eval`).
+            filled = f"readonly {key}={value}"
+            text, count = re.subn(rf"^{key}=UNREVIEWED$", filled, text,
                                   flags=re.MULTILINE)
             if count:
                 used.add(key)
@@ -492,7 +496,7 @@ def assemble(path: Path, template: bool = False,
                 end = words.find("\n", mention.end())
                 line = words[start:len(words) if end < 0 else end]
                 reads = re.search(r"\$\{?[#!]?$", words[start:mention.start()])
-                if line != f"{key}={value}" and not reads:
+                if line != filled and not reads:
                     raise Refused(f"step {name}: {key} is assigned other than its "
                                   "session value")
         allowed = current | (historical_labels if historical else set())
