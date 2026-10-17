@@ -489,3 +489,18 @@ def test_every_built_expectation_admits_its_last_declared_alternative(packages, 
         index = len(spec["alternatives"]) - 1
         assert (ran.returncode, ran.stdout, ran.stderr) == (0, CHECKED % index, b""), step
         _retained(tmp_path, stdout, b"", 0, step)
+
+
+def test_workstation_commands_parse_and_name_only_real_steps(tmp_path):
+    """Q1b: the operator's exact commands parse, and every step its sequence names
+    is a step of this composition (Astra's go review: no ambiguous invocation)."""
+    document = _text(DOCUMENT)
+    script = tmp_path / "q1b.sh"
+    script.write_bytes(_fence(document, "Q1b: exact workstation commands", 0).encode())
+    ran = subprocess.run([_bash(), "-n", script.as_posix()], stdin=subprocess.DEVNULL,
+                         capture_output=True, text=True, timeout=30, check=False)
+    assert (ran.returncode, ran.stderr) == (0, "")
+    named = set(re.findall(r"`(q12-c[0-9a-z-]+)`",
+                           package.section(document, "Q1b: exact workstation commands")))
+    steps = {step.name for step in package.assemble(DOCUMENT)}
+    assert named and named <= steps
