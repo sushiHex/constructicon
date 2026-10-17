@@ -94,6 +94,9 @@ PROOFS = {
         "foundation",
         "tests/test_m8_n5_read_rehearsal.py tests/test_m8_n5_write_rehearsal.py",
     ),
+    "Rehearse the q12 continuation's real-tool steps": (
+        "foundation", "tests/test_m8_maintenance_q12_rehearsal.py",
+    ),
     "Prove the host plans the package CI installed": (
         "foundation", "tests/test_m8_host_runtime.py",
     ),
