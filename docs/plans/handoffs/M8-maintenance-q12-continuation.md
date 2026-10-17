@@ -32,11 +32,11 @@ The model, effort, callbacks, epoch, task, exam, every bound, the 300-second exc
 
 The owner approved these criteria on 2026-10-16. Any one of them refuses the go, or stops the session before D0. Each is checked against the evidence named.
 
-1. **Rehearsal not on the exact commit.** The rehearsal job did not pass on this document's merged commit. Evidence: the run URL, its head SHA and its jobs.
+1. **Rehearsal not on the exact commit.** The `m8-containment` workflow, dispatched on this document's merged commit (it runs only on pull requests and dispatch), did not pass, or its foundation lane did not run `tests/test_m8_maintenance_q12_rehearsal.py` with every test passing. Evidence: the run URL, its head SHA and that step's log.
 2. **Rehearsal coverage short.** A packaged VM step has neither passed T5 in the rehearsal nor been named, with its reason, in `tests/test_m8_maintenance_q12_rehearsal.py`'s unrehearsable list. Or the #210 boundary blocks did not each run on an accepting and a refusing path in `tests/test_m8_lane_output.py`. Evidence: the CI logs of both files on the merged commit.
 3. **Review incomplete.** Any of the following, with the diff, the review list and the thread list as evidence:
    - The merged tree differs from the reviewed head.
-   - The connector review of the final head has findings.
+   - The connector review of the final head has a finding that is neither fixed nor declined with a recorded reason the owner's authorization explicitly accepts.
    - A review thread is unresolved.
 4. **Pins disagree.** Any of the following:
    - The authorization, the Q2 guard and the rebuilt package manifest name different C, O, D, BASE, bundle SHA-256 or size.
@@ -48,7 +48,7 @@ The owner approved these criteria on 2026-10-16. Any one of them refuses the go,
    - A hardline custody claim is unreleased.
 
    Evidence: the preflight output and the hardline history. The owner is reachable for the authorized hour.
-6. **Fresh paths occupied.** The bundle prepared below is not the only file under the private execution directory. Every VM destination is also checked absent by its own step.
+6. **Fresh paths occupied.** At the session's start, before Q1b's first command, the bundle prepared below is not the only file under the private execution directory. Every VM destination is also checked absent by its own step.
 7. **No stop plan.** Q8's stop report is not prepared. Evidence: this document.
 8. **Public exposure.** A step pushes or posts publicly, or reaches a destination beyond the reviewed policy's two. Publication happens only after the park, under #186's rules. Evidence: the assembled package; a grep shows no push, PR or comment command.
 9. **Acceptance mismatch.** The fixed task's source hashes at C differ from the three `SOURCE_HASHES`. An accepted application leads to an ordinary contribution PR, which is the "accepted contribution" #186 defines. Evidence: the bundle preparation below.
@@ -156,6 +156,76 @@ The values file for the second build holds exactly the following:
 - `PREVIEW_SHA256`: the reviewed C8 `preview_sha256`;
 - `RUN_ID`: C8's `run_id`, which must equal `run-5c7172babff67a7d53412b6c598bc34b`, derived from the actor and key;
 - `EXPECTED_BOOT`: this session's measured boot UUID.
+
+## Q1b: exact workstation commands
+
+These run in Git Bash on the workstation, from a dedicated clean checkout of the authorized commit (detached), which is the repository root for every relative path. Three values are exported privately and never published:
+- `P`: the private execution directory. At the session's start it holds only the prepared bundle (Q0 criterion 6). It then receives the dispatcher, the packages, the transport program, T5's per-step captures (`$P/run/<package>-<step>`) and the values file.
+- `SSH_TARGET`: the target, exported only once address discovery has run.
+- `SSH_HOST_KEY_ALIAS`: the recorded alias.
+
+D0 and D4 write their own capture files into the checkout root. They stay there, untracked, until they are moved into `P` after the park.
+
+Save this fence as `$P/q12.sh`. Each command is one fresh, non-interactive process, `bash "$P/q12.sh" <helper> <arguments>`, so no shell state carries between commands:
+
+```bash
+exec </dev/null
+set -Eeuo pipefail
+: "${P:?Private execution directory required}"
+: "${SSH_HOST_KEY_ALIAS:?Previously recorded host-key alias required}"
+PY=(/c/Python314/python.exe -I -S -B)
+# LogLevel=ERROR keeps a server banner or client warning off stderr, which T5
+# requires empty; real errors still reach stderr, so T5 still refuses them.
+OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o "HostKeyAlias=$SSH_HOST_KEY_ALIAS"
+  -o ConnectTimeout=15 -o LogLevel=ERROR)
+# SSH_TARGET exists only after address discovery; each helper requires it then.
+q12_mkdir() {
+  : "${SSH_TARGET:?Private discovered target required}"
+  ssh -T "${OPTS[@]}" "$SSH_TARGET" \
+    "test ! -e \"\$HOME/$1\" && test ! -L \"\$HOME/$1\" && /usr/bin/mkdir -m 0700 -- \"\$HOME/$1\""
+}
+# A fresh remote directory, then the local package's contents into it.
+q12_upload() {
+  q12_mkdir "$2"
+  scp "${OPTS[@]}" "$1"/* "$SSH_TARGET:$2/"
+}
+# One packaged step through T5: transport and expectation local, script remote.
+q12_step() {
+  : "${SSH_TARGET:?Private discovered target required}"
+  "${PY[@]}" "$P/m8-q12-transport.py" "$P/run/$1-$2" "$P/$1/$2.expected.json" -- \
+    ssh -T "${OPTS[@]}" "$SSH_TARGET" \
+    "cd \"\$HOME/$1\" && sha256sum --check --strict --quiet MANIFEST.sha256 && bash $2.sh"
+}
+# Bundle upload: a fresh remote directory, then the one file into it.
+q12_bundle() {
+  q12_mkdir maintenance-q12-c7-package
+  scp "${OPTS[@]}" "$P/maintenance-q12-5793ef98.bundle" "$SSH_TARGET:maintenance-q12-c7-package/"
+}
+case "${1-}" in
+  q12_mkdir | q12_upload | q12_step | q12_bundle) "$@" ;;
+  *) echo 'usage: q12.sh q12_mkdir|q12_upload|q12_step|q12_bundle ARGUMENTS' >&2; exit 2 ;;
+esac
+```
+
+The sequence, once each, stopping and parking at the first refusal. `PY` below means `/c/Python314/python.exe -I -S -B`:
+1. **Preflight:** run `PY scripts/m8_vm_usage.py`. It must print `idle-observed`. Then send the custody start notice.
+2. **Build and prepare locally:**
+   - `PY scripts/m8_procedure_package.py build docs/plans/handoffs/M8-maintenance-q12-continuation.md "$P/maintenance-q12-package-1"`. Record its manifest hash, which must equal the authorization's.
+   - Save the fence above as `$P/q12.sh`, and the Q6 fence as `$P/m8-q12-transport.py`.
+   - Create `$P/run` with `mkdir -m 0700`.
+3. **Start and discover:** from the checkout root:
+   - run the discovery continuation's first fence, the helper's pinned hash check, before D0;
+   - run D0 (Q1 step 3);
+   - run the discovery continuation's second and third fences;
+   - export `SSH_TARGET` privately from the discovered address.
+4. **Upload:**
+   - `bash "$P/q12.sh" q12_upload "$P/maintenance-q12-package-1" maintenance-q12-package-1`.
+   - `bash "$P/q12.sh" q12_bundle`.
+5. **Run the first package:** `bash "$P/q12.sh" q12_step maintenance-q12-package-1 <step>` for each step in Q7's order, from `q12-c1-controller` to `q12-c8-preflight`, and nothing after it.
+6. **Write the values file:** `$P/values.toml` is TOML, exactly `PREVIEW_SHA256 = "..."`, `RUN_ID = "..."` and `EXPECTED_BOOT = "..."`, taken from the reviewed C8 record and the recorded boot UUID.
+7. **Build and upload the second package:** build `"$P/maintenance-q12-package-2"` with `--values "$P/values.toml"`, then upload it with `bash "$P/q12.sh" q12_upload "$P/maintenance-q12-package-2" maintenance-q12-package-2`. Because `RUN_ID` is filled, the second package rebuilds every step. Its manifest differs, and that is expected.
+8. **Run the rest from the second package:** with `bash "$P/q12.sh" q12_step maintenance-q12-package-2 <step>`, resume at `q12-c9-authority`, then `q12-c10-application`, `q12-c10-inspect` (only after alternative 0) and `q12-c11-diagnosis`. Never rerun an earlier step.
+9. **Park:** run D4 (Q1 step 8) on every outcome.
 
 ## Q2: pins
 
@@ -717,6 +787,7 @@ No step after g11's first S4 has run live on this controller, so the next stop i
 - **C8 to C10:** g10 passed preflight and returned a validated non-acceptance with a grouped capture mismatch, whose cause is unknown. #199 to #204 changed the capture path since then. A normal non-acceptance is therefore a possible outcome, not a defect of this procedure. It is diagnosed once in C11 and not retried.
 - **C10's stderr:** the #210 audit left it UNKNOWN. Its only writers are asyncio's reports of a run-host or recovery-pump failure (`run_host.py:584-599`, `667-680`). Both run after a failure has already happened, and C10's capture then records `unexpected`. A successful run has no stderr writer.
 - **The transport:** an ssh loss or a blocked custody wait leaves the remote outcome unknown. T5 grants no retry, recovery or cancellation. The operator parks only after a fresh observation, and reports the uncertainty.
+- **C4 must not be interrupted.** An abrupt interruption during publication can leave a `.pending-*` descriptor (`operator_store.py:672`). The store then refuses binding, maintenance and publication until a separately authorized recovery (`tests/substrate/test_operator_store_maintenance.py:392`). Parking or rebooting does not repair it. Let C4 finish, or record the interruption as unrecoverable for this session.
 
 The stop report posted to #186 contains only the following:
 - the step reached;

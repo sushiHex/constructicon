@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -489,3 +490,33 @@ def test_every_built_expectation_admits_its_last_declared_alternative(packages, 
         index = len(spec["alternatives"]) - 1
         assert (ran.returncode, ran.stdout, ran.stderr) == (0, CHECKED % index, b""), step
         _retained(tmp_path, stdout, b"", 0, step)
+
+
+def test_workstation_commands_parse_and_name_only_real_steps(tmp_path):
+    """Q1b: the operator's exact commands parse, and every step its sequence names
+    is a step of this composition (Astra's go review: no ambiguous invocation)."""
+    document = _text(DOCUMENT)
+    script = tmp_path / "q1b.sh"
+    script.write_bytes(_fence(document, "Q1b: exact workstation commands", 0).encode())
+    ran = subprocess.run([_bash(), "-n", script.as_posix()], stdin=subprocess.DEVNULL,
+                         capture_output=True, text=True, timeout=30, check=False)
+    assert (ran.returncode, ran.stderr) == (0, "")
+    # The dispatcher runs one helper per process; before discovery a step refuses
+    # for the missing target instead of reaching ssh.
+    env = {key: value for key, value in os.environ.items() if key != "SSH_TARGET"}
+    env |= {"P": tmp_path.as_posix(), "SSH_HOST_KEY_ALIAS": "alias"}
+
+    def dispatch(*argv: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run([_bash(), script.as_posix(), *argv], stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, timeout=30, check=False,
+                              env=env)
+
+    usage = dispatch()
+    assert usage.returncode == 2 and "usage: q12.sh" in usage.stderr
+    early = dispatch("q12_step", "maintenance-q12-package-1", "q12-c1-controller")
+    assert early.returncode != 0 and "Private discovered target required" in early.stderr
+    assert not (tmp_path / "run").exists()
+    named = set(re.findall(r"`(q12-c[0-9a-z-]+)`",
+                           package.section(document, "Q1b: exact workstation commands")))
+    steps = {step.name for step in package.assemble(DOCUMENT)}
+    assert named and named <= steps
