@@ -64,6 +64,9 @@ MUTANTS = (
      "isinstance(value, str) and SESSION_VALUES[key].fullmatch(value)", "isinstance(value, str)",
      TESTS + "test_session_values_are_only_the_three_names_in_their_shapes"
      "[RUN_ID = \"run-$(id)\"]"),
+    ("every assignment of a session name is its session value", MODULE + "assemble",
+     'if any(line != f"{key}={value}" for line in', "if False and any(line for line in",
+     TESTS + "test_measured_session_values_fill_exact_unreviewed_lines"),
     ("a session value that fills no line refuses", MODULE + "assemble",
      "if set(values or {}) - used:", "if False:",
      TESTS + "test_measured_session_values_fill_exact_unreviewed_lines"),

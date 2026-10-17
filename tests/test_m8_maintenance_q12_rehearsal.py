@@ -16,18 +16,25 @@ and tools a test host cannot have.
   real sudo, the real service user, the real lane CLI's ``preflight`` and the real
   launch root.
 
-Not rehearsable here, and why:
-- C1 and C2's installers (LR2, LR3, R11, LR8, R19) need the VM's installed
+Not rehearsable here, and why (every step not rehearsed above is named):
+- ``q12-c1-controller`` and ``q12-c1-history`` need the VM's installed controller
+  workspace, the retained g10 generation and the g9 account seal.
+  ``q12-c2-preserve`` needs the g11 boot's D2 records under the service home. All
+  three fences are g11's or P1's, tested with their own documents.
+- ``q12-c2-d2``, ``q12-c2-lr3``, ``q12-c2-r11``, ``q12-c2-kept-launch`` and
+  ``q12-c2-controller``: C2's installers (LR2, LR3, R11, LR8, R19) need the VM's installed
   controller, launch and D2 set, and the network. Their records' grammar is tested
   in ``test_m8_maintenance_q12_continuation.py``; their fences are frozen and
   tested with their own runbooks.
-- C3's L1 and S6a need ``maintain`` on a store. CI's only store is the shared
-  fixture, and a maintenance withdrawal would change it for the lane's later
-  steps. L1 and S6a are tested as blocks in ``test_m8_lane_output.py`` and
+- ``q12-c3-qualification``: its L1 and S6a need ``maintain`` on a store. CI's
+  only store is the shared fixture, and a maintenance withdrawal would change it
+  for the lane's later steps. L1 and S6a are tested as blocks in ``test_m8_lane_output.py`` and
   ``test_m8_operator_commands.py``.
 - ``q12-c3-retained`` binds g11's actual evidence digest, so only its refusal is
   reachable off the host.
-- C4 and C7 to C11 need a published generation, the source bundle and the
+- ``q12-c4-publish``, ``q12-c7-prepare``, ``q12-c8-preflight``,
+  ``q12-c9-authority``, ``q12-c10-application``, ``q12-c10-inspect`` and
+  ``q12-c11-diagnosis`` need a published generation, the source bundle and the
   application. Their fences are g11's, unchanged and tested in
   ``test_m8_maintenance_g11_continuation.py``.
 """
@@ -106,6 +113,17 @@ def _t5(directory: Path, script: Path, expected: Path, **environment: str):
     )
 
 
+REHEARSED = {"q12-c5-h7", "q12-c2-preflight"}
+
+
+def test_every_step_is_rehearsed_or_named_with_its_reason():
+    """Q0 criterion 2, mechanically: no step is silently left out of the rehearsal."""
+    steps = {step.name for step in package.assemble(DOCUMENT)}
+    named = set(re.findall(r"``(q12-[a-z0-9-]+)``", __doc__ or ""))
+    assert steps - REHEARSED == named - REHEARSED and named - REHEARSED <= steps
+    assert steps >= REHEARSED
+
+
 # --- portable: the combined H7/H8 step --------------------------------------------
 
 # Host paths and the host-only drift tool, replaced for a test host.
@@ -154,9 +172,10 @@ async def _h7(directory: Path, home: Path, **records: str) -> subprocess.Complet
 H7 = {"h7-g11-s6b-denial.json": "denial-derived", "h7-g11-s6c-plan-refusal.json": "wrongplan"}
 # T5 compares bytes; native Windows Python writes CRLF to a text-mode stdout, so
 # these run where the host's bytes are produced: POSIX, including CI's verify job.
-pytestmark = pytest.mark.skipif(os.name == "nt", reason="T5 is byte-exact; Windows prints CRLF")
+POSIX = pytest.mark.skipif(os.name == "nt", reason="T5 is byte-exact; Windows prints CRLF")
 
 
+@POSIX
 async def test_measured_active_refresh_is_alternative_0_and_skips_h8(evidence_world, tmp_path):
     directory, _ = evidence_world
     ran = await _h7(directory, tmp_path / "home", **H7, **{"h7-g11-active.json": "active-measured"})
@@ -167,6 +186,7 @@ async def test_measured_active_refresh_is_alternative_0_and_skips_h8(evidence_wo
         f"{directory.as_posix()}/g11.sealed.json\n")
 
 
+@POSIX
 async def test_unmeasured_active_refresh_runs_one_h8_as_alternative_1(evidence_world, tmp_path):
     directory, _ = evidence_world
     ran = await _h7(directory, tmp_path / "home", **H7, **{
@@ -176,6 +196,7 @@ async def test_unmeasured_active_refresh_runs_one_h8_as_alternative_1(evidence_w
     assert json.loads(status.read_bytes()) == {"returncode": 0}
 
 
+@POSIX
 async def test_an_unmeasured_h8_is_no_declared_alternative(evidence_world, tmp_path):
     directory, _ = evidence_world
     ran = await _h7(directory, tmp_path / "home", **H7, **{
@@ -184,6 +205,7 @@ async def test_an_unmeasured_h8_is_no_declared_alternative(evidence_world, tmp_p
     assert (directory / "step.stdout").read_text().endswith("NO DRIFT\nrefresh-unmeasured\n")
 
 
+@POSIX
 async def test_an_accepted_denial_control_stops_before_h8(evidence_world, tmp_path):
     directory, _ = evidence_world
     ran = await _h7(directory, tmp_path / "home", **{

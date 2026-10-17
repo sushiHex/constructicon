@@ -33,7 +33,7 @@ The model, effort, callbacks, epoch, task, exam, every bound, the 300-second exc
 The owner approved these criteria on 2026-10-16. Any one of them refuses the go, or stops the session before D0. Each is checked against the evidence named.
 
 1. **Rehearsal not on the exact commit.** The rehearsal job did not pass on this document's merged commit. Evidence: the run URL, its head SHA and its jobs.
-2. **Rehearsal coverage short.** A packaged VM step has neither passed T5 in the rehearsal nor been listed with its reason in the rehearsal's unrehearsable table. Or the five #210 boundaries did not each run on an accepting and a refusing path. Evidence: the rehearsal test log.
+2. **Rehearsal coverage short.** A packaged VM step has neither passed T5 in the rehearsal nor been named, with its reason, in `tests/test_m8_maintenance_q12_rehearsal.py`'s unrehearsable list. Or the #210 boundary blocks did not each run on an accepting and a refusing path in `tests/test_m8_lane_output.py`. Evidence: the CI logs of both files on the merged commit.
 3. **Review incomplete.** Any of the following, with the diff, the review list and the thread list as evidence:
    - The merged tree differs from the reviewed head.
    - The connector review of the final head has findings.
@@ -1013,7 +1013,11 @@ parts = [
 ## Evidence and limits
 
 - **Mechanical composition:** every VM step is built by the packager from the pinned sources above. Its lints refuse unreviewed lane invocations, undeclared or historical labels, unfilled placeholders and documented declarations. Its tests and mutation inventory cover them. Tests also build this composition and check every built step with `bash -n`.
-- **The rehearsal:** this is the go's evidence, gated by Q0. It runs every packaged step through T5 with real bash and stock utilities. Steps that need the VM, the vendor account or the network use the doubles the rehearsal names, and its unrehearsable table lists the rest.
+- **The rehearsal:** this is the go's evidence, gated by Q0. It runs only two built steps through T5:
+  - `q12-c5-h7`, with real bash and the real lane CLI over a scripted peer: both alternatives and two refusals;
+  - `q12-c2-preflight`, on the foundation lane with real tools.
+
+  Every other step is named, with its reason, in the rehearsal's unrehearsable list. Their frozen fences are tested where they were reviewed. T5's framing and every built expectation are tested against T5 itself.
 - **What this is not:** none of this is host, vendor, qualification or application evidence. The installed `m8-host-drift` output (`NO DRIFT`) and host `sudo` diagnostics remain host facts, observed clean through g11's C2.
 - **Limits recorded rather than solved:**
   - Content hashes do not freeze shell context. A literal before a reviewed fence could redefine what it calls, and review covers the few literals here.

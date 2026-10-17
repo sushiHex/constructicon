@@ -446,10 +446,14 @@ def test_measured_session_values_fill_exact_unreviewed_lines(tmp_path):
     with pytest.raises(package.Refused, match="unreviewed placeholder"):
         package.assemble(procedure(tmp_path, SESSION), values={"RUN_ID": RUN})
     quoted = SESSION.replace("RUN_ID=UNREVIEWED", "RUN_ID=\\\"UNREVIEWED\\\"")
-    with pytest.raises(package.Refused, match="unreviewed placeholder"):
+    with pytest.raises(package.Refused, match="RUN_ID is assigned other than its session"):
         package.assemble(procedure(tmp_path, quoted), values=filled)
     with pytest.raises(package.Refused, match=r"values \['RUN_ID'\] fill no line"):
         package.assemble(procedure(tmp_path, QUALIFICATION), values={"RUN_ID": RUN})
+    # A stale literal is not vouched for by a fill elsewhere in the step or package.
+    stale = SESSION.replace("RUN_ID=UNREVIEWED", "RUN_ID=UNREVIEWED\\nRUN_ID=run-" + "0" * 32)
+    with pytest.raises(package.Refused, match="RUN_ID is assigned other than its session"):
+        package.assemble(procedure(tmp_path, stale), values=filled)
 
 
 @pytest.mark.parametrize("text", [
