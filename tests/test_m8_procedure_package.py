@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 import subprocess
 import sys
@@ -129,7 +130,8 @@ def test_build_writes_exact_step_bytes_and_a_manifest_atomically(tmp_path):
     script = (out / "c3-qualification.sh").read_bytes().decode()
     assert script.startswith("W=/home/m8-service/m8-maint-q12\nset -Eeuo pipefail\n")
     assert 'lane_capture "$LANES/s4"' in script and 'wait "$H"' in script
-    assert (out / "c3-qualification.stdout").read_bytes() == b"lane-boundary-checked\n"
+    assert json.loads((out / "c3-qualification.expected.json").read_bytes()) == {
+        "alternatives": [["lane-boundary-checked"]], "record": None}
     manifest = (out / "MANIFEST.sha256").read_bytes()
     assert hashlib.sha256(manifest).hexdigest() == digest
     for line in manifest.decode().splitlines():
@@ -467,6 +469,40 @@ def test_cli_builds_with_a_values_file(tmp_path):
     assert package.main(["x", "build", str(path), str(tmp_path / "out"), "--values",
                          str(tmp_path / "values.toml")]) == 0
     assert f"RUN_ID={RUN}\n" in (tmp_path / "out" / "c3-qualification.sh").read_text()
+
+
+BRANCHED = QUALIFICATION.replace(
+    'stdout = ["lane-boundary-checked"]',
+    'stdout = [["lane-boundary-checked", "refresh-measured"], '
+    '["lane-boundary-checked", "refresh-unmeasured"]]\n'
+    'record = {keys = ["run_id", "accepted"], max_bytes = 256}')
+
+
+def test_alternatives_and_a_record_are_declared_for_the_transport(tmp_path):
+    step = package.assemble(procedure(tmp_path, BRANCHED))[0]
+    assert json.loads(step.expected()) == {
+        "alternatives": [["lane-boundary-checked", "refresh-measured"],
+                         ["lane-boundary-checked", "refresh-unmeasured"]],
+        "record": {"keys": ["accepted", "run_id"], "max_bytes": 256}}
+    empty = QUALIFICATION.replace('stdout = ["lane-boundary-checked"]', "stdout = []")
+    assert json.loads(package.assemble(procedure(tmp_path, empty))[0].expected()) == {
+        "alternatives": [[]], "record": None}
+
+
+@pytest.mark.parametrize(("change", "message"), [
+    (('["lane-boundary-checked", "refresh-unmeasured"]]',
+      '["lane-boundary-checked", "refresh-measured"]]'), "alternatives must be distinct"),
+    (("max_bytes = 256", "max_bytes = 9000"), "record is exactly keys and max_bytes"),
+    (("max_bytes = 256", "max_bytes = true"), "record is exactly keys and max_bytes"),
+    (("max_bytes = 256}", "max_bytes = 256, extra = 1}"), "record is exactly keys"),
+    (('keys = ["run_id", "accepted"]', 'keys = ["run_id", "run_id"]'), "distinct identifiers"),
+    (('keys = ["run_id", "accepted"]', "keys = []"), "distinct identifiers"),
+    (('keys = ["run_id", "accepted"]', 'keys = ["Run-Id"]'), "distinct identifiers"),
+    (('"refresh-measured"], ', '"refresh-measured"], ["x\\ny"], '), "not be LF-only"),
+])
+def test_malformed_expectations_refuse(tmp_path, change, message):
+    with pytest.raises(package.Refused, match=message):
+        package.assemble(procedure(tmp_path, BRANCHED.replace(*change)))
 
 
 def test_literals_keep_their_exact_trailing_newlines(tmp_path):

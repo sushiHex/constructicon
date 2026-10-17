@@ -32,7 +32,13 @@ Usage, with isolated Python from the repository root::
 shape; a value that fills no line refuses. Later steps are built again, into a
 fresh ``OUT``, once their values are measured and reviewed.
 
-``build`` writes ``<step>.sh`` and ``<step>.stdout`` (LF only) and ``MANIFEST.sha256``
+A step's ``stdout`` is one list of exact lines or a list of distinct alternative
+lists (a reviewed branch such as a measured or unmeasured refresh), and an optional
+``record = {keys = [...], max_bytes = N}`` declares one closed JSON record line after
+them. The transport checks framing only; a record's values are a typed checker's and
+a reviewer's job.
+
+``build`` writes ``<step>.sh``, ``<step>.expected.json`` (LF only) and ``MANIFEST.sha256``
 (``sha256sum --check`` format) into ``OUT``, which it claims with an exclusive
 ``mkdir``. The manifest is written last, so a package without one is incomplete. It
 prints the manifest's own SHA-256. It never guesses; its one repair is supplying a
@@ -66,6 +72,7 @@ step, source or heading, some do not. It refuses:
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import sys
 import tomllib
@@ -184,7 +191,8 @@ LANE_BLOCKS = {
         ("M8-N4-host-runtime.md", "R19 — Import check as `m8-service`", 0),
 }
 TOP_KEYS = {"labels", "sources", "steps"}
-STEP_KEYS = {"name", "stdout", "historical", "parts"}
+STEP_KEYS = {"name", "stdout", "record", "historical", "parts"}
+RECORD_KEY = re.compile(r"[a-z_][a-z0-9_]{0,63}")
 
 
 class Refused(ValueError):
@@ -203,7 +211,16 @@ class Fence:
 class Step:
     name: str
     text: str
-    stdout: tuple[str, ...]
+    alternatives: tuple[tuple[str, ...], ...]
+    record: tuple[tuple[str, ...], int] | None = None
+
+    def expected(self) -> str:
+        """The transport's declared expectation: exactly one alternative's lines, then
+        the record line when one is declared."""
+        record = None if self.record is None else {
+            "keys": list(self.record[0]), "max_bytes": self.record[1]}
+        return json.dumps({"alternatives": [list(lines) for lines in self.alternatives],
+                           "record": record}, sort_keys=True) + "\n"
 
 
 def fence_blocks(document: str) -> list[Fence]:
@@ -342,6 +359,36 @@ def _normalized(text: str) -> str:
     return SHELL_QUOTING.sub("", text.replace("\\\n", ""))
 
 
+def _expectation(name: str, entry: dict) -> tuple[tuple[tuple[str, ...], ...],
+                                                  tuple[tuple[str, ...], int] | None]:
+    """Declared stdout: one list of lines, or a list of distinct alternative lists,
+    plus an optional closed record line (`record = {keys, max_bytes}`)."""
+    declared = entry["stdout"]
+    if isinstance(declared, list) and declared and all(isinstance(x, list) for x in declared):
+        alternatives = tuple(tuple(_strings(lines, f"step {name}: stdout")) for lines in declared)
+    else:
+        alternatives = (tuple(_strings(declared, f"step {name}: stdout")),)
+    if len(set(alternatives)) != len(alternatives):
+        raise Refused(f"step {name}: stdout alternatives must be distinct")
+    if any("\n" in line or "\r" in line for lines in alternatives for line in lines):
+        raise Refused(f"step {name}: a built file would not be LF-only")
+    record = None
+    if "record" in entry:
+        spec = entry["record"]
+        if (not isinstance(spec, dict) or set(spec) != {"keys", "max_bytes"}
+                or type(spec["max_bytes"]) is not int or not 2 <= spec["max_bytes"] <= 8192):
+            raise Refused(f"step {name}: record is exactly keys and max_bytes (2-8192)")
+        keys = tuple(_strings(spec["keys"], f"step {name}: record keys"))
+        if not keys or len(set(keys)) != len(keys) or not all(map(RECORD_KEY.fullmatch, keys)):
+            raise Refused(f"step {name}: record keys must be distinct identifiers")
+        record = (tuple(sorted(keys)), spec["max_bytes"])
+    largest = max(len("".join(line + "\n" for line in lines).encode("utf-8"))
+                  for lines in alternatives) + (record[1] if record else 0)
+    if largest > MAX_STDOUT:
+        raise Refused(f"step {name}: declared stdout exceeds {MAX_STDOUT} bytes")
+    return alternatives, record
+
+
 def assemble(path: Path, template: bool = False,
              values: dict[str, str] | None = None) -> list[Step]:
     # Raw bytes: text-mode reading would silently translate CRLF and hide it.
@@ -379,7 +426,8 @@ def assemble(path: Path, template: bool = False,
     for entry in declared_steps:
         if not isinstance(entry, dict) or not set(entry) <= STEP_KEYS or not {
                 "name", "stdout", "parts"} <= set(entry):
-            raise Refused("a step has exactly name, stdout, parts and optional historical")
+            raise Refused("a step has exactly name, stdout, parts and optional record "
+                          "and historical")
         name = entry["name"]
         if not isinstance(name, str) or not NAME.fullmatch(name) or name in names:
             raise Refused(f"step name {name!r} is invalid or repeated")
@@ -415,13 +463,10 @@ def assemble(path: Path, template: bool = False,
             raise Refused(f"step {name}: undeclared or historical labels {stray}")
         if not template and (PLACEHOLDER.search(joined) or DECLARATION.search(text)):
             raise Refused(f"step {name}: an unreviewed placeholder remains")
-        stdout = tuple(_strings(entry["stdout"], f"step {name}: stdout"))
-        rendered = "".join(line + "\n" for line in stdout)
-        if any("\n" in line or "\r" in line for line in stdout) or "\r" in text:
+        alternatives, record = _expectation(name, entry)
+        if "\r" in text:
             raise Refused(f"step {name}: a built file would not be LF-only")
-        if len(rendered.encode("utf-8")) > MAX_STDOUT:
-            raise Refused(f"step {name}: declared stdout exceeds {MAX_STDOUT} bytes")
-        steps.append(Step(name, text, stdout))
+        steps.append(Step(name, text, alternatives, record))
     if not steps:
         raise Refused("the composition declares no steps")
     if set(values or {}) - used:
@@ -438,8 +483,7 @@ def build(path: Path, out: Path, template: bool = False,
         raise Refused("the output directory already exists") from None
     lines = []
     for step in steps:
-        for suffix, body in ((".sh", step.text),
-                             (".stdout", "".join(line + "\n" for line in step.stdout))):
+        for suffix, body in ((".sh", step.text), (".expected.json", step.expected())):
             raw = body.encode("utf-8")
             with open(out / (step.name + suffix), "xb") as stream:
                 stream.write(raw)
