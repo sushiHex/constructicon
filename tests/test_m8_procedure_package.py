@@ -222,6 +222,11 @@ def test_constant_imports_and_comments_are_not_invocations(tmp_path, text):
     "import constructicon.substrate.executors.codex_lane",
     "from constructicon.substrate.executors.codex_lane import EVIDENCE_DOMAIN, main",
     "from constructicon.substrate.executors.codex_lane import (EVIDENCE_DOMAIN,",
+    # Any other mention of the module, however imported or named.
+    "from constructicon.substrate.executors import codex_lane; codex_lane.main([])",
+    "from constructicon.substrate.executors import codex_lane as lane",
+    "importlib.import_module(constructicon.substrate.executors.codex_lane)",
+    "from other.codex_lane import EVIDENCE_DOMAIN",
 ])
 def test_importing_anything_that_can_dispatch_the_lane_refuses(tmp_path, text):
     with pytest.raises(package.Refused, match="only a reviewed lane-boundary block"):

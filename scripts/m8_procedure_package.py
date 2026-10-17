@@ -38,8 +38,9 @@ step, source or heading, some do not. It refuses:
 - **sources:** a changed pin, a CRLF source, an absent or repeated heading, a
   missing fence, a fence that is not ``bash``;
 - **lane boundary (#210, #220):** a step whose text outside reviewed lane-boundary
-  fences invokes the lane CLI (``LANE``, ``LANE_MODULE``, the module name as a
-  command word, or ``codex_lane.py``), and a part ending in a line continuation.
+  fences names the lane CLI (``LANE``, ``LANE_MODULE``, or any mention of
+  ``codex_lane`` other than importing uppercase constants from the fully qualified
+  module), and a part ending in a line continuation.
   Each unreviewed part is checked after shell normalization, without whole-line
   comments; with no trailing continuation, no word spans two parts. A fence is reviewed
   only when its exact bytes are on the allowlist, wherever it is read from. Bytes
@@ -73,16 +74,17 @@ LABEL = re.compile(r"(?<![0-9A-Za-z])[gq][0-9]{1,3}(?![0-9A-Za-z])")
 PLACEHOLDER = re.compile(r"\bUNREVIEWED\b|\bUNPREPARED\b(?!\.bundle(?:$|[\s;)|&]))",
                          re.MULTILINE)
 SHELL_QUOTING = re.compile(r"[\"'\\$]")
-# Ways a step can invoke the lane CLI: the array, its module variable, the module
-# name as a command word (`-m` or OC's runpy wrapper `"${PY[@]}" <module>`) or its
-# file. Importing constants from the module, as the evidence checkers do, is not.
-LANE_INVOCATION = re.compile(
-    r"\bLANE\b|\bLANE_MODULE\b|codex_lane\.py\b"
-    r"|\bconstructicon\.substrate\.executors\.codex_lane\b")
-# `from <module> import CONSTANT, ...` with any whitespace, ending its statement.
-# Only uppercase constants: `import <module>` or a lowercase name (`main`) hands
-# over something that can dispatch the CLI.
-FROM_BEFORE = re.compile(r"(?:^|[\s;(])from\s+$")
+# Ways a step can reach the lane CLI: the array, its module variable, or any
+# mention of the module (`-m`, OC's runpy wrapper, `from ... import codex_lane`, an
+# alias, its file, `import_module`). Enumerating spellings never ends, so every
+# mention is refused except one exact form: importing uppercase constants from
+# the fully qualified module, as the evidence checkers do. A name assembled from
+# pieces at run time remains the review's job.
+LANE_INVOCATION = re.compile(r"\bLANE\b|\bLANE_MODULE\b|\bcodex_lane\b")
+# `from constructicon.substrate.executors.codex_lane import CONSTANT, ...`, any
+# whitespace, ending its statement. `import <module>` or a lowercase name (`main`)
+# hands over something that can dispatch the CLI.
+FROM_BEFORE = re.compile(r"(?:^|[\s;(])from\s+constructicon\.substrate\.executors\.$")
 CONSTANTS_AFTER = re.compile(
     r"\s+import\s+\(?\s*[A-Z][A-Z0-9_]*(?:\s*,\s*[A-Z][A-Z0-9_]*)*\s*\)?\s*(?:;|$)")
 COMMENT_LINE = re.compile(r"^[ \t]*#.*$", re.MULTILINE)
@@ -92,7 +94,7 @@ def _invokes(text: str) -> bool:
     """Whether normalized, comment-free text names the lane CLI other than as the
     module of a `from` statement that imports only uppercase constants."""
     for match in LANE_INVOCATION.finditer(text):
-        if match.group(0).startswith("constructicon."):
+        if match.group(0) == "codex_lane":
             start = text.rfind("\n", 0, match.start()) + 1
             end = text.find("\n", match.end())
             before = text[start:match.start()]

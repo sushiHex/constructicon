@@ -23,9 +23,12 @@ MUTANTS = (
      FORMS, "for match in re.finditer(r'\\bLANE\\b|\\bLANE_MODULE\\b|codex_lane\\.py\\b', text):",
      INVOKE + "[change7]"),
     ("the module variable is an invocation", MODULE + "_invokes",
-     FORMS, "for match in re.finditer(r'\\bLANE\\b|codex_lane\\.py\\b"
-     "|\\bconstructicon\\.substrate\\.executors\\.codex_lane\\b', text):",
+     FORMS, "for match in re.finditer(r'\\bLANE\\b|\\bcodex_lane\\b', text):",
      INVOKE + "[change5]"),
+    ("a package-level import of the lane module is a mention", MODULE + "_invokes",
+     "FROM_BEFORE.search(before)", "True",
+     TESTS + "test_importing_anything_that_can_dispatch_the_lane_refuses"
+     "[from other.codex_lane import EVIDENCE_DOMAIN]"),
     ("a constants import with any whitespace is not an invocation", MODULE + "_invokes",
      "FROM_BEFORE.search(before)", "before.endswith('from ')",
      TESTS + "test_constant_imports_and_comments_are_not_invocations"
