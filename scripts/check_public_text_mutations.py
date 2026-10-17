@@ -2,8 +2,7 @@
 
 Each mutant removes one part of the ref-update sweep, the tag sweep, the
 bounded listings they read, the reporting of a cancelled scan, or the refusal
-of a redirect. Only
-assertion failures count as kills.
+of a redirect. Only assertion failures count as kills.
 """
 
 from _mutations import run
