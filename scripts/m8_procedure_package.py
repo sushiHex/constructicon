@@ -78,9 +78,28 @@ SHELL_QUOTING = re.compile(r"[\"'\\$]")
 # file. Importing from the module, as the evidence checkers do, is not matched.
 LANE_INVOCATION = re.compile(
     r"\bLANE\b|\bLANE_MODULE\b|codex_lane\.py\b"
-    r"|(?<!from )(?<!import )\bconstructicon\.substrate\.executors\.codex_lane\b"
-    r"(?![ \t]+import\b)")
+    r"|\bconstructicon\.substrate\.executors\.codex_lane\b")
+IMPORTED = re.compile(r"(?:^|[\s;(])(?:from|import)\s+$")
 COMMENT_LINE = re.compile(r"^[ \t]*#.*$", re.MULTILINE)
+
+
+def _invokes(text: str) -> bool:
+    """Whether normalized, comment-free text names the lane CLI other than as the
+    module of a `from` or `import` statement (any whitespace)."""
+    for match in LANE_INVOCATION.finditer(text):
+        if match.group(0).startswith("constructicon."):
+            line = text[text.rfind("\n", 0, match.start()) + 1:match.start()]
+            if IMPORTED.search(line):
+                continue
+        return True
+    return False
+
+
+def _continues(body: str) -> bool:
+    """Whether bash joins the next line to this one: an odd run of backslashes before
+    the final newline (an even run is literal backslashes)."""
+    run = len(body) - 1 - len(body[:-1].rstrip("\\"))
+    return body.endswith("\n") and run % 2 == 1
 NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
 MAX_STDOUT = 65_536
 # The only reviewed fences that may invoke the lane CLI, keyed by the SHA-256 of
@@ -300,11 +319,11 @@ def assemble(path: Path, template: bool = False) -> list[Step]:
         pieces = [piece for part in parts for piece in _part(name, part, sources)]
         # A piece ending in a line continuation would splice into the next piece,
         # rewriting a reviewed fence's first command (`IGNORED=\` before S1).
-        if any(body.endswith("\\\n") for body, _ in pieces):
+        if any(_continues(body) for body, _ in pieces):
             raise Refused(f"step {name}: a part ends in a line continuation")
         # Every piece then ends at a line break, so no word spans two pieces and each
         # is checked alone. Whole-line comments never run; their prose is not a call.
-        if any(LANE_INVOCATION.search(COMMENT_LINE.sub("", _normalized(body)))
+        if any(_invokes(COMMENT_LINE.sub("", _normalized(body)))
                for body, reviewed in pieces if not reviewed):
             raise Refused(f"step {name}: only a reviewed lane-boundary block may invoke "
                           "the lane CLI (#210 lane-output contract)")

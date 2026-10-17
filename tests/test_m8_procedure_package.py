@@ -166,11 +166,28 @@ def test_only_reviewed_lane_boundary_blocks_may_invoke_the_lane(tmp_path, change
         package.assemble(procedure(tmp_path, QUALIFICATION.replace(*change)))
 
 
+def accepted(path: Path) -> list[package.Step]:
+    """An accepting claim, stated as an assertion so a wrong refusal is a failure."""
+    try:
+        return package.assemble(path)
+    except package.Refused as error:
+        pytest.fail(f"refused: {error}")
+
+
+def test_an_even_run_of_trailing_backslashes_is_literal(tmp_path):
+    """Two backslashes are one literal backslash; the newline still ends the command."""
+    even = QUALIFICATION.replace('{literal = "W=/home/m8-service/m8-maint-q12"}',
+                                 '{literal = "printf %s x\\\\\\\\"}')
+    assert "printf %s x\\\\\nset -Eeuo" in accepted(procedure(tmp_path, even))[0].text
+
+
 @pytest.mark.parametrize("splice", [
     # A name spliced from two parts.
     '{literal = "OTHER=${LA\\\\"}, {literal = "NE[@]}"}',
     # A reviewed fence's first command swallowed into an assignment (S1, #220).
     '{literal = "IGNORED=\\\\"}',
+    # An odd run of trailing backslashes still escapes the newline.
+    '{literal = "IGNORED=x\\\\\\\\\\\\"}',
 ])
 def test_a_part_ending_in_a_line_continuation_refuses(tmp_path, splice):
     spliced = QUALIFICATION.replace('{literal = "W=/home/m8-service/m8-maint-q12"}', splice)
@@ -181,6 +198,10 @@ def test_a_part_ending_in_a_line_continuation_refuses(tmp_path, splice):
 @pytest.mark.parametrize("text", [
     "from constructicon.substrate.executors.codex_lane import EVIDENCE_DOMAIN",
     "import constructicon.substrate.executors.codex_lane as lane",
+    # Legal whitespace in an import is still an import.
+    "import  constructicon.substrate.executors.codex_lane as lane",
+    "from\tconstructicon.substrate.executors.codex_lane import EVIDENCE_DOMAIN",
+    "x = 1; import constructicon.substrate.executors.codex_lane",
     "# codex_lane.py prints its summary; constructicon.substrate.executors.codex_lane",
     "  # see the LANE array",
 ])
@@ -189,7 +210,7 @@ def test_imports_and_comments_are_not_invocations(tmp_path, text):
     allowed = QUALIFICATION.replace(
         '{literal = "W=/home/m8-service/m8-maint-q12"}',
         '{literal = "W=/home/m8-service/m8-maint-q12"}, {literal = "' + text + '"}')
-    assert text in package.assemble(procedure(tmp_path, allowed))[0].text
+    assert text in accepted(procedure(tmp_path, allowed))[0].text
 
 
 def test_stale_generation_paths_are_refused_like_the_h7_composition_gap(tmp_path):

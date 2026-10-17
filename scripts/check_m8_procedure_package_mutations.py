@@ -1,8 +1,8 @@
 """Lane-boundary lint mutations for the procedure packager (#210, #220).
 
-Each mutant removes one part of the lint: the continuation refusal, an invocation
-form, the content-keyed allowlist or shell normalization. Only assertion failures
-count as kills.
+Each mutant removes one part of the lint: the continuation refusal and its odd-run
+rule, an invocation form, the import exemption, the content-keyed allowlist or
+shell normalization. Only assertion failures count as kills.
 """
 
 from _mutations import run
@@ -10,19 +10,26 @@ from _mutations import run
 MODULE = "scripts.m8_procedure_package:"
 TESTS = "tests/test_m8_procedure_package.py::"
 INVOKE = TESTS + "test_only_reviewed_lane_boundary_blocks_may_invoke_the_lane"
-SEARCH = "if any(LANE_INVOCATION.search("
+FORMS = "for match in LANE_INVOCATION.finditer(text):"
 
 MUTANTS = (
     ("a part may not end in a line continuation", MODULE + "assemble",
-     'if any(body.endswith("\\\\\\n") for body, _ in pieces):', "if False:",
+     "if any(_continues(body) for body, _ in pieces):", "if False:",
      TESTS + "test_a_part_ending_in_a_line_continuation_refuses[{literal = \"IGNORED=\\\\\\\\\"}]"),
-    ("the module name is a command word under OC's runpy wrapper", MODULE + "assemble",
-     SEARCH, "if any(re.compile(r'\\bLANE\\b|\\bLANE_MODULE\\b|codex_lane\\.py\\b').search(",
+    ("only an odd run of trailing backslashes continues", MODULE + "_continues",
+     "run % 2 == 1", "run > 0",
+     TESTS + "test_an_even_run_of_trailing_backslashes_is_literal"),
+    ("the module name is a command word under OC's runpy wrapper", MODULE + "_invokes",
+     FORMS, "for match in re.finditer(r'\\bLANE\\b|\\bLANE_MODULE\\b|codex_lane\\.py\\b', text):",
      INVOKE + "[change7]"),
-    ("the module variable is an invocation", MODULE + "assemble",
-     SEARCH, "if any(re.compile(r'\\bLANE\\b|codex_lane\\.py\\b"
-     "|constructicon\\.substrate\\.executors\\.codex_lane\\b').search(",
+    ("the module variable is an invocation", MODULE + "_invokes",
+     FORMS, "for match in re.finditer(r'\\bLANE\\b|codex_lane\\.py\\b"
+     "|\\bconstructicon\\.substrate\\.executors\\.codex_lane\\b', text):",
      INVOKE + "[change5]"),
+    ("an import with any whitespace is not an invocation", MODULE + "_invokes",
+     "if IMPORTED.search(line):", "if line.endswith(('from ', 'import ')):",
+     TESTS + "test_imports_and_comments_are_not_invocations"
+     "[from\\tconstructicon.substrate.executors.codex_lane import EVIDENCE_DOMAIN]"),
     ("review standing is the fence's exact bytes", MODULE + "_part",
      'hashlib.sha256(body.encode("utf-8")).hexdigest() in LANE_BLOCKS', "True",
      TESTS + "test_review_standing_follows_exact_bytes_not_file_or_heading_names"),
