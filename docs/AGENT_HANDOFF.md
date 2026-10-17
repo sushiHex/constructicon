@@ -17,8 +17,7 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ## #216, #221 — public text is swept by ref update, and reported on cancel
 
-[PR #228](https://github.com/sushiHex/constructicon/pull/228), a draft as of
-2026-10-17 UTC; its merge commit is not recorded here yet.
+[PR #228](https://github.com/sushiHex/constructicon/pull/228), 2026-10-17 UTC.
 
 - **Ref updates (#216):** the sweep reads the repository activity listing
   (`GET /repos/{owner}/{repo}/activity`). That listing records each push,
