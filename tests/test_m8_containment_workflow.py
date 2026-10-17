@@ -2,13 +2,14 @@
 
 import os
 import re
-import shutil
 import subprocess
 import sys
 import textwrap
 from pathlib import Path
 
 import pytest
+
+from tests.git_bash import git_bash
 
 WORKFLOW = Path(__file__).parents[1] / ".github/workflows/m8-containment.yml"
 CLASSIFIER = Path(__file__).parents[1] / "scripts/ci/m8_ci_scope.py"
@@ -195,20 +196,6 @@ def _commit(repository: Path, message: str) -> str:
     return _git(repository, "rev-parse", "HEAD")
 
 
-def _bash() -> Path:
-    if os.name == "nt":
-        git = shutil.which("git")
-        if git is not None:
-            candidate = Path(git).resolve().parent.parent / "bin/bash.exe"
-            if candidate.is_file():
-                return candidate
-        pytest.skip("Git Bash is required to execute the workflow gate on Windows")
-    bash = shutil.which("bash")
-    if bash is None:
-        pytest.skip("Bash is required to execute the workflow gate")
-    return Path(bash)
-
-
 def _gate_shell() -> str:
     gate = WORKFLOW.read_text(encoding="utf-8").split(
         "      - name: Require the selected proof set\n", 1,
@@ -263,7 +250,7 @@ def _run_gate(
     }
     shell = 'python3() { "$TEST_PYTHON" "$@"; }\n' + _gate_shell()
     return subprocess.run(
-        [str(_bash()), "-c", shell],
+        [git_bash(), "-c", shell],
         cwd=repository,
         env=environment,
         capture_output=True,
