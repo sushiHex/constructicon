@@ -477,12 +477,18 @@ def assemble(path: Path, template: bool = False,
                                   flags=re.MULTILINE)
             if count:
                 used.add(key)
-            # Every line that assigns a measured name in any form (bare, export,
-            # readonly, declare, after `;`) is exactly the session value, so a stale
-            # literal in one step is never vouched for by a fill in another.
-            if any(line != f"{key}={value}" for line in
-                   re.findall(rf"^.*\b{key}=.*$", _normalized(text), flags=re.MULTILINE)):
-                raise Refused(f"step {name}: {key} is assigned other than its session value")
+            # Writing a variable takes its bare name; reading it takes `$`. So every
+            # bare mention of a measured name is the exact filled line, and any other
+            # mention is a read: no export, +=, [i]=, read or printf -v can replace the
+            # session value, and a stale literal is never vouched for by another fill.
+            for mention in re.finditer(rf"\b{key}\b", text):
+                start = text.rfind("\n", 0, mention.start()) + 1
+                end = text.find("\n", mention.end())
+                line = text[start:len(text) if end < 0 else end]
+                reads = re.search(r"\$\{?[#!]?$", text[start:mention.start()])
+                if line != f"{key}={value}" and not reads:
+                    raise Refused(f"step {name}: {key} is assigned other than its "
+                                  "session value")
         allowed = current | (historical_labels if historical else set())
         joined = _normalized(text)
         stray = sorted({label for label in LABEL.findall(joined) if label not in allowed})

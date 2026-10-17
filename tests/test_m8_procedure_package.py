@@ -450,9 +450,15 @@ def test_measured_session_values_fill_exact_unreviewed_lines(tmp_path):
         package.assemble(procedure(tmp_path, quoted), values=filled)
     with pytest.raises(package.Refused, match=r"values \['RUN_ID'\] fill no line"):
         package.assemble(procedure(tmp_path, QUALIFICATION), values={"RUN_ID": RUN})
+    # Reads of the measured name stay legal.
+    reads = SESSION.replace("RUN_ID=UNREVIEWED", "RUN_ID=UNREVIEWED\\ntest \\\"$RUN_ID\\\" "
+                            "= \\\"${RUN_ID}\\\" && test \\\"${#RUN_ID}\\\" -eq 36")
+    assert "${#RUN_ID}" in package.assemble(procedure(tmp_path, reads), values=filled)[0].text
     # A stale literal is not vouched for by a fill elsewhere in the step or package.
     for form in ("RUN_ID=run-", "export RUN_ID=run-", "readonly RUN_ID=run-",
-                 "declare -r RUN_ID=run-", "true; RUN_ID=run-", "RUN_ID=\\\"run-"):
+                 "declare -r RUN_ID=run-", "true; RUN_ID=run-", "RUN_ID=\\\"run-",
+                 "RUN_ID+=x", "RUN_ID[0]=run-", "read RUN_ID <<< run-",
+                 "printf -v RUN_ID %s run-"):
         stale = SESSION.replace("RUN_ID=UNREVIEWED", f"RUN_ID=UNREVIEWED\\n{form}" + "0" * 32)
         with pytest.raises(package.Refused, match="RUN_ID is assigned other than its session"):
             package.assemble(procedure(tmp_path, stale), values=filled)
