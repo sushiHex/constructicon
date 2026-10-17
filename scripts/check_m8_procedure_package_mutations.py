@@ -83,6 +83,10 @@ MUTANTS = (
      "if PLACEHOLDER.search(_normalized(pending)) or DECLARATION.search(text):",
      "if DECLARATION.search(text):",
      TESTS + "test_a_deferred_step_waits_only_for_session_values"),
+    ("a record bound admits its shortest record", MODULE + "_expectation",
+     'if spec["max_bytes"] < shortest:', "if False:",
+     TESTS + "test_malformed_expectations_refuse"
+     "[change2-below its shortest record \\\\(26 bytes\\\\)]"),
     ("shell normalization joins continued lines", MODULE + "_normalized",
      'SHELL_QUOTING.sub("", text.replace("\\\\\\n", ""))', "text",
      INVOKE + "[change2]"),

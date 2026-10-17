@@ -395,6 +395,11 @@ def _expectation(name: str, entry: dict) -> tuple[tuple[tuple[str, ...], ...],
         keys = tuple(_strings(spec["keys"], f"step {name}: record keys"))
         if not keys or len(set(keys)) != len(keys) or not all(map(RECORD_KEY.fullmatch, keys)):
             raise Refused(f"step {name}: record keys must be distinct identifiers")
+        # The shortest record T5 could accept: compact, every value a digit, and LF.
+        shortest = len(json.dumps(dict.fromkeys(keys, 0), separators=(",", ":"))) + 1
+        if spec["max_bytes"] < shortest:
+            raise Refused(f"step {name}: record max_bytes is below its shortest record "
+                          f"({shortest} bytes)")
         record = (tuple(sorted(keys)), spec["max_bytes"])
     largest = max(len("".join(line + "\n" for line in lines).encode("utf-8"))
                   for lines in alternatives) + (record[1] if record else 0)

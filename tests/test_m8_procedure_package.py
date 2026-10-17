@@ -540,6 +540,8 @@ def test_alternatives_and_a_record_are_declared_for_the_transport(tmp_path):
     (('["lane-boundary-checked", "refresh-unmeasured"]]',
       '["lane-boundary-checked", "refresh-measured"]]'), "alternatives must be distinct"),
     (("max_bytes = 256", "max_bytes = 9000"), "record is exactly keys and max_bytes"),
+    # {"run_id":0,"accepted":0} plus LF is 26 bytes: a smaller bound can never accept.
+    (("max_bytes = 256", "max_bytes = 25"), r"below its shortest record \(26 bytes\)"),
     (("max_bytes = 256", "max_bytes = true"), "record is exactly keys and max_bytes"),
     (("max_bytes = 256}", "max_bytes = 256, extra = 1}"), "record is exactly keys"),
     (('keys = ["run_id", "accepted"]', 'keys = ["run_id", "run_id"]'), "distinct identifiers"),
