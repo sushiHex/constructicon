@@ -15,6 +15,23 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #229 — public text refuses every redirect
+
+[PR #231](https://github.com/sushiHex/constructicon/pull/231), 2026-10-17 UTC.
+
+- **The defect:** urllib's default redirect handler forwards `Authorization`
+  to the redirect target. A redirect off `api.github.com` would have been sent
+  the workflow token, or a personal token during a backfill.
+- **The fix:** the scanner's one request path opens through a handler that
+  raises `Incomplete` on any redirect. The run fails, and the response is never
+  read.
+- **Evidence:** a two-server test for 301, 302, 303, 307 and 308 shows the
+  target receives no request. A mutant that restores default following is
+  killed, which makes 32 of 32.
+
+What this does not establish: the backfill itself. It still waits on an owner
+token. See the #216/#221 entry below.
+
 ## #216, #221 — public text is swept by ref update, and reported on cancel
 
 [PR #228](https://github.com/sushiHex/constructicon/pull/228), 2026-10-17 UTC.
