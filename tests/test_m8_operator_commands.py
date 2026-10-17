@@ -12,7 +12,6 @@ import json
 import os
 import re
 import shlex
-import shutil
 import subprocess
 import sys
 import sysconfig
@@ -33,6 +32,7 @@ from constructicon.substrate.executors.codex_protocol import (
     ExpectedAccount,
 )
 from constructicon.substrate.executors.linux import sealed_catalog
+from tests.git_bash import git_bash
 from tests.operator_store_world import StoreWorld
 from tests.substrate import test_codex_lane as fake_lane
 from tests.substrate.test_codex_protocol import IDENTITY, spend_result
@@ -55,13 +55,7 @@ def _runbook() -> str:
 
 
 def _bash() -> str:
-    windows_bash = Path(r"C:/Program Files/Git/bin/bash.exe")
-    if windows_bash.is_file():
-        return str(windows_bash)
-    found = shutil.which("bash")
-    if found is None:
-        pytest.skip("the runbook syntax check requires Git Bash or bash")
-    return found
+    return git_bash()
 
 
 def _run_isolated(module: str, *arguments: str) -> subprocess.CompletedProcess[str]:

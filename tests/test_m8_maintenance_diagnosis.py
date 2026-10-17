@@ -5,12 +5,13 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+from tests.git_bash import git_bash
 
 ROOT = Path(__file__).parents[1]
 DOCUMENT = ROOT / "docs/plans/handoffs/M8-maintenance-diagnosis.md"
@@ -124,8 +125,7 @@ def test_bootstrap_refuses_an_installed_helper_collision(tmp_path, name):
 
 
 def test_diagnosis_shell_blocks_parse_and_unprepared_pins_stop():
-    bash = shutil.which("bash")
-    assert bash is not None
+    bash = git_bash()
     text = DOCUMENT.read_text(encoding="utf-8")
     blocks = re.findall(r"```bash\n(.*?)```", text, re.S)
     assert len(blocks) == 5
@@ -280,7 +280,7 @@ def test_quiescence_requires_the_exact_no_process_exit(process_status):
     block = block.replace("EXPECTED_BOOT=UNREVIEWED", "EXPECTED_BOOT=" + boot)
     block = block.replace("/usr/bin/cat /proc/sys/kernel/random/boot_id", "printf " + boot)
     block = block.replace("/usr/bin/pgrep -u m8-service", f"(exit {process_status})")
-    result = subprocess.run([shutil.which("bash"), "-c", "set -Eeuo pipefail\n" + block],
+    result = subprocess.run([git_bash(), "-c", "set -Eeuo pipefail\n" + block],
         stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20, check=False)
     if process_status == 1:
         assert result.returncode == 0 and result.stdout == "diagnosis-quiescence-checked\n"
