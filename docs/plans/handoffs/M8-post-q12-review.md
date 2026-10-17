@@ -91,7 +91,7 @@ This review follows Fable: the owner approves, and a model does not, because mod
 ## Public-text work
 
 These items run alongside the review and do not depend on it.
-- **#229:** done in [PR #231](https://github.com/sushiHex/constructicon/pull/231). The scanner refuses every redirect, so the token never leaves `api.github.com`. The agents' `gh` session carries the `repo`, `workflow` and `delete_repo` scopes, so a leak of it would compromise the repository.
+- **#229:** done in [PR #231](https://github.com/sushiHex/constructicon/pull/231). The scanner refuses every redirect, so the token never leaves `api.github.com`. The agents work through the owner's own credentials, so a leaked token would put the whole repository at risk, not just the scanner's reads.
 - **The backfill:** this runs with a fine-grained token the owner mints: read-only, scoped to this repository alone, and expiring in one day. Two scanner changes come first, in their own PR:
   - **A pass over all reachable history, without a commit-date filter.** Today the supplementary branch listing sends `since` to the commits API (`scripts/ci/check_public_text.py:448-459`). The ref-update scan selects updates by their timestamp (`:373-401`).
   - **A recorded gap, rather than a failed run, for a force-pushed previous head that no longer resolves.** Today `compared` fails the run (`:348-371`). The activity listing holds 25 force pushes.
