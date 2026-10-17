@@ -1,4 +1,4 @@
-"""The procedure packager: exact assembly, pinned sources, and refusals that name the step."""
+"""The procedure packager: exact assembly, pinned sources and closed refusals."""
 
 from __future__ import annotations
 
@@ -66,11 +66,16 @@ NE[@]}" startup
 """
 
 
+def reviewed(document: str, heading: str) -> str:
+    body = package.fences(package.section(document, heading))[0][1]
+    return hashlib.sha256(body.encode()).hexdigest()
+
+
 @pytest.fixture(autouse=True)
 def fixture_allowlist(monkeypatch):
     monkeypatch.setattr(package, "LANE_BLOCKS", {
-        ("procedure.md", "L1: qualification boundary"),
-        ("frozen.md", "Setup"), ("frozen.md", "S6a. Held"),
+        reviewed(SELF_BLOCKS, "L1: qualification boundary"): "L1",
+        reviewed(FROZEN, "Setup"): "Setup", reviewed(FROZEN, "S6a. Held"): "S6a",
     })
 
 
@@ -145,10 +150,108 @@ def test_build_writes_exact_step_bytes_and_a_manifest_atomically(tmp_path):
     # Literals never name the lane.
     ('{literal = "W=/home/m8-service/m8-maint-q12"}',
      "{literal = 'OTHER=(\"${LANE[@]}\")'}"),
+    # #220: the module invoked directly, by name or by path, without the array.
+    ('{literal = "W=/home/m8-service/m8-maint-q12"}',
+     '{literal = "/usr/bin/python3 -I -m constructicon.substrate.executors.codex_lane startup"}'),
+    ('{literal = "W=/home/m8-service/m8-maint-q12"}',
+     '{literal = "\\"${PY[@]}\\" \\"$LANE_MODULE\\" startup"}'),
+    ('{literal = "W=/home/m8-service/m8-maint-q12"}',
+     '{literal = "/usr/bin/python3 /opt/c/constructicon/substrate/executors/codex_lane.py"}'),
+    # #220: OC's runpy wrapper takes the module name as a plain argument.
+    ('{literal = "W=/home/m8-service/m8-maint-q12"}',
+     '{literal = "\\"${PY[@]}\\" constructicon.substrate.executors.codex_lane startup"}'),
 ])
-def test_only_reviewed_lane_boundary_blocks_may_name_the_lane(tmp_path, change):
+def test_only_reviewed_lane_boundary_blocks_may_invoke_the_lane(tmp_path, change):
     with pytest.raises(package.Refused, match="only a reviewed lane-boundary block"):
         package.assemble(procedure(tmp_path, QUALIFICATION.replace(*change)))
+
+
+def accepted(path: Path) -> list[package.Step]:
+    """An accepting claim, stated as an assertion so a wrong refusal is a failure."""
+    try:
+        return package.assemble(path)
+    except package.Refused as error:
+        pytest.fail(f"refused: {error}")
+
+
+def test_an_even_run_of_trailing_backslashes_is_literal(tmp_path):
+    """Two backslashes are one literal backslash; the newline still ends the command."""
+    even = QUALIFICATION.replace('{literal = "W=/home/m8-service/m8-maint-q12"}',
+                                 '{literal = "printf %s x\\\\\\\\"}')
+    assert "printf %s x\\\\\nset -Eeuo" in accepted(procedure(tmp_path, even))[0].text
+
+
+@pytest.mark.parametrize("splice", [
+    # A name spliced from two parts.
+    '{literal = "OTHER=${LA\\\\"}, {literal = "NE[@]}"}',
+    # A reviewed fence's first command swallowed into an assignment (S1, #220).
+    '{literal = "IGNORED=\\\\"}',
+    # An odd run of trailing backslashes still escapes the newline.
+    '{literal = "IGNORED=x\\\\\\\\\\\\"}',
+])
+def test_a_part_ending_in_a_line_continuation_refuses(tmp_path, splice):
+    spliced = QUALIFICATION.replace('{literal = "W=/home/m8-service/m8-maint-q12"}', splice)
+    with pytest.raises(package.Refused, match="ends in a line continuation"):
+        package.assemble(procedure(tmp_path, spliced))
+
+
+@pytest.mark.parametrize("text", [
+    # A quoted or escaped hash is a word, not a comment (connector review of #222).
+    '\\"#\\" || \\"${LANE[@]}\\" startup',
+    "\\\\# x; \\\"${LANE[@]}\\\" startup",
+    # A hash line that continues the previous word, or sits inside an open quote.
+    'echo a\\\\\\n#; \\"${LANE[@]}\\" startup',
+    'echo \\"\\n#\\"; \\"${LANE[@]}\\" startup',
+    # So a real comment naming the lane is refused too: lines are never classified.
+    "# see the LANE array",
+    "# codex_lane.py prints its summary",
+], ids=["quoted-hash", "escaped-hash", "continued-hash", "open-quote-hash", "comment-lane",
+        "comment-module"])
+def test_hash_lines_are_checked_like_any_text(tmp_path, text):
+    with pytest.raises(package.Refused, match="only a reviewed lane-boundary block"):
+        package.assemble(procedure(tmp_path, _with_literal(text)))
+
+
+def _with_literal(text: str) -> str:
+    return QUALIFICATION.replace(
+        '{literal = "W=/home/m8-service/m8-maint-q12"}',
+        '{literal = "W=/home/m8-service/m8-maint-q12"}, {literal = "' + text + '"}')
+
+
+@pytest.mark.parametrize("text", [
+    "from constructicon.substrate.executors.codex_lane import EVIDENCE_DOMAIN",
+    # Legal whitespace and a constant list are still a constants import.
+    "from\tconstructicon.substrate.executors.codex_lane import EVIDENCE_DOMAIN",
+    "from  constructicon.substrate.executors.codex_lane  import  (EVIDENCE_DOMAIN, LANE_SCHEMA)",
+    "x = 1; from constructicon.substrate.executors.codex_lane import QUALIFICATION_PLANS; y = 2",
+    # A parenthesized import across lines is the same statement.
+    "from constructicon.substrate.executors.codex_lane import (\\n    EVIDENCE_DOMAIN,"
+    "\\n    LANE_SCHEMA,\\n)",
+])
+def test_constant_imports_are_not_invocations(tmp_path, text):
+    """The evidence checkers import constants from codex_lane."""
+    built = accepted(procedure(tmp_path, _with_literal(text)))[0].text
+    assert text.replace("\\n", "\n").replace("\\t", "\t") in built
+
+
+@pytest.mark.parametrize("text", [
+    # An imported entry point runs the CLI (connector review of #222).
+    "from constructicon.substrate.executors.codex_lane import main; main()",
+    "import constructicon.substrate.executors.codex_lane as lane; lane.main()",
+    "import constructicon.substrate.executors.codex_lane",
+    "from constructicon.substrate.executors.codex_lane import EVIDENCE_DOMAIN, main",
+    "from constructicon.substrate.executors.codex_lane import (EVIDENCE_DOMAIN,",
+    # Any other mention of the module, however imported or named.
+    "from constructicon.substrate.executors import codex_lane; codex_lane.main([])",
+    "from constructicon.substrate.executors import codex_lane as lane",
+    "importlib.import_module(constructicon.substrate.executors.codex_lane)",
+    "from other.codex_lane import EVIDENCE_DOMAIN",
+    "from constructicon.substrate.executors.codex_lane import (\\n    EVIDENCE_DOMAIN,"
+    "\\n    main,\\n)",
+])
+def test_importing_anything_that_can_dispatch_the_lane_refuses(tmp_path, text):
+    with pytest.raises(package.Refused, match="only a reviewed lane-boundary block"):
+        package.assemble(procedure(tmp_path, _with_literal(text)))
 
 
 def test_stale_generation_paths_are_refused_like_the_h7_composition_gap(tmp_path):
@@ -230,14 +333,17 @@ def test_repeated_steps_and_assigned_placeholders_refuse_sentinels_do_not(tmp_pa
             package.assemble(procedure(tmp_path, assigned))
 
 
-def test_an_allowlisted_name_outside_the_procedure_directory_is_not_reviewed(tmp_path):
-    """A pinned copy at fake/frozen.md shares the reviewed name, never its standing."""
-    (tmp_path / "fake").mkdir()
-    (tmp_path / "fake" / "frozen.md").write_bytes(FROZEN.encode())
-    path = procedure(tmp_path, QUALIFICATION)
-    path.write_bytes(path.read_bytes().replace(b'path = "frozen.md"', b'path = "fake/frozen.md"'))
+def test_review_standing_follows_exact_bytes_not_file_or_heading_names(tmp_path):
+    """#220: a sibling under the reviewed name and heading, with other bytes, is not
+    reviewed; the reviewed bytes are, wherever they are pinned from."""
+    changed = FROZEN.replace('wait "$H"', 'wait "$H"; "${LANE[@]}" startup')
     with pytest.raises(package.Refused, match="only a reviewed lane-boundary block"):
-        package.assemble(path)
+        package.assemble(procedure(tmp_path, QUALIFICATION, frozen=changed))
+    (tmp_path / "copy").mkdir()
+    (tmp_path / "copy" / "frozen.md").write_bytes(FROZEN.encode())
+    path = procedure(tmp_path, QUALIFICATION)
+    path.write_bytes(path.read_bytes().replace(b'path = "frozen.md"', b'path = "copy/frozen.md"'))
+    assert package.assemble(path)[0].name == "c3-qualification"
 
 
 def test_wrong_container_and_selector_types_refuse_without_a_traceback(tmp_path):
@@ -361,12 +467,20 @@ def test_cli_is_strict_unless_template_and_runs_isolated(tmp_path):
     assert run("bogus").returncode == 1
 
 
+def test_every_allowlisted_digest_is_the_named_block_at_current_bytes():
+    for digest, (name, heading, index) in REAL_LANE_BLOCKS.items():
+        document = (HANDOFFS / name).read_bytes().decode("utf-8")
+        lang, body = package.fences(package.section(document, heading))[index]
+        assert lang == "bash" and hashlib.sha256(body.encode()).hexdigest() == digest, heading
+        assert package.LANE_INVOCATION.search(package._normalized(body)), heading
+
+
 def test_real_frozen_and_reviewed_blocks_are_classified(tmp_path, monkeypatch):
     """The allowlist against actual repository bytes: L1-L3 and frozen S6a pass;
     frozen OC S4 and ER R1, which print the lane summary unwrapped, refuse."""
     monkeypatch.setattr(package, "LANE_BLOCKS", REAL_LANE_BLOCKS)
     names = ("M8-N4-operator-commands.md", "M8-N5-explicit-refresh.md",
-             "M8-maintenance-lane-output.md")
+             "M8-maintenance-lane-output.md", "M8-N4-host-runtime.md")
     for name in names:
         shutil.copyfile(HANDOFFS / name, tmp_path / name)
     sources = "\n".join(
@@ -387,6 +501,7 @@ def test_real_frozen_and_reviewed_blocks_are_classified(tmp_path, monkeypatch):
         with pytest.raises(package.Refused, match="lane-boundary block"):
             package.assemble(step(source, heading), template=True)
     for source, heading in (("s2", "L1: qualification boundary"), ("s2", "L2: H7 controls"),
+                            ("s3", "R19 — Import check as `m8-service`"),
                             ("s2", "L3: explicit refresh"),
                             ("s0", "S6a. Maintenance-lock positive control")):
         try:

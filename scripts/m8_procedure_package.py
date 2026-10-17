@@ -29,15 +29,24 @@ Usage, with isolated Python from the repository root::
 ``build`` writes ``<step>.sh`` and ``<step>.stdout`` (LF only) and ``MANIFEST.sha256``
 (``sha256sum --check`` format) into ``OUT``, which it claims with an exclusive
 ``mkdir``. The manifest is written last, so a package without one is incomplete. It
-prints the manifest's own SHA-256 and refuses,
-naming the step, and never guesses or repairs:
+prints the manifest's own SHA-256. It never guesses; its one repair is supplying a
+literal's missing final newline. Refusal messages are diagnostics: many name the
+step, source or heading, some do not. It refuses:
 
 - **schema:** unknown keys, wrong types, empty parts or selections, a part that
   is not exactly a literal or exactly a fence selection;
 - **sources:** a changed pin, a CRLF source, an absent or repeated heading, a
   missing fence, a fence that is not ``bash``;
-- **lane boundary (#210):** text naming the lane CLI array (``LANE``) unless it
-  comes from an allowlisted, reviewed lane-boundary block; literals never may;
+- **lane boundary (#210, #220):** a step whose text outside reviewed lane-boundary
+  fences names the lane CLI (``LANE``, ``LANE_MODULE``, or any mention of
+  ``codex_lane`` other than importing uppercase constants from the fully qualified
+  module), and a part ending in a line continuation.
+  Each unreviewed part is checked after shell normalization, comments included: a
+  `#` may be quoted or continued from the line before, so prose that names the lane
+  is refused too. With no trailing continuation, no word spans two parts. A fence is reviewed
+  only when its exact bytes are on the allowlist, wherever it is read from. Bytes
+  do not freeze shell context: an earlier unreviewed part can still redefine a
+  function or variable a reviewed fence uses, which is the review's job;
 - **labels:** an undeclared generation/session label, or a historical one in a
   step not marked historical. This is a spelling check, not proof of fresh paths;
 - **placeholders:** ``UNREVIEWED`` or ``UNPREPARED`` (other than the
@@ -66,20 +75,73 @@ LABEL = re.compile(r"(?<![0-9A-Za-z])[gq][0-9]{1,3}(?![0-9A-Za-z])")
 PLACEHOLDER = re.compile(r"\bUNREVIEWED\b|\bUNPREPARED\b(?!\.bundle(?:$|[\s;)|&]))",
                          re.MULTILINE)
 SHELL_QUOTING = re.compile(r"[\"'\\$]")
-LANE_NAME = re.compile(r"\bLANE\b")
+# Ways a step can reach the lane CLI: the array, its module variable, or any
+# mention of the module (`-m`, OC's runpy wrapper, `from ... import codex_lane`, an
+# alias, its file, `import_module`). Enumerating spellings never ends, so every
+# mention is refused except one exact form: importing uppercase constants from
+# the fully qualified module, as the evidence checkers do. A name assembled from
+# pieces at run time remains the review's job.
+LANE_INVOCATION = re.compile(r"\bLANE\b|\bLANE_MODULE\b|\bcodex_lane\b")
+# `from constructicon.substrate.executors.codex_lane import CONSTANT, ...`, any
+# whitespace, ending its statement. `import <module>` or a lowercase name (`main`)
+# hands over something that can dispatch the CLI.
+FROM_BEFORE = re.compile(r"(?:^|[\s;(])from\s+constructicon\.substrate\.executors\.$")
+_NAMES = r"[A-Z][A-Z0-9_]*(?:\s*,\s*[A-Z][A-Z0-9_]*)*"
+CONSTANTS_AFTER = re.compile(
+    rf"\s+import\s+(?:\(\s*{_NAMES}\s*,?\s*\)|{_NAMES})\s*(?:;|$)")
+
+
+def _invokes(text: str) -> bool:
+    """Whether normalized text names the lane CLI other than as the module of a
+    `from` statement that imports only uppercase constants."""
+    for match in LANE_INVOCATION.finditer(text):
+        if match.group(0) == "codex_lane":
+            start = text.rfind("\n", 0, match.start()) + 1
+            end = text.find("\n", match.end())
+            before = text[start:match.start()]
+            after = text[match.end():len(text) if end < 0 else end]
+            if re.match(r"\s+import\s+\($", after):
+                # A parenthesized import runs to its closing parenthesis's line.
+                close = text.find(")", match.end())
+                close_end = text.find("\n", close) if close >= 0 else -1
+                after = text[match.end():len(text) if close_end < 0 else close_end]
+            if FROM_BEFORE.search(before) and CONSTANTS_AFTER.match(after):
+                continue
+        return True
+    return False
+
+
+def _continues(body: str) -> bool:
+    """Whether bash joins the next line to this one: an odd run of backslashes before
+    the final newline (an even run is literal backslashes)."""
+    run = len(body) - 1 - len(body[:-1].rstrip("\\"))
+    return body.endswith("\n") and run % 2 == 1
 NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
 MAX_STDOUT = 65_536
-# The only reviewed blocks that may name the lane CLI. Startup boundaries are
-# wrapped by lane_capture (#210 L1-L3); OC Setup defines the array, S1 prepare
-# prints a declared record, and S6a discards its held lane's output then checks
-# `wait` and its evidence.
+# The only reviewed fences that may invoke the lane CLI, keyed by the SHA-256 of
+# their exact bytes, so a same-named heading in another file is not reviewed.
+# Startup boundaries are wrapped by lane_capture (#210 L1-L3); OC Setup defines
+# the array, S1 prepare prints a declared record, and S6a discards its held lane's
+# output then checks `wait` and its evidence.
 LANE_BLOCKS = {
-    ("M8-maintenance-lane-output.md", "L1: qualification boundary"),
-    ("M8-maintenance-lane-output.md", "L2: H7 controls"),
-    ("M8-maintenance-lane-output.md", "L3: explicit refresh"),
-    ("M8-N4-operator-commands.md", "Setup: fixed controller and evidence checks"),
-    ("M8-N4-operator-commands.md", "S1. Prepare"),
-    ("M8-N4-operator-commands.md", "S6a. Maintenance-lock positive control"),
+    "05c3714b695c84a7f122a5b3be79ba1f4d279865a816510ec960ac1a3156184b":
+        ("M8-maintenance-lane-output.md", "L1: qualification boundary", 0),
+    "dc1295ebc58160fee43dc53f2c0f1e5275c765a594610104c83e28a5786750cb":
+        ("M8-maintenance-lane-output.md", "L2: H7 controls", 0),
+    "c25ab6d03e4966d08b576f429c1079afcc2e1483467ba04e046fb1c7ef25d03b":
+        ("M8-maintenance-lane-output.md", "L3: explicit refresh", 0),
+    "3028af29aa54f1e50f990308fff20733bb7eecfae0e80c14d3f42bfdee39c442":
+        ("M8-N4-operator-commands.md", "Setup: fixed controller and evidence checks", 0),
+    # Imports the lane's constants in one multi-line statement; it runs no lane.
+    "e404d62f08ce8cc07e1384db9a71a97b04b931ead6356bb0ceb872f37184c361":
+        ("M8-N4-operator-commands.md", "Setup: fixed controller and evidence checks", 1),
+    "1e0049b134c40dc8044dc9ad58c8f97700f56d6440eeb7a8b182bdc732417e45":
+        ("M8-N4-operator-commands.md", "S1. Prepare", 0),
+    "cbeff595f802b4576cc663dd8fbf7f1deba139831a2754c8fd9891ab759f5eae":
+        ("M8-N4-operator-commands.md", "S6a. Maintenance-lock positive control", 0),
+    # Names the module only in its import check; it never runs the CLI.
+    "f7dc20309ff8bc803def1d9e808a573ffa59e4c0b2a5c1dc592ef684a3a7d429":
+        ("M8-N4-host-runtime.md", "R19 — Import check as `m8-service`", 0),
 }
 TOP_KEYS = {"labels", "sources", "steps"}
 STEP_KEYS = {"name", "stdout", "historical", "parts"}
@@ -188,8 +250,9 @@ def _strings(value: object, what: str) -> list[str]:
     return value
 
 
-def _part(name: str, part: object, sources: dict, paths: dict) -> tuple[str, str | None]:
-    """(text, allowlist key or None) for one part, after strict shape checks."""
+def _part(name: str, part: object, sources: dict) -> list[tuple[str, bool]]:
+    """(text, reviewed lane block?) for each piece of one part, after strict shape
+    checks. A literal is one piece and never reviewed."""
     if not isinstance(part, dict):
         raise Refused(f"step {name}: a part must be a table")
     if set(part) == {"literal"} and isinstance(part["literal"], str):
@@ -197,7 +260,7 @@ def _part(name: str, part: object, sources: dict, paths: dict) -> tuple[str, str
         if not literal.strip():
             raise Refused(f"step {name}: a literal part is empty")
         # Exact bytes: only a missing final newline is supplied.
-        return literal if literal.endswith("\n") else literal + "\n", None
+        return [(literal if literal.endswith("\n") else literal + "\n", False)]
     if set(part) != {"source", "heading", "fences"}:
         raise Refused(f"step {name}: a part is exactly a literal or a fence selection")
     source, heading, selected = part["source"], part["heading"], part["fences"]
@@ -207,7 +270,7 @@ def _part(name: str, part: object, sources: dict, paths: dict) -> tuple[str, str
             type(index) is int for index in selected):
         raise Refused(f"step {name}: fences must be a non-empty list of integers")
     found = fences(section(sources[source], heading))
-    text = []
+    pieces = []
     for index in selected:
         if not 0 <= index < len(found):
             raise Refused(f"step {name}: {heading!r} has no fence {index}")
@@ -216,8 +279,13 @@ def _part(name: str, part: object, sources: dict, paths: dict) -> tuple[str, str
             raise Refused(f"step {name}: {heading!r} fence {index} is not bash")
         if not body.strip():
             raise Refused(f"step {name}: {heading!r} fence {index} is empty")
-        text.append(body)
-    return "".join(text), (paths[source], heading)
+        pieces.append((body, hashlib.sha256(body.encode("utf-8")).hexdigest() in LANE_BLOCKS))
+    return pieces
+
+
+def _normalized(text: str) -> str:
+    """Bash joins continued lines and adjacent quoted fragments into one word."""
+    return SHELL_QUOTING.sub("", text.replace("\\\n", ""))
 
 
 def assemble(path: Path, template: bool = False) -> list[Step]:
@@ -226,7 +294,7 @@ def assemble(path: Path, template: bool = False) -> list[Step]:
     if "\r" in document:
         raise Refused("the procedure document is not LF-only")
     spec = composition(document)
-    sources, paths = {"self": document}, {"self": path.name}
+    sources = {"self": document}
     declared = spec.get("sources", {})
     if not isinstance(declared, dict):
         raise Refused("sources must be a table")
@@ -240,10 +308,7 @@ def assemble(path: Path, template: bool = False) -> list[Step]:
             raise Refused(f"source {key} does not match its pinned SHA-256")
         if b"\r" in raw:
             raise Refused(f"source {key} is not LF-only")
-        # Only a sibling of the procedure (a bare file name) can be an allowlisted
-        # reviewed source; a pinned copy elsewhere never matches the allowlist.
-        bare = Path(source["path"]).name == source["path"]
-        sources[key], paths[key] = raw.decode("utf-8"), source["path"] if bare else None
+        sources[key] = raw.decode("utf-8")
     labels = spec.get("labels", {})
     if not isinstance(labels, dict) or not set(labels) <= {"current", "historical"}:
         raise Refused("labels has only current and historical lists")
@@ -270,17 +335,21 @@ def assemble(path: Path, template: bool = False) -> list[Step]:
         parts = entry["parts"]
         if not isinstance(parts, list) or not parts:
             raise Refused(f"step {name}: parts must be a non-empty list")
-        pieces = []
-        for part in parts:
-            text, origin = _part(name, part, sources, paths)
-            if LANE_NAME.search(text.replace("\\\n", "")) and origin not in LANE_BLOCKS:
-                raise Refused(f"step {name}: only a reviewed lane-boundary block may name "
-                              "the lane CLI (#210 lane-output contract)")
-            pieces.append(text)
-        text = "".join(pieces)
+        pieces = [piece for part in parts for piece in _part(name, part, sources)]
+        # A piece ending in a line continuation would splice into the next piece,
+        # rewriting a reviewed fence's first command (`IGNORED=\` before S1).
+        if any(_continues(body) for body, _ in pieces):
+            raise Refused(f"step {name}: a part ends in a line continuation")
+        # Every piece then ends at a line break, so no word spans two pieces and each
+        # is checked alone, comments included (deciding what is a comment would need
+        # bash's quote state across lines).
+        if any(_invokes(_normalized(body))
+               for body, reviewed in pieces if not reviewed):
+            raise Refused(f"step {name}: only a reviewed lane-boundary block may invoke "
+                          "the lane CLI (#210 lane-output contract)")
+        text = "".join(body for body, _ in pieces)
         allowed = current | (historical_labels if historical else set())
-        # Bash joins continued lines and adjacent quoted fragments into one word.
-        joined = SHELL_QUOTING.sub("", text.replace("\\\n", ""))
+        joined = _normalized(text)
         stray = sorted({label for label in LABEL.findall(joined) if label not in allowed})
         if stray:
             raise Refused(f"step {name}: undeclared or historical labels {stray}")
