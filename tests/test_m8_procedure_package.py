@@ -533,6 +533,8 @@ def test_cli_builds_with_a_values_file(tmp_path):
     "readonly() { :; }", "function readonly { :; }", "builtin () { :; }",
     "x=1; printf() { :; }", "enable -n readonly", "shopt -s expand_aliases",
     "function test() { :; }", "true && command enable -n readonly",
+    # enable after a reserved word, and the hook that could mask a disabled builtin.
+    "if true; then enable -n readonly; fi", "command_not_found_handle() { :; }",
 ])
 def test_no_unreviewed_part_may_rebind_a_bash_builtin(tmp_path, text):
     """A function, enable or aliases could intercept the generated readonly line
@@ -542,7 +544,7 @@ def test_no_unreviewed_part_may_rebind_a_bash_builtin(tmp_path, text):
 
 
 def test_ordinary_functions_and_reads_of_builtin_words_pass(tmp_path):
-    text = "record_check() { test -n x; }; echo readonly enable"
+    text = "record_check() { test -n x; }; echo readonly"
     assert "record_check()" in accepted(procedure(tmp_path, _with_literal(text)))[0].text
 
 

@@ -41,6 +41,21 @@ lists (a reviewed branch such as a measured or unmeasured refresh), and an optio
 them. The transport checks framing only; a record's values are a typed checker's and
 a reviewer's job.
 
+**Threat model.** Its input is a procedure document the owner reviews and merges;
+reviewed frozen fences are pinned by digest. Its lints catch honest composition
+mistakes and close named mechanisms by rule:
+- invoking the lane outside a reviewed fence;
+- splicing words across parts;
+- unfilled placeholders and declarations;
+- writing a measured session value (also refused by bash: the fill is ``readonly``);
+- rebinding a bash builtin (a function of a builtin's or hook's name, ``enable``,
+  aliases).
+
+It does not interpret shell. Code assembled and run at run time (``eval`` of a
+built string, sourcing generated text, indirect expansion, encoded escapes) is
+visible only to the review of the few unreviewed lines a procedure adds, and is out
+of scope here.
+
 ``build`` writes ``<step>.sh``, ``<step>.expected.json`` (LF only) and ``MANIFEST.sha256``
 (``sha256sum --check`` format) into ``OUT``, which it claims with an exclusive
 ``mkdir``. The manifest is written last, so a package without one is incomplete. It
@@ -141,6 +156,8 @@ _BUILTIN_NAMES = (
     "readarray readonly return set shift shopt source suspend test times trap true type "
     "typeset ulimit umask unalias unset wait")
 BUILTINS = frozenset(_BUILTIN_NAMES.split())
+# Functions bash itself calls by name, which could mask a disabled builtin.
+HOOKS = frozenset({"command_not_found_handle"})
 FUNCTION_NAME = re.compile(
     r"(?:^|[;&|(){}\s])(?:function\s+([^\s(){};&|]+)|([^\s(){};&|]+)\s*\(\s*\))")
 
@@ -148,8 +165,10 @@ FUNCTION_NAME = re.compile(
 def _rebinds_a_builtin(text: str) -> bool:
     """Whether normalized text could change what a builtin name runs."""
     names = {name for match in FUNCTION_NAME.finditer(text) for name in match.groups() if name}
-    enabled = re.search(r"(?m)(?:^|[;&|(){}])\s*(?:(?:builtin|command)\s+)*enable\b", text)
-    return bool(names & BUILTINS) or bool(enabled) or "expand_aliases" in text
+    # The `enable` token anywhere, as for the lane module: its command positions
+    # (after `then`, `do`, `&&`, ...) are bash's grammar, not a list to keep.
+    return bool(names & (BUILTINS | HOOKS)) or bool(re.search(
+        r"\benable\b|\bexpand_aliases\b", text))
 
 
 def _continues(body: str) -> bool:

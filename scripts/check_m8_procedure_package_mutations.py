@@ -74,7 +74,7 @@ MUTANTS = (
      "if any(_rebinds_a_builtin(_normalized(body))", "if False and any(_rebinds_a_builtin(body)",
      TESTS + "test_no_unreviewed_part_may_rebind_a_bash_builtin[readonly() { :; }]"),
     ("a function named for a builtin rebinds it", MODULE + "_rebinds_a_builtin",
-     "bool(names & BUILTINS)", "False",
+     "bool(names & (BUILTINS | HOOKS))", "False",
      TESTS + "test_no_unreviewed_part_may_rebind_a_bash_builtin[readonly() { :; }]"),
     ("a filled session value is readonly in bash", MODULE + "assemble",
      'filled = f"readonly {key}={value}"', 'filled = f"{key}={value}"',
