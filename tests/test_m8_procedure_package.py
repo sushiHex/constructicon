@@ -199,10 +199,15 @@ def test_a_part_ending_in_a_line_continuation_refuses(tmp_path, splice):
     # A quoted or escaped hash is a word, not a comment (connector review of #222).
     '\\"#\\" || \\"${LANE[@]}\\" startup',
     "\\\\# x; \\\"${LANE[@]}\\\" startup",
-    # A hash line that continues the previous word is not a comment either.
+    # A hash line that continues the previous word, or sits inside an open quote.
     'echo a\\\\\\n#; \\"${LANE[@]}\\" startup',
-], ids=["quoted-hash", "escaped-hash", "continued-hash"])
-def test_only_a_real_comment_line_is_ignored(tmp_path, text):
+    'echo \\"\\n#\\"; \\"${LANE[@]}\\" startup',
+    # So a real comment naming the lane is refused too: lines are never classified.
+    "# see the LANE array",
+    "# codex_lane.py prints its summary",
+], ids=["quoted-hash", "escaped-hash", "continued-hash", "open-quote-hash", "comment-lane",
+        "comment-module"])
+def test_hash_lines_are_checked_like_any_text(tmp_path, text):
     with pytest.raises(package.Refused, match="only a reviewed lane-boundary block"):
         package.assemble(procedure(tmp_path, _with_literal(text)))
 
@@ -222,11 +227,9 @@ def _with_literal(text: str) -> str:
     # A parenthesized import across lines is the same statement.
     "from constructicon.substrate.executors.codex_lane import (\\n    EVIDENCE_DOMAIN,"
     "\\n    LANE_SCHEMA,\\n)",
-    "# codex_lane.py prints its summary; constructicon.substrate.executors.codex_lane",
-    "  # see the LANE array",
 ])
-def test_constant_imports_and_comments_are_not_invocations(tmp_path, text):
-    """The evidence checkers import constants from codex_lane, and comments never run."""
+def test_constant_imports_are_not_invocations(tmp_path, text):
+    """The evidence checkers import constants from codex_lane."""
     built = accepted(procedure(tmp_path, _with_literal(text)))[0].text
     assert text.replace("\\n", "\n").replace("\\t", "\t") in built
 

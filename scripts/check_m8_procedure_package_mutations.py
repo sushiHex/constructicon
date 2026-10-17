@@ -1,7 +1,8 @@
 """Lane-boundary lint mutations for the procedure packager (#210, #220).
 
 Each mutant removes one part of the lint: the continuation refusal and its odd-run
-rule, an invocation form, the constants-only import exemption, the content-keyed allowlist or
+rule, an invocation form, the constants-only import exemption, checking hash lines,
+the content-keyed allowlist or
 shell normalization. Only assertion failures count as kills.
 """
 
@@ -31,19 +32,16 @@ MUTANTS = (
      "[from other.codex_lane import EVIDENCE_DOMAIN]"),
     ("a constants import with any whitespace is not an invocation", MODULE + "_invokes",
      "FROM_BEFORE.search(before)", "before.endswith('from ')",
-     TESTS + "test_constant_imports_and_comments_are_not_invocations"
+     TESTS + "test_constant_imports_are_not_invocations"
      "[from\\tconstructicon.substrate.executors.codex_lane import EVIDENCE_DOMAIN]"),
     ("only uppercase constants may be imported from the lane", MODULE + "_invokes",
      "CONSTANTS_AFTER.match(after)", "True",
      TESTS + "test_importing_anything_that_can_dispatch_the_lane_refuses"
      "[from constructicon.substrate.executors.codex_lane import main; main()]"),
-    ("comments are decided before quotes are removed", MODULE + "assemble",
-     "_invokes(_normalized(_comment_free(body)))",
-     "_invokes(COMMENT_LINE.sub('', _normalized(body)))",
-     TESTS + "test_only_a_real_comment_line_is_ignored[quoted-hash]"),
-    ("a line continuing the previous word is no comment", MODULE + "_comment_free",
-     "if not joined and COMMENT_LINE", "if COMMENT_LINE",
-     TESTS + "test_only_a_real_comment_line_is_ignored[continued-hash]"),
+    ("hash lines are checked like any text", MODULE + "assemble",
+     "_invokes(_normalized(body))",
+     "_invokes(re.sub(r'(?m)^[ \\t]*#.*$', '', _normalized(body)))",
+     TESTS + "test_hash_lines_are_checked_like_any_text[quoted-hash]"),
     ("review standing is the fence's exact bytes", MODULE + "_part",
      'hashlib.sha256(body.encode("utf-8")).hexdigest() in LANE_BLOCKS', "True",
      TESTS + "test_review_standing_follows_exact_bytes_not_file_or_heading_names"),

@@ -41,8 +41,9 @@ step, source or heading, some do not. It refuses:
   fences names the lane CLI (``LANE``, ``LANE_MODULE``, or any mention of
   ``codex_lane`` other than importing uppercase constants from the fully qualified
   module), and a part ending in a line continuation.
-  Each unreviewed part is checked after shell normalization, without whole-line
-  comments; with no trailing continuation, no word spans two parts. A fence is reviewed
+  Each unreviewed part is checked after shell normalization, comments included: a
+  `#` may be quoted or continued from the line before, so prose that names the lane
+  is refused too. With no trailing continuation, no word spans two parts. A fence is reviewed
   only when its exact bytes are on the allowlist, wherever it is read from. Bytes
   do not freeze shell context: an earlier unreviewed part can still redefine a
   function or variable a reviewed fence uses, which is the review's job;
@@ -88,12 +89,11 @@ FROM_BEFORE = re.compile(r"(?:^|[\s;(])from\s+constructicon\.substrate\.executor
 _NAMES = r"[A-Z][A-Z0-9_]*(?:\s*,\s*[A-Z][A-Z0-9_]*)*"
 CONSTANTS_AFTER = re.compile(
     rf"\s+import\s+(?:\(\s*{_NAMES}\s*,?\s*\)|{_NAMES})\s*(?:;|$)")
-COMMENT_LINE = re.compile(r"^[ \t]*#.*$", re.MULTILINE)
 
 
 def _invokes(text: str) -> bool:
-    """Whether normalized, comment-free text names the lane CLI other than as the
-    module of a `from` statement that imports only uppercase constants."""
+    """Whether normalized text names the lane CLI other than as the module of a
+    `from` statement that imports only uppercase constants."""
     for match in LANE_INVOCATION.finditer(text):
         if match.group(0) == "codex_lane":
             start = text.rfind("\n", 0, match.start()) + 1
@@ -109,19 +109,6 @@ def _invokes(text: str) -> bool:
                 continue
         return True
     return False
-
-
-def _comment_free(body: str) -> str:
-    """The raw text without whole-line comments, decided before any quote is
-    removed: only an unquoted, unescaped leading `#` on a line that does not continue
-    the previous one starts a comment (`"#" || cmd` runs `cmd`)."""
-    lines, joined = [], False
-    for line in body.splitlines(keepends=True):
-        if not joined and COMMENT_LINE.fullmatch(line.rstrip("\n")):
-            line = "\n" if line.endswith("\n") else ""
-        lines.append(line)
-        joined = _continues(line if line.endswith("\n") else line + "\n")
-    return "".join(lines)
 
 
 def _continues(body: str) -> bool:
@@ -354,8 +341,9 @@ def assemble(path: Path, template: bool = False) -> list[Step]:
         if any(_continues(body) for body, _ in pieces):
             raise Refused(f"step {name}: a part ends in a line continuation")
         # Every piece then ends at a line break, so no word spans two pieces and each
-        # is checked alone. Whole-line comments never run; their prose is not a call.
-        if any(_invokes(_normalized(_comment_free(body)))
+        # is checked alone, comments included (deciding what is a comment would need
+        # bash's quote state across lines).
+        if any(_invokes(_normalized(body))
                for body, reviewed in pieces if not reviewed):
             raise Refused(f"step {name}: only a reviewed lane-boundary block may invoke "
                           "the lane CLI (#210 lane-output contract)")
