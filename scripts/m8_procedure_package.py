@@ -188,6 +188,10 @@ LANE_BLOCKS = {
         ("M8-N4-operator-commands.md", "S1. Prepare", 0),
     "cbeff595f802b4576cc663dd8fbf7f1deba139831a2754c8fd9891ab759f5eae":
         ("M8-N4-operator-commands.md", "S6a. Maintenance-lock positive control", 0),
+    # The physical preflight: OC S3's preflight line, whose readiness record goes to
+    # grep and which returns before the lane's summary path (codex_lane.py:757-765).
+    "8e63ea22469943d003a0a8c17e19ada2f33df12acae49544285c32b4efe90e9f":
+        ("M8-maintenance-q12-continuation.md", "Q5: new and renamed VM fences", 1),
     # Names the module only in its import check; it never runs the CLI.
     "f7dc20309ff8bc803def1d9e808a573ffa59e4c0b2a5c1dc592ef684a3a7d429":
         ("M8-N4-host-runtime.md", "R19 — Import check as `m8-service`", 0),
