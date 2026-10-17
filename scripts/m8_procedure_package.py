@@ -472,10 +472,11 @@ def assemble(path: Path, template: bool = False,
                                   flags=re.MULTILINE)
             if count:
                 used.add(key)
-            # Every assignment of a measured name is this session's value, so a stale
+            # Every line that assigns a measured name in any form (bare, export,
+            # readonly, declare, after `;`) is exactly the session value, so a stale
             # literal in one step is never vouched for by a fill in another.
             if any(line != f"{key}={value}" for line in
-                   re.findall(rf"^[ \t]*{key}=.*$", text, flags=re.MULTILINE)):
+                   re.findall(rf"^.*\b{key}=.*$", _normalized(text), flags=re.MULTILINE)):
                 raise Refused(f"step {name}: {key} is assigned other than its session value")
         allowed = current | (historical_labels if historical else set())
         joined = _normalized(text)
