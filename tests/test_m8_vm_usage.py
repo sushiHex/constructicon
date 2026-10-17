@@ -1,4 +1,9 @@
-"""Fake subprocess runner only; no PowerShell, Hyper-V or VM is ever contacted."""
+"""No Hyper-V service or VM is ever contacted.
+
+Most tests fake the subprocess runner. The ``@ACTUAL`` tests (Windows only) run
+real Windows PowerShell through the production argv and subprocess boundary,
+with ``Get-VM``, ``Get-VMCheckpoint`` and ``Get-Process`` replaced by fakes.
+"""
 
 from __future__ import annotations
 

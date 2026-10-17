@@ -9,6 +9,15 @@ name: Public text
 # workflow event at all. The hourly sweep covers reviews, commits, commit
 # comments, edits and GITHUB_TOKEN-posted text within GITHUB_TOKEN's
 # 1,000-requests-per-hour repository budget.
+#
+# No concurrency group (#221): every event run executes, so every revision an
+# event carries is scanned. A per-item group would let GitHub cancel a pending
+# run when a newer event for the same item queues, leaving the skipped revision
+# to the sweep only if it is still current; `queue: max` would keep up to 100
+# pending, then cancel too. The cost is runner time and parallel runs drawing
+# on the same API budget. The scan is read-only, so parallel runs cannot
+# interfere. `exec` makes Python the step's entry process, so the runner's
+# cancellation signals reach it and it reports the findings it already made.
 
 on:
   issues:
@@ -25,9 +34,6 @@ permissions:
   contents: read
   issues: read
   pull-requests: read
-
-concurrency:
-  group: public-text-${{ github.event_name }}-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
 
 jobs:
   scan:
@@ -50,7 +56,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = schedule ]; then
-            python3 -I -S -B scripts/ci/check_public_text.py sweep
+            exec python3 -I -S -B scripts/ci/check_public_text.py sweep
           else
-            python3 -I -S -B scripts/ci/check_public_text.py event "$GITHUB_EVENT_PATH"
+            exec python3 -I -S -B scripts/ci/check_public_text.py event "$GITHUB_EVENT_PATH"
           fi

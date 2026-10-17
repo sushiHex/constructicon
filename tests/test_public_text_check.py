@@ -6,7 +6,10 @@ import hashlib
 import io
 import json
 import re
-from datetime import UTC, datetime
+import signal
+import urllib.error
+from datetime import UTC, datetime, timedelta
+from email.message import Message
 from pathlib import Path
 
 import pytest
@@ -19,24 +22,59 @@ PATTERNS = f"{SECRET}\n 10\\.9\\.8\\.\\d+ \n\n"
 LEAK = f"/home/{SECRET.lower()}/m8-launch"
 
 
+class Response(io.BytesIO):
+    """A response body with headers, as ``urlopen`` returns."""
+
+    def __init__(self, body: bytes, link: str = "") -> None:
+        super().__init__(body)
+        self.headers = {"Link": link} if link else {}
+
+
+# The repository and an empty activity listing, unless a test routes its own.
+DEFAULT_ROUTES = {"": {"default_branch": "main"}, "activity": {"linked": [[]]}}
+
+
 class FakeAPI:
-    """Routes ``/repos/owner/repo/<path>`` to canned JSON pages or raw bytes."""
+    """Routes ``/repos/owner/repo/<path>`` to canned JSON pages or raw bytes.
+
+    ``{"linked": [page, ...]}`` is a listing paged by ``Link`` cursors, as the
+    activity listing is; an exception instance is raised, as a failed request.
+    """
 
     def __init__(self, routes: dict[str, object]) -> None:
-        self.routes, self.seen = routes, []
+        self.routes, self.seen = {**DEFAULT_ROUTES, **routes}, []
 
     def __call__(self, request, timeout):
         assert request.get_header("Authorization") == "Bearer token"
-        path = request.full_url.split("/repos/owner/repo/", 1)[1]
+        located = re.fullmatch(r"https://api\.github\.com/(?:repos/owner/repo|repositories/1)/?(.*)",
+                               request.full_url)
+        assert located is not None, request.full_url
+        path = located.group(1)
         self.seen.append(path)
         base, _, query = path.partition("?")
         number = re.search(r"(?:^|&)page=(\d+)", query)
         page = int(number.group(1)) if number else None
         value = self.routes.get(base)
+        if isinstance(value, BaseException):
+            raise value
+        if callable(value):
+            value = value()
         if value is None and base.startswith("commits/") and "commits/*" in self.routes:
             value = self.routes["commits/*"]
         if value is None and page:
             value = []
+        if isinstance(value, dict) and "linked" in value:
+            cursor = re.search(r"(?:^|&)after=(\d+)", query)
+            index = int(cursor.group(1)) if cursor else 0
+            pages = value["linked"]
+            link = ""
+            if index + 1 < len(pages):
+                origin = value.get("origin", "https://api.github.com/repositories/1/activity")
+                link = f'<{origin}?per_page=100&after={index + 1}>; rel="next"'
+            elif index and not value.get("linkless"):  # a later page links back
+                link = '<https://api.github.com/repositories/1/activity?before=0>; rel="prev"'
+            body = json.dumps(pages[index]).encode()
+            return io.BytesIO(body) if value.get("headerless") else Response(body, link)
         if isinstance(value, dict) and "pages" in value:  # a paged object such as a commit
             value = value["pages"][page - 1] if page <= len(value["pages"]) else {"files": []}
         if isinstance(value, bytes):
@@ -44,7 +82,7 @@ class FakeAPI:
         if page is not None and isinstance(value, list) and value and isinstance(value[0], list):
             value = value[page - 1] if page <= len(value) else []
         assert value is not None, f"unexpected request {path}"
-        return io.BytesIO(json.dumps(value).encode())
+        return Response(json.dumps(value).encode())
 
 
 def pull(number: int = 7, **fields) -> dict:
@@ -378,5 +416,290 @@ def test_workflow_runs_only_default_branch_code_and_reads_only_the_secret():
     assert "ref: ${{ github.event.repository.default_branch }}" in steps
     assert "persist-credentials: false" in steps and "head" not in steps
     assert "PUBLIC_TEXT_PATTERNS: ${{ secrets.PUBLIC_TEXT_PATTERNS }}" in steps
-    permissions = workflow.split("\npermissions:", 1)[1].split("\nconcurrency:", 1)[0]
+    permissions = workflow.split("\npermissions:", 1)[1].split("\njobs:", 1)[0]
     assert "write" not in permissions and "actions: read" in permissions
+
+
+def test_every_event_run_executes_and_python_receives_the_runner_signals():
+    """#221: no concurrency group cancels a pending event run, and ``exec``
+    makes Python the step's entry process, which the runner signals."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    code = "\n".join(line for line in workflow.splitlines() if not line.lstrip().startswith("#"))
+    assert "concurrency" not in code and "queue" not in code
+    run_step = workflow.split("run: |", 1)[1]
+    assert run_step.count("exec python3 -I -S -B scripts/ci/check_public_text.py ") == 2
+    assert run_step.count("python3") == 2
+
+
+# --- #216: branch commits by ref update, and tags --------------------------------
+
+SINCE = datetime(2026, 10, 16, 0, 0, tzinfo=UTC)
+NOW = datetime(2026, 10, 16, 3, 0, tzinfo=UTC)
+P, X, Y, Q = ("1" * 40, "2" * 40, "3" * 40, "4" * 40)
+ZERO = "0" * 40
+
+
+def update(ref: str, before: str, after: str, at: str = "2026-10-16T02:00:00Z",
+           kind: str = "push") -> dict:
+    return {"ref": ref, "before": before, "after": after, "timestamp": at, "activity_type": kind}
+
+
+def leaky_commit(sha: str) -> dict:
+    """An old-dated commit whose own diff carries the leak."""
+    return {f"commits/{sha}": {"files": [
+        {"filename": "notes.md", "status": "added", "patch": f"+{LEAK}"}]}}
+
+
+def comparison(*shas: str, total: int | None = None) -> dict:
+    return {"total_commits": len(shas) if total is None else total,
+            "commits": [merge_commit(sha, "old", "2026-01-01T00:00:00Z") for sha in shas]}
+
+
+def swept(routes: dict, since=SINCE, now=NOW):
+    api = FakeAPI(routes)
+    try:
+        found = check.findings(check.sweep(check.GitHub("owner/repo", "token", api), since, now),
+                               check.patterns(PATTERNS))
+    except check.Incomplete as error:  # an assertion, so a mutant's refusal counts as a kill
+        pytest.fail(f"the sweep was incomplete: {error}")
+    return found, api
+
+
+def test_an_old_dated_commit_pushed_after_the_cursor_is_scanned():
+    """The acceptance of #216: the date-filtered listing misses the commit; its
+    push, recorded after the cursor, does not."""
+    found, api = swept({
+        "branches": [{"name": "topic"}],
+        "commits": [],  # dated before the cursor, so the dated listing is empty
+        "activity": {"linked": [[
+            update("refs/heads/topic", P, X),
+            # Before the cursor: an earlier sweep covered it, so it is not compared.
+            update("refs/heads/topic", Q, P, at="2026-10-15T20:00:00Z"),
+        ]]},
+        f"compare/{P}...{X}": comparison(X),
+        **leaky_commit(X),
+    })
+    assert found == [("branch file", X[:12])]
+    assert "activity?per_page=100&time_period=day" in api.seen
+    assert f"compare/{P}...{X}?per_page=100&page=1" in api.seen
+    assert not any(path.startswith(f"compare/{Q}") for path in api.seen)
+
+
+def test_activity_cursor_pages_are_followed_and_the_period_widens_with_the_window():
+    found, api = swept({
+        "activity": {"linked": [[update("refs/heads/a", Q, P)],
+                                [update("refs/heads/b", P, X)]]},
+        f"compare/{Q}...{P}": comparison(),
+        f"compare/{P}...{X}": comparison(X),
+        **leaky_commit(X),
+    }, now=SINCE + timedelta(days=3))
+    assert found == [("branch file", X[:12])]
+    assert "activity?per_page=100&time_period=week" in api.seen
+    assert "activity?per_page=100&after=1" in api.seen
+    _, api = swept({}, now=SINCE + timedelta(days=8))
+    assert "activity?per_page=100" in api.seen
+
+
+def test_new_and_deleted_branches_and_the_default_branch_creation_are_covered():
+    deleted = f"wip-{SECRET}"
+    found, api = swept({
+        "activity": {"linked": [[
+            update("refs/heads/new", ZERO, X, kind="branch_creation"),
+            update("refs/heads/main", ZERO, Y, kind="branch_creation"),
+            update(f"refs/heads/{deleted}", P, ZERO, kind="branch_deletion"),
+        ]]},
+        f"compare/main...{X}": comparison(X),
+        "commits": [merge_commit(Y, f"first {LEAK}")],
+        **leaky_commit(X),
+        f"commits/{Y}": {"files": []},
+    })
+    assert found == [("branch file", X[:12]), ("branch commit", Y[:12]),
+                     ("branch name", hashlib.sha256(deleted.encode()).hexdigest()[:12])]
+    # A new branch is compared with the default branch; the default branch's own
+    # creation lists its whole history; a deletion is compared with nothing.
+    assert f"commits?sha={Y}&per_page=100&page=1" in api.seen
+    assert not any(path.startswith(f"compare/{P}") for path in api.seen)
+
+
+def test_comparison_pages_are_followed_and_their_declared_count_met():
+    clean = [merge_commit(f"{n:040x}", "clean") for n in range(100)]
+    found, api = swept({
+        "activity": {"linked": [[update("refs/heads/topic", P, X)]]},
+        f"compare/{P}...{X}": {"pages": [
+            {"total_commits": 101, "commits": clean},
+            {"total_commits": 101, "commits": [merge_commit(X, "late")]}]},
+        "commits/*": {"files": []},
+        **leaky_commit(X),
+    })
+    assert found == [("branch file", X[:12])]
+    assert f"compare/{P}...{X}?per_page=100&page=2" in api.seen
+
+
+def test_a_commit_already_scanned_this_sweep_is_not_fetched_again():
+    found, api = swept({
+        "branches": [{"name": "topic"}],
+        "commits": [merge_commit(X, "new")],
+        "activity": {"linked": [[update("refs/heads/topic", P, X)]]},
+        f"compare/{P}...{X}": comparison(X),
+        **leaky_commit(X),
+    })
+    assert found == [("branch file", X[:12])]
+    assert sum(path.startswith(f"commits/{X}") for path in api.seen) == 1
+
+
+@pytest.mark.parametrize("failure", [
+    "unknown previous head", "short comparison", "endless comparison", "malformed head",
+    "endless activity", "link outside the API", "page without headers",
+    "later page without links", "full page without next", "no default branch", "no timestamp",
+])
+def test_every_ref_update_failure_fails_closed(tmp_path, monkeypatch, capsys, failure):
+    pushed = {"activity": {"linked": [[update("refs/heads/topic", P, X)]]}}
+    routes = {
+        "unknown previous head": {**pushed, f"compare/{P}...{X}": urllib.error.HTTPError(
+            "https://api.github.com/", 404, "Not Found", Message(), None)},
+        "short comparison": {**pushed, f"compare/{P}...{X}": comparison(X, total=2)},
+        "endless comparison": {**pushed, f"compare/{P}...{X}": {"pages": [
+            comparison(*[X] * 100, total=100 * check.MAX_PAGES)] * check.MAX_PAGES}},
+        # Comparable if accepted: only the refusal itself fails it.
+        "malformed head": {"activity": {"linked": [[update("refs/heads/topic", P, "head")]]},
+                           f"compare/{P}...head": comparison()},
+        "endless activity": {"activity": {"linked": [[]] * (check.MAX_PAGES + 1)}},
+        "link outside the API": {"activity": {"linked": [[], []],
+                                              "origin": "https://example.invalid/activity"}},
+        "page without headers": {"activity": {"linked": [[]], "headerless": True}},
+        "later page without links": {"activity": {"linked": [[], []], "linkless": True}},
+        # GitHub omits ``next`` from a full last page too: refused, as noise.
+        "full page without next": {"activity": {"linked": [
+            [update("refs/heads/old", P, X, at="2026-10-15T00:00:00Z")] * 100]}},
+        "no default branch": {"": {}},
+        "no timestamp": {"activity": {"linked": [[{"ref": "refs/heads/topic", "before": P,
+                                                    "after": X}]]}},
+    }[failure]
+    status, out, _ = run(tmp_path, monkeypatch, capsys,
+                         ["sweep", "--since", "2026-10-16T00:00:00Z"],
+                         {**routes, "commits/*": {"files": []}})
+    # The refusal's own class: a fake's assertion over an unexpected request is not it.
+    expected = {"unknown previous head": "HTTPError", "no timestamp": "KeyError"}
+    assert status == 1, failure
+    assert f"public text check incomplete ({expected.get(failure, 'Incomplete')})" in out
+
+
+def test_a_failing_surface_does_not_hide_the_rest(tmp_path, monkeypatch, capsys):
+    """An obstruction that recurs every sweep (here an unreachable previous
+    head) still fails the run, but every other surface is scanned each time."""
+    routes = {"activity": {"linked": [[update("refs/heads/topic", P, X)]]},
+              f"compare/{P}...{X}": urllib.error.HTTPError(
+                  "https://api.github.com/", 404, "Not Found", Message(), None),
+              "comments": [{"id": 71, "body": LEAK, "updated_at": "2026-10-16T01:00:00Z"}]}
+    status, out, _ = run(tmp_path, monkeypatch, capsys,
+                         ["sweep", "--since", "2026-10-16T00:00:00Z"], routes)
+    assert status == 1
+    assert "::error::commit comment 71 matches a private pattern" in out
+    assert "public text check incomplete (HTTPError)" in out
+
+
+def test_every_tag_is_scanned_in_full():
+    """Tags have no update record: each sweep reads every tag's name, every
+    annotated tag's message, and each commit a tag reaches off the default branch."""
+    leaky_tag = f"rel-{SECRET}"
+    tag_object = "5" * 40
+    found, api = swept({
+        "tags": [{"name": "v1"}, {"name": leaky_tag}, {"name": "signed"}, {"name": "renamed"}],
+        "git/ref/tags/v1": {"object": {"type": "commit", "sha": X}},
+        f"git/ref/tags/{leaky_tag}": {"object": {"type": "commit", "sha": Y}},
+        "git/ref/tags/signed": {"object": {"type": "tag", "sha": tag_object}},
+        f"git/tags/{tag_object}": {"tag": "signed", "message": f"release {LEAK}",
+                                   "tagger": {"name": "t"},
+                                   "object": {"type": "commit", "sha": Q}},
+        # An annotated tag's own name need not be its ref's.
+        "git/ref/tags/renamed": {"object": {"type": "tag", "sha": "7" * 40}},
+        f"git/tags/{'7' * 40}": {"tag": f"internal-{SECRET}", "message": "clean",
+                                 "object": {"type": "commit", "sha": Q}},
+        f"compare/main...{X}": comparison(X),
+        f"compare/main...{Y}": comparison(),
+        f"compare/main...{Q}": comparison(),
+        **leaky_commit(X),
+    })
+
+    def digest(name: str) -> str:
+        return hashlib.sha256(name.encode()).hexdigest()[:12]
+
+    assert found == [("tag file", X[:12]), ("tag name", digest(leaky_tag)),
+                     ("tag message", digest("signed")), ("tag message", digest("renamed"))]
+    assert "tags?per_page=100&page=1" in api.seen
+
+
+@pytest.mark.parametrize("target", ["blob", "tree", "too deep", "missing"])
+def test_a_tag_that_reaches_no_commit_fails_closed(tmp_path, monkeypatch, capsys, target):
+    nested = "6" * 40
+    named = {"blob": {"type": "blob", "sha": nested}, "tree": {"type": "tree", "sha": nested},
+             "too deep": {"type": "tag", "sha": nested}, "missing": None}[target]
+    routes = {"tags": [{"name": "v1"}], "git/ref/tags/v1": {"object": named},
+              # A tag naming itself never reaches a commit: bounded, then refused.
+              f"git/tags/{nested}": {"message": "m", "object": {"type": "tag", "sha": nested}},
+              # Comparable if accepted: only the refusal itself fails it.
+              f"compare/main...{nested}": comparison()}
+    status, out, _ = run(tmp_path, monkeypatch, capsys,
+                         ["sweep", "--since", "2026-10-16T00:00:00Z"], routes)
+    assert status == 1 and "public text check incomplete (Incomplete)" in out
+
+
+# --- #221: a cancelled or timed-out scan still reports ---------------------------
+
+class Stop(BaseException):
+    """Not an ``Exception``: as a cancellation ends the scan."""
+
+
+def test_a_scan_stopped_by_a_base_exception_still_reports_what_it_found(
+        tmp_path, monkeypatch, capsys):
+    payload = {"issue": {"number": 41, "body": LEAK}, "pull_request": pull()}
+    try:
+        status, out, _ = run(tmp_path, monkeypatch, capsys, event_args(tmp_path, payload),
+                             {"pulls/7/commits": Stop()})
+    except Stop:  # an assertion, not an escaped BaseException, so it counts as a failure
+        pytest.fail("the stop escaped main unreported")
+    assert status == 1
+    lines = out.splitlines()
+    assert lines[:2] == ["::error::issue 41 matches a private pattern",
+                         "::error::public text check incomplete (Stop)"]
+
+
+@pytest.mark.parametrize("name", ["SIGINT", "SIGTERM"])
+def test_the_runner_signals_end_the_scan_as_cancelled_after_its_findings(
+        tmp_path, monkeypatch, capsys, name):
+    """The runner cancels a step with SIGINT, then SIGTERM: either ends the scan
+    as an incomplete run that has printed its findings."""
+    number = getattr(signal, name)
+    before = signal.getsignal(number)
+    installed = []
+
+    def interrupt():
+        installed.append(signal.getsignal(number))
+        if installed[0] is not before:  # never under pytest's own handler or the default
+            signal.raise_signal(number)
+        return []
+
+    payload = {"issue": {"number": 41, "body": LEAK}, "pull_request": pull()}
+    try:
+        status, out, _ = run(tmp_path, monkeypatch, capsys, event_args(tmp_path, payload),
+                             {"pulls/7/commits": interrupt})
+    except BaseException as error:  # an escape is the failure under test
+        pytest.fail(f"{type(error).__name__} escaped main unreported")
+    assert len(installed) == 1 and installed[0] is not before, "main installs no handler"
+    assert status == 1
+    assert out.splitlines()[:2] == ["::error::issue 41 matches a private pattern",
+                                    "::error::public text check incomplete (Cancelled)"]
+    assert signal.getsignal(number) == before
+
+
+def test_a_cancellation_ignores_the_runners_next_signal():
+    """The runner follows SIGINT with SIGTERM: once cancelled, the report and
+    the handler restoration that follow are not interrupted again."""
+    previous = {number: signal.getsignal(number) for number in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        with pytest.raises(check.Cancelled):
+            check._cancel(signal.SIGINT, None)
+        assert [signal.getsignal(number) for number in previous] == [signal.SIG_IGN] * 2
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
