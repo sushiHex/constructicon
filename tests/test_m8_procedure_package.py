@@ -195,22 +195,37 @@ def test_a_part_ending_in_a_line_continuation_refuses(tmp_path, splice):
         package.assemble(procedure(tmp_path, spliced))
 
 
+def _with_literal(text: str) -> str:
+    return QUALIFICATION.replace(
+        '{literal = "W=/home/m8-service/m8-maint-q12"}',
+        '{literal = "W=/home/m8-service/m8-maint-q12"}, {literal = "' + text + '"}')
+
+
 @pytest.mark.parametrize("text", [
     "from constructicon.substrate.executors.codex_lane import EVIDENCE_DOMAIN",
-    "import constructicon.substrate.executors.codex_lane as lane",
-    # Legal whitespace in an import is still an import.
-    "import  constructicon.substrate.executors.codex_lane as lane",
+    # Legal whitespace and a constant list are still a constants import.
     "from\tconstructicon.substrate.executors.codex_lane import EVIDENCE_DOMAIN",
-    "x = 1; import constructicon.substrate.executors.codex_lane",
+    "from  constructicon.substrate.executors.codex_lane  import  (EVIDENCE_DOMAIN, LANE_SCHEMA)",
+    "x = 1; from constructicon.substrate.executors.codex_lane import QUALIFICATION_PLANS; y = 2",
     "# codex_lane.py prints its summary; constructicon.substrate.executors.codex_lane",
     "  # see the LANE array",
 ])
-def test_imports_and_comments_are_not_invocations(tmp_path, text):
-    """The evidence checkers import from codex_lane, and comments never run."""
-    allowed = QUALIFICATION.replace(
-        '{literal = "W=/home/m8-service/m8-maint-q12"}',
-        '{literal = "W=/home/m8-service/m8-maint-q12"}, {literal = "' + text + '"}')
-    assert text in accepted(procedure(tmp_path, allowed))[0].text
+def test_constant_imports_and_comments_are_not_invocations(tmp_path, text):
+    """The evidence checkers import constants from codex_lane, and comments never run."""
+    assert text in accepted(procedure(tmp_path, _with_literal(text)))[0].text
+
+
+@pytest.mark.parametrize("text", [
+    # An imported entry point runs the CLI (connector review of #222).
+    "from constructicon.substrate.executors.codex_lane import main; main()",
+    "import constructicon.substrate.executors.codex_lane as lane; lane.main()",
+    "import constructicon.substrate.executors.codex_lane",
+    "from constructicon.substrate.executors.codex_lane import EVIDENCE_DOMAIN, main",
+    "from constructicon.substrate.executors.codex_lane import (EVIDENCE_DOMAIN,",
+])
+def test_importing_anything_that_can_dispatch_the_lane_refuses(tmp_path, text):
+    with pytest.raises(package.Refused, match="only a reviewed lane-boundary block"):
+        package.assemble(procedure(tmp_path, _with_literal(text)))
 
 
 def test_stale_generation_paths_are_refused_like_the_h7_composition_gap(tmp_path):

@@ -1,7 +1,7 @@
 """Lane-boundary lint mutations for the procedure packager (#210, #220).
 
 Each mutant removes one part of the lint: the continuation refusal and its odd-run
-rule, an invocation form, the import exemption, the content-keyed allowlist or
+rule, an invocation form, the constants-only import exemption, the content-keyed allowlist or
 shell normalization. Only assertion failures count as kills.
 """
 
@@ -26,10 +26,14 @@ MUTANTS = (
      FORMS, "for match in re.finditer(r'\\bLANE\\b|codex_lane\\.py\\b"
      "|\\bconstructicon\\.substrate\\.executors\\.codex_lane\\b', text):",
      INVOKE + "[change5]"),
-    ("an import with any whitespace is not an invocation", MODULE + "_invokes",
-     "if IMPORTED.search(line):", "if line.endswith(('from ', 'import ')):",
-     TESTS + "test_imports_and_comments_are_not_invocations"
+    ("a constants import with any whitespace is not an invocation", MODULE + "_invokes",
+     "FROM_BEFORE.search(before)", "before.endswith('from ')",
+     TESTS + "test_constant_imports_and_comments_are_not_invocations"
      "[from\\tconstructicon.substrate.executors.codex_lane import EVIDENCE_DOMAIN]"),
+    ("only uppercase constants may be imported from the lane", MODULE + "_invokes",
+     "CONSTANTS_AFTER.match(after)", "True",
+     TESTS + "test_importing_anything_that_can_dispatch_the_lane_refuses"
+     "[from constructicon.substrate.executors.codex_lane import main; main()]"),
     ("review standing is the fence's exact bytes", MODULE + "_part",
      'hashlib.sha256(body.encode("utf-8")).hexdigest() in LANE_BLOCKS', "True",
      TESTS + "test_review_standing_follows_exact_bytes_not_file_or_heading_names"),

@@ -75,21 +75,29 @@ PLACEHOLDER = re.compile(r"\bUNREVIEWED\b|\bUNPREPARED\b(?!\.bundle(?:$|[\s;)|&]
 SHELL_QUOTING = re.compile(r"[\"'\\$]")
 # Ways a step can invoke the lane CLI: the array, its module variable, the module
 # name as a command word (`-m` or OC's runpy wrapper `"${PY[@]}" <module>`) or its
-# file. Importing from the module, as the evidence checkers do, is not matched.
+# file. Importing constants from the module, as the evidence checkers do, is not.
 LANE_INVOCATION = re.compile(
     r"\bLANE\b|\bLANE_MODULE\b|codex_lane\.py\b"
     r"|\bconstructicon\.substrate\.executors\.codex_lane\b")
-IMPORTED = re.compile(r"(?:^|[\s;(])(?:from|import)\s+$")
+# `from <module> import CONSTANT, ...` with any whitespace, ending its statement.
+# Only uppercase constants: `import <module>` or a lowercase name (`main`) hands
+# over something that can dispatch the CLI.
+FROM_BEFORE = re.compile(r"(?:^|[\s;(])from\s+$")
+CONSTANTS_AFTER = re.compile(
+    r"\s+import\s+\(?\s*[A-Z][A-Z0-9_]*(?:\s*,\s*[A-Z][A-Z0-9_]*)*\s*\)?\s*(?:;|$)")
 COMMENT_LINE = re.compile(r"^[ \t]*#.*$", re.MULTILINE)
 
 
 def _invokes(text: str) -> bool:
     """Whether normalized, comment-free text names the lane CLI other than as the
-    module of a `from` or `import` statement (any whitespace)."""
+    module of a `from` statement that imports only uppercase constants."""
     for match in LANE_INVOCATION.finditer(text):
         if match.group(0).startswith("constructicon."):
-            line = text[text.rfind("\n", 0, match.start()) + 1:match.start()]
-            if IMPORTED.search(line):
+            start = text.rfind("\n", 0, match.start()) + 1
+            end = text.find("\n", match.end())
+            before = text[start:match.start()]
+            after = text[match.end():len(text) if end < 0 else end]
+            if FROM_BEFORE.search(before) and CONSTANTS_AFTER.match(after):
                 continue
         return True
     return False
@@ -116,6 +124,9 @@ LANE_BLOCKS = {
         ("M8-maintenance-lane-output.md", "L3: explicit refresh", 0),
     "3028af29aa54f1e50f990308fff20733bb7eecfae0e80c14d3f42bfdee39c442":
         ("M8-N4-operator-commands.md", "Setup: fixed controller and evidence checks", 0),
+    # Imports the lane's constants in one multi-line statement; it runs no lane.
+    "e404d62f08ce8cc07e1384db9a71a97b04b931ead6356bb0ceb872f37184c361":
+        ("M8-N4-operator-commands.md", "Setup: fixed controller and evidence checks", 1),
     "1e0049b134c40dc8044dc9ad58c8f97700f56d6440eeb7a8b182bdc732417e45":
         ("M8-N4-operator-commands.md", "S1. Prepare", 0),
     "cbeff595f802b4576cc663dd8fbf7f1deba139831a2754c8fd9891ab759f5eae":
