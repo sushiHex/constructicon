@@ -130,6 +130,28 @@ def _invokes(text: str) -> bool:
     return False
 
 
+# Bash's builtins (`compgen -b`, bash 5): the names generated lines rely on, such
+# as `readonly`. Bash has exactly three ways to change what such a name runs: a
+# function of that name, `enable`, and aliases (inert in scripts without
+# `shopt -s expand_aliases`).
+_BUILTIN_NAMES = (
+    ". : [ alias bg bind break builtin caller cd command compgen complete compopt "
+    "continue declare dirs disown echo enable eval exec exit export false fc fg getopts "
+    "hash help history jobs kill let local logout mapfile popd printf pushd pwd read "
+    "readarray readonly return set shift shopt source suspend test times trap true type "
+    "typeset ulimit umask unalias unset wait")
+BUILTINS = frozenset(_BUILTIN_NAMES.split())
+FUNCTION_NAME = re.compile(
+    r"(?:^|[;&|(){}\s])(?:function\s+([^\s(){};&|]+)|([^\s(){};&|]+)\s*\(\s*\))")
+
+
+def _rebinds_a_builtin(text: str) -> bool:
+    """Whether normalized text could change what a builtin name runs."""
+    names = {name for match in FUNCTION_NAME.finditer(text) for name in match.groups() if name}
+    enabled = re.search(r"(?m)(?:^|[;&|(){}])\s*(?:(?:builtin|command)\s+)*enable\b", text)
+    return bool(names & BUILTINS) or bool(enabled) or "expand_aliases" in text
+
+
 def _continues(body: str) -> bool:
     """Whether bash joins the next line to this one: an odd run of backslashes before
     the final newline (an even run is literal backslashes)."""
@@ -472,6 +494,11 @@ def assemble(path: Path, template: bool = False,
                for body, reviewed in pieces if not reviewed):
             raise Refused(f"step {name}: only a reviewed lane-boundary block may invoke "
                           "the lane CLI (#210 lane-output contract)")
+        # Generated lines (`readonly NAME=value`) and reviewed fences rely on bash's
+        # builtins meaning themselves; no unreviewed part may rebind one.
+        if any(_rebinds_a_builtin(_normalized(body)) for body, reviewed in pieces
+               if not reviewed):
+            raise Refused(f"step {name}: an unreviewed part rebinds a bash builtin")
         text = "".join(body for body, _ in pieces)
         for key, value in (values or {}).items():
             # readonly: bash itself then refuses any later write, however its name is

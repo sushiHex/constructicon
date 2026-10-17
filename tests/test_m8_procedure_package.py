@@ -529,6 +529,23 @@ def test_cli_builds_with_a_values_file(tmp_path):
     assert f"readonly RUN_ID={RUN}\n" in (tmp_path / "out" / "c3-qualification.sh").read_text()
 
 
+@pytest.mark.parametrize("text", [
+    "readonly() { :; }", "function readonly { :; }", "builtin () { :; }",
+    "x=1; printf() { :; }", "enable -n readonly", "shopt -s expand_aliases",
+    "function test() { :; }", "true && command enable -n readonly",
+])
+def test_no_unreviewed_part_may_rebind_a_bash_builtin(tmp_path, text):
+    """A function, enable or aliases could intercept the generated readonly line
+    (connector review); bash has exactly these three mechanisms."""
+    with pytest.raises(package.Refused, match="rebinds a bash builtin"):
+        package.assemble(procedure(tmp_path, _with_literal(text)))
+
+
+def test_ordinary_functions_and_reads_of_builtin_words_pass(tmp_path):
+    text = "record_check() { test -n x; }; echo readonly enable"
+    assert "record_check()" in accepted(procedure(tmp_path, _with_literal(text)))[0].text
+
+
 @pytest.mark.parametrize("write", [
     "suffix=ID; printf -v RUN_${suffix} %s run-x",
     "eval RUN_ID=run-x",
