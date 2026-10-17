@@ -158,9 +158,16 @@ def session_values(path: Path) -> dict[str, str]:
         values = tomllib.loads(path.read_bytes().decode("utf-8"))
     except tomllib.TOMLDecodeError:
         raise Refused("the values file is not valid TOML") from None
-    if not values or not set(values) <= set(SESSION_VALUES) or not all(
-            isinstance(value, str) and SESSION_VALUES[key].fullmatch(value)
-            for key, value in values.items()):
+    return _checked(values)
+
+
+def _checked(values: object) -> dict[str, str]:
+    """Session values in their exact shapes, wherever they come from (the CLI's
+    file or a caller of `assemble` or `build`)."""
+    if not isinstance(values, dict) or not values or not set(values) <= set(
+            SESSION_VALUES) or not all(isinstance(value, str) and isinstance(key, str)
+                                       and SESSION_VALUES[key].fullmatch(value)
+                                       for key, value in values.items()):
         raise Refused(f"values are only {sorted(SESSION_VALUES)}, each in its exact shape")
     return values
 
@@ -426,6 +433,8 @@ def assemble(path: Path, template: bool = False,
     if current & historical_labels:
         raise Refused(f"labels {sorted(current & historical_labels)} are both current "
                       "and historical")
+    if values is not None:
+        values = _checked(values)
     steps, names, used = [], set(), set()
     declared_steps = spec.get("steps", [])
     if not isinstance(declared_steps, list):
@@ -484,8 +493,12 @@ def assemble(path: Path, template: bool = False,
         alternatives, record = _expectation(name, entry)
         if "\r" in text:
             raise Refused(f"step {name}: a built file would not be LF-only")
-        steps.append(Step(name, text, alternatives, record,
-                          waiting=deferred and values is None and not template))
+        step = Step(name, text, alternatives, record,
+                    waiting=deferred and values is None and not template)
+        # The transport reads at most 65,536 bytes of expectation (Q6's T5).
+        if len(step.expected().encode("utf-8")) > MAX_STDOUT:
+            raise Refused(f"step {name}: its expectation exceeds {MAX_STDOUT} bytes")
+        steps.append(step)
     if not steps:
         raise Refused("the composition declares no steps")
     if set(values or {}) - used:

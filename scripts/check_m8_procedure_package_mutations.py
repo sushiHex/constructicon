@@ -60,10 +60,16 @@ MUTANTS = (
      "heading = \"LR8. Controller\", fences = [0, 0], set = {O = "
      "\"e7d40b139c2a0205f37c7050295a3eca55af9d2c\", C = "
      "\"5793ef98ef5597c9ee9811a0d1f031554eb7f514\"}}-declares O 2 times]"),
-    ("a session value has its name's exact shape", MODULE + "session_values",
-     "isinstance(value, str) and SESSION_VALUES[key].fullmatch(value)", "isinstance(value, str)",
+    ("a session value has its name's exact shape", MODULE + "_checked",
+     "and SESSION_VALUES[key].fullmatch(value)", "and True",
      TESTS + "test_session_values_are_only_the_three_names_in_their_shapes"
      "[RUN_ID = \"run-$(id)\"]"),
+    ("values given directly are checked", MODULE + "assemble",
+     "values = _checked(values)", "pass",
+     TESTS + "test_values_given_directly_are_checked_like_the_file[given0]"),
+    ("the serialized expectation fits the transport", MODULE + "assemble",
+     'if len(step.expected().encode("utf-8")) > MAX_STDOUT:', "if False:",
+     TESTS + "test_an_expectation_the_transport_cannot_read_refuses"),
     ("every assignment of a session name is its session value", MODULE + "assemble",
      'if any(line != f"{key}={value}" for line in', "if False and any(line for line in",
      TESTS + "test_measured_session_values_fill_exact_unreviewed_lines"),

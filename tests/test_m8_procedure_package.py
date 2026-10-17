@@ -466,6 +466,26 @@ def test_session_values_are_only_the_three_names_in_their_shapes(tmp_path, text)
         values(tmp_path, text)
 
 
+@pytest.mark.parametrize("given", [
+    {"RUN_ID": "$(touch /tmp/x)"}, {"RUN_ID": RUN, "C": "a" * 40}, {}, {"RUN_ID": 7},
+])
+def test_values_given_directly_are_checked_like_the_file(tmp_path, given):
+    """A caller of assemble or build gets the CLI's shape checks (connector review)."""
+    with pytest.raises(package.Refused, match="values are only"):
+        package.assemble(procedure(tmp_path, SESSION), values=given)
+    with pytest.raises(package.Refused, match="values are only"):
+        package.build(procedure(tmp_path, SESSION), tmp_path / "out", values=given)
+    assert not (tmp_path / "out").exists()
+
+
+def test_an_expectation_the_transport_cannot_read_refuses(tmp_path):
+    """Each alternative fits, but the serialized expectation exceeds T5's bound."""
+    many = ", ".join(f'["{index:06d}"]' for index in range(7000))
+    wide = QUALIFICATION.replace('stdout = ["lane-boundary-checked"]', f"stdout = [{many}]")
+    with pytest.raises(package.Refused, match="its expectation exceeds 65536 bytes"):
+        package.assemble(procedure(tmp_path, wide))
+
+
 DEFERRED = SESSION.replace('stdout = ["lane-boundary-checked"]',
                            'stdout = ["lane-boundary-checked"]\ndeferred = true')
 
