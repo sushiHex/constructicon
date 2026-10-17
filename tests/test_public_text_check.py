@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import http.server
 import io
 import json
 import re
 import signal
+import threading
 import urllib.error
 from datetime import UTC, datetime, timedelta
 from email.message import Message
@@ -690,6 +692,59 @@ def test_the_runner_signals_end_the_scan_as_cancelled_after_its_findings(
     assert out.splitlines()[:2] == ["::error::issue 41 matches a private pattern",
                                     "::error::public text check incomplete (Cancelled)"]
     assert signal.getsignal(number) == before
+
+
+# --- #229: the token never leaves the API ----------------------------------------
+
+class Recorder(http.server.ThreadingHTTPServer):
+    """A local server that answers every request with ``reply`` and records it."""
+
+    def __init__(self, reply) -> None:
+        super().__init__(("127.0.0.1", 0), self.Handler)
+        self.reply, self.requests = reply, []
+        threading.Thread(target=self.serve_forever, daemon=True).start()
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.server_address[1]}"
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.server.requests.append((self.path, self.headers.get("Authorization")))
+            status, headers, body = self.server.reply
+            self.send_response(status)
+            for name, value in headers.items():
+                self.send_header(name, value)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+def test_a_redirect_is_refused_and_the_token_never_reaches_its_target(
+        tmp_path, monkeypatch, capsys, status):
+    """A followed redirect would forward ``Authorization`` to the new host."""
+    elsewhere = Recorder((200, {}, b"{}"))
+    api = Recorder((status, {"Location": f"{elsewhere.url}/stolen"}, b""))
+    try:
+        monkeypatch.setattr(check, "API", api.url)
+        with pytest.raises(check.Incomplete):
+            check.GitHub("owner/repo", "token").get("")
+        assert api.requests == [("/repos/owner/repo", "Bearer token")]
+        assert elsewhere.requests == []
+        monkeypatch.setenv("PUBLIC_TEXT_PATTERNS", PATTERNS)
+        monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+        monkeypatch.setenv("GITHUB_TOKEN", "token")
+        assert check.main(["check", "sweep", "--since", "2026-10-16T00:00:00Z"]) == 1
+        assert "public text check incomplete (Incomplete)" in capsys.readouterr().out
+        assert elsewhere.requests == []
+    finally:
+        for server in (api, elsewhere):
+            server.shutdown()
+            server.server_close()
 
 
 def test_a_cancellation_ignores_the_runners_next_signal():

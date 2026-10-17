@@ -120,10 +120,27 @@ def patterns(raw: str) -> list[re.Pattern[str]]:
     return [re.compile(line, re.IGNORECASE) for line in lines]
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect (#229).
+
+    The default handler follows a redirect with every header but the body's,
+    ``Authorization`` included, so a redirect to another host would be sent the
+    token. The API endpoints read here do not redirect: one that does is
+    incomplete, and its response is never read."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise Incomplete("a request was redirected")
+
+
+def open_api(request: urllib.request.Request, timeout: float):
+    """``urlopen`` that never follows a redirect: the token stays with the API."""
+    return urllib.request.build_opener(_NoRedirect).open(request, timeout=timeout)
+
+
 class GitHub:
     """Read-only REST access with the workflow token; JSON or raw bytes."""
 
-    def __init__(self, repository: str, token: str, opener: Callable = urllib.request.urlopen):
+    def __init__(self, repository: str, token: str, opener: Callable = open_api):
         if not repository or not token:
             raise Incomplete("repository or token missing")
         self.repository, self.token, self.opener = repository, token, opener
@@ -511,7 +528,7 @@ def _report(kind: str, ident: str) -> None:
     print(f"::error::{kind} {ident} matches a private pattern", flush=True)
 
 
-def main(argv: list[str], opener: Callable = urllib.request.urlopen) -> int:
+def main(argv: list[str], opener: Callable = open_api) -> int:
     """Scan, printing each finding as it is made; 0 only for a complete, clean scan.
 
     The runner cancels a step (on cancellation or the job's timeout) with
