@@ -732,14 +732,18 @@ def test_a_redirect_is_refused_and_the_token_never_reaches_its_target(
     try:
         monkeypatch.setattr(check, "API", api.url)
         with pytest.raises(check.Incomplete):
-            check.GitHub("owner/repo", "token").get("")
-        assert api.requests == [("/repos/owner/repo", "Bearer token")]
+            check.GitHub("owner/repo", "secret-229").get("")
+        assert api.requests == [("/repos/owner/repo", "Bearer secret-229")]
         assert elsewhere.requests == []
         monkeypatch.setenv("PUBLIC_TEXT_PATTERNS", PATTERNS)
         monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
-        monkeypatch.setenv("GITHUB_TOKEN", "token")
+        monkeypatch.setenv("GITHUB_TOKEN", "secret-229")
         assert check.main(["check", "sweep", "--since", "2026-10-16T00:00:00Z"]) == 1
-        assert "public text check incomplete (Incomplete)" in capsys.readouterr().out
+        out = capsys.readouterr()
+        assert "public text check incomplete (Incomplete)" in out.out
+        # The report names the failure, never the token or either address.
+        for leaked in ("secret-229", api.url, elsewhere.url, "127.0.0.1"):
+            assert leaked not in out.out + out.err
         assert elsewhere.requests == []
     finally:
         for server in (api, elsewhere):

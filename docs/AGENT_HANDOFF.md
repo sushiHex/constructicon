@@ -23,8 +23,11 @@ a slice merges, newest first. Nothing here authorizes work.
   to the redirect target. A redirect off `api.github.com` would have been sent
   the workflow token, or a personal token during a backfill.
 - **The fix:** the scanner's one request path opens through a handler that
-  raises `Incomplete` on any redirect. The run fails, and the response is never
-  read.
+  raises `Incomplete` on any redirect it would follow. A 3xx it cannot follow,
+  such as a 304, one with no `Location`, or one to a forbidden scheme, still
+  fails with urllib's own `HTTPError` or `ValueError`. Either way the run fails
+  and the response is never read. The `opener` parameter is a test seam, and
+  anything injected through it is unguarded.
 - **Evidence:** a two-server test for 301, 302, 303, 307 and 308 shows the
   target receives no request. A mutant that restores default following is
   killed, which makes 32 of 32.
