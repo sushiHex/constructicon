@@ -481,11 +481,14 @@ def assemble(path: Path, template: bool = False,
             # bare mention of a measured name is the exact filled line, and any other
             # mention is a read: no export, +=, [i]=, read or printf -v can replace the
             # session value, and a stale literal is never vouched for by another fill.
-            for mention in re.finditer(rf"\b{key}\b", text):
-                start = text.rfind("\n", 0, mention.start()) + 1
-                end = text.find("\n", mention.end())
-                line = text[start:len(text) if end < 0 else end]
-                reads = re.search(r"\$\{?[#!]?$", text[start:mention.start()])
+            # Bash joins quoted and escaped pieces into one word (`RUN_"ID"`), so the
+            # mentions are classified after that joining; `$` is kept to tell reads.
+            words = re.sub(r"[\"'\\]", "", text.replace("\\\n", ""))
+            for mention in re.finditer(rf"\b{key}\b", words):
+                start = words.rfind("\n", 0, mention.start()) + 1
+                end = words.find("\n", mention.end())
+                line = words[start:len(words) if end < 0 else end]
+                reads = re.search(r"\$\{?[#!]?$", words[start:mention.start()])
                 if line != f"{key}={value}" and not reads:
                     raise Refused(f"step {name}: {key} is assigned other than its "
                                   "session value")
