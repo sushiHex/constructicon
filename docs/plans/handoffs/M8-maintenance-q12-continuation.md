@@ -160,8 +160,8 @@ The values file for the second build holds exactly the following:
 ## Q1b: exact workstation commands
 
 These run in Git Bash on the workstation, from a dedicated clean checkout of the authorized commit (detached), which is the repository root for every relative path. Three values are set privately and never published:
-- `P`: the private execution directory holding the prepared bundle. Packages, the transport program, T5's per-step captures and the values file go there.
-- `SSH_TARGET`: the discovered target.
+- `P`: the private execution directory holding the prepared bundle. Packages, the transport program, T5's per-step captures (`$P/run/<package>-<step>`) and the values file go there.
+- `SSH_TARGET`: the target, set only once address discovery has run.
 - `SSH_HOST_KEY_ALIAS`: the recorded alias.
 
 D0 and D4 write their own capture files into the checkout root. They stay there, untracked, until they are moved into `P` after the park.
@@ -170,21 +170,29 @@ D0 and D4 write their own capture files into the checkout root. They stay there,
 exec </dev/null
 set -Eeuo pipefail
 : "${P:?Private execution directory required}"
-: "${SSH_TARGET:?Private discovered target required}"
 : "${SSH_HOST_KEY_ALIAS:?Previously recorded host-key alias required}"
 PY=(/c/Python314/python.exe -I -S -B)
-SSH=(ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes -o "HostKeyAlias=$SSH_HOST_KEY_ALIAS" -o ConnectTimeout=15)
-SCP=(scp -o BatchMode=yes -o StrictHostKeyChecking=yes -o "HostKeyAlias=$SSH_HOST_KEY_ALIAS" -o ConnectTimeout=15)
+# LogLevel=ERROR keeps a server banner or client warning off stderr, which T5
+# requires empty; real errors still reach stderr, so T5 still refuses them.
+OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o "HostKeyAlias=$SSH_HOST_KEY_ALIAS"
+  -o ConnectTimeout=15 -o LogLevel=ERROR)
 DOC=docs/plans/handoffs/M8-maintenance-q12-continuation.md
+# SSH_TARGET exists only after address discovery; each helper requires it then.
+q12_mkdir() {
+  : "${SSH_TARGET:?Private discovered target required}"
+  ssh -T "${OPTS[@]}" "$SSH_TARGET" \
+    "test ! -e \"\$HOME/$1\" && test ! -L \"\$HOME/$1\" && /usr/bin/mkdir -m 0700 -- \"\$HOME/$1\""
+}
 # A fresh remote directory, then the local package's contents into it.
 q12_upload() {
-  "${SSH[@]}" "$SSH_TARGET" "test ! -e \"\$HOME/$2\" && test ! -L \"\$HOME/$2\" && /usr/bin/mkdir -m 0700 -- \"\$HOME/$2\""
-  "${SCP[@]}" "$1"/* "$SSH_TARGET:$2/"
+  q12_mkdir "$2"
+  scp "${OPTS[@]}" "$1"/* "$SSH_TARGET:$2/"
 }
 # One packaged step through T5: transport and expectation local, script remote.
 q12_step() {
-  "${PY[@]}" "$P/m8-q12-transport.py" "$P/run/$2" "$P/$1/$2.expected.json" -- \
-    "${SSH[@]}" "$SSH_TARGET" \
+  : "${SSH_TARGET:?Private discovered target required}"
+  "${PY[@]}" "$P/m8-q12-transport.py" "$P/run/$1-$2" "$P/$1/$2.expected.json" -- \
+    ssh -T "${OPTS[@]}" "$SSH_TARGET" \
     "cd \"\$HOME/$1\" && sha256sum --check --strict --quiet MANIFEST.sha256 && bash $2.sh"
 }
 ```
@@ -192,11 +200,16 @@ q12_step() {
 The sequence, once each, stopping and parking at the first refusal:
 1. **Preflight:** run `"${PY[@]}" scripts/m8_vm_usage.py`. It must print `idle-observed`. Then send the custody start notice.
 2. **Build and prepare locally:** `"${PY[@]}" scripts/m8_procedure_package.py build "$DOC" "$P/maintenance-q12-package-1"`. Record its manifest hash, which must equal the authorization's. Save the Q6 fence as `$P/m8-q12-transport.py`, and create `$P/run` with `mkdir -m 0700`.
-3. **Start and discover:** run D0 (Q1 step 3), then the discovery continuation's three fences, each from the checkout root.
+3. **Start and discover:** from the checkout root:
+   - run the discovery continuation's first fence, the helper's pinned hash check, before D0;
+   - run D0 (Q1 step 3);
+   - run the discovery continuation's second and third fences;
+   - set `SSH_TARGET` privately from the discovered address.
 4. **Upload:**
    - `q12_upload "$P/maintenance-q12-package-1" maintenance-q12-package-1`.
-   - Create `maintenance-q12-c7-package` the same way, then copy `"$P/maintenance-q12-5793ef98.bundle"` into it with `"${SCP[@]}"`.
-5. **Run the first package:** `q12_step maintenance-q12-package-1 <step>` for each step in Q7's order, from `q12-c1-controller` to `q12-c8-preflight`. Run `q12-c10-inspect` only after `q12-c10-application` prints alternative 0.
+   - `q12_mkdir maintenance-q12-c7-package`.
+   - `scp "${OPTS[@]}" "$P/maintenance-q12-5793ef98.bundle" "$SSH_TARGET:maintenance-q12-c7-package/"`.
+5. **Run the first package:** `q12_step maintenance-q12-package-1 <step>` for each step in Q7's order, from `q12-c1-controller` to `q12-c8-preflight`, and nothing after it.
 6. **Write the values file:** `$P/values.toml` is TOML, exactly `PREVIEW_SHA256 = "..."`, `RUN_ID = "..."` and `EXPECTED_BOOT = "..."`, taken from the reviewed C8 record and the recorded boot UUID.
 7. **Build and upload the second package:** build `"$P/maintenance-q12-package-2"` with `--values "$P/values.toml"`, then upload it with `q12_upload`. Because `RUN_ID` is filled, the second package rebuilds every step. Its manifest differs, and that is expected.
 8. **Run the rest from the second package:** resume at `q12-c9-authority`, then `q12-c10-application`, `q12-c10-inspect` (only after alternative 0) and `q12-c11-diagnosis`. Never rerun an earlier step.
