@@ -59,7 +59,7 @@ The owner approved these criteria on 2026-10-16. Any one of them refuses the go,
 Everything runs from the checked repository root at the authorized commit, with Git Bash or isolated Python. Every invocation closes stdin. Private outputs stay in the private execution directory and are never published.
 
 1. **Preflight.** Run `/c/Python314/python.exe -I -S -B scripts/m8_vm_usage.py` once. Require exit zero and `idle-observed`, then send the custody start notice over hardline.
-2. **Build the first package.** Build it with `python -I -S -B scripts/m8_procedure_package.py build docs/plans/handoffs/M8-maintenance-q12-continuation.md maintenance-q12-package-1`. Record the printed manifest hash. The CLI names the deferred steps C9–C11.
+2. **Build the first package.** Build it with `/c/Python314/python.exe -I -S -B scripts/m8_procedure_package.py build docs/plans/handoffs/M8-maintenance-q12-continuation.md maintenance-q12-package-1`. Record the printed manifest hash. The CLI names the deferred steps C9–C11.
 3. **Start.** Copy the frozen diagnosis D0 PowerShell fence verbatim, including its final LF, to `maintenance-q12-d0.ps1`. Save the Q1 start fence below as `maintenance-q12-d0.py` and run it once with `/c/Python314/python.exe -I -S -B maintenance-q12-d0.py`. Require exactly `q12-vm-start-checked`.
 4. **Discover the address.** Run the discovery continuation's three fences once, as in g11 C1, keeping the address private.
 5. **Upload.** Upload the package directory and the prepared bundle through the maintenance session P0's file-upload transport, under fresh absent names: `maintenance-q12-package-1`, and `maintenance-q12-c7-package/maintenance-q12-5793ef98.bundle`.
@@ -67,11 +67,11 @@ Everything runs from the checked repository root at the authorized commit, with 
 
    ```
    /c/Python314/python.exe -I -S -B m8-q12-transport.py STEP STEP.expected.json -- ssh ... \
-     'cd maintenance-q12-package-1 && sha256sum --check --strict --quiet MANIFEST.sha256 && bash STEP.sh'
+     'cd PACKAGE && sha256sum --check --strict --quiet MANIFEST.sha256 && bash STEP.sh'
    ```
 
-   `STEP` is a fresh absent local prefix, and `ssh ...` is the reviewed strict-key transport. Stop at the first refusal.
-7. **Build the second package after C8.** Review C8's record. Write the values file below, then build `maintenance-q12-package-2` with `--values`. Upload it and run C9 onward from it.
+   `PACKAGE` is the uploaded package the step was built in, `STEP` is a fresh absent local prefix, and `ssh ...` is the reviewed strict-key transport. Stop at the first refusal.
+7. **Build the second package after C8.** Review C8's record. Write the values file below, then build `maintenance-q12-package-2` with `--values`. Upload it and run C9 onward from it. C11 also keeps its quiescence capture there.
 8. **Park on every outcome.** Save the Q1 park fence as `maintenance-q12-d4.py`, with D4 verbatim as `maintenance-q12-d4.ps1`. Run it once and require `q12-vm-park-checked`. Release custody only after that marker.
 
 Start fence (`maintenance-q12-d0.py`):
@@ -451,8 +451,8 @@ print("normal-application-completion-checked")' \
   "$S/application-status.json" "$S/application-run.json" "$A" "$RUN_ID" "$ID" < /dev/null \
   | /usr/bin/grep -qxF normal-application-completion-checked
 set -C
-QUIESCENCE_CAPTURE="$HOME/maintenance-q12-c11-package/quiescence.private"
-QUIESCENCE_STDERR="$HOME/maintenance-q12-c11-package/quiescence.stderr"
+QUIESCENCE_CAPTURE="$HOME/maintenance-q12-package-2/quiescence.private"
+QUIESCENCE_STDERR="$HOME/maintenance-q12-package-2/quiescence.stderr"
 test ! -e "$QUIESCENCE_CAPTURE"
 test ! -L "$QUIESCENCE_CAPTURE"
 test ! -e "$QUIESCENCE_STDERR"
@@ -665,9 +665,12 @@ try:
         rest = raw[len(prefix):]
         if not raw.startswith(prefix) or rest.count(b"\n") != 1 or not rest.endswith(b"\n"):
             continue
-        assert rest.isascii() and len(rest) <= bound
-        line = json.loads(rest.decode("ascii"), object_pairs_hook=unique)
-        assert type(line) is dict and set(line) == set(keys)
+        try:
+            assert rest.isascii() and len(rest) <= bound
+            line = json.loads(rest.decode("ascii"), object_pairs_hook=unique)
+            assert type(line) is dict and set(line) == set(keys)
+        except (AssertionError, ValueError):
+            continue
         matched.append(index)
     assert len(matched) == 1
 except Exception:
