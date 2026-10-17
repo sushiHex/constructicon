@@ -85,8 +85,9 @@ LANE_INVOCATION = re.compile(r"\bLANE\b|\bLANE_MODULE\b|\bcodex_lane\b")
 # whitespace, ending its statement. `import <module>` or a lowercase name (`main`)
 # hands over something that can dispatch the CLI.
 FROM_BEFORE = re.compile(r"(?:^|[\s;(])from\s+constructicon\.substrate\.executors\.$")
+_NAMES = r"[A-Z][A-Z0-9_]*(?:\s*,\s*[A-Z][A-Z0-9_]*)*"
 CONSTANTS_AFTER = re.compile(
-    r"\s+import\s+\(?\s*[A-Z][A-Z0-9_]*(?:\s*,\s*[A-Z][A-Z0-9_]*)*\s*\)?\s*(?:;|$)")
+    rf"\s+import\s+(?:\(\s*{_NAMES}\s*,?\s*\)|{_NAMES})\s*(?:;|$)")
 COMMENT_LINE = re.compile(r"^[ \t]*#.*$", re.MULTILINE)
 
 
@@ -99,6 +100,11 @@ def _invokes(text: str) -> bool:
             end = text.find("\n", match.end())
             before = text[start:match.start()]
             after = text[match.end():len(text) if end < 0 else end]
+            if re.match(r"\s+import\s+\($", after):
+                # A parenthesized import runs to its closing parenthesis's line.
+                close = text.find(")", match.end())
+                close_end = text.find("\n", close) if close >= 0 else -1
+                after = text[match.end():len(text) if close_end < 0 else close_end]
             if FROM_BEFORE.search(before) and CONSTANTS_AFTER.match(after):
                 continue
         return True

@@ -207,12 +207,16 @@ def _with_literal(text: str) -> str:
     "from\tconstructicon.substrate.executors.codex_lane import EVIDENCE_DOMAIN",
     "from  constructicon.substrate.executors.codex_lane  import  (EVIDENCE_DOMAIN, LANE_SCHEMA)",
     "x = 1; from constructicon.substrate.executors.codex_lane import QUALIFICATION_PLANS; y = 2",
+    # A parenthesized import across lines is the same statement.
+    "from constructicon.substrate.executors.codex_lane import (\\n    EVIDENCE_DOMAIN,"
+    "\\n    LANE_SCHEMA,\\n)",
     "# codex_lane.py prints its summary; constructicon.substrate.executors.codex_lane",
     "  # see the LANE array",
 ])
 def test_constant_imports_and_comments_are_not_invocations(tmp_path, text):
     """The evidence checkers import constants from codex_lane, and comments never run."""
-    assert text in accepted(procedure(tmp_path, _with_literal(text)))[0].text
+    built = accepted(procedure(tmp_path, _with_literal(text)))[0].text
+    assert text.replace("\\n", "\n").replace("\\t", "\t") in built
 
 
 @pytest.mark.parametrize("text", [
@@ -227,6 +231,8 @@ def test_constant_imports_and_comments_are_not_invocations(tmp_path, text):
     "from constructicon.substrate.executors import codex_lane as lane",
     "importlib.import_module(constructicon.substrate.executors.codex_lane)",
     "from other.codex_lane import EVIDENCE_DOMAIN",
+    "from constructicon.substrate.executors.codex_lane import (\\n    EVIDENCE_DOMAIN,"
+    "\\n    main,\\n)",
 ])
 def test_importing_anything_that_can_dispatch_the_lane_refuses(tmp_path, text):
     with pytest.raises(package.Refused, match="only a reviewed lane-boundary block"):
