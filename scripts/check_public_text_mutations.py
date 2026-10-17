@@ -1,8 +1,8 @@
-"""Public-text check mutations (#216, #221).
+"""Public-text check mutations (#216, #221, #229).
 
 Each mutant removes one part of the ref-update sweep, the tag sweep, the
-bounded listings they read, or the reporting of a cancelled scan. Only
-assertion failures count as kills.
+bounded listings they read, the reporting of a cancelled scan, or the refusal
+of a redirect. Only assertion failures count as kills.
 """
 
 from _mutations import run
@@ -90,6 +90,9 @@ MUTANTS = (
     ("a cancellation ignores the runner's next signal", MODULE + "_cancel",
      "signal.signal(number, signal.SIG_IGN)", "pass",
      TESTS + "test_a_cancellation_ignores_the_runners_next_signal"),
+    ("a redirect is refused, so the token stays with the API", MODULE + "open_api",
+     "urllib.request.build_opener(_NoRedirect)", "urllib.request.build_opener()",
+     TESTS + "test_a_redirect_is_refused_and_the_token_never_reaches_its_target[302]"),
     ("the previous signal handlers are restored", MODULE + "main",
      "signal.signal(number, signal.SIG_DFL if handler is None else handler)", "pass",
      SIGNALS + "[SIGINT]"),
