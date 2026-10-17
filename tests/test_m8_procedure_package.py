@@ -460,7 +460,7 @@ def test_measured_session_values_fill_exact_unreviewed_lines(tmp_path):
                  "RUN_ID+=x", "RUN_ID[0]=run-", "read RUN_ID <<< run-",
                  "printf -v RUN_ID %s run-", "printf -v RUN_\\\"ID\\\" %s run-",
                  "printf -v RUN_'ID' %s run-", "printf -v RUN_\\\\ID %s run-",
-                 "printf -v $'RUN_ID' %s run-"):
+                 "printf -v $'RUN_ID' %s run-", "printf -v $\\\"RUN_ID\\\" %s run-"):
         stale = SESSION.replace("RUN_ID=UNREVIEWED", f"RUN_ID=UNREVIEWED\\n{form}" + "0" * 32)
         with pytest.raises(package.Refused, match="RUN_ID is assigned other than its session"):
             package.assemble(procedure(tmp_path, stale), values=filled)

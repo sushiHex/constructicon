@@ -483,8 +483,10 @@ def assemble(path: Path, template: bool = False,
             # session value, and a stale literal is never vouched for by another fill.
             # Bash joins quoted and escaped pieces into one word (`RUN_"ID"`), so the
             # mentions are classified after that joining; `$` is kept to tell reads.
-            # `$'...'` is ANSI-C quoting, not a read: its `$` goes with the quote.
-            words = re.sub(r"[\"'\\]", "", text.replace("\\\n", "").replace("$'", "'"))
+            # A `$` directly before a quote is quoting syntax (ANSI-C `$'...'`, locale
+            # `$"..."`), never a read, so it goes with the quote.
+            unquoted = re.sub(r"\$(?=[\"'])", "", text.replace("\\\n", ""))
+            words = re.sub(r"[\"'\\]", "", unquoted)
             for mention in re.finditer(rf"\b{key}\b", words):
                 start = words.rfind("\n", 0, mention.start()) + 1
                 end = words.find("\n", mention.end())
