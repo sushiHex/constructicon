@@ -290,6 +290,17 @@ jobs:
             tests/test_m8_n5_read_rehearsal.py \
             tests/test_m8_n5_write_rehearsal.py \
             -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
+      - name: Rehearse the q12 continuation's real-tool steps
+        if: matrix.lane == 'foundation'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The packaged q12 physical preflight through the q12 transport, with real
+          # sudo, the service user, the lane CLI and the launch root. Its portable
+          # cases run in verify; nothing here touches the fixture store.
+          M8_READ_REHEARSAL_REQUIRED=1 "$PWD/.venv/bin/python" -m pytest \
+            tests/test_m8_maintenance_q12_rehearsal.py \
+            -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
       - name: Prove the host plans the package CI installed
         if: matrix.lane == 'foundation'
         shell: bash

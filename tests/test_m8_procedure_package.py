@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 import subprocess
 import sys
@@ -10,6 +11,8 @@ from pathlib import Path
 
 import pytest
 from scripts import m8_procedure_package as package
+
+from tests.test_m8_operator_commands import _bash
 
 HANDOFFS = Path(__file__).parents[1] / "docs" / "plans" / "handoffs"
 REAL_LANE_BLOCKS = package.LANE_BLOCKS
@@ -42,6 +45,15 @@ wait "$H"
 
 ```text
 not a command
+```
+
+### LR8. Controller
+
+```bash
+umask 077
+O=<40-hex commit the old controller workspace was made at>
+C=<40-hex merge commit named in LR0>
+test "$O" != "$C"
 ```
 """
 SELF_BLOCKS = """## L1: qualification boundary
@@ -120,7 +132,8 @@ def test_build_writes_exact_step_bytes_and_a_manifest_atomically(tmp_path):
     script = (out / "c3-qualification.sh").read_bytes().decode()
     assert script.startswith("W=/home/m8-service/m8-maint-q12\nset -Eeuo pipefail\n")
     assert 'lane_capture "$LANES/s4"' in script and 'wait "$H"' in script
-    assert (out / "c3-qualification.stdout").read_bytes() == b"lane-boundary-checked\n"
+    assert json.loads((out / "c3-qualification.expected.json").read_bytes()) == {
+        "alternatives": [["lane-boundary-checked"]], "record": None}
     manifest = (out / "MANIFEST.sha256").read_bytes()
     assert hashlib.sha256(manifest).hexdigest() == digest
     for line in manifest.decode().splitlines():
@@ -289,7 +302,7 @@ def test_a_changed_or_crlf_frozen_source_is_refused(tmp_path):
     (('stdout = ["lane-boundary-checked"]', 'stdout = ["ok\\r"]'), "not be LF-only"),
     (('stdout = ["lane-boundary-checked"]', 'stdout = ["two\\nlines"]'), "not be LF-only"),
     (('stdout = ["lane-boundary-checked"]', 'stdout = ["x"]\nhistorical = "false"'),
-     "historical must be a boolean"),
+     "historical and deferred must be booleans"),
     (('stdout = ["lane-boundary-checked"]', 'stdout = ["x"]\nextra = 1'), "a step has exactly"),
     (('{literal = "W=/home/m8-service/m8-maint-q12"}',
       '{literal = "W=x", source = "oc", heading = "Setup", fences = [0]}'),
@@ -366,6 +379,227 @@ def test_every_shell_spelling_of_a_placeholder_refuses(tmp_path, spelling):
     escaped = QUALIFICATION.replace("m8-maint-q12", f"m8-maint-q12\\n{spelling}")
     with pytest.raises(package.Refused, match="unreviewed placeholder"):
         package.assemble(procedure(tmp_path, escaped))
+
+
+OLD, NEW = "e7d40b139c2a0205f37c7050295a3eca55af9d2c", "5793ef98ef5597c9ee9811a0d1f031554eb7f514"
+CONTROLLER = '{source = "oc", heading = "LR8. Controller", fences = [0]'
+
+
+def controller(selection: str) -> str:
+    return QUALIFICATION.replace('{source = "oc", heading = "S6a. Held", fences = [0]},',
+                                 '{source = "oc", heading = "S6a. Held", fences = [0]},\n  '
+                                 + selection + ",")
+
+
+def test_set_fills_each_documented_declaration_exactly_once(tmp_path):
+    filled = controller(CONTROLLER + f', set = {{O = "{OLD}", C = "{NEW}"}}}}')
+    text = package.assemble(procedure(tmp_path, filled))[0].text
+    assert f"umask 077\nO={OLD}\nC={NEW}\ntest " in text and "=<" not in text
+
+
+@pytest.mark.parametrize(("selection", "message"), [
+    # A documented declaration left unfilled is a placeholder.
+    (CONTROLLER + "}", "unreviewed placeholder"),
+    (CONTROLLER + f', set = {{O = "{OLD}"}}}}', "unreviewed placeholder"),
+    # Only a 40-hex commit fills a declaration; nothing else is a single inert word.
+    (CONTROLLER + ', set = {O = "$(id)", C = "x"}}', "40-hex commits"),
+    (CONTROLLER + f', set = {{O = "{OLD.upper()}", C = "{NEW}"}}}}', "40-hex commits"),
+    (CONTROLLER + ', set = {O = 7}}', "40-hex commits"),
+    (CONTROLLER + f', set = "{OLD}"}}', "40-hex commits"),
+    # Each name fills exactly one declaration line in the selection.
+    (CONTROLLER + f', set = {{D = "{OLD}", O = "{OLD}", C = "{NEW}"}}}}', "declares D 0 times"),
+    ('{source = "oc", heading = "LR8. Controller", fences = [0, 0]'
+     f', set = {{O = "{OLD}", C = "{NEW}"}}}}', "declares O 2 times"),
+    (CONTROLLER + f', set = {{"O=<" = "{OLD}"}}}}', "declares O=< 0 times"),
+])
+def test_unfilled_or_unsafe_declarations_refuse(tmp_path, selection, message):
+    with pytest.raises(package.Refused, match=message):
+        package.assemble(procedure(tmp_path, controller(selection)))
+
+
+def test_template_mode_keeps_unfilled_declarations(tmp_path):
+    path = procedure(tmp_path, controller(CONTROLLER + "}"))
+    assert "O=<40-hex" in package.assemble(path, template=True)[0].text
+
+
+def test_a_set_on_a_literal_is_not_a_part(tmp_path):
+    literal = QUALIFICATION.replace('{literal = "W=/home/m8-service/m8-maint-q12"}',
+                                    f'{{literal = "W=x", set = {{O = "{OLD}"}}}}')
+    with pytest.raises(package.Refused, match="exactly a literal or a fence selection"):
+        package.assemble(procedure(tmp_path, literal))
+
+
+PREVIEW, RUN = "ab" * 32, "run-" + "cd" * 16
+SESSION = QUALIFICATION.replace("m8-maint-q12", "m8-maint-q12\\nPREVIEW_SHA256=UNREVIEWED"
+                                "\\nRUN_ID=UNREVIEWED")
+
+
+def values(tmp_path: Path, text: str) -> dict[str, str]:
+    path = tmp_path / "values.toml"
+    path.write_bytes(text.encode())
+    return package.session_values(path)
+
+
+def test_measured_session_values_fill_exact_unreviewed_lines(tmp_path):
+    filled = values(tmp_path, f'PREVIEW_SHA256 = "{PREVIEW}"\nRUN_ID = "{RUN}"\n')
+    text = package.assemble(procedure(tmp_path, SESSION), values=filled)[0].text
+    assert f"readonly PREVIEW_SHA256={PREVIEW}\nreadonly RUN_ID={RUN}\n" in text
+    assert "UNREVIEWED" not in text
+    # A partial fill leaves a placeholder; a quoted spelling is not an exact line.
+    with pytest.raises(package.Refused, match="unreviewed placeholder"):
+        package.assemble(procedure(tmp_path, SESSION), values={"RUN_ID": RUN})
+    quoted = SESSION.replace("RUN_ID=UNREVIEWED", "RUN_ID=\\\"UNREVIEWED\\\"")
+    with pytest.raises(package.Refused, match="RUN_ID is assigned other than its session"):
+        package.assemble(procedure(tmp_path, quoted), values=filled)
+    with pytest.raises(package.Refused, match=r"values \['RUN_ID'\] fill no line"):
+        package.assemble(procedure(tmp_path, QUALIFICATION), values={"RUN_ID": RUN})
+    # Reads of the measured name stay legal.
+    reads = SESSION.replace("RUN_ID=UNREVIEWED", "RUN_ID=UNREVIEWED\\ntest \\\"$RUN_ID\\\" "
+                            "= \\\"${RUN_ID}\\\" && test \\\"${#RUN_ID}\\\" -eq 36")
+    assert "${#RUN_ID}" in package.assemble(procedure(tmp_path, reads), values=filled)[0].text
+    # A stale literal is not vouched for by a fill elsewhere in the step or package.
+    for form in ("RUN_ID=run-", "export RUN_ID=run-", "readonly RUN_ID=run-",
+                 "declare -r RUN_ID=run-", "true; RUN_ID=run-", "RUN_ID=\\\"run-",
+                 "RUN_ID+=x", "RUN_ID[0]=run-", "read RUN_ID <<< run-",
+                 "printf -v RUN_ID %s run-", "printf -v RUN_\\\"ID\\\" %s run-",
+                 "printf -v RUN_'ID' %s run-", "printf -v RUN_\\\\ID %s run-",
+                 "printf -v $'RUN_ID' %s run-", "printf -v $\\\"RUN_ID\\\" %s run-"):
+        stale = SESSION.replace("RUN_ID=UNREVIEWED", f"RUN_ID=UNREVIEWED\\n{form}" + "0" * 32)
+        with pytest.raises(package.Refused, match="RUN_ID is assigned other than its session"):
+            package.assemble(procedure(tmp_path, stale), values=filled)
+
+
+@pytest.mark.parametrize("text", [
+    f'RUN_ID = "{RUN}x"', 'RUN_ID = "run-$(id)"', f'PREVIEW_SHA256 = "{PREVIEW[:-1]}"',
+    'EXPECTED_BOOT = "934acecb-9042-4e02-845e-050a4d07126"', f'C = "{PREVIEW[:40]}"',
+    "RUN_ID = 7", "", "RUN_ID = ",
+])
+def test_session_values_are_only_the_three_names_in_their_shapes(tmp_path, text):
+    with pytest.raises(package.Refused, match=r"values are only|not valid TOML"):
+        values(tmp_path, text)
+
+
+@pytest.mark.parametrize("given", [
+    {"RUN_ID": "$(touch /tmp/x)"}, {"RUN_ID": RUN, "C": "a" * 40}, {}, {"RUN_ID": 7},
+])
+def test_values_given_directly_are_checked_like_the_file(tmp_path, given):
+    """A caller of assemble or build gets the CLI's shape checks (connector review)."""
+    with pytest.raises(package.Refused, match="values are only"):
+        package.assemble(procedure(tmp_path, SESSION), values=given)
+    with pytest.raises(package.Refused, match="values are only"):
+        package.build(procedure(tmp_path, SESSION), tmp_path / "out", values=given)
+    assert not (tmp_path / "out").exists()
+
+
+def test_an_expectation_the_transport_cannot_read_refuses(tmp_path):
+    """Each alternative fits, but the serialized expectation exceeds T5's bound."""
+    many = ", ".join(f'["{index:06d}"]' for index in range(7000))
+    wide = QUALIFICATION.replace('stdout = ["lane-boundary-checked"]', f"stdout = [{many}]")
+    with pytest.raises(package.Refused, match="its expectation exceeds 65536 bytes"):
+        package.assemble(procedure(tmp_path, wide))
+
+
+DEFERRED = SESSION.replace('stdout = ["lane-boundary-checked"]',
+                           'stdout = ["lane-boundary-checked"]\ndeferred = true')
+
+
+def test_a_deferred_step_waits_only_for_session_values(tmp_path):
+    first = package.build(procedure(tmp_path, DEFERRED), tmp_path / "first")
+    assert (tmp_path / "first" / "MANIFEST.sha256").read_bytes() == b""
+    assert first == hashlib.sha256(b"").hexdigest()
+    second = tmp_path / "second"
+    package.build(procedure(tmp_path, DEFERRED), second, values={"PREVIEW_SHA256": PREVIEW,
+                                                                "RUN_ID": RUN})
+    assert f"readonly RUN_ID={RUN}\n" in (second / "c3-qualification.sh").read_text()
+    # Anything else unreviewed still refuses, deferred or not.
+    other = DEFERRED.replace("m8-maint-q12", "m8-maint-q12\\nC=UNREVIEWED")
+    with pytest.raises(package.Refused, match="may wait only for session values"):
+        package.assemble(procedure(tmp_path, other))
+    with pytest.raises(package.Refused, match="historical and deferred must be booleans"):
+        package.assemble(procedure(tmp_path, DEFERRED.replace("deferred = true",
+                                                              'deferred = "yes"')))
+
+
+def test_cli_builds_with_a_values_file(tmp_path):
+    path = procedure(tmp_path, SESSION)
+    (tmp_path / "values.toml").write_bytes(f'PREVIEW_SHA256 = "{PREVIEW}"\nRUN_ID = "{RUN}"\n'
+                                           .encode())
+    assert package.main(["x", "build", str(path), str(tmp_path / "out"), "--values",
+                         str(tmp_path / "values.toml")]) == 0
+    assert f"readonly RUN_ID={RUN}\n" in (tmp_path / "out" / "c3-qualification.sh").read_text()
+
+
+@pytest.mark.parametrize("text", [
+    "readonly() { :; }", "function readonly { :; }", "builtin () { :; }",
+    "x=1; printf() { :; }", "enable -n readonly", "shopt -s expand_aliases",
+    "function test() { :; }", "true && command enable -n readonly",
+    # enable after a reserved word, and the hook that could mask a disabled builtin.
+    "if true; then enable -n readonly; fi", "command_not_found_handle() { :; }",
+])
+def test_no_unreviewed_part_may_rebind_a_bash_builtin(tmp_path, text):
+    """A function, enable or aliases could intercept the generated readonly line
+    (connector review); bash has exactly these three mechanisms."""
+    with pytest.raises(package.Refused, match="rebinds a bash builtin"):
+        package.assemble(procedure(tmp_path, _with_literal(text)))
+
+
+def test_ordinary_functions_and_reads_of_builtin_words_pass(tmp_path):
+    text = "record_check() { test -n x; }; echo readonly"
+    assert "record_check()" in accepted(procedure(tmp_path, _with_literal(text)))[0].text
+
+
+@pytest.mark.parametrize("write", [
+    "suffix=ID; printf -v RUN_${suffix} %s run-x",
+    "eval RUN_ID=run-x",
+    "RUN_ID+=x",
+])
+def test_bash_refuses_any_later_write_to_a_filled_session_value(tmp_path, write):
+    """The filled line is readonly, so even a write the text checks cannot see (a name
+    built at run time) fails in bash, with stderr that T5 refuses (connector review)."""
+    built = package.assemble(procedure(tmp_path, SESSION),
+                             values={"PREVIEW_SHA256": PREVIEW, "RUN_ID": RUN})[0].text
+    filled = [line for line in built.splitlines() if line.startswith("readonly ")]
+    script = tmp_path / "write.sh"
+    script.write_bytes(("\n".join(filled) + f"\n{write}\nprintf '%s\\n' \"$RUN_ID\"\n").encode())
+    ran = subprocess.run([_bash(), script.as_posix()], stdin=subprocess.DEVNULL,
+                         capture_output=True, text=True, timeout=30, check=False)
+    assert "readonly" in ran.stderr and ran.stdout.strip() == RUN
+
+
+BRANCHED = QUALIFICATION.replace(
+    'stdout = ["lane-boundary-checked"]',
+    'stdout = [["lane-boundary-checked", "refresh-measured"], '
+    '["lane-boundary-checked", "refresh-unmeasured"]]\n'
+    'record = {keys = ["run_id", "accepted"], max_bytes = 256}')
+
+
+def test_alternatives_and_a_record_are_declared_for_the_transport(tmp_path):
+    step = package.assemble(procedure(tmp_path, BRANCHED))[0]
+    assert json.loads(step.expected()) == {
+        "alternatives": [["lane-boundary-checked", "refresh-measured"],
+                         ["lane-boundary-checked", "refresh-unmeasured"]],
+        "record": {"keys": ["accepted", "run_id"], "max_bytes": 256}}
+    empty = QUALIFICATION.replace('stdout = ["lane-boundary-checked"]', "stdout = []")
+    assert json.loads(package.assemble(procedure(tmp_path, empty))[0].expected()) == {
+        "alternatives": [[]], "record": None}
+
+
+@pytest.mark.parametrize(("change", "message"), [
+    (('["lane-boundary-checked", "refresh-unmeasured"]]',
+      '["lane-boundary-checked", "refresh-measured"]]'), "alternatives must be distinct"),
+    (("max_bytes = 256", "max_bytes = 9000"), "record is exactly keys and max_bytes"),
+    # {"run_id":0,"accepted":0} plus LF is 26 bytes: a smaller bound can never accept.
+    (("max_bytes = 256", "max_bytes = 25"), r"below its shortest record \(26 bytes\)"),
+    (("max_bytes = 256", "max_bytes = true"), "record is exactly keys and max_bytes"),
+    (("max_bytes = 256}", "max_bytes = 256, extra = 1}"), "record is exactly keys"),
+    (('keys = ["run_id", "accepted"]', 'keys = ["run_id", "run_id"]'), "distinct identifiers"),
+    (('keys = ["run_id", "accepted"]', "keys = []"), "distinct identifiers"),
+    (('keys = ["run_id", "accepted"]', 'keys = ["Run-Id"]'), "distinct identifiers"),
+    (('"refresh-measured"], ', '"refresh-measured"], ["x\\ny"], '), "not be LF-only"),
+])
+def test_malformed_expectations_refuse(tmp_path, change, message):
+    with pytest.raises(package.Refused, match=message):
+        package.assemble(procedure(tmp_path, BRANCHED.replace(*change)))
 
 
 def test_literals_keep_their_exact_trailing_newlines(tmp_path):
