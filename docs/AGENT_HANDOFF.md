@@ -15,6 +15,59 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## #216, #221 — public text is swept by ref update, and reported on cancel
+
+[PR #228](https://github.com/sushiHex/constructicon/pull/228), a draft as of
+2026-10-17 UTC; its merge commit is not recorded here yet.
+
+- **Ref updates (#216):** the sweep reads the repository activity listing
+  (`GET /repos/{owner}/{repo}/activity`). That listing records each push,
+  force push, branch creation and merge, with the ref's heads before and
+  after. Each update since the cursor is compared, so an old-dated commit
+  pushed late is scanned:
+  - a push, force push or merge: `before...after`;
+  - a new branch: against the default branch;
+  - the default branch's own creation: its whole history;
+  - a deletion: its name only.
+
+  The date-filtered branch listing stays as a second source. An unreachable
+  previous head, a comparison short of its `total_commits` or over the page
+  bound, and a malformed update each fail the run.
+- **Tags, read in full:** the activity listing carried no tag refs in a live
+  probe, so every sweep reads every tag. That covers its name, each annotated
+  tag's own name, message and tagger, and every commit it reaches off the
+  default branch. A tag that names anything but a commit fails the run. The
+  cost is at least two requests per tag per sweep.
+- **Full page without `next`:** GitHub omits `next` from a full last page, but
+  a full page without `next` is refused, as is a later page without a `Link`.
+  A listing that is an exact multiple of 100 entries therefore fails one sweep
+  as noise; the next sweep's wider window clears it.
+- **Every event run executes (#221):** the workflow has no concurrency group,
+  so no pending event run is cancelled. The cost is runner time and a shared
+  token budget. `queue: max` was the alternative; it still cancels beyond 100
+  pending runs.
+- **Reported on cancel (#221):**
+  - findings print, flushed, as they are made;
+  - `main` catches `BaseException`;
+  - the runner's SIGINT and SIGTERM end the scan as `Cancelled`;
+  - the step `exec`s Python, so Python, not bash, receives those signals.
+
+  One failing surface no longer hides the others.
+- **Evidence:** 27 new tests, 26 of them RED on the base; 31 of 31 mutants in
+  `scripts/check_public_text_mutations.py` are killed.
+
+What this does not establish:
+- **Activity delay and retention:** neither is verified. One push was listed
+  within 4 seconds. An update that appears only after the 30-minute overlap is
+  caught only by the date listing.
+- **Token access:** `GITHUB_TOKEN`'s access to the activity listing is
+  unverified until the first scheduled run after merge.
+- **Open owner action:** sweeps before #228 selected branch commits by date. An
+  old-dated commit pushed before the first ref-update sweep stays unscanned
+  until a local `sweep --since <repository creation>` backfill runs with this
+  code. The owner then moves `PUBLIC_TEXT_SWEPT_THROUGH`. The activity listing
+  held about 1,100 entries, so expect more than the earlier 1,949 requests.
+
 ## #212 — public text is checked against private patterns, after posting
 
 [PR #212](https://github.com/sushiHex/constructicon/pull/212) merged as
@@ -34,9 +87,9 @@ default branch only, with read-only permissions and no persisted credentials.
 Patterns come from the `PUBLIC_TEXT_PATTERNS` secret, so no private value
 enters the repository. A finding prints a kind and an identifier (a number, id
 or digest), not the text, URL, filename or pattern. A run that reaches an item
-it cannot scan completely fails. It still prints the findings it already made,
-unless the job is cancelled or times out
-([#221](https://github.com/sushiHex/constructicon/issues/221)).
+it cannot scan completely fails. It still prints the findings it already made.
+As merged in #212, a cancelled or timed-out job printed none; #228 fixes that
+(see the #216/#221 entry above).
 
 - **Events** scan issues, issue comments and pull requests (each commit's own
   diff) as they are posted or edited. Review comments and commit comments reach
@@ -79,16 +132,17 @@ run this check before posting, since such posts raise no event.
 What this does not establish:
 - **Detection, not prevention:** text is found after it is public. GitHub keeps
   an edited item's earlier revisions until they are deleted by hand, and only
-  current text is scanned. A pending event run is cancelled when a newer event
-  for the same item queues. The skipped revision is scanned only if it is still
-  current when a sweep reads it.
-- **Commit-date window:** two kinds of commit are missed unless they belong to
-  a pull request updated in the window, which supplies all its commits:
+  current text is scanned. As merged in #212, a pending event run was cancelled
+  when a newer event for the same item queued; #228 removes the concurrency
+  group, so every event run executes.
+- **Commit-date window (as merged in #212):** two kinds of commit were missed
+  unless they belonged to a pull request updated in the window:
   - a branch commit dated before the cursor but pushed after it;
   - a commit reachable only from a tag.
 
-  [#216](https://github.com/sushiHex/constructicon/issues/216) tracks a
-  ref-update cursor.
+  #228 selects branch commits by ref update and reads every tag
+  ([#216](https://github.com/sushiHex/constructicon/issues/216)). Commits
+  missed before it remain an open owner action (see the entry above).
 - **Unverified review coverage:** reviews and dismissals are reached through
   the issues listing's `since` filter, which uses the `updated_at` of each pull
   request's issue. Nobody has verified that every review edit advances it.
