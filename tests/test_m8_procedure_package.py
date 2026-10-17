@@ -300,7 +300,7 @@ def test_a_changed_or_crlf_frozen_source_is_refused(tmp_path):
     (('stdout = ["lane-boundary-checked"]', 'stdout = ["ok\\r"]'), "not be LF-only"),
     (('stdout = ["lane-boundary-checked"]', 'stdout = ["two\\nlines"]'), "not be LF-only"),
     (('stdout = ["lane-boundary-checked"]', 'stdout = ["x"]\nhistorical = "false"'),
-     "historical must be a boolean"),
+     "historical and deferred must be booleans"),
     (('stdout = ["lane-boundary-checked"]', 'stdout = ["x"]\nextra = 1'), "a step has exactly"),
     (('{literal = "W=/home/m8-service/m8-maint-q12"}',
       '{literal = "W=x", source = "oc", heading = "Setup", fences = [0]}'),
@@ -460,6 +460,27 @@ def test_measured_session_values_fill_exact_unreviewed_lines(tmp_path):
 def test_session_values_are_only_the_three_names_in_their_shapes(tmp_path, text):
     with pytest.raises(package.Refused, match=r"values are only|not valid TOML"):
         values(tmp_path, text)
+
+
+DEFERRED = SESSION.replace('stdout = ["lane-boundary-checked"]',
+                           'stdout = ["lane-boundary-checked"]\ndeferred = true')
+
+
+def test_a_deferred_step_waits_only_for_session_values(tmp_path):
+    first = package.build(procedure(tmp_path, DEFERRED), tmp_path / "first")
+    assert (tmp_path / "first" / "MANIFEST.sha256").read_bytes() == b""
+    assert first == hashlib.sha256(b"").hexdigest()
+    second = tmp_path / "second"
+    package.build(procedure(tmp_path, DEFERRED), second, values={"PREVIEW_SHA256": PREVIEW,
+                                                                "RUN_ID": RUN})
+    assert f"RUN_ID={RUN}\n" in (second / "c3-qualification.sh").read_text()
+    # Anything else unreviewed still refuses, deferred or not.
+    other = DEFERRED.replace("m8-maint-q12", "m8-maint-q12\\nC=UNREVIEWED")
+    with pytest.raises(package.Refused, match="may wait only for session values"):
+        package.assemble(procedure(tmp_path, other))
+    with pytest.raises(package.Refused, match="historical and deferred must be booleans"):
+        package.assemble(procedure(tmp_path, DEFERRED.replace("deferred = true",
+                                                              'deferred = "yes"')))
 
 
 def test_cli_builds_with_a_values_file(tmp_path):

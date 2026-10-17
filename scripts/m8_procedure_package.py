@@ -29,8 +29,10 @@ Usage, with isolated Python from the repository root::
 
 ``--values`` fills values measured mid-session (``PREVIEW_SHA256``, ``RUN_ID``,
 ``EXPECTED_BOOT``) into exact ``NAME=UNREVIEWED`` lines, each checked against its
-shape; a value that fills no line refuses. Later steps are built again, into a
-fresh ``OUT``, once their values are measured and reviewed.
+shape; a value that fills no line refuses. A step marked ``deferred = true`` may wait
+only for those values: without ``--values`` it is checked but not written, and the CLI
+names it. Once the values are measured and reviewed, everything is built again into a
+fresh ``OUT``, where no placeholder may remain.
 
 A step's ``stdout`` is one list of exact lines or a list of distinct alternative
 lists (a reviewed branch such as a measured or unmeasured refresh), and an optional
@@ -191,7 +193,7 @@ LANE_BLOCKS = {
         ("M8-N4-host-runtime.md", "R19 — Import check as `m8-service`", 0),
 }
 TOP_KEYS = {"labels", "sources", "steps"}
-STEP_KEYS = {"name", "stdout", "record", "historical", "parts"}
+STEP_KEYS = {"name", "stdout", "record", "historical", "deferred", "parts"}
 RECORD_KEY = re.compile(r"[a-z_][a-z0-9_]{0,63}")
 
 
@@ -213,6 +215,7 @@ class Step:
     text: str
     alternatives: tuple[tuple[str, ...], ...]
     record: tuple[tuple[str, ...], int] | None = None
+    waiting: bool = False  # deferred, and built only with measured session values
 
     def expected(self) -> str:
         """The transport's declared expectation: exactly one alternative's lines, then
@@ -432,9 +435,9 @@ def assemble(path: Path, template: bool = False,
         if not isinstance(name, str) or not NAME.fullmatch(name) or name in names:
             raise Refused(f"step name {name!r} is invalid or repeated")
         names.add(name)
-        historical = entry.get("historical", False)
-        if type(historical) is not bool:
-            raise Refused(f"step {name}: historical must be a boolean")
+        historical, deferred = entry.get("historical", False), entry.get("deferred", False)
+        if type(historical) is not bool or type(deferred) is not bool:
+            raise Refused(f"step {name}: historical and deferred must be booleans")
         parts = entry["parts"]
         if not isinstance(parts, list) or not parts:
             raise Refused(f"step {name}: parts must be a non-empty list")
@@ -461,12 +464,19 @@ def assemble(path: Path, template: bool = False,
         stray = sorted({label for label in LABEL.findall(joined) if label not in allowed})
         if stray:
             raise Refused(f"step {name}: undeclared or historical labels {stray}")
-        if not template and (PLACEHOLDER.search(joined) or DECLARATION.search(text)):
+        if deferred and values is None and not template:
+            # Built later, with measured session values: only those may remain.
+            pending = re.sub(rf"^(?:{'|'.join(SESSION_VALUES)})=UNREVIEWED$", "", text,
+                             flags=re.MULTILINE)
+            if PLACEHOLDER.search(_normalized(pending)) or DECLARATION.search(text):
+                raise Refused(f"step {name}: a deferred step may wait only for session values")
+        elif not template and (PLACEHOLDER.search(joined) or DECLARATION.search(text)):
             raise Refused(f"step {name}: an unreviewed placeholder remains")
         alternatives, record = _expectation(name, entry)
         if "\r" in text:
             raise Refused(f"step {name}: a built file would not be LF-only")
-        steps.append(Step(name, text, alternatives, record))
+        steps.append(Step(name, text, alternatives, record,
+                          waiting=deferred and values is None and not template))
     if not steps:
         raise Refused("the composition declares no steps")
     if set(values or {}) - used:
@@ -483,6 +493,8 @@ def build(path: Path, out: Path, template: bool = False,
         raise Refused("the output directory already exists") from None
     lines = []
     for step in steps:
+        if step.waiting:
+            continue
         for suffix, body in ((".sh", step.text), (".expected.json", step.expected())):
             raw = body.encode("utf-8")
             with open(out / (step.name + suffix), "xb") as stream:
@@ -510,6 +522,10 @@ def main(argv: list[str]) -> int:
             print(f"composition-checked {len(steps)} steps")
         elif arguments[:1] == ["build"] and len(arguments) == 3:
             print(build(Path(arguments[1]), Path(arguments[2]), template, values))
+            waiting = [step.name for step in assemble(Path(arguments[1]), template, values)
+                       if step.waiting]
+            if waiting:
+                print("deferred until session values: " + " ".join(waiting))
         else:
             raise Refused("usage: check DOC [--template] | "
                           "build DOC OUT [--values FILE] [--template]")
