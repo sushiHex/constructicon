@@ -1,0 +1,12 @@
+# actionlint configuration (CI runs it in the verify job; see verify.yml).
+# Each ignore is one deliberate pattern in one file, matched by the exact
+# message. Never add a blanket ignore: a new finding must fail the check.
+paths:
+  .github/workflows/m8-containment.yml:
+    ignore:
+      # The printf format holds literal Markdown backticks for the step
+      # summary; they must not expand.
+      - 'shellcheck reported issue in this script: SC2016:info:12:8: '
+      # The redirect writes the runner-owned $RUNNER_TEMP file on purpose; the
+      # root-only file is installed afterwards with `sudo install`.
+      - 'shellcheck reported issue in this script: SC2024:warning:13:46: '

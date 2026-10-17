@@ -27,6 +27,23 @@ jobs:
         with:
           python-version: "3.11"
       - run: uv sync --dev
+      # GitHub voids a workflow with one invalid key or expression and shows only
+      # a jobless run, so lint every workflow before merge (#218). The release
+      # checksum is from actionlint_1.7.12_checksums.txt in the v1.7.12 release.
+      # The runner's shellcheck lints the run: blocks.
+      - name: Lint workflows with actionlint
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/$archive"
+          printf '%s  %s\n' "$ACTIONLINT_SHA256" "$RUNNER_TEMP/$archive" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" actionlint
+          shellcheck --version
+          "$RUNNER_TEMP/actionlint" -color -verbose -shellcheck="$(command -v shellcheck)"
       - name: Check maintenance diagnosis fixtures under UID 0
         run: |
           sudo -n -H env PYTHONPATH="$PWD/src" PYTHONIOENCODING=utf-8 "$PWD/.venv/bin/python" -c '
