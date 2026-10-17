@@ -48,7 +48,7 @@ The owner approved these criteria on 2026-10-16. Any one of them refuses the go,
    - A hardline custody claim is unreleased.
 
    Evidence: the preflight output and the hardline history. The owner is reachable for the authorized hour.
-6. **Fresh paths occupied.** The bundle prepared below is not the only file under the private execution directory. Every VM destination is also checked absent by its own step.
+6. **Fresh paths occupied.** At the session's start, before Q1b's first command, the bundle prepared below is not the only file under the private execution directory. Every VM destination is also checked absent by its own step.
 7. **No stop plan.** Q8's stop report is not prepared. Evidence: this document.
 8. **Public exposure.** A step pushes or posts publicly, or reaches a destination beyond the reviewed policy's two. Publication happens only after the park, under #186's rules. Evidence: the assembled package; a grep shows no push, PR or comment command.
 9. **Acceptance mismatch.** The fixed task's source hashes at C differ from the three `SOURCE_HASHES`. An accepted application leads to an ordinary contribution PR, which is the "accepted contribution" #186 defines. Evidence: the bundle preparation below.
@@ -159,12 +159,14 @@ The values file for the second build holds exactly the following:
 
 ## Q1b: exact workstation commands
 
-These run in Git Bash on the workstation, from a dedicated clean checkout of the authorized commit (detached), which is the repository root for every relative path. Three values are set privately and never published:
-- `P`: the private execution directory holding the prepared bundle. Packages, the transport program, T5's per-step captures (`$P/run/<package>-<step>`) and the values file go there.
-- `SSH_TARGET`: the target, set only once address discovery has run.
+These run in Git Bash on the workstation, from a dedicated clean checkout of the authorized commit (detached), which is the repository root for every relative path. Three values are exported privately and never published:
+- `P`: the private execution directory. At the session's start it holds only the prepared bundle (Q0 criterion 6). It then receives the dispatcher, the packages, the transport program, T5's per-step captures (`$P/run/<package>-<step>`) and the values file.
+- `SSH_TARGET`: the target, exported only once address discovery has run.
 - `SSH_HOST_KEY_ALIAS`: the recorded alias.
 
 D0 and D4 write their own capture files into the checkout root. They stay there, untracked, until they are moved into `P` after the park.
+
+Save this fence as `$P/q12.sh`. Each command is one fresh, non-interactive process, `bash "$P/q12.sh" <helper> <arguments>`, so no shell state carries between commands:
 
 ```bash
 exec </dev/null
@@ -176,7 +178,6 @@ PY=(/c/Python314/python.exe -I -S -B)
 # requires empty; real errors still reach stderr, so T5 still refuses them.
 OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o "HostKeyAlias=$SSH_HOST_KEY_ALIAS"
   -o ConnectTimeout=15 -o LogLevel=ERROR)
-DOC=docs/plans/handoffs/M8-maintenance-q12-continuation.md
 # SSH_TARGET exists only after address discovery; each helper requires it then.
 q12_mkdir() {
   : "${SSH_TARGET:?Private discovered target required}"
@@ -195,24 +196,35 @@ q12_step() {
     ssh -T "${OPTS[@]}" "$SSH_TARGET" \
     "cd \"\$HOME/$1\" && sha256sum --check --strict --quiet MANIFEST.sha256 && bash $2.sh"
 }
+# Bundle upload: a fresh remote directory, then the one file into it.
+q12_bundle() {
+  q12_mkdir maintenance-q12-c7-package
+  scp "${OPTS[@]}" "$P/maintenance-q12-5793ef98.bundle" "$SSH_TARGET:maintenance-q12-c7-package/"
+}
+case "${1-}" in
+  q12_mkdir | q12_upload | q12_step | q12_bundle) "$@" ;;
+  *) echo 'usage: q12.sh q12_mkdir|q12_upload|q12_step|q12_bundle ARGUMENTS' >&2; exit 2 ;;
+esac
 ```
 
-The sequence, once each, stopping and parking at the first refusal:
-1. **Preflight:** run `"${PY[@]}" scripts/m8_vm_usage.py`. It must print `idle-observed`. Then send the custody start notice.
-2. **Build and prepare locally:** `"${PY[@]}" scripts/m8_procedure_package.py build "$DOC" "$P/maintenance-q12-package-1"`. Record its manifest hash, which must equal the authorization's. Save the Q6 fence as `$P/m8-q12-transport.py`, and create `$P/run` with `mkdir -m 0700`.
+The sequence, once each, stopping and parking at the first refusal. `PY` below means `/c/Python314/python.exe -I -S -B`:
+1. **Preflight:** run `PY scripts/m8_vm_usage.py`. It must print `idle-observed`. Then send the custody start notice.
+2. **Build and prepare locally:**
+   - `PY scripts/m8_procedure_package.py build docs/plans/handoffs/M8-maintenance-q12-continuation.md "$P/maintenance-q12-package-1"`. Record its manifest hash, which must equal the authorization's.
+   - Save the fence above as `$P/q12.sh`, and the Q6 fence as `$P/m8-q12-transport.py`.
+   - Create `$P/run` with `mkdir -m 0700`.
 3. **Start and discover:** from the checkout root:
    - run the discovery continuation's first fence, the helper's pinned hash check, before D0;
    - run D0 (Q1 step 3);
    - run the discovery continuation's second and third fences;
-   - set `SSH_TARGET` privately from the discovered address.
+   - export `SSH_TARGET` privately from the discovered address.
 4. **Upload:**
-   - `q12_upload "$P/maintenance-q12-package-1" maintenance-q12-package-1`.
-   - `q12_mkdir maintenance-q12-c7-package`.
-   - `scp "${OPTS[@]}" "$P/maintenance-q12-5793ef98.bundle" "$SSH_TARGET:maintenance-q12-c7-package/"`.
-5. **Run the first package:** `q12_step maintenance-q12-package-1 <step>` for each step in Q7's order, from `q12-c1-controller` to `q12-c8-preflight`, and nothing after it.
+   - `bash "$P/q12.sh" q12_upload "$P/maintenance-q12-package-1" maintenance-q12-package-1`.
+   - `bash "$P/q12.sh" q12_bundle`.
+5. **Run the first package:** `bash "$P/q12.sh" q12_step maintenance-q12-package-1 <step>` for each step in Q7's order, from `q12-c1-controller` to `q12-c8-preflight`, and nothing after it.
 6. **Write the values file:** `$P/values.toml` is TOML, exactly `PREVIEW_SHA256 = "..."`, `RUN_ID = "..."` and `EXPECTED_BOOT = "..."`, taken from the reviewed C8 record and the recorded boot UUID.
-7. **Build and upload the second package:** build `"$P/maintenance-q12-package-2"` with `--values "$P/values.toml"`, then upload it with `q12_upload`. Because `RUN_ID` is filled, the second package rebuilds every step. Its manifest differs, and that is expected.
-8. **Run the rest from the second package:** resume at `q12-c9-authority`, then `q12-c10-application`, `q12-c10-inspect` (only after alternative 0) and `q12-c11-diagnosis`. Never rerun an earlier step.
+7. **Build and upload the second package:** build `"$P/maintenance-q12-package-2"` with `--values "$P/values.toml"`, then upload it with `bash "$P/q12.sh" q12_upload "$P/maintenance-q12-package-2" maintenance-q12-package-2`. Because `RUN_ID` is filled, the second package rebuilds every step. Its manifest differs, and that is expected.
+8. **Run the rest from the second package:** with `bash "$P/q12.sh" q12_step maintenance-q12-package-2 <step>`, resume at `q12-c9-authority`, then `q12-c10-application`, `q12-c10-inspect` (only after alternative 0) and `q12-c11-diagnosis`. Never rerun an earlier step.
 9. **Park:** run D4 (Q1 step 8) on every outcome.
 
 ## Q2: pins
