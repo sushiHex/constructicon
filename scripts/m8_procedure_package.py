@@ -111,6 +111,19 @@ def _invokes(text: str) -> bool:
     return False
 
 
+def _comment_free(body: str) -> str:
+    """The raw text without whole-line comments, decided before any quote is
+    removed: only an unquoted, unescaped leading `#` on a line that does not continue
+    the previous one starts a comment (`"#" || cmd` runs `cmd`)."""
+    lines, joined = [], False
+    for line in body.splitlines(keepends=True):
+        if not joined and COMMENT_LINE.fullmatch(line.rstrip("\n")):
+            line = "\n" if line.endswith("\n") else ""
+        lines.append(line)
+        joined = _continues(line if line.endswith("\n") else line + "\n")
+    return "".join(lines)
+
+
 def _continues(body: str) -> bool:
     """Whether bash joins the next line to this one: an odd run of backslashes before
     the final newline (an even run is literal backslashes)."""
@@ -342,7 +355,7 @@ def assemble(path: Path, template: bool = False) -> list[Step]:
             raise Refused(f"step {name}: a part ends in a line continuation")
         # Every piece then ends at a line break, so no word spans two pieces and each
         # is checked alone. Whole-line comments never run; their prose is not a call.
-        if any(_invokes(COMMENT_LINE.sub("", _normalized(body)))
+        if any(_invokes(_normalized(_comment_free(body)))
                for body, reviewed in pieces if not reviewed):
             raise Refused(f"step {name}: only a reviewed lane-boundary block may invoke "
                           "the lane CLI (#210 lane-output contract)")

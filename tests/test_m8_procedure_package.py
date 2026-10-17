@@ -195,6 +195,18 @@ def test_a_part_ending_in_a_line_continuation_refuses(tmp_path, splice):
         package.assemble(procedure(tmp_path, spliced))
 
 
+@pytest.mark.parametrize("text", [
+    # A quoted or escaped hash is a word, not a comment (connector review of #222).
+    '\\"#\\" || \\"${LANE[@]}\\" startup',
+    "\\\\# x; \\\"${LANE[@]}\\\" startup",
+    # A hash line that continues the previous word is not a comment either.
+    'echo a\\\\\\n#; \\"${LANE[@]}\\" startup',
+], ids=["quoted-hash", "escaped-hash", "continued-hash"])
+def test_only_a_real_comment_line_is_ignored(tmp_path, text):
+    with pytest.raises(package.Refused, match="only a reviewed lane-boundary block"):
+        package.assemble(procedure(tmp_path, _with_literal(text)))
+
+
 def _with_literal(text: str) -> str:
     return QUALIFICATION.replace(
         '{literal = "W=/home/m8-service/m8-maint-q12"}',
