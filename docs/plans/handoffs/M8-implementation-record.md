@@ -6866,3 +6866,14 @@ tests with 16 explicitly Linux-only skips; no local full Windows gate is claimed
 The follow-up evidence-ledger update changes no executable fences or code.
 This establishes the synthetic composed proof, not installed-host readiness,
 approval of private drift inputs or authority for a live session.
+
+The connector's review of `4f6fcb8` found two introduced documentation defects,
+both adopted after source verification. Q1's package-build example omitted the
+isolated interpreter even though the script is mode `100644` without a shebang;
+Q1's run instruction pointed to Q7's private declarations instead of Q8's ordered
+step inventory. The corrected build command names the existing reviewed isolated
+Python invocation and closes stdin; the run instruction names Q8's C1–C8 range.
+A regression extracts and executes the documented build command with only the
+test interpreter and private directory substituted, using synthetic values;
+another pins the inventory reference. No VM command, packaged fence, controller
+input or execution authority changes in these corrections.

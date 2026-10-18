@@ -86,7 +86,7 @@ push is part of any packaged step.
 2. Prepare the reviewed bundle below under its fresh q13 filename. Save a private
    TOML values file with exactly `DRIFT_STDOUT_HEX` and `DRIFT_TOOL_SHA256`,
    each independently reviewed. Build with isolated Python:
-   `scripts/m8_procedure_package.py build docs/plans/handoffs/M8-maintenance-q13-continuation.md "$P/maintenance-q13-package-1" --values "$P/drift-values.toml"`.
+   `/c/Python314/python.exe -I -S -B scripts/m8_procedure_package.py build docs/plans/handoffs/M8-maintenance-q13-continuation.md "$P/maintenance-q13-package-1" --values "$P/drift-values.toml" < /dev/null`.
    Require 16 written steps and exactly C9/C10/C11 deferred. Record the manifest
    digest and compare it with the authorization. Failure is no-go, not permission
    to fill runtime fields synthetically or use `--template`.
@@ -98,8 +98,9 @@ push is part of any packaged step.
    wrappers below under the matching `.py` names. Run discovery's pinned helper
    check before D0, run D0 once, then the remaining discovery fences once.
    Require `q13-vm-start-checked`; export the discovered target privately.
-5. Upload package 1 and the single bundle using Q1b. Run each Q7 step once,
-   in order through T5, C1 through C8 only. Stop at the first refusal.
+5. Upload package 1 and the single bundle using Q1b. Run each step in Q8's table
+   order once through T5, C1 through C8 only; stop before C9. Stop at the first
+   refusal.
 6. Review the real C8 record and recorded boot. A second private values file must
    repeat the identical approved private pair and add exactly
    `PREVIEW_SHA256`, `RUN_ID`, `EXPECTED_BOOT`. The run must equal

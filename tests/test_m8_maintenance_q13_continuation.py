@@ -111,6 +111,47 @@ def test_private_pair_builds_sixteen_and_only_runtime_steps_wait(tmp_path):
         assert not (first / f"{name}.expected.json").exists()
 
 
+def test_actual_documented_first_build_uses_isolated_python_and_writes_sixteen(tmp_path):
+    sequence = package.section(_text(DOCUMENT), "Q1: workstation sequence")
+    command, = re.findall(r"`([^`\n]*scripts/m8_procedure_package.py build[^`\n]*)`", sequence)
+    argv = shlex.split(command)
+    assert argv == [
+        "/c/Python314/python.exe", "-I", "-S", "-B", "scripts/m8_procedure_package.py", "build",
+        "docs/plans/handoffs/M8-maintenance-q13-continuation.md", "$P/maintenance-q13-package-1",
+        "--values", "$P/drift-values.toml", "<", "/dev/null"]
+    (tmp_path / "drift-values.toml").write_bytes(("\n".join(
+        f'{key} = "{value}"' for key, value in PRIVATE_VALUES.items()) + "\n").encode())
+    # Replace only the workstation interpreter and private execution directory;
+    # execute the documented argv in a genuinely isolated stdlib-only child.
+    actual = [sys.executable, *(arg.replace("$P/", tmp_path.as_posix() + "/")
+                                for arg in argv[1:-2])]
+    ran = subprocess.run(actual, stdin=subprocess.DEVNULL, capture_output=True,
+                         cwd=DOCUMENT.parents[3], timeout=30, check=False)
+    first = tmp_path / "maintenance-q13-package-1"
+    assert ran.returncode == 0 and ran.stderr == b""
+    assert ran.stdout == os.linesep.encode().join([
+        hashlib.sha256((first / "MANIFEST.sha256").read_bytes()).hexdigest().encode(),
+        b"deferred until session values: q13-c9-authority q13-c10-application q13-c11-diagnosis",
+        b""])
+    emitted = {name.removesuffix(".sh") for name in _manifest(first) if name.endswith(".sh")}
+    assert emitted == set(_steps(values=PRIVATE_VALUES)) - DEFERRED and len(emitted) == 16
+    assert len(list(first.iterdir())) == 33
+    assert not any((first / f"{name}.sh").exists() for name in DEFERRED)
+
+
+def test_workstation_first_package_runs_q8_inventory_only_through_c8():
+    sequence = package.section(_text(DOCUMENT), "Q1: workstation sequence")
+    step, = re.findall(r"^5\. (.*?)(?=^6\.)", sequence, re.M | re.S)
+    normalized = " ".join(step.split())
+    assert "Q8's table order" in normalized and "Q7" not in normalized
+    assert "C1 through C8 only; stop before C9" in normalized
+    inventory = package.section(_text(DOCUMENT), "Q8: all 19 steps and evidence boundaries")
+    names = re.findall(r"^\| `(q13-[a-z0-9-]+)` \|", inventory, re.M)
+    first = names[:names.index("q13-c9-authority")]
+    assert first[0] == "q13-c1-controller" and first[-1] == "q13-c8-preflight"
+    assert len(first) == 15
+
+
 def test_full_synthetic_build_is_reproducible_and_parses_all_nineteen(tmp_path):
     first, second = tmp_path / "first", tmp_path / "second"
     assert package.build(DOCUMENT, first, values=VALUES) == package.build(
