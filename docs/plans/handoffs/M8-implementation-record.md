@@ -6877,3 +6877,32 @@ A regression extracts and executes the documented build command with only the
 test interpreter and private directory substituted, using synthetic values;
 another pins the inventory reference. No VM command, packaged fence, controller
 input or execution authority changes in these corrections.
+
+## Retain isolated-startup observations in their lane artifact (Refs #239)
+
+The foundation upload already accepts `n3c-*.json`; the isolated startup
+publication and refusal tests instead emitted two unprefixed filenames.
+Their assertions ran, but their evidence files were outside the retained
+artifact. Both observations now use that existing namespace. No upload pattern
+is broadened and no workflow or production source changes.
+
+The shared test evidence writer reads the actual workflow upload contract and
+asserts that each emitted basename matches it before writing. The upload must
+remain unconditional and lane-bound. This checks computed filenames when their
+branches execute, without a second output manifest. Portable tests discover the
+literal maintenance filenames and exercise the same writer; both old names
+failed by assertion before the rename while the matching names passed.
+Additional accepting and refusing probes cover the writer's upload boundary.
+
+These tests do not establish that unexecuted dynamic branches emitted anything,
+or that a successful write was uploaded. The exact-head Linux artifact must
+contain both renamed observations before retention is reported as verified.
+This work uses no private host, credentials or added vendor-binary invocation.
+
+Local workflow, preparation/preflight and maintenance/restart tests passed
+60 cases with 16 explicitly Linux-only skips; Ruff and diff checks passed.
+The source audit found 52 shared-writer calls across 15 modules: all 34 literal
+names match the existing patterns, and the 18 computed calls use matching
+namespaces. This guard covers that shared writer, not independent direct
+writers to the evidence directory. Exact-head CI and actual retained files
+remain separate evidence requirements.

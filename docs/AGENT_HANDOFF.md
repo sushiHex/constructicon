@@ -15,6 +15,23 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## CI evidence names must belong to the lane artifact
+
+Under [#239](https://github.com/sushiHex/constructicon/issues/239), the two
+isolated-startup observations use the existing `n3c-` artifact namespace.
+Their earlier tests executed, but their filenames did not match the workflow's
+upload patterns. A passing test was not evidence that its JSON was retained.
+
+The shared test evidence writer checks each emitted basename against the actual
+unconditional, lane-bound workflow upload. Portable tests exercise the literal
+maintenance names even when the physical cases cannot run locally; computed
+names are checked when emitted. This is not a claim that every possible dynamic
+branch ran, nor that a matching glob proves a successful upload. Final-head CI
+and inspection of the resulting artifact remain the retention proof.
+
+No workflow glob, production behavior, private-host state or live authority is
+changed. Exact verification evidence belongs in the PR and M8 record.
+
 ## q13 preparation distinguishes composed proof from host readiness
 
 Under [#189](https://github.com/sushiHex/constructicon/issues/189) and

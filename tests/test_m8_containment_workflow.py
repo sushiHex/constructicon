@@ -1,5 +1,7 @@
 """Pin the proof inventory and routing while actionlint checks YAML semantics."""
 
+import ast
+import json
 import os
 import re
 import subprocess
@@ -13,6 +15,14 @@ from tests.git_bash import git_bash
 
 WORKFLOW = Path(__file__).parents[1] / ".github/workflows/m8-containment.yml"
 CLASSIFIER = Path(__file__).parents[1] / "scripts/ci/m8_ci_scope.py"
+MAINTENANCE = Path(__file__).parent / "substrate/test_operator_store_maintenance_restart.py"
+MAINTENANCE_LITERAL_EVIDENCE_NAMES = [
+    node.args[0].value
+    for node in ast.walk(ast.parse(MAINTENANCE.read_text(encoding="utf-8")))
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    and node.func.id == "write_evidence" and node.args
+    and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)
+]
 
 # Every provisioned proof belongs to exactly one isolated runner. These are not
 # sampled smoke tests: removing a file or mutation inventory must fail here.
@@ -175,6 +185,71 @@ def test_lane_evidence_is_disjoint_and_bound_to_the_reviewed_head():
     assert "M8_EGRESS_REQUIRED=1" in text
     assert "codex-*.json" in text
     assert "duplex-*.json" in text
+
+
+def test_literal_maintenance_name_coverage_includes_both_isolated_startup_outcomes():
+    assert {
+        "n3c-isolated-startup-refusal.json", "n3c-isolated-startup-publication.json",
+    } <= set(MAINTENANCE_LITERAL_EVIDENCE_NAMES)
+
+
+@pytest.mark.parametrize("name", MAINTENANCE_LITERAL_EVIDENCE_NAMES)
+def test_literal_maintenance_evidence_names_are_retained(name, tmp_path, monkeypatch):
+    # Linux-only cases still get portable coverage for their literal names.
+    # Computed names are checked when write_evidence actually emits them.
+    from tests.substrate.test_native_codex_mediation import write_evidence
+
+    monkeypatch.setenv("M8_EVIDENCE_DIRECTORY", str(tmp_path))
+    write_evidence(name, {"synthetic_retention_probe": True})
+    assert json.loads((tmp_path / name).read_bytes()) == {"synthetic_retention_probe": True}
+
+
+@pytest.mark.parametrize("name", ["n3c-computed-point.json", "codex-computed-case.json"])
+def test_evidence_writer_accepts_names_in_the_shared_lane_upload(name, tmp_path, monkeypatch):
+    from tests.substrate.test_native_codex_mediation import write_evidence
+
+    monkeypatch.setenv("M8_EVIDENCE_DIRECTORY", str(tmp_path))
+    write_evidence(name, {"synthetic_retention_probe": True})
+    assert (tmp_path / name).is_file()
+
+
+@pytest.mark.parametrize("name", ["unretained.json", "n3c-nested/evidence.json"])
+def test_evidence_writer_refuses_names_outside_the_lane_upload(name, tmp_path, monkeypatch):
+    from tests.substrate.test_native_codex_mediation import write_evidence
+
+    monkeypatch.setenv("M8_EVIDENCE_DIRECTORY", str(tmp_path))
+    with pytest.raises(AssertionError, match=r"omitted from its lane artifact|must be basenames"):
+        write_evidence(name, {"synthetic_retention_probe": True})
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("change", [
+    lambda text: text.replace("Preserve exact runtime and observed boundary evidence", "removed"),
+    lambda text: text.replace("uses: actions/upload-artifact@", "uses: actions/other@"),
+    lambda text: text.replace("        if: always()", "        if: false"),
+    lambda text: text.replace("-${{ matrix.lane }}", "-unscoped"),
+    lambda text: text.replace("          path: |", "          paths: |"),
+    lambda text: text.replace("${{ env.M8_EVIDENCE }}/", "${{ env.OTHER }}/"),
+])
+def test_evidence_writer_refuses_an_unrecognized_upload_contract(change, tmp_path, monkeypatch):
+    from tests.substrate.test_native_codex_mediation import write_evidence
+
+    text = change(WORKFLOW.read_text(encoding="utf-8"))
+    monkeypatch.setattr(Path, "read_text", lambda *args, **kwargs: text)
+    monkeypatch.setenv("M8_EVIDENCE_DIRECTORY", str(tmp_path))
+    with pytest.raises(AssertionError):
+        write_evidence("n3c-synthetic.json", {"synthetic_retention_probe": True})
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_evidence_writer_refuses_a_missing_workflow(tmp_path, monkeypatch):
+    from tests.substrate.test_native_codex_mediation import write_evidence
+
+    monkeypatch.setattr(Path, "is_file", lambda *args: False)
+    monkeypatch.setenv("M8_EVIDENCE_DIRECTORY", str(tmp_path))
+    with pytest.raises(AssertionError, match="evidence upload workflow is missing"):
+        write_evidence("n3c-synthetic.json", {"synthetic_retention_probe": True})
+    assert list(tmp_path.iterdir()) == []
 
 
 def _git(repository: Path, *arguments: str) -> str:

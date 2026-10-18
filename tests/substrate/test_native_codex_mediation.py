@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import fnmatch
 import hashlib
 import json
 import os
@@ -84,6 +85,33 @@ def native(tmp_path):
 def write_evidence(name, value):
     directory = os.environ.get("M8_EVIDENCE_DIRECTORY")
     if directory:
+        # This upload is shared by all isolated lanes. Check concrete emitted
+        # names, including computed ones, rather than maintaining a second list.
+        workflow = Path(__file__).parents[2] / ".github/workflows/m8-containment.yml"
+        assert workflow.is_file(), "evidence upload workflow is missing"
+        uploads = re.findall(
+            r"      - name: Preserve exact runtime and observed boundary evidence\n"
+            r"(.*?)(?=\n      - |\n  \w|\Z)",
+            workflow.read_text(encoding="utf-8"), re.S,
+        )
+        assert len(uploads) == 1, "expected one shared evidence upload"
+        upload, = uploads
+        assert "        if: always()\n" in upload
+        assert re.search(r"^        uses: actions/upload-artifact@", upload, re.M)
+        assert (
+            "          name: m8-containment-${{ github.run_id }}-"
+            "${{ github.run_attempt }}-${{ matrix.lane }}\n"
+        ) in upload
+        paths = re.findall(r"^          path: \|\n((?:            [^\n]+\n)+)", upload, re.M)
+        assert len(paths) == 1, "expected one evidence upload path block"
+        patterns = re.findall(
+            r"^            \$\{\{ env.M8_EVIDENCE \}\}/([^\n]+)$", paths[0], re.M,
+        )
+        assert patterns and all(re.fullmatch(r"[\w.*-]+", pattern) for pattern in patterns)
+        assert "/" not in name and "\\" not in name, "evidence names must be basenames"
+        assert any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns), (
+            f"evidence is omitted from its lane artifact: {name}"
+        )
         (Path(directory) / name).write_text(json.dumps(value, sort_keys=True, indent=2) + "\n")
 
 
