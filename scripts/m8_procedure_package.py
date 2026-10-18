@@ -28,7 +28,8 @@ Usage, with isolated Python from the repository root::
     python -I -S -B scripts/m8_procedure_package.py build DOC OUT [--values FILE] [--template]
 
 ``--values`` fills values measured mid-session (``PREVIEW_SHA256``, ``RUN_ID``,
-``EXPECTED_BOOT``) into exact ``NAME=UNREVIEWED`` lines as ``readonly NAME=value``,
+``EXPECTED_BOOT``, ``DRIFT_STDOUT_HEX``, ``DRIFT_TOOL_SHA256``) into exact
+``NAME=UNREVIEWED`` lines as ``readonly NAME=value``,
 each checked against its shape, so bash refuses any later write however its name is
 built; a value that fills no line refuses. A step marked ``deferred = true`` may wait
 only for those values: without ``--values`` it is checked but not written, and the CLI
@@ -45,6 +46,7 @@ a reviewer's job.
 reviewed frozen fences are pinned by digest. Its lints catch honest composition
 mistakes and close named mechanisms by rule:
 - invoking the lane outside a reviewed fence;
+- invoking the host drift tool outside its reviewed in-step output guard;
 - splicing words across parts;
 - unfilled placeholders and declarations;
 - writing a measured session value (also refused by bash: the fill is ``readonly``);
@@ -191,6 +193,8 @@ SESSION_VALUES = {
     "PREVIEW_SHA256": re.compile(r"[0-9a-f]{64}"),
     "RUN_ID": re.compile(r"run-[0-9a-f]{32}"),
     "EXPECTED_BOOT": re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"),
+    "DRIFT_STDOUT_HEX": re.compile(r"(?:[0-9a-f]{2}){2,4096}"),
+    "DRIFT_TOOL_SHA256": re.compile(r"[0-9a-f]{64}"),
 }
 
 
@@ -206,6 +210,18 @@ def session_values(path: Path) -> dict[str, str]:
 def _checked(values: object) -> dict[str, str]:
     """Session values in their exact shapes, wherever they come from (the CLI's
     file or a caller of `assemble` or `build`)."""
+    if isinstance(values, dict) and "DRIFT_STDOUT_HEX" in values:
+        encoded = values["DRIFT_STDOUT_HEX"]
+        try:
+            if not isinstance(encoded, str) or not SESSION_VALUES["DRIFT_STDOUT_HEX"].fullmatch(
+                    encoded):
+                raise ValueError
+            text = bytes.fromhex(encoded).decode("utf-8")
+            if not text.endswith("\n") or not text[:-1].strip() or not text[:-1].isprintable():
+                raise ValueError
+        except (ValueError, UnicodeError):
+            raise Refused("drift stdout must be canonical hex of one printable UTF-8 line, "
+                          "final LF included, at most 4096 decoded bytes") from None
     if not isinstance(values, dict) or not values or not set(values) <= set(
             SESSION_VALUES) or not all(isinstance(value, str) and isinstance(key, str)
                                        and SESSION_VALUES[key].fullmatch(value)
@@ -216,6 +232,18 @@ def _checked(values: object) -> dict[str, str]:
 
 NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
 MAX_STDOUT = 65_536
+# Exact reviewed G1 bytes only. Like LANE_BLOCKS, this closes direct mentions in
+# honest compositions; it does not interpret dynamically constructed shell.
+DRIFT_BLOCKS = {
+    "045ad123b57f0cf11ff721556b907cd095a746d4475a7eac781e520a78853d5d":
+        ("M8-private-output-guard.md", "G1: private drift boundary", 0),
+}
+DRIFT_INVOCATION = re.compile(r"\bm8-host-drift\b")
+# Frozen q12's tests retain their historical assembly contract. This is not
+# execution approval or an exception for any edited/successor composition.
+LEGACY_DRIFT_PROCEDURES = frozenset({
+    "1fbd0a983fc9537f47198221b5a84937da6b3e79fe0c15fb77b3e9b2ba4d76b1",
+})
 # The only reviewed fences that may invoke the lane CLI, keyed by the SHA-256 of
 # their exact bytes, so a same-named heading in another file is not reviewed.
 # Startup boundaries are wrapped by lane_capture (#210 L1-L3); OC Setup defines
@@ -454,6 +482,7 @@ def assemble(path: Path, template: bool = False,
              values: dict[str, str] | None = None) -> list[Step]:
     # Raw bytes: text-mode reading would silently translate CRLF and hide it.
     document = path.read_bytes().decode("utf-8")
+    legacy_drift = hashlib.sha256(document.encode("utf-8")).hexdigest() in LEGACY_DRIFT_PROCEDURES
     if "\r" in document:
         raise Refused("the procedure document is not LF-only")
     spec = composition(document)
@@ -513,6 +542,10 @@ def assemble(path: Path, template: bool = False,
                for body, reviewed in pieces if not reviewed):
             raise Refused(f"step {name}: only a reviewed lane-boundary block may invoke "
                           "the lane CLI (#210 lane-output contract)")
+        if not legacy_drift and any(DRIFT_INVOCATION.search(_normalized(body)) and hashlib.sha256(
+                body.encode("utf-8")).hexdigest() not in DRIFT_BLOCKS for body, _ in pieces):
+            raise Refused(f"step {name}: only a reviewed drift-guard block may invoke "
+                          "the host drift tool (#226 private-output contract)")
         # Generated lines (`readonly NAME=value`) and reviewed fences rely on bash's
         # builtins meaning themselves; no unreviewed part may rebind one.
         if any(_rebinds_a_builtin(_normalized(body)) for body, reviewed in pieces
