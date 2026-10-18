@@ -854,11 +854,13 @@ def isolated_checked_revision(mode: str, evidence: Path, expected: str,
         sys.executable, "-I", "-S", "-B", "-c", entry,
         str(Path(__file__).parents[2] / "src"), sysconfig.get_paths()["purelib"],
         _evidence_program(), mode, str(evidence),
-        "maintenance" if mode == "initial" else "active", expected,
+        "maintenance" if mode in {"initial", "qualify", "hold"} else "active", expected,
         str(session / "startup-policy.json"), str(session), str(launch),
     ], as_service=True)
     assert (checked.returncode, checked.stdout, checked.stderr) == (
-        0, (revision + "\n").encode(), b"")
+        0, (revision + "\n").encode(), b""), (
+            "synthetic isolated evidence checker diagnostic: "
+            + checked.stderr.decode("utf-8", errors="replace")[-4096:])
 
 
 @pytest.mark.parametrize("plan", ["pro", "plus"])

@@ -16,6 +16,47 @@ from tests.git_bash import git_bash
 from tests.preparation_preflight import source_bundle
 
 
+@pytest.mark.parametrize(("mode", "custody"), [
+    ("initial", "maintenance"), ("qualify", "maintenance"),
+    ("hold", "maintenance"), ("active", "active"), ("refresh", "active"),
+])
+def test_isolated_checker_receives_the_mode_specific_custody(tmp_path, monkeypatch, mode, custody):
+    from tests.substrate import test_operator_store_maintenance_restart as isolated
+
+    revision = "sha256:" + "a" * 64
+    expected = "-" if mode == "initial" else "pro/sha256:" + "b" * 64
+    calls = []
+
+    def checked(command, *, as_service):
+        assert as_service is True
+        calls.append(command[-7:])
+        return subprocess.CompletedProcess(command, 0, (revision + "\n").encode(), b"")
+
+    monkeypatch.setattr(isolated, "isolated_run", checked)
+    isolated.isolated_checked_revision(mode, tmp_path / "evidence.json", expected,
+                                       tmp_path / "session", tmp_path / "launch", revision)
+    assert calls == [[mode, str(tmp_path / "evidence.json"), custody, expected,
+                      str(tmp_path / "session/startup-policy.json"),
+                      str(tmp_path / "session"), str(tmp_path / "launch")]]
+
+
+def test_isolated_checker_failure_exposes_only_a_bounded_synthetic_diagnostic(
+    tmp_path, monkeypatch,
+):
+    from tests.substrate import test_operator_store_maintenance_restart as isolated
+
+    diagnostic = b"omitted-synthetic-prefix:" + b"x" * 5000 + b"synthetic-checker-end\n"
+    monkeypatch.setattr(isolated, "isolated_run", lambda command, **kwargs:
+                        subprocess.CompletedProcess(command, 1, b"", diagnostic))
+    with pytest.raises(AssertionError) as failed:
+        isolated.isolated_checked_revision("hold", tmp_path / "evidence.json", "pro/synthetic",
+                                           tmp_path / "session", tmp_path / "launch", "synthetic")
+    message = str(failed.value)
+    bounded = "synthetic isolated evidence checker diagnostic: " + diagnostic.decode()[-4096:]
+    assert bounded in message
+    assert "omitted-synthetic-prefix" not in message
+
+
 @pytest.mark.parametrize("wrong_consumer", [False, True])
 async def test_preparation_bundle_is_genuine_and_consumer_damage_is_not_a_digest_mismatch(
     tmp_path, wrong_consumer,

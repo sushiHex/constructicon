@@ -47,7 +47,7 @@ these stricter preparation conditions. The separate
 current no-go facts; it is not a host-execution authorization.
 
 1. The private drift stdout expectation has no independent owner approval by file
-   digest, or the installed tool digest is unmeasured. Both remain
+   digest, or there is no approved independently sourced tool digest to pin. Both remain
    `UNREVIEWED` here. Neither may be learned from the invocation it validates.
    A candidate measurement is not approval.
 2. Any of the 19 steps below lacks an explicit evidence classification. A

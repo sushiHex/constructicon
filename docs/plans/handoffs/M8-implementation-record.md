@@ -6736,6 +6736,16 @@ about host generation 11. The physical proof requires the existing Linux root
 lane; Windows collection/skips cannot establish it. Exact-head CI evidence must
 be recorded before this proof is called executed.
 
+At initial PR head `4970c6e`, the existing Linux N3c step passed its prior
+15 cases but refused the new cohort before publication: the test helper mapped
+every mode except `initial` to active custody. The new held-maintenance record
+was therefore mislabeled by its caller; the frozen production checker correctly
+rejected it. The fixture correction follows the checker's whole mode class
+(`initial`, `qualify`, `hold` are maintenance; `active`, `refresh` are active),
+with portable argument coverage rather than weakening evidence checks. This
+initial run does not establish C7/C8 execution. Qualification and the package
+mutation job passed at that head; all 38 inventory entries were reported killed.
+
 Fable's design pass supports retaining C and separating capture from approval.
 Its proposed extra capture-only boot is not automatically exempt from the
 one-session budget. No private expectation or installed-tool digest was approved,
@@ -6743,3 +6753,14 @@ no host queried or started, and no credential, model or vendor binary was used
 by these new helpers/tests. Existing credential-free CI binary lanes remain
 unchanged. This slice does not establish all-step live readiness or authorize
 q13, R6, replacement, retry or public-history deletion.
+
+Subsequent source recovery narrowed the measurement gap. A complete historical
+tool file was found in the other session's retained artifacts; both R2 source
+listings match it after CRLF-to-LF normalization, and a durable private copy now
+has the same digest. Its success line is a fixed literal, contrary to the design
+review's premise that baseline content was needed to determine those bytes.
+The readiness document records source and candidate-expectation digests, not raw
+host output. These remain proposed inputs until owner approval. No current host
+query or tool invocation was performed. G1 would check the installed digest
+before execution; a mismatch would refuse rather than adopt new bytes. This can
+avoid a separate measurement bootstrap, not the independent approval or exact go.

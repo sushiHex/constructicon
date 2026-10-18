@@ -10,8 +10,8 @@ the [q13 composition](M8-maintenance-q13-continuation.md) owns the proposed step
 ## Decision boundary
 
 **NO-GO for host execution.** A complete source package, a green gate and a
-synthetic accepting rehearsal cannot establish the installed drift tool's bytes,
-its output contract, current host state or owner approval of private evidence.
+synthetic accepting rehearsal cannot establish the current installed drift
+tool's bytes, current host state or owner approval of private evidence.
 The exact-head review and evidence ledger must distinguish each of these facts.
 
 The proposed budget remains one q13 live session and at most one application
@@ -32,14 +32,47 @@ It does not measure the installed controller. The composition retains fresh
 launch/controller verification and R19; a difference is a stop, not permission
 to install. Recheck this source comparison on the final head.
 
+## Recovered source, not a new host measurement
+
+After the initial design pass, the other session identified the complete
+historical drift-tool source. The retained private file is 2,578 bytes, 62 lines,
+LF-only, SHA-256
+`e3541663b621a79558be4186a0def104d17c7b7b10a5066bb34edfeb53eb0165`.
+Both complete source listings in the historical
+[R2 report](https://github.com/sushiHex/constructicon/issues/73#issuecomment-5790260256)
+match that digest after converting the comment's CRLF line endings to LF.
+The source and a candidate expectation are preserved outside the public checkout
+in durable private evidence, not only in the original temporary scratchpad.
+Custody is the owner and this preparation session; retain through q13 closeout,
+then seek owner direction before deletion. The private handoff holds locations.
+
+The source's successful output is a fixed literal plus LF. The baseline selects
+the successful branch; it does not supply bytes to that literal. Extracting the
+literal without executing the script produces a 52-byte expectation, SHA-256
+`5b0478e374b71d9017020aa6bf2b08f20bc0087d0bd8bb8a43dc524cc028d79b`.
+This corrects the design review's premise that baseline content was needed to
+specify the successful output. It is an independently sourced candidate contract,
+not output learned from the invocation it would validate.
+
+Owner approval of these exact inputs is still required. If approved, G1 compares
+the current installed file to the historical source pin before invocation. A
+difference stops; no new bytes are adopted. That route needs no separate bootstrap
+session merely to obtain a digest. It does not claim that the host file has
+remained unchanged or that the tool establishes fresh qualification.
+In particular, this historical tool compares rows present in its baseline but
+does not prove the baseline's key inventory is complete. This source-level limit
+is tracked separately in [#238](https://github.com/sushiHex/constructicon/issues/238).
+G1 must not be described as repairing it; the existing D2 qualification checks remain.
+
 ## Measurement is not approval
 
 The retained q12 C1 output is a combined step stream, not a standalone capture
-of the drift executable. No independently approved expected stdout file or
-installed-tool digest has been established by this preparation. Do not split a
-line out of that stream and present it as a measured emitter contract.
+of the drift executable. The candidate above was recovered from independent
+source, not split out of that stream. No owner approval or current-host
+measurement has been established by this preparation.
 
-A future minimal measurement proposal must do only the following:
+If that source-based pin is not accepted, a future minimal measurement proposal
+must do only the following:
 
 1. Establish exact procedure pins, fresh destinations, custody and the reviewed
    start/park transport. It needs its own explicit go; no command runs now.
@@ -71,7 +104,7 @@ The later G1 invocation validates against that approved input. No invocation
 creates its own expectation. Historical private evidence needed for comparison
 must be preserved before separately authorized public-history removal.
 
-Whether this is a separate capture-only session or a checkpoint within q13 is
+Whether that fallback is a separate capture-only session or a checkpoint within q13 is
 an owner budget decision, not an implementation detail. A separate session
 would extend the proposed one-session ceiling. An in-session checkpoint would
 consume q13's session even if approval cannot be obtained. Neither route is
@@ -86,8 +119,8 @@ Before requesting execution, retain one package containing:
   reconstruction rule for the deferred package;
 - the 19-step evidence ledger, naming composed executed proofs, fragments and
   host-only unknowns separately, with exact-head test and CI evidence;
-- the private approved drift expectation and tool digest references, independent
-  approval record and explicit measurement-session accounting;
+- the private approved drift expectation and historical source/tool pin references,
+  independent approval record and any explicit measurement-session accounting;
 - positive custody/idle and fresh destination checks, without treating absence
   of a message as exclusive custody;
 - the unchanged attempt budget, stop/park procedure and limits: synthetic peers
