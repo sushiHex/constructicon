@@ -6557,3 +6557,27 @@ The new fixture now seals that synthetic selection as root-owned, service-group
 Production writers and readers are unchanged. Switching the reader to root was
 rejected because it would hide the missing fixture precondition. Corrected
 physical startup/publication results remain unverified until the new head runs.
+
+At historical head `e0c10b169d05efabde748d8ed9ce97d09232249e`, the corrected
+foundation [job 117622416069](https://github.com/sushiHex/constructicon/actions/runs/39109423274/job/117622416069)
+executed all 15 maintenance/restart cases successfully, including both new
+isolated-startup cases, `[pro]` and `[plus]`. The accepting case completed
+production maintenance startup, the unchanged evidence checker, evidence-bound
+publication and activation, rejection of a mismatching activation digest and
+stale prior selection, and production active startup. The refusing case
+completed its exact normal-refusal record and retained the descriptor byte
+inventory and durable withdrawal without publication.
+
+That head passed qualification and all four containment lanes. Its hosted
+[verification job](https://github.com/sushiHex/constructicon/actions/runs/39109423257/job/117622134688)
+reported 6,818 passed, 446 skipped and one warning; lint, strict types and all
+five import contracts passed. These are observations of that exact Linux head,
+not fresh execution evidence for its later rebase.
+
+Rebasing onto scanner merge `146920d` preserves all three #236 test-file blobs
+from `e0c10b1`, the merged scanner implementation/tests and its living record.
+The handoff also preserves the scanner's merged scope without importing the
+separate unmerged guard slice. Only documentation and archive reconciliation
+followed the rebase; fresh exact-head CI is still required. This does not expand
+the synthetic-peer proof into vendor qualification, installed-controller state,
+a full C3/C4, q13, T5 or S6a rehearsal, or new crash/timeout-cleanup evidence.
