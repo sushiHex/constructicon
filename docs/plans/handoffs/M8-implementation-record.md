@@ -6848,3 +6848,21 @@ are removed after identifying the cause; bounded step observations remain.
 No inherited ACL is removed, no saved file is repaired with `chmod`, and no
 production command or frozen privacy assertion changes. Final composed C7/C8
 acceptance still requires a new Linux run.
+
+At `03804a2`, that run completed affirmatively. Foundation job `117691747157`
+in [run 39132967503](https://github.com/sushiHex/constructicon/actions/runs/39132967503)
+passed, and artifact `12139591767` records exactly `accept`, `wrong-consumer`,
+`source-drift`, `qualification`, and `diagnostic` in `cases_completed`.
+It also records a genuine 90-second hold, the unchanged activated store,
+checked source pin/preview and `application_attempted=false`. Accepting C7
+returned zero with 208 stdout bytes; accepting C8 returned zero with 1,204
+stdout bytes; both had empty stderr. Refusals remained at their intended
+boundaries, including T5's refusal of otherwise-successful diagnostic output.
+The saver probe recorded service ownership, one regular link and mode `0600`.
+
+Verify run `39132967535`, runner qualification `39132967579` and all four
+containment lanes passed the same head. The local targeted suite passed 101
+tests with 16 explicitly Linux-only skips; no local full Windows gate is claimed.
+The follow-up evidence-ledger update changes no executable fences or code.
+This establishes the synthetic composed proof, not installed-host readiness,
+approval of private drift inputs or authority for a live session.

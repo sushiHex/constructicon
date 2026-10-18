@@ -37,6 +37,14 @@ checkers over a genuine bundle and emitted synthetic qualification, with a real
 is not historical generation-11 evidence; physical execution belongs to the
 Linux lane, not Windows skips. Exact results and limits live in the M8 record.
 
+The composed test exposed a real CI environment assumption: the service home
+has an inherited default ACL, so even the unchanged `umask 077` saver produced
+mode `0664`. A paired-directory observation proved `/tmp` produced `0600`.
+Disposable fixture state moved there, retaining an early exact-saver mode check;
+the temporary tracing was removed. This did not repair any ACL, weaken the
+private-file guard or establish the private host's permissions. All five
+accepting/refusing scenarios subsequently completed on Linux at `03804a2`.
+
 The readiness document separates capture from approval: a first observed tool
 digest does not certify that tool, and an invocation cannot supply its own
 expected output. This preparation neither establishes all-step host readiness

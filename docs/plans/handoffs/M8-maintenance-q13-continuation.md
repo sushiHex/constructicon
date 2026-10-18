@@ -587,13 +587,15 @@ umask 077
 
 ## Q8: all 19 steps and evidence boundaries
 
-This inventory classifies the baseline, not an assertion that all 19 have run.
+This inventory classifies offline evidence, not an assertion that all 19 have run.
 “Fragment” means source/component assertions, not the actual packaged producer
 through T5. Existing q12 composed rehearsals cover only physical preflight and
 H7/H8. The merged real isolated CLI seam is valuable but does not upgrade C3/C4
 to fully composed evidence. The new q13 structural tests are also not host facts.
-C7/C8 whole-step join and other missing preparation proofs remain explicit no-go
-items until their own tests have actually executed at the final head.
+The C7/C8 whole-step join ran at `03804a2` in
+[the foundation lane](https://github.com/sushiHex/constructicon/actions/runs/39132967503/job/117691747157).
+Its completion artifact records all five scenarios, not just collection or an
+empty fault list. Any later code change still needs its own final-head gate.
 
 | Packaged step (table order) | Existing or planned offline proof | Still not established by that proof |
 | --- | --- | --- |
@@ -610,8 +612,8 @@ items until their own tests have actually executed at the final head.
 | `q13-c3-qualification` | Lane boundary and real isolated CLI qualification seam. | Whole C3, historical continuity and held-lock S6a not joined by that seam. |
 | `q13-c4-publish` | Floor checks and real emitted qualification/publication/activation seam. | Whole packaged C3-to-C4 continuity not claimed. |
 | `q13-c5-h7` | q13 packaged T5 alternatives/refusals with real lane CLI and exact G1 integration. | Synthetic peer, custody and binding substitutes are not live refresh/account measurements. |
-| `q13-c7-prepare` | Source preparation fragments; composed q13 seam is a separate proof obligation. | Real host topology/binding and source transfer remain observations. |
-| `q13-c8-preflight` | Closed whitelist/saver fragments; composed q13 seam is a separate proof obligation. | Fresh preview, run and authorization fields are not approved offline. |
+| `q13-c7-prepare` | Executed packaged T5 proof over a genuine bundle and immutable activated store; wrong consumer and diagnostic output refuse. | Synthetic native peer and disposable paths are not the private host's topology or transfer. |
+| `q13-c8-preflight` | Executed packaged T5 proof through real assembly and unchanged whitelist/saver checks; source drift and qualification mismatch refuse. | Fresh live preview, run and authorization fields are not approved offline. |
 | `q13-c9-authority` | Authorization contracts; deferred until reviewed C8 values. | Root installation and fresh authority custody. |
 | `q13-c10-application` | Application entry accepting/refusing component fixtures; deferred. | One real application attempt, never an offline model invocation. |
 | `q13-c10-inspect` | Closed inspector grammar; run only after application alternative 0. | Actual accepted candidate inspection. |

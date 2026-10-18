@@ -112,6 +112,21 @@ authorized here, and no budget exemption is inferred from "read-only".
 
 ## Exact go package
 
+The source preparation's C7/C8 composed proof executed at `03804a2` in
+[run 39132967503](https://github.com/sushiHex/constructicon/actions/runs/39132967503).
+Artifact `12139591767` records acceptance plus wrong-consumer, source-drift,
+qualification-mismatch and diagnostic-output refusals, a real 90-second hold,
+an unchanged activated store and no application attempt. Verify, runner
+qualification and all four containment lanes passed that head. The subsequent
+ledger-only update changes no executable fence or implementation; final-head
+CI and review remain required before merging it.
+
+This closes the offline C7/C8 proof obligation, not the host-execution no-go.
+The native peer is synthetic. In particular, the CI service home's inherited
+default ACL was measured to defeat the shell saver's private mode; the disposable
+fixture now uses `/tmp` and checks the resulting mode before qualification.
+Nothing here establishes the private host's ACLs or relaxes its saved-file checks.
+
 Before requesting execution, retain one package containing:
 
 - the reviewed merged procedure head, source document/fence digests, unchanged
