@@ -1,4 +1,4 @@
-"""Lane-boundary lint mutations for the procedure packager (#210, #220).
+"""Boundary lint mutations for the procedure packager (#210, #220, #226).
 
 Each mutant removes one part of the lint: the continuation refusal and its odd-run
 rule, an invocation form, the constants-only import exemption, checking hash lines,
@@ -12,8 +12,45 @@ MODULE = "scripts.m8_procedure_package:"
 TESTS = "tests/test_m8_procedure_package.py::"
 INVOKE = TESTS + "test_only_reviewed_lane_boundary_blocks_may_invoke_the_lane"
 FORMS = "for match in LANE_INVOCATION.finditer(text):"
+GUARDS = "tests/test_m8_private_output_guard.py::"
 
 MUTANTS = (
+    ("each guarded step declares its private expectation once", MODULE + "assemble",
+     "if len(declaration.findall(text)) != 1:", "if len(declaration.findall(text)) < 1:",
+     GUARDS + "test_guard_cannot_duplicate_a_private_declaration"),
+    ("private declarations precede the first reviewed guard", MODULE + "assemble",
+     "if not declaration.search(before_guard):", "if False:",
+     GUARDS + "test_private_declarations_must_precede_the_first_guard[values-DRIFT_STDOUT_HEX]"),
+    ("each guarded step declares its expectation", MODULE + "assemble",
+     'for key in ("DRIFT_STDOUT_HEX", "DRIFT_TOOL_SHA256"):',
+     'for key in ("DRIFT_TOOL_SHA256",):',
+     GUARDS + "test_guarded_steps_cannot_borrow_or_duplicate_another_steps_private_fill"
+     "[-DRIFT_STDOUT_HEX]"),
+    ("each guarded step declares its tool digest", MODULE + "assemble",
+     'for key in ("DRIFT_STDOUT_HEX", "DRIFT_TOOL_SHA256"):',
+     'for key in ("DRIFT_STDOUT_HEX",):',
+     GUARDS + "test_guarded_steps_cannot_borrow_or_duplicate_another_steps_private_fill"
+     "[-DRIFT_TOOL_SHA256]"),
+    ("a successor never invokes drift outside the approved guard", MODULE + "assemble",
+     "if not legacy_drift and any(DRIFT_INVOCATION.search(_normalized(body))",
+     "if False and any(DRIFT_INVOCATION.search(_normalized(body))",
+     GUARDS + "test_reviewed_guard_does_not_authorize_an_extra_direct_call"),
+    ("the legacy exception binds exact document bytes", MODULE + "assemble",
+     'hashlib.sha256(document.encode("utf-8")).hexdigest() in LEGACY_DRIFT_PROCEDURES',
+     "True", GUARDS + "test_historical_q12_assembly_exception_requires_exact_document_bytes"),
+    ("drift guard standing binds exact fence bytes", MODULE + "assemble",
+     'body.encode("utf-8")).hexdigest() not in DRIFT_BLOCKS',
+     'body.encode("utf-8")).hexdigest() in set()',
+     GUARDS + "test_guard_review_standing_is_its_exact_bytes"),
+    ("drift invocation checks join shell fragments", MODULE + "assemble",
+     "DRIFT_INVOCATION.search(_normalized(body))", "DRIFT_INVOCATION.search(body)",
+     GUARDS + "test_shell_fragments_cannot_hide_an_unguarded_drift_call"),
+    ("the private expectation includes its final LF", MODULE + "_checked",
+     'not text.endswith("\\n")', "False",
+     GUARDS + "test_guard_requires_an_exact_expected_lf"),
+    ("the private expectation is one printable line", MODULE + "_checked",
+     'not text[:-1].isprintable()', "False",
+     GUARDS + "test_guard_requires_printable_text_without_extra_lines"),
     ("a part may not end in a line continuation", MODULE + "assemble",
      "if any(_continues(body) for body, _ in pieces):", "if False:",
      TESTS + "test_a_part_ending_in_a_line_continuation_refuses[{literal = \"IGNORED=\\\\\\\\\"}]"),

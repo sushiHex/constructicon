@@ -43,6 +43,33 @@ Publication/activation trust the supplied digest; the preceding checker and
 composition own its content validation. No new crash or timeout-cleanup proof
 is claimed. The detailed limits are in the living M8 implementation record.
 
+## #226, #189 — private drift output is checked inside the step
+
+[PR #235](https://github.com/sushiHex/constructicon/pull/235) adds the reviewed
+G1 fence and private packager values. The fence retains output/status privately,
+checks the supplied tool digest, zero exit, empty stderr and exact expected
+stdout, and exits before the next command on mismatch. The expectation is
+bounded UTF-8 encoded as shell-safe hex, final LF included. Captures are exclusive;
+`launch_requested` does not mistake an unknown launch outcome for no execution.
+An introduced descendant-output race was corrected with concurrent pipe drains:
+both must reach EOF successfully before comparison. Direct-child exit alone is
+not completed capture; drain errors refuse with partial bytes retained privately.
+
+The connector found an introduced provenance gap: exact G1 could omit its
+private declarations or borrow another step's values. The verified correction
+requires exactly one canonical declaration for each input in that step, before
+its first G1 fence; templates and deferred steps obey the same rule. Repeated
+guards share one pair. Lexical placement is not arbitrary Bash control-flow
+proof. The exact frozen q12 document remains assemblable for historical tests,
+which gives no execution authority.
+
+Credential-free tests exercise synthetic accepting output, plausible mismatches,
+full diagnostic contracts and stopping before later commands. No actual host
+expectation or tool digest is supplied. The digest check reopens the tool path
+for execution, so trusted custody still owns that race. Capture has no timeout
+or disk bound. This slice establishes neither qualification nor a complete q13
+procedure, rehearsal or live attempt; the wider #189 audit remains separate.
+
 ## #230 — public-text backfill preserves coverage gaps
 
 [PR #234](https://github.com/sushiHex/constructicon/pull/234) merged as

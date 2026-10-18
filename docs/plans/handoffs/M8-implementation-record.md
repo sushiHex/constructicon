@@ -6581,3 +6581,115 @@ separate unmerged guard slice. Only documentation and archive reconciliation
 followed the rebase; fresh exact-head CI is still required. This does not expand
 the synthetic-peer proof into vendor qualification, installed-controller state,
 a full C3/C4, q13, T5 or S6a rehearsal, or new crash/timeout-cleanup evidence.
+
+### Private drift output boundary preparation (Refs #226, #189)
+
+The [private output guard](M8-private-output-guard.md) adds one exact reviewed
+fence for successor compositions. It captures the host tool's stdout, stderr
+and numeric status privately, requires the supplied installed-tool digest,
+status zero, empty stderr and complete expected stdout before printing the
+repository-owned `drift-checked`. Its explicit shell exit stops the entire step
+on mismatch, including when Bash's conditional context disables errexit.
+Capture destinations are exclusive and validation retains the capture file
+descriptors. `launch_requested` records the affirmative request; a launch
+exception retains an unknown return code and makes no claim that no process ran.
+
+The packager fills `DRIFT_STDOUT_HEX` and `DRIFT_TOOL_SHA256` from private
+`--values` input as read-only shell variables. The decoded expectation is one
+nonempty printable UTF-8 line, final LF included, at most 4,096 bytes; hex keeps
+shell metacharacters inert. Every direct tool mention in a successor must be
+inside the exact reviewed fence, after shell normalization. Counts are not
+authority. Only the exact frozen q12 document retains its historical assembly
+contract; a one-byte change removes that exemption, and all source pins are
+still checked. This compatibility does not authorize executing q12.
+
+The portable guard suite ran on Windows: 71 passed, with one symlink-creation
+case skipped for platform privilege. Synthetic host-tool bytes are explicitly
+labelled and paired with different plausible output that refuses. Accepting
+steps assert the built declared output and whole actual stdout/stderr. Executed
+cases cover the conditional branch, a condition disabling errexit, two diagnosis
+calls including a second-call mismatch, unexpected stderr, nonzero status,
+missing LF, extra lines, occupied captures, digest mismatch and launch failure.
+The six executable fence fault cases fail outcome or evidence assertions when
+their corresponding guards are removed. All 33 packager inventory mutants were
+assertion-killed, including six new source mutations; inventory target and test
+collection checks passed. Full verification and final-head CI remain PR evidence.
+
+No actual host expectation, installed-tool digest or approved private evidence
+reference is supplied. The digest is checked by reading a path that subprocess
+later reopens; preventing intervening replacement still requires trusted host
+custody. Capture is unbounded on disk before comparison and has no timeout.
+The complete q13 composition, its rehearsal and its separate execution gate
+remain outside this slice. The wider frozen-runbook and stock-utility audit in
+#189 is not completed by these selected successor checks. No VM, credential,
+vendor binary, model call, qualification or application attempt occurred.
+
+The PR #235 connector finding is introduced: exact G1 bytes could be selected
+without either private placeholder, and the values-used check was package-wide.
+The real packager accepted a literal-only guarded step and guarded second steps
+missing a declaration; new refusal assertions failed before the fix. A lexical
+extension also reproduced: placing the declaration after G1 let the first guard
+consume inherited values before its read-only fill executed.
+
+Every step selecting the exact G1 fence now requires exactly one canonical
+declaration for each private value, before its first G1 piece and before any
+fill. Templates and deferred steps obey the same source contract. A repeated
+guard in one step shares that pair; separate steps each declare their own.
+Tests cover missing, inherited, literal, duplicate and late declarations and
+the accepting multi-step fill. Count-only and package-wide checks were rejected
+because they leave those distinct defects open. This is an honest-composition
+lint, not a Bash control-flow proof. G1 bytes and the exact frozen q12 assembly
+exception remain unchanged.
+
+The focused guard, packager and frozen q12 suite passed 262 tests with 38
+platform skips. All 37 packager inventory mutants were assertion-killed,
+including the four new declaration/order removals, and inventory target and
+collection checks passed. Ruff passed for the changed tests and scripts. These
+are local focused results; final-head repository verification remains CI evidence.
+
+After rebasing onto the public-text merge `146920d`, the packager, its mutation
+inventory and the guard tests retain exactly their committed bytes from
+`5507cd8`. Scanner source/tests and the main record, including its scanner
+section, are preserved. The combined scope/manifest-link and guard/packager/frozen
+q12 checks passed 322 tests with 38 platform skips. No full Windows gate or
+repeated mutation run was launched; earlier exact-head CI remains historical
+evidence until verification runs on the rebased head.
+
+The next PR #235 connector finding, against `24430ac`, is introduced: direct
+capture-file handles let a successful child leave a descendant writing after
+comparison. Deterministic control-socket tests reproduced both stdout and stderr
+cases as assertion failures: `drift-checked` and the next command appeared before
+the descendant was released. This was not merely an unexecuted source premise.
+
+G1 now gives the child two pipes and concurrently streams them into the retained
+exclusive private files. Both drain futures must complete successfully before
+flush and comparison; executor shutdown alone is not success evidence. The
+direct-child status remains only that fact. A drain failure refuses and preserves
+captured bytes without certifying capture completeness. Real descendant writes
+are privately captured and refuse; a silent descendant closes both streams before
+acceptance. Test-only socket synchronization determines ordering, with bounded
+test timeouts only failing hangs. Four executable mutations remove either result
+check or bypass both joins for each late stream; each fails the actual verdict
+assertion, not by a harness exception.
+
+This does not add a production timeout, disk bound, process-tree completion proof
+or adversarial-filesystem containment. A descendant retaining a pipe can hold the
+guard indefinitely; a trusted tool could reopen capture paths. No actual host
+data, installed tool, model call or live procedure was used.
+
+The complete guard and packager suites plus mutation-inventory structural checks
+passed locally on Windows: 264 passed, one symlink-privilege skip. This includes
+the nine new descendant/drain cases and their four assertion-proven fault cases.
+Ruff passed for the changed script and tests. The broader mutation inventories
+were structurally checked, not remeasured here; no full Windows gate was run.
+The scope/manifest/link suite passed all 60 tests after named staged-document
+manifest regeneration. The nine new cases passed again after tightening the
+test-only socket reader and timeout cleanup; no timeout is a passing criterion.
+
+Rebasing onto the isolated-qualification merge `459cc770` preserves its complete
+record and handoff, together with the scanner sections. The packager, mutation
+inventory, guard tests and complete G1 document are byte-identical to `5708b39`.
+The rebased scope/manifest/link checks and nine new descendant/drain cases passed
+69 tests, with 89 unrelated guard cases deselected. No full suite or mutation
+inventory was re-executed after this rebase; earlier counts remain historical,
+and exact-head CI is still required.
