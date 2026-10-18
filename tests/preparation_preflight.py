@@ -14,13 +14,23 @@ import os
 import re
 import shlex
 import shutil
+import stat
+import sys
 import sysconfig
 import tempfile
+from contextlib import suppress
 from pathlib import Path
 
 from scripts import m8_procedure_package as package
 
-from constructicon.api._maintenance_source import SOURCE_FILES, SOURCE_HASHES, SourcePin, git
+from constructicon.api._maintenance_source import (
+    SOURCE_FILES,
+    SOURCE_HASHES,
+    SourcePin,
+    git,
+    read_bounded,
+)
+from constructicon.core.errors import ContractViolation
 from constructicon.core.maintenance import MaintenanceAttemptAuthorization
 from constructicon.core.native_operator import NativeOperatorStoreIdentityV1
 from constructicon.substrate.executors.egress import MAX_SOCKET_PATH_BYTES, SOCKET_NAME
@@ -168,12 +178,24 @@ def packaged_steps(directory: Path, launch: Path, session: Path, bundle: Path,
         "if module == 'constructicon.api.maintenance_entry':\n"
         f"    with open({str(directory / 'cli-entered')!r}, 'ab') as observed:\n"
         "        observed.write((sys.argv[1] + '\\n').encode())\n")
+    original_bootstrap = 'sys.path.insert(0, "/opt/constructicon-m8-controller")'
+    bootstrap = "sys.path[:0] = " + json.dumps([
+        str(ROOT / "src"), sysconfig.get_paths()["purelib"]])
+    display_imports = ("from pathlib import Path\n" + original_bootstrap + "\n"
+        "from constructicon.api._maintenance_source import read_bounded\n"
+        "from constructicon.core.identity import parse_json_value\n"
+        "from constructicon.core.maintenance import MaintenanceAttemptAuthorization\n")
+    observed_bootstrap = ("sys.path[:0] = " + json.dumps([
+        str(ROOT), str(ROOT / "src"), sysconfig.get_paths()["purelib"]])
+        + "; from tests.preparation_preflight "
+        "import observe_checker_inputs; observe_checker_inputs(sys.argv, "
+        + json.dumps(str(directory / "checker-inputs.json")) + ")")
     substitutions = {
         old_python: "PY=(" + shlex.join(command) + ")",
         '"${SERVICE[@]}" /usr/bin/python3 -I -S -B -c':
             '"${SERVICE[@]}" ' + shlex.quote(command[0]) + ' -I -S -B -c',
-        'sys.path.insert(0, "/opt/constructicon-m8-controller")':
-            "sys.path[:0] = " + json.dumps([str(ROOT / "src"), sysconfig.get_paths()["purelib"]]),
+        original_bootstrap: bootstrap,
+        display_imports: display_imports.replace(original_bootstrap, observed_bootstrap),
         "/var/lib/constructicon-m8-launch/operator-stores": str(launch / "operator-stores"),
         "/var/lib/constructicon-m8-launch": str(launch),
         "K=n4-codex-pro": "K=" + KEY,
@@ -207,17 +229,77 @@ def _inventory(root):
             for path in root.rglob("*") if path.is_file()}
 
 
-def observe_step(fault, name, status, stdout, stderr):
+def observe_checker_inputs(argv, destination):
+    """Fake-only input observation; never judge or alter the frozen checker."""
+    try:
+        metadata = None
+        if len(argv) > 1:
+            try:
+                info = Path(argv[1]).lstat()
+                metadata = {"uid": info.st_uid, "mode": stat.S_IMODE(info.st_mode),
+                            "nlink": info.st_nlink, "size": info.st_size,
+                            "regular": stat.S_ISREG(info.st_mode)}
+            except OSError:
+                pass
+        statuses = {key: {"value": argv[index][:32] if len(argv) > index else None,
+                          "complete": len(argv) > index and len(argv[index]) <= 32}
+                    for key, index in (("cli", 7), ("saver", 8))}
+        arguments = []
+        for value in argv[1:9]:
+            raw = value.encode("utf-8", errors="surrogatepass")
+            arguments.append({"bytes": len(raw), "tail_hex": raw[-1024:].hex(),
+                              "complete": len(raw) <= 1024})
+        record = {"meaning": "synthetic checker inputs, not a passed verdict", "argc": len(argv),
+                  "arguments": arguments, "service_uid": os.getuid(), "metadata": metadata,
+                  "statuses": statuses, "exception": None}
+        with Path(destination).open("x", encoding="utf-8") as output:
+            output.write(json.dumps(record, sort_keys=True) + "\n")
+        # Observe only the caller's final-checker frame, including its first
+        # exception before the frozen catch closes it to "unknown". Never retain
+        # exception text, traceback, locals or preview content, and restore any
+        # previous tracer when this frame returns (also on SystemExit).
+        target = sys._getframe(1)
+        previous, previous_local = sys.gettrace(), target.f_trace
+
+        def trace(frame, event, argument):
+            if frame is not target:
+                return None
+            if event == "exception" and record["exception"] is None:
+                record["exception"] = {"class": argument[0].__name__[:128], "line": frame.f_lineno}
+                with suppress(OSError):
+                    Path(destination).write_text(json.dumps(record, sort_keys=True) + "\n",
+                                                 encoding="utf-8")
+            if event == "return":
+                sys.settrace(previous)
+                target.f_trace = previous_local
+                return previous_local
+            return trace
+
+        sys.settrace(trace)
+        target.f_trace = trace
+    except OSError:
+        # Missing observation stays missing, not an inferred successful input.
+        # Diagnostics must not change the frozen checker's output or decision.
+        pass
+
+
+def observe_step(fault, name, status, stdout, stderr, checker_inputs=None):
     """Retain bounded synthetic observations before any verdict assertion."""
     from tests.substrate.test_native_codex_mediation import write_evidence
 
-    write_evidence(f"n3c-q13-{fault}-{name}.json", {
+    record = {
         "schema_version": 1, "synthetic_fixture": True,
         "meaning": "step observation, not a passed verdict",
         "scenario": fault, "step": name, "status": status,
         "streams": {key: {"bytes": len(raw), "tail_hex": raw[-8192:].hex()}
                     for key, raw in (("stdout", stdout), ("stderr", stderr))},
-    })
+    }
+    if checker_inputs is not None:
+        try:
+            record["checker_inputs"] = json.loads(read_bounded(checker_inputs, 20000))
+        except (OSError, ValueError, ContractViolation):
+            record["checker_inputs"] = None
+    write_evidence(f"n3c-q13-{fault}-{name}.json", record)
 
 
 def _drift_source(application, base):
@@ -314,7 +396,8 @@ def _exercise_seam(root: Path, launch: Path, foundation: Path, parent: Path, sta
             stdout = (capture / "step.stdout").read_bytes()
             stderr = (capture / "step.stderr").read_bytes()
             status = json.loads((capture / "step.status.json").read_bytes())
-            observe_step(fault, name, status, stdout, stderr)
+            observe_step(fault, name, status, stdout, stderr,
+                         directory / "checker-inputs.json" if name == STEPS[1] else None)
             application = directory / "application"
             if name == STEPS[0]:
                 if fault == "wrong-consumer":

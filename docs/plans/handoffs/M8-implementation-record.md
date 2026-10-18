@@ -6805,3 +6805,17 @@ cover both long-path refusal and short-path acceptance, and actual-package tests
 check the selected state path's budget. This is fixture placement, not a relaxed
 production limit or a claim that C8 has passed. Existing isolated-startup
 artifact names omitted by the upload patterns are separately tracked in #239.
+
+At `7befd4f`, C8's real assembly and preview production progressed: the retained
+preview parsed and its identity/pin assertions passed, but the final frozen
+display checker returned `unknown`. Its portable positive replay still passes.
+The fixture now records that checker's exact bounded synthetic arguments and
+file metadata at the existing interpreter-bootstrap seam, without changing its
+predicates or stdout/stderr. This is diagnostic evidence, not a presumed fix or
+a passing C8 verdict; pipeline statuses and ownership must be observed rather
+than guessed from the existence of a valid preview.
+The diagnostic itself is checked in real isolated `-I -S` child interpreters:
+acceptance and both refusal cases preserve the complete original output and
+status. That test first reproduced a missing helper import, corrected only in
+the fixture bootstrap. An oversized diagnostic remains unavailable without
+replacing the original step observation or its refusal.
