@@ -5,6 +5,7 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -16,6 +17,8 @@ import pytest
 from scripts import m8_procedure_package as package
 
 from constructicon.api._maintenance_source import SOURCE_FILES, SOURCE_HASHES, git
+from constructicon.core.errors import ContractViolation
+from constructicon.substrate.executors.egress import MAX_SOCKET_PATH_BYTES, SOCKET_NAME
 from tests import preparation_preflight as seam
 from tests.git_bash import git_bash
 from tests.preparation_preflight import source_bundle
@@ -107,7 +110,8 @@ def test_actual_q13_seam_mapping_retains_producer_and_checker_fences(tmp_path, l
     session = tmp_path / "session"
     bundle = tmp_path / "source.bundle"
     bundle.write_bytes(b"synthetic mapping input, not an execution bundle\n")
-    out = seam.packaged_steps(tmp_path, launch, session, bundle, "a" * 40, "b" * 64)
+    short_state = PurePosixPath("/home/m8-service/pf-12345678/0")
+    out = seam.packaged_steps(tmp_path, launch, session, bundle, "a" * 40, "b" * 64, short_state)
     frozen = (seam.HANDOFFS / "M8-maintenance-g11-continuation.md").read_bytes().decode()
     bootstrap = "sys.path[:0] = " + json.dumps([
         str(seam.ROOT / "src"), sysconfig.get_paths()["purelib"]])
@@ -117,6 +121,11 @@ def test_actual_q13_seam_mapping_retains_producer_and_checker_fences(tmp_path, l
     ):
         script = out / (name + ".sh")
         body = script.read_bytes().decode()
+        state = next(line[2:] for line in body.splitlines() if line.startswith("S="))
+        assert state == str(short_state)
+        socket = (PurePosixPath(state) / "acquisitions/payloads" /
+                  ("acq-" + "0" * 32) / SOCKET_NAME)
+        assert len(os.fsencode(socket)) <= MAX_SOCKET_PATH_BYTES
         assert next(line for line in body.splitlines() if line.startswith("R=")) == (
             "R=" + str(launch / "operator-stores"))
         assert next(line for line in body.splitlines() if line.startswith("L=")) == (
@@ -151,3 +160,16 @@ def test_seam_completion_evidence_matches_the_existing_ci_upload_globs(tmp_path,
     workflow = (seam.ROOT / ".github/workflows/m8-containment.yml").read_bytes().decode()
     globs = re.findall(r"\$\{\{ env.M8_EVIDENCE \}\}/([^\s]+)", workflow)
     assert any(fnmatch.fnmatchcase(published[0], pattern) for pattern in globs)
+
+
+def test_real_provider_refuses_long_fixture_state_and_accepts_short_state():
+    from tests.substrate.test_codex_adapter import bare_launcher
+    from tests.substrate.test_codex_egress import policy_for, provider_for
+
+    long = PurePosixPath(
+        "/var/lib/constructicon-m8-launch/n3a-restart-12345678/seam-accept/state/acquisitions")
+    with pytest.raises(ContractViolation, match="too long for the native egress socket"):
+        provider_for(bare_launcher(), policy=policy_for(443), root=long)
+    short = PurePosixPath("/home/m8-service/pf-12345678/0/acquisitions")
+    accepted = provider_for(bare_launcher(), policy=policy_for(443), root=short)
+    assert accepted.egress == policy_for(443)

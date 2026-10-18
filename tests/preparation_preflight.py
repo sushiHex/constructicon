@@ -15,6 +15,7 @@ import re
 import shlex
 import shutil
 import sysconfig
+import tempfile
 from pathlib import Path
 
 from scripts import m8_procedure_package as package
@@ -22,6 +23,8 @@ from scripts import m8_procedure_package as package
 from constructicon.api._maintenance_source import SOURCE_FILES, SOURCE_HASHES, SourcePin, git
 from constructicon.core.maintenance import MaintenanceAttemptAuthorization
 from constructicon.core.native_operator import NativeOperatorStoreIdentityV1
+from constructicon.substrate.executors.egress import MAX_SOCKET_PATH_BYTES, SOCKET_NAME
+from constructicon.substrate.git.acquisition import AcquisitionPaths
 from constructicon.substrate.git.authority import GitAuthority
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.maintenance_task_world import committed_tree_base
@@ -130,7 +133,7 @@ def qualify(root: Path, launch: Path, session: Path):
 
 
 def packaged_steps(directory: Path, launch: Path, session: Path, bundle: Path,
-                   base: str, revision: str):
+                   base: str, revision: str, state: Path):
     """Build the actual q13 package, then substitute only fixture-bound inputs.
 
     No fence is removed/reordered, binding checker bypassed, or CLI replaced.
@@ -180,7 +183,7 @@ def packaged_steps(directory: Path, launch: Path, session: Path, bundle: Path,
         "$HOME/maintenance-q13-c7-package/maintenance-q13-5793ef98.bundle": str(bundle),
         "/home/m8-service/maintenance-q13-5793ef98.bundle": str(session / "reviewed.bundle"),
         "/home/m8-service/m8-maint-q13": str(session),
-        "/home/m8-service/m8-m5": str(directory / "state"),
+        "/home/m8-service/m8-m5": str(state),
         "/home/m8-service/m8-maint-a5": str(directory / "application"),
         "$HOME/maintenance-q13-drift-c7-prepare": str(directory / "drift-c7"),
         "$HOME/maintenance-q13-drift-c8-preflight": str(directory / "drift-c8"),
@@ -252,6 +255,24 @@ asyncio.run(main())
 
 
 def exercise_seam(root: Path, launch: Path, foundation: Path, parent: Path):
+    """Own one short canonical state parent until every scenario command joins.
+
+    The protected launch/store root is already too long for a native UNIX socket.
+    A separate service-owned temporary parent supplies fresh one-character state
+    children without aliasing or weakening the provider's actual path bound.
+    """
+    from tests.substrate.test_operator_store_maintenance_restart import service
+
+    with tempfile.TemporaryDirectory(prefix="pf-", dir="/home/m8-service") as name:
+        state_parent = Path(name)
+        assert state_parent.resolve() == state_parent
+        os.chown(state_parent, *service())
+        longest = AcquisitionPaths(state_parent / "4/acquisitions", "acq-" + "0" * 32)
+        assert len(os.fsencode(longest.payload / SOCKET_NAME)) <= MAX_SOCKET_PATH_BYTES
+        return _exercise_seam(root, launch, foundation, parent, state_parent)
+
+
+def _exercise_seam(root: Path, launch: Path, foundation: Path, parent: Path, state_parent: Path):
     """One immutable qualified topology; fresh service state for every scenario."""
     from tests.substrate.test_operator_store_maintenance_restart import service
     from tests.test_m8_maintenance_q12_rehearsal import _t5
@@ -262,7 +283,8 @@ def exercise_seam(root: Path, launch: Path, foundation: Path, parent: Path):
     reviewed = asyncio.run(source_bundle(parent / "reviewed-source"))
     wrong = asyncio.run(source_bundle(parent / "wrong-source", wrong_consumer=True))
     completed = []
-    for fault in ("accept", "wrong-consumer", "source-drift", "qualification", "diagnostic"):
+    for index, fault in enumerate(("accept", "wrong-consumer", "source-drift", "qualification",
+                                  "diagnostic")):
         directory = parent / ("seam-" + fault)
         directory.mkdir(mode=0o700)
         os.chown(directory, *service())
@@ -276,7 +298,8 @@ def exercise_seam(root: Path, launch: Path, foundation: Path, parent: Path):
             os.chown(destination, *service())
             destination.chmod(0o600)
         bundle, base, revision = wrong if fault == "wrong-consumer" else reviewed
-        package_dir = packaged_steps(directory, launch, session, bundle, base, revision)
+        state = state_parent / str(index)  # Absent; the actual C7 command creates it.
+        package_dir = packaged_steps(directory, launch, session, bundle, base, revision, state)
         if fault == "diagnostic":
             path = package_dir / (STEPS[0] + ".sh")
             path.write_bytes(path.read_bytes() + b"printf 'synthetic preparation warning\\n' >&2\n")
@@ -293,7 +316,6 @@ def exercise_seam(root: Path, launch: Path, foundation: Path, parent: Path):
             status = json.loads((capture / "step.status.json").read_bytes())
             observe_step(fault, name, status, stdout, stderr)
             application = directory / "application"
-            state = directory / "state"
             if name == STEPS[0]:
                 if fault == "wrong-consumer":
                     assert (status, stdout, stderr) == (

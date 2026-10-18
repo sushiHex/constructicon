@@ -6792,3 +6792,16 @@ to the earlier bounded checker diagnostic. That failure now raises explicitly
 after the unchanged whole-tuple check, so assertion rewriting cannot bypass the
 diagnostic bound. Verification includes collecting the physical module alongside
 the portable test, which reproduces the full suite's rewriting behavior.
+
+At `6da0be5`, the retained observation positively established C7's accepting
+path (status zero, expected 208-byte stdout, empty stderr); C8 then refused at
+`assembly`. The constructor's socket-path check was reproduced directly:
+the nested fixture state produces a 142-byte native egress socket path, exceeding
+107 bytes. No state child under that protected-root layout can meet the bound.
+The fixture therefore uses a separate, short, canonical disposable state root
+under the service home, with fresh per-scenario children and scoped cleanup.
+Store, launch, source and application paths remain unchanged. Constructor tests
+cover both long-path refusal and short-path acceptance, and actual-package tests
+check the selected state path's budget. This is fixture placement, not a relaxed
+production limit or a claim that C8 has passed. Existing isolated-startup
+artifact names omitted by the upload patterns are separately tracked in #239.
