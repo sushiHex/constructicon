@@ -9,7 +9,12 @@ digest is recorded here.
 ## Contract and composition
 
 The procedure declares `DRIFT_STDOUT_HEX=UNREVIEWED` and
-`DRIFT_TOOL_SHA256=UNREVIEWED` once per step. The packager fills these from the
+`DRIFT_TOOL_SHA256=UNREVIEWED` exactly once in every step selecting G1, lexically
+before its first G1 fence. Repeated G1 fences in that step share this one pair.
+The packager checks this source contract even for templates and deferred steps;
+another step's fills, inherited variables and literal assignments do not satisfy
+it. This establishes lexical placement, not arbitrary Bash control flow.
+The packager fills these from the
 private `--values` TOML file as read-only shell variables. The first is canonical
 lowercase hex encoding a nonempty printable UTF-8 line, including its final LF,
 at most 4,096 decoded bytes. Shell metacharacters are data. The second is the

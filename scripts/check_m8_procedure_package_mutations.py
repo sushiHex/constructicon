@@ -15,6 +15,22 @@ FORMS = "for match in LANE_INVOCATION.finditer(text):"
 GUARDS = "tests/test_m8_private_output_guard.py::"
 
 MUTANTS = (
+    ("each guarded step declares its private expectation once", MODULE + "assemble",
+     "if len(declaration.findall(text)) != 1:", "if len(declaration.findall(text)) < 1:",
+     GUARDS + "test_guard_cannot_duplicate_a_private_declaration"),
+    ("private declarations precede the first reviewed guard", MODULE + "assemble",
+     "if not declaration.search(before_guard):", "if False:",
+     GUARDS + "test_private_declarations_must_precede_the_first_guard[values-DRIFT_STDOUT_HEX]"),
+    ("each guarded step declares its expectation", MODULE + "assemble",
+     'for key in ("DRIFT_STDOUT_HEX", "DRIFT_TOOL_SHA256"):',
+     'for key in ("DRIFT_TOOL_SHA256",):',
+     GUARDS + "test_guarded_steps_cannot_borrow_or_duplicate_another_steps_private_fill"
+     "[-DRIFT_STDOUT_HEX]"),
+    ("each guarded step declares its tool digest", MODULE + "assemble",
+     'for key in ("DRIFT_STDOUT_HEX", "DRIFT_TOOL_SHA256"):',
+     'for key in ("DRIFT_STDOUT_HEX",):',
+     GUARDS + "test_guarded_steps_cannot_borrow_or_duplicate_another_steps_private_fill"
+     "[-DRIFT_TOOL_SHA256]"),
     ("a successor never invokes drift outside the approved guard", MODULE + "assemble",
      "if not legacy_drift and any(DRIFT_INVOCATION.search(_normalized(body))",
      "if False and any(DRIFT_INVOCATION.search(_normalized(body))",

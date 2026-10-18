@@ -228,6 +228,87 @@ def test_private_values_file_and_filled_bytes_round_trip(tmp_path):
     assert "UNREVIEWED" not in steps[0].text
 
 
+def _two_guarded_steps(tmp_path: Path, change: tuple[str, str] | None = None) -> Path:
+    path = _procedure(tmp_path)
+    original = path.read_bytes().decode()
+    step = original.split("[[steps]]", 1)[1].rsplit("```", 1)[0]
+    step = step.replace('name = "guarded"', 'name = "second-guarded"')
+    if change:
+        before, after = change
+        assert step.count(before) == 1
+        step = step.replace(before, after)
+    path.write_bytes((original.rsplit("```", 1)[0] + "[[steps]]" + step + "```\n").encode())
+    return path
+
+
+PRIVATE_VALUES = {"DRIFT_STDOUT_HEX": SYNTHETIC.hex(), "DRIFT_TOOL_SHA256": "1" * 64}
+
+
+def test_each_guarded_step_declares_and_fills_its_own_private_values(tmp_path):
+    steps = package.assemble(_two_guarded_steps(tmp_path), values=PRIVATE_VALUES)
+    assert len(steps) == 2
+    for step in steps:
+        for key, value in PRIVATE_VALUES.items():
+            assert step.text.count(f"readonly {key}={value}\n") == 1
+
+
+@pytest.mark.parametrize("key", ["DRIFT_STDOUT_HEX", "DRIFT_TOOL_SHA256"])
+@pytest.mark.parametrize("replacement", ["", ": ${KEY?}", "KEY=UNREVIEWED\\nKEY=UNREVIEWED"])
+def test_guarded_steps_cannot_borrow_or_duplicate_another_steps_private_fill(
+    tmp_path, key, replacement,
+):
+    replacement = replacement.replace("KEY", key)
+    path = _two_guarded_steps(tmp_path, (f"{key}=UNREVIEWED", replacement))
+    with pytest.raises(package.Refused, match="exactly one private declaration"):
+        package.assemble(path, values=PRIVATE_VALUES)
+
+
+def test_guard_without_private_declarations_cannot_use_literal_values(tmp_path):
+    path = _procedure(tmp_path)
+    text = path.read_bytes().decode().replace("DRIFT_STDOUT_HEX=UNREVIEWED",
+                                            "DRIFT_STDOUT_HEX=780a")
+    text = text.replace("DRIFT_TOOL_SHA256=UNREVIEWED", "DRIFT_TOOL_SHA256=" + "1" * 64)
+    path.write_bytes(text.encode())
+    with pytest.raises(package.Refused, match="exactly one private declaration"):
+        package.assemble(path)
+
+
+def test_guard_cannot_duplicate_a_private_declaration(tmp_path):
+    path = _two_guarded_steps(tmp_path, (
+        "DRIFT_STDOUT_HEX=UNREVIEWED",
+        "DRIFT_STDOUT_HEX=UNREVIEWED\\nDRIFT_STDOUT_HEX=UNREVIEWED",
+    ))
+    with pytest.raises(package.Refused, match="exactly one private declaration"):
+        package.assemble(path, values=PRIVATE_VALUES)
+
+
+@pytest.mark.parametrize("template", [False, True])
+def test_deferred_or_template_guard_still_requires_each_private_declaration(tmp_path, template):
+    path = _procedure(tmp_path)
+    text = path.read_bytes().decode().replace('name = "guarded"',
+                                            'name = "guarded"\ndeferred = true')
+    text = text.replace("DRIFT_TOOL_SHA256=UNREVIEWED", ": ${DRIFT_TOOL_SHA256?}")
+    path.write_bytes(text.encode())
+    with pytest.raises(package.Refused, match="exactly one private declaration"):
+        package.assemble(path, template=template)
+
+
+@pytest.mark.parametrize("key", ["DRIFT_STDOUT_HEX", "DRIFT_TOOL_SHA256"])
+@pytest.mark.parametrize("mode", ["values", "template", "deferred"])
+def test_private_declarations_must_precede_the_first_guard(tmp_path, key, mode):
+    path = _procedure(tmp_path)
+    text = path.read_bytes().decode().replace(f"{key}=UNREVIEWED", "")
+    literal = "{literal = " + json.dumps(f"{key}=UNREVIEWED") + "},"
+    assert text.count("fences = [0]},") == 1
+    text = text.replace("fences = [0]},", "fences = [0]},\n" + literal)
+    if mode == "deferred":
+        text = text.replace('name = "guarded"', 'name = "guarded"\ndeferred = true')
+    path.write_bytes(text.encode())
+    with pytest.raises(package.Refused, match="before its first reviewed drift guard"):
+        package.assemble(path, template=mode == "template",
+                         values=PRIVATE_VALUES if mode == "values" else None)
+
+
 def test_shell_metacharacters_remain_exact_private_output_bytes(tmp_path):
     sentence = b"Synthetic ' \" $(exit 91) `exit 92` & ; | \\ text\n"
     ran = _run(tmp_path, stdout=sentence, expected_stdout=sentence)

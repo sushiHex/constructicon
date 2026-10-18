@@ -6623,3 +6623,26 @@ The complete q13 composition, its rehearsal and its separate execution gate
 remain outside this slice. The wider frozen-runbook and stock-utility audit in
 #189 is not completed by these selected successor checks. No VM, credential,
 vendor binary, model call, qualification or application attempt occurred.
+
+The PR #235 connector finding is introduced: exact G1 bytes could be selected
+without either private placeholder, and the values-used check was package-wide.
+The real packager accepted a literal-only guarded step and guarded second steps
+missing a declaration; new refusal assertions failed before the fix. A lexical
+extension also reproduced: placing the declaration after G1 let the first guard
+consume inherited values before its read-only fill executed.
+
+Every step selecting the exact G1 fence now requires exactly one canonical
+declaration for each private value, before its first G1 piece and before any
+fill. Templates and deferred steps obey the same source contract. A repeated
+guard in one step shares that pair; separate steps each declare their own.
+Tests cover missing, inherited, literal, duplicate and late declarations and
+the accepting multi-step fill. Count-only and package-wide checks were rejected
+because they leave those distinct defects open. This is an honest-composition
+lint, not a Bash control-flow proof. G1 bytes and the exact frozen q12 assembly
+exception remain unchanged.
+
+The focused guard, packager and frozen q12 suite passed 262 tests with 38
+platform skips. All 37 packager inventory mutants were assertion-killed,
+including the four new declaration/order removals, and inventory target and
+collection checks passed. Ruff passed for the changed tests and scripts. These
+are local focused results; final-head repository verification remains CI evidence.

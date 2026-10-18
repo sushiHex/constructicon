@@ -47,6 +47,8 @@ reviewed frozen fences are pinned by digest. Its lints catch honest composition
 mistakes and close named mechanisms by rule:
 - invoking the lane outside a reviewed fence;
 - invoking the host drift tool outside its reviewed in-step output guard;
+- selecting that guard without exactly one canonical private declaration per
+  input in the same step, lexically before its first guard;
 - splicing words across parts;
 - unfilled placeholders and declarations;
 - writing a measured session value (also refused by bash: the fill is ``readonly``);
@@ -552,6 +554,18 @@ def assemble(path: Path, template: bool = False,
                if not reviewed):
             raise Refused(f"step {name}: an unreviewed part rebinds a bash builtin")
         text = "".join(body for body, _ in pieces)
+        guarded = [index for index, (body, _) in enumerate(pieces)
+                   if hashlib.sha256(body.encode("utf-8")).hexdigest() in DRIFT_BLOCKS]
+        if guarded:
+            before_guard = "".join(body for body, _ in pieces[:guarded[0]])
+            for key in ("DRIFT_STDOUT_HEX", "DRIFT_TOOL_SHA256"):
+                declaration = re.compile(rf"^{key}=UNREVIEWED$", re.MULTILINE)
+                if len(declaration.findall(text)) != 1:
+                    raise Refused(f"step {name}: a reviewed drift guard requires exactly one "
+                                  f"private declaration {key}=UNREVIEWED")
+                if not declaration.search(before_guard):
+                    raise Refused(f"step {name}: {key}=UNREVIEWED must appear before its first "
+                                  "reviewed drift guard")
         for key, value in (values or {}).items():
             # readonly: bash itself then refuses any later write, however its name is
             # spelled or built at run time (`printf -v RUN_${suffix}`, `+=`, `eval`).
