@@ -15,6 +15,28 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## Isolated startup/publication join — test structure and evidence boundary
+
+Under [#189](https://github.com/sushiHex/constructicon/issues/189), the existing
+disposable root/service test lane now contains a startup → checked emitted
+evidence → publish/activate → active-startup join over its own store. Its
+accepting case binds both descriptor revisions to the emitted record, checks a
+mismatching activation refusal and rejects the stale prior selection. Its normal
+refusal case asserts the unchanged descriptor bytes and retained withdrawal.
+
+The synthetic native peer and catalog are selected by one injection-root
+replacement; the original profiled bwrap, runtime, launcher methods, relay and
+store custody remain production code. Copying bwrap would lose its exact-path
+AppArmor attachment, so the test retains the original path. Four portable peer
+and constructor checks ran locally; the two physical cases collect but were not
+executed on Windows. Linux evidence belongs to their actual CI run.
+
+This supplies test structure, not a vendor observation, installed-controller
+claim, full C3/C4 or q13 rehearsal, S6a concurrency proof or host authorization.
+Publication/activation trust the supplied digest; the preceding checker and
+composition own its content validation. No new crash or timeout-cleanup proof
+is claimed. The detailed limits are in the living M8 implementation record.
+
 ## #229 — public text refuses every redirect
 
 [PR #231](https://github.com/sushiHex/constructicon/pull/231), 2026-10-17 UTC.

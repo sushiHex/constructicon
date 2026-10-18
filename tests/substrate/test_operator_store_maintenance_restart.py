@@ -27,7 +27,9 @@ from constructicon.core.errors import ContractViolation
 from constructicon.core.identity import canonical_json, digest
 from constructicon.core.native_operator import NativeOperatorStoreIdentityV1
 from constructicon.substrate.executors import operator_store as stores
+from tests.isolated_startup import peer_program
 from tests.substrate.test_native_codex_mediation import write_evidence
+from tests.substrate.test_native_layout import SOURCE as SYNTHETIC_CATALOG
 from tests.substrate.test_operator_store_restart import protected_root as protected_root
 
 KEY = "n3c-maintenance"
@@ -708,4 +710,251 @@ def test_a_publication_temporary_linked_to_the_anchor_disables_until_removed(pro
     write_evidence("n3c-anchor-link.json", {
         "schema_version": 1, "second_anchor_name_disables": True,
         "removal_restores_binding": True,
+    })
+
+
+# A narrow joined CLI proof, not a full C3/C4 runbook or transport rehearsal.
+# The root fixture and its teardown are the same ones this module already uses.
+def isolated_module(module: str, *arguments: str) -> list[str]:
+    source = Path(__file__).parents[2] / "src"
+    entry = (
+        "import runpy, sys; sys.path[:0] = sys.argv[1:3]; del sys.argv[1:3]; "
+        "module = sys.argv.pop(1)\n"
+        "if module == 'constructicon.substrate.executors.codex_lane':\n"
+        "    from dataclasses import replace\n"
+        "    from constructicon.substrate.executors import codex_lane\n"
+        "    from constructicon.substrate.executors.linux import NativeVendor\n"
+        "    real = codex_lane._launcher\n"
+        "    def isolated(root):\n"
+        "        return replace(real(root.parent.parent),\n"
+        "            vendor=NativeVendor(root / 'native-codex', root / 'codex-models.json'))\n"
+        "    codex_lane._launcher = isolated\n"
+        "    raise SystemExit(codex_lane.main(sys.argv[1:]))\n"
+        'runpy.run_module(module, run_name="__main__", alter_sys=True)'
+    )
+    return [sys.executable, "-I", "-S", "-B", "-c", entry, str(source),
+            sysconfig.get_paths()["purelib"], module, *arguments]
+
+
+def isolated_run(command: list[str], *, as_service: bool = False):
+    options = {}
+    if as_service:
+        uid, gid = service()
+        options = {"user": uid, "group": gid, "extra_groups": [],
+                   "env": dict(stores.LANE_ENVIRONMENT)}
+    return subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True,
+                          timeout=150, check=False, cwd="/", **options)
+
+
+def isolated_read(root: Path, sealed, expected: str) -> None:
+    entry = ("import sys; sys.path[:0] = sys.argv[1:3]; del sys.argv[1:3]; "
+             "import constructicon; exec(sys.argv.pop(1))")
+    ran = isolated_run([
+        sys.executable, "-I", "-S", "-B", "-c", entry,
+        str(Path(__file__).parents[2] / "src"), sysconfig.get_paths()["purelib"],
+        READER, str(root), KEY, sealed.model_dump_json(),
+    ], as_service=True)
+    assert (ran.returncode, ran.stdout, ran.stderr) == (0, (expected + "\n").encode(), b"")
+
+
+@pytest.fixture
+def isolated_startup_root(protected_root: Path, plan: str):
+    """Reuse the immutable runtime and profiled bwrap with a synthetic peer.
+
+    This is a separate per-test store and launch set, never the shared CI store.
+    The test entry replaces only the injection-root `_launcher` factory: its
+    result is the real shared launcher with this NativeVendor. The original
+    profiled bwrap path is essential to AppArmor attachment. No custody, relay,
+    launcher method or syscalls are patched, and no installed vendor is needed.
+    """
+    root = protected_root
+    uid, gid = service_root(root)
+    first = publish(root, 1, runtime_uid=uid)  # synthetic seed, not live qualification
+    activate_fixture(root, 1)
+    isolated_read(root, first, "accepted")
+    credential = bundle_of(root) / "store" / "auth.json"
+    credential.write_bytes(b"harmless isolated fixture\n")
+    os.chown(credential, uid, gid)
+    credential.chmod(0o600)
+    launch = root / "isolated-launch"
+    launch.mkdir(mode=0o755)
+    base = root.parent
+    shutil.copyfile(base / "runtime.json", launch / "runtime.json")
+    (launch / "runtime.json").chmod(0o444)
+    native = launch / "native-codex" / "bin"
+    native.mkdir(parents=True, mode=0o755)
+    (native / "codex").write_bytes(peer_program(plan))
+    (native / "codex").chmod(0o555)
+    catalog = launch / "codex-models.json"
+    catalog.write_bytes(json.dumps(SYNTHETIC_CATALOG).encode())
+    catalog.chmod(0o444)
+    session = root / "session"
+    session.mkdir(mode=0o700)
+    os.chown(session, uid, gid)
+    from constructicon.substrate.executors.codex_lane import production_configuration
+
+    for name, raw in {
+        "config.toml": production_configuration().encode(),
+        # The synthetic peer opens no network socket. These are explicit sealed
+        # test inputs, not DNS or vendor observations, and not an S1 rehearsal.
+        "startup-policy.json": json.dumps({
+            "destinations": [["auth.openai.com", 443, "8.8.8.8"]], "connections": 8,
+        }).encode(),
+    }.items():
+        path = session / name
+        path.write_bytes(raw)
+        os.chown(path, uid, gid)
+        path.chmod(0o600)
+    return root, launch, session, first
+
+
+def isolated_record(ran, path: Path, expected_status: int) -> tuple[dict, str]:
+    from constructicon.substrate.executors.codex_lane import EVIDENCE_DOMAIN, STARTUP_FIELDS
+
+    assert path.is_file(), (ran.returncode, ran.stdout, ran.stderr)
+    record = json.loads(path.read_bytes())
+    assert set(record) == STARTUP_FIELDS | {"completed"}
+    assert record["completed"] is True
+    revision = str(digest(EVIDENCE_DOMAIN, 1, json.loads(canonical_json(record))))
+    summary = (json.dumps({"evidence_digest": revision,
+                           "faults": record["faults"]}) + "\n").encode()
+    assert (ran.returncode, ran.stdout, ran.stderr) == (expected_status, b"", summary)
+    assert record["process"]["returncode"] == record["process"]["payload_returncode"] == 0
+    assert record["process"]["stderr_bytes"] == 0
+    assert record["credential"] == {
+        "present": True, "regular_0600": True, "mtime_changed": False, "checked": True}
+    assert record["relay"] == {"destinations": {}, "denied": {}, "closed": True}
+    assert record["vendor_conformance_qualified"] is False
+    return record, revision
+
+
+def isolated_checked_revision(mode: str, evidence: Path, expected: str,
+                              session: Path, launch: Path, revision: str) -> None:
+    from tests.test_m8_operator_commands import _evidence_program
+
+    # The frozen checker body is unchanged. The entry explicitly loads this
+    # checkout, not an installed controller; its original search path is inert.
+    entry = ("import sys; sys.path[:0] = sys.argv[1:3]; del sys.argv[1:3]; "
+             "import constructicon; exec(sys.argv.pop(1))")
+    checked = isolated_run([
+        sys.executable, "-I", "-S", "-B", "-c", entry,
+        str(Path(__file__).parents[2] / "src"), sysconfig.get_paths()["purelib"],
+        _evidence_program(), mode, str(evidence),
+        "maintenance" if mode == "initial" else "active", expected,
+        str(session / "startup-policy.json"), str(session), str(launch),
+    ], as_service=True)
+    assert (checked.returncode, checked.stdout, checked.stderr) == (
+        0, (revision + "\n").encode(), b"")
+
+
+@pytest.mark.parametrize("plan", ["pro", "plus"])
+def test_isolated_startup_evidence_drives_real_publication_and_active_custody(
+    isolated_startup_root, plan: str,
+):
+    """Real CLI/custody/methods; the injection root selects a synthetic NativeVendor."""
+    from constructicon.substrate.executors.codex_lane import QUALIFICATION_PLANS, STARTUP_METHODS
+    from constructicon.substrate.executors.codex_protocol import (
+        ExpectedAccount,
+        account_faults,
+        named_method,
+    )
+    from tests.substrate.test_codex_protocol import IDENTITY, managed
+
+    root, launch, session, first = isolated_startup_root
+    base = ["--store-root", str(root), "--key", KEY]
+    descriptor = bundle_of(root) / "descriptors"
+    old_bytes = (descriptor / "1.json").read_bytes()
+    evidence = session / "qualification.json"
+    lane = isolated_module(
+        "constructicon.substrate.executors.codex_lane", "startup", "--launch-root", str(launch),
+        "--configuration", str(session / "config.toml"),
+        "--policy", str(session / "startup-policy.json"),
+        "--lane-dir", str(session / "maintenance-lane"), "--evidence", str(evidence),
+        "--deadline", "30",
+    )
+    ran = isolated_run(isolated_module(
+        "constructicon.substrate.executors.operator_store", "maintain", *base,
+        "--service", "m8-service", "--wait", "0", "--", *lane,
+    ))
+    record, revision = isolated_record(ran, evidence, 0 if plan == "pro" else 1)
+    assert record["custody"] == {"kind": "maintenance", "generation_floor": 1}
+    withdrawal = (bundle_of(root) / "active.json").read_bytes()
+    assert json.loads(withdrawal) == {"schema_version": 1, "key": KEY, "generation_floor": 1}
+    isolated_read(root, first, "refused")
+    if ran.returncode:
+        assert plan == "plus"
+        expected = ExpectedAccount(plan_type=QUALIFICATION_PLANS[0],
+                                   alternatives=QUALIFICATION_PLANS[1:])
+        assert record["faults"] == [
+            *account_faults({"result": managed(planType="plus")}, expected),
+            "the startup gate did not complete",
+            "the startup did not send exactly the four authorized methods",
+            "no spend readback was judged",
+        ]
+        assert record["gate"]["completed"] is False and record["readback"] is None
+        assert record["methods_sent"] == [named_method(name) for name in STARTUP_METHODS[:3]]
+        # The composition ends at its normal refusal. Assert the complete durable
+        # inventory, not just an absent success marker or an empty fault list.
+        assert {path.name: path.read_bytes() for path in descriptor.iterdir()} == {
+            "1.json": old_bytes}
+        assert (bundle_of(root) / "active.json").read_bytes() == withdrawal
+        write_evidence("isolated-startup-refusal.json", {
+            "schema_version": 1, "synthetic_peer": True, "normal_refusal_checked": True,
+            "descriptor_inventory_unchanged": True, "withdrawal_retained": True,
+            "qualification_evidence_digest": revision,
+        })
+        return
+    assert plan == "pro"
+    assert record["faults"] == [] and record["gate"]["completed"] is True
+    assert record["gate"]["account"] == str(IDENTITY)
+    isolated_checked_revision("initial", evidence, "-", session, launch, revision)
+    published = isolated_run(isolated_module(
+        "constructicon.substrate.executors.operator_store", "publish", *base,
+        "--generation", "2", "--qualification-evidence-digest", revision,
+    ))
+    assert (published.returncode, published.stderr) == (0, b"")
+    second = NativeOperatorStoreIdentityV1.model_validate_json(published.stdout)
+    assert (published.returncode, published.stdout, published.stderr) == (
+        0, (second.model_dump_json() + "\n").encode(), b"")
+    assert str(second.subscription_mode_adapter_revision) == revision
+    assert str(second.store_conformance_revision) == revision
+    assert (bundle_of(root) / "active.json").read_bytes() == withdrawal
+    assert (descriptor / "1.json").read_bytes() == old_bytes
+    sealed = session / "qualified.json"
+    sealed.write_bytes(second.model_dump_json().encode())
+    sealed.chmod(0o600)
+    uid, gid = service()
+    os.chown(sealed, uid, gid)
+    activation = isolated_module(
+        "constructicon.substrate.executors.operator_store", "activate", *base,
+        "--generation", "2", "--sealed", str(sealed), "--qualification-evidence-digest",
+    )
+    refused = isolated_run([*activation, str(digest("isolated-wrong-evidence", 1, "synthetic"))])
+    assert (refused.returncode, refused.stdout, refused.stderr) == (
+        1, b"", b"operator_store: qualified store identity does not match evidence digest\n")
+    assert (bundle_of(root) / "active.json").read_bytes() == withdrawal
+    activated = isolated_run([*activation, revision])
+    assert (activated.returncode, activated.stdout, activated.stderr) == (0, b"", b"")
+    isolated_read(root, second, "accepted")
+    isolated_read(root, first, "refused")
+    active_evidence = session / "active.json"
+    seal = f"pro/{IDENTITY}"
+    active = isolated_run(isolated_module(
+        "constructicon.substrate.executors.codex_lane", "startup", *base,
+        "--custody", "active", "--sealed", str(sealed), "--expected", seal,
+        "--launch-root", str(launch), "--configuration", str(session / "config.toml"),
+        "--policy", str(session / "startup-policy.json"),
+        "--lane-dir", str(session / "active-lane"), "--evidence", str(active_evidence),
+        "--deadline", "30",
+    ), as_service=True)
+    active_record, active_revision = isolated_record(active, active_evidence, 0)
+    assert active_record["custody"] == {
+        "kind": "active", "binding_digest": str(second.operator_binding_digest)}
+    isolated_checked_revision("active", active_evidence, seal, session, launch, active_revision)
+    assert (bundle_of(root) / "store/auth.json").read_bytes() == b"harmless isolated fixture\n"
+    write_evidence("isolated-startup-publication.json", {
+        "schema_version": 1, "synthetic_peer": True, "real_inherited_custody": True,
+        "qualification_evidence_digest": revision, "active_evidence_digest": active_revision,
+        "publication_bound_emitted_evidence": True, "wrong_evidence_activation_refused": True,
+        "new_selection_accepted": True, "prior_selection_refused": True,
     })

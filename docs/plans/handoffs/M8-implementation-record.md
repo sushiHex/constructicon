@@ -6485,3 +6485,61 @@ and Linux retaining the supplied physical-boundary double. Before the fix,
 Darwin failed its physical-boundary assertion while Linux passed; afterward both
 passed. This is portable boundary-selection evidence, not an executed macOS
 host or a change to production containment.
+
+### Isolated startup, publication and active-custody join (Refs #189, #186)
+
+The added cases in `test_operator_store_maintenance_restart.py` connect the
+production maintenance CLI and startup lane to publication, activation and an
+active startup, using a disposable per-test root and the existing root/service
+fixture. The shared CI store is not withdrawn. Generation 1 is an explicitly
+synthetic seeded selection; generation 2 must bind the qualification record the
+production lane actually completed and published. This is a narrow joined proof,
+not a complete C3/C4, S1, S6a, q13 or transport rehearsal.
+
+The synthetic native executable answers only the four startup methods and
+opens no network socket. Its accepting plan and different plausible refusing
+plan are labelled synthetic, not measured vendor or private-host output. The
+injection-root substitution is exact: the test CLI entry calls the real
+`_launcher` on the shared launch root, then uses `dataclasses.replace` to select
+the per-test `NativeVendor` executable and synthetic catalog. All launcher
+methods, the profiled bwrap path, immutable runtime, relay, native mount,
+`inherit_maintenance`, `maintenance_custody` and `BindingStore` remain real.
+The original launcher constructor reads no installed vendor before that
+replacement, so this proof needs no vendor download or binary.
+
+A first fixture design copied bwrap into the per-test launch set. Source review
+rejected it before execution: AppArmor attaches only to the existing shared
+bwrap path, so the copy would not receive the required profile. The corrected
+injection uses the original path and needs no bind mount or additional teardown.
+The unchanged frozen evidence checker runs from this checkout with independently
+read hashes of the synthetic executable/catalog and the existing runtime pin;
+this is not an installed-controller claim.
+
+The accepting case asserts complete stdout/stderr/status for the lane summary,
+checker, publication, activation and fresh service readers. Both published
+revisions must equal the emitted evidence digest. A mismatching activation
+digest must refuse without changing withdrawal; actual activation must accept
+the returned identity, refuse the prior identity and admit active startup under
+its binding. The refusing case must retain a completed normal-refusal record,
+the exact descriptor byte inventory and the durable withdrawal, with no next
+publication. Lane records and CLI summaries come from production code, never
+from supplied canned evidence. Publication/activation trust the supplied digest;
+the preceding checker and composition validate its content, not the helpers.
+
+The startup await resumes only after the exchange/relay close and terminal
+custody checks. Root retains the maintenance lock through the service child's
+exit; subsequent publication and activation reacquire and validate current
+state. These are separate commands, not one atomic lock interval. Ordinary
+children join before the existing root fixture cleanup. Lane deadlines and the
+test's subprocess timeout bound observation; timeout/interruption is incomplete
+evidence and is not proof that no process or effect occurred. No new death,
+power-loss, concurrent-writer or 90-second held-startup claim is made.
+
+Four portable peer and constructor checks passed without Linux privileges. The
+focused peer, root-module and lane-output run passed 96 tests with 22 platform
+skips, including both new physical cases. Both
+physical cases collect in the existing foundation root proof step but are
+unverified on the local Windows workstation; platform skips are not physical
+evidence. Exact-head Linux execution and the repository gate remain PR evidence.
+No VM, host access, credentials, vendor request, model call or frozen-document
+change occurred in this preparation.
