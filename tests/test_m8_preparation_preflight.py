@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import errno
 import fnmatch
 import hashlib
 import json
@@ -51,88 +50,52 @@ def test_exact_packaged_saver_executes_and_refuses_an_existing_destination(tmp_p
         assert path.stat().st_mode & 0o777 == 0o600
 
 
-def test_saver_observation_bounds_acl_bytes_and_records_explicit_absence(tmp_path, monkeypatch):
-    destination = tmp_path / "probe.json"
-    destination.write_bytes(b"synthetic")
-    calls = []
-
-    def getxattr(path, name):
-        calls.append((path, name))
-        if name == "system.posix_acl_access":
-            raise OSError(errno.ENODATA, "synthetic absent ACL")
-        return b"a" * 1025
-
-    monkeypatch.setattr(os, "getxattr", getxattr, raising=False)
-    ran = subprocess.CompletedProcess([], 1, b"o" * 1025, b"synthetic refusal\n")
-    record = seam.saver_observation(tmp_path, tmp_path.parent, destination, ran)
-    assert record["meaning"] == "synthetic saver observation, not qualification evidence"
-    assert record["returncode"] == 1
-    assert record["metadata"] == {"uid": destination.stat().st_uid,
-        "mode": destination.stat().st_mode & 0o7777, "nlink": 1, "regular": True}
-    assert record["streams"] == {
-        "stdout": {"bytes": 1025, "tail_hex": (b"o" * 1024).hex()},
-        "stderr": {"bytes": 18, "tail_hex": b"synthetic refusal\n".hex()}}
-    for field in ("parent_default_acl", "home_default_acl"):
-        assert record[field] == {"bytes": 1025, "hex": (b"a" * 1024).hex(), "complete": False}
-    assert record["file_access_acl"] == {"errno": errno.ENODATA}
-    assert calls == [(tmp_path, "system.posix_acl_default"),
-                     (tmp_path.parent, "system.posix_acl_default"),
-                     (destination, "system.posix_acl_access")]
-
-
-@pytest.mark.parametrize("modes", [(0o600, 0o600), (0o664, 0o600),
-                                  (0o600, 0o664), (0o664, 0o664)])
+@pytest.mark.parametrize(("mode", "returncode"), [(0o600, 0), (0o664, 0), (0o600, 1)])
 def test_saver_probe_publishes_observed_mode_before_asserting_private_file(
-    tmp_path, monkeypatch, modes,
+    tmp_path, monkeypatch, mode, returncode,
 ):
     from tests.substrate import test_native_codex_mediation as evidence
     from tests.substrate import test_operator_store_maintenance_restart as isolated
 
     monkeypatch.setattr(isolated, "service", lambda: (1002, 1002))
-    comparison = tmp_path / "independent"
-    comparison.mkdir()
-
-    def temporary(**kwargs):
-        assert kwargs == {"prefix": "pf-saver-", "dir": "/tmp"}
-        return nullcontext(comparison)
-
-    monkeypatch.setattr(seam.tempfile, "TemporaryDirectory", temporary)
-    monkeypatch.setattr(seam.os, "chown", lambda *args: None, raising=False)
-    records = [{"metadata": {"uid": 1002, "mode": mode, "nlink": 1, "regular": True}}
-               for mode in modes]
-    calls, entered = [], []
+    destination = tmp_path / "saver-probe.json"
+    real_lstat = Path.lstat
+    monkeypatch.setattr(Path, "lstat", lambda path, *args, **kwargs:
+        SimpleNamespace(st_uid=1002, st_mode=0o100000 | mode, st_nlink=1)
+        if path == destination else real_lstat(path, *args, **kwargs))
+    calls = []
 
     def run(command, **options):
         assert command[2] == seam.saver_script()
         assert options["input"] == b'{"synthetic_saver_probe": true}\n'
-        destination = Path(command[-1])
-        entered.append(destination.parent)
+        assert Path(command[-1]) == destination
         destination.write_bytes(options["input"])
-        return subprocess.CompletedProcess(command, 0, b"", b"")
-
-    def publish(*args):
-        # Both subprocesses and observations exist even if the first mode refuses.
-        assert entered == [tmp_path, comparison]
-        calls.append(args)
+        return subprocess.CompletedProcess(command, returncode, b"", b"")
 
     monkeypatch.setattr(seam.subprocess, "run", run)
-    monkeypatch.setattr(seam, "saver_observation", lambda parent, *args:
-                        records[0 if parent == tmp_path else 1])
-    monkeypatch.setattr(evidence, "write_evidence", publish)
-    if modes == (0o600, 0o600):
+    monkeypatch.setattr(evidence, "write_evidence", lambda *args: calls.append(args))
+    if (mode, returncode) == (0o600, 0):
         seam.check_saver(tmp_path)
     else:
         with pytest.raises(AssertionError):
             seam.check_saver(tmp_path)
-    assert calls == [("n3c-q13-saver-probe.json",
-                      {"results": {"service_home": records[0], "tmp": records[1]}})]
+    assert calls == [("n3c-q13-saver-probe.json", {
+        "meaning": "synthetic saver observation, not qualification evidence",
+        "returncode": returncode,
+        "metadata": {"uid": 1002, "mode": mode, "nlink": 1, "regular": True},
+        "streams": {key: {"bytes": 0, "tail_hex": ""} for key in ("stdout", "stderr")}})]
 
 
 def test_saver_probe_refusal_precedes_any_costly_qualification(tmp_path, monkeypatch):
     from tests.substrate import test_operator_store_maintenance_restart as isolated
 
     calls = []
-    monkeypatch.setattr(seam.tempfile, "TemporaryDirectory", lambda **kwargs: nullcontext(tmp_path))
+
+    def temporary(**kwargs):
+        assert kwargs == {"prefix": "pf-", "dir": "/tmp"}
+        return nullcontext(tmp_path)
+
+    monkeypatch.setattr(seam.tempfile, "TemporaryDirectory", temporary)
     monkeypatch.setattr(seam.os, "chown", lambda *args: None, raising=False)
     monkeypatch.setattr(isolated, "service", lambda: (1002, 1002))
     monkeypatch.setattr(seam, "AcquisitionPaths", lambda *args: SimpleNamespace(payload=tmp_path))
@@ -235,7 +198,7 @@ def test_actual_q13_seam_mapping_retains_producer_and_checker_fences(tmp_path, l
     session = tmp_path / "session"
     bundle = tmp_path / "source.bundle"
     bundle.write_bytes(b"synthetic mapping input, not an execution bundle\n")
-    short_state = PurePosixPath("/home/m8-service/pf-12345678/0")
+    short_state = PurePosixPath("/tmp/pf-12345678/0")
     out = seam.packaged_steps(tmp_path, launch, session, bundle, "a" * 40, "b" * 64, short_state)
     frozen = (seam.HANDOFFS / "M8-maintenance-g11-continuation.md").read_bytes().decode()
     bootstrap = "sys.path[:0] = " + json.dumps([
@@ -246,6 +209,7 @@ def test_actual_q13_seam_mapping_retains_producer_and_checker_fences(tmp_path, l
     ):
         script = out / (name + ".sh")
         body = script.read_bytes().decode()
+        assert "observe_checker_inputs" not in body
         state = next(line[2:] for line in body.splitlines() if line.startswith("S="))
         assert state == str(short_state)
         socket = (PurePosixPath(state) / "acquisitions/payloads" /
@@ -262,13 +226,6 @@ def test_actual_q13_seam_mapping_retains_producer_and_checker_fences(tmp_path, l
         selected = package.fences(package.section(frozen, heading))[fence][1].replace(
             'sys.path.insert(0, "/opt/constructicon-m8-controller")', bootstrap).replace(
             '"${SERVICE[@]}" /usr/bin/python3 -I -S -B -c', controller_python)
-        if name == seam.STEPS[1]:
-            observed = ("sys.path[:0] = " + json.dumps([
-                str(seam.ROOT), str(seam.ROOT / "src"), sysconfig.get_paths()["purelib"]])
-                + "; from tests.preparation_preflight "
-                "import observe_checker_inputs; observe_checker_inputs(sys.argv, "
-                + json.dumps(str(tmp_path / "checker-inputs.json")) + ")")
-            selected = selected.replace(bootstrap, observed)
         assert body.count(selected) == 1
         assert body.count('binding_check "$W/g11.sealed.json" accepted -') == 1
         assert body.count('check_sealed "$W/g11.sealed.json" "$Q"') == 1
@@ -302,21 +259,21 @@ def test_real_provider_refuses_long_fixture_state_and_accepts_short_state():
         "/var/lib/constructicon-m8-launch/n3a-restart-12345678/seam-accept/state/acquisitions")
     with pytest.raises(ContractViolation, match="too long for the native egress socket"):
         provider_for(bare_launcher(), policy=policy_for(443), root=long)
-    short = PurePosixPath("/home/m8-service/pf-12345678/0/acquisitions")
+    short = PurePosixPath("/tmp/pf-12345678/0/acquisitions")
     accepted = provider_for(bare_launcher(), policy=policy_for(443), root=short)
     assert accepted.egress == policy_for(443)
 
 
 @pytest.mark.parametrize("case", ["accept", "source-refusal", "predicate-refusal"])
-def test_instrumented_actual_display_checker_keeps_its_output_and_records_inputs(
-    tmp_path, monkeypatch, case,
+def test_actual_display_checker_accepts_preview_and_refuses_source_or_saver_failure(
+    tmp_path, case,
 ):
     from tests.test_m8_maintenance_private_continuation import _authorization
 
     bundle = tmp_path / "source.bundle"
     bundle.write_bytes(b"synthetic checker mapping input\n")
     out = seam.packaged_steps(tmp_path, tmp_path / "launch", tmp_path / "session", bundle,
-                              "a" * 40, "b" * 64, PurePosixPath("/home/m8-service/pf-12345678/0"))
+                              "a" * 40, "b" * 64, PurePosixPath("/tmp/pf-12345678/0"))
     script = (out / (seam.STEPS[1] + ".sh")).read_bytes().decode()
     match = re.search(r"-c '(import hashlib, json, os, stat, sys\n.*?)' \\\n", script, re.S)
     assert match is not None
@@ -331,7 +288,6 @@ def test_instrumented_actual_display_checker_keeps_its_output_and_records_inputs
     preview.write_bytes(raw)
     # Only the platform-owned UID/mode predicate is substituted. Real regular,
     # link, bounded read, model, value, status and rendering checks all execute.
-    original = preview.lstat()
     argv = ["checker", str(preview), application.as_posix(), "reviewed", "operator:test",
             "maintenance-2", "a" * 40, "1" if case == "source-refusal" else "0",
             "1" if case == "predicate-refusal" else "0"]
@@ -347,10 +303,7 @@ info.update(st_uid=1, st_mode=stat.S_IFREG | 0o600)
 os.getuid = lambda: 1
 Path.lstat = lambda self, *args, **kwargs: (
     SimpleNamespace(**info) if self == preview else real_lstat(self, *args, **kwargs))
-try:
-    exec(compile(program, '<instrumented-frozen-C8>', 'exec'), {})
-finally:
-    assert sys.gettrace() is None
+exec(compile(program, '<frozen-C8>', 'exec'), {})
 """
 
     def run(source):
@@ -362,13 +315,7 @@ finally:
                              env={**os.environ, "PYTHONPATH": str(tmp_path / "absent")})
         return ran.returncode, ran.stdout, ran.stderr
 
-    injection = ("; from tests.preparation_preflight import observe_checker_inputs; "
-                 "observe_checker_inputs(sys.argv, "
-                 + json.dumps(str(tmp_path / "checker-inputs.json")) + ")")
-    assert program.count(injection) == 1
-    baseline = run(program.replace(injection, ""))
     status, stdout, stderr = run(program)
-    assert (status, stdout, stderr) == baseline
     assert stderr == b""
     result = json.loads(stdout)
     if case == "accept":
@@ -379,57 +326,4 @@ finally:
     else:
         assert status == 1 and result == {
             "preflight": False, "stage": "source" if case == "source-refusal" else "unknown"}
-    observed = json.loads((tmp_path / "checker-inputs.json").read_bytes())
-    assert observed["argc"] == 9 and observed["service_uid"] == 1
-    assert observed["metadata"] == {"uid": 1, "mode": 0o600, "nlink": original.st_nlink,
-                                     "size": len(raw), "regular": True}
-    assert observed["arguments"] == [
-        {"bytes": len(value.encode()), "tail_hex": value.encode().hex(), "complete": True}
-        for value in argv[1:]]
-    assert observed["statuses"] == {
-        "cli": {"value": argv[7], "complete": True},
-        "saver": {"value": argv[8], "complete": True}}
-    if case == "accept":
-        assert observed["exception"] is None
-    else:
-        assert observed["exception"]["class"] == (
-            "SystemExit" if case == "source-refusal" else "AssertionError")
-        line = observed["exception"]["line"]
-        assert program.splitlines()[line - 1].strip() == (
-            "raise SystemExit(1)" if case == "source-refusal" else 'assert sys.argv[8] == "0"')
     assert preview.read_bytes() == raw
-
-
-def test_checker_input_observation_bounds_every_argv_value_and_status(tmp_path, monkeypatch):
-    monkeypatch.setattr(os, "getuid", lambda: 1, raising=False)
-    preview = tmp_path / "preview.json"
-    preview.write_bytes(b"synthetic input")
-    destination = tmp_path / "inputs.json"
-    argv = ["checker", str(preview), *(["z" * 2049] * 7)]
-    seam.observe_checker_inputs(argv, destination)
-    record = json.loads(destination.read_bytes())
-    assert record["argc"] == 9 and len(record["arguments"]) == 8
-    for value, observed in zip(argv[1:], record["arguments"], strict=True):
-        raw = value.encode()
-        assert observed == {"bytes": len(raw), "tail_hex": raw[-1024:].hex(),
-                            "complete": len(raw) <= 1024}
-    assert record["statuses"] == {key: {"value": "z" * 32, "complete": False}
-                                   for key in ("cli", "saver")}
-    monkeypatch.setenv("M8_EVIDENCE_DIRECTORY", str(tmp_path))
-    seam.observe_step("accept", seam.STEPS[1], {"returncode": 1}, b"", b"", destination)
-    artifact = tmp_path / f"n3c-q13-accept-{seam.STEPS[1]}.json"
-    assert json.loads(artifact.read_bytes())["checker_inputs"] == record
-
-
-def test_oversized_checker_diagnostic_is_unavailable_without_replacing_step_observation(
-    tmp_path, monkeypatch,
-):
-    monkeypatch.setenv("M8_EVIDENCE_DIRECTORY", str(tmp_path))
-    diagnostic = tmp_path / "oversized-inputs.json"
-    diagnostic.write_bytes(b"x" * 20001)
-    seam.observe_step("accept", seam.STEPS[1], {"returncode": 1}, b"unknown\n", b"", diagnostic)
-    artifact = tmp_path / f"n3c-q13-accept-{seam.STEPS[1]}.json"
-    record = json.loads(artifact.read_bytes())
-    assert record["checker_inputs"] is None
-    assert record["status"] == {"returncode": 1}
-    assert record["streams"]["stdout"] == {"bytes": 8, "tail_hex": b"unknown\n".hex()}

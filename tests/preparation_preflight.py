@@ -16,10 +16,8 @@ import shlex
 import shutil
 import stat
 import subprocess
-import sys
 import sysconfig
 import tempfile
-from contextlib import suppress
 from pathlib import Path
 
 from scripts import m8_procedure_package as package
@@ -29,9 +27,7 @@ from constructicon.api._maintenance_source import (
     SOURCE_HASHES,
     SourcePin,
     git,
-    read_bounded,
 )
-from constructicon.core.errors import ContractViolation
 from constructicon.core.maintenance import MaintenanceAttemptAuthorization
 from constructicon.core.native_operator import NativeOperatorStoreIdentityV1
 from constructicon.substrate.executors.egress import MAX_SOCKET_PATH_BYTES, SOCKET_NAME
@@ -182,21 +178,11 @@ def packaged_steps(directory: Path, launch: Path, session: Path, bundle: Path,
     original_bootstrap = 'sys.path.insert(0, "/opt/constructicon-m8-controller")'
     bootstrap = "sys.path[:0] = " + json.dumps([
         str(ROOT / "src"), sysconfig.get_paths()["purelib"]])
-    display_imports = ("from pathlib import Path\n" + original_bootstrap + "\n"
-        "from constructicon.api._maintenance_source import read_bounded\n"
-        "from constructicon.core.identity import parse_json_value\n"
-        "from constructicon.core.maintenance import MaintenanceAttemptAuthorization\n")
-    observed_bootstrap = ("sys.path[:0] = " + json.dumps([
-        str(ROOT), str(ROOT / "src"), sysconfig.get_paths()["purelib"]])
-        + "; from tests.preparation_preflight "
-        "import observe_checker_inputs; observe_checker_inputs(sys.argv, "
-        + json.dumps(str(directory / "checker-inputs.json")) + ")")
     substitutions = {
         old_python: "PY=(" + shlex.join(command) + ")",
         '"${SERVICE[@]}" /usr/bin/python3 -I -S -B -c':
             '"${SERVICE[@]}" ' + shlex.quote(command[0]) + ' -I -S -B -c',
         original_bootstrap: bootstrap,
-        display_imports: display_imports.replace(original_bootstrap, observed_bootstrap),
         "/var/lib/constructicon-m8-launch/operator-stores": str(launch / "operator-stores"),
         "/var/lib/constructicon-m8-launch": str(launch),
         "K=n4-codex-pro": "K=" + KEY,
@@ -230,61 +216,7 @@ def _inventory(root):
             for path in root.rglob("*") if path.is_file()}
 
 
-def observe_checker_inputs(argv, destination):
-    """Fake-only input observation; never judge or alter the frozen checker."""
-    try:
-        metadata = None
-        if len(argv) > 1:
-            try:
-                info = Path(argv[1]).lstat()
-                metadata = {"uid": info.st_uid, "mode": stat.S_IMODE(info.st_mode),
-                            "nlink": info.st_nlink, "size": info.st_size,
-                            "regular": stat.S_ISREG(info.st_mode)}
-            except OSError:
-                pass
-        statuses = {key: {"value": argv[index][:32] if len(argv) > index else None,
-                          "complete": len(argv) > index and len(argv[index]) <= 32}
-                    for key, index in (("cli", 7), ("saver", 8))}
-        arguments = []
-        for value in argv[1:9]:
-            raw = value.encode("utf-8", errors="surrogatepass")
-            arguments.append({"bytes": len(raw), "tail_hex": raw[-1024:].hex(),
-                              "complete": len(raw) <= 1024})
-        record = {"meaning": "synthetic checker inputs, not a passed verdict", "argc": len(argv),
-                  "arguments": arguments, "service_uid": os.getuid(), "metadata": metadata,
-                  "statuses": statuses, "exception": None}
-        with Path(destination).open("x", encoding="utf-8") as output:
-            output.write(json.dumps(record, sort_keys=True) + "\n")
-        # Observe only the caller's final-checker frame, including its first
-        # exception before the frozen catch closes it to "unknown". Never retain
-        # exception text, traceback, locals or preview content, and restore any
-        # previous tracer when this frame returns (also on SystemExit).
-        target = sys._getframe(1)
-        previous, previous_local = sys.gettrace(), target.f_trace
-
-        def trace(frame, event, argument):
-            if frame is not target:
-                return None
-            if event == "exception" and record["exception"] is None:
-                record["exception"] = {"class": argument[0].__name__[:128], "line": frame.f_lineno}
-                with suppress(OSError):
-                    Path(destination).write_text(json.dumps(record, sort_keys=True) + "\n",
-                                                 encoding="utf-8")
-            if event == "return":
-                sys.settrace(previous)
-                target.f_trace = previous_local
-                return previous_local
-            return trace
-
-        sys.settrace(trace)
-        target.f_trace = trace
-    except OSError:
-        # Missing observation stays missing, not an inferred successful input.
-        # Diagnostics must not change the frozen checker's output or decision.
-        pass
-
-
-def observe_step(fault, name, status, stdout, stderr, checker_inputs=None):
+def observe_step(fault, name, status, stdout, stderr):
     """Retain bounded synthetic observations before any verdict assertion."""
     from tests.substrate.test_native_codex_mediation import write_evidence
 
@@ -295,11 +227,6 @@ def observe_step(fault, name, status, stdout, stderr, checker_inputs=None):
         "streams": {key: {"bytes": len(raw), "tail_hex": raw[-8192:].hex()}
                     for key, raw in (("stdout", stdout), ("stderr", stderr))},
     }
-    if checker_inputs is not None:
-        try:
-            record["checker_inputs"] = json.loads(read_bounded(checker_inputs, 20000))
-        except (OSError, ValueError, ContractViolation):
-            record["checker_inputs"] = None
     write_evidence(f"n3c-q13-{fault}-{name}.json", record)
 
 
@@ -347,35 +274,6 @@ def saver_script():
     return "set -Eeuo pipefail\n" + service + "\n" + saver + '\nsave_sealed "$1"\n'
 
 
-def saver_observation(parent, home, destination, ran):
-    """Bounded synthetic filesystem inputs; absence is an explicit errno, not OK."""
-    def acl(path, name):
-        try:
-            raw = os.getxattr(path, name)
-        except AttributeError:
-            return {"unsupported": True}
-        except OSError as error:
-            return {"errno": error.errno}
-        return {"bytes": len(raw), "hex": raw[:1024].hex(), "complete": len(raw) <= 1024}
-
-    try:
-        info = destination.lstat()
-        metadata = {"uid": info.st_uid, "mode": stat.S_IMODE(info.st_mode),
-                    "nlink": info.st_nlink, "regular": stat.S_ISREG(info.st_mode)}
-    except OSError as error:
-        metadata = {"errno": error.errno}
-    return {
-        "meaning": "synthetic saver observation, not qualification evidence",
-        "returncode": ran.returncode,
-        "streams": {key: {"bytes": len(raw), "tail_hex": raw[-1024:].hex()}
-                    for key, raw in (("stdout", ran.stdout), ("stderr", ran.stderr))},
-        "metadata": metadata,
-        "parent_default_acl": acl(parent, "system.posix_acl_default"),
-        "home_default_acl": acl(home, "system.posix_acl_default"),
-        "file_access_acl": acl(destination, "system.posix_acl_access"),
-    }
-
-
 def check_saver(parent):
     """Fail before the held qualification if the real private-file saver differs."""
     from tests.git_bash import git_bash
@@ -383,24 +281,23 @@ def check_saver(parent):
     from tests.substrate.test_operator_store_maintenance_restart import service
 
     raw = b'{"synthetic_saver_probe": true}\n'
-    with tempfile.TemporaryDirectory(prefix="pf-saver-", dir="/tmp") as name:
-        comparison = Path(name)
-        os.chown(comparison, *service())
-        observations, completed = {}, []
-        for label, directory in (("service_home", parent), ("tmp", comparison)):
-            destination = directory / "saver-probe.json"
-            ran = subprocess.run(
-                [git_bash(), "-c", saver_script(), "saver-probe", str(destination)],
-                input=raw, capture_output=True, timeout=15, check=False)
-            observations[label] = saver_observation(
-                directory, Path("/home/m8-service"), destination, ran)
-            completed.append((ran, destination, observations[label]))
-        write_evidence("n3c-q13-saver-probe.json", {"results": observations})
-        for ran, destination, record in completed:
-            assert (ran.returncode, ran.stdout, ran.stderr) == (0, b"", b"")
-            assert record["metadata"] == {"uid": service()[0], "mode": 0o600,
-                                          "nlink": 1, "regular": True}
-            assert destination.read_bytes() == raw
+    destination = parent / "saver-probe.json"
+    ran = subprocess.run([git_bash(), "-c", saver_script(), "saver-probe", str(destination)],
+                         input=raw, capture_output=True, timeout=15, check=False)
+    try:
+        info = destination.lstat()
+        metadata = {"uid": info.st_uid, "mode": stat.S_IMODE(info.st_mode),
+                    "nlink": info.st_nlink, "regular": stat.S_ISREG(info.st_mode)}
+    except OSError as error:
+        metadata = {"errno": error.errno}
+    write_evidence("n3c-q13-saver-probe.json", {
+        "meaning": "synthetic saver observation, not qualification evidence",
+        "returncode": ran.returncode, "metadata": metadata,
+        "streams": {key: {"bytes": len(data), "tail_hex": data[-1024:].hex()}
+                    for key, data in (("stdout", ran.stdout), ("stderr", ran.stderr))}})
+    assert (ran.returncode, ran.stdout, ran.stderr) == (0, b"", b"")
+    assert metadata == {"uid": service()[0], "mode": 0o600, "nlink": 1, "regular": True}
+    assert destination.read_bytes() == raw
 
 
 def exercise_seam(root: Path, launch: Path, foundation: Path, parent: Path):
@@ -409,10 +306,12 @@ def exercise_seam(root: Path, launch: Path, foundation: Path, parent: Path):
     The protected launch/store root is already too long for a native UNIX socket.
     A separate service-owned temporary parent supplies fresh one-character state
     children without aliasing or weakening the provider's actual path bound.
+    CI's service home has a default ACL that defeats the saver's private mode;
+    use /tmp and prove the saver's resulting mode before the qualification hold.
     """
     from tests.substrate.test_operator_store_maintenance_restart import service
 
-    with tempfile.TemporaryDirectory(prefix="pf-", dir="/home/m8-service") as name:
+    with tempfile.TemporaryDirectory(prefix="pf-", dir="/tmp") as name:
         state_parent = Path(name)
         assert state_parent.resolve() == state_parent
         os.chown(state_parent, *service())
@@ -464,8 +363,7 @@ def _exercise_seam(root: Path, launch: Path, foundation: Path, parent: Path, sta
             stdout = (capture / "step.stdout").read_bytes()
             stderr = (capture / "step.stderr").read_bytes()
             status = json.loads((capture / "step.status.json").read_bytes())
-            observe_step(fault, name, status, stdout, stderr,
-                         directory / "checker-inputs.json" if name == STEPS[1] else None)
+            observe_step(fault, name, status, stdout, stderr)
             application = directory / "application"
             if name == STEPS[0]:
                 if fault == "wrong-consumer":

@@ -6832,3 +6832,19 @@ It changes no permission or ACL to hide a failure. Fable's source review also
 clarified that C7 checks content, not its saved file's mode; C7's pass never
 established `0600`. Default ACL inheritance remains a hypothesis until observed.
 This is a diagnostic, not yet a successful C8 composition.
+
+At `ee0eec7`, foundation artifact `12137524763` resolves that hypothesis before
+qualification runs. The service-home fixture parent and service home both have
+a default ACL; the exact saver creates mode `0664` there. The same saver creates
+mode `0600` under the independent `/tmp` parent, whose default ACL is absent.
+Both commands return zero with empty stdout/stderr, and both files have the
+correct service UID and one link. This is measured CI fixture behavior, not a
+claim about the private host's ACLs or a passing C8 result.
+
+The disposable state parent now lives under `/tmp`, retaining service ownership,
+fresh scenario paths and the native socket bound. An early exact-saver private
+mode check remains. The temporary checker tracing and ACL-comparison machinery
+are removed after identifying the cause; bounded step observations remain.
+No inherited ACL is removed, no saved file is repaired with `chmod`, and no
+production command or frozen privacy assertion changes. Final composed C7/C8
+acceptance still requires a new Linux run.
