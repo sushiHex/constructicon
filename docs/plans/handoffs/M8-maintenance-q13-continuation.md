@@ -591,8 +591,12 @@ umask 077
 This inventory classifies offline evidence, not an assertion that all 19 have run.
 “Fragment” means source/component assertions, not the actual packaged producer
 through T5. Existing q12 composed rehearsals cover only physical preflight and
-H7/H8. The merged real isolated CLI seam is valuable but does not upgrade C3/C4
-to fully composed evidence. The new q13 structural tests are also not host facts.
+H7/H8. The earlier real isolated CLI seam alone does not upgrade C3/C4 to fully
+composed evidence. The whole C3/C4 test now assembles those packaged steps through
+T5 over a disposable store, including historical-seal and floor refusals. Its
+physical execution requires the Linux foundation gate; portable construction
+tests and Windows skips do not establish that result. Synthetic peer, DNS,
+prior seal and G1 inputs never establish the corresponding private host facts.
 The C7/C8 whole-step join ran at `03804a2` in
 [the foundation lane](https://github.com/sushiHex/constructicon/actions/runs/39132967503/job/117691747157).
 Its completion artifact records all five scenarios, not just collection or an
@@ -610,8 +614,8 @@ empty fault list. Any later code change still needs its own final-head gate.
 | `q13-c2-controller` | Controller and import-check fragments. | LR8 must report installed true/different zero; no LR9 install. |
 | `q13-c2-preflight` | q12 packaged T5 accepting foundation proof. | Actual current host readiness is still a fresh observation. |
 | `q13-c3-retained` | Evidence validators and retained-evidence checker. | Exact retained q11 S4 digest is not manufactured offline. |
-| `q13-c3-qualification` | Lane boundary and real isolated CLI qualification seam. | Whole C3, historical continuity and held-lock S6a not joined by that seam. |
-| `q13-c4-publish` | Floor checks and real emitted qualification/publication/activation seam. | Whole packaged C3-to-C4 continuity not claimed. |
+| `q13-c3-qualification` | Whole packaged T5 test joins prepare, real qualification, prior-seal comparison and S6a held-lock control; Linux execution required. | Synthetic prior seal and peer do not measure historical host continuity or vendor identity. |
+| `q13-c4-publish` | Same fixture carries emitted qualification into floor-10 checks, publication and activation of 11; floor-9 refusal must precede any publication entry. Linux execution required. | Disposable store and bindings are not the private host's generations or qualification. |
 | `q13-c5-h7` | q13 packaged T5 alternatives/refusals with real lane CLI and exact G1 integration. | Synthetic peer, custody and binding substitutes are not live refresh/account measurements. |
 | `q13-c7-prepare` | Executed packaged T5 proof over a genuine bundle and immutable activated store; wrong consumer and diagnostic output refuse. | Synthetic native peer and disposable paths are not the private host's topology or transfer. |
 | `q13-c8-preflight` | Executed packaged T5 proof through real assembly and unchanged whitelist/saver checks; source drift and qualification mismatch refuse. | Fresh live preview, run and authorization fields are not approved offline. |

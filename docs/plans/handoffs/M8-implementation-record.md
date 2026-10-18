@@ -6906,3 +6906,41 @@ names match the existing patterns, and the 18 computed calls use matching
 namespaces. This guard covers that shared writer, not independent direct
 writers to the evidence directory. Exact-head CI and actual retained files
 remain separate evidence requirements.
+
+## Whole packaged qualification/publication proof (Refs #189, #226)
+
+The q13 readiness review corrected an overclaim: the C7/C8 proof and isolated
+CLI join did not prove the whole packaged C3 qualification/C4 publication
+sequence. The old q12 exemption cited the shared store and lack of a disposable
+published generation. The newer isolated fixture removes those limitations.
+The owner selected the bounded proof, not an exception to Q0's evidence rule.
+
+The design reuses the existing foundation root lane and synthetic native peer.
+Fresh scenarios start from explicit synthetic historical inputs, preserving
+the real floor-10/generation-11 law, production custody and emitted qualification
+checks. The accepting path runs C3 and C4 through unchanged T5; a historical
+seal mismatch must refuse before the held qualification, and a non-10 floor
+must refuse before publication. Each refusal needs affirmative entry evidence
+and a comparison of durable state, not only an absent success marker.
+
+The asynchronous boundary is S6a's background holder: normal completion joins
+it before the next step; the intended seal refusal precedes it and the floor
+refusal follows C3's join. Test cleanup belongs outside the packaged script.
+Adding an EXIT trap inside the script was considered and rejected because it
+would change the failure/output behavior under test. Observations retained
+before verdict assertions are diagnostics, not affirmative completion facts.
+
+Installed controller/launch and retained host state remain genuine in-session
+checks, not offline fabricated inputs. The living readiness record clarifies
+that a go package specifies these checks; the authorized start performs the
+fresh usage/custody checks before D0. This does not authorize a host query or
+start. No production implementation, workflow or accepted source fence changes.
+
+Portable validation: 33 tests passed across the new composition checks, existing
+preparation checks and maintenance module; 19 Linux-only cases skipped locally.
+Both authored guard-deletion mutations fail assertions: seal comparison cannot
+reach held dispatch, and floor validation cannot reach publication even when
+the publisher would independently refuse. Cleanup tests cover recycled process
+identity and bounded direct-child escalation. Ruff passed for all three changed
+Python files. Physical acceptance and both refusals still require final-head
+Linux execution and retained artifacts; these portable results do not replace it.

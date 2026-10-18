@@ -112,6 +112,22 @@ authorized here, and no budget exemption is inferred from "read-only".
 
 ## Exact go package
 
+The offline obligation and the first authorized host checks are separate.
+The preparation decision requires the whole C3 qualification/C4 publication
+join to be exercised now that the disposable isolated store exists; the earlier
+shared-fixture limitation no longer exempts those steps. The C7/C8 result alone
+does not discharge that obligation. Its final-head accepting and refusing
+evidence must be included before requesting the go.
+
+Installed controller, D2/launch records, historical seals, actual store floor,
+boot and fresh destinations remain observations made by their prescribed steps.
+They are not fabricated as offline evidence. The go package specifies these
+checks and their stop rules; it does not claim their future results. The usage
+preflight and positive idle/custody check run at the authorized session's start,
+immediately before D0, as Q1 requires. A custody claim cannot remain fresh merely
+because a previous session held it. No checks here authorize starting the host
+before the exact go.
+
 The source preparation's C7/C8 composed proof executed at `03804a2` in
 [run 39132967503](https://github.com/sushiHex/constructicon/actions/runs/39132967503).
 Artifact `12139591767` records acceptance plus wrong-consumer, source-drift,
@@ -136,8 +152,9 @@ Before requesting execution, retain one package containing:
   host-only unknowns separately, with exact-head test and CI evidence;
 - the private approved drift expectation and historical source/tool pin references,
   independent approval record and any explicit measurement-session accounting;
-- positive custody/idle and fresh destination checks, without treating absence
-  of a message as exclusive custody;
+- the prescribed positive custody/idle and fresh destination checks, their
+  in-session order and stop rules, without presenting unperformed checks as
+  results or treating absence of a message as exclusive custody;
 - the unchanged attempt budget, stop/park procedure and limits: synthetic peers
   are not live qualification; stream EOF is not process-tree termination;
   transport uncertainty never licenses retry;
