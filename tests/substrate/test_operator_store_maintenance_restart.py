@@ -720,7 +720,8 @@ def isolated_module(module: str, *arguments: str) -> list[str]:
     entry = (
         "import runpy, sys; sys.path[:0] = sys.argv[1:3]; del sys.argv[1:3]; "
         "module = sys.argv.pop(1)\n"
-        "if module == 'constructicon.substrate.executors.codex_lane':\n"
+        "if module in ('constructicon.substrate.executors.codex_lane',\n"
+        "              'constructicon.api.maintenance_entry'):\n"
         "    from dataclasses import replace\n"
         "    from constructicon.substrate.executors import codex_lane\n"
         "    from constructicon.substrate.executors.linux import NativeVendor\n"
@@ -729,7 +730,8 @@ def isolated_module(module: str, *arguments: str) -> list[str]:
         "        return replace(real(root.parent.parent),\n"
         "            vendor=NativeVendor(root / 'native-codex', root / 'codex-models.json'))\n"
         "    codex_lane._launcher = isolated\n"
-        "    raise SystemExit(codex_lane.main(sys.argv[1:]))\n"
+        "    if module == 'constructicon.substrate.executors.codex_lane':\n"
+        "        raise SystemExit(codex_lane.main(sys.argv[1:]))\n"
         'runpy.run_module(module, run_name="__main__", alter_sys=True)'
     )
     return [sys.executable, "-I", "-S", "-B", "-c", entry, str(source),
@@ -758,7 +760,7 @@ def isolated_read(root: Path, sealed, expected: str) -> None:
 
 
 @pytest.fixture
-def isolated_startup_root(protected_root: Path, plan: str):
+def isolated_startup_root(protected_root: Path, plan: str, request):
     """Reuse the immutable runtime and profiled bwrap with a synthetic peer.
 
     This is a separate per-test store and launch set, never the shared CI store.
@@ -767,8 +769,16 @@ def isolated_startup_root(protected_root: Path, plan: str):
     profiled bwrap path is essential to AppArmor attachment. No custody, relay,
     launcher method or syscalls are patched, and no installed vendor is needed.
     """
-    root = protected_root
-    uid, gid = service_root(root)
+    uid, gid = service_root(protected_root)
+    launch = protected_root / "isolated-launch"
+    launch.mkdir(mode=0o755)
+    # The host provider locates its store below launch-root. Existing startup
+    # tests retain their original layout; the preparation seam opts into this
+    # production topology without redirecting BindingStore or custody checks.
+    root = launch / "operator-stores" if getattr(request, "param", False) else protected_root
+    if root != protected_root:
+        root.mkdir(mode=0o750)
+        service_root(root)
     first = publish(root, 1, runtime_uid=uid)  # synthetic seed, not live qualification
     activate_fixture(root, 1)
     # Unlike the production metadata writer, the explicit seed helper creates
@@ -782,9 +792,7 @@ def isolated_startup_root(protected_root: Path, plan: str):
     credential.write_bytes(b"harmless isolated fixture\n")
     os.chown(credential, uid, gid)
     credential.chmod(0o600)
-    launch = root / "isolated-launch"
-    launch.mkdir(mode=0o755)
-    base = root.parent
+    base = protected_root.parent
     shutil.copyfile(base / "runtime.json", launch / "runtime.json")
     (launch / "runtime.json").chmod(0o444)
     native = launch / "native-codex" / "bin"
@@ -794,7 +802,7 @@ def isolated_startup_root(protected_root: Path, plan: str):
     catalog = launch / "codex-models.json"
     catalog.write_bytes(json.dumps(SYNTHETIC_CATALOG).encode())
     catalog.chmod(0o444)
-    session = root / "session"
+    session = protected_root / "session"
     session.mkdir(mode=0o700)
     os.chown(session, uid, gid)
     from constructicon.substrate.executors.codex_lane import production_configuration
@@ -963,4 +971,23 @@ def test_isolated_startup_evidence_drives_real_publication_and_active_custody(
         "qualification_evidence_digest": revision, "active_evidence_digest": active_revision,
         "publication_bound_emitted_evidence": True, "wrong_evidence_activation_refused": True,
         "new_selection_accepted": True, "prior_selection_refused": True,
+    })
+
+
+@pytest.mark.parametrize("plan", ["pro"])
+@pytest.mark.parametrize("isolated_startup_root", [True], indirect=True)
+def test_actual_packaged_q13_preparation_preflight_over_isolated_production_topology(
+    isolated_startup_root, protected_root,
+):
+    from tests.preparation_preflight import exercise_seam
+
+    root, launch, session, _seed = isolated_startup_root
+    qualification = exercise_seam(root, launch, session, protected_root)
+    write_evidence("isolated-preparation-preflight.json", {
+        "schema_version": 1, "synthetic_peer": True, "genuine_held_startup_seconds": 90,
+        "qualification_evidence_digest": qualification,
+        "actual_q13_c7_c8_packaged": True, "source_pin_and_preview_checked": True,
+        "cases_completed": ["accept", "wrong-consumer", "source-drift", "qualification",
+                            "diagnostic"],
+        "immutable_activated_store": True, "application_attempted": False,
     })
