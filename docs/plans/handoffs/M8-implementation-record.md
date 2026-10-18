@@ -6646,3 +6646,11 @@ platform skips. All 37 packager inventory mutants were assertion-killed,
 including the four new declaration/order removals, and inventory target and
 collection checks passed. Ruff passed for the changed tests and scripts. These
 are local focused results; final-head repository verification remains CI evidence.
+
+After rebasing onto the public-text merge `146920d`, the packager, its mutation
+inventory and the guard tests retain exactly their committed bytes from
+`5507cd8`. Scanner source/tests and the main record, including its scanner
+section, are preserved. The combined scope/manifest-link and guard/packager/frozen
+q12 checks passed 322 tests with 38 platform skips. No full Windows gate or
+repeated mutation run was launched; earlier exact-head CI remains historical
+evidence until verification runs on the rebased head.
