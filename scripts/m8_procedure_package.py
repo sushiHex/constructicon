@@ -32,9 +32,10 @@ Usage, with isolated Python from the repository root::
 ``NAME=UNREVIEWED`` lines as ``readonly NAME=value``,
 each checked against its shape, so bash refuses any later write however its name is
 built; a value that fills no line refuses. A step marked ``deferred = true`` may wait
-only for those values: without ``--values`` it is checked but not written, and the CLI
-names it. Once the values are measured and reviewed, everything is built again into a
-fresh ``OUT``, where no placeholder may remain.
+only while one of those canonical session-value placeholders remains: it is checked
+but not written until then, and the CLI names it. Once the values are measured and
+reviewed, everything is built again into a fresh ``OUT``, where no placeholder may
+remain.
 
 A step's ``stdout`` is one list of exact lines or a list of distinct alternative
 lists (a reviewed branch such as a measured or unmeasured refresh), and an optional
@@ -198,6 +199,8 @@ SESSION_VALUES = {
     "DRIFT_STDOUT_HEX": re.compile(r"(?:[0-9a-f]{2}){2,4096}"),
     "DRIFT_TOOL_SHA256": re.compile(r"[0-9a-f]{64}"),
 }
+SESSION_PLACEHOLDER = re.compile(
+    rf"^(?P<name>{'|'.join(map(re.escape, SESSION_VALUES))})=UNREVIEWED$", re.MULTILINE)
 
 
 def session_values(path: Path) -> dict[str, str]:
@@ -597,10 +600,14 @@ def assemble(path: Path, template: bool = False,
         stray = sorted({label for label in LABEL.findall(joined) if label not in allowed})
         if stray:
             raise Refused(f"step {name}: undeclared or historical labels {stray}")
-        if deferred and values is None and not template:
-            # Built later, with measured session values: only those may remain.
-            pending = re.sub(rf"^(?:{'|'.join(SESSION_VALUES)})=UNREVIEWED$", "", text,
-                             flags=re.MULTILINE)
+        remaining_session_values = {match.group("name")
+                                    for match in SESSION_PLACEHOLDER.finditer(text)}
+        if deferred and not template:
+            # Only canonical session values may remain in a deferred step. Values
+            # already supplied above are filled before this check, so a partial
+            # private-value fill can leave runtime fields pending without weakening
+            # the unfillable-placeholder refusal.
+            pending = SESSION_PLACEHOLDER.sub("", text)
             if PLACEHOLDER.search(_normalized(pending)) or DECLARATION.search(text):
                 raise Refused(f"step {name}: a deferred step may wait only for session values")
         elif not template and (PLACEHOLDER.search(joined) or DECLARATION.search(text)):
@@ -609,7 +616,7 @@ def assemble(path: Path, template: bool = False,
         if "\r" in text:
             raise Refused(f"step {name}: a built file would not be LF-only")
         step = Step(name, text, alternatives, record,
-                    waiting=deferred and values is None and not template)
+                    waiting=deferred and bool(remaining_session_values) and not template)
         # The transport reads at most 65,536 bytes of expectation (Q6's T5).
         if len(step.expected().encode("utf-8")) > MAX_STDOUT:
             raise Refused(f"step {name}: its expectation exceeds {MAX_STDOUT} bytes")

@@ -503,6 +503,28 @@ DEFERRED = SESSION.replace('stdout = ["lane-boundary-checked"]',
                            'stdout = ["lane-boundary-checked"]\ndeferred = true')
 
 
+def _partially_deferred_composition() -> str:
+    session_fields = (
+        "DRIFT_STDOUT_HEX=UNREVIEWED",
+        "DRIFT_TOOL_SHA256=UNREVIEWED",
+        "PREVIEW_SHA256=UNREVIEWED",
+        "RUN_ID=UNREVIEWED",
+        "EXPECTED_BOOT=UNREVIEWED",
+    )
+    placeholders = r"\n".join(session_fields)
+    return f'''[[steps]]
+name = "ready"
+stdout = ["ok"]
+parts = [{{literal = "true"}}]
+
+[[steps]]
+name = "deferred-runtime"
+stdout = ["ok"]
+deferred = true
+parts = [{{literal = "{placeholders}"}}]
+'''
+
+
 def test_a_deferred_step_waits_only_for_session_values(tmp_path):
     first = package.build(procedure(tmp_path, DEFERRED), tmp_path / "first")
     assert (tmp_path / "first" / "MANIFEST.sha256").read_bytes() == b""
@@ -518,6 +540,75 @@ def test_a_deferred_step_waits_only_for_session_values(tmp_path):
     with pytest.raises(package.Refused, match="historical and deferred must be booleans"):
         package.assemble(procedure(tmp_path, DEFERRED.replace("deferred = true",
                                                               'deferred = "yes"')))
+
+
+def test_partial_private_values_leave_only_remaining_session_values_waiting(tmp_path):
+    path = procedure(tmp_path, _partially_deferred_composition())
+    private_values = {"DRIFT_STDOUT_HEX": "6f6b0a", "DRIFT_TOOL_SHA256": "d" * 64}
+
+    first = package.assemble(path, values=private_values)
+    assert [step.name for step in first if step.waiting] == ["deferred-runtime"]
+    deferred = first[1]
+    assert "readonly DRIFT_STDOUT_HEX=6f6b0a\n" in deferred.text
+    assert f"readonly DRIFT_TOOL_SHA256={'d' * 64}\n" in deferred.text
+    assert "PREVIEW_SHA256=UNREVIEWED\n" in deferred.text
+    assert "RUN_ID=UNREVIEWED\n" in deferred.text
+    assert "EXPECTED_BOOT=UNREVIEWED\n" in deferred.text
+
+    first_output = tmp_path / "phase1"
+    package.build(path, first_output, values=private_values)
+    assert len(list(first_output.glob("*.sh"))) == 1
+    assert len(list(first_output.glob("*.expected.json"))) == 1
+    assert len((first_output / "MANIFEST.sha256").read_text().splitlines()) == 2
+    assert not (first_output / "deferred-runtime.sh").exists()
+
+    all_values = {
+        **private_values,
+        "PREVIEW_SHA256": "a" * 64,
+        "RUN_ID": "run-" + "b" * 32,
+        "EXPECTED_BOOT": "00000000-0000-4000-8000-000000000001",
+    }
+    second = package.assemble(path, values=all_values)
+    assert len(second) == 2
+    assert not any(step.waiting for step in second)
+    assert f"readonly PREVIEW_SHA256={'a' * 64}\n" in second[1].text
+    assert f"readonly RUN_ID={'run-' + 'b' * 32}\n" in second[1].text
+    assert "readonly EXPECTED_BOOT=00000000-0000-4000-8000-000000000001\n" in second[1].text
+    assert "UNREVIEWED" not in second[1].text
+
+    second_output = tmp_path / "phase2"
+    package.build(path, second_output, values=all_values)
+    assert len(list(second_output.glob("*.sh"))) == 2
+    assert len(list(second_output.glob("*.expected.json"))) == 2
+    assert len((second_output / "MANIFEST.sha256").read_text().splitlines()) == 4
+
+    alien_dir = tmp_path / "alien"
+    alien_dir.mkdir()
+    alien_steps = _partially_deferred_composition().replace(
+        "EXPECTED_BOOT=UNREVIEWED", "EXPECTED_BOOT=UNREVIEWED\\nC=UNREVIEWED", 1)
+    alien_path = procedure(alien_dir, alien_steps)
+    with pytest.raises(package.Refused, match="deferred step may wait only for session values"):
+        package.assemble(alien_path, values=private_values)
+
+
+def test_non_deferred_step_still_refuses_unfilled_runtime_values(tmp_path):
+    steps = _partially_deferred_composition().replace("deferred = true\n", "", 1)
+    path = procedure(tmp_path, steps)
+    with pytest.raises(package.Refused, match="unreviewed placeholder remains"):
+        package.assemble(path, values={"DRIFT_STDOUT_HEX": "6f6b0a",
+                                       "DRIFT_TOOL_SHA256": "d" * 64})
+
+
+def test_fully_filled_deferred_step_emits_without_values_argument(tmp_path):
+    deferred_without_values = QUALIFICATION.replace(
+        'stdout = ["lane-boundary-checked"]',
+        'stdout = ["lane-boundary-checked"]\ndeferred = true')
+    path = procedure(tmp_path, deferred_without_values)
+    step, = package.assemble(path)
+    assert not step.waiting
+    out = tmp_path / "fully-filled"
+    package.build(path, out)
+    assert (out / "c3-qualification.sh").is_file()
 
 
 def test_cli_builds_with_a_values_file(tmp_path):

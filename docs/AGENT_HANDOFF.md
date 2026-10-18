@@ -15,6 +15,34 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## q13 preparation distinguishes composed proof from host readiness
+
+Under [#189](https://github.com/sushiHex/constructicon/issues/189) and
+[#226](https://github.com/sushiHex/constructicon/issues/226), the additive q13
+composition selects the exact private drift guard at all ten sites and keeps
+the retained controller pin. Unchanged controller input bytes justify retaining
+the pin, not declaring the installation healthy; fresh verification remains.
+The 19-step ledger distinguishes actual composed rehearsals from component
+tests and host-only observations.
+
+The first real package exposed a deferral defect: a supplied private drift pair
+was mistaken for a complete set of later runtime values. Deferred steps now wait
+on their remaining canonical placeholders; missing nondeferred inputs and alien
+placeholders still refuse. No template or synthetic value is an operator input.
+
+Preservation and H7/H8 tests exercise the actual package through T5, asserting
+whole output and empty stderr. The isolated C7/C8 test retains production
+checkers over a genuine bundle and emitted synthetic qualification, with a real
+90-second held startup and fresh state per scenario. Its generation-2 fixture
+is not historical generation-11 evidence; physical execution belongs to the
+Linux lane, not Windows skips. Exact results and limits live in the M8 record.
+
+The readiness document separates capture from approval: a first observed tool
+digest does not certify that tool, and an invocation cannot supply its own
+expected output. This preparation neither establishes all-step host readiness
+nor authorizes a session, model call, baseline change or retry. The one-session
+budget is not silently enlarged for a read-only measurement.
+
 ## Isolated startup/publication join — test structure and evidence boundary
 
 Under [#189](https://github.com/sushiHex/constructicon/issues/189), the existing

@@ -6693,3 +6693,53 @@ The rebased scope/manifest/link checks and nine new descendant/drain cases passe
 69 tests, with 89 unrelated guard cases deselected. No full suite or mutation
 inventory was re-executed after this rebase; earlier counts remain historical,
 and exact-head CI is still required.
+
+## q13 preparation: packaged boundaries, not inferred host readiness (Refs #189, #226)
+
+The additive [q13 composition](M8-maintenance-q13-continuation.md) inventories
+all 19 steps and selects the exact G1 bytes at ten sites. Frozen predecessors,
+lane fences, T5 and G1 remain unchanged. The controller inputs have no diff
+between retained C `5793ef98` and preparation baseline `dc61d16`; the procedure
+retains verification, not replacement. Source equality is not installed-tree
+evidence. The [readiness boundary](M8-q13-readiness.md) keeps private measurement,
+independent approval and exact execution authority distinct from source tests.
+
+Actual assembly exposed a packager defect: supplying the private drift pair
+made deferred steps demand their not-yet-measured runtime values. Deferral now
+depends on remaining canonical placeholders after supplied values are filled,
+not on the absence of the entire values argument. Missing nondeferred values,
+alien placeholders, invalid values and reassignment still refuse. A completely
+filled deferred step is emitted. The real q13 package writes 16 step pairs with
+only the private pair, and all 19 with the three further synthetic runtime values
+in tests. Synthetic values never constitute an operator package.
+
+The new portable q13 suite passed 20 cases without skips. It exercises actual
+packaged preservation through T5 with real disposable files, including occupied,
+missing, hardlinked, oversized and diagnostic refusals; it exercises both H7/H8
+branches through T5 with the real lane CLI and labelled synthetic host/custody
+boundaries. A plausible different drift line refuses at G1. Successful paths
+assert complete stdout and empty stderr. Record grammar/component tests for
+other steps remain fragments, not assertions that their installed producers ran.
+The focused guard and packager suites passed locally: 227 passed, one Windows
+symlink-privilege skip. These are focused results, not the final repository gate.
+
+The C7/C8 proof uses an opt-in production store topology in the existing
+disposable root lane and one synthetic native injection point. It preserves
+actual packaged binding, qualification, source, saver, journal and provider
+checks. Its shared immutable foundation requires an actual 90-second synthetic
+held startup; editing a zero-second startup record to claim S6a was rejected.
+Five separate state trees cover acceptance, wrong consumer, source drift,
+qualification mismatch and an undeclared preparation diagnostic. Positive
+scenario/CLI inventories prevent an early stop from masquerading as all cases
+executed. Generation 2 is a synthetic store instance of the same law, not a claim
+about host generation 11. The physical proof requires the existing Linux root
+lane; Windows collection/skips cannot establish it. Exact-head CI evidence must
+be recorded before this proof is called executed.
+
+Fable's design pass supports retaining C and separating capture from approval.
+Its proposed extra capture-only boot is not automatically exempt from the
+one-session budget. No private expectation or installed-tool digest was approved,
+no host queried or started, and no credential, model or vendor binary was used
+by these new helpers/tests. Existing credential-free CI binary lanes remain
+unchanged. This slice does not establish all-step live readiness or authorize
+q13, R6, replacement, retry or public-history deletion.
