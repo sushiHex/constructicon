@@ -916,7 +916,7 @@ def test_isolated_startup_evidence_drives_real_publication_and_active_custody(
         assert {path.name: path.read_bytes() for path in descriptor.iterdir()} == {
             "1.json": old_bytes}
         assert (bundle_of(root) / "active.json").read_bytes() == withdrawal
-        write_evidence("isolated-startup-refusal.json", {
+        write_evidence("n3c-isolated-startup-refusal.json", {
             "schema_version": 1, "synthetic_peer": True, "normal_refusal_checked": True,
             "descriptor_inventory_unchanged": True, "withdrawal_retained": True,
             "qualification_evidence_digest": revision,
@@ -970,7 +970,7 @@ def test_isolated_startup_evidence_drives_real_publication_and_active_custody(
         "kind": "active", "binding_digest": str(second.operator_binding_digest)}
     isolated_checked_revision("active", active_evidence, seal, session, launch, active_revision)
     assert (bundle_of(root) / "store/auth.json").read_bytes() == b"harmless isolated fixture\n"
-    write_evidence("isolated-startup-publication.json", {
+    write_evidence("n3c-isolated-startup-publication.json", {
         "schema_version": 1, "synthetic_peer": True, "real_inherited_custody": True,
         "qualification_evidence_digest": revision, "active_evidence_digest": active_revision,
         "publication_bound_emitted_evidence": True, "wrong_evidence_activation_refused": True,
