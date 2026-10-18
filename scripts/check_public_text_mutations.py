@@ -19,7 +19,8 @@ SIGNALS = TESTS + "test_the_runner_signals_end_the_scan_as_cancelled_after_its_f
 
 MUTANTS = (
     ("ref updates are read", MODULE + "sweep",
-     "yield from pushed(github, since_time, now, default(), seen)", "yield from ()", OLD_DATED),
+     "yield from pushed(github, since_time, now, default(), seen, all_history)",
+     "yield from ()", OLD_DATED),
     ("one failing surface does not hide the rest", MODULE + "sweep",
      "failures.append(error)", "raise",
      TESTS + "test_a_failing_surface_does_not_hide_the_rest"),
@@ -108,8 +109,8 @@ MUTANTS = (
     ("existing tags are unconditional findings", MODULE + "tagged",
      'yield "existing tag", _digest(name), ""', 'pass',
      TESTS + "test_all_history_tags_list_full_history_and_are_unconditional_findings"),
-    ("missing prior heads are reported as gaps", MODULE + "pushed",
-     'yield "history gap", ident, ""', 'pass',
+    ("missing prior heads are reported as gaps", MODULE + "_history_gap",
+     'return "history gap", ident, ""', 'return "branch name", ident, ""',
      TESTS + "test_missing_force_push_prior_head_is_a_gap_and_later_updates_are_scanned"),
     ("a comparison error needs force push and 404", MODULE + "compared",
      'if error.code != 404 or not force_push:', 'if not force_push:',
@@ -132,6 +133,38 @@ MUTANTS = (
      'if complete and not found and backfill_started is not None:',
      'if not found and backfill_started is not None:',
      TESTS + "test_backfill_failure_never_offers_a_cursor_candidate[cancel]"),
+    ("all-history force pushes scan both endpoints", MODULE + "pushed",
+     'if all_history and (after == NO_COMMIT or update.get("activity_type") == "force_push"):',
+     'if all_history and after == NO_COMMIT:',
+     TESTS + "test_all_history_ref_destruction_after_start_cannot_offer_a_clean_cursor"
+     "[in-run-force_push]"),
+    ("all-history deletions scan their prior history", MODULE + "pushed",
+     'if all_history and (after == NO_COMMIT or update.get("activity_type") == "force_push"):',
+     'if all_history and update.get("activity_type") == "force_push":',
+     TESTS + "test_all_history_ref_destruction_after_start_cannot_offer_a_clean_cursor"
+     "[in-run-branch_deletion]"),
+    ("destructive history is covered on a retry too", MODULE + "pushed",
+     'if all_history and (after == NO_COMMIT or update.get("activity_type") == "force_push"):',
+     'if all_history and utc(str(update["timestamp"])) >= now and '
+     '(after == NO_COMMIT or update.get("activity_type") == "force_push"):',
+     TESTS + "test_all_history_ref_destruction_after_start_cannot_offer_a_clean_cursor"
+     "[retry-branch_deletion]"),
+    ("destructive updates have a nonzero prior head", MODULE + "pushed",
+     'if before == NO_COMMIT:', 'if False:',
+     TESTS + "test_all_history_destructive_failures_are_not_reclassified_as_prior_head_gaps"
+     "[prior zero]"),
+    ("prior head is resolved as the exact SHA", MODULE + "pushed",
+     'if not isinstance(prior, dict) or prior.get("sha") != before:', 'if False:',
+     TESTS + "test_all_history_destructive_failures_are_not_reclassified_as_prior_head_gaps"
+     "[prior malformed]"),
+    ("destructive prior permission errors are not gaps", MODULE + "pushed",
+     'if error.code != 404:', 'if False:',
+     TESTS + "test_all_history_destructive_failures_are_not_reclassified_as_prior_head_gaps"
+     "[prior forbidden]"),
+    ("after histories are traversed even when the head commit was scanned", MODULE + "pushed",
+     'if after != NO_COMMIT:', 'if after != NO_COMMIT and after not in seen:',
+     TESTS + "test_all_history_destructive_updates_scan_clean_endpoints_and_deduplicate_files"
+     "[force_push]"),
 )
 
 

@@ -14,7 +14,8 @@ Run by ``.github/workflows/public-text.yml`` from the default branch only:
   the next window; it never skips one.
 - ``sweep --since TIME --all-history`` is a manual backfill, run locally with
   a personal token; it reads all reachable branch and tag history without a
-  commit-date filter. TIME still selects activity and non-Git text. Without
+  commit-date filter, plus both endpoints of destructive branch updates
+  selected by TIME. TIME still selects activity and non-Git text. Without
   ``--all-history``, ``--since`` selects the normal sweep's time window.
 
 The cursor is the later of the last successful scheduled sweep's start and the
@@ -55,7 +56,12 @@ only unavailability through this authenticated API, not permanent deletion;
 token visibility and retention can affect it. Its readable history
 and later updates are still scanned. A gap makes the run non-successful and
 never advances the cursor; it is not a claim of coverage. Other comparison
-errors fail the traversal. Commits dated in the window are still listed
+errors fail the traversal. In all-history mode, deletions and force pushes
+instead resolve the prior SHA and scan its complete history plus the nonzero
+after-head history directly. A prior lookup's 404 is a gap even for a deletion;
+downstream listing and file errors remain incomplete traversals. A retry with
+the same TIME checks the same selected updates even when they predate the new
+run's start. Commits dated in the window are still listed
 on every branch, as a second source. The activity listing carries branches
 only, so tags are scanned in full on every sweep: each name, each annotated
 tag's own name, message and tagger, and every commit a tag reaches that the
@@ -72,8 +78,10 @@ passed is caught by the date listing if its commits are dated in a window, and
 otherwise missed. Sweeps before #216 selected by date alone, so an old-dated
 commit pushed before the first ref-update sweep stays missed until a local
 ``sweep --since TIME --all-history`` backfill covers reachable history regardless
-of commit dates. Unreachable objects and deleted tags are not recovered by it;
-the tag ruleset is a separate owner action.
+of commit dates. Unreachable objects absent from reported activity and deleted
+tags are not recovered by it; the tag ruleset is a separate owner action.
+Pinned branch heads and the activity pass are not a repository snapshot: an
+unreported destructive update can still escape the census and activity pass.
 """
 
 from __future__ import annotations
@@ -408,14 +416,25 @@ def compared(github: GitHub, base: str, head: str,
         raise Incomplete("comparison commit listing is not complete")
 
 
+def _history_gap(update: dict, before: str, after: str) -> Item:
+    activity_id = update.get("id")
+    if not ((type(activity_id) is int and activity_id >= 0)
+            or (isinstance(activity_id, str) and 0 < len(activity_id) <= 128)):
+        raise Incomplete("a history gap has no bounded activity identity")
+    ident = f"{_digest(str(activity_id))}:{before[:12]}:{after[:12]}"
+    return "history gap", ident, ""
+
+
 def pushed(github: GitHub, since_time: datetime, now: datetime, default: str,
-           seen: set[str]) -> Iterator[Item]:
+           seen: set[str], all_history: bool = False) -> Iterator[Item]:
     """Every commit a branch update exposed since ``since_time``, by ref update.
 
     Each update's heads are compared, whatever its commits' dates: an
     old-dated commit pushed late is in its push's range. A created branch is
     compared with the default branch; the default branch's own creation scans
-    its whole history. A deletion exposes nothing new, but its name was public.
+    its whole history. All-history backfills scan both endpoints of destructive
+    updates selected by the window, including on retries: the branch census may
+    have happened after history disappeared. Other sweeps scan a deletion's name.
     """
     elapsed = now - since_time
     period = next((name for name, span in ACTIVITY_PERIODS if elapsed <= span), None)
@@ -427,6 +446,23 @@ def pushed(github: GitHub, since_time: datetime, now: datetime, default: str,
         branch = ref.removeprefix("refs/heads/")
         yield ("branch name" if branch != ref else "ref name"), _digest(branch), branch
         after = _sha(update.get("after"))
+        if all_history and (after == NO_COMMIT or update.get("activity_type") == "force_push"):
+            before = _sha(update.get("before"))
+            if before == NO_COMMIT:
+                raise Incomplete("a destructive ref update has no prior head")
+            try:
+                prior = github.get(f"commits/{before}")
+            except urllib.error.HTTPError as error:
+                if error.code != 404:
+                    raise
+                yield _history_gap(update, before, after)
+            else:
+                if not isinstance(prior, dict) or prior.get("sha") != before:
+                    raise Incomplete("a destructive ref update prior head is not resolved")
+                yield from _unseen(github, github.pages(f"commits?sha={before}"), "branch", seen)
+            if after != NO_COMMIT:
+                yield from _unseen(github, github.pages(f"commits?sha={after}"), "branch", seen)
+            continue
         if after == NO_COMMIT:
             continue
         before = _sha(update.get("before"))
@@ -440,12 +476,7 @@ def pushed(github: GitHub, since_time: datetime, now: datetime, default: str,
         try:
             yield from _unseen(github, commits, "branch", seen)
         except MissingPriorHead:
-            activity_id = update.get("id")
-            if not ((type(activity_id) is int and activity_id >= 0)
-                    or (isinstance(activity_id, str) and 0 < len(activity_id) <= 128)):
-                raise Incomplete("a history gap has no bounded activity identity") from None
-            ident = f"{_digest(str(activity_id))}:{before[:12]}:{after[:12]}"
-            yield "history gap", ident, ""
+            yield _history_gap(update, before, after)
             # Salvage all readable history, without pretending it covers the
             # unavailable side of the force push. Later updates still run.
             yield from _unseen(github, github.pages(f"commits?sha={after}"), "branch", seen)
@@ -517,7 +548,7 @@ def sweep(github: GitHub, since_time: datetime, now: datetime | None = None,
                                "branch", seen)
 
     def updates() -> Iterator[Item]:
-        yield from pushed(github, since_time, now, default(), seen)
+        yield from pushed(github, since_time, now, default(), seen, all_history)
 
     def tags() -> Iterator[Item]:
         yield from tagged(github, default(), seen, all_history)
@@ -586,7 +617,7 @@ def findings(items: Iterator[Item], compiled: list[re.Pattern[str]],
 def _report(kind: str, ident: str) -> None:
     # Flushed at once: a job killed after its cancellation grace keeps it.
     if kind == "history gap":
-        message = "force-push prior head unavailable; coverage not established"
+        message = "prior head unavailable through authenticated API; coverage not established"
     elif kind == "existing tag":
         message = "tag exists; repository tag restriction requires review"
     else:

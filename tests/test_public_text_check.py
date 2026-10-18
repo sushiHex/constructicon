@@ -56,7 +56,7 @@ class FakeAPI:
         base, _, query = path.partition("?")
         number = re.search(r"(?:^|&)page=(\d+)", query)
         page = int(number.group(1)) if number else None
-        value = self.routes.get(base)
+        value = self.routes.get(path.split("&per_page=", 1)[0], self.routes.get(base))
         if isinstance(value, BaseException):
             raise value
         if callable(value):
@@ -679,6 +679,126 @@ def test_all_history_tags_list_full_history_and_are_unconditional_findings(
     assert f"commits?sha={X}&per_page=100&page=1" in api.seen
     assert not any(path.startswith("compare/") for path in api.seen)
     assert "PUBLIC_TEXT_SWEPT_THROUGH candidate" not in out
+
+
+@pytest.mark.parametrize("destructive", ["branch_deletion", "force_push"])
+@pytest.mark.parametrize("started", [NOW, NOW + timedelta(hours=1)], ids=["in-run", "retry"])
+def test_all_history_ref_destruction_after_start_cannot_offer_a_clean_cursor(
+        tmp_path, monkeypatch, capsys, destructive, started):
+    """The census sees only post-update refs; old history still matters at start."""
+    class Started(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return started
+
+    monkeypatch.setattr(check, "datetime", Started)
+    deleted = destructive == "branch_deletion"
+    routes = {
+        "branches": [] if deleted else [{"name": "topic", "commit": {"sha": X}}],
+        "activity": {"linked": [[update(
+            "refs/heads/topic", P, ZERO if deleted else X,
+            at="2026-10-16T03:00:01Z", kind=destructive)]]},
+        # Current reachable history is clean, but the old head's own diff is not.
+        "commits": [merge_commit(X, "clean")], f"commits/{X}": {"files": []},
+        f"commits?sha={P}": [merge_commit(P, "old", "2000-01-01T00:00:00Z")],
+        f"compare/{P}...{X}": comparison(X),
+        f"commits/{P}": {"sha": P, **leaky_commit(P)[f"commits/{P}"]},
+    }
+    status, out, api = run(tmp_path, monkeypatch, capsys,
+                           ["sweep", "--since", "2026-10-16T00:00:00Z", "--all-history"],
+                           routes)
+    assert status == 1, "destructive activity hid start-time history but the scan reported clean"
+    assert f"branch file {P[:12]} matches" in out
+    assert f"commits?sha={P}&per_page=100&page=1" in api.seen
+    assert not any(path.startswith("compare/") for path in api.seen)
+    assert "PUBLIC_TEXT_SWEPT_THROUGH candidate" not in out
+
+
+@pytest.mark.parametrize("destructive", ["branch_deletion", "force_push"])
+def test_all_history_destructive_updates_scan_clean_endpoints_and_deduplicate_files(
+        tmp_path, monkeypatch, capsys, destructive):
+    deleted = destructive == "branch_deletion"
+    routes = {
+        "branches": [] if deleted else [{"name": "topic", "commit": {"sha": X}}],
+        "activity": {"linked": [[update(
+            "refs/heads/topic", P, ZERO if deleted else X, kind=destructive)]]},
+        "commits": [merge_commit(X, "clean")],
+        f"commits?sha={P}": [merge_commit(P, "clean")],
+        f"commits/{P}": {"sha": P, "files": []}, f"commits/{X}": {"files": []},
+    }
+    status, out, api = run(tmp_path, monkeypatch, capsys,
+                           ["sweep", "--since", "2026-10-16T00:00:00Z", "--all-history"],
+                           routes)
+    assert status == 0 and "PUBLIC_TEXT_SWEPT_THROUGH candidate" in out
+    assert f"commits?sha={P}&per_page=100&page=1" in api.seen
+    assert not any(path.startswith("compare/") for path in api.seen)
+    if not deleted:
+        assert api.seen.count(f"commits?sha={X}&per_page=100&page=1") == 2
+        assert sum(path.startswith(f"commits/{X}?") for path in api.seen) == 1
+    else:
+        assert not any(path.startswith("commits?sha=" + ZERO) for path in api.seen)
+
+
+@pytest.mark.parametrize("destructive", ["branch_deletion", "force_push"])
+@pytest.mark.parametrize("started", [NOW, NOW + timedelta(hours=1)], ids=["in-run", "retry"])
+def test_unavailable_destructive_prior_head_stays_a_gap_across_backfill_retries(
+        tmp_path, monkeypatch, capsys, destructive, started):
+    class Started(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return started
+
+    monkeypatch.setattr(check, "datetime", Started)
+    deleted = destructive == "branch_deletion"
+    routes = {
+        "activity": {"linked": [[update(
+            "refs/heads/topic", P, ZERO if deleted else X,
+            at="2026-10-16T03:00:01Z", kind=destructive),
+            update("refs/heads/next", X, Y)]]},
+        f"commits/{P}": missing(), "commits": [merge_commit(X, "clean")],
+        f"commits/{X}": {"files": []}, f"compare/{X}...{Y}": comparison(Y),
+        **leaky_commit(Y),
+    }
+    status, out, api = run(tmp_path, monkeypatch, capsys,
+                           ["sweep", "--since", "2026-10-16T00:00:00Z", "--all-history"],
+                           routes)
+    assert status == 1 and "::error::history gap " in out
+    assert f"branch file {Y[:12]} matches" in out
+    assert "traversal-complete; coverage-incomplete" in out
+    assert "PUBLIC_TEXT_SWEPT_THROUGH candidate" not in out
+    assert (f"commits?sha={X}&per_page=100&page=1" in api.seen) is not deleted
+
+
+@pytest.mark.parametrize("cause", ["prior forbidden", "prior malformed", "prior missing",
+                                    "prior zero", "history missing", "file missing", "bound",
+                                    "after missing"])
+def test_all_history_destructive_failures_are_not_reclassified_as_prior_head_gaps(
+        tmp_path, monkeypatch, capsys, cause):
+    prior = {"prior missing": None, "prior zero": ZERO}.get(cause, P)
+    routes = {"activity": {"linked": [[update("refs/heads/topic", prior, ZERO,
+                                              kind="branch_deletion")]]},
+              f"commits/{P}": {"sha": P, "files": []},
+              f"commits?sha={P}": [merge_commit(Q, "clean")], f"commits/{Q}": {"files": []}}
+    if cause == "prior forbidden":
+        routes[f"commits/{P}"] = missing(403)
+    elif cause == "prior malformed":
+        routes[f"commits/{P}"] = {"sha": X, "files": []}
+    elif cause == "history missing":
+        routes[f"commits?sha={P}"] = missing()
+    elif cause == "file missing":
+        routes[f"commits/{Q}"] = missing()
+    elif cause == "bound":
+        routes[f"commits?sha={P}"] = [merge_commit(Q, "clean")] * 100
+    elif cause == "after missing":
+        routes["activity"] = {"linked": [[update("refs/heads/topic", P, X,
+                                                 kind="force_push")]]}
+        routes[f"commits?sha={X}"] = missing()
+    status, out, _ = run(tmp_path, monkeypatch, capsys,
+                         ["sweep", "--since", "2026-10-16T00:00:00Z", "--all-history"], routes)
+    expected = ("HTTPError" if cause in {"prior forbidden", "history missing", "file missing",
+                                         "after missing"} else "Incomplete")
+    assert status == 1 and f"public text check incomplete ({expected})" in out
+    assert "history gap" not in out and "PUBLIC_TEXT_SWEPT_THROUGH candidate" not in out
 
 
 def test_missing_force_push_prior_head_is_a_gap_and_later_updates_are_scanned(

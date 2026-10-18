@@ -51,6 +51,25 @@ owner decision tracked by #233. No allowlist or coverage waiver is introduced.
 The tag ruleset and real backfill remain owner actions, so this is partial #230
 evidence rather than completion of that issue.
 
+The PR #234 connector review found an introduced race between captured run
+start and the branch census: a deletion or force push could hide old history
+while the scan still offered a clean cursor. Four credential-free regressions
+reproduced false success for both destructive updates, during the scan and on a
+later retry. All-history mode now scans both endpoints of every destructive
+update selected by TIME, directly rather than through a comparison. It first
+requires an exact, nonzero prior SHA; only that resolution request's 404 becomes
+a gap. Readable prior history and a nonzero after-head history are fully paged
+with the existing per-commit deduplication. A deletion has no after head.
+
+The alternative of rejecting only destructive updates after the current run's
+start was rejected: a retry could move the same unresolved update before its
+new start and falsely offer a cursor. Tests cover clean permitting paths,
+unavailable prior heads across retries, later-update salvage, invalid prior
+heads, permission errors, downstream listing/file errors and the page bound.
+Normal scheduled comparison behavior is retained. This closes the observed
+race, not the documented activity API visibility/latency limitation; pinned
+heads plus reported activity do not establish snapshot consistency.
+
 ## 2026-10-15 — installed capture diagnostics for the next maintenance session
 
 Refs #186. The existing bounded historical reader recognizes the five exact
