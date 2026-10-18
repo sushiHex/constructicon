@@ -1,7 +1,8 @@
 """Synthetic host interface evidence, never a measurement of the private host.
 
 The exact reviewed guard is assembled by the real packager, then executed by
-Bash. Only host-bound primitives (Python and the drift executable) are replaced.
+Bash. Host-bound primitives (Python and the drift executable) are replaced;
+descendant cases also instrument drain/comparison boundaries for synchronization.
 Every synthetic success has different plausible output that the same step
 refuses; no stub here is evidence of the installed tool's interface.
 """
@@ -11,9 +12,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import queue
+import re
 import shlex
+import socket
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -82,13 +87,13 @@ def _run(tmp_path: Path, *, stdout: bytes = SYNTHETIC, stderr: bytes = b"", stat
     script = (out / "guarded.sh").read_bytes().decode()
     # Replace only the host interpreter and executable, at their actual boundary.
     script = script.replace("/usr/bin/python3", shlex.quote(Path(sys.executable).as_posix()))
-    script = script.replace('subprocess.run([str(tool)]',
-                            'subprocess.run([sys.executable, str(tool)]')
+    script = script.replace('subprocess.Popen([str(tool)]',
+                            'subprocess.Popen([sys.executable, str(tool)]')
     script = script.replace('Path("/usr/local/bin/m8-host-drift")',
                             f"Path({tool.as_posix()!r})")
     if launch_error:
-        script = script.replace('subprocess.run([sys.executable, str(tool)]',
-                                'subprocess.run([str(tool.parent / "absent-executable")]')
+        script = script.replace('subprocess.Popen([sys.executable, str(tool)]',
+                                'subprocess.Popen([str(tool.parent / "absent-executable")]')
     if mutate:
         before, after = mutate
         assert script.count(before) == 1
@@ -401,3 +406,237 @@ def test_each_guard_fact_is_sensitive_to_an_assertion_mutation(tmp_path, before,
                 "launch_requested": True, "returncode": None}
         else:
             assert ran.returncode != 0
+
+
+def _descendant_run(tmp_path, stream, *, mutation=None, drain_failure=None):
+    """Test-only socket barriers: no sleep decides whether a writer finished.
+
+    A descendant holds inherited output open until the guard either awaits EOF
+    or prematurely passes validation. The latter releases its bytes only after
+    that decision, deterministically reproducing the old regular-file race.
+    Instrumentation observes standard futures/copy boundaries and the existing
+    comparison; it supplies no verdict and changes no captured byte.
+    """
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    events = queue.Queue()
+
+    def line(connection):
+        raw = bytearray()
+        while len(raw) < 128 and not raw.endswith(b"\n"):
+            part = connection.recv(1)
+            if not part:
+                raise OSError("test synchronization closed")
+            raw.extend(part)
+        if not raw.endswith(b"\n"):
+            raise OSError("test synchronization line too long")
+        return bytes(raw)
+
+    def accept():
+        try:
+            while True:
+                connection, _ = listener.accept()
+                connection.settimeout(15)
+                raw = line(connection)
+                events.put((raw.decode().strip(), connection))
+        except OSError:
+            pass
+
+    threading.Thread(target=accept, daemon=True).start()
+    tool = tmp_path / "descendant-drift.py"
+    tool.write_bytes((
+        "import os, socket, subprocess, sys\n"
+        "if len(sys.argv) == 1:\n"
+        f"    os.write(1, {SYNTHETIC!r})\n"
+        "    subprocess.Popen([sys.executable, __file__, 'writer'], stdin=subprocess.DEVNULL,\n"
+        "                     stdout=sys.stdout, stderr=sys.stderr)\n"
+        "    os._exit(0)\n"
+        f"stream = {stream!r}\n"
+        "if stream == 'stdout': os.close(2)\n"
+        "if stream == 'stderr': os.close(1)\n"
+        "with socket.create_connection(('127.0.0.1', int(os.environ['TEST_SYNC'])), "
+        "15) as control:\n"
+        "    control.sendall(b'writer-ready\\n')\n"
+        "    assert control.recv(1) == b'g'\n"
+        "    if stream != 'silent':\n"
+        "        os.write(1 if stream == 'stdout' else 2, b'synthetic descendant line\\n')\n"
+        "    if stream != 'stderr': os.close(1)\n"
+        "    if stream != 'stdout': os.close(2)\n"
+        "    control.sendall(b'writer-finished\\n')\n"
+        "os._exit(0)\n"
+    ).encode())
+    values = {"DRIFT_STDOUT_HEX": SYNTHETIC.hex(),
+              "DRIFT_TOOL_SHA256": hashlib.sha256(tool.read_bytes()).hexdigest()}
+    out = tmp_path / "package"
+    package.build(_procedure(tmp_path), out, values=values)
+    script = (out / "guarded.sh").read_bytes().decode()
+    script = script.replace("/usr/bin/python3", shlex.quote(Path(sys.executable).as_posix()))
+    for primitive in ("run", "Popen"):
+        script = script.replace(f"subprocess.{primitive}([str(tool)]",
+                                f"subprocess.{primitive}([sys.executable, str(tool)]")
+    script = script.replace('Path("/usr/local/bin/m8-host-drift")', f"Path({tool.as_posix()!r})")
+    synchronization = f'''
+import os, shutil, socket, threading
+from concurrent.futures import Future
+_ready = threading.Event()
+def _note(event):
+    with socket.create_connection(("127.0.0.1", int(os.environ["TEST_SYNC"])), 15) as control:
+        control.sendall((event + "\\n").encode())
+        if control.recv(1) != b"g": raise OSError("test synchronization closed")
+_result = Future.result
+def _observed_result(self, *args, **kwargs):
+    _note("eof-wait")
+    return _result(self, *args, **kwargs)
+Future.result = _observed_result
+_copy = shutil.copyfileobj
+def _observed_copy(source, destination, *args):
+    class Destination:
+        def write(self, data):
+            result = destination.write(data)
+            destination.flush()
+            if destination.name.endswith("stdout") and destination.tell() >= {len(SYNTHETIC)}:
+                _ready.set()
+            return result
+    _copy(source, Destination(), *args)
+    if destination.name.endswith({drain_failure!r} or "never-match"):
+        raise OSError("synthetic completed-drain failure")
+shutil.copyfileobj = _observed_copy
+def _validation(stdout):
+    if os.fstat(stdout.fileno()).st_size >= {len(SYNTHETIC)}: _ready.set()
+    if not _ready.wait(15): raise RuntimeError("test stdout drain did not run")
+    _note("validation")
+'''
+    script = script.replace("from pathlib import Path\n",
+                            "from pathlib import Path\n" + synchronization)
+    script, matches = re.subn(r'(?m)^( +)stdout.seek\(0\)$',
+                             r'\1_validation(stdout)\n\1stdout.seek(0)', script)
+    assert matches == 1
+    script, matches = re.subn(r'(?m)^( +)    raise ValueError\("output contract"\)$',
+                             r'\1    raise ValueError("output contract")\n'
+                             r'\1_note("decision-passed")', script)
+    assert matches == 1
+    if mutation:
+        before, after = mutation
+        assert script.count(before) == 1
+        script = script.replace(before, after)
+    path = out / "guarded.sh"
+    path.write_bytes(script.encode())
+    process = subprocess.Popen([git_bash(), str(path)], stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               env={**os.environ, "TEST_ROOT": tmp_path.as_posix(),
+                                    "TEST_SYNC": str(listener.getsockname()[1])})
+
+    def completed():
+        try:
+            stdout, stderr = process.communicate(timeout=20)
+            events.put(("done", (process.returncode, stdout, stderr)))
+        except BaseException as error:
+            events.put(("error", error))
+
+    threading.Thread(target=completed, daemon=True).start()
+    writer = None
+    release = False
+    writer_finished = False
+    observed = []
+    waiting = []
+    try:
+        while True:
+            event, detail = events.get(timeout=25)
+            observed.append(event)
+            if event == "error":
+                raise RuntimeError("descendant test process did not complete") from detail
+            if event == "done":
+                return detail, observed, writer_finished
+            if event == "writer-ready":
+                writer = detail
+            elif event in {"eof-wait", "decision-passed"}:
+                release = True
+                waiting.append(detail)
+            else:
+                detail.sendall(b"g")
+                detail.close()
+            if writer is not None and release:
+                writer.sendall(b"g")
+                assert line(writer) == b"writer-finished\n"
+                writer.close()
+                writer = None
+                writer_finished = True
+            if writer_finished:
+                for connection in waiting:
+                    connection.sendall(b"g")
+                    connection.close()
+                waiting.clear()
+    finally:
+        if writer is not None:
+            writer.sendall(b"g")
+            writer.close()
+        for connection in waiting:
+            connection.close()
+        listener.close()
+        if process.poll() is None:
+            process.kill()
+            process.communicate(timeout=10)
+
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+def test_descendant_late_output_is_captured_before_the_guard_decides(tmp_path, stream):
+    result, observed, finished = _descendant_run(tmp_path, stream)
+    assert result == (1, b"", b"drift-guard-refused\n")
+    assert finished
+    assert observed.index("eof-wait") < observed.index("validation")
+    assert (tmp_path / "first/stdout").read_bytes() == SYNTHETIC + (
+        b"synthetic descendant line\n" if stream == "stdout" else b"")
+    assert (tmp_path / "first/stderr").read_bytes() == (
+        b"synthetic descendant line\n" if stream == "stderr" else b"")
+    assert json.loads((tmp_path / "first/status.json").read_bytes()) == {
+        "launch_requested": True, "returncode": 0}
+    assert not (tmp_path / "next").exists()
+
+
+def test_silent_descendant_closes_both_streams_before_acceptance(tmp_path):
+    result, observed, finished = _descendant_run(tmp_path, "silent")
+    assert result == (0, b"drift-checked\nnext-command\n", b"")
+    assert finished and observed.count("eof-wait") == 2
+    assert observed.index("eof-wait") < observed.index("validation")
+    assert (tmp_path / "first/stdout").read_bytes() == SYNTHETIC
+    assert (tmp_path / "first/stderr").read_bytes() == b""
+    assert json.loads((tmp_path / "first/status.json").read_bytes()) == {
+        "launch_requested": True, "returncode": 0}
+
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+def test_completed_drain_exception_refuses_even_when_bytes_match(tmp_path, stream):
+    result, observed, finished = _descendant_run(tmp_path, "silent", drain_failure=stream)
+    assert result == (1, b"", b"drift-guard-refused\n")
+    assert finished and "validation" not in observed
+    assert (tmp_path / "first/stdout").read_bytes() == SYNTHETIC
+    assert (tmp_path / "first/stderr").read_bytes() == b""
+    assert json.loads((tmp_path / "first/status.json").read_bytes()) == {
+        "launch_requested": True, "returncode": 0}
+    assert not (tmp_path / "next").exists()
+
+
+@pytest.mark.parametrize(("before", "stream", "failure"), [
+    ("stdout_copied.result()", "silent", "stdout"),
+    ("stderr_copied.result()", "silent", "stderr"),
+    ("stdout_copied.result()\n                stderr_copied.result()", "stdout", None),
+    ("stdout_copied.result()\n                stderr_copied.result()", "stderr", None),
+])
+def test_eof_and_drain_success_gates_are_assertion_sensitive(tmp_path, before, stream, failure):
+    """Each removed result must fail a verdict assertion, never a harness error.
+
+    Executor shutdown still joins threads in these mutants. That is insufficient:
+    it neither propagates their exceptions nor undoes a comparison made too soon.
+    The control peer releases real late bytes only after that premature decision.
+    """
+    result, _, finished = _descendant_run(tmp_path, stream, mutation=(before, "pass"),
+                                         drain_failure=failure)
+    assert finished
+    assert result == (0, b"drift-checked\nnext-command\n", b"")
+    with pytest.raises(AssertionError):
+        assert result == (1, b"", b"drift-guard-refused\n")
+    assert (tmp_path / "first/stdout").read_bytes() == SYNTHETIC + (
+        b"synthetic descendant line\n" if stream == "stdout" else b"")
+    assert (tmp_path / "first/stderr").read_bytes() == (
+        b"synthetic descendant line\n" if stream == "stderr" else b"")

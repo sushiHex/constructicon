@@ -237,7 +237,7 @@ MAX_STDOUT = 65_536
 # Exact reviewed G1 bytes only. Like LANE_BLOCKS, this closes direct mentions in
 # honest compositions; it does not interpret dynamically constructed shell.
 DRIFT_BLOCKS = {
-    "045ad123b57f0cf11ff721556b907cd095a746d4475a7eac781e520a78853d5d":
+    "f2ccf6bc1675f07fbc4c93dd8bf83a42ded1a5e03f0281f948dd152c40583fc0":
         ("M8-private-output-guard.md", "G1: private drift boundary", 0),
 }
 DRIFT_INVOCATION = re.compile(r"\bm8-host-drift\b")

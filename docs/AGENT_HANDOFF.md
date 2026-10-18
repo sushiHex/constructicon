@@ -51,6 +51,9 @@ checks the supplied tool digest, zero exit, empty stderr and exact expected
 stdout, and exits before the next command on mismatch. The expectation is
 bounded UTF-8 encoded as shell-safe hex, final LF included. Captures are exclusive;
 `launch_requested` does not mistake an unknown launch outcome for no execution.
+An introduced descendant-output race was corrected with concurrent pipe drains:
+both must reach EOF successfully before comparison. Direct-child exit alone is
+not completed capture; drain errors refuse with partial bytes retained privately.
 
 The connector found an introduced provenance gap: exact G1 could omit its
 private declarations or borrow another step's values. The verified correction

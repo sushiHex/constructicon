@@ -41,7 +41,12 @@ The exact frozen q12 document remains assemblable for historical test compatibil
 by document digest only. That exemption gives no execution authority; changing
 even one byte removes it. q12's assumed output remains a known defect.
 
-G1 records whether launch was requested and the numeric status, stdout and stderr.
+G1 records whether launch was requested and the direct child's numeric status,
+stdout and stderr. Two concurrent bounded-memory drains copy pipes into retained
+private files. Both drains must reach EOF successfully before comparison; the
+child and its descendants never receive the capture file handles. Direct-child
+exit alone does not complete capture. A failed drain refuses, preserving whatever
+private bytes were captured, not certifying them as complete.
 It emits only `drift-checked` after status zero, empty stderr and exact stdout.
 A mismatch exits the entire step before its next command, even when the fence
 appears in an `if` body or a context where Bash disables errexit. Raw diagnostics
@@ -57,8 +62,10 @@ that no process started. A completed nonzero exit is retained as such.
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 def main():
@@ -80,16 +87,23 @@ def main():
             if hashlib.sha256(tool.read_bytes()).hexdigest() != digest:
                 raise ValueError("tool changed")
             result["launch_requested"] = True
-            completed = subprocess.run([str(tool)], stdin=subprocess.DEVNULL,
-                                       stdout=stdout, stderr=stderr, check=False)
-            result["returncode"] = completed.returncode
-            status = completed.returncode
-            stdout.seek(0)
-            actual = stdout.read(4097)
-            stderr.seek(0)
-            diagnostic = stderr.read(1)
-            if status != 0 or diagnostic or actual != expected:
-                raise ValueError("output contract")
+            with subprocess.Popen([str(tool)], stdin=subprocess.DEVNULL,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  bufsize=0) as child, ThreadPoolExecutor(max_workers=2) as drains:
+                stdout_copied = drains.submit(shutil.copyfileobj, child.stdout, stdout, 65536)
+                stderr_copied = drains.submit(shutil.copyfileobj, child.stderr, stderr, 65536)
+                status = child.wait()
+                result["returncode"] = status
+                stdout_copied.result()
+                stderr_copied.result()
+                stdout.flush()
+                stderr.flush()
+                stdout.seek(0)
+                actual = stdout.read(4097)
+                stderr.seek(0)
+                diagnostic = stderr.read(1)
+                if status != 0 or diagnostic or actual != expected:
+                    raise ValueError("output contract")
     finally:
         with (directory / "status.json").open("x", encoding="utf-8", newline="\n") as record:
             record.write(json.dumps(result, sort_keys=True) + "\n")
@@ -113,6 +127,13 @@ nonzero status, oversized stdout, an occupied capture, a mismatching tool digest
 the conditional branch and repeated calls. Every accepting path asserts the
 whole stdout and empty stderr. Every mismatch checks that the next command did
 not run. These are portable executable proofs, not private-host observations.
+Test-only control-socket barriers hold a real descendant's inherited streams open
+until the guard awaits EOF, without sleep-based success criteria. Late stdout and
+stderr are captured and refuse; a silent descendant closes both streams before
+acceptance. A completed drain that raises also refuses despite matching bytes.
+Executable mutations removing either drain-result check, or bypassing both EOF
+joins before comparison, fail verdict assertions. These synchronization hooks are
+test instrumentation, not production interfaces or host evidence.
 
 A host-only stub in a successor must be labelled **synthetic**, or **measured**
 with a stable private evidence reference, custodian, retention period and integrity
@@ -122,8 +143,13 @@ empty stderr as well as status and stdout. Earlier frozen tests are not repaired
 or reclassified as measurements by these checks.
 
 The comparison is bounded after capture: output is streamed to disk without a
-capture limit, and execution has no timeout. Capturing may fail or be interrupted;
-an absent status record is incomplete evidence. The hash check reads the installed
+capture limit, and execution has no timeout. A descendant retaining a pipe can
+keep the guard waiting indefinitely. EOF establishes stream completion, not
+process-tree termination. Capturing may fail or be interrupted; an absent status
+record or failed drain is incomplete capture evidence, even if a direct-child
+return code was recorded. A trusted tool could deliberately reopen capture paths;
+this is not containment against an adversarial filesystem actor.
+The hash check reads the installed
 path before subprocess reopens it; trusted host custody must prevent replacement
 between those operations. This pins an observed file digest, not descriptor-bound
 execution. A matching line and tool digest do not establish qualification, sudo

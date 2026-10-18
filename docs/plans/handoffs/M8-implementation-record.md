@@ -6654,3 +6654,34 @@ section, are preserved. The combined scope/manifest-link and guard/packager/froz
 q12 checks passed 322 tests with 38 platform skips. No full Windows gate or
 repeated mutation run was launched; earlier exact-head CI remains historical
 evidence until verification runs on the rebased head.
+
+The next PR #235 connector finding, against `24430ac`, is introduced: direct
+capture-file handles let a successful child leave a descendant writing after
+comparison. Deterministic control-socket tests reproduced both stdout and stderr
+cases as assertion failures: `drift-checked` and the next command appeared before
+the descendant was released. This was not merely an unexecuted source premise.
+
+G1 now gives the child two pipes and concurrently streams them into the retained
+exclusive private files. Both drain futures must complete successfully before
+flush and comparison; executor shutdown alone is not success evidence. The
+direct-child status remains only that fact. A drain failure refuses and preserves
+captured bytes without certifying capture completeness. Real descendant writes
+are privately captured and refuse; a silent descendant closes both streams before
+acceptance. Test-only socket synchronization determines ordering, with bounded
+test timeouts only failing hangs. Four executable mutations remove either result
+check or bypass both joins for each late stream; each fails the actual verdict
+assertion, not by a harness exception.
+
+This does not add a production timeout, disk bound, process-tree completion proof
+or adversarial-filesystem containment. A descendant retaining a pipe can hold the
+guard indefinitely; a trusted tool could reopen capture paths. No actual host
+data, installed tool, model call or live procedure was used.
+
+The complete guard and packager suites plus mutation-inventory structural checks
+passed locally on Windows: 264 passed, one symlink-privilege skip. This includes
+the nine new descendant/drain cases and their four assertion-proven fault cases.
+Ruff passed for the changed script and tests. The broader mutation inventories
+were structurally checked, not remeasured here; no full Windows gate was run.
+The scope/manifest/link suite passed all 60 tests after named staged-document
+manifest regeneration. The nine new cases passed again after tightening the
+test-only socket reader and timeout cleanup; no timeout is a passing criterion.
