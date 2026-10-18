@@ -6685,3 +6685,11 @@ were structurally checked, not remeasured here; no full Windows gate was run.
 The scope/manifest/link suite passed all 60 tests after named staged-document
 manifest regeneration. The nine new cases passed again after tightening the
 test-only socket reader and timeout cleanup; no timeout is a passing criterion.
+
+Rebasing onto the isolated-qualification merge `459cc770` preserves its complete
+record and handoff, together with the scanner sections. The packager, mutation
+inventory, guard tests and complete G1 document are byte-identical to `5708b39`.
+The rebased scope/manifest/link checks and nine new descendant/drain cases passed
+69 tests, with 89 unrelated guard cases deselected. No full suite or mutation
+inventory was re-executed after this rebase; earlier counts remain historical,
+and exact-head CI is still required.
