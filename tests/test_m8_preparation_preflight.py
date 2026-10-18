@@ -6,6 +6,7 @@ import hashlib
 import json
 import subprocess
 import sysconfig
+from pathlib import PurePosixPath
 
 import pytest
 from scripts import m8_procedure_package as package
@@ -76,8 +77,11 @@ async def test_preparation_bundle_is_genuine_and_consumer_damage_is_not_a_digest
             assert hashlib.sha256(raw).hexdigest() == SOURCE_HASHES[name]
 
 
-def test_actual_q13_seam_mapping_retains_producer_and_checker_fences(tmp_path):
-    launch, session = tmp_path / "launch", tmp_path / "session"
+@pytest.mark.parametrize("layout", ["native", "linux-prefix"])
+def test_actual_q13_seam_mapping_retains_producer_and_checker_fences(tmp_path, layout):
+    launch = (PurePosixPath("/var/lib/constructicon-m8-launch/synthetic-root/isolated-launch")
+              if layout == "linux-prefix" else tmp_path / "launch")
+    session = tmp_path / "session"
     bundle = tmp_path / "source.bundle"
     bundle.write_bytes(b"synthetic mapping input, not an execution bundle\n")
     out = seam.packaged_steps(tmp_path, launch, session, bundle, "a" * 40, "b" * 64)
@@ -90,6 +94,10 @@ def test_actual_q13_seam_mapping_retains_producer_and_checker_fences(tmp_path):
     ):
         script = out / (name + ".sh")
         body = script.read_bytes().decode()
+        assert next(line for line in body.splitlines() if line.startswith("R=")) == (
+            "R=" + str(launch / "operator-stores"))
+        assert next(line for line in body.splitlines() if line.startswith("L=")) == (
+            "L=" + str(launch))
         selected = package.fences(package.section(frozen, heading))[fence][1].replace(
             'sys.path.insert(0, "/opt/constructicon-m8-controller")', bootstrap)
         assert body.count(selected) == 1

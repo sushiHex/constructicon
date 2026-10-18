@@ -182,12 +182,15 @@ def packaged_steps(directory: Path, launch: Path, session: Path, bundle: Path,
         "$HOME/maintenance-q13-drift-c8-preflight": str(directory / "drift-c8"),
         "/usr/local/bin/m8-host-drift": str(drift),
     }
+    # Match only authored tokens, longest first. A Linux fixture path itself
+    # contains the original launch prefix; never rewrite inserted values again.
+    authored = re.compile("|".join(re.escape(token) for token in
+                                   sorted(substitutions, key=len, reverse=True)))
     for name in STEPS:
         for suffix in (".sh", ".expected.json"):
             path = out / (name + suffix)
             text = path.read_bytes().decode()
-            for original, replacement in substitutions.items():
-                text = text.replace(original, replacement)
+            text = authored.sub(lambda match: substitutions[match[0]], text)
             path.write_bytes(text.encode())
     return out
 

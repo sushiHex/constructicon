@@ -6764,3 +6764,14 @@ host output. These remain proposed inputs until owner approval. No current host
 query or tool invocation was performed. G1 would check the installed digest
 before execution; a mismatch would refuse rather than adopt new bytes. This can
 avoid a separate measurement bootstrap, not the independent approval or exact go.
+
+The next Linux run at `c063ae8` progressed to C7 but failed its success-tuple
+assertion after the same 15 prior cases passed. A portable reproduction then
+found a second introduced fixture defect: sequential path substitutions rewrote
+an already-inserted store path when the Linux fixture lived beneath the original
+launch prefix. Windows temporary paths did not expose that overlap. The fixture
+now substitutes authored tokens in one non-recursive pass, with exact-path
+coverage for both layouts. This is a demonstrated defect, not proof that it was
+the only cause of that run's refusal. Shared helper assertions are now registered
+for pytest rewriting so another failure retains the compared values rather than
+only a bare assertion location. A fresh physical run remains required.
