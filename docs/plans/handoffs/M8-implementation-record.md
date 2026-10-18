@@ -6819,3 +6819,16 @@ acceptance and both refusal cases preserve the complete original output and
 status. That test first reproduced a missing helper import, corrected only in
 the fixture bootstrap. An oversized diagnostic remains unavailable without
 replacing the original step observation or its refusal.
+
+At `37e083a`, foundation artifact `12138076840` identifies the refusal: the
+preview has the service's UID, one link and successful CLI/saver statuses, but
+mode `0664`. The frozen checker's first exception is its private-mode assertion.
+The emitted saver still contains its original `umask 077`; no cause is inferred
+from that contradiction. A separate early probe exercises that exact saver on
+synthetic input and records bounded file/ACL observations before requiring
+private mode, ahead of the qualification hold. The same saver runs under a
+second disposable `/tmp` parent to distinguish directory-specific inputs.
+It changes no permission or ACL to hide a failure. Fable's source review also
+clarified that C7 checks content, not its saved file's mode; C7's pass never
+established `0600`. Default ACL inheritance remains a hypothesis until observed.
+This is a diagnostic, not yet a successful C8 composition.

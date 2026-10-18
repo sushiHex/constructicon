@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import fnmatch
 import hashlib
 import json
@@ -11,7 +12,9 @@ import shlex
 import subprocess
 import sys
 import sysconfig
-from pathlib import PurePosixPath
+from contextlib import nullcontext
+from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 
 import pytest
 from scripts import m8_procedure_package as package
@@ -22,6 +25,128 @@ from constructicon.substrate.executors.egress import MAX_SOCKET_PATH_BYTES, SOCK
 from tests import preparation_preflight as seam
 from tests.git_bash import git_bash
 from tests.preparation_preflight import source_bundle
+
+
+def test_exact_packaged_saver_executes_and_refuses_an_existing_destination(tmp_path):
+    script = seam.saver_script()
+    service, = re.findall(r"^SERVICE=.*$", script, re.M)
+    assert service == (
+        "SERVICE=(sudo -n -u m8-service /usr/bin/env -i PATH=/usr/bin:/bin "
+        "HOME=/home/m8-service LANG=C.UTF-8)")
+    assert "umask 077; cat" in script
+    # Only the OS user-transport primitive is replaced, never the saver body.
+    script = script.replace(service, "SERVICE=()")
+    path = tmp_path / "probe.json"
+    command = [git_bash(), "-c", script, "portable-saver", path.as_posix()]
+    first = subprocess.run(command, input=b"synthetic-first\n", capture_output=True,
+                           timeout=15, check=False)
+    assert (first.returncode, first.stdout, first.stderr) == (0, b"", b"")
+    assert path.read_bytes() == b"synthetic-first\n"
+    second = subprocess.run(command, input=b"synthetic-second\n", capture_output=True,
+                            timeout=15, check=False)
+    assert second.returncode != 0 and second.stdout == b"" and second.stderr
+    assert path.read_bytes() == b"synthetic-first\n"
+    # Git Bash on Windows does not establish native Linux ACL/mode semantics.
+    if os.name != "nt":
+        assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_saver_observation_bounds_acl_bytes_and_records_explicit_absence(tmp_path, monkeypatch):
+    destination = tmp_path / "probe.json"
+    destination.write_bytes(b"synthetic")
+    calls = []
+
+    def getxattr(path, name):
+        calls.append((path, name))
+        if name == "system.posix_acl_access":
+            raise OSError(errno.ENODATA, "synthetic absent ACL")
+        return b"a" * 1025
+
+    monkeypatch.setattr(os, "getxattr", getxattr, raising=False)
+    ran = subprocess.CompletedProcess([], 1, b"o" * 1025, b"synthetic refusal\n")
+    record = seam.saver_observation(tmp_path, tmp_path.parent, destination, ran)
+    assert record["meaning"] == "synthetic saver observation, not qualification evidence"
+    assert record["returncode"] == 1
+    assert record["metadata"] == {"uid": destination.stat().st_uid,
+        "mode": destination.stat().st_mode & 0o7777, "nlink": 1, "regular": True}
+    assert record["streams"] == {
+        "stdout": {"bytes": 1025, "tail_hex": (b"o" * 1024).hex()},
+        "stderr": {"bytes": 18, "tail_hex": b"synthetic refusal\n".hex()}}
+    for field in ("parent_default_acl", "home_default_acl"):
+        assert record[field] == {"bytes": 1025, "hex": (b"a" * 1024).hex(), "complete": False}
+    assert record["file_access_acl"] == {"errno": errno.ENODATA}
+    assert calls == [(tmp_path, "system.posix_acl_default"),
+                     (tmp_path.parent, "system.posix_acl_default"),
+                     (destination, "system.posix_acl_access")]
+
+
+@pytest.mark.parametrize("modes", [(0o600, 0o600), (0o664, 0o600),
+                                  (0o600, 0o664), (0o664, 0o664)])
+def test_saver_probe_publishes_observed_mode_before_asserting_private_file(
+    tmp_path, monkeypatch, modes,
+):
+    from tests.substrate import test_native_codex_mediation as evidence
+    from tests.substrate import test_operator_store_maintenance_restart as isolated
+
+    monkeypatch.setattr(isolated, "service", lambda: (1002, 1002))
+    comparison = tmp_path / "independent"
+    comparison.mkdir()
+
+    def temporary(**kwargs):
+        assert kwargs == {"prefix": "pf-saver-", "dir": "/tmp"}
+        return nullcontext(comparison)
+
+    monkeypatch.setattr(seam.tempfile, "TemporaryDirectory", temporary)
+    monkeypatch.setattr(seam.os, "chown", lambda *args: None, raising=False)
+    records = [{"metadata": {"uid": 1002, "mode": mode, "nlink": 1, "regular": True}}
+               for mode in modes]
+    calls, entered = [], []
+
+    def run(command, **options):
+        assert command[2] == seam.saver_script()
+        assert options["input"] == b'{"synthetic_saver_probe": true}\n'
+        destination = Path(command[-1])
+        entered.append(destination.parent)
+        destination.write_bytes(options["input"])
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    def publish(*args):
+        # Both subprocesses and observations exist even if the first mode refuses.
+        assert entered == [tmp_path, comparison]
+        calls.append(args)
+
+    monkeypatch.setattr(seam.subprocess, "run", run)
+    monkeypatch.setattr(seam, "saver_observation", lambda parent, *args:
+                        records[0 if parent == tmp_path else 1])
+    monkeypatch.setattr(evidence, "write_evidence", publish)
+    if modes == (0o600, 0o600):
+        seam.check_saver(tmp_path)
+    else:
+        with pytest.raises(AssertionError):
+            seam.check_saver(tmp_path)
+    assert calls == [("n3c-q13-saver-probe.json",
+                      {"results": {"service_home": records[0], "tmp": records[1]}})]
+
+
+def test_saver_probe_refusal_precedes_any_costly_qualification(tmp_path, monkeypatch):
+    from tests.substrate import test_operator_store_maintenance_restart as isolated
+
+    calls = []
+    monkeypatch.setattr(seam.tempfile, "TemporaryDirectory", lambda **kwargs: nullcontext(tmp_path))
+    monkeypatch.setattr(seam.os, "chown", lambda *args: None, raising=False)
+    monkeypatch.setattr(isolated, "service", lambda: (1002, 1002))
+    monkeypatch.setattr(seam, "AcquisitionPaths", lambda *args: SimpleNamespace(payload=tmp_path))
+    monkeypatch.setattr(seam, "MAX_SOCKET_PATH_BYTES", 10000)
+
+    def refuse(parent):
+        calls.append(("probe", parent))
+        raise AssertionError("synthetic saver mode refused")
+
+    monkeypatch.setattr(seam, "check_saver", refuse)
+    monkeypatch.setattr(seam, "_exercise_seam", lambda *args: calls.append(("qualification",)))
+    with pytest.raises(AssertionError, match="synthetic saver mode refused"):
+        seam.exercise_seam(tmp_path, tmp_path, tmp_path, tmp_path)
+    assert calls == [("probe", tmp_path)]
 
 
 def test_step_observation_retains_bounded_bytes_without_claiming_a_verdict(

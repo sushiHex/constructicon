@@ -15,6 +15,7 @@ import re
 import shlex
 import shutil
 import stat
+import subprocess
 import sys
 import sysconfig
 import tempfile
@@ -336,6 +337,72 @@ asyncio.run(main())
     assert ran.stdout.decode().strip() != base
 
 
+def saver_script():
+    """Extract, rather than reimplement, the actual packaged saver and transport."""
+    step, = (step for step in package.assemble(DOCUMENT, template=True)
+             if step.name == STEPS[1])
+    service, = re.findall(r"^SERVICE=.*$", step.text, re.M)
+    saver, = re.findall(r"^save_sealed\(\) \{\n.*?^\}", step.text, re.M | re.S)
+    assert "umask 077; cat" in saver
+    return "set -Eeuo pipefail\n" + service + "\n" + saver + '\nsave_sealed "$1"\n'
+
+
+def saver_observation(parent, home, destination, ran):
+    """Bounded synthetic filesystem inputs; absence is an explicit errno, not OK."""
+    def acl(path, name):
+        try:
+            raw = os.getxattr(path, name)
+        except AttributeError:
+            return {"unsupported": True}
+        except OSError as error:
+            return {"errno": error.errno}
+        return {"bytes": len(raw), "hex": raw[:1024].hex(), "complete": len(raw) <= 1024}
+
+    try:
+        info = destination.lstat()
+        metadata = {"uid": info.st_uid, "mode": stat.S_IMODE(info.st_mode),
+                    "nlink": info.st_nlink, "regular": stat.S_ISREG(info.st_mode)}
+    except OSError as error:
+        metadata = {"errno": error.errno}
+    return {
+        "meaning": "synthetic saver observation, not qualification evidence",
+        "returncode": ran.returncode,
+        "streams": {key: {"bytes": len(raw), "tail_hex": raw[-1024:].hex()}
+                    for key, raw in (("stdout", ran.stdout), ("stderr", ran.stderr))},
+        "metadata": metadata,
+        "parent_default_acl": acl(parent, "system.posix_acl_default"),
+        "home_default_acl": acl(home, "system.posix_acl_default"),
+        "file_access_acl": acl(destination, "system.posix_acl_access"),
+    }
+
+
+def check_saver(parent):
+    """Fail before the held qualification if the real private-file saver differs."""
+    from tests.git_bash import git_bash
+    from tests.substrate.test_native_codex_mediation import write_evidence
+    from tests.substrate.test_operator_store_maintenance_restart import service
+
+    raw = b'{"synthetic_saver_probe": true}\n'
+    with tempfile.TemporaryDirectory(prefix="pf-saver-", dir="/tmp") as name:
+        comparison = Path(name)
+        os.chown(comparison, *service())
+        observations, completed = {}, []
+        for label, directory in (("service_home", parent), ("tmp", comparison)):
+            destination = directory / "saver-probe.json"
+            ran = subprocess.run(
+                [git_bash(), "-c", saver_script(), "saver-probe", str(destination)],
+                input=raw, capture_output=True, timeout=15, check=False)
+            observations[label] = saver_observation(
+                directory, Path("/home/m8-service"), destination, ran)
+            completed.append((ran, destination, observations[label]))
+        write_evidence("n3c-q13-saver-probe.json", {"results": observations})
+        for ran, destination, record in completed:
+            assert (ran.returncode, ran.stdout, ran.stderr) == (0, b"", b"")
+            assert record["metadata"] == {"uid": service()[0], "mode": 0o600,
+                                          "nlink": 1, "regular": True}
+            assert destination.read_bytes() == raw
+
+
 def exercise_seam(root: Path, launch: Path, foundation: Path, parent: Path):
     """Own one short canonical state parent until every scenario command joins.
 
@@ -351,6 +418,7 @@ def exercise_seam(root: Path, launch: Path, foundation: Path, parent: Path):
         os.chown(state_parent, *service())
         longest = AcquisitionPaths(state_parent / "4/acquisitions", "acq-" + "0" * 32)
         assert len(os.fsencode(longest.payload / SOCKET_NAME)) <= MAX_SOCKET_PATH_BYTES
+        check_saver(state_parent)
         return _exercise_seam(root, launch, foundation, parent, state_parent)
 
 
