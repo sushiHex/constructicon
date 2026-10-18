@@ -771,6 +771,12 @@ def isolated_startup_root(protected_root: Path, plan: str):
     uid, gid = service_root(root)
     first = publish(root, 1, runtime_uid=uid)  # synthetic seed, not live qualification
     activate_fixture(root, 1)
+    # Unlike the production metadata writer, the explicit seed helper creates
+    # its new selection in root's group. Seal this fixture input for the real
+    # service reader rather than hiding its permissions behind a root read.
+    selection = bundle_of(root) / "active.json"
+    os.chown(selection, 0, gid)
+    assert_sealed_metadata(selection, gid)
     isolated_read(root, first, "accepted")
     credential = bundle_of(root) / "store" / "auth.json"
     credential.write_bytes(b"harmless isolated fixture\n")

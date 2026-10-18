@@ -6543,3 +6543,17 @@ unverified on the local Windows workstation; platform skips are not physical
 evidence. Exact-head Linux execution and the repository gate remain PR evidence.
 No VM, host access, credentials, vendor request, model call or frozen-document
 change occurred in this preparation.
+
+At `8bfec61`, the first foundation run reached the existing N3c root step:
+13 existing tests passed, and both new cases errored at the initial fixture
+service read, before any new startup or peer execution. This is an introduced
+fixture defect. The explicit seed helper creates a new `active.json` in root's
+group and then sets `0440`; the existing earlier test reads that initial seed
+as root, while this proof deliberately reads it as the service. The new reader
+correctly refused the unreadable selection.
+
+The new fixture now seals that synthetic selection as root-owned, service-group
+`0440` and asserts those exact metadata facts before the initial service read.
+Production writers and readers are unchanged. Switching the reader to root was
+rejected because it would hide the missing fixture precondition. Corrected
+physical startup/publication results remain unverified until the new head runs.
