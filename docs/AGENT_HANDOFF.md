@@ -15,6 +15,56 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## Isolated startup/publication join — test structure and evidence boundary
+
+Under [#189](https://github.com/sushiHex/constructicon/issues/189), the existing
+disposable root/service test lane now contains a startup → checked emitted
+evidence → publish/activate → active-startup join over its own store. Its
+accepting case binds both descriptor revisions to the emitted record, checks a
+mismatching activation refusal and rejects the stale prior selection. Its normal
+refusal case asserts the unchanged descriptor bytes and retained withdrawal.
+
+The synthetic native peer and catalog are selected by one injection-root
+replacement; the original profiled bwrap, runtime, launcher methods, relay and
+store custody remain production code. Copying bwrap would lose its exact-path
+AppArmor attachment, so the test retains the original path. Four portable peer
+and constructor checks ran locally. At historical head `e0c10b1`, the foundation
+job in [run 39109423274](https://github.com/sushiHex/constructicon/actions/runs/39109423274/job/117622416069)
+passed all 15 maintenance/restart cases, including both new accepting/refusing
+cases. The preceding `8bfec61` run stopped those two cases before startup:
+the synthetic selection had root's group and was unreadable to the service.
+Sealing and asserting that fixture input's metadata corrected the precondition;
+production custody checks were retained. Windows skips remain skips.
+
+This establishes the exercised CLI/evidence/store seam on the disposable Linux
+runner, not a vendor observation, installed-controller claim, full C3/C4 or q13
+rehearsal, S6a concurrency proof or host authorization.
+Publication/activation trust the supplied digest; the preceding checker and
+composition own its content validation. No new crash or timeout-cleanup proof
+is claimed. The detailed limits are in the living M8 implementation record.
+
+## #230 — public-text backfill preserves coverage gaps
+
+[PR #234](https://github.com/sushiHex/constructicon/pull/234) merged as
+`146920d` on 2026-10-18 UTC. Manual `--all-history` removes reachable-history
+commit-date filters, pins listed heads and scans both endpoints of destructive
+updates selected by the activity window, including on retries. An unavailable
+prior head becomes a gap only after affirmative resolution checks; API 404 is
+not proof of permanent deletion. Every existing tag is an unconditional finding.
+
+A completed traversal with gaps reports incomplete coverage and exits nonzero.
+Only a clean completed manual scan offers its captured start as a cursor
+candidate; the scanner never writes that cursor. The connector reproduced an
+introduced census race where deletion/force-push history could disappear before
+listing. Rejecting only updates after the current start was insufficient because
+a retry could hide the same gap; scanning both endpoints closes that case.
+Final-head CI and all 50 scanner mutants passed for the merged slice.
+
+No real backfill, token issuance, tag ruleset, private-history deletion, host
+operation or model execution occurred. Activity visibility/latency and atomic
+snapshot consistency remain unproved; unresolved-gap disposition is a separate
+owner decision, not a coverage waiver.
+
 ## #229 — public text refuses every redirect
 
 [PR #231](https://github.com/sushiHex/constructicon/pull/231), 2026-10-17 UTC.
