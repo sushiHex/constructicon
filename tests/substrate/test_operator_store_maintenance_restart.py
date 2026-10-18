@@ -857,8 +857,10 @@ def isolated_checked_revision(mode: str, evidence: Path, expected: str,
         "maintenance" if mode in {"initial", "qualify", "hold"} else "active", expected,
         str(session / "startup-policy.json"), str(session), str(launch),
     ], as_service=True)
-    assert (checked.returncode, checked.stdout, checked.stderr) == (
-        0, (revision + "\n").encode(), b""), (
+    if (checked.returncode, checked.stdout, checked.stderr) != (
+        0, (revision + "\n").encode(), b""):
+        # Do not let pytest's rewritten comparison append unbounded streams.
+        raise AssertionError(
             "synthetic isolated evidence checker diagnostic: "
             + checked.stderr.decode("utf-8", errors="replace")[-4096:])
 
@@ -985,7 +987,7 @@ def test_actual_packaged_q13_preparation_preflight_over_isolated_production_topo
 
     root, launch, session, _seed = isolated_startup_root
     qualification = exercise_seam(root, launch, session, protected_root)
-    write_evidence("isolated-preparation-preflight.json", {
+    write_evidence("n3c-preparation-preflight.json", {
         "schema_version": 1, "synthetic_peer": True, "genuine_held_startup_seconds": 90,
         "qualification_evidence_digest": qualification,
         "actual_q13_c7_c8_packaged": True, "source_pin_and_preview_checked": True,

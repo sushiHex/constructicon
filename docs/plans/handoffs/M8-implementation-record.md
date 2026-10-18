@@ -6775,3 +6775,20 @@ coverage for both layouts. This is a demonstrated defect, not proof that it was
 the only cause of that run's refusal. Shared helper assertions are now registered
 for pytest rewriting so another failure retains the compared values rather than
 only a bare assertion location. A fresh physical run remains required.
+
+At `6821276`, C7 still refused; the rewritten assertion exposed a child import
+failure ending in `pydantic_core`, though pytest truncated the full tuple.
+Inspection established another fixture bootstrap mismatch: five service-side
+inline controller checks retained the system interpreter while loading the test
+environment's Python 3.11 dependencies. They now use that environment's
+interpreter too; stdlib-only checks and the contained runtime are unchanged.
+Portable assertions cover interpreter selection in the actual package. Bounded
+per-step synthetic observations are retained before verdict assertions, under
+the existing artifact glob; they explicitly do not claim a passed verdict.
+This corrects the diagnostic boundary instead of adding another message at one
+failure site. Physical execution is still required to establish the composition.
+The same head's full suite also caught pytest appending raw comparison values
+to the earlier bounded checker diagnostic. That failure now raises explicitly
+after the unchanged whole-tuple check, so assertion rewriting cannot bypass the
+diagnostic bound. Verification includes collecting the physical module alongside
+the portable test, which reproduces the full suite's rewriting behavior.

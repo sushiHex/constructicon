@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import json
+import re
+import shlex
 import subprocess
+import sys
 import sysconfig
 from pathlib import PurePosixPath
 
@@ -15,6 +19,25 @@ from constructicon.api._maintenance_source import SOURCE_FILES, SOURCE_HASHES, g
 from tests import preparation_preflight as seam
 from tests.git_bash import git_bash
 from tests.preparation_preflight import source_bundle
+
+
+def test_step_observation_retains_bounded_bytes_without_claiming_a_verdict(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setenv("M8_EVIDENCE_DIRECTORY", str(tmp_path))
+    stdout = b"discarded prefix" + bytes(range(256)) * 40
+    stderr = b"synthetic child refusal\n"
+    seam.observe_step("accept", seam.STEPS[0], {"returncode": 1}, stdout, stderr)
+    record = json.loads((tmp_path / f"n3c-q13-accept-{seam.STEPS[0]}.json").read_bytes())
+    assert record == {
+        "schema_version": 1, "synthetic_fixture": True,
+        "meaning": "step observation, not a passed verdict",
+        "scenario": "accept", "step": seam.STEPS[0], "status": {"returncode": 1},
+        "streams": {
+            "stdout": {"bytes": len(stdout), "tail_hex": stdout[-8192:].hex()},
+            "stderr": {"bytes": len(stderr), "tail_hex": stderr.hex()},
+        },
+    }
 
 
 @pytest.mark.parametrize(("mode", "custody"), [
@@ -98,8 +121,13 @@ def test_actual_q13_seam_mapping_retains_producer_and_checker_fences(tmp_path, l
             "R=" + str(launch / "operator-stores"))
         assert next(line for line in body.splitlines() if line.startswith("L=")) == (
             "L=" + str(launch))
+        controller_python = '"${SERVICE[@]}" ' + shlex.quote(sys.executable) + ' -I -S -B -c'
+        assert '"${SERVICE[@]}" /usr/bin/python3 -I -S -B -c' not in body
+        assert controller_python in body
+        assert '/usr/bin/python3 -I -S -B - "$DRIFT_CAPTURE"' in body
         selected = package.fences(package.section(frozen, heading))[fence][1].replace(
-            'sys.path.insert(0, "/opt/constructicon-m8-controller")', bootstrap)
+            'sys.path.insert(0, "/opt/constructicon-m8-controller")', bootstrap).replace(
+            '"${SERVICE[@]}" /usr/bin/python3 -I -S -B -c', controller_python)
         assert body.count(selected) == 1
         assert body.count('binding_check "$W/g11.sealed.json" accepted -') == 1
         assert body.count('check_sealed "$W/g11.sealed.json" "$Q"') == 1
@@ -109,3 +137,17 @@ def test_actual_q13_seam_mapping_retains_producer_and_checker_fences(tmp_path, l
         ran = subprocess.run([git_bash(), "-n", str(script)], stdin=subprocess.DEVNULL,
                              capture_output=True, timeout=10, check=False)
         assert (ran.returncode, ran.stdout, ran.stderr) == (0, b"", b"")
+
+
+def test_seam_completion_evidence_matches_the_existing_ci_upload_globs(tmp_path, monkeypatch):
+    from tests.substrate import test_operator_store_maintenance_restart as isolated
+
+    published = []
+    monkeypatch.setattr(seam, "exercise_seam", lambda *args: "synthetic-qualification")
+    monkeypatch.setattr(isolated, "write_evidence", lambda name, value: published.append(name))
+    isolated.test_actual_packaged_q13_preparation_preflight_over_isolated_production_topology(
+        (tmp_path, tmp_path / "launch", tmp_path / "session", None), tmp_path)
+    assert published == ["n3c-preparation-preflight.json"]
+    workflow = (seam.ROOT / ".github/workflows/m8-containment.yml").read_bytes().decode()
+    globs = re.findall(r"\$\{\{ env.M8_EVIDENCE \}\}/([^\s]+)", workflow)
+    assert any(fnmatch.fnmatchcase(published[0], pattern) for pattern in globs)

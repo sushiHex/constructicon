@@ -135,7 +135,9 @@ def packaged_steps(directory: Path, launch: Path, session: Path, bundle: Path,
 
     No fence is removed/reordered, binding checker bypassed, or CLI replaced.
     Unselected deferred steps get explicitly synthetic values and never execute.
-    Inline checkers load this checkout, not an installed controller. The same
+    Inline controller checkers use this venv and checkout together, not system
+    Python with incompatible compiled venv packages or an installed controller.
+    Stdlib-only G1 and the actual contained runtime remain unchanged. The same
     injection-root launcher substitution as #236 also serves maintenance_entry.
     """
     from tests.substrate.test_operator_store_maintenance_restart import KEY, isolated_module
@@ -165,6 +167,8 @@ def packaged_steps(directory: Path, launch: Path, session: Path, bundle: Path,
         "        observed.write((sys.argv[1] + '\\n').encode())\n")
     substitutions = {
         old_python: "PY=(" + shlex.join(command) + ")",
+        '"${SERVICE[@]}" /usr/bin/python3 -I -S -B -c':
+            '"${SERVICE[@]}" ' + shlex.quote(command[0]) + ' -I -S -B -c',
         'sys.path.insert(0, "/opt/constructicon-m8-controller")':
             "sys.path[:0] = " + json.dumps([str(ROOT / "src"), sysconfig.get_paths()["purelib"]]),
         "/var/lib/constructicon-m8-launch/operator-stores": str(launch / "operator-stores"),
@@ -198,6 +202,19 @@ def packaged_steps(directory: Path, launch: Path, session: Path, bundle: Path,
 def _inventory(root):
     return {str(path.relative_to(root)): path.read_bytes()
             for path in root.rglob("*") if path.is_file()}
+
+
+def observe_step(fault, name, status, stdout, stderr):
+    """Retain bounded synthetic observations before any verdict assertion."""
+    from tests.substrate.test_native_codex_mediation import write_evidence
+
+    write_evidence(f"n3c-q13-{fault}-{name}.json", {
+        "schema_version": 1, "synthetic_fixture": True,
+        "meaning": "step observation, not a passed verdict",
+        "scenario": fault, "step": name, "status": status,
+        "streams": {key: {"bytes": len(raw), "tail_hex": raw[-8192:].hex()}
+                    for key, raw in (("stdout", stdout), ("stderr", stderr))},
+    })
 
 
 def _drift_source(application, base):
@@ -274,6 +291,7 @@ def exercise_seam(root: Path, launch: Path, foundation: Path, parent: Path):
             stdout = (capture / "step.stdout").read_bytes()
             stderr = (capture / "step.stderr").read_bytes()
             status = json.loads((capture / "step.status.json").read_bytes())
+            observe_step(fault, name, status, stdout, stderr)
             application = directory / "application"
             state = directory / "state"
             if name == STEPS[0]:
