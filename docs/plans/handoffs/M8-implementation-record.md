@@ -6581,3 +6581,45 @@ separate unmerged guard slice. Only documentation and archive reconciliation
 followed the rebase; fresh exact-head CI is still required. This does not expand
 the synthetic-peer proof into vendor qualification, installed-controller state,
 a full C3/C4, q13, T5 or S6a rehearsal, or new crash/timeout-cleanup evidence.
+
+### Private drift output boundary preparation (Refs #226, #189)
+
+The [private output guard](M8-private-output-guard.md) adds one exact reviewed
+fence for successor compositions. It captures the host tool's stdout, stderr
+and numeric status privately, requires the supplied installed-tool digest,
+status zero, empty stderr and complete expected stdout before printing the
+repository-owned `drift-checked`. Its explicit shell exit stops the entire step
+on mismatch, including when Bash's conditional context disables errexit.
+Capture destinations are exclusive and validation retains the capture file
+descriptors. `launch_requested` records the affirmative request; a launch
+exception retains an unknown return code and makes no claim that no process ran.
+
+The packager fills `DRIFT_STDOUT_HEX` and `DRIFT_TOOL_SHA256` from private
+`--values` input as read-only shell variables. The decoded expectation is one
+nonempty printable UTF-8 line, final LF included, at most 4,096 bytes; hex keeps
+shell metacharacters inert. Every direct tool mention in a successor must be
+inside the exact reviewed fence, after shell normalization. Counts are not
+authority. Only the exact frozen q12 document retains its historical assembly
+contract; a one-byte change removes that exemption, and all source pins are
+still checked. This compatibility does not authorize executing q12.
+
+The portable guard suite ran on Windows: 71 passed, with one symlink-creation
+case skipped for platform privilege. Synthetic host-tool bytes are explicitly
+labelled and paired with different plausible output that refuses. Accepting
+steps assert the built declared output and whole actual stdout/stderr. Executed
+cases cover the conditional branch, a condition disabling errexit, two diagnosis
+calls including a second-call mismatch, unexpected stderr, nonzero status,
+missing LF, extra lines, occupied captures, digest mismatch and launch failure.
+The six executable fence fault cases fail outcome or evidence assertions when
+their corresponding guards are removed. All 33 packager inventory mutants were
+assertion-killed, including six new source mutations; inventory target and test
+collection checks passed. Full verification and final-head CI remain PR evidence.
+
+No actual host expectation, installed-tool digest or approved private evidence
+reference is supplied. The digest is checked by reading a path that subprocess
+later reopens; preventing intervening replacement still requires trusted host
+custody. Capture is unbounded on disk before comparison and has no timeout.
+The complete q13 composition, its rehearsal and its separate execution gate
+remain outside this slice. The wider frozen-runbook and stock-utility audit in
+#189 is not completed by these selected successor checks. No VM, credential,
+vendor binary, model call, qualification or application attempt occurred.
