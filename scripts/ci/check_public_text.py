@@ -12,13 +12,18 @@ Run by ``.github/workflows/public-text.yml`` from the default branch only:
   diff. It also covers text that no event reaches, such as reviews and
   anything posted with ``GITHUB_TOKEN``. A delayed or dropped schedule widens
   the next window; it never skips one.
-- ``sweep --since TIME`` is a manual backfill from an ISO time, run locally with
-  a personal token; the workflow never passes it.
+- ``sweep --since TIME --all-history`` is a manual backfill, run locally with
+  a personal token; it reads all reachable branch and tag history without a
+  commit-date filter, plus both endpoints of destructive branch updates
+  selected by TIME. TIME still selects activity and non-Git text. Without
+  ``--all-history``, ``--since`` selects the normal sweep's time window.
 
 The cursor is the later of the last successful scheduled sweep's start and the
 ``PUBLIC_TEXT_SWEPT_THROUGH`` repository variable, which the owner sets to the
-start time of a successful manual backfill. With neither, the sweep fails: it
-never invents a window. ``GITHUB_TOKEN`` allows 1,000 requests per hour per
+start time of a successful manual backfill. A clean, completed manual scan
+with ``--all-history`` prints that start as a candidate; it never writes the variable. Findings,
+coverage gaps, errors and cancellation never produce a candidate. With neither,
+the sweep fails: it never invents a window. ``GITHUB_TOKEN`` allows 1,000 requests per hour per
 repository, so each commit is fetched once per sweep and every API-backed run
 prints its request count. A backlog too large for one hour fails every run
 until a manual backfill moves the variable.
@@ -45,12 +50,25 @@ the ref's heads before and after; each update since the cursor is compared, so
 an old-dated commit pushed late is scanned. A new branch is compared with the
 default branch, whose own history earlier sweeps covered; the creation of the
 default branch itself scans its whole history. A previous head that can no
-longer be compared fails the run. Commits dated in the window are still listed
+longer be compared is reported as a coverage gap when the API confirms an
+unavailable force-push prior head and a readable current head. A 404 establishes
+only unavailability through this authenticated API, not permanent deletion;
+token visibility and retention can affect it. Its readable history
+and later updates are still scanned. A gap makes the run non-successful and
+never advances the cursor; it is not a claim of coverage. Other comparison
+errors fail the traversal. In all-history mode, deletions and force pushes
+instead resolve the prior SHA and scan its complete history plus the nonzero
+after-head history directly. A prior lookup's 404 is a gap even for a deletion;
+downstream listing and file errors remain incomplete traversals. A retry with
+the same TIME checks the same selected updates even when they predate the new
+run's start. Commits dated in the window are still listed
 on every branch, as a second source. The activity listing carries branches
 only, so tags are scanned in full on every sweep: each name, each annotated
 tag's own name, message and tagger, and every commit a tag reaches that the
-default branch does not. A tag naming anything but a commit fails the run. A
-pull request's commits are all scanned whenever it is updated. Commit comments
+default branch does not. Every existing tag is also an unconditional finding
+reported by digest, supporting the repository's tag restriction. A tag naming
+anything but a commit fails the run. A pull request's commits are all scanned
+whenever it is updated. Commit comments
 cannot be filtered by the API, so all of them are listed each sweep, within the
 page bound.
 
@@ -59,7 +77,11 @@ long it stays there. An update that appears only after the window's overlap has
 passed is caught by the date listing if its commits are dated in a window, and
 otherwise missed. Sweeps before #216 selected by date alone, so an old-dated
 commit pushed before the first ref-update sweep stays missed until a local
-``sweep --since`` backfill from the repository's creation covers it.
+``sweep --since TIME --all-history`` backfill covers reachable history regardless
+of commit dates. Unreachable objects absent from reported activity and deleted
+tags are not recovered by it; the tag ruleset is a separate owner action.
+Pinned branch heads and the activity pass are not a repository snapshot: an
+unreported destructive update can still escape the census and activity pass.
 """
 
 from __future__ import annotations
@@ -70,6 +92,7 @@ import os
 import re
 import signal
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterable, Iterator
@@ -96,6 +119,10 @@ class Incomplete(ValueError):
 
 class PatternsNotConfigured(Incomplete):
     """The secret is unset or empty."""
+
+
+class MissingPriorHead(Incomplete):
+    """A force-push comparison has a readable head and an unavailable prior head."""
 
 
 class Cancelled(BaseException):
@@ -345,17 +372,36 @@ def _sha(value: object) -> str:
     return value
 
 
-def compared(github: GitHub, base: str, head: str) -> Iterator[dict]:
+def compared(github: GitHub, base: str, head: str,
+             force_push: bool = False) -> Iterator[dict]:
     """Every commit reachable from ``head`` and not from ``base``, completely.
 
     The comparison pages its commits, each yielded as it is listed; the count
     the last page declares must then be met. A ``base`` the API cannot
     resolve, such as a force-pushed-away head that is no longer stored, is an
-    error, never an empty range."""
+    error, never an empty range. For a force push only, affirmative resolution
+    checks distinguish an unavailable prior head as ``MissingPriorHead``."""
     path = f"compare/{urllib.parse.quote(base)}...{urllib.parse.quote(head)}"
     count = 0
     for page in range(1, MAX_PAGES + 1):
-        detail = github.get(f"{path}?per_page=100&page={page}")
+        try:
+            detail = github.get(f"{path}?per_page=100&page={page}")
+        except urllib.error.HTTPError as error:
+            if error.code != 404 or not force_push:
+                raise
+            # A comparison's 404 does not establish which object is unavailable.
+            # Only this request, never a later file read, can become a gap.
+            current = github.get(f"commits/{head}")
+            if not isinstance(current, dict) or current.get("sha") != head:
+                raise Incomplete("a force-push current head is not resolved") from None
+            try:
+                github.get(f"commits/{base}")
+            except urllib.error.HTTPError as missing:
+                if missing.code != 404:
+                    raise
+            else:
+                raise error
+            raise MissingPriorHead from None
         listed = detail.get("commits") if isinstance(detail, dict) else None
         if not isinstance(listed, list):
             raise Incomplete("comparison commit listing is not complete")
@@ -370,14 +416,25 @@ def compared(github: GitHub, base: str, head: str) -> Iterator[dict]:
         raise Incomplete("comparison commit listing is not complete")
 
 
+def _history_gap(update: dict, before: str, after: str) -> Item:
+    activity_id = update.get("id")
+    if not ((type(activity_id) is int and activity_id >= 0)
+            or (isinstance(activity_id, str) and 0 < len(activity_id) <= 128)):
+        raise Incomplete("a history gap has no bounded activity identity")
+    ident = f"{_digest(str(activity_id))}:{before[:12]}:{after[:12]}"
+    return "history gap", ident, ""
+
+
 def pushed(github: GitHub, since_time: datetime, now: datetime, default: str,
-           seen: set[str]) -> Iterator[Item]:
+           seen: set[str], all_history: bool = False) -> Iterator[Item]:
     """Every commit a branch update exposed since ``since_time``, by ref update.
 
     Each update's heads are compared, whatever its commits' dates: an
     old-dated commit pushed late is in its push's range. A created branch is
     compared with the default branch; the default branch's own creation scans
-    its whole history. A deletion exposes nothing new, but its name was public.
+    its whole history. All-history backfills scan both endpoints of destructive
+    updates selected by the window, including on retries: the branch census may
+    have happened after history disappeared. Other sweeps scan a deletion's name.
     """
     elapsed = now - since_time
     period = next((name for name, span in ACTIVITY_PERIODS if elapsed <= span), None)
@@ -389,27 +446,53 @@ def pushed(github: GitHub, since_time: datetime, now: datetime, default: str,
         branch = ref.removeprefix("refs/heads/")
         yield ("branch name" if branch != ref else "ref name"), _digest(branch), branch
         after = _sha(update.get("after"))
+        if all_history and (after == NO_COMMIT or update.get("activity_type") == "force_push"):
+            before = _sha(update.get("before"))
+            if before == NO_COMMIT:
+                raise Incomplete("a destructive ref update has no prior head")
+            try:
+                prior = github.get(f"commits/{before}")
+            except urllib.error.HTTPError as error:
+                if error.code != 404:
+                    raise
+                yield _history_gap(update, before, after)
+            else:
+                if not isinstance(prior, dict) or prior.get("sha") != before:
+                    raise Incomplete("a destructive ref update prior head is not resolved")
+                yield from _unseen(github, github.pages(f"commits?sha={before}"), "branch", seen)
+            if after != NO_COMMIT:
+                yield from _unseen(github, github.pages(f"commits?sha={after}"), "branch", seen)
+            continue
         if after == NO_COMMIT:
             continue
         before = _sha(update.get("before"))
         if before != NO_COMMIT:
-            commits = compared(github, before, after)
+            commits = compared(github, before, after,
+                               force_push=update.get("activity_type") == "force_push")
         elif branch == default:
             commits = github.pages(f"commits?sha={after}")
         else:
             commits = compared(github, default, after)
-        yield from _unseen(github, commits, "branch", seen)
+        try:
+            yield from _unseen(github, commits, "branch", seen)
+        except MissingPriorHead:
+            yield _history_gap(update, before, after)
+            # Salvage all readable history, without pretending it covers the
+            # unavailable side of the force push. Later updates still run.
+            yield from _unseen(github, github.pages(f"commits?sha={after}"), "branch", seen)
 
 
-def tagged(github: GitHub, default: str, seen: set[str]) -> Iterator[Item]:
+def tagged(github: GitHub, default: str, seen: set[str],
+           all_history: bool = False) -> Iterator[Item]:
     """Every tag, in full: its name, each annotated tag's message and tagger,
     and every commit it reaches that the default branch does not.
 
-    Tags have no update record to select from, so every sweep reads all of
+    Tags have no update record to select from, so every sweep reports all of
     them. A tag that names anything but a commit, at the end of at most
     ``MAX_TAG_DEPTH`` annotated tags, fails the scan."""
     for tag in github.pages("tags"):
         name = str(tag.get("name", ""))
+        yield "existing tag", _digest(name), ""
         yield "tag name", _digest(name), name
         target = github.get(f"git/ref/tags/{urllib.parse.quote(name)}")
         named = (target.get("object") if isinstance(target, dict) else None) or {}
@@ -426,11 +509,14 @@ def tagged(github: GitHub, default: str, seen: set[str]) -> Iterator[Item]:
             named = annotated.get("object") or {}
         if named.get("type") != "commit":
             raise Incomplete("a tag names something other than a commit")
-        commits = compared(github, default, _sha(named.get("sha")))
+        head = _sha(named.get("sha"))
+        commits = (github.pages(f"commits?sha={head}") if all_history
+                   else compared(github, default, head))
         yield from _unseen(github, commits, "tag", seen)
 
 
-def sweep(github: GitHub, since_time: datetime, now: datetime | None = None) -> Iterator[Item]:
+def sweep(github: GitHub, since_time: datetime, now: datetime | None = None,
+          all_history: bool = False) -> Iterator[Item]:
     since = _stamp(since_time)
     now = datetime.now(UTC) if now is None else now
     seen: set[str] = set()
@@ -451,18 +537,21 @@ def sweep(github: GitHub, since_time: datetime, now: datetime | None = None) -> 
             # public, and squash or merge commits carry text written at merge
             # time. The name is public too; it is reported by a digest, never
             # spelled out. Commits dated in the window are a second source
-            # beside ref updates.
+            # beside ref updates. Manual all-history scans instead pin each
+            # listed head and remove that filter.
             raw_name = str(branch.get("name", ""))
             yield "branch name", _digest(raw_name), raw_name
-            name = urllib.parse.quote(raw_name, safe="")
-            yield from _unseen(github, github.pages(f"commits?sha={name}&since={since}"),
+            name = (_sha((branch.get("commit") or {}).get("sha")) if all_history
+                    else urllib.parse.quote(raw_name, safe=""))
+            query = f"commits?sha={name}" + ("" if all_history else f"&since={since}")
+            yield from _unseen(github, github.pages(query),
                                "branch", seen)
 
     def updates() -> Iterator[Item]:
-        yield from pushed(github, since_time, now, default(), seen)
+        yield from pushed(github, since_time, now, default(), seen, all_history)
 
     def tags() -> Iterator[Item]:
-        yield from tagged(github, default(), seen)
+        yield from tagged(github, default(), seen, all_history)
 
     def commit_comments() -> Iterator[Item]:
         for comment in github.pages("comments"):
@@ -514,7 +603,9 @@ def findings(items: Iterator[Item], compiled: list[re.Pattern[str]],
     as they are met, so a later failure does not hide what was already found."""
     found = [] if found is None else found
     for kind, ident, text in items:
-        if any(pattern.search(text) for pattern in compiled) and (kind, ident) not in found:
+        flagged = (kind in {"existing tag", "history gap"}
+                   or any(pattern.search(text) for pattern in compiled))
+        if flagged and (kind, ident) not in found:
             # Reported before it is recorded: a stop between the two loses only
             # the record, and a stopped run fails anyway.
             if report is not None:
@@ -525,7 +616,13 @@ def findings(items: Iterator[Item], compiled: list[re.Pattern[str]],
 
 def _report(kind: str, ident: str) -> None:
     # Flushed at once: a job killed after its cancellation grace keeps it.
-    print(f"::error::{kind} {ident} matches a private pattern", flush=True)
+    if kind == "history gap":
+        message = "prior head unavailable through authenticated API; coverage not established"
+    elif kind == "existing tag":
+        message = "tag exists; repository tag restriction requires review"
+    else:
+        message = "matches a private pattern"
+    print(f"::error::{kind} {ident} {message}", flush=True)
 
 
 def main(argv: list[str], opener: Callable = open_api) -> int:
@@ -537,6 +634,7 @@ def main(argv: list[str], opener: Callable = open_api) -> int:
     github: GitHub | None = None
     found: list[tuple[str, str]] = []
     complete = False
+    backfill_started: datetime | None = None
     previous: dict[int, object] = {}
     try:
         for name in ("SIGINT", "SIGTERM"):
@@ -545,19 +643,25 @@ def main(argv: list[str], opener: Callable = open_api) -> int:
         compiled = patterns(os.environ.get("PUBLIC_TEXT_PATTERNS", ""))
         repository = os.environ.get("GITHUB_REPOSITORY", "")
         token = os.environ.get("GITHUB_TOKEN", "")
-        if argv[1:] == ["sweep"] or (argv[1:3] == ["sweep", "--since"] and len(argv) == 4):
+        manual = (argv[1:3] == ["sweep", "--since"]
+                  and (len(argv) == 4 or (len(argv) == 5 and argv[4] == "--all-history")))
+        if argv[1:] == ["sweep"] or manual:
             github = GitHub(repository, token, opener)
-            if len(argv) == 4:
+            started = datetime.now(UTC)
+            if manual:
                 since = utc(argv[3])
+                if len(argv) == 5:
+                    backfill_started = started
             else:
                 since = cursor(github, os.environ.get("PUBLIC_TEXT_SWEPT_THROUGH", ""))
-            items = sweep(github, since)
+            items = sweep(github, since, started, all_history=len(argv) == 5)
         elif argv[1:2] == ["event"] and len(argv) == 3:
             payload = json.loads(Path(argv[2]).read_text(encoding="utf-8"))
             github = GitHub(repository, token, opener) if token else None
             items = event(payload, github)
         else:
-            raise Incomplete("usage: check_public_text.py event PATH | sweep [--since TIME]")
+            raise Incomplete("usage: check_public_text.py event PATH | sweep "
+                             "[--since TIME [--all-history]]")
         findings(items, compiled, found, _report)
         complete = True
     except BaseException as error:  # a cancellation too; the class, never the content
@@ -568,6 +672,11 @@ def main(argv: list[str], opener: Callable = open_api) -> int:
             signal.signal(number, signal.SIG_DFL if handler is None else handler)
     if github is not None:
         print(f"::notice::public text check made {github.requests} API requests", flush=True)
+    if complete and any(kind == "history gap" for kind, _ in found):
+        print("::notice::public text traversal-complete; coverage-incomplete", flush=True)
+    if complete and not found and backfill_started is not None:
+        print("::notice::manual backfill complete; PUBLIC_TEXT_SWEPT_THROUGH candidate "
+              + _stamp(backfill_started), flush=True)
     return 0 if complete and not found else 1
 
 

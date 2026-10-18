@@ -13,6 +13,63 @@ From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-
 and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
 subscription route; see the dated section at the end of this record.
 
+## 2026-10-18 — public-text history backfill preparation
+
+Refs #230 and the [post-q12 review](M8-post-q12-review.md). The manual
+`sweep --since TIME --all-history` mode removes commit-date filters from
+reachable branch and tag history, pins listed branch heads, and retains the
+existing page bounds and per-commit deduplication. TIME still selects activity
+and non-Git text. Ordinary scheduled scans retain their bounded time window.
+
+A force-push comparison returning 404 becomes an explicit history-gap finding
+only after the current head resolves and the prior head also returns 404.
+That means unavailable through this authenticated API, not permanently deleted;
+token visibility and object retention remain possible causes. Readable history,
+later updates and other surfaces are still scanned. Other errors remain
+incomplete traversals. Gap reports contain a digest of the bounded activity id
+and validated SHA prefixes; tag findings contain only a name digest. Every
+existing tag is an unconditional finding, even when no private pattern matches.
+
+A completed traversal containing gaps reports `traversal-complete` and
+`coverage-incomplete`, exits nonzero, and cannot advance the scheduled cursor.
+Only a clean completed manual all-history scan prints its captured run-start
+time as a `PUBLIC_TEXT_SWEPT_THROUGH` candidate. The scanner never writes that
+variable. Findings, gaps, errors and cancellation suppress the candidate.
+
+The credential-free focused suite exercises accepting history traversal and
+the refusal paths, including later-update salvage, distinct gap identities,
+fallback failure, unrelated 404 and permission errors, bounds, cancellation,
+and cursor suppression. Verification evidence is recorded with the final head.
+The matching mutation inventory retains its existing targets and adds guards
+for history scope, unconditional findings, gap classification and cursor safety.
+
+This slice performs no real backfill, token access, repository-setting change,
+tag restriction, VM operation or model execution. It cannot recover unreachable
+objects, deleted tags or text removed from edit history. An unresolved gap can
+prevent future successful cursor advancement; disposition requires the separate
+owner decision tracked by #233. No allowlist or coverage waiver is introduced.
+The tag ruleset and real backfill remain owner actions, so this is partial #230
+evidence rather than completion of that issue.
+
+The PR #234 connector review found an introduced race between captured run
+start and the branch census: a deletion or force push could hide old history
+while the scan still offered a clean cursor. Four credential-free regressions
+reproduced false success for both destructive updates, during the scan and on a
+later retry. All-history mode now scans both endpoints of every destructive
+update selected by TIME, directly rather than through a comparison. It first
+requires an exact, nonzero prior SHA; only that resolution request's 404 becomes
+a gap. Readable prior history and a nonzero after-head history are fully paged
+with the existing per-commit deduplication. A deletion has no after head.
+
+The alternative of rejecting only destructive updates after the current run's
+start was rejected: a retry could move the same unresolved update before its
+new start and falsely offer a cursor. Tests cover clean permitting paths,
+unavailable prior heads across retries, later-update salvage, invalid prior
+heads, permission errors, downstream listing/file errors and the page bound.
+Normal scheduled comparison behavior is retained. This closes the observed
+race, not the documented activity API visibility/latency limitation; pinned
+heads plus reported activity do not establish snapshot consistency.
+
 ## 2026-10-15 — installed capture diagnostics for the next maintenance session
 
 Refs #186. The existing bounded historical reader recognizes the five exact
