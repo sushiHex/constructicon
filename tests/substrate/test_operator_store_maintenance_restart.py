@@ -995,3 +995,22 @@ def test_actual_packaged_q13_preparation_preflight_over_isolated_production_topo
                             "diagnostic"],
         "immutable_activated_store": True, "application_attempted": False,
     })
+
+
+@pytest.mark.parametrize("plan", ["pro"])
+@pytest.mark.parametrize("isolated_startup_root", [True], indirect=True)
+@pytest.mark.parametrize("scenario", ["accept", "historical-seal", "wrong-floor"])
+def test_actual_packaged_q13_qualification_publication(
+    isolated_startup_root, protected_root, scenario,
+):
+    from tests.qualification_publication import exercise_seam
+
+    root, launch, _unused_session, _seed = isolated_startup_root
+    qualification = exercise_seam(root, launch, protected_root, scenario)
+    write_evidence(f"n3c-q13-c3c4-{scenario}.json", {
+        "schema_version": 1, "synthetic_fixture": True, "scenario": scenario,
+        "actual_q13_c3_c4_packaged": True,
+        "qualification_evidence_digest": qualification,
+        "genuine_held_startup_seconds": 0 if scenario == "historical-seal" else 90,
+        "historical_host_evidence": False, "application_attempted": False,
+    })

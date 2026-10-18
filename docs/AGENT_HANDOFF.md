@@ -15,6 +15,31 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## A former rehearsal exemption can stop applying
+
+The q12 C3/C4 rehearsal exemption cited the shared store and missing disposable
+published generation. Once the isolated store fixture existed, that reason no
+longer applied. The C7/C8 proof did not silently satisfy the separate whole-step
+qualification/publication obligation. The q13 follow-up keeps that distinction
+and tests the actual packaged C3/C4 sequence, not a replacement composition.
+
+Synthetic historical inputs, DNS and the native peer are named fixture
+boundaries. Generation, custody, emitted evidence, publication and activation
+remain the real laws. Observations recorded before assertions diagnose a failed
+test; only the completed accepting/refusing cohort establishes its verdict.
+Linux evidence remains required; portable checks and skipped physical cases
+are not substitutes.
+
+Test-only cleanup must not rewrite the packaged shell's failure behavior. An
+EXIT trap added inside the tested step was rejected on that basis. The fixture
+owns cleanup outside the command, without claiming broader process-tree or
+production crash guarantees.
+
+This closes a source-proof obligation only when the final-head physical gate
+passes. It does not approve private inputs, manufacture installed-state facts,
+or authorize the q13 session. Fresh custody/idle checks are first authorized
+session gates, not results that can be asserted in advance in a go package.
+
 ## CI evidence names must belong to the lane artifact
 
 Under [#239](https://github.com/sushiHex/constructicon/issues/239), the two
