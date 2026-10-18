@@ -30,6 +30,9 @@ from constructicon.substrate.effects.fake import FakeAnnounceEffect
 from constructicon.substrate.executors.fake import FakeExecutor
 from constructicon.substrate.journal.sqlite import SqliteJournal
 
+# Helper assertions must retain their evidence in the Linux proof lane too.
+pytest.register_assert_rewrite("tests.preparation_preflight")
+
 _ATTEMPT_EVENTS = frozenset({"RunStarted", "RunResumed", "RunReclaimed"})
 _TERMINAL_EVENTS = frozenset({"RunSucceeded", "RunFailed", "RunParked", "RunCancelled"})
 

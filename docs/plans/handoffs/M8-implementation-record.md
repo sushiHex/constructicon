@@ -6693,3 +6693,187 @@ The rebased scope/manifest/link checks and nine new descendant/drain cases passe
 69 tests, with 89 unrelated guard cases deselected. No full suite or mutation
 inventory was re-executed after this rebase; earlier counts remain historical,
 and exact-head CI is still required.
+
+## q13 preparation: packaged boundaries, not inferred host readiness (Refs #189, #226)
+
+The additive [q13 composition](M8-maintenance-q13-continuation.md) inventories
+all 19 steps and selects the exact G1 bytes at ten sites. Frozen predecessors,
+lane fences, T5 and G1 remain unchanged. The controller inputs have no diff
+between retained C `5793ef98` and preparation baseline `dc61d16`; the procedure
+retains verification, not replacement. Source equality is not installed-tree
+evidence. The [readiness boundary](M8-q13-readiness.md) keeps private measurement,
+independent approval and exact execution authority distinct from source tests.
+
+Actual assembly exposed a packager defect: supplying the private drift pair
+made deferred steps demand their not-yet-measured runtime values. Deferral now
+depends on remaining canonical placeholders after supplied values are filled,
+not on the absence of the entire values argument. Missing nondeferred values,
+alien placeholders, invalid values and reassignment still refuse. A completely
+filled deferred step is emitted. The real q13 package writes 16 step pairs with
+only the private pair, and all 19 with the three further synthetic runtime values
+in tests. Synthetic values never constitute an operator package.
+
+The new portable q13 suite passed 20 cases without skips. It exercises actual
+packaged preservation through T5 with real disposable files, including occupied,
+missing, hardlinked, oversized and diagnostic refusals; it exercises both H7/H8
+branches through T5 with the real lane CLI and labelled synthetic host/custody
+boundaries. A plausible different drift line refuses at G1. Successful paths
+assert complete stdout and empty stderr. Record grammar/component tests for
+other steps remain fragments, not assertions that their installed producers ran.
+The focused guard and packager suites passed locally: 227 passed, one Windows
+symlink-privilege skip. These are focused results, not the final repository gate.
+
+The C7/C8 proof uses an opt-in production store topology in the existing
+disposable root lane and one synthetic native injection point. It preserves
+actual packaged binding, qualification, source, saver, journal and provider
+checks. Its shared immutable foundation requires an actual 90-second synthetic
+held startup; editing a zero-second startup record to claim S6a was rejected.
+Five separate state trees cover acceptance, wrong consumer, source drift,
+qualification mismatch and an undeclared preparation diagnostic. Positive
+scenario/CLI inventories prevent an early stop from masquerading as all cases
+executed. Generation 2 is a synthetic store instance of the same law, not a claim
+about host generation 11. The physical proof requires the existing Linux root
+lane; Windows collection/skips cannot establish it. Exact-head CI evidence must
+be recorded before this proof is called executed.
+
+At initial PR head `4970c6e`, the existing Linux N3c step passed its prior
+15 cases but refused the new cohort before publication: the test helper mapped
+every mode except `initial` to active custody. The new held-maintenance record
+was therefore mislabeled by its caller; the frozen production checker correctly
+rejected it. The fixture correction follows the checker's whole mode class
+(`initial`, `qualify`, `hold` are maintenance; `active`, `refresh` are active),
+with portable argument coverage rather than weakening evidence checks. This
+initial run does not establish C7/C8 execution. Qualification and the package
+mutation job passed at that head; all 38 inventory entries were reported killed.
+
+Fable's design pass supports retaining C and separating capture from approval.
+Its proposed extra capture-only boot is not automatically exempt from the
+one-session budget. No private expectation or installed-tool digest was approved,
+no host queried or started, and no credential, model or vendor binary was used
+by these new helpers/tests. Existing credential-free CI binary lanes remain
+unchanged. This slice does not establish all-step live readiness or authorize
+q13, R6, replacement, retry or public-history deletion.
+
+Subsequent source recovery narrowed the measurement gap. A complete historical
+tool file was found in the other session's retained artifacts; both R2 source
+listings match it after CRLF-to-LF normalization, and a durable private copy now
+has the same digest. Its success line is a fixed literal, contrary to the design
+review's premise that baseline content was needed to determine those bytes.
+The readiness document records source and candidate-expectation digests, not raw
+host output. These remain proposed inputs until owner approval. No current host
+query or tool invocation was performed. G1 would check the installed digest
+before execution; a mismatch would refuse rather than adopt new bytes. This can
+avoid a separate measurement bootstrap, not the independent approval or exact go.
+
+The next Linux run at `c063ae8` progressed to C7 but failed its success-tuple
+assertion after the same 15 prior cases passed. A portable reproduction then
+found a second introduced fixture defect: sequential path substitutions rewrote
+an already-inserted store path when the Linux fixture lived beneath the original
+launch prefix. Windows temporary paths did not expose that overlap. The fixture
+now substitutes authored tokens in one non-recursive pass, with exact-path
+coverage for both layouts. This is a demonstrated defect, not proof that it was
+the only cause of that run's refusal. Shared helper assertions are now registered
+for pytest rewriting so another failure retains the compared values rather than
+only a bare assertion location. A fresh physical run remains required.
+
+At `6821276`, C7 still refused; the rewritten assertion exposed a child import
+failure ending in `pydantic_core`, though pytest truncated the full tuple.
+Inspection established another fixture bootstrap mismatch: five service-side
+inline controller checks retained the system interpreter while loading the test
+environment's Python 3.11 dependencies. They now use that environment's
+interpreter too; stdlib-only checks and the contained runtime are unchanged.
+Portable assertions cover interpreter selection in the actual package. Bounded
+per-step synthetic observations are retained before verdict assertions, under
+the existing artifact glob; they explicitly do not claim a passed verdict.
+This corrects the diagnostic boundary instead of adding another message at one
+failure site. Physical execution is still required to establish the composition.
+The same head's full suite also caught pytest appending raw comparison values
+to the earlier bounded checker diagnostic. That failure now raises explicitly
+after the unchanged whole-tuple check, so assertion rewriting cannot bypass the
+diagnostic bound. Verification includes collecting the physical module alongside
+the portable test, which reproduces the full suite's rewriting behavior.
+
+At `6da0be5`, the retained observation positively established C7's accepting
+path (status zero, expected 208-byte stdout, empty stderr); C8 then refused at
+`assembly`. The constructor's socket-path check was reproduced directly:
+the nested fixture state produces a 142-byte native egress socket path, exceeding
+107 bytes. No state child under that protected-root layout can meet the bound.
+The fixture therefore uses a separate, short, canonical disposable state root
+under the service home, with fresh per-scenario children and scoped cleanup.
+Store, launch, source and application paths remain unchanged. Constructor tests
+cover both long-path refusal and short-path acceptance, and actual-package tests
+check the selected state path's budget. This is fixture placement, not a relaxed
+production limit or a claim that C8 has passed. Existing isolated-startup
+artifact names omitted by the upload patterns are separately tracked in #239.
+
+At `7befd4f`, C8's real assembly and preview production progressed: the retained
+preview parsed and its identity/pin assertions passed, but the final frozen
+display checker returned `unknown`. Its portable positive replay still passes.
+The fixture now records that checker's exact bounded synthetic arguments and
+file metadata at the existing interpreter-bootstrap seam, without changing its
+predicates or stdout/stderr. This is diagnostic evidence, not a presumed fix or
+a passing C8 verdict; pipeline statuses and ownership must be observed rather
+than guessed from the existence of a valid preview.
+The diagnostic itself is checked in real isolated `-I -S` child interpreters:
+acceptance and both refusal cases preserve the complete original output and
+status. That test first reproduced a missing helper import, corrected only in
+the fixture bootstrap. An oversized diagnostic remains unavailable without
+replacing the original step observation or its refusal.
+
+At `37e083a`, foundation artifact `12138076840` identifies the refusal: the
+preview has the service's UID, one link and successful CLI/saver statuses, but
+mode `0664`. The frozen checker's first exception is its private-mode assertion.
+The emitted saver still contains its original `umask 077`; no cause is inferred
+from that contradiction. A separate early probe exercises that exact saver on
+synthetic input and records bounded file/ACL observations before requiring
+private mode, ahead of the qualification hold. The same saver runs under a
+second disposable `/tmp` parent to distinguish directory-specific inputs.
+It changes no permission or ACL to hide a failure. Fable's source review also
+clarified that C7 checks content, not its saved file's mode; C7's pass never
+established `0600`. Default ACL inheritance remains a hypothesis until observed.
+This is a diagnostic, not yet a successful C8 composition.
+
+At `ee0eec7`, foundation artifact `12137524763` resolves that hypothesis before
+qualification runs. The service-home fixture parent and service home both have
+a default ACL; the exact saver creates mode `0664` there. The same saver creates
+mode `0600` under the independent `/tmp` parent, whose default ACL is absent.
+Both commands return zero with empty stdout/stderr, and both files have the
+correct service UID and one link. This is measured CI fixture behavior, not a
+claim about the private host's ACLs or a passing C8 result.
+
+The disposable state parent now lives under `/tmp`, retaining service ownership,
+fresh scenario paths and the native socket bound. An early exact-saver private
+mode check remains. The temporary checker tracing and ACL-comparison machinery
+are removed after identifying the cause; bounded step observations remain.
+No inherited ACL is removed, no saved file is repaired with `chmod`, and no
+production command or frozen privacy assertion changes. Final composed C7/C8
+acceptance still requires a new Linux run.
+
+At `03804a2`, that run completed affirmatively. Foundation job `117691747157`
+in [run 39132967503](https://github.com/sushiHex/constructicon/actions/runs/39132967503)
+passed, and artifact `12139591767` records exactly `accept`, `wrong-consumer`,
+`source-drift`, `qualification`, and `diagnostic` in `cases_completed`.
+It also records a genuine 90-second hold, the unchanged activated store,
+checked source pin/preview and `application_attempted=false`. Accepting C7
+returned zero with 208 stdout bytes; accepting C8 returned zero with 1,204
+stdout bytes; both had empty stderr. Refusals remained at their intended
+boundaries, including T5's refusal of otherwise-successful diagnostic output.
+The saver probe recorded service ownership, one regular link and mode `0600`.
+
+Verify run `39132967535`, runner qualification `39132967579` and all four
+containment lanes passed the same head. The local targeted suite passed 101
+tests with 16 explicitly Linux-only skips; no local full Windows gate is claimed.
+The follow-up evidence-ledger update changes no executable fences or code.
+This establishes the synthetic composed proof, not installed-host readiness,
+approval of private drift inputs or authority for a live session.
+
+The connector's review of `4f6fcb8` found two introduced documentation defects,
+both adopted after source verification. Q1's package-build example omitted the
+isolated interpreter even though the script is mode `100644` without a shebang;
+Q1's run instruction pointed to Q7's private declarations instead of Q8's ordered
+step inventory. The corrected build command names the existing reviewed isolated
+Python invocation and closes stdin; the run instruction names Q8's C1–C8 range.
+A regression extracts and executes the documented build command with only the
+test interpreter and private directory substituted, using synthetic values;
+another pins the inventory reference. No VM command, packaged fence, controller
+input or execution authority changes in these corrections.

@@ -139,6 +139,10 @@ MUTANTS = (
      "if PLACEHOLDER.search(_normalized(pending)) or DECLARATION.search(text):",
      "if DECLARATION.search(text):",
      TESTS + "test_a_deferred_step_waits_only_for_session_values"),
+    ("partial values keep unresolved deferred steps out of phase one", MODULE + "assemble",
+     "waiting=deferred and bool(remaining_session_values) and not template",
+     "waiting=deferred and values is None and not template",
+     TESTS + "test_partial_private_values_leave_only_remaining_session_values_waiting"),
     ("a record bound admits its shortest record", MODULE + "_expectation",
      'if spec["max_bytes"] < shortest:', "if False:",
      TESTS + "test_malformed_expectations_refuse"
