@@ -336,6 +336,7 @@ def test_manual_backfill_skips_the_cursor_and_reports_its_request_count(
     assert not any(path.startswith("actions/") for path in api.seen)
     assert "issues?state=all&since=2026-08-31T15:00:00Z&per_page=100&page=1" in api.seen
     assert f"made {len(api.seen)} API requests" in out
+    assert "PUBLIC_TEXT_SWEPT_THROUGH candidate" not in out
     for args in (["sweep", "--since", "yesterday"], ["sweep", "--since"],
                  ["sweep", "extra"], ["event"]):
         assert run(tmp_path, monkeypatch, capsys, args)[0] == 1, args
@@ -443,7 +444,8 @@ ZERO = "0" * 40
 
 def update(ref: str, before: str, after: str, at: str = "2026-10-16T02:00:00Z",
            kind: str = "push") -> dict:
-    return {"ref": ref, "before": before, "after": after, "timestamp": at, "activity_type": kind}
+    return {"id": 1, "ref": ref, "before": before, "after": after, "timestamp": at,
+            "activity_type": kind}
 
 
 def leaky_commit(sha: str) -> dict:
@@ -626,9 +628,135 @@ def test_every_tag_is_scanned_in_full():
     def digest(name: str) -> str:
         return hashlib.sha256(name.encode()).hexdigest()[:12]
 
-    assert found == [("tag file", X[:12]), ("tag name", digest(leaky_tag)),
-                     ("tag message", digest("signed")), ("tag message", digest("renamed"))]
+    assert found == [("existing tag", digest("v1")), ("tag file", X[:12]),
+                     ("existing tag", digest(leaky_tag)), ("tag name", digest(leaky_tag)),
+                     ("existing tag", digest("signed")), ("tag message", digest("signed")),
+                     ("existing tag", digest("renamed")), ("tag message", digest("renamed"))]
     assert "tags?per_page=100&page=1" in api.seen
+
+
+def missing(status=404):
+    return urllib.error.HTTPError("https://api.github.com/", status, "missing", Message(), None)
+
+
+def test_all_history_backfill_has_no_date_filter_and_pins_branch_heads(
+        tmp_path, monkeypatch, capsys):
+    """Old-dated reachable history is read even if activity no longer lists it."""
+    class Started(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW
+
+    monkeypatch.setattr(check, "datetime", Started)
+    routes = {"branches": [{"name": "topic", "commit": {"sha": X}}],
+              "commits": [merge_commit(P, "old", "2000-01-01T00:00:00Z")],
+              f"commits/{P}": {"files": []}}
+    status, out, api = run(tmp_path, monkeypatch, capsys,
+                           ["sweep", "--since", "2026-10-16T00:00:00Z", "--all-history"],
+                           routes)
+    assert status == 0 and "PUBLIC_TEXT_SWEPT_THROUGH candidate" in out
+    assert "candidate 2026-10-16T03:00:00Z" in out
+    assert f"commits?sha={X}&per_page=100&page=1" in api.seen
+    assert all("since=" not in path for path in api.seen if path.startswith("commits?"))
+    assert f"commits/{P}?per_page=100&page=1" in api.seen
+    assert not any(path.startswith("actions/") for path in api.seen)
+    routes[f"commits/{P}"] = leaky_commit(P)[f"commits/{P}"]
+    status, out, _ = run(tmp_path, monkeypatch, capsys,
+                         ["sweep", "--since", "2026-10-16T00:00:00Z", "--all-history"], routes)
+    assert status == 1 and f"branch file {P[:12]} matches" in out
+    assert "PUBLIC_TEXT_SWEPT_THROUGH candidate" not in out
+
+
+def test_all_history_tags_list_full_history_and_are_unconditional_findings(
+        tmp_path, monkeypatch, capsys):
+    routes = {"tags": [{"name": "clean-release"}],
+              "git/ref/tags/clean-release": {"object": {"type": "commit", "sha": X}},
+              "commits": [merge_commit(P, "old")], f"commits/{P}": {"files": []}}
+    status, out, api = run(tmp_path, monkeypatch, capsys,
+                           ["sweep", "--since", "2026-10-16T00:00:00Z", "--all-history"], routes)
+    assert status == 1 and "existing tag " in out and "tag exists" in out
+    assert "clean-release" not in out and "matches a private pattern" not in out
+    assert f"commits?sha={X}&per_page=100&page=1" in api.seen
+    assert not any(path.startswith("compare/") for path in api.seen)
+    assert "PUBLIC_TEXT_SWEPT_THROUGH candidate" not in out
+
+
+def test_missing_force_push_prior_head_is_a_gap_and_later_updates_are_scanned(
+        tmp_path, monkeypatch, capsys):
+    routes = {"activity": {"linked": [[
+        update("refs/heads/topic", P, X, kind="force_push"),
+        update("refs/heads/next", X, Y)]]},
+        f"compare/{P}...{X}": missing(), f"commits/{P}": missing(),
+        f"commits/{X}": {"sha": X, "files": []},
+        "commits": [merge_commit(X, "current")],
+        f"compare/{X}...{Y}": comparison(Y), **leaky_commit(Y),
+        "comments": [{"id": 71, "body": LEAK, "updated_at": "2026-10-16T01:00:00Z"}]}
+    status, out, api = run(tmp_path, monkeypatch, capsys,
+                           ["sweep", "--since", "2026-10-16T00:00:00Z"], routes)
+    assert status == 1 and f":{P[:12]}:{X[:12]}" in out
+    assert "coverage not established" in out and "check incomplete" not in out
+    assert "traversal-complete; coverage-incomplete" in out
+    assert f"branch file {Y[:12]} matches" in out and "commit comment 71 matches" in out
+    assert f"commits?sha={X}&per_page=100&page=1" in api.seen
+    assert "PUBLIC_TEXT_SWEPT_THROUGH candidate" not in out
+
+
+def test_history_gaps_keep_distinct_activity_identities_and_fallback_failures(
+        tmp_path, monkeypatch, capsys):
+    first = update("refs/heads/topic", P, X, kind="force_push")
+    second = {**first, "id": 2}
+    routes = {"activity": {"linked": [[first, second]]},
+              f"compare/{P}...{X}": missing(), f"commits/{P}": missing(),
+              f"commits/{X}": {"sha": X, "files": []}, "commits": []}
+    status, out, _ = run(tmp_path, monkeypatch, capsys,
+                         ["sweep", "--since", "2026-10-16T00:00:00Z", "--all-history"], routes)
+    assert status == 1 and out.count("::error::history gap ") == 2
+    assert "traversal-complete; coverage-incomplete" in out
+    assert "PUBLIC_TEXT_SWEPT_THROUGH candidate" not in out
+    routes["commits"] = missing(403)
+    status, out, _ = run(tmp_path, monkeypatch, capsys,
+                         ["sweep", "--since", "2026-10-16T00:00:00Z", "--all-history"], routes)
+    assert status == 1 and "::error::history gap " in out
+    assert "public text check incomplete (HTTPError)" in out
+    assert "traversal-complete" not in out and "PUBLIC_TEXT_SWEPT_THROUGH candidate" not in out
+
+
+@pytest.mark.parametrize("cause", ["head missing", "prior readable", "prior forbidden",
+                                    "comparison forbidden", "current malformed", "file missing"])
+def test_only_a_proven_missing_force_push_prior_head_becomes_a_gap(
+        tmp_path, monkeypatch, capsys, cause):
+    routes = {"activity": {"linked": [[update("refs/heads/topic", P, X, kind="force_push")]]},
+              f"compare/{P}...{X}": missing(),
+              f"commits/{X}": {"sha": X, "files": []}, f"commits/{P}": missing()}
+    if cause == "head missing":
+        routes[f"commits/{X}"] = missing()
+    elif cause == "prior readable":
+        routes[f"commits/{P}"] = {"sha": P, "files": []}
+    elif cause == "prior forbidden":
+        routes[f"commits/{P}"] = missing(403)
+    elif cause == "comparison forbidden":
+        routes[f"compare/{P}...{X}"] = missing(403)
+    elif cause == "current malformed":
+        routes[f"commits/{X}"] = {"files": []}
+    else:
+        routes[f"compare/{P}...{X}"] = comparison(X)
+        routes[f"commits/{X}"] = missing()
+    status, out, _ = run(tmp_path, monkeypatch, capsys,
+                         ["sweep", "--since", "2026-10-16T00:00:00Z"], routes)
+    assert status == 1 and "public text check incomplete" in out
+    assert "history gap" not in out and "PUBLIC_TEXT_SWEPT_THROUGH candidate" not in out
+
+
+@pytest.mark.parametrize("cause", ["bound", "error", "cancel"])
+def test_backfill_failure_never_offers_a_cursor_candidate(tmp_path, monkeypatch, capsys, cause):
+    routes = {"branches": [{"name": "topic", "commit": {"sha": X}}],
+              "commits": {"bound": [[merge_commit(X, "clean")] * 100] * check.MAX_PAGES,
+                          "error": missing(403), "cancel": Stop()}[cause],
+              f"commits/{X}": {"files": []}}
+    status, out, _ = run(tmp_path, monkeypatch, capsys,
+                         ["sweep", "--since", "2026-10-16T00:00:00Z", "--all-history"], routes)
+    assert status == 1 and "check incomplete" in out
+    assert "PUBLIC_TEXT_SWEPT_THROUGH candidate" not in out
 
 
 @pytest.mark.parametrize("target", ["blob", "tree", "too deep", "missing"])
