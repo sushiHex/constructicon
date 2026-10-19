@@ -19,8 +19,9 @@ same typed control plane.
 
 **Developer preview.** M1 through M7.1 are complete. M8 has landed executor
 contracts, networkless Linux containment, safe WRITE capture, contained gates,
-and the credential-free half of the Codex subscription adapter. Live Claude
-Code, Codex, and Pi adapters are not available yet. See
+and the Codex subscription adapter with bounded historical READ, WRITE and
+maintenance-application acceptance. Those results do not enable a generally
+available production provider; Claude Code and Pi remain independently gated. See
 [current status](#what-is-implemented) and
 [open work](https://github.com/sushiHex/constructicon/issues).
 
@@ -112,8 +113,8 @@ belong in the adapter; the graph language and walker do not grow provider
 switches. An adapter is interchangeable only where it can enforce the admitted
 capabilities.
 
-Subscription reuse for solo developers is an explicit goal, **not a working
-integration today**. Accepted [ADR 0021](docs/adr/0021-subscription-executors-bind-operator-stores.md)
+Subscription reuse has bounded historical Codex evidence, **not general
+production availability**. Accepted [ADR 0021](docs/adr/0021-subscription-executors-bind-operator-stores.md)
 selects an operator-bound subscription route for the explicit v3 profile;
 gateway v1 under ADR 0018 is unchanged and unselected. The
 [authentication record](docs/designs/EXECUTOR_AUTHENTICATION.md) holds the
@@ -139,6 +140,12 @@ import-linter, and pytest.
 The separate [Linux containment lane](docs/M8_CI.md#pr-b-the-separate-containment-gate)
 provisions its physical test boundary on GitHub Actions. Platform skips in a
 local run are not containment evidence.
+
+To follow a proposed change through capture, trusted checks and recorded
+acceptance or refusal, run the existing
+[credential-free maintenance rehearsal](docs/CONTRIBUTING.md#rehearse-a-maintenance-contribution).
+It uses scripted native input and disposable Git state, not a model login or
+your working repository as a merge target.
 
 ### Run a small workflow
 
@@ -325,7 +332,8 @@ snapshot. Runtime identification happens without a candidate mount; cancellation
 and descendant cleanup complete before authority is minted.
 
 The Codex subscription adapter follows [ADR 0021](docs/adr/0021-subscription-executors-bind-operator-stores.md).
-Its credential-free half is merged:
+Its implementation includes:
+
 - a strict READ and WRITE operator adapter for the pinned client;
 - operator-store custody with offline maintenance and activation;
 - vendor egress through a host relay limited to the sealed vendor
@@ -336,16 +344,23 @@ Its credential-free half is merged:
   enforces no ceiling. It starts no turn while the account reports its spend
   control reached, and publishes the readback facts.
 
-All of it is proved against hostile fixtures, with no login and no model
-request. On the private host, the owner's device login and every startup
-control have passed. Token refresh is not yet measured, and no model request
-has run.
+Credential-free CI exercises hostile fixtures. Separately authorized historical
+host sessions established bounded Codex READ and WRITE at distinct revisions
+and measured explicit refresh. Natural expiry-triggered refresh and actual live
+expired-login behavior remain unmeasured. See the
+[accepted historical closeout](docs/plans/handoffs/M8-implementation-record.md#codex-historical-closeout-owner-acceptance-2026-10-13).
 
-Still outstanding: provider-route conformance and the live adapters. None of
-this is yet a working subscription integration or a live coding-agent backend.
-Track
-the remaining work in the [M8 implementation record](docs/plans/handoffs/M8-implementation-record.md)
-and [authentication assessment](docs/designs/EXECUTOR_AUTHENTICATION.md).
+The later q13 maintenance application was accepted, and its data-only parser
+vectors were recovered into an ordinary contribution in [PR #250](https://github.com/sushiHex/constructicon/pull/250).
+The [recovery record](docs/plans/handoffs/M8-implementation-record.md#q13-contribution-recovered-and-published-for-review-refs-245-186)
+separates the historical exam from current-source regression evidence.
+
+These results do not auto-enable a provider, supply general vendor conformance,
+or qualify another boot: fresh continuity and qualification remain required.
+Claude Code's startup/tool restrictions and Pi's lifecycle require independent
+proofs; M8 is not complete. See the [implementation record](docs/plans/handoffs/M8-implementation-record.md)
+for current evidence and the [authentication assessment](docs/designs/EXECUTOR_AUTHENTICATION.md)
+for the route decision and its historical investigation.
 
 **M9 remains planned:** self-improvement through evaluated immutable candidates
 and explicit promotion, without letting the learner define its own exam.
@@ -408,7 +423,7 @@ plus Pydantic. CI enforces both rules.
 - [M8 implementation record](docs/plans/handoffs/M8-implementation-record.md):
   shipped foundations, remaining slices, and proof boundaries
 - [Executor authentication](docs/designs/EXECUTOR_AUTHENTICATION.md):
-  subscription goals, current constraints, and the next feasibility experiment
+  accepted route decision and chronological feasibility evidence
 - [Linux CI evidence](docs/M8_CI.md): runner qualification versus containment proof
 - [Historical planning archive](docs/plans/README.md): non-normative plans,
   recovered records, and implementation handoffs

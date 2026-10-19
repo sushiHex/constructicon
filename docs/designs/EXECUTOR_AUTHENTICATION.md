@@ -1,5 +1,17 @@
 # Executor authentication: feasibility and next decision
 
+Current-status pointer (2026-10-19): the chronological assessment below records
+the route decision and its earlier experiments, not today's qualification.
+Later Codex sessions established bounded historical READ/WRITE and explicit
+refresh acceptance; q13 also produced the data-only contribution merged in
+[PR #250](https://github.com/sushiHex/constructicon/pull/250). See the living
+[historical closeout](../plans/handoffs/M8-implementation-record.md#codex-historical-closeout-owner-acceptance-2026-10-13)
+and [q13 recovery record](../plans/handoffs/M8-implementation-record.md#q13-contribution-recovered-and-published-for-review-refs-245-186).
+Natural refresh and live expired-login refusal remain unmeasured. No production
+provider is auto-enabled, and another boot needs fresh qualification. Claude
+Code and Pi retain independent obligations. Historical conclusions below keep
+their scope.
+
 Status: evidence record behind the accepted ADR 0021 decision (2026-09-13);
 not a claim of working subscription integration. No login, credential
 inspection, remote provider request, or gateway provisioning was performed.

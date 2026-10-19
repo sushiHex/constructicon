@@ -15,6 +15,23 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## Historical acceptance and a reproducible fake path are different facts
+
+The #254 public-doc refresh replaces stale claims that no model request or
+refresh had run with links to accepted, revision-specific Codex READ/WRITE,
+explicit refresh and q13 contribution evidence. It preserves the chronological
+authentication assessment and frozen procedures. Natural refresh and live
+expired-login refusal, general production availability and qualification for
+another boot do not follow from those historical results; Claude Code and Pi
+keep their own gates.
+
+The contributor guide points to the existing two-case maintenance-entry
+rehearsal, not a new launcher: scripted native input, real Git/capture/gate and
+journal evidence, acceptance versus successful-no-op refusal, and unchanged
+target refs. The optional vector consumer is only a finite exam. Neither the
+portable launcher nor passing regression data proves physical containment,
+merge installation, exhaustive correctness or authority for a live attempt.
+
 ## Successful payloads still need clean diagnostics
 
 The bounded #189 slice strengthens the inherited kept-launch verification and

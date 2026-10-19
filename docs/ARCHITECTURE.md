@@ -875,8 +875,13 @@ CANCELLED | PARKED}` with machine-readable parked reasons.
   outside the v1 source-law closure, one pure grant predicate, schema-4
   introspection with `unavailable_reasons`, and complete fake providers; v1
   bytes and the v1 law revision are pinned by goldens captured from
-  `d2b8f94`. The Codex and Claude Code adapters and Pi remain separate
-  slices; no live model adapter is available yet. Native CI evidence is described in
+  `d2b8f94`. Codex has bounded historical READ/WRITE and maintenance-application
+  acceptance, not a generally enabled production provider or qualification for
+  another boot. Claude Code and Pi retain independent qualification obligations;
+  M8 is not complete. See the implementation record's
+  [historical closeout](plans/handoffs/M8-implementation-record.md#codex-historical-closeout-owner-acceptance-2026-10-13)
+  and [q13 contribution](plans/handoffs/M8-implementation-record.md#q13-contribution-recovered-and-published-for-review-refs-245-186).
+  Native CI evidence is described in
   [M8_CI.md](M8_CI.md). See
   [ADR 0018](adr/0018-live-executors-are-leased-contained-processes.md) and the
   [implementation record](plans/handoffs/M8-implementation-record.md).
