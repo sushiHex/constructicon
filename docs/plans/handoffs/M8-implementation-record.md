@@ -4,6 +4,15 @@ Status: PR A–D and Codex N1–N5 are complete at their recorded boundaries.
 The owner accepted bounded historical Codex closeout on 2026-10-13; N6/N7 and
 integrated M8 completion remain separate. No production provider is enabled.
 
+Authority: [accepted ADR 0018](../../adr/0018-live-executors-are-leased-contained-processes.md)
+and [frozen rev 1](../milestones/M8-live-executors-rev1.md). PR #26 merged as
+`3ee1beb6a58fac0bab85841a1f34d96b514c3c34`, PR A's exact base. The merged
+tree equals its reviewed head `8308cf8`. Approval does not provision Linux or
+a gateway. Neither the frozen plan nor its planning evidence is edited here.
+From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-operator-stores.md)
+and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
+subscription route; see the dated section at the end of this record.
+
 ## Retained drift baseline source investigation (Refs #238)
 
 The [investigation and proposal](M8-host-baseline-contract.md) confirms two
@@ -21,15 +30,6 @@ public-surface bounds. It collects nothing and changes no live tool, baseline,
 frozen plan or physical qualification requirement. Complete unchanged evidence
 can still be unhealthy and never establishes qualification. Adoption and any
 future collector/capture procedure require a separate owner decision.
-
-Authority: [accepted ADR 0018](../../adr/0018-live-executors-are-leased-contained-processes.md)
-and [frozen rev 1](../milestones/M8-live-executors-rev1.md). PR #26 merged as
-`3ee1beb6a58fac0bab85841a1f34d96b514c3c34`, PR A's exact base. The merged
-tree equals its reviewed head `8308cf8`. Approval does not provision Linux or
-a gateway. Neither the frozen plan nor its planning evidence is edited here.
-From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-operator-stores.md)
-and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
-subscription route; see the dated section at the end of this record.
 
 ## 2026-10-18 — public-text history backfill preparation
 
