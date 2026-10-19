@@ -15,6 +15,19 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## Complete drift facts are not fresh qualification
+
+The #238 investigation (#252) established source-level inventory/query-status
+limits and a tested, source-only complete nine-fact proposal. Historical cases
+are explicitly source-equivalent; the retained full tool was not republished
+or executed. Fresh source-pin inspection rejected a review premise equating
+dpkg architecture with qualification machine names. Optimized-Python inventory
+checks and bounded public comparison outcomes are proved by synthetic tests.
+
+No collector, live tool adoption, baseline migration, host measurement or
+qualification is established. Complete unchanged facts can still be unhealthy;
+physical D2 obligations and any future adoption decision remain separate.
+
 ## q13 accepted contribution recovered
 
 The separate reviewed read-only transfer recovered the exact accepted q13
