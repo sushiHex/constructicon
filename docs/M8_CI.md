@@ -69,6 +69,21 @@ for its device-setup mappings; [Linux UID maps](https://man7.org/linux/man-pages
 for reader-relative columns; [AppArmor exec transitions](https://github.com/torvalds/linux/blob/v6.17/security/apparmor/domain.c)
 for named-stack selection versus a leading-`&` executable attachment search.
 
+## Offline controller import proof
+
+The required `verify` job prepares the exact lock-selected CPython 3.12 wheels
+in a separate acquisition step. It reuses the controller's existing closure,
+wheel selector and SHA-256 validator. A network failure fails that step with a
+safe package label and failure class; it is never a skipped controller proof.
+The request timeout remains 120 seconds, with no automatic retry.
+
+The following isolated-import step reads `M8_CONTROLLER_WHEELS` and validates
+every file's actual bytes again, including cache hits. Missing or wrong-digest
+files fail without network fallback. Wheel extraction, complete controller
+assembly, the real `/usr/bin/python3.12 -I -S -B` imports and the outside-module
+and unwritten-tree assertions remain required. Local byte tests do not replace
+that Linux execution. No private-host procedure or dependency pin is changed.
+
 ## PR B: the separate containment gate
 
 `M8 Linux containment` provisions its own scoped policy and immutable closure

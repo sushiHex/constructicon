@@ -6,8 +6,8 @@ tag rule, the wheel unpack rules, the package extraction and the command record
 run on every platform. Custody, the writer, root's ``cp`` and ownership run on
 Linux only, on a temporary host whose files read as root's through M8-D2's uid
 view. One test runs only in the verify lane with ``M8_CONTROLLER_REQUIRED=1``:
-it downloads the locked wheels and imports the controller under the host's
-interpreter version, ``/usr/bin/python3.12 -I -S -B``.
+it revalidates the prepared locked wheels offline and imports the controller
+under the host's interpreter version, ``/usr/bin/python3.12 -I -S -B``.
 """
 
 from __future__ import annotations
@@ -22,13 +22,13 @@ import shutil
 import stat
 import subprocess
 import sys
-import urllib.request
 import warnings
 import zipfile
 from pathlib import Path
 
 import pytest
 from scripts.ci import m8_host_artifacts as artifacts
+from scripts.ci.acquire_m8_controller_wheels import read_locked, selected_wheels
 
 from tests.test_m8_host_artifacts import (
     bare,
@@ -521,13 +521,16 @@ def test_the_runbook_check_is_the_scripts_check_over_the_proof_modules() -> None
 def test_the_verify_lane_runs_the_controller_import_proof() -> None:
     workflow = (REPOSITORY / ".github/workflows/verify.yml").read_text(encoding="utf-8")
     assert "runs-on: ubuntu-latest" in workflow
-    step = (
-        "      - run: M8_CONTROLLER_REQUIRED=1 uv run python -m pytest "
-        "tests/test_m8_controller_env.py::test_the_staged_controller_imports_under_isolated_python"
-        " -v -p no:cacheprovider\n"
-    )
+    preparation = "uv run python -m scripts.ci.acquire_m8_controller_wheels"
+    step = "M8_CONTROLLER_REQUIRED=1 uv run python -m pytest "
+    step += ("tests/test_m8_controller_env.py::"
+             "test_the_staged_controller_imports_under_isolated_python")
+    step += " -v -p no:cacheprovider\n"
     assert workflow.count(step) == 1
     assert workflow.index("      - run: uv run verify\n") < workflow.index(step)
+    assert workflow.count(preparation) == 1
+    assert workflow.index(preparation) < workflow.index(step)
+    assert 'M8_CONTROLLER_WHEELS: ${{ runner.temp }}/m8-controller-wheels' in workflow
 
 
 def test_the_runbook_proves_the_script_and_the_lock_with_stock_git() -> None:
@@ -839,16 +842,13 @@ def test_the_staged_controller_imports_under_isolated_python(tmp_path: Path) -> 
     python = Path("/usr/bin/python3.12")
     assert sys.platform == "linux" and python.exists(), "the proof needs the host interpreter"
     glibc = artifacts.host_glibc()
-    selected = [
-        artifacts.select_wheel(p, glibc)
-        for p in artifacts.controller_closure(checkout(artifacts.LOCK))
-    ]
+    selected = selected_wheels(checkout(artifacts.LOCK), glibc)
+    prepared = os.environ.get("M8_CONTROLLER_WHEELS")
+    assert prepared, "the offline proof needs the explicit prepared-wheel directory"
     archives: dict[str, zipfile.ZipFile] = {}
     planned = []
     for wheel in selected:
-        with urllib.request.urlopen(wheel["url"], timeout=120) as response:
-            data = response.read()
-        assert sha256(data) == wheel["sha256"], wheel
+        data = read_locked(Path(prepared), wheel)
         archives[wheel["file"]] = zipfile.ZipFile(io.BytesIO(data))
         planned.append(artifacts.wheel_entries(archives[wheel["file"]], wheel["file"]))
     tracked = subprocess.run(
