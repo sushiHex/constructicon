@@ -100,6 +100,46 @@ async def test_reply_dependent_conversation_and_scope(backend, maximum, request,
             await operation
 
 
+async def test_scripted_pi_read_uses_same_adapter_and_real_read_mount(launcher, tmp_path):
+    """Scripted protocol + physical READ only; no real Pi/provider qualification."""
+    from constructicon.core.executor import TaskSpec
+    from constructicon.substrate.executors.pi_read import PI_LIMITS, PiReadExecutor
+    from constructicon.substrate.git.authority import GitAuthority
+    from tests.gitworld import seed_authority
+    from tests.piworld import peer_source
+    from tests.substrate.test_pi_read import grants
+
+    original = "contained workspace bytes é"
+    authority = GitAuthority(seed_authority(tmp_path, {"fixture.txt": original}),
+                             tmp_path / "snapshots")
+    head = authority.read_ref("refs/heads/main")
+    assert head is not None
+    view = authority.read_snapshot(head)
+    root = Path(view.path)
+    before = view.git_ref()
+    paths = AcquisitionPaths(tmp_path, acquisition_id_for("pi-read-proof", 1))
+    selected = replace(launcher, limits=PI_LIMITS)
+    async with acquisition_guard(paths) as guard:
+        executor = PiReadExecutor(selected, ("/usr/bin/python3", "-I", "-c", peer_source()),
+                                  guard_fds=(guard,))
+        outcome = await executor.execute(TaskSpec(instruction="Analyze fixture.txt"),
+                                         workspace=view, grants=grants())
+        assert outcome.status == "success", outcome
+        assert outcome.output == "Read: " + original
+        assert executor.conversation.decoder.eof
+    assert (root / "fixture.txt").read_text("utf-8") == original and view.git_ref() == before
+    assert authority.read_ref("refs/heads/main") == head
+    evidence = os.environ.get("M8_EVIDENCE_DIRECTORY")
+    if evidence:
+        (Path(evidence) / "duplex-pi-read.json").write_text(json.dumps({
+            "launch_revision": str(selected.revision), "status": outcome.status,
+            "workspace_read": True, "workspace_unchanged": True,
+            "protocol_eof": executor.conversation.decoder.eof,
+            "requested_model": outcome.requested_model, "served_model": outcome.served_model,
+            "proof": "scripted peer; no Pi/provider qualification",
+        }), encoding="utf-8")
+
+
 @pytest.mark.parametrize("cause", ["error", "callback-timeout", "oversized-write"])
 async def test_conversation_error_preserves_cause_and_salvage(launcher, tmp_path, cause):
     error = (

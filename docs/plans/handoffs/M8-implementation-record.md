@@ -13,11 +13,68 @@ From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-
 and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
 subscription route; see the dated section at the end of this record.
 
+## Pi READ conversation slice (Refs #259)
+
+This first implementation separates the finite Pi-shaped decoder from a
+single-use `ProcessIO` conversation and direct `Executor`. It publishes no
+leased provider or availability descriptor. The existing launcher owns the
+process, absolute deadline, byte ceilings and joined termination; the adapter
+requires both affirmative protocol completion and clean process completion.
+Neither an acceptance response nor a clean exit alone is sufficient.
+
+The scripted peer reads fixture workspace bytes and reports them through a
+normal user/tool-use/read-result/final-analysis cycle. Portable tests substitute
+containment, not the byte conversation; the separate Linux duplex case uses
+the same peer under the physical launcher. Only an executed required Linux
+case supplies physical evidence. Neither peer establishes actual Pi startup,
+native tool restrictions, authentication or provider behavior.
+
+The implementation keeps incomplete observations distinct from success,
+counts finalized assistant usage once, and bounds the whole published outcome.
+Early review corrected two malformed-input hazards: nested non-object shapes
+must become protocol damage, and repeated message facts are compared as
+canonical bytes rather than Python equality. Cleanup errors propagate instead
+of being mislabeled as spawn failures.
+
+Independent review reproduced two further introduced defects. Equal read-result
+copies could both contain malformed content, so finite payload-shape validation
+now precedes comparison. A reader failure during a suspended write could mask
+caller cancellation at the final join; cancellation now retains that failure
+as its cause after owned cleanup. Both have deterministic regression tests.
+A narrow follow-up found that an aborted provider `done` update could be
+overridden by a later normal completion. Non-success now latches immediately;
+successful provider completion must agree canonically with `message_end`.
+Both permitting stop/tool-use updates and contradictory/refusing updates are
+tested. The Linux addition proves the mounted READ accepting path, not the
+design's complete authority-denial or durable-recovery matrix.
+
+Connector review reproduced an introduced empty-analysis defect: empty,
+whitespace-only and multiple all-empty text blocks could publish success after
+a completed read. Terminal analysis now requires nonblank joined text while
+preserving the original meaningful reply. Regression cases cover all three
+refusals and mixed empty/meaningful blocks; a guard-removal mutant must fail
+by assertion. This finding was adopted; no review finding was rejected.
+
+Full leased assembly, launch identity and durable recovery remain subsequent
+proof obligations under the accepted design. This slice does not satisfy the
+whole #42 acceptance scope or enable a live provider. Exact-head tests,
+assertion-killed mutations, physical results and review disposition belong in
+its PR; unexecuted or skipped proof groups remain unestablished.
+
 ## Pi READ design boundary (Refs #42)
+
+The owner accepted the design on 2026-10-19 in the
+[PR #258 decision](https://github.com/sushiHex/constructicon/pull/258#issuecomment-6278007014).
+It merged as `022fd651340be7876fa06c90d30a398189689aea`, with the reviewed
+tree unchanged. The design's pre-decision wording remains frozen. The same
+owner wave separately authorized credential-free preparatory implementation;
+[#259](https://github.com/sushiHex/constructicon/issues/259) bounds its first
+decoder/conversation/READ slice. This permits preparation before Claude
+qualification, not Pi qualification before Claude or any live provider route.
 
 The completed source-only [screen #257](https://github.com/sushiHex/constructicon/issues/257#issuecomment-6276054659)
 supports a task-shaped RPC interface, not a qualified workspace READ executor.
-The [proposed design](M8-Pi-READ-design.md) maps one fresh, single-dispatch
+The [accepted design](M8-Pi-READ-design.md) maps one fresh, single-dispatch
 conversation to existing executor, workspace, lease and process contracts.
 Its finite checklist separates scripted protocol evidence, physical containment
 with a harmless peer, real Pi startup/tool behavior and provider qualification.

@@ -66,7 +66,7 @@ the eventual code differs.
 
 | Record | Purpose |
 | --- | --- |
-| [Pi workspace READ design](handoffs/M8-Pi-READ-design.md) | Proposed fake-first adapter design and finite proof checklist after source screen #257; actual workspace, existing executor/lease/process contracts, no live authentication route selected. Not implementation approval or N7 qualification; Claude-first order remains unchanged |
+| [Pi workspace READ design](handoffs/M8-Pi-READ-design.md) | Accepted in #258; credential-free preparatory implementation separately authorized under #259. Actual workspace, existing executor/lease/process contracts, no live authentication route selected. Frozen proposal wording is historical; Claude-first qualification order remains unchanged |
 | [M6.1 / M6.2 implementation handoff](handoffs/M6.1-M6.2-implementation-handoff.md) | Preserves an earlier artifact-based implementation handoff and its exact base/checksum assumptions; historical only |
 | [M6.2 implementation record](handoffs/M6.2-implementation-record.md) | Records the completed rev-2 scope, compatibility boundary, strengthened failure proof, and integrated-session sequencing |
 | [M7 implementation record](handoffs/M7-implementation-record.md) | Living record for PRs A–D: deviations, authority decisions, review corrections, integrity closure, and the panel pattern |
