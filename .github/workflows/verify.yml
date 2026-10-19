@@ -86,6 +86,7 @@ jobs:
           - check_m8_native_operator_mutations.py
           - check_m8_procedure_package_mutations.py
           - check_m8_candidate_transfer_mutations.py
+          - check_m8_host_baseline_mutations.py
           - check_m8_qualification_mutations.py
           - check_public_text_mutations.py
           - check_registry_store_mutations.py

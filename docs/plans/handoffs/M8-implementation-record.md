@@ -13,6 +13,24 @@ From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-
 and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
 subscription route; see the dated section at the end of this record.
 
+## Retained drift baseline source investigation (Refs #238)
+
+The [investigation and proposal](M8-host-baseline-contract.md) confirms two
+pre-existing source-level limits: baseline-selected iteration does not prove
+the complete key inventory, and successful output formatting can hide a failed
+fact query. Both public historical listings normalize to the already retained
+source digest. This is not an installed-file or current-host measurement.
+
+Portable, explicitly source-equivalent fixtures reproduce the comparison and
+query-status mechanisms without copying the retained tool. The proposed
+stdlib-only module validates exactly nine typed facts and affirmative bounded
+query completions, then reports only a fixed drift verdict and changed known
+keys. Tests exercise the actual proposed module, including acceptance and full
+public-surface bounds. It collects nothing and changes no live tool, baseline,
+frozen plan or physical qualification requirement. Complete unchanged evidence
+can still be unhealthy and never establishes qualification. Adoption and any
+future collector/capture procedure require a separate owner decision.
+
 ## 2026-10-18 — public-text history backfill preparation
 
 Refs #230 and the [post-q12 review](M8-post-q12-review.md). The manual
