@@ -15,6 +15,20 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## Wheel acquisition and controller import are different proofs
+
+The #247 CI preparation selects the exact locked controller wheels with the
+existing closure/tag selector and digest validator. Transport failure is named
+as acquisition failure using only a safe package label and failure class. It
+remains a failed gate; there are no automatic retries or expanded timeouts.
+
+The isolated controller proof reads only the explicit prepared directory and
+revalidates every file, so an existing cache entry is not positive byte proof.
+Missing or corrupt bytes refuse without network fallback. The real Python 3.12
+`-I -S -B` import, extraction and outside/unwritten-tree checks remain intact.
+This separates failure attribution; it does not prove network reliability or
+change any dependency, private-host procedure or execution authority.
+
 ## Transfer proves the contribution bytes, not a new execution
 
 The #245 helper transports the exact q13 commit, its sole vector blob and a

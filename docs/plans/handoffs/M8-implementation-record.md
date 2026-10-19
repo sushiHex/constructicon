@@ -7176,3 +7176,45 @@ composition before an exact execution go. No VM, vendor binary, credential,
 refresh or model call has been run for this preparation; portable rehearsals
 are not live export evidence. Final test and mutation counts belong in the PR
 evidence once those runs finish, not in an inferred passing claim here.
+
+## Locked-wheel acquisition before the offline controller proof (Refs #247)
+
+The observed PR #243 failure occurred during a TLS handshake before any wheel
+bytes reached digest validation or controller staging. Its single unchanged
+failed-job retry passed. That success did not establish network reliability or
+remove the coupling between acquisition and the import test.
+
+CI now runs a separately named preparation command using the existing
+`controller_closure`, `select_wheel` and `require_locked` laws. It acquires only
+the exact locked files and reports failures using fixed classes and safe package
+or preparation labels, without raw exception text, URLs or local paths.
+Validated cached files may be reused; wrong cached bytes refuse
+without silent replacement. The existing 120-second request timeout is retained
+and no retry is added.
+
+The required controller test consumes an explicit prepared-wheel directory and
+revalidates each file's bytes without network fallback. A missing directory,
+missing file or wrong digest fails. The original wheel-entry checks, complete
+assembly and stock copy, real Python 3.12 `-I -S -B` import over every proof module
+plus `maintenance_entry`, outside-module refusal and no-bytecode assertion are
+preserved. Existing unsupported-host skips do not satisfy the required Linux
+step, and an acquisition failure remains a failed CI gate.
+
+Credential-free tests cover valid/missing/wrong-digest local bytes, exact
+selection reuse, one acquisition attempt with the unchanged request timeout,
+cache-hit revalidation, safe CLI diagnostics and accepting CLI output. Network calls are replaced only
+at the HTTP primitive. Workflow checks require preparation before the separate
+offline proof. Exact-head CI and the real isolated import remain the execution
+evidence for the changed workflow; portable tests do not establish that result.
+No accepted plan bytes, dependencies, private-host procedures, credentials,
+vendor execution or VM state are changed.
+
+A follow-up self-review reproduced a diagnostic gap: a truncated response
+raises `http.client.IncompleteRead`, not `OSError`, and was safely refused but
+reported only as an unexpected preparation failure. The fetch-only exception
+handling now also covers its documented `HTTPException` base, preserving the
+attempted package and fixed transport class without exposing response bytes.
+The regression raises during response reading, asserts no wheel publication,
+and retains the distinct unexpected-implementation-error case. This taxonomy
+follows the [Python HTTP client contract](https://docs.python.org/3.11/library/http.client.html#http.client.IncompleteRead),
+not a catch-all that would misclassify arbitrary implementation errors.
