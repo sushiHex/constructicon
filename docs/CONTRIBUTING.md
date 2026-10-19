@@ -11,6 +11,16 @@ Green locally is the goal `verify` serves; CI runs the same command. The full
 lifecycle runs with zero credentials (I7) — if your change needs a secret to be
 tested, the design is wrong.
 
+The root pytest bootstrap checks that `constructicon` resolves to this
+checkout's `src/constructicon/__init__.py` before importing test fixtures or
+collecting tests. A reused editable environment pointing at another worktree,
+or a missing package, refuses with the expected and resolved locations. From
+the intended checkout, use `PYTHONIOENCODING=utf-8 uv run --no-active verify`
+with no foreign `UV_PROJECT_ENVIRONMENT` or `PYTHONPATH` override. This uses
+the checkout's own environment; the check never changes import paths or
+reinstalls packages. The earlier lint, types and layer stages still run.
+Ordinary imports and deliberate wheel/subprocess import tests are unaffected.
+
 If a full pytest run stops without an assertion summary, preserve its output
 and the numeric child return code; the cause remains unknown until evidence
 establishes it. `verify` reports each failed stage's exact child `returncode`

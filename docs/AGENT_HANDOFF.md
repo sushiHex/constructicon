@@ -15,6 +15,22 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## Verification must establish which checkout supplies its imports
+
+The #246 root pytest bootstrap compares the resolved `constructicon` package
+origin with the source path belonging to that bootstrap. Foreign editable
+sources and missing packages refuse before shared fixtures or test collection,
+even when the reused environment supplies the `verify` entry point. Lint, types
+and import-linter still precede this check in `verify`.
+
+The credential-free regression uses two real disposable Git checkouts and a
+private virtualenv with Hatchling-style editable `.pth` selection. It affirms
+both the selected origin and the accepting/refusing collection boundary; the
+fixture does not install dependencies. Ordinary imports and deliberate import
+subprocesses retain their behavior. This is a development-source check, not
+runtime provenance or a new environment manager. The verified invocation and
+repair guidance are in [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Moving a proof also moves its evidence obligations
 
 The #242 containment partition moves only the independent protected-root
