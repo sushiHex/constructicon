@@ -4,6 +4,24 @@ Status: PR A–D and Codex N1–N5 are complete at their recorded boundaries.
 The owner accepted bounded historical Codex closeout on 2026-10-13; N6/N7 and
 integrated M8 completion remain separate. No production provider is enabled.
 
+## Retained drift baseline source investigation (Refs #238)
+
+The [investigation and proposal](M8-host-baseline-contract.md) confirms two
+pre-existing source-level limits: baseline-selected iteration does not prove
+the complete key inventory, and successful output formatting can hide a failed
+fact query. Both public historical listings normalize to the already retained
+source digest. This is not an installed-file or current-host measurement.
+
+Portable, explicitly source-equivalent fixtures reproduce the comparison and
+query-status mechanisms without copying the retained tool. The proposed
+stdlib-only module validates exactly nine typed facts and affirmative bounded
+query completions, then reports only a fixed drift verdict and changed known
+keys. Tests exercise the actual proposed module, including acceptance and full
+public-surface bounds. It collects nothing and changes no live tool, baseline,
+frozen plan or physical qualification requirement. Complete unchanged evidence
+can still be unhealthy and never establishes qualification. Adoption and any
+future collector/capture procedure require a separate owner decision.
+
 Authority: [accepted ADR 0018](../../adr/0018-live-executors-are-leased-contained-processes.md)
 and [frozen rev 1](../milestones/M8-live-executors-rev1.md). PR #26 merged as
 `3ee1beb6a58fac0bab85841a1f34d96b514c3c34`, PR A's exact base. The merged
