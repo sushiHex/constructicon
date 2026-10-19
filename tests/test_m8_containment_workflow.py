@@ -33,6 +33,9 @@ MAINTENANCE_LITERAL_EVIDENCE_NAMES = [
 # Every provisioned proof belongs to exactly one isolated runner. These are not
 # sampled smoke tests: removing a file or mutation inventory must fail here.
 PROOFS = {
+    "Observe frozen P2 stock-utility diagnostics on Ubuntu 24.04": (
+        "foundation", "tests/test_m8_stock_utility_diagnostics.py",
+    ),
     "Prove N3a protected descriptors and native-only store custody": (
         "foundation",
         "tests/substrate/test_operator_store_restart.py "
@@ -194,6 +197,19 @@ def test_lane_evidence_is_disjoint_and_bound_to_the_reviewed_head():
     assert "M8_EGRESS_REQUIRED=1" in text
     assert "codex-*.json" in text
     assert "duplex-*.json" in text
+
+
+def test_stock_utility_observation_requires_the_explicit_ubuntu_lane():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    proofs = text.split("\n  proofs:\n", 1)[1].split("\n  containment:\n", 1)[0]
+    assert "runs-on: ubuntu-24.04" in proofs
+    step, = re.findall(
+        r"      - name: Observe frozen P2 stock-utility diagnostics on Ubuntu 24.04\n"
+        r"(.*?)(?=\n      - )", proofs, re.S)
+    assert "if: matrix.lane == 'foundation'" in step
+    assert "sudo -u m8-service env -i" in step
+    assert 'M8_STOCK_UTILITIES_REQUIRED=1 M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE"' in step
+    assert "::test_ubuntu_stock_cp_preserves_bytes_but_fails_clean_diagnostics" in step
 
 
 @pytest.mark.parametrize("names", [BRIDGE_N4, MAINTENANCE_N4])

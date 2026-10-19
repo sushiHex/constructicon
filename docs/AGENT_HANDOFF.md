@@ -15,6 +15,23 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## A successful stock copy is not a clean operator boundary
+
+The next bounded #189 slice preserves the historical P2 runbook and its old
+test. A real-child warning control affirmatively shows that the old test can
+pass while stderr contains an undeclared diagnostic. The current q13 archive
+already uses exclusive Python creation instead of that `cp --no-clobber` route
+and already has clean/warning coverage; it was not another omission.
+
+New portable controls bind three successful copies and complete producer output
+to the unchanged T5 boundary: three synthetic warnings refuse and prevent the
+next shell command, while clean output accepts. A guard-removal mutant must
+fail by assertion. The separate required Ubuntu 24.04 lane executes frozen P2
+verbatim over disposable inputs and retains actual coreutils version and whole
+diagnostics in its run-bound artifact. Its observed result belongs to exact-head
+CI, not a portable substitution or a prediction from the version number.
+This is not a whole utility audit, private-host measurement or new live authority.
+
 ## Historical acceptance and a reproducible fake path are different facts
 
 The #254 public-doc refresh replaces stale claims that no model request or

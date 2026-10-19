@@ -117,6 +117,17 @@ jobs:
           printf 'commit=%s lane=%s image=%s/%s kernel=%s\n' "$EVIDENCE_COMMIT" "$EVIDENCE_LANE" "$ImageOS" "$ImageVersion" "$(uname -r)" > "$RUNNER_TEMP/m8-host.txt"
           id m8-service >> "$RUNNER_TEMP/m8-host.txt"
           sudo cat /sys/kernel/security/apparmor/profiles | awk '/constructicon-m8-/ {print}' >> "$RUNNER_TEMP/m8-host.txt"
+      - name: Observe frozen P2 stock-utility diagnostics on Ubuntu 24.04
+        if: matrix.lane == 'foundation'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Unprivileged disposable files, exact historical command, no vendor.
+          sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
+            M8_STOCK_UTILITIES_REQUIRED=1 M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
+            "$PWD/.venv/bin/python" -m pytest \
+              tests/test_m8_stock_utility_diagnostics.py::test_ubuntu_stock_cp_preserves_bytes_but_fails_clean_diagnostics \
+              -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
       - name: Prove N3a protected descriptors and native-only store custody
         if: matrix.lane == 'foundation'
         shell: bash
