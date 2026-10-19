@@ -1,0 +1,103 @@
+"""Finite scripted Pi READ guards; assertion failures alone count as kills."""
+
+from _mutations import run
+
+DECODER = "constructicon.substrate.executors.pi_protocol:PiDecoder."
+PROTOCOL = "constructicon.substrate.executors.pi_protocol:"
+ADAPTER = "constructicon.substrate.executors.pi_read:"
+WIRE = "tests/substrate/test_pi_protocol.py::"
+TASK = "tests/substrate/test_pi_read.py::"
+
+MUTANTS = (
+    ("record ceiling", DECODER + "feed", "len(self.buffer) + amount > RECORD_BYTES",
+     "False", WIRE + "test_framing_byte_and_count_limits_bind_exactly[record]"),
+    ("stdout ceiling", DECODER + "feed", "self.total > STDOUT_BYTES", "False",
+     WIRE + "test_framing_byte_and_count_limits_bind_exactly[stdout]"),
+    ("record count", DECODER + "feed", "self.count > RECORD_COUNT", "False",
+     WIRE + "test_framing_byte_and_count_limits_bind_exactly[count]"),
+    ("JSON depth", PROTOCOL + "parse_record", "depth > JSON_DEPTH", "False",
+     WIRE + "test_depth_is_checked_before_recursive_parsing_and_strings_do_not_count"),
+    ("unterminated tail", DECODER + "finish", "if self.buffer:", "if False:",
+     WIRE + "test_damaged_tail_demotes_otherwise_complete_analysis"),
+    ("publication field bound", PROTOCOL + "publication_fits", "len(encoded(item)) > limit",
+     "False", WIRE + "test_every_published_string_field_obeys_its_encoded_bound"),
+    ("publication whole bound", PROTOCOL + "publication_fits",
+     "len(encoded(value)) > OUTCOME_BYTES",
+     "False", WIRE + "test_global_bound_and_nested_new_sites_are_walked"),
+    ("publication integer bound", PROTOCOL + "publication_fits", "not 0 <= item <= MAX_INTEGER",
+     "False", WIRE + "test_global_bound_and_nested_new_sites_are_walked"),
+    ("analysis bound demotes", DECODER + "message_end", "if self.final != reply:", "if False:",
+     WIRE + "test_reply_bound_binds_at_encoded_json_bytes_and_salvages_one_over"),
+    ("read content shape", PROTOCOL + "text_blocks",
+     'raise ValueError("unsupported READ content")', "return",
+     WIRE + "test_matching_malformed_read_content_is_not_schema_proof"),
+    ("update index excludes bool", PROTOCOL + "assistant_update",
+     'type(update.get("contentIndex")) is not int',
+     'not isinstance(update.get("contentIndex"), int)',
+     WIRE + "test_stream_update_payloads_have_finite_shapes"),
+    ("update delta shape", PROTOCOL + "assistant_update", 'type(update.get("delta")) is not str',
+     "False", WIRE + "test_stream_update_payloads_have_finite_shapes"),
+    ("turn copy canonical", DECODER + "observe",
+     'not same(record.get("message"), self.turn_assistant)',
+     'record.get("message") != self.turn_assistant',
+     WIRE + "test_copies_compare_canonical_bytes_including_boolean_integer_distinction[turn_end]"),
+    ("agent copy canonical", DECODER + "observe",
+     'not same(record.get("messages"), self.messages)',
+     'record.get("messages") != self.messages',
+     WIRE + "test_copies_compare_canonical_bytes_including_boolean_integer_distinction[agent_end]"),
+    ("read execution name", DECODER + "observe", 'record["toolName"] != "read"', "False",
+     TASK + "test_protocol_refusals_never_become_success"),
+    ("read error", DECODER + "observe", 'record.get("isError") is not False', "False",
+     TASK + "test_protocol_refusals_never_become_success"),
+    ("settled abort", DECODER + "observe", 'record.get("aborted") is not False', "False",
+     TASK + "test_protocol_refusals_never_become_success"),
+    ("missing agent", DECODER + "__init__",
+     "self.started = self.ended = self.settled = self.turn = False",
+     "self.started = True\n    self.ended = self.settled = self.turn = False",
+     TASK + "test_missing_completion_never_succeeds[agent_start]"),
+    ("missing message start", DECODER + "observe", "self.active_role != role", "False",
+     WIRE + "test_message_completions_require_matching_starts"),
+    ("final needs read", DECODER + "message_end", "not text or not self.calls", "not text",
+     WIRE + "test_final_analysis_requires_actual_completed_read"),
+    ("usage finalized once", DECODER + "message_end", 'self.input_tokens += usage["input"]',
+     'self.input_tokens += usage["input"] * 2',
+     TASK + "test_workspace_read_accepts_early_completion_and_counts_usage_once[1]"),
+    ("single executor dispatch", ADAPTER + "PiReadExecutor.execute", "if self.entered:",
+     "if False:", TASK + "test_pending_write_is_read_concurrently_and_reentry_poison_is_permanent"),
+    ("reentry poisons original", ADAPTER + "PiReadExecutor.execute",
+     "self.conversation.decoder.refused = True", "self.conversation.decoder.refused = False",
+     TASK + "test_pending_write_is_read_concurrently_and_reentry_poison_is_permanent"),
+    ("explicit fixture model", ADAPTER + "PiReadExecutor.validate_grants",
+     'or grants.model_selection.model != "fixture/pi-read"', "or False",
+     TASK + "test_exact_profile_refuses_before_launch"),
+    ("explicit off", ADAPTER + "PiReadExecutor.validate_grants", 'grants.effort != "off"',
+     "False", TASK + "test_exact_profile_refuses_before_launch"),
+    ("reader enrollment before write", ADAPTER + "PiReadConversation.__call__",
+     "await read_entered.wait()", "pass",
+     TASK + "test_workspace_read_accepts_early_completion_and_counts_usage_once[1]"),
+    ("cancellation survives reader failure", ADAPTER + "PiReadConversation.__call__",
+     "raise primary from secondary", "raise secondary",
+     TASK + "test_cancel_with_pending_write_keeps_already_failed_reader_as_cause"),
+    ("provider done is not always successful", DECODER + "observe",
+     'if update["reason"] not in ("stop", "toolUse"):', "if False:",
+     WIRE + "test_provider_done_update_latches_non_success_and_agrees_with_message_end"),
+    ("provider done copy agrees", DECODER + "message_end",
+     "if not same(self.provider_completion, message):", "if False:",
+     WIRE + "test_provider_done_copy_must_agree_canonically_with_message_end"),
+    ("input budget includes both commands", ADAPTER + "PiReadConversation.__call__",
+     "if self.spent > self.input_limit:", "if False:",
+     TASK + "test_input_budget_counts_both_commands_before_delivery"),
+    *(
+        ("clean process " + field, DECODER + "outcome", before, "False",
+         TASK + "test_process_completion_is_independently_required")
+        for field, before in (
+            ("supervisor", "result.returncode != 0"),
+            ("payload", "result.payload_returncode != 0"),
+            ("bound", "result.bound_exceeded is not None"),
+            ("stderr", "result.stderr"),
+        )
+    ),
+)
+
+if __name__ == "__main__":
+    raise SystemExit(run(MUTANTS))

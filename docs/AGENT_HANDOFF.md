@@ -15,6 +15,22 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## Pi preparation is not Pi qualification
+
+The accepted READ design permits a credential-free direct-executor slice before
+Claude qualification, without changing qualification order. The Pi-shaped
+scripted peer reads actual fixture workspace bytes through the existing owned
+process seam. No leased provider or production availability follows; provider
+identity, durable recovery and real Pi startup/authentication remain separate
+proof obligations.
+
+Protocol completion and process completion are independent facts. The reader
+must enter before requests can deliver; early completion remains provisional
+through the correlated response, EOF and joined clean termination. Matching
+message copies must also be well-formed: agreement alone does not validate
+their payload shapes. The M8 implementation record and exact-head PR evidence
+distinguish portable substitution from the required Linux case.
+
 ## Pi protocol fit does not select its authentication boundary
 
 The proposed Pi READ design follows the bounded source screen with a concrete
