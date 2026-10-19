@@ -429,6 +429,7 @@ jobs:
             M8_PLACEMENT_REQUIRED=1 M8_PLACEMENT_ROOT=/var/lib/constructicon-m8-launch/placement-runtime \
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_native_recovery.py \
+              tests/substrate/test_pi_recovery.py \
               tests/test_native_lifecycle.py -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           uv run python scripts/check_m8_native_recovery_mutations.py
           uv run python scripts/check_m8_n5_stage1_mutations.py

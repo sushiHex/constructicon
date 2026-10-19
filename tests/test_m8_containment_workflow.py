@@ -71,7 +71,8 @@ PROOFS = {
     ),
     "Prove journal-owned native fixture recovery": (
         "lifecycle",
-        "tests/substrate/test_native_recovery.py tests/test_native_lifecycle.py "
+        "tests/substrate/test_native_recovery.py tests/substrate/test_pi_recovery.py "
+        "tests/test_native_lifecycle.py "
         "scripts/check_m8_native_recovery_mutations.py scripts/check_m8_n5_stage1_mutations.py "
         "scripts/check_m8_n5_read_mutations.py",
     ),
