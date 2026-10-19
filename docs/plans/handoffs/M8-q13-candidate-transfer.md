@@ -157,18 +157,23 @@ the second must produce the bounded artifact accepted by the local capture.
 
 ### Exact local preparation
 
-Save this Python fence verbatim as a private `prepare.py`. Invoke with the
-checkout, fresh package directory, private boot-values TOML and the exact
-reviewed procedure commit, in that order. The checkout must be at that commit.
+Save this Python fence verbatim as a private `prepare.py`. Invoke it with
+`python -I -S -B prepare.py CHECKOUT OUTPUT VALUES REVIEWED_COMMIT`: the checkout,
+fresh package directory, private boot-values TOML and exact reviewed procedure
+commit, in that order. The checkout must be at that commit.
 This prepares files only; it never starts the VM or invokes SSH. It reads helper
 bytes from the reviewed commit, not a possibly modified working copy. The
-packager independently binds document bytes to their manifest. Preserve the
+packager also executes directly from that commit's blob, without adding the
+checkout to Python's import path. Untracked or ignored package initializers
+and adjacent standard-library shadows therefore cannot execute during preparation.
+The packager independently binds document bytes to their manifest. Preserve the
 printed final manifest digest as `PACKAGE_SHA256` for the commands below.
 
 ```python
 import hashlib
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 checkout, output, values = map(Path, sys.argv[1:4])
@@ -179,8 +184,11 @@ def git(*args):
                                    stdin=subprocess.DEVNULL, timeout=30)
 assert git("rev-parse", "HEAD").decode().strip() == revision
 assert git("status", "--porcelain", "--untracked-files=no") == b""
-sys.path.insert(0, str(checkout))
-from scripts import m8_procedure_package as package
+packager = git("show", revision + ":scripts/m8_procedure_package.py")
+assert 0 < len(packager) <= 65536 and b"\r" not in packager
+package = types.ModuleType("q13_procedure_package")
+sys.modules[package.__name__] = package
+exec(compile(packager, "<reviewed-procedure-packager>", "exec"), package.__dict__)
 
 docs = checkout / "docs/plans/handoffs"
 document = docs / "M8-q13-candidate-transfer.md"
@@ -225,17 +233,17 @@ set -Eeuo pipefail
 [[ "$PACKAGE_SHA256" =~ ^[0-9a-f]{64}$ ]]
 OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o "HostKeyAlias=$SSH_HOST_KEY_ALIAS"
       -o ConnectTimeout=15 -o LogLevel=ERROR)
-SSH="$(uv run python -c 'import shutil; from pathlib import Path; print(Path(shutil.which("ssh")).resolve())' < /dev/null)"
+SSH="$(uv run python -I -c 'import shutil; from pathlib import Path; print(Path(shutil.which("ssh")).resolve())' < /dev/null)"
 printf '%s  %s\n' "$PACKAGE_SHA256" "$PACKAGE/PACKAGE.sha256" | sha256sum --check --strict --quiet
 (cd "$PACKAGE" && sha256sum --check --strict --quiet PACKAGE.sha256)
 "$SSH" -T "${OPTS[@]}" "$SSH_TARGET" \
   'umask 077; test ! -e "$HOME/maintenance-q13-export-package" && test ! -L "$HOME/maintenance-q13-export-package" && mkdir -m 0700 "$HOME/maintenance-q13-export-package"' < /dev/null
 scp "${OPTS[@]}" "$PACKAGE"/* "$SSH_TARGET:maintenance-q13-export-package/" < /dev/null
 REMOTE="cd \"\$HOME/maintenance-q13-export-package\" && printf '%s  PACKAGE.sha256\n' '$PACKAGE_SHA256' | /usr/bin/sha256sum --check --strict --quiet && /usr/bin/sha256sum --check --strict --quiet PACKAGE.sha256"
-uv run python "$PACKAGE/transport.py" "$PACKAGE/preflight" \
+uv run python -I "$PACKAGE/transport.py" "$PACKAGE/preflight" \
   "$PACKAGE/q13-export-preflight.expected.json" -- "$SSH" -T "${OPTS[@]}" \
   "$SSH_TARGET" "$REMOTE && bash q13-export-preflight.sh" < /dev/null
-uv run python scripts/m8_candidate_transfer.py capture --out "$CAPTURE" -- \
+uv run python -I scripts/m8_candidate_transfer.py capture --out "$CAPTURE" -- \
   "$SSH" -T "${OPTS[@]}" "$SSH_TARGET" \
   "$REMOTE && bash q13-export-candidate.sh" < /dev/null
 ```
@@ -326,7 +334,7 @@ older T5 transport to claim an output or elapsed-time bound it does not have.
 With the host still held under custody, invoke:
 
 ```bash
-uv run python scripts/m8_candidate_transfer.py verify \
+uv run python -I scripts/m8_candidate_transfer.py verify \
   --artifact "$CAPTURE/artifact.json" --trusted-base "$CHECKOUT" \
   --quarantine "$QUARANTINE" < /dev/null
 ```

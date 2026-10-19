@@ -7152,6 +7152,22 @@ both LF and CRLF working copies against an LF index, proves that preparation
 uses the raw reviewed blob, and leaves the working copy unchanged. No production
 newline guard was relaxed to make the test pass.
 
+The PR #249 connector review found an introduced local preparation defect:
+the tracked-clean check ignored untracked and ignored package initializers,
+while adding the checkout to Python's import path let those initializers run.
+Credential-free regressions affirmatively reproduced execution of both kinds
+of initializer. Preparation now compiles the packager's exact reviewed Git
+blob in a registered private module without adding the checkout to the import
+path; the packager's imports are standard-library only. Rehearsals retain
+positive LF/CRLF preparation with untracked/ignored initializers and an adjacent
+standard-library shadow present, assert none executes, and still refuse dirty
+tracked helper or packager bytes. This is a source-import correction, not new
+host execution authority or a relaxation of the source custody requirements.
+The same-class audit also isolated all four workstation Python invocations
+with `-I`. Executed controls show a script-directory JSON shadow and a working-
+directory SSH-resolution import shadow can run without isolation, then remain
+unexecuted while the isolated reviewed commands succeed.
+
 The proposed procedure separately verifies the installed controller, its
 imports, the current boot and a positive quiescence observation under exclusive
 custody. It neither repairs #238's baseline inventory nor treats that historical

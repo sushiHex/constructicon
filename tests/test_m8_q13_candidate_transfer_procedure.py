@@ -78,6 +78,9 @@ def test_build_is_lf_manifest_covered_and_every_shell_fence_parses(tmp_path):
         assert option in transport
     assert "PACKAGE.sha256" in transport and "MANIFEST.sha256" not in transport
     assert " capture --out " in transport and "transport.py" in transport
+    document = DOCUMENT.read_bytes().decode()
+    assert document.count("uv run python ") == 4
+    assert document.count("uv run python -I ") == 4
 
 
 def portable(text, tmp_path):
@@ -186,8 +189,9 @@ def test_actual_export_bootstrap_and_guards(tmp_path, case):
 
 
 @pytest.mark.parametrize("helper_newlines", ["lf", "crlf"])
+@pytest.mark.parametrize("poison", ["none", "untracked-init", "ignored-init", "stdlib-shadow"])
 def test_documented_preparation_reads_reviewed_blob_and_covers_staged_helper(
-    tmp_path, helper_newlines,
+    tmp_path, helper_newlines, poison,
 ):
     checkout = tmp_path / "checkout"
     checkout.mkdir()
@@ -224,6 +228,19 @@ def test_documented_preparation_reads_reviewed_blob_and_covers_staged_helper(
     reviewed_helper = git("show", revision + ":scripts/m8_candidate_transfer.py")
     assert reviewed_helper == helper_lf and b"\r" not in reviewed_helper
     assert (checkout / "scripts/m8_candidate_transfer.py").read_bytes() == helper_working
+    marker = tmp_path / "unreviewed-import-executed"
+    if poison != "none":
+        relative = "json.py" if poison == "stdlib-shadow" else "scripts/__init__.py"
+        (checkout / relative).write_bytes((
+            "from pathlib import Path\nPath(" + repr(str(marker))
+            + ").write_bytes(b'unreviewed import executed')\n").encode())
+        if poison == "ignored-init":
+            (checkout / ".git/info").mkdir(exist_ok=True)
+            (checkout / ".git/info/exclude").write_bytes(b"scripts/__init__.py\n")
+            assert git("check-ignore", relative).strip() == relative.encode()
+        else:
+            assert relative.encode() in git("status", "--porcelain", "--untracked-files=all")
+        assert git("status", "--porcelain", "--untracked-files=no") == b""
     program, = fences(DOCUMENT, "Exact local preparation", "python")
     prepare = tmp_path / "prepare.py"
     prepare.write_bytes(program.encode())
@@ -234,6 +251,7 @@ def test_documented_preparation_reads_reviewed_blob_and_covers_staged_helper(
             str(values), revision]
     ran = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True,
                          timeout=30, check=False, env=environment)
+    assert not marker.exists(), "preparation must never execute unreviewed checkout imports"
     assert ran.returncode == 0 and ran.stderr == b"", ran.stderr
     manifest = (output / "PACKAGE.sha256").read_bytes()
     assert ran.stdout.strip().decode() == hashlib.sha256(manifest).hexdigest()
@@ -246,12 +264,17 @@ def test_documented_preparation_reads_reviewed_blob_and_covers_staged_helper(
     assert {"m8_candidate_transfer.py", "transport.py", "MANIFEST.sha256"} <= set(names)
     assert (output / "m8_candidate_transfer.py").read_bytes() == reviewed_helper
     assert (checkout / "scripts/m8_candidate_transfer.py").read_bytes() == helper_working
-    # The reviewed revision cannot silently bless a dirty tracked helper.
-    (checkout / "scripts/m8_candidate_transfer.py").write_bytes(b"unexpected\n")
-    dirty = subprocess.run([*argv[:6], str(tmp_path / "dirty-output"), *argv[7:]],
-                           stdin=subprocess.DEVNULL, capture_output=True, timeout=30,
-                           check=False, env=environment)
-    assert dirty.returncode != 0 and not (tmp_path / "dirty-output").exists()
+    # Exact Git-blob loading does not waive the tracked-clean document contract.
+    for name in ("m8_candidate_transfer.py", "m8_procedure_package.py"):
+        path = checkout / "scripts" / name
+        before = path.read_bytes()
+        path.write_bytes(b"unexpected\n")
+        dirty_output = tmp_path / ("dirty-" + path.stem)
+        dirty = subprocess.run([*argv[:6], str(dirty_output), *argv[7:]],
+                               stdin=subprocess.DEVNULL, capture_output=True, timeout=30,
+                               check=False, env=environment)
+        assert dirty.returncode != 0 and not dirty_output.exists() and not marker.exists()
+        path.write_bytes(before)
 
 
 @pytest.mark.parametrize("case", ["accept", "changed-helper", "preflight-refused"])
@@ -292,9 +315,9 @@ def test_exact_closed_transport_joins_manifests_t5_and_capture_argv(tmp_path, ca
     text = text.replace('"$SSH" -T', '"$SSH" "$TEST_STUB" ssh -T')
     # Replace only the platform interpreter/SSH/SCP and final capture dispatch;
     # leave the frozen T5 and every remaining command/join intact.
-    text = text.replace("uv run python scripts/m8_candidate_transfer.py capture",
+    text = text.replace("uv run python -I scripts/m8_candidate_transfer.py capture",
                         '"$TEST_PY" -I -S -B "$TEST_STUB" capture')
-    text = text.replace("uv run python", '"$TEST_PY" -I -S -B')
+    text = text.replace("uv run python -I", '"$TEST_PY" -I -S -B')
     text = 'scp() { "$TEST_PY" -I -S -B "$TEST_STUB" scp "$@"; }\n' + text
     script = tmp_path / "transport.sh"
     script.write_bytes(text.encode())
@@ -326,3 +349,40 @@ def test_exact_closed_transport_joins_manifests_t5_and_capture_argv(tmp_path, ca
         assert digest in capture[-1] and "sha256sum --check --strict --quiet" in capture[-1]
     else:
         assert ran.returncode != 0 and ran.stdout == b"transport-step-refused\n"
+
+
+@pytest.mark.parametrize("command", ["helper", "ssh-resolution"])
+def test_workstation_python_isolation_blocks_executable_import_shadows(tmp_path, command):
+    marker = tmp_path / "shadow-executed"
+    poison = ("from pathlib import Path\nPath(" + repr(str(marker))
+              + ").write_bytes(b'unreviewed import executed')\n").encode()
+    environment = dict(os.environ)
+    if command == "helper":
+        scripts = tmp_path / "scripts"
+        scripts.mkdir()
+        helper = scripts / "m8_candidate_transfer.py"
+        helper.write_bytes((ROOT / "scripts/m8_candidate_transfer.py").read_bytes())
+        (scripts / "json.py").write_bytes(poison)
+        arguments = [str(helper), "--help"]
+    else:
+        (tmp_path / "shutil.py").write_bytes(poison)
+        transport, = fences(DOCUMENT, "Exact closed transport")
+        selection, = [line for line in transport.splitlines() if line.startswith("SSH=")]
+        program = selection.split(" -c ", 1)[1].split("'", 2)[1]
+        binary = tmp_path / "bin" / ("ssh.exe" if os.name == "nt" else "ssh")
+        binary.parent.mkdir()
+        binary.write_bytes(b"fixture name for resolution only; never executed\n")
+        binary.chmod(0o755)
+        environment["PATH"] = str(binary.parent)
+        arguments = ["-c", program]
+    # Affirmatively prove the same input can execute the shadow without -I.
+    subprocess.run([sys.executable, *arguments], cwd=tmp_path, stdin=subprocess.DEVNULL,
+                   capture_output=True, timeout=30, check=False, env=environment)
+    assert marker.read_bytes() == b"unreviewed import executed"
+    marker.unlink()
+    isolated = subprocess.run([sys.executable, "-I", *arguments], cwd=tmp_path,
+        stdin=subprocess.DEVNULL, capture_output=True, timeout=30, check=False, env=environment)
+    assert isolated.returncode == 0 and isolated.stderr == b"", isolated.stderr
+    assert not marker.exists()
+    if command == "ssh-resolution":
+        assert isolated.stdout.decode().strip() == str(binary.resolve())
