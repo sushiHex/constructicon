@@ -15,6 +15,20 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## Successful payloads still need clean diagnostics
+
+The bounded #189 slice strengthens the inherited kept-launch verification and
+initial/requalification/active evidence-checker tests. Actual synthetic child
+warnings retain a positive payload and exit zero, yet fail the complete
+success assertions. The packaged kept-launch boundary also runs through the
+unchanged T5, which retains the warning and prevents the next shell command.
+This is source/diagnostic evidence, not host, account or installation evidence.
+
+The g11 kept-launch fragment helper already asserted stderr and was not a
+second defect. Production behavior and frozen runbooks were not changed;
+the broader stock-utility and private-host diagnostic audit is not established
+by these selected tests. No warning was suppressed or accepted as healthy.
+
 ## Complete drift facts are not fresh qualification
 
 The #238 investigation (#252) established source-level inventory/query-status

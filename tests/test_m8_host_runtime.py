@@ -1109,7 +1109,12 @@ class LaunchHost:
     def run(self, command: str, capsys: pytest.CaptureFixture[str]) -> tuple[int, dict]:
         feed(self.monkeypatch, self.kernel.read_text(encoding="utf-8"))
         status = artifacts.main([command, self.commit, str(self.workspace)])
-        return status, json.loads(capsys.readouterr().out)
+        captured = capsys.readouterr()
+        record = json.loads(captured.out)
+        if command == "verify-launch" and status == 0:
+            assert (captured.out, captured.err) == (
+                json.dumps(record, sort_keys=True, indent=2) + "\n", "")
+        return status, record
 
     def install(self, steps: int | None = None, sequence: list[list[str]] | None = None) -> int:
         """A root sequence (R13 by default), chained like ``&&``, minus owner and group options."""

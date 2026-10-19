@@ -13,6 +13,43 @@ From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-
 and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
 subscription route; see the dated section at the end of this record.
 
+## Selected operator success diagnostics (Refs #189)
+
+The bounded audit read #189's body and all eleven then-current comments. Its
+two selected gaps were pre-existing test omissions, not observed host warnings:
+
+| Active inherited boundary | Source evidence for the omission | Required consumer contract |
+| --- | --- | --- |
+| Kept-launch verifier success | `tests/test_m8_host_runtime.py:LaunchHost.run` parsed `capsys.readouterr().out` and discarded stderr; `test_new_commit_verifies_kept_launch_or_refuses_mismatch_without_mutation` checked successful verdict/state through it. | q13 `q13-c2-kept-launch` selects g11 C2's verifier/marker fence; declared clean diagnostics and original T5 require empty whole stderr. |
+| Initial/requalification evidence checker | `tests/test_m8_operator_commands.py:test_documented_evidence_checker_accepts_actual_clean_qualification` checked status/digest but omitted success stderr; the requalification path checked status alone. | q13 common Setup inherits the exact `check_evidence` producer; T5 requires the composed stdout alternative and empty stderr. |
+| Active evidence checker | `tests/test_m8_operator_commands.py:test_documented_checker_accepts_actual_active_startup` checked status/digest but omitted stderr. | The same common helper/T5 contract applies during q13 controls. |
+
+The selected existing success assertions now cover status, exact digest plus
+one LF and empty stderr. The existing launch fixture adds a full stdout-format
+and stderr assertion only for successful `verify-launch`; other commands and
+refusal semantics are unchanged. The formatting assertion follows the actual
+`m8_host_artifacts.main` JSON emitter, not an invented output contract.
+
+Focused tests inject a real child stderr write into each selected evidence
+checker mode while preserving its positive status and payload. A portable
+launch-main test substitutes only the unavailable verification facts, then
+proves the existing capture assertion rejects an extra diagnostic or JSON
+whitespace. A small actual packaged kept-launch step runs through unchanged T5:
+clean output accepts, a synthetic verifier warning refuses despite child exit
+zero, complete private captures/status remain, and actual shell `&&` gating
+prevents the next command. These are synthetic source/diagnostic proofs, not
+private-host, installation, account or vendor observations.
+
+Four focused assertion-kill mutants in the existing procedure inventory remove
+the respective stderr observations. Counts and exact-head gate results belong
+in the PR after execution. The g11 `_exec` helper already checked stderr; its
+kept-launch fragment was correctly rejected as an additional gap, not repaired
+or duplicated. Existing q13 preservation/G1/H7/C7-C8/export success paths were
+also already whole-stderr tight. This is not a complete stock-utility audit or
+an observation of `cp`, sudo, SSH, host Python or the retained drift tool.
+Frozen runbooks, production source and live authority remain unchanged; no
+warnings are suppressed or newly permitted and no host action is authorized.
+
 ## Retained drift baseline source investigation (Refs #238)
 
 The [investigation and proposal](M8-host-baseline-contract.md) confirms two

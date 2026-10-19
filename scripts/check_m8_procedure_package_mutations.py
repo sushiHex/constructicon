@@ -153,5 +153,31 @@ MUTANTS = (
 )
 
 
+DIAGNOSTIC_TESTS = "tests/test_m8_operator_diagnostics.py::"
+MUTANTS += (
+    ("kept-launch successful capture requires clean stderr",
+     "tests.test_m8_host_runtime:LaunchHost.run",
+     "(captured.out, captured.err)", '(captured.out, "")',
+     DIAGNOSTIC_TESTS + "test_existing_kept_launch_capture_checks_complete_success[stderr]"),
+    ("initial evidence checker success requires clean stderr",
+     "tests.test_m8_operator_commands:"
+     "test_documented_evidence_checker_accepts_actual_clean_qualification",
+     "(result.returncode, result.stdout, result.stderr)",
+     '(result.returncode, result.stdout, "")',
+     DIAGNOSTIC_TESTS + "test_existing_acceptance_rejects_real_child_warning[initial]"),
+    ("requalification evidence checker success requires clean stderr",
+     "tests.test_m8_operator_commands:"
+     "test_documented_evidence_checker_accepts_actual_clean_qualification",
+     "(requalified.returncode, requalified.stdout, requalified.stderr)",
+     '(requalified.returncode, requalified.stdout, "")',
+     DIAGNOSTIC_TESTS + "test_existing_acceptance_rejects_real_child_warning[qualify]"),
+    ("active evidence checker success requires clean stderr",
+     "tests.test_m8_operator_commands:test_documented_checker_accepts_actual_active_startup",
+     "(result.returncode, result.stdout, result.stderr)",
+     '(result.returncode, result.stdout, "")',
+     DIAGNOSTIC_TESTS + "test_existing_acceptance_rejects_real_child_warning[active]"),
+)
+
+
 if __name__ == "__main__":
     raise SystemExit(run(MUTANTS))
