@@ -24,7 +24,7 @@ substitution failed; a scalar alone does not affirm completion of its query.
 
 Credential-free source-equivalent fixtures exercise those two mechanisms:
 
-| Input or event | Historical mechanism | Proposed contract |
+| Input or event | Source-equivalent translated historical mechanism | Proposed contract |
 | --- | --- | --- |
 | Complete matching inventory | Unchanged | Unchanged |
 | Complete changed value | Drifted | Drifted |
@@ -45,7 +45,7 @@ No current baseline, host value, tool installation or qualification was measured
 ## Smallest proposed contract
 
 [`scripts/m8_host_baseline_contract.py`](../../../scripts/m8_host_baseline_contract.py)
-is a stdlib-only, source-reviewed proof module. It has no CLI, collector,
+is a stdlib-only, source-reviewable proof module. It has no CLI, collector,
 subprocess launch, file reader, capture writer or installation entry. It imports
 no Constructicon kernel and introduces no alternate runtime mechanism. Existing
 runner qualification and host-artifact verification record overlapping facts
@@ -72,11 +72,20 @@ not evidence that all future host platforms conform. Broader domains or a
 different inventory require a reviewed source-contract change, not automatic
 repair or acceptance of unknown keys.
 
+Here `architecture` is the historical tool's `dpkg --print-architecture` result,
+such as synthetic `amd64`, not the qualification report's machine architecture
+such as `x86_64`. The latter appears in D2's qualification evidence but is a
+different producer and contract. This proposal does not claim a generic
+cross-platform architecture vocabulary.
+
 `decode_baseline` requires bytes bounded to 2,048, exactly nine LF-terminated
 TSV rows, exactly one tab per row, no duplicate or unknown keys and no omitted
 key. Row order is immaterial. Empty, CRLF, control-bearing, undecodable and
 unterminated inputs refuse. A missing file is not synthesized as an empty
 baseline; a future reader must report it as unavailable before this decoder.
+The 2,048-byte limit is an early predecode size guard for malformed input, not
+the maximum valid inventory size: per-scalar limits make every valid inventory
+smaller. Query overflow is separately tested before scalar interpretation.
 The frozen `HostFacts` type also validates direct construction. No decoder
 silently rewrites or repairs historical bytes.
 
@@ -134,3 +143,27 @@ construction, real bounds, and the entire public comparison field inventory.
 The Bash fixture uses the existing portable Git Bash selector on Windows.
 Exact test/mutation and final-head gate results belong in the PR, not an
 unmeasured success claim here. No live or Linux physical evidence is claimed.
+
+## Narrow review dispositions
+
+The independent source/design review did not execute tests or repeat the source
+provenance extraction. Its proposed architecture widening was not adopted:
+fresh hash-pinned extraction confirms the drift key uses the dpkg producer,
+whereas D2's `x86_64` belongs to qualification evidence. Tests positively accept
+`amd64` and refuse the other producer's vocabulary. This was a review-premise
+mismatch, not an established historical incompatibility.
+
+The remaining precision improvements were adopted: explicitly label the table
+as translated evidence; enforce inventory/type correspondence with an explicit
+check that survives `-O`; execute the failed-substitution fixture even with
+`-euo pipefail`; use the existing direct lightweight Bash selector; and explain
+the predecode size guard separately from valid-input scalar limits. The initial
+unoptimized assertion was a source-proposal guard weakness, not a live defect.
+The first full local gate on `0d9cf09` passed lint, typing and layer checks but
+was stopped before pytest completion for these corrections. It is incomplete,
+not a passing gate. A corrected-head run and exact results belong in the PR.
+The table wording, stronger synthetic shell flags, import dependency and size
+explanation are proof/clarity improvements, not established historical/live
+defects. The correspondence guard weakness was introduced in this proposal;
+the architecture-domain concern was rejected for the source-specific reason
+above rather than silently broadened.

@@ -6,11 +6,12 @@ import dataclasses
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from scripts import m8_host_baseline_contract as contract
 
-from tests.test_m8_operator_commands import _bash
+from tests.git_bash import git_bash
 
 VALUES = {
     "kernel": "6.8.0-99-generic",
@@ -188,6 +189,44 @@ def test_every_published_field_is_fixed_or_known_key_without_host_values() -> No
     assert len(json.dumps(surface)) <= 256
 
 
+def test_architecture_is_dpkg_name_not_qualification_machine_name() -> None:
+    assert contract.decode_baseline(baseline()).architecture == "amd64"
+    results = observations()
+    assert contract.decode_observation(results).architecture == "amd64"
+    with pytest.raises(contract.InventoryRefused):
+        contract.decode_baseline(baseline({**VALUES, "architecture": "x86_64"}))
+    results["architecture"].stdout = b"x86_64\n"
+    with pytest.raises(contract.InventoryRefused):
+        contract.decode_observation(results)
+
+
+def test_inventory_type_correspondence_is_enforced_under_optimized_python(tmp_path) -> None:
+    source = Path(contract.__file__).read_text("utf-8")
+    target = "fields(HostFacts)"
+    assert source.count(target) == 1
+    probe = """import runpy, sys
+try:
+    runpy.run_path(sys.argv[1])
+except RuntimeError as exc:
+    if str(exc) != 'baseline inventory/type mismatch':
+        raise
+    sys.stdout.buffer.write(b'inventory-mismatch\\n')
+else:
+    sys.stdout.buffer.write(b'inventory-ok\\n')
+"""
+    for name, text, expected in (
+        ("valid.py", source, b"inventory-ok\n"),
+        ("invalid.py", source.replace(target, "fields(Comparison)"), b"inventory-mismatch\n"),
+    ):
+        path = tmp_path / name
+        path.write_text(text, encoding="utf-8", newline="\n")
+        result = subprocess.run(
+            [sys.executable, "-I", "-O", "-c", probe, str(path)],
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=10, check=False,
+        )
+        assert (result.returncode, result.stdout, result.stderr) == (0, expected, b"")
+
+
 # Deliberately narrow source-equivalent fixtures. These exercise the two reviewed
 # mechanisms, not the retained script's exact bytes, path, commands or installation.
 LEGACY_COMPARE = """import json, sys
@@ -221,9 +260,9 @@ def test_historical_comparison_mechanism_source_equivalent(blob: bytes, expected
 def test_failed_substitution_masking_source_equivalent(tmp_path) -> None:
     # Portable Bash is optional on Windows; the Python comparison proofs above
     # always run. No query touches host facts: the only query here is `exit 7`.
-    bash = _bash()
+    bash = git_bash()
     result = subprocess.run(
-        [bash, "-c", "set -uo pipefail; printf 'fact\\t%s\\n' \"$(exit 7)\""],
+        [bash, "-c", "set -euo pipefail; printf 'fact\\t%s\\n' \"$(exit 7)\""],
         stdin=subprocess.DEVNULL, capture_output=True, timeout=10, check=False, cwd=tmp_path,
     )
     assert (result.returncode, result.stdout, result.stderr) == (0, b"fact\t\n", b"")

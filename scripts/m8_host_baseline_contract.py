@@ -151,5 +151,6 @@ def compare(baseline: HostFacts, current: HostFacts) -> Comparison:
     return Comparison("drifted" if changed else "unchanged", changed)
 
 
-# The explicit type and inventory must stay in one-to-one correspondence.
-assert tuple(field.name for field in fields(HostFacts)) == KEYS
+# The explicit type and inventory must correspond even with python -O.
+if tuple(field.name for field in fields(HostFacts)) != KEYS:
+    raise RuntimeError("baseline inventory/type mismatch")
