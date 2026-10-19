@@ -7102,3 +7102,77 @@ all 18 tests on Windows with Python 3.11. Touched-file Ruff (including the root
 bootstrap, which the ordinary gate's `src`/`tests` scope does not lint) and
 `git diff --check` passed. Full-gate evidence is recorded in the PR; no Linux
 physical proof or private-host action is claimed by this development change.
+
+## q13 candidate-transfer preparation (Refs #245)
+
+The accepted q13 candidate remains on the parked host. This slice supplies a
+separate source-only transfer helper and a proposed read-only procedure; it
+does not spend another model/application attempt or claim a contribution PR
+exists. #186 remains open. The exact candidate, parent, run and input/render
+digests are independently recorded in
+[the transfer procedure](M8-q13-candidate-transfer.md).
+
+The artifact carries only the raw immutable commit, one vector blob and the
+closed historical acceptance projection. The receiver reconstructs the tree
+from its independently present base in a fresh quarantine, requires the exact
+commit identity, and runs the existing trusted vector exam. Historical
+projection matching and fresh examination are separate positive receipt fields.
+It never imports remote Git history or executes candidate Python. Per-operation
+Git output bounds apply before buffering: the larger pack bound is reserved for
+the workstation's independently trusted base tree, not host-supplied objects.
+
+Fable's design review rejected an incorrect fixed-metadata premise. Capture
+supplies fixed commit identity/message only when it creates the commit; a writer
+can have committed first. Source inspection confirmed this. The transfer
+therefore retains and bounds actual raw metadata, proves its object identity,
+and requires private inspection before publication. It does not fabricate
+headers or silently change the historically accepted object.
+
+The independent procedure review also corrected the initially reported SHA-256
+of the retained controller verifier. Reading the exact `5793ef98` Git blob as
+raw bytes yields `c3c714b2f6c1d1c62c9e1e9c31c6851277c6b661ee9c983efbceaa255911c856`
+(78,300 bytes, LF-only); two independent raw-byte checks agree. The earlier
+reported digest was wrong. A rehearsal that replaces the host verifier with a
+fixture cannot establish this historical literal, so its source provenance was
+checked separately rather than inferred from the passing mocked command.
+
+Independent review reproduced an introduced cancellation defect in the new
+capture helper: cancellation while awaiting process creation could leave a
+real child's full stdout pipe without a reader, then hang cleanup waiting for
+exit. The fix enrolls readers after recovering the owned spawn and joins them;
+its regression affirmatively fills the pipe before cancellation. A successful
+exit, both EOFs, empty stderr and valid bounded artifact are required before
+publishing a complete capture. Partial files never imply success or retry
+authority. Killing local SSH does not establish remote process termination.
+
+A fresh Windows integration checkout exposed a test-fixture defect: it committed
+CRLF working-copy bytes instead of modelling the reviewed LF Git blob. The
+production preparation correctly refused those bytes. The fixture now tests
+both LF and CRLF working copies against an LF index, proves that preparation
+uses the raw reviewed blob, and leaves the working copy unchanged. No production
+newline guard was relaxed to make the test pass.
+
+The PR #249 connector review found an introduced local preparation defect:
+the tracked-clean check ignored untracked and ignored package initializers,
+while adding the checkout to Python's import path let those initializers run.
+Credential-free regressions affirmatively reproduced execution of both kinds
+of initializer. Preparation now compiles the packager's exact reviewed Git
+blob in a registered private module without adding the checkout to the import
+path; the packager's imports are standard-library only. Rehearsals retain
+positive LF/CRLF preparation with untracked/ignored initializers and an adjacent
+standard-library shadow present, assert none executes, and still refuse dirty
+tracked helper or packager bytes. This is a source-import correction, not new
+host execution authority or a relaxation of the source custody requirements.
+The same-class audit also isolated all four workstation Python invocations
+with `-I`. Executed controls show a script-directory JSON shadow and a working-
+directory SSH-resolution import shadow can run without isolation, then remain
+unexecuted while the isolated reviewed commands succeed.
+
+The proposed procedure separately verifies the installed controller, its
+imports, the current boot and a positive quiescence observation under exclusive
+custody. It neither repairs #238's baseline inventory nor treats that historical
+drift tool as fresh qualification. Review and CI must cover the final executable
+composition before an exact execution go. No VM, vendor binary, credential,
+refresh or model call has been run for this preparation; portable rehearsals
+are not live export evidence. Final test and mutation counts belong in the PR
+evidence once those runs finish, not in an inferred passing claim here.
