@@ -44,6 +44,34 @@ message copies must also be well-formed: agreement alone does not validate
 their payload shapes. The M8 implementation record and exact-head PR evidence
 distinguish portable substitution from the required Linux case.
 
+## Fixture lease recovery must use the actual caller contract
+
+The scripted Pi READ successor binds the supplied program/runtime and semantic
+workspace configuration to a fixture-only provider identity. Installation paths
+are private custody, not public content identity. Disposal retains its original
+Git closure/path/authority checks without requiring the fixture executable or
+launcher locator to remain available. One benign assembly probe permits one
+acquisition per provider instance; it is not real Pi availability.
+
+Early recovery tests supplied live-only control and source-graph fields absent
+from the ordinary walker recovery context, hiding an introduced refusal. The
+reference now uses independently supplied manifest/binding/epoch facts, while
+live owner context is sealed separately. The accepting regression injects hard
+death immediately after the real lease record and reconstructs a ControlPlane;
+it does not manufacture a row or callback. A public deadline also proved
+extendable despite the sealed grant. Its read-only observation now preserves
+the original pre-wait budget, and the direct adapter caps remaining time at the
+grant without resetting consumed time.
+
+Portable host abandonment and literal Linux controller death are distinct
+claims. The required lifecycle lane executes five fixture death phases and
+retains both physical guard-lock observations, successor quiescence/closure and
+checkpoint/no-redispatch facts. Only the executed final-head lane and artifact
+census establish those physical results. None supplies vendor startup,
+authentication, a model request or Claude-first sequencing credit. Completion
+context belongs in the initial coherent contribution where possible: a later
+documentation commit creates a new head that still needs its own required CI.
+
 ## Pi protocol fit does not select its authentication boundary
 
 The proposed Pi READ design follows the bounded source screen with a concrete
