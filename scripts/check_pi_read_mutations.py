@@ -28,6 +28,8 @@ MUTANTS = (
      "False", WIRE + "test_global_bound_and_nested_new_sites_are_walked"),
     ("analysis bound demotes", DECODER + "message_end", "if self.final != reply:", "if False:",
      WIRE + "test_reply_bound_binds_at_encoded_json_bytes_and_salvages_one_over"),
+    ("final analysis contains nonblank text", DECODER + "message_end", "if not reply.strip():",
+     "if False:", WIRE + "test_terminal_analysis_requires_nonblank_joined_reply"),
     ("read content shape", PROTOCOL + "text_blocks",
      'raise ValueError("unsupported READ content")', "return",
      WIRE + "test_matching_malformed_read_content_is_not_schema_proof"),

@@ -379,6 +379,8 @@ class PiDecoder:
                     or any(call.result is None for call in self.calls.values())):
                 raise ValueError("final analysis lacks completed read")
             reply = "".join(text)
+            if not reply.strip():
+                raise ValueError("final analysis has no nonblank text")
             self.final = bounded(reply, REPLY_BYTES)
             if self.final != reply:
                 self.damage("analysis publication limit exceeded")

@@ -237,6 +237,34 @@ def test_final_analysis_requires_actual_completed_read():
     assert decoded(transform=change).outcome(CLEAN).status == "partial"
 
 
+@pytest.mark.parametrize("text", [[""], [" \t\n"], ["", "", ""]],
+                         ids=["empty", "whitespace", "all-empty-blocks"])
+def test_terminal_analysis_requires_nonblank_joined_reply(text):
+    def change(records):
+        final = next(item["message"] for item in records if item["type"] == "message_end"
+                     and item["message"].get("stopReason") == "stop")
+        final["content"] = [{"type": "text", "text": block} for block in text]
+        return records
+
+    outcome = decoded(transform=change).outcome(CLEAN)
+    assert outcome.status == "partial"
+    assert outcome.output is outcome.raw_reply is None
+
+
+def test_terminal_analysis_keeps_meaningful_text_among_empty_blocks_unchanged():
+    text = ["", " \t", " meaningful analysis é ", "\n", ""]
+
+    def change(records):
+        final = next(item["message"] for item in records if item["type"] == "message_end"
+                     and item["message"].get("stopReason") == "stop")
+        final["content"] = [{"type": "text", "text": block} for block in text]
+        return records
+
+    outcome = decoded(transform=change).outcome(CLEAN)
+    assert outcome.status == "success"
+    assert outcome.output == outcome.raw_reply == "".join(text)
+
+
 def test_message_completions_require_matching_starts():
     def change(records):
         return [item for item in records if item["type"] not in ("message_start", "message_update")]

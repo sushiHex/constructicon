@@ -48,6 +48,13 @@ Both permitting stop/tool-use updates and contradictory/refusing updates are
 tested. The Linux addition proves the mounted READ accepting path, not the
 design's complete authority-denial or durable-recovery matrix.
 
+Connector review reproduced an introduced empty-analysis defect: empty,
+whitespace-only and multiple all-empty text blocks could publish success after
+a completed read. Terminal analysis now requires nonblank joined text while
+preserving the original meaningful reply. Regression cases cover all three
+refusals and mixed empty/meaningful blocks; a guard-removal mutant must fail
+by assertion. This finding was adopted; no review finding was rejected.
+
 Full leased assembly, launch identity and durable recovery remain subsequent
 proof obligations under the accepted design. This slice does not satisfy the
 whole #42 acceptance scope or enable a live provider. Exact-head tests,
