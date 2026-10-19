@@ -22,7 +22,7 @@ from tests.substrate.test_native_codex_mediation import write_evidence
 
 HANDOFFS = Path(__file__).resolve().parents[1] / "docs/plans/handoffs"
 MARKER = b"d2-prior-records-preserved\n"
-WARNING = (b"cp: warning: behavior of -n is non-portable and may change in future; "
+WARNING = (b"/usr/bin/cp: warning: behavior of -n is non-portable and may change in future; "
            b"use --update=none instead\n")
 EVIDENCE = "n3c-stock-utility-cp.json"
 

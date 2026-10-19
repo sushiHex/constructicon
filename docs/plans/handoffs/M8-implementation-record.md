@@ -39,10 +39,19 @@ coreutils version, producer-source digest, complete producer/transport status
 and diagnostics, source/archive byte facts and next-command observation. The
 existing writer checks that the basename belongs to the always-uploaded lane
 namespace; a new exact subnamespace census refuses missing or additional files.
-The runner-specific expectation is three portability warnings despite successful
-copies and exit zero. The first exact-head CI will establish or refute that
-expectation; unexpected diagnostics fail and remain evidence, not a reason to
-accept arbitrary warnings. Local Windows skips do not establish this observation.
+The runner-specific assertion requires three portability warnings despite
+successful copies and exit zero. Unexpected diagnostics fail and remain
+evidence, not a reason to accept arbitrary warnings. Local Windows skips do
+not establish this observation.
+
+The first required Ubuntu observation retained GNU coreutils 9.4, producer exit
+zero, all three warning lines, the exact marker, unchanged sources and matching
+archive, plus T5 refusal and no following command. Its test nevertheless failed:
+the introduced expectation used `cp:` while the actual frozen absolute command
+emitted `/usr/bin/cp:`. Artifact inspection established that literal-prefix
+mistake; the correction pins the complete observed absolute-command diagnostic,
+not a permissive warning pattern. That first failed gate is not final-head
+verification, and this disposable runner observation is not a private-host fact.
 
 No production source, frozen test/runbook, vendor binary, VM, credential, retry,
 timeout or host qualification is changed. Counts, actual Ubuntu observations and
