@@ -155,6 +155,11 @@ MUTANTS = (
 
 DIAGNOSTIC_TESTS = "tests/test_m8_operator_diagnostics.py::"
 MUTANTS += (
+    ("historical preservation's three warnings cannot pass T5",
+     "tests.test_m8_stock_utility_diagnostics:transport_program", "return body",
+     'return body.replace("assert os.fstat(stderr.fileno()).st_size == 0", "pass")',
+     "tests/test_m8_stock_utility_diagnostics.py::"
+     "test_preservation_success_with_three_synthetic_warnings_cannot_continue[True]"),
     ("kept-launch successful capture requires clean stderr",
      "tests.test_m8_host_runtime:LaunchHost.run",
      "(captured.out, captured.err)", '(captured.out, "")',

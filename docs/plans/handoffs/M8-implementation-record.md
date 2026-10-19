@@ -13,6 +13,42 @@ From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-
 and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
 subscription route; see the dated section at the end of this record.
 
+## Historical P2 stock-utility diagnostics (Refs #189)
+
+This additive test-only slice targets the original stock-utility mismatch,
+not another change to the selected #253 boundary assertions. Source inventory:
+
+| Boundary | Established source fact | Disposition |
+| --- | --- | --- |
+| Frozen maintenance P2 | `M8-maintenance-session.md`, P2, calls `/usr/bin/cp -p --no-clobber` for three records before its positive marker. Its old `test_d2_preservation_copies_fixed_records_before_lr2_without_overwrite` checks copy bytes and status but omits accepting stderr. | Preserve both historical files. An actual-child synthetic warning still passes that old test, affirmatively reproducing its limitation. |
+| Current q13 preservation | `test_actual_packaged_preservation_through_t5_with_disposable_files` already checks complete T5 diagnostics over the exclusive Python archive producer, including a warning refusal. | Already covered, not another omitted guard; no duplicate q13 implementation or runbook edit. |
+| Stock `cp` on the declared runner | A Git Bash coreutils version is not Ubuntu evidence, and upstream/version expectations alone are not an observation. | Execute the exact frozen P2 body on the existing explicit Ubuntu 24.04 foundation runner, as an unprivileged user over disposable files. Require its dedicated flag and refuse an incompatible environment rather than silently skipping. |
+
+The new portable controls substitute only the deprecated option/diagnostic
+boundary: actual stock copies, original archive guards and `cmp` still run.
+They bind unchanged source and archive bytes, producer exit zero and exact marker
+to either empty stderr or three explicitly synthetic warnings. The unchanged
+q12 T5 accepts the clean case, refuses the warnings, retains complete captures
+and status, and its actual shell `&&` prevents the next command. Removing its
+stderr assertion in a disposable in-memory test copy must be assertion-killed;
+frozen procedure bytes remain untouched.
+
+The dedicated runner probe uses the original P2 body without substitutions.
+Its existing lane artifact receives `n3c-stock-utility-cp.json`, including actual
+coreutils version, producer-source digest, complete producer/transport status
+and diagnostics, source/archive byte facts and next-command observation. The
+existing writer checks that the basename belongs to the always-uploaded lane
+namespace; a new exact subnamespace census refuses missing or additional files.
+The runner-specific expectation is three portability warnings despite successful
+copies and exit zero. The first exact-head CI will establish or refute that
+expectation; unexpected diagnostics fail and remain evidence, not a reason to
+accept arbitrary warnings. Local Windows skips do not establish this observation.
+
+No production source, frozen test/runbook, vendor binary, VM, credential, retry,
+timeout or host qualification is changed. Counts, actual Ubuntu observations and
+final-head execution/review evidence belong in the PR. The broader #189 utility
+audit and private-host UNKNOWN outputs remain separate obligations.
+
 ## Selected operator success diagnostics (Refs #189)
 
 The bounded audit read #189's body and all eleven then-current comments. Its
