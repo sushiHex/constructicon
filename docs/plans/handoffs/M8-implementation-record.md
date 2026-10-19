@@ -7201,10 +7201,20 @@ preserved. Existing unsupported-host skips do not satisfy the required Linux
 step, and an acquisition failure remains a failed CI gate.
 
 Credential-free tests cover valid/missing/wrong-digest local bytes, exact
-selection reuse, a single bounded acquisition attempt, cache-hit revalidation,
-safe CLI diagnostics and accepting CLI output. Network calls are replaced only
+selection reuse, one acquisition attempt with the unchanged request timeout,
+cache-hit revalidation, safe CLI diagnostics and accepting CLI output. Network calls are replaced only
 at the HTTP primitive. Workflow checks require preparation before the separate
 offline proof. Exact-head CI and the real isolated import remain the execution
 evidence for the changed workflow; portable tests do not establish that result.
 No accepted plan bytes, dependencies, private-host procedures, credentials,
 vendor execution or VM state are changed.
+
+A follow-up self-review reproduced a diagnostic gap: a truncated response
+raises `http.client.IncompleteRead`, not `OSError`, and was safely refused but
+reported only as an unexpected preparation failure. The fetch-only exception
+handling now also covers its documented `HTTPException` base, preserving the
+attempted package and fixed transport class without exposing response bytes.
+The regression raises during response reading, asserts no wheel publication,
+and retains the distinct unexpected-implementation-error case. This taxonomy
+follows the [Python HTTP client contract](https://docs.python.org/3.11/library/http.client.html#http.client.IncompleteRead),
+not a catch-all that would misclassify arbitrary implementation errors.

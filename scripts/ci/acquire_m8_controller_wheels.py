@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import io
 import os
 import re
@@ -56,7 +57,7 @@ def acquire(directory: Path, selected: list[dict[str, str]]) -> None:
             try:
                 with urllib.request.urlopen(wheel["url"], timeout=120) as response:
                     data = response.read()
-            except (OSError, ValueError):
+            except (OSError, ValueError, http.client.HTTPException):
                 raise WheelFailure(wheel["name"], "transport") from None
             validate(data, wheel)
             try:

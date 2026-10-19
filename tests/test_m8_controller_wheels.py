@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import io
 import urllib.error
 from pathlib import Path
@@ -101,7 +102,7 @@ def test_failed_acquisition_names_only_the_package_and_failure_class(
     assert not (destination / wheel["file"]).exists()
 
 
-@pytest.mark.parametrize("state", ["valid", "transport", "unexpected"])
+@pytest.mark.parametrize("state", ["valid", "transport", "truncated", "unexpected"])
 def test_cli_reports_success_or_only_a_safe_acquisition_failure(
     wheels, selection, tmp_path: Path, monkeypatch, capsys, state: str,
 ) -> None:
@@ -111,9 +112,15 @@ def test_cli_reports_success_or_only_a_safe_acquisition_failure(
     monkeypatch.setattr(wheels.artifacts, "host_glibc", lambda: 39)
     monkeypatch.setattr(wheels, "selected_wheels", lambda *_: [wheel])
 
+    class TruncatedResponse(io.BytesIO):
+        def read(self, *_args, **_kwargs):
+            raise http.client.IncompleteRead(b"https://private.invalid/private-path")
+
     def failure(*_args, **_kwargs):
         if state == "transport":
             raise urllib.error.URLError("https://private.invalid/private-path")
+        if state == "truncated":
+            return TruncatedResponse(data)
         if state == "unexpected":
             raise RuntimeError("https://private.invalid/private-path")
         return io.BytesIO(data)
@@ -121,7 +128,7 @@ def test_cli_reports_success_or_only_a_safe_acquisition_failure(
     monkeypatch.setattr(wheels.urllib.request, "urlopen", failure)
     assert wheels.main([str(tmp_path / "wheels")]) == (0 if state == "valid" else 1)
     captured = capsys.readouterr()
-    if state == "transport":
+    if state in {"transport", "truncated"}:
         assert captured.out == "" and captured.err == "controller wheels: demo: transport\n"
     elif state == "unexpected":
         assert captured.out == ""
@@ -129,6 +136,8 @@ def test_cli_reports_success_or_only_a_safe_acquisition_failure(
     else:
         assert captured.out == "controller wheels: validated 1 locked files\n"
         assert captured.err == ""
+    if state != "valid":
+        assert not (tmp_path / "wheels" / wheel["file"]).exists()
     assert str(wheels.WheelFailure("private/path", "transport")) == (
         "controller wheels: invalid-package: transport")
 
