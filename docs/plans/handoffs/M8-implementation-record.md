@@ -7244,7 +7244,8 @@ No model/application rerun, refresh, installation, baseline rewrite or new
 qualification occurred. Private raw capture and original commit metadata stay
 outside the public repository under owner custody; retain them through issue
 closeout and until explicit disposal direction, with no automatic deletion.
-The private stable reference is `q13-transfer-52a24d3`.
+Private evidence locators are retained separately and communicated only through
+the private channel; no locator is required to establish the public result.
 
 The ordinary contribution preserves all 10,839 vector bytes at
 `tests/vectors/plan_manifest.json`. It does not import the original commit or
@@ -7262,3 +7263,9 @@ Markdown heading. It refused before producing command files or starting the
 VM; the corrected extractor preserves fenced bodies verbatim. This was not a
 failed host step or a retried transfer. Full contribution-PR gates and review
 remain separate evidence; retrieval alone does not close #186.
+
+Review found an unnecessary private evidence label in this public record. It
+was removed, and the contribution's other files and publication text were
+checked for the same class. This correction does not erase earlier public
+revisions; no credential, host address or filesystem path was exposed by that
+label. The vector and executable source bytes are unchanged.
