@@ -343,12 +343,12 @@ async def test_documented_evidence_checker_accepts_actual_clean_qualification(
     path = directory / "qualification.json"
     revision = write_evidence(path, evidence)
     result = _check_evidence("initial", path, "maintenance", "-", policy, directory)
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == str(revision)
+    assert (result.returncode, result.stdout, result.stderr) == (0, str(revision) + "\n", "")
     # Only the first qualification is unsealed: a requalification compares the
     # account with the prior seal, and the first one has none to compare with.
     requalified = _check_evidence("qualify", path, "maintenance", seal(plan), policy, directory)
-    assert requalified.returncode == 0, requalified.stderr
+    assert (requalified.returncode, requalified.stdout, requalified.stderr) == (
+        0, str(revision) + "\n", "")
     for mode, expected in (("qualify", "-"), ("initial", seal(plan)),
                            ("qualify", seal(plan, OTHER_ACCOUNT))):
         refused = _check_evidence(mode, path, "maintenance", expected, policy, directory)
@@ -467,8 +467,7 @@ async def test_documented_checker_accepts_actual_active_startup(
     path = directory / "active.json"
     revision = write_evidence(path, evidence)
     result = _check_evidence("active", path, "active", seal(plan), policy, directory)
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == str(revision)
+    assert (result.returncode, result.stdout, result.stderr) == (0, str(revision) + "\n", "")
     assert _check_evidence("active", path, "active", "wrong", policy, directory).returncode != 0
     # The account, not just the plan: another account's seal, or none, never passes.
     for mode, custody, expected in (
