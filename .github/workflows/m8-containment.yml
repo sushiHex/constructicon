@@ -208,8 +208,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Per-test protected roots own their stores, synthetic peers and
-          # joined processes. Only the immutable runtime/profile is reused;
+          # Per-test protected roots own their stores and synthetic launch sets.
+          # Only the immutable runtime/profile is reused;
           # this suite needs neither foundation's N3a store nor its relay.
           # The existing isolated runner overlaps its real holds with that lane.
           sudo env RUNNER_ENVIRONMENT=github-hosted M8_STORE_PROVISION_REQUIRED=1 \

@@ -104,7 +104,7 @@ its ten slowest phases, and each mutant reports elapsed time, including failure
 and timeout outcomes. Only assertion failures count as killed mutants.
 
 The protected-root N3c suite creates and removes per-test store roots; synthetic
-launch sets belong to those same roots. It joins owned processes before cleanup.
+launch sets belong to those same roots.
 It reuses only that runner's immutable runtime and profiled bubblewrap, so its
 genuine qualification holds can overlap foundation work on a separate host.
 The N3c persistence suite still follows N3a/N3b on foundation; its shared-store
