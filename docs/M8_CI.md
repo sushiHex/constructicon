@@ -91,8 +91,8 @@ The stable `containment` check aggregates four independent hosted-runner lanes:
 
 | Lane | Proofs |
 | --- | --- |
-| `foundation` | N3a store custody; N3b egress; the N4-preparation proxy bridge, including the pinned binary's telemetry flush to a controlled peer; the zone's sealed catalog and environment file on production's own launch path; launcher, workspace, capture, gates and duplex; their mutation inventories |
-| `lifecycle` | Native startup, test-only provider placement and journal recovery; their mutation inventories |
+| `foundation` | N3a store custody; N3b egress; N3c persistence, refresh and non-widening over that shared store; the N4-preparation proxy bridge, including the pinned binary's telemetry flush to a controlled peer; the zone's sealed catalog and environment file on production's own launch path; launcher, workspace, capture, gates and duplex; their mutation inventories |
+| `lifecycle` | N3c protected-root maintenance and packaged qualification; native startup, test-only provider placement and journal recovery; their mutation inventories |
 | `combined` | Combined startup/mediation and Codex adapter; combined and N2 mutation inventories |
 | `mediation` | Credential-free native mediation probes and their mutation inventory |
 
@@ -102,6 +102,14 @@ gets a fresh process. No deadline, test file or mutation inventory is removed.
 The workflow inventory test pins that routing. Each pytest invocation reports
 its ten slowest phases, and each mutant reports elapsed time, including failure
 and timeout outcomes. Only assertion failures count as killed mutants.
+
+The protected-root N3c suite creates and removes per-test store roots; synthetic
+launch sets belong to those same roots. It joins owned processes before cleanup.
+It reuses only that runner's immutable runtime and profiled bubblewrap, so its
+genuine qualification holds can overlap foundation work on a separate host.
+The N3c persistence suite still follows N3a/N3b on foundation; its shared-store
+dependency and the N3c mutation inventory stay there. Evidence follows the lane
+that produced it under the same upload patterns and retention.
 
 For pull requests, the classifier from the exact base commit inspects a complete
 committed merge-base-to-head diff; PR code cannot grant itself the prose-only

@@ -38,9 +38,12 @@ PROOFS = {
         "foundation",
         "tests/substrate/test_native_egress_containment.py scripts/check_m8_n3b_mutations.py",
     ),
-    "Prove N3c maintenance, refresh and non-widening": (
+    "Prove N3c protected-root maintenance and packaged qualification": (
+        "lifecycle",
+        "tests/substrate/test_operator_store_maintenance_restart.py",
+    ),
+    "Prove N3c persistence, refresh and non-widening": (
         "foundation",
-        "tests/substrate/test_operator_store_maintenance_restart.py "
         "tests/substrate/test_operator_store_persistence.py scripts/check_m8_n3c_mutations.py",
     ),
     "Prove the N4 proxy bridge in the native zone": (
