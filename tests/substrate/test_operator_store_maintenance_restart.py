@@ -27,7 +27,9 @@ from constructicon.core.errors import ContractViolation
 from constructicon.core.identity import canonical_json, digest
 from constructicon.core.native_operator import NativeOperatorStoreIdentityV1
 from constructicon.substrate.executors import operator_store as stores
+from tests import native_account
 from tests.isolated_startup import peer_program
+from tests.substrate._evidence_secrecy import MAINTENANCE_N4, assert_clean_evidence
 from tests.substrate.test_native_codex_mediation import write_evidence
 from tests.substrate.test_native_layout import SOURCE as SYNTHETIC_CATALOG
 from tests.substrate.test_operator_store_restart import protected_root as protected_root
@@ -549,6 +551,15 @@ report.write_text(json.dumps(facts))
 """
 
 
+def assert_maintenance_evidence() -> None:
+    directory = os.environ.get("M8_EVIDENCE_DIRECTORY")
+    assert_clean_evidence(
+        Path(directory) if directory else None, "n4-*.json", MAINTENANCE_N4,
+        native_account.fixture_tokens(),
+        required=bool(os.environ.get("M8_STORE_PROVISION_REQUIRED")),
+    )
+
+
 def test_the_service_lane_inherits_only_the_held_lock_and_proves_it(protected_root):
     """Host-runtime interface item 4: root withdraws; the service lane proves custody."""
     root = protected_root
@@ -610,6 +621,7 @@ def test_the_service_lane_inherits_only_the_held_lock_and_proves_it(protected_ro
         "other_parent_refused": True, "no_inherited_lock_refused": True,
         "self_taken_lock_refused": True, "withdrawal_outlives_the_helper": True,
     })
+    assert_maintenance_evidence()
 
 
 REBOOT_ID = "00000000-0000-4000-8000-000000000b07"

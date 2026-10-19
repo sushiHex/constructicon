@@ -11,7 +11,13 @@ from pathlib import Path
 
 import pytest
 
+from tests import native_account
 from tests.git_bash import git_bash
+from tests.substrate._evidence_secrecy import (
+    BRIDGE_N4,
+    MAINTENANCE_N4,
+    assert_clean_evidence,
+)
 
 WORKFLOW = Path(__file__).parents[1] / ".github/workflows/m8-containment.yml"
 CLASSIFIER = Path(__file__).parents[1] / "scripts/ci/m8_ci_scope.py"
@@ -188,6 +194,49 @@ def test_lane_evidence_is_disjoint_and_bound_to_the_reviewed_head():
     assert "M8_EGRESS_REQUIRED=1" in text
     assert "codex-*.json" in text
     assert "duplex-*.json" in text
+
+
+@pytest.mark.parametrize("names", [BRIDGE_N4, MAINTENANCE_N4])
+def test_each_lanes_n4_evidence_has_an_exact_clean_census(names, tmp_path):
+    for name in names:
+        (tmp_path / name).write_text('{"credential_free_fixture": true}')
+    assert_clean_evidence(tmp_path, "n4-*.json", names, native_account.fixture_tokens())
+
+
+@pytest.mark.parametrize("names", [BRIDGE_N4, MAINTENANCE_N4])
+@pytest.mark.parametrize("damage", ["missing", "injected", "token", "begin", "private"])
+def test_each_lanes_n4_census_or_secret_damage_is_refused(names, damage, tmp_path):
+    for name in names:
+        (tmp_path / name).write_text('{"credential_free_fixture": true}')
+    if damage == "missing":
+        (tmp_path / names[0]).unlink()
+    elif damage == "injected":
+        (tmp_path / "n4-injected.json").write_text("{}")
+    elif damage == "token":
+        (tmp_path / names[0]).write_text(native_account.fixture_tokens()[0])
+    elif damage == "begin":
+        (tmp_path / names[0]).write_text("-----BEGIN CERTIFICATE-----")
+    else:
+        (tmp_path / names[0]).write_text("PRIVATE KEY")
+    with pytest.raises(AssertionError):
+        assert_clean_evidence(tmp_path, "n4-*.json", names, native_account.fixture_tokens())
+
+
+def test_required_maintenance_evidence_refuses_a_missing_directory(monkeypatch, tmp_path):
+    from tests.substrate.test_operator_store_maintenance_restart import (
+        assert_maintenance_evidence,
+    )
+
+    monkeypatch.setenv("M8_STORE_PROVISION_REQUIRED", "1")
+    monkeypatch.delenv("M8_EVIDENCE_DIRECTORY", raising=False)
+    with pytest.raises(AssertionError, match="required evidence directory is missing"):
+        assert_maintenance_evidence()
+    monkeypatch.delenv("M8_STORE_PROVISION_REQUIRED")
+    assert_maintenance_evidence()
+    monkeypatch.setenv("M8_STORE_PROVISION_REQUIRED", "1")
+    monkeypatch.setenv("M8_EVIDENCE_DIRECTORY", str(tmp_path))
+    (tmp_path / MAINTENANCE_N4[0]).write_text("{}")
+    assert_maintenance_evidence()
 
 
 def test_literal_maintenance_name_coverage_includes_both_isolated_startup_outcomes():

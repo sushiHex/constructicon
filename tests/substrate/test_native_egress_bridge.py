@@ -68,6 +68,7 @@ from tests.native_startup import (
     configuration,
     initialize,
 )
+from tests.substrate._evidence_secrecy import BRIDGE_N4, assert_clean_evidence
 from tests.substrate.test_egress import CONTROLLED, until
 from tests.substrate.test_linux_containment import launcher as launcher
 from tests.substrate.test_native_codex_mediation import write_evidence
@@ -1230,26 +1231,20 @@ def test_no_evidence_file_contains_key_material():
         if os.environ.get("M8_BRIDGE_REQUIRED"):
             pytest.fail("the required N4 bridge lane has no evidence directory")
         pytest.skip("N4 bridge evidence is written only by the provisioned Linux lane")
-    files = sorted(Path(directory).glob("n4-*.json"))
-    if os.environ.get("M8_BRIDGE_REQUIRED"):
-        # The root lane's inherited-custody proof runs earlier in the same
-        # foundation lane and writes into the same evidence directory, so its
-        # file is present too and is scanned with the bridge's own.
-        assert [path.name for path in files] == [
-            "n4-bridge.json", "n4-inherited-maintenance.json",
-            "n4-lane-login.json", "n4-lane-startup.json", "n4-lane-trust.json",
-            "n4-pinned-client.json",
-        ]
-    accounts = sorted(Path(directory).glob("n5-account-*.json"))
-    if os.environ.get("M8_BRIDGE_REQUIRED"):
-        assert [path.name for path in accounts] == sorted(
-            f"n5-account-{case}.json" for case in native_account.CASES)
-    explicit = sorted(Path(directory).glob("n5-explicit-refresh-*.json"))
-    if os.environ.get("M8_BRIDGE_REQUIRED"):
-        assert [path.name for path in explicit] == sorted(
-            f"n5-explicit-refresh-{case}.json" for case in EXPLICIT_REFRESH_CASES)
-    tokens = native_account.fixture_tokens()
-    for path in files + accounts + explicit:
-        text = path.read_text()
-        assert "-----BEGIN" not in text and "PRIVATE KEY" not in text, path.name
-        assert not any(token in text for token in tokens), path.name
+    required = bool(os.environ.get("M8_BRIDGE_REQUIRED"))
+    assert_clean_evidence(
+        Path(directory), "n4-*.json",
+        BRIDGE_N4 if required else None,
+        native_account.fixture_tokens(),
+    )
+    assert_clean_evidence(
+        Path(directory), "n5-account-*.json",
+        [f"n5-account-{case}.json" for case in native_account.CASES] if required else None,
+        native_account.fixture_tokens(),
+    )
+    assert_clean_evidence(
+        Path(directory), "n5-explicit-refresh-*.json",
+        [f"n5-explicit-refresh-{case}.json" for case in EXPLICIT_REFRESH_CASES]
+        if required else None,
+        native_account.fixture_tokens(),
+    )
