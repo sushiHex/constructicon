@@ -15,6 +15,19 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## Superseded PR verification and default-branch evidence
+
+The #261 workflow slice groups verification by workflow and PR, canceling older
+runs only within that PR. Non-PR runs include their unique run id: disabling
+running-job cancellation alone would still allow GitHub to replace a pending
+run in a shared concurrency group. Default-branch evidence therefore retains
+independent groups. All verification, mutation and fail-closed aggregate jobs
+remain unchanged.
+
+The source contract pins this policy; it does not execute GitHub's concurrency
+scheduler. Actual cancellation and final-head completion evidence belong to
+the implementation PR. No timeout, retry or proof requirement was relaxed.
+
 ## Pi preparation is not Pi qualification
 
 The accepted READ design permits a credential-free direct-executor slice before
