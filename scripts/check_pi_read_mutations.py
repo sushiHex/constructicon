@@ -87,6 +87,8 @@ MUTANTS = (
     ("input budget includes both commands", ADAPTER + "PiReadConversation.__call__",
      "if self.spent > self.input_limit:", "if False:",
      TASK + "test_input_budget_counts_both_commands_before_delivery"),
+    ("clean process stderr", DECODER + "outcome", "or result.stderr)", "or False)",
+     TASK + "test_process_completion_is_independently_required"),
     *(
         ("clean process " + field, DECODER + "outcome", before, "False",
          TASK + "test_process_completion_is_independently_required")
@@ -94,7 +96,6 @@ MUTANTS = (
             ("supervisor", "result.returncode != 0"),
             ("payload", "result.payload_returncode != 0"),
             ("bound", "result.bound_exceeded is not None"),
-            ("stderr", "result.stderr"),
         )
     ),
 )
