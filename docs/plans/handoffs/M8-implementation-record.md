@@ -7145,6 +7145,13 @@ exit, both EOFs, empty stderr and valid bounded artifact are required before
 publishing a complete capture. Partial files never imply success or retry
 authority. Killing local SSH does not establish remote process termination.
 
+A fresh Windows integration checkout exposed a test-fixture defect: it committed
+CRLF working-copy bytes instead of modelling the reviewed LF Git blob. The
+production preparation correctly refused those bytes. The fixture now tests
+both LF and CRLF working copies against an LF index, proves that preparation
+uses the raw reviewed blob, and leaves the working copy unchanged. No production
+newline guard was relaxed to make the test pass.
+
 The proposed procedure separately verifies the installed controller, its
 imports, the current boot and a positive quiescence observation under exclusive
 custody. It neither repairs #238's baseline inventory nor treats that historical

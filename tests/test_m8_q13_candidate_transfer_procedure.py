@@ -185,7 +185,10 @@ def test_actual_export_bootstrap_and_guards(tmp_path, case):
             assert b"candidate-transfer-import-refused" in ran.stderr
 
 
-def test_documented_preparation_reads_reviewed_blob_and_covers_staged_helper(tmp_path):
+@pytest.mark.parametrize("helper_newlines", ["lf", "crlf"])
+def test_documented_preparation_reads_reviewed_blob_and_covers_staged_helper(
+    tmp_path, helper_newlines,
+):
     checkout = tmp_path / "checkout"
     checkout.mkdir()
     documents = (DOCUMENT, *(HANDOFFS / name for name in (
@@ -193,21 +196,34 @@ def test_documented_preparation_reads_reviewed_blob_and_covers_staged_helper(tmp
         "M8-N4-host-runtime.md")))
     files = [*documents, ROOT / "scripts/m8_procedure_package.py",
              ROOT / "scripts/m8_candidate_transfer.py", ROOT / "docs/plans/MANIFEST.sha256"]
-    subprocess.run(["git", "init", "--quiet", "--template=", checkout],
-                   stdin=subprocess.DEVNULL, check=True, capture_output=True, timeout=30)
+    environment = {name: value for name, value in os.environ.items()
+                   if not name.startswith("GIT_")}
+    environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+
+    def git(*arguments):
+        return subprocess.check_output(["git", "-C", str(checkout), *arguments],
+            stdin=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=30, env=environment)
+
+    git("init", "--quiet", "--template=")
+    # Model Git's LF index independently from the platform's working-copy
+    # spelling. Retain the conversion setting for the real prepare/status call.
+    git("config", "core.autocrlf", "input")
+    helper_lf = (ROOT / "scripts/m8_candidate_transfer.py").read_bytes().replace(b"\r\n", b"\n")
+    assert b"\r" not in helper_lf
+    helper_working = helper_lf.replace(b"\n", b"\r\n") if helper_newlines == "crlf" else helper_lf
     for path in files:
         target = checkout / path.relative_to(ROOT)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(path.read_bytes())
-    subprocess.run(["git", "-C", checkout, "-c", "core.autocrlf=false", "add", "."],
-                   stdin=subprocess.DEVNULL, check=True, capture_output=True, timeout=30)
-    subprocess.run(["git", "-C", checkout, "-c", "user.name=test", "-c",
-                    "user.email=test@example.invalid", "-c", "commit.gpgSign=false", "-c",
-                    "core.hooksPath=" + os.devnull, "commit", "--quiet", "-m", "fixture"],
-                   stdin=subprocess.DEVNULL, check=True, capture_output=True, timeout=30)
-    revision = subprocess.check_output(
-        ["git", "-C", checkout, "rev-parse", "HEAD"],
-        stdin=subprocess.DEVNULL, timeout=30).decode().strip()
+        target.write_bytes(helper_working if path.name == "m8_candidate_transfer.py"
+                           else path.read_bytes())
+    git("-c", "core.autocrlf=input", "add", ".")
+    git("-c", "user.name=test", "-c", "user.email=test@example.invalid", "-c",
+        "commit.gpgSign=false", "-c", "core.hooksPath=" + os.devnull,
+        "commit", "--quiet", "-m", "fixture")
+    revision = git("rev-parse", "HEAD").decode().strip()
+    reviewed_helper = git("show", revision + ":scripts/m8_candidate_transfer.py")
+    assert reviewed_helper == helper_lf and b"\r" not in reviewed_helper
+    assert (checkout / "scripts/m8_candidate_transfer.py").read_bytes() == helper_working
     program, = fences(DOCUMENT, "Exact local preparation", "python")
     prepare = tmp_path / "prepare.py"
     prepare.write_bytes(program.encode())
@@ -217,7 +233,7 @@ def test_documented_preparation_reads_reviewed_blob_and_covers_staged_helper(tmp
     argv = [sys.executable, "-I", "-S", "-B", str(prepare), str(checkout), str(output),
             str(values), revision]
     ran = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True,
-                         timeout=30, check=False)
+                         timeout=30, check=False, env=environment)
     assert ran.returncode == 0 and ran.stderr == b"", ran.stderr
     manifest = (output / "PACKAGE.sha256").read_bytes()
     assert ran.stdout.strip().decode() == hashlib.sha256(manifest).hexdigest()
@@ -228,12 +244,13 @@ def test_documented_preparation_reads_reviewed_blob_and_covers_staged_helper(tmp
         names.append(name)
     assert len(names) == 7
     assert {"m8_candidate_transfer.py", "transport.py", "MANIFEST.sha256"} <= set(names)
-    assert (output / "m8_candidate_transfer.py").read_bytes() == (
-        ROOT / "scripts/m8_candidate_transfer.py").read_bytes()
+    assert (output / "m8_candidate_transfer.py").read_bytes() == reviewed_helper
+    assert (checkout / "scripts/m8_candidate_transfer.py").read_bytes() == helper_working
     # The reviewed revision cannot silently bless a dirty tracked helper.
     (checkout / "scripts/m8_candidate_transfer.py").write_bytes(b"unexpected\n")
     dirty = subprocess.run([*argv[:6], str(tmp_path / "dirty-output"), *argv[7:]],
-                           stdin=subprocess.DEVNULL, capture_output=True, timeout=30, check=False)
+                           stdin=subprocess.DEVNULL, capture_output=True, timeout=30,
+                           check=False, env=environment)
     assert dirty.returncode != 0 and not (tmp_path / "dirty-output").exists()
 
 
