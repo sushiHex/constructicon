@@ -15,6 +15,27 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## Transfer proves the contribution bytes, not a new execution
+
+The #245 helper transports the exact q13 commit, its sole vector blob and a
+closed historical projection. Its receiver reconstructs the entire tree from
+an independently present base in a fresh quarantine and runs the existing
+trusted vector exam. Historical matching and fresh examination are separate
+receipt fields. No remote Git history or executable candidate code is imported.
+The procedure is preparation, not evidence that the parked candidate was
+retrieved or that an ordinary contribution PR exists; #186 owns that obligation.
+
+Two initially reported facts were wrong: capture need not have authored the
+commit's metadata, because a writer can commit first; and the first reported
+verifier SHA did not match its raw Git blob. Both were checked against source
+and corrected. A mocked host primitive does not prove a historical source pin.
+Independent review also reproduced a pending-spawn cancellation hang with a
+real full pipe. Cleanup now enrolls and joins those readers; incomplete capture
+never grants retry authority. The exchange deadline is not a hard bound on
+joined cleanup and does not establish remote termination. No controller
+replacement, qualification, refresh, model call or private-host execution is
+implied by these credential-free proofs.
+
 ## Verification must establish which checkout supplies its imports
 
 The #246 root pytest bootstrap compares the resolved `constructicon` package
