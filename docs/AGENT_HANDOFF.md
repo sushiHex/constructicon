@@ -15,6 +15,22 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## Pi protocol fit does not select its authentication boundary
+
+The proposed Pi READ design follows the bounded source screen with a concrete
+existing-contract mapping and paired acceptance/refusal obligations. A harmless
+scripted peer must actually read the admitted workspace; a text-only canned
+answer is not the READ witness. Scripted behavior, Linux containment, real Pi
+startup/tool behavior and provider qualification remain distinct evidence.
+
+No live authentication route is selected. Pi's advertised OAuth support does
+not inherit the unmodified-vendor-client exception: ADR 0021 separates a
+store-owning native zone from the workspace-bearing worker. An empty home also
+does not prove that an actual Pi process ignores workspace-local resources.
+The design adds no runtime implementation, available provider or sequencing
+change. Issues own subsequent approval and work; the committed proposal is not
+implementation authority.
+
 ## A successful stock copy is not a clean operator boundary
 
 The next bounded #189 slice preserves the historical P2 runbook and its old

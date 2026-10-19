@@ -13,6 +13,30 @@ From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-
 and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
 subscription route; see the dated section at the end of this record.
 
+## Pi READ design boundary (Refs #42)
+
+The completed source-only [screen #257](https://github.com/sushiHex/constructicon/issues/257#issuecomment-6276054659)
+supports a task-shaped RPC interface, not a qualified workspace READ executor.
+The [proposed design](M8-Pi-READ-design.md) maps one fresh, single-dispatch
+conversation to existing executor, workspace, lease and process contracts.
+Its finite checklist separates scripted protocol evidence, physical containment
+with a harmless peer, real Pi startup/tool behavior and provider qualification.
+These are future proof obligations, not tests executed by this docs-only slice.
+
+The authentication comparison selects only a credential-free fixture for the
+proposed proofs. Pi OAuth, API/OpenRouter and local-provider routes remain
+unselected. A workspace-mounted Pi process cannot inherit ADR 0021's
+store-owning, workspace-free native-zone exception. No provider is enabled,
+no credentials or vendor process are used, and neither Claude acceptance nor
+the N6-before-N7 and M8-before-M9 sequence changes.
+
+Independent design review and exact-head document/gate results belong in the
+PR. The bounded #189 triage separately reproduced an inherited C11 fragment
+test's accepting-diagnostic omission while the composed T5 still refused;
+its [issue disposition](https://github.com/sushiHex/constructicon/issues/189#issuecomment-6276599505)
+defers implementation until an approved successor selects that fragment.
+This design does not turn historical maintenance gaps into new operational work.
+
 ## Historical P2 stock-utility diagnostics (Refs #189)
 
 This additive test-only slice targets the original stock-utility mismatch,
