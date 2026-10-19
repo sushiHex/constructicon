@@ -15,6 +15,21 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## Moving a proof also moves its evidence obligations
+
+The #242 containment partition moves only the independent protected-root
+maintenance suite to the existing lifecycle runner. Shared-store persistence
+and its mutation inventory stay on foundation. All real hold durations and
+proof invocations are retained; the final-head CI artifacts, not a routing
+test alone, establish physical execution and retention.
+
+The first partition missed a cross-suite artifact census. The producer moved,
+but foundation still required its inherited-maintenance file. The correction
+keeps an exact census and the same key-material checks on each producing lane.
+A review of that correction caught an absent-directory bypass; required runs
+now refuse it explicitly. Tests cover both clean and refusing paths. This
+changes neither host qualification nor production execution authority.
+
 ## Application acceptance is not contribution publication
 
 The q13 session under #186 completed the fixed maintenance application with

@@ -203,18 +203,25 @@ jobs:
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_native_egress_containment.py \
               -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           uv run python scripts/check_m8_n3b_mutations.py
-      - name: Prove N3c maintenance, refresh and non-widening
-        if: matrix.lane == 'foundation'
+      - name: Prove N3c protected-root maintenance and packaged qualification
+        if: matrix.lane == 'lifecycle'
         shell: bash
         run: |
           set -euo pipefail
-          # Fresh protected roots as the provisioning principal (withdrawal,
-          # activation, SIGKILL crash points, bind mounts), then the service
-          # over the N3a fixture through the N3b relay. No credential.
+          # Per-test protected roots own their stores and synthetic launch sets.
+          # Only the immutable runtime/profile is reused;
+          # this suite needs neither foundation's N3a store nor its relay.
+          # The existing isolated runner overlaps its real holds with that lane.
           sudo env RUNNER_ENVIRONMENT=github-hosted M8_STORE_PROVISION_REQUIRED=1 \
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_operator_store_maintenance_restart.py \
               -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
+      - name: Prove N3c persistence, refresh and non-widening
+        if: matrix.lane == 'foundation'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The service still uses foundation's N3a fixture through its N3b relay.
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
             M8_OPERATOR_STORE_REQUIRED=1 \
