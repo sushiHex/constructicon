@@ -7218,3 +7218,47 @@ The regression raises during response reading, asserts no wheel publication,
 and retains the distinct unexpected-implementation-error case. This taxonomy
 follows the [Python HTTP client contract](https://docs.python.org/3.11/library/http.client.html#http.client.IncompleteRead),
 not a catch-all that would misclassify arbitrary implementation errors.
+
+## q13 contribution recovered and published for review (Refs #245, #186)
+
+The owner authorized the separate read-only transfer at reviewed `52a24d3`,
+merged unchanged as `c3323e1`. Fresh idle observation and the peer's affirmative
+release preceded exclusive custody and one clean start. The final seven-file
+package manifest was
+`839163d3664a679d998eab24b809d63fa64b9b7ddc26f12f4b9b0b3fdecf227e`.
+Controller/import preflight and strict-host-identity transport passed. Capture
+recorded exit zero, both EOFs, empty stderr, no overflow and no timeout; its
+22,841-byte artifact has SHA-256
+`36131d06bb13aa9bb52eb775168e8975b41fb9dbfb48f5d60c36de4516492d23`.
+
+The receiver reconstructed exact candidate
+`058d85fed094256f09b909789a8e07b72092337f` from the independently present sole
+base `5793ef98ef5597c9ee9811a0d1f031554eb7f514`. Historical projection matching,
+whole-tree reconstruction and fresh examination were separate positive facts.
+The pinned historical exam reproduced input digest
+`ef04c5d45233e6a7cd7b54e9cc29d1e67a9511f1a030f6a57df8278a9759d67e`
+and render digest
+`ec1a425474b6cd7c286c65556bfa9e5bd3278c525436d1efa867acd249fc3d02`.
+Clean park and a fresh `idle-observed` measurement preceded custody release.
+No model/application rerun, refresh, installation, baseline rewrite or new
+qualification occurred. Private raw capture and original commit metadata stay
+outside the public repository under owner custody; retain them through issue
+closeout and until explicit disposal direction, with no automatic deletion.
+The private stable reference is `q13-transfer-52a24d3`.
+
+The ordinary contribution preserves all 10,839 vector bytes at
+`tests/vectors/plan_manifest.json`. It does not import the original commit or
+its private metadata into public history. Independent content inspection found
+64 generic parser cases: 32 path cases and 32 manifest-entry cases, with no
+private operational data. The existing contribution consumer now runs instead
+of skipping. On the current checkout, its fixed exam ran all 64 cases with no
+baseline failure, error or skip and distinguished all eight fixed mutants by
+assertion failure. This current-source exam is distinct from the pinned
+historical re-examination; neither is an exhaustive correctness or coverage
+claim. No generated Python, target implementation or evaluator was changed.
+
+One local command-extraction parser initially treated a Python comment as a
+Markdown heading. It refused before producing command files or starting the
+VM; the corrected extractor preserves fenced bodies verbatim. This was not a
+failed host step or a retried transfer. Full contribution-PR gates and review
+remain separate evidence; retrieval alone does not close #186.

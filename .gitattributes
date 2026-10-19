@@ -1,3 +1,5 @@
 # These reviewed helpers cross a byte-pinned transport boundary.
 /src/constructicon/substrate/journal/maintenance_evidence.py text eol=lf
 /src/constructicon/substrate/journal/maintenance_diagnostic.py text eol=lf
+# Preserve the accepted data artifact's exact bytes across checkouts.
+/tests/vectors/plan_manifest.json text eol=lf

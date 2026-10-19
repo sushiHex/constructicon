@@ -15,6 +15,20 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## q13 accepted contribution recovered
+
+The separate reviewed read-only transfer recovered the exact accepted q13
+candidate, reconstructed its complete tree from the pinned base and passed the
+trusted historical exam. The VM was cleanly parked and fresh idle state checked
+before custody release. No new model attempt or provider qualification occurred.
+
+The public contribution preserves the 10,839-byte vector file, not the original
+commit metadata or private capture. Its 64 parser cases activate the existing
+contribution consumer and distinguish the fixed eight-mutant exam. This is
+finite regression evidence, not general autonomous-engineering readiness or
+exhaustive coverage. See the living M8 implementation record for exact pins and
+the distinction between the pinned historical exam and current-source CI.
+
 ## Wheel acquisition and controller import are different proofs
 
 The #247 CI preparation selects the exact locked controller wheels with the
