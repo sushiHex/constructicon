@@ -7067,3 +7067,38 @@ runtime guarantee. The expired local full-pytest session handle did not yield a
 recoverable exit result, so no successful local full run is claimed from its
 process disappearing. No private-host action or new vendor invocation was added
 by this CI change.
+
+## Development verification source identity (Refs #246)
+
+The root pytest bootstrap now positively compares `find_spec("constructicon")`'s
+resolved origin with its own checkout's `src/constructicon/__init__.py`. It
+does not import the package to perform the check. Foreign editable sources and
+missing packages refuse before shared fixture import and test collection,
+with expected/resolved locations and guidance to use the checkout's own
+environment. The supported invocation from that checkout is
+`PYTHONIOENCODING=utf-8 uv run --no-active verify`, after removing any foreign
+`UV_PROJECT_ENVIRONMENT` or `PYTHONPATH` override.
+
+Putting the check in the intended checkout's test bootstrap also catches a
+reused environment's older `verify` entry point. It does not stop the earlier
+lint, type or import-linter stages, alter import paths, repair an environment,
+or add a runtime provenance contract. Ordinary package imports, the existing
+wheel packaging check and deliberate subprocess imports remain supported.
+
+Test-first evidence: before the guard, the accepting cases passed while the
+foreign and missing cases failed the required early-refusal assertions. The
+final regression uses two real disposable Git checkouts and a private stdlib
+virtualenv with the same `.pth` source selection mechanism as Hatchling's
+path-based editable install. No dependency installation or network access is
+needed by that fixture. Both direct pytest and the real `verify` entry-point
+function's pytest subprocess are exercised; only its stage list is narrowed
+for the fixture. Exact origin probes precede each invocation, successful
+collection/test markers affirm acceptance, and their absence is paired with
+the explicit source-mismatch refusal. A foreign package's import marker also
+proves that the direct pytest guard did not execute it.
+
+The focused source-identity, verification-status and packaging cohort passed
+all 18 tests on Windows with Python 3.11. Touched-file Ruff (including the root
+bootstrap, which the ordinary gate's `src`/`tests` scope does not lint) and
+`git diff --check` passed. Full-gate evidence is recorded in the PR; no Linux
+physical proof or private-host action is claimed by this development change.
