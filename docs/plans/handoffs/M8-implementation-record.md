@@ -7010,3 +7010,60 @@ retrieval needs a separately reviewed, bounded transfer procedure rather than
 another model attempt. Claude qualification remains independently blocked by
 #175's supported startup/tool-restriction question; this Codex result cannot
 satisfy it or change the N6-before-N7 sequence.
+
+## Distribute independent containment proofs without shortening them (Refs #242)
+
+The baseline foundation job `117804341145` took 28m21s under its unchanged
+30-minute timeout. Its protected-root maintenance suite alone took 363.47s;
+the genuine qualification holds dominated that cohort. The lifecycle job in
+the same run took 7m41s. These are measured observations, not latency bounds.
+
+The protected-root suite now runs on the existing lifecycle runner. Each case
+owns its store and synthetic launch set; the immutable runtime and profiled
+bubblewrap are provisioned on every runner. The persistence suite and N3c
+mutation inventory retain their foundation placement and shared N3a/N3b
+dependencies. No extra runner, production scheduler, reduced hold duration,
+timeout increase or removed proof is introduced. Workflow inventory tests pin
+each invocation to exactly one lane; artifact paths remain lane-bound.
+
+The first run at `8f5191b` exposed an introduced dependency missed by the initial
+audit: foundation's key-material test expected the root suite's inherited-lock
+artifact in its own directory. Moving the producer without the consumer made
+that exact census fail. This was not dismissed as a pre-existing flake. The
+corrected shared assertion retains both exact filename census and the original
+PEM/fixture-token checks: foundation owns five N4 files, while lifecycle owns
+the one inherited-maintenance file. N5 account and explicit-refresh censuses
+remain unchanged. A narrow follow-up review found that a missing evidence
+directory could bypass the new maintenance scan; required runs now affirmatively
+refuse that absence. Optional local absence remains optional.
+
+Portable tests exercise both clean lane censuses, missing and unexpected files,
+fixture-token leakage, each PEM marker, and the real maintenance boundary with
+required missing/required present/optional missing directory. All 52 workflow
+tests passed locally; the independent follow-up review ran all 13 focused
+accepting/refusing cases without a new finding. Touched-file Ruff and diff
+checks passed. No physical result is inferred from those portable tests.
+
+The combined workflow, scope and mutation-inventory suite passed all 152 cases
+using this worktree's own interpreter. An earlier invocation through a reused
+editable environment imported an older checkout and failed a mutation target
+lookup; both module paths were checked before the corrected run. That failed
+invocation is neither a defect in this change nor evidence for its source.
+An early verification source-identity guard is tracked separately in #246.
+
+The first relocated physical suite passed 19 tests in 347.02s. Artifact
+`12159101094` retained 32 N3c files and one inherited-maintenance N4 file: 33
+files total, correcting the initial prediction of 33 N3c plus one N4. Its
+accepting and wrong-floor qualification records affirm genuine 90-second
+holds; the historical-seal refusal records zero. Lifecycle completed in
+12m46s. Full verify run `39186819998` passed, but containment run
+`39186820023` failed at the introduced foundation census. Neither its shortened
+failed foundation time nor the passing moved suite establishes the final speedup.
+
+Final-head full verification, all four successful physical lanes and inspection
+of their actual artifact contents remain the merge gate. Comparative final
+timings belong in the PR evidence; one successful run cannot establish a hard
+runtime guarantee. The expired local full-pytest session handle did not yield a
+recoverable exit result, so no successful local full run is claimed from its
+process disappearing. No private-host action or new vendor invocation was added
+by this CI change.
