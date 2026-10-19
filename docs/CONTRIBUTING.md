@@ -61,6 +61,67 @@ existing component or contract to compose or extend. Use
 `describe_component(name)` for one stable contract and `rdeps(name)` before
 changing a shared definition. Compose before you drop a tier (I10).
 
+## Rehearse a maintenance contribution
+
+The current maintenance application has an existing credential-free rehearsal:
+propose a data-only change → capture an immutable candidate → run the fixed
+trusted exam → publish acceptance evidence, or refuse. It adds no new workflow
+language or model service. From a committed checkout with Git installed and its
+own `uv sync --dev` environment, run this in Bash/Git Bash:
+
+```bash
+PYTHONIOENCODING=utf-8 uv run --no-active python -m pytest \
+  tests/api/test_maintenance_entry.py::test_full_tree_entry_mediates_callback_and_runs_retained_consumer \
+  -v </dev/null
+```
+
+Use no foreign `UV_PROJECT_ENVIRONMENT` or `PYTHONPATH` override. The fixture
+reads the committed `HEAD` tree, not uncommitted edits, into a disposable local
+Git authority; it excludes only the allowed contribution path so the writer
+starts without a prior answer. It does not modify tracked checkout files or
+its refs.
+
+Expected: **2 passed, no skipped cases** (`contribution` and `successful-noop`).
+Both tests passing includes the deliberate application refusal:
+
+- A scripted native peer asks the real Codex adapter to mediate one trusted
+  Python callback. The contribution case writes bounded JSON parser vectors;
+  Git capture produces a candidate with the pinned base as its sole parent.
+- The trusted gate checks the exact prepared tree and data-only scope, renders
+  deterministic tests and requires assertion failures against all eight fixed
+  mutants. SQLite evidence binds the journal-minted attestation, candidate and
+  input/render digests. The ordinary consumer is then run from the candidate
+  snapshot, and published acceptance is inspected after joined shutdown.
+- In the no-op case the callback still completes successfully, but capture
+  equals the base. The application refuses before the checker, publishes no
+  acceptance result, and closes its leases. The target ref stays at the base
+  in **both** cases: application acceptance is not merge or installation.
+
+The entrypoint is an executable test, not a general contribution launcher or
+an exported evidence-report command. Its native peer and operator store are
+fake; its portable process launcher substitutes the OS isolation primitives.
+Real Git, capture, gate code and journal evidence do not make that substitution
+physical containment or a vendor/host observation. The separate
+[Linux containment lane](M8_CI.md#pr-b-the-separate-containment-gate) provides
+credential-free physical containment evidence, not live vendor/host
+qualification. A skipped case is not a successful rehearsal.
+
+For just the retained q13 vector contribution's finite exam:
+
+```bash
+PYTHONIOENCODING=utf-8 uv run --no-active python -m pytest \
+  tests/test_plan_manifest_contribution.py -q </dev/null
+```
+
+Expected on this revision: **1 passed**, not a skip for absent vectors. This
+consumer checks a bounded regular JSON file against the fixed exam; it does
+**not** enforce the application's whole Git-tree/history scope or execute inside
+containment. Neither command changes the target implementation, defines its
+own exam, installs a candidate or grants a new live attempt. Inspect the
+[entry test](../tests/api/test_maintenance_entry.py) and
+[shared witness](../tests/maintenance_task_world.py) to follow the assertions.
+These focused commands supplement, not replace, `uv run verify` and PR review.
+
 ## Finding and tracking work
 
 Use [GitHub Issues](https://github.com/sushiHex/constructicon/issues) for current
