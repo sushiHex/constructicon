@@ -6944,3 +6944,69 @@ the publisher would independently refuse. Cleanup tests cover recycled process
 identity and bounded direct-child escalation. Ruff passed for all three changed
 Python files. Physical acceptance and both refusals still require final-head
 Linux execution and retained artifacts; these portable results do not replace it.
+
+## q13: one accepted maintenance application (Refs #186, #226)
+
+On 2026-10-19 UTC the owner-authorized q13 session ran procedure
+`879a71bda07a569a25b63919524295928f7b7e55`, retaining controller/source
+`5793ef98ef5597c9ee9811a0d1f031554eb7f514`. The
+[exact go package](https://github.com/sushiHex/constructicon/issues/186#issuecomment-6256281924)
+and [execution authorization](https://github.com/sushiHex/constructicon/issues/186#issuecomment-6257818496)
+are distinct records. All readiness manifest members and initial package
+members matched before execution. Claude affirmatively released custody;
+the usage helper observed idle before the start notice and single D0 start.
+
+All 19 packaged steps passed their unchanged T5 contracts: zero command status,
+empty stderr and exact declared stdout/record shape. C1/C2 checked the pinned
+drift output, historical records, fresh D2 qualification, kept launch, installed
+controller and physical preflight. C3 checked retained evidence and fresh
+startup qualification including the real 90-second lock control. C4 published
+and activated generation 11. Every H7 control passed; natural refresh was
+unmeasured, so the reviewed conditional H8 branch measured explicit refresh.
+No controller replacement or R6 re-baseline occurred.
+
+C7/C8 produced the genuine-provider preview. The exact approved deferred rule
+added only its observed digest, the measured boot and the fixed maintenance-5
+run identity. Two package-2 builds were byte-identical, with manifest SHA-256
+`423b8a0b9c07d300521da584c7f528746896cfac1ecf921805ac820ebb07a724`.
+All 32 initial members verified unchanged inside it; only the three deferred
+steps were added. Earlier steps were not rerun.
+
+The single C10 application returned normal acceptance for
+`run-4c5df557e3d2f6a0f44030084115f865`. C10 inspection identified candidate
+`058d85fed094256f09b909789a8e07b72092337f`, input SHA-256
+`ef04c5d45233e6a7cd7b54e9cc29d1e67a9511f1a030f6a57df8278a9759d67e`
+and render SHA-256
+`ec1a425474b6cd7c286c65556bfa9e5bd3278c525436d1efa867acd249fc3d02`.
+The complete C11 selected-history diagnosis reported:
+
+- journal succeeded, validated command origin and 12 checked events;
+- writer/checker started, validated checkpoints and no recorded failures;
+- `plan-manifest-trusted-vectors` passed;
+- identity-matched outcome, completed dispatch and executor success;
+- four admitted callbacks started and completed, all four worker results success;
+- no recorded timeout or bound exceedance, accepted command and historical
+  acceptance observed, with no pending attempt.
+
+`failure_kind: unknown` remains unknown; it is not an invented failure or a
+claim about unobserved backend retries. The result is the fixed application's
+acceptance under its trusted exam, not arbitrary-code correctness or general
+production readiness. No hard token, backend-request or monetary bound is
+inferred. Natural refresh and the baseline-completeness limitation in #238
+remain unproved by this session.
+
+D4 emitted `q13-vm-park-checked`. A subsequent fresh usage observation reported
+Off, operational status Ok, zero uptime/checkpoints and no local console before
+custody release. Private captures were retained after park, with session manifest
+SHA-256 `8030353b477f45e4420bb324679f414e6e2e39700679a78a06671af41b535fa7`.
+Custodian and disposal policy remain those of the approved go package. Raw host
+output, addresses, private paths and credentials are not part of this record.
+
+The candidate remains on the parked private host. This procedure supplied no
+candidate-export or push command; no contribution PR was created. Therefore
+#186's accepted-contribution obligation is not complete. The session budget is
+spent; acceptance does not authorize another start, retry or q14. Any subsequent
+retrieval needs a separately reviewed, bounded transfer procedure rather than
+another model attempt. Claude qualification remains independently blocked by
+#175's supported startup/tool-restriction question; this Codex result cannot
+satisfy it or change the N6-before-N7 sequence.
