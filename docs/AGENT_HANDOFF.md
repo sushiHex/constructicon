@@ -15,6 +15,26 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## Application acceptance is not contribution publication
+
+The q13 session under #186 completed the fixed maintenance application with
+normal acceptance, a passed trusted-vector gate and a complete selected-history
+diagnosis. Its four admitted callbacks completed successfully. The reviewed
+park and a fresh idle observation preceded custody release. Exact pins and
+limits are in the M8 implementation record.
+
+The candidate was not exported or pushed: the session supplied no command for
+that boundary. A successful application does not by itself satisfy an issue
+whose outcome also requires an ordinary contribution PR. It also does not
+authorize another start or repeat attempt. Preserve the accepted candidate and
+prove its transfer separately; do not ask the model to recreate it.
+
+This result does not remove Claude's independent startup/tool-authority gap,
+prove natural refresh or repair the retained drift baseline's inventory limit.
+The earlier recommendation to proceed directly to a Claude permitting slice
+was too broad: #175 still requires a supported-control answer or a concrete
+reviewed enforcement proposal before that work can proceed.
+
 ## A former rehearsal exemption can stop applying
 
 The q12 C3/C4 rehearsal exemption cited the shared store and missing disposable
