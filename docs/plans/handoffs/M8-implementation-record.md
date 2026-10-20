@@ -7875,3 +7875,32 @@ accounted for. The documented host-managed-provider switch was examined and
 rejected for this recipe because it skips opaque stored OAuth discovery. No
 token injection, accepted-ADR weakening, permitting READ adapter, or native
 qualification follows from this experiment.
+
+PR #273 merged as `7281d7d`, tree-identical to reviewed `9c188fe`. Exact-head
+CI passed full verification (7,654 passed, 460 skipped, one warning), runner
+qualification and all four Linux lanes. The foundation artifact positively
+proved the standalone execution-denial observations and cleanup; its exact
+digest and limits are in the linked evidence document. Eight new guard mutants
+were assertion-killed. Independent and connector reviews found no blockers.
+The separate full local Windows result was not recovered and is not credited.
+
+## N6 finite startup recipe (Refs #175)
+
+The [fixed startup contract](M8-N6-fixed-startup-contract.md) consolidates the
+pinned source conjunction: initially protected environment names, safe mode,
+empty native tools, immutable policy, no further execution, exact observations,
+retained-hook synchronization and delayed SDK handshake. This is source
+qualification for a credential-free implementation, not vendor support or a
+production launch descriptor. No vendor process or private host was used.
+
+Independent adversarial review found one introduced specification defect:
+forced settings loading can succeed with no fetch or notification. Known
+Pro/Max takes an ineligible null-settings path under this recipe. The corrected
+contract proves the initial snapshot when no settings are published and
+synchronous snapshot replacement when settings are published. The orchestrator
+reproduced the premise from the pinned source; focused review then cleared
+credential-free implementation. No eligibility, replay or startup-success wire
+field was invented. Other reviewed hypotheses were rejected with evidence:
+own model/effort arguments use session state rather than raw settings rows,
+and ADR 0021 does not categorically prohibit the source-qualified byoc flag.
+Those dispositions do not establish vendor support or native qualification.
