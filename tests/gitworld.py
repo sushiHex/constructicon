@@ -82,7 +82,9 @@ def seed_authority(root: Path, files: dict[str, str] | None = None) -> Path:
 def push_to_main(repo: Path, files: dict[str, str], message: str) -> GitSha:
     """Test-side base movement: commit files onto main via a throwaway clone.
     (The deny-push hook guards the authority against agent workspaces; the
-    seeding path bypasses it deliberately via a plain fetch into main.)"""
+    seeding path bypasses it deliberately via a plain fetch into main.)
+    Nested fixture parents are created; text uses UTF-8 without newline translation.
+    """
     with tempfile.TemporaryDirectory() as tmp:
         clone = Path(tmp) / "clone"
         clone.mkdir()
@@ -98,7 +100,9 @@ def push_to_main(repo: Path, files: dict[str, str], message: str) -> GitSha:
             _host_git(["fetch", "-q", str(repo), head], clone)
             _host_git(["reset", "-q", "--hard", head], clone)
         for name, content in files.items():
-            (clone / name).write_text(content)
+            path = clone / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8", newline="\n")
         _host_git(["add", "-A"], clone)
         _host_git(["commit", "-q", "-m", message], clone)
         new_head = subprocess.run(

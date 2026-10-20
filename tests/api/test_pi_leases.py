@@ -15,9 +15,10 @@ from constructicon.core.control import (
 )
 from constructicon.core.graph import Connection, Graph, GraphNode, Ref
 from constructicon.core.run import RunStatus
+from constructicon.substrate.effects.fake import FakeAnnounceEffect
 from constructicon.substrate.executors.pi_provider import PiReadHandle
 from tests.api.test_control_response_loss import LOCAL_ADMIN, RUN_ACTOR
-from tests.conftest import SUMMARY, InjectedCrash, atomic, await_attempt_terminal
+from tests.conftest import ANNOUNCED, SUMMARY, InjectedCrash, atomic, await_attempt_terminal
 from tests.gateworld import ControlledGateProvider
 from tests.pi_leaseworld import assemble, register_pi
 from tests.substrate.test_pi_provider import world as world
@@ -223,6 +224,119 @@ async def test_real_walker_reconciles_recorded_before_materialization_crash(
         assert provider_b.closure.is_closed(AcquisitionPaths(
             provider_b.acquisition_root, acquisition_id_for(old.lease_id, old.acquisition_epoch),
         ))
+    finally:
+        if second is not None:
+            await second.shutdown()
+        await first.shutdown()
+
+
+async def announce_read_summary(ctx, inputs):
+    receipt = await ctx.effect("announce", {"summary": inputs["summary"]})
+    return {"announced": {"status": receipt.status}}
+
+
+async def test_scripted_read_counterfactual_simulates_effects_and_discards_both_leases(
+    world, tmp_path, monkeypatch,
+):
+    """Fresh single-use fixture assemblies; model computation is not called free."""
+    effect = FakeAnnounceEffect()
+    calls = []
+    for name in ("execute", "reconcile", "simulate"):
+        original = getattr(effect, name)
+
+        async def observed(request, *, name=name, original=original):
+            calls.append((name, request.run_id))
+            return await original(request)
+
+        monkeypatch.setattr(effect, name, observed)
+    launcher = world[4]
+    first_system, journal, _provider, workspace = await assemble(
+        tmp_path, launcher, owner="pi-source", effects={"announce": effect},
+    )
+    before = workspace.authority.read_ref("refs/heads/main")
+    first = ControlPlane(system=first_system, store=journal)
+    second = None
+    try:
+        await first.startup()
+        read = await register_pi(first)
+        definition, _ = atomic("test/pi-read-announce", (SUMMARY,), (ANNOUNCED,),
+                               announce_read_summary)
+        registered = await first.registry_register(
+            LOCAL_ADMIN, definition=definition, idempotency_key="pi-announce-register",
+        )
+        assert isinstance(registered, RegistrationCommandResult), registered
+        promoted = await first.registry_promote_initial(
+            LOCAL_ADMIN, component=definition.name, version=registered.version,
+            idempotency_key="pi-announce-promote",
+        )
+        assert isinstance(promoted, PromotionCommandResult), promoted
+        graph = Graph(name="pi-read-counterfactual", inputs=read.inputs, outputs=(ANNOUNCED,),
+                      nodes=(*read.nodes, GraphNode(id="announce", body=Ref(
+                          component=definition.name,
+                      ))), connections=(Connection(src="worker", dst="announce"),))
+        source = await first.runs_start(
+            RUN_ACTOR, proposal=graph, inputs={"issue": {"title": "read and announce"}},
+            idempotency_key="pi-counterfactual-source",
+        )
+        assert isinstance(source, RunSubmission), source
+        await until(lambda: journal.run_state(source.run_id).status in {
+            RunStatus.SUCCEEDED, RunStatus.FAILED,
+        })
+        assert journal.run_state(source.run_id).status is RunStatus.SUCCEEDED, (
+            journal.events(source.run_id)
+        )
+        assert any(event.kind == "RunSucceeded" for event in journal.events(source.run_id))
+        source_rows = journal.capability_leases(source.run_id)
+        assert {row.binding_id for row in source_rows} == {"executor", "workspace"}
+        assert all(row.state == "closed" and row.disposition == "released" for row in source_rows)
+        assert calls == [("reconcile", source.run_id), ("execute", source.run_id)]
+        assert len(effect.executions) == 1 and not effect.simulations
+        assert launcher.calls == 1 and launcher.joined and launcher.eof
+        await first.shutdown()
+
+        next_system, next_journal, next_provider, next_workspace = await assemble(
+            tmp_path, launcher, owner="pi-counterfactual", effects={"announce": effect},
+        )
+        second = ControlPlane(system=next_system, store=next_journal)
+        await second.startup()
+        replay = await second.runs_counterfactual(
+            RUN_ACTOR, source_run_id=source.run_id, overrides={},
+            idempotency_key="pi-counterfactual-replay",
+        )
+        assert isinstance(replay, RunSubmission), replay
+        await until(lambda: next_journal.run_state(replay.run_id).status in {
+            RunStatus.SUCCEEDED, RunStatus.FAILED,
+        })
+        assert next_journal.run_state(replay.run_id).status is RunStatus.SUCCEEDED, (
+            next_journal.events(replay.run_id)
+        )
+        assert any(event.kind == "EffectSimulated" for event in next_journal.events(replay.run_id))
+        assert calls == [("reconcile", source.run_id), ("execute", source.run_id),
+                         ("simulate", replay.run_id)]
+        assert len(effect.executions) == len(effect.simulations) == 1
+        live_request, simulated_request = effect.executions[0], effect.simulations[0]
+        assert simulated_request.mode == "simulated"
+        assert simulated_request.idempotency_key != live_request.idempotency_key
+        simulated = next_journal.receipt_for(simulated_request.idempotency_key)
+        committed = next_journal.receipt_for(live_request.idempotency_key)
+        assert simulated is not None and simulated.status == "simulated"
+        assert committed is not None and committed.status == "committed"
+        origin = next_journal.run_origin(replay.run_id)
+        assert origin is not None and origin.source_run_id == source.run_id
+        assert origin.effects == "simulated" and origin.capabilities == "discard"
+        replay_rows = next_journal.capability_leases(replay.run_id)
+        assert {row.binding_id for row in replay_rows} == {"executor", "workspace"}
+        assert all(row.state == "closed" and row.disposition == "discarded" for row in replay_rows)
+        assert {(row.lease_id, row.acquisition_epoch) for row in replay_rows}.isdisjoint(
+            (row.lease_id, row.acquisition_epoch) for row in source_rows
+        )
+        assert launcher.calls == 2 and launcher.joined and launcher.eof
+        assert not list(next_workspace.root.glob("payloads/*"))
+        assert not list(next_provider.acquisition_root.glob("payloads/*"))
+        assert next_workspace.authority.read_ref("refs/heads/main") == before
+        assert workspace.authority.read_ref("refs/heads/main") == before
+        assert all(row.state == "closed" and row.disposition == "released"
+                   for row in next_journal.capability_leases(source.run_id))
     finally:
         if second is not None:
             await second.shutdown()

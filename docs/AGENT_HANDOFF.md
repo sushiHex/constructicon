@@ -15,6 +15,50 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## A fixture closeout keeps its evidence boundaries
+
+The #267 Pi READ tests compose the existing adapter/decoder with startup and
+authority-attempt observations, complete the selected pending-reply/startup
+cancellation witnesses, and run the ordinary counterfactual graph with
+simulate-only effects and discarded leases. They reuse the launcher and
+literal-death matrix rather than introducing another process or recovery law.
+The living M8 record distinguishes the new cases, inherited proofs and exact-
+head Linux evidence. Written or locally skipped physical tests are not results.
+
+Several test premises needed correction: a reader can already be suspended
+inside its primitive when a later state arrives; descriptor-number reuse is
+not inherited authority; a denied chmod is not an attempted write. Initial Linux
+CI also rejected a four-event public-guard trace inferred from Windows: native
+disposal uses its private namespace guard, while the portable substitute
+delegates to the public fake. Paired close/cancel tests now exercise both
+primitive routes on every host and require startup's exact exit/no-held facts
+at disposal entry plus affirmative disposal completion, not a backend-specific
+final trace or an outer waiter's scheduling order. The unrelated Python 3.11
+Windows fixture failure is tracked separately, not converted into passing
+coverage.
+
+The first native bait case also failed during test seeding, before launch:
+the shared helper assumed flat paths. It now creates nested parents and writes
+explicit UTF-8; portable seed/update regressions check exact tree names and
+blob bytes, including retained files. This setup correction is not native
+containment evidence, and the bait observations still require corrected-head
+Linux execution.
+
+The first launched bait control then exposed a second expectation mismatch:
+bubblewrap derives `PWD` from the launcher's selected cwd after clearing the
+ambient environment. The existing containment proof already allowed this
+name. Both physical consumers now share that allowed-name constant; the bait
+peer records and requires the fixed `/workspace` value while still refusing
+ambient fixture/proxy names. Complete synthetic-observation diagnostics do not
+publish a passing artifact before the assertions finish. This is a corrected
+test premise, not proof that native containment failed or that the corrected
+case has executed successfully.
+
+These are scripted fixture observations. Workspace bait ignored by a fixed
+Python program does not qualify real Pi discovery/tool restrictions, and
+physical containment does not select authentication. Real Pi, Claude-first
+qualification and integrated M8 acceptance retain their independent boundaries.
+
 ## A mutant assertion needs a passing control for the same test
 
 The shared runner requires a fresh unmutated control before an assertion can
