@@ -15,6 +15,58 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## A mutant assertion needs a passing control for the same test
+
+The shared runner requires a fresh unmutated control before an assertion can
+earn kill credit. Controls are reused only within one inventory invocation,
+for the same exact pytest selection and target pre-import module. A passing
+exit alone is insufficient: a call must affirmatively pass, and skipped,
+expected-failing, errored or unexecuted controls refuse credit. This also
+deliberately refuses mixed passing/skipped selections.
+
+The failing mutant must identify a node that passed its control. Review found
+two introduced false-credit paths: a newly collected failing parameter had no
+passing control, and a raw assertion later classified as expected failure
+could lend its control identity to another failure. Credit now requires both
+a raw assertion and a final failed call report without expected-failure
+classification for the same node. Real-child regressions cover both cases.
+
+Connector review exposed the limit of node IDs: opaque positional parameters
+can reuse an ID for a different case, even without changing the full ID list.
+Both modes now collect with the original function. At `pytest_runtestloop`,
+after collection hooks and wrappers return, both affirmatively record ordered
+node IDs and the mutant activates before fixture setup. Credit requires equal
+ordered receipts and affirmative activation, not just an intersecting ID.
+Preparation extracts compiled function code without executing its definition;
+otherwise evaluating a default again could itself manufacture a failure.
+Regressions prove opaque insertion/replacement refusal, original collection
+hooks, runtime fixture/body kills and unused-default refusal. This is a trusted
+test/plugin boundary, not opaque-value identity or cross-process determinism;
+independent collection drift can conservatively refuse a cached control.
+
+Working-tree byte snapshots bracket the inventory; drift or unreadable inputs
+invalidate every pending kill. Git's ownership check required an exact-root,
+command-scoped `safe.directory` exception for service-account checkouts, not
+host configuration changes. This binds the repository inputs of a fixed
+invocation, not ignored/external runtime inputs, intervening edits restored
+before the final snapshot, or test determinism. Local portable evidence does
+not replace the rebased head's complete CI and actual Linux service-user lane.
+
+## Wheel failure categories are observations, not inferred causes
+
+Merged PR #268 (`367ae86`) adds bounded exception-class and stage diagnostics
+to locked controller-wheel acquisition. HTTP status is public only when it is
+an exact integer in 100..599. Raw exception text, URLs and opaque nested data
+remain withheld; unknown metadata stays unknown. The renderer bounds every
+public field, including adversarial inputs.
+
+Credential-free tests exercise accepting, integrity-refusing and transport-
+refusing paths. Exact-head CI and all four physical lanes passed before merge;
+connector review completed without findings and the merged tree matches the
+reviewed head. This does not retrospectively identify the earlier opaque
+transport failure's cause. Locked bytes, offline import proof, request bounds,
+single-attempt policy and production availability remain unchanged.
+
 ## Superseded PR verification and default-branch evidence
 
 The #261 workflow slice groups verification by workflow and PR, canceling older

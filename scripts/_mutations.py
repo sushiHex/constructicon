@@ -7,13 +7,67 @@ one function body in memory, so already-imported aliases observe the same mutant
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib
 import inspect
+import json
+import os
 import subprocess
 import sys
 import textwrap
 import time
 from pathlib import Path
+from types import CodeType
+
+
+def source_snapshot() -> bytes:
+    """Working-tree bytes, including dirty and nonignored untracked inputs.
+
+    Check only at invocation boundaries, not for every mutant. This is a drift
+    check for a fixed checkout, not protection against concurrent hostile edits
+    that change and restore files between the two snapshots.
+    """
+    root = Path(__file__).resolve().parents[1]
+    listed = subprocess.run(
+        ["git", "-c", f"safe.directory={root.as_posix()}",
+         "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        cwd=root, stdin=subprocess.DEVNULL, capture_output=True, check=True, timeout=60,
+    )
+    digest = hashlib.sha256()
+    for name in sorted(set(listed.stdout.split(b"\0")) - {b""}):
+        path = root / os.fsdecode(name)
+        content = path.read_bytes() if not path.is_symlink() else os.fsencode(os.readlink(path))
+        digest.update(len(name).to_bytes(8, "big") + name)
+        digest.update(len(content).to_bytes(8, "big") + content)
+    return digest.digest()
+
+
+def diagnostic_tail(output) -> str:
+    """TimeoutExpired retains bytes even when the child requested text mode."""
+    if isinstance(output, bytes):
+        return output[-3000:].decode("utf-8", errors="replace")
+    return (output or "")[-3000:]
+
+
+def evidence_collection(output: str, marker: str) -> list[str] | None:
+    """Accept exactly one affirmative, structured child report."""
+    prefix = marker + " "
+    reports = [line[len(prefix):] for line in output.splitlines() if line.startswith(prefix)]
+    if len(reports) != 1:
+        return None
+    try:
+        nodes = json.loads(reports[0])
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(nodes, list) or not nodes or any(
+        not isinstance(node, str) or not node for node in nodes
+    ):
+        return None
+    return nodes
+
+
+def evidence_nodeids(output: str, marker: str) -> set[str]:
+    return set(evidence_collection(output, marker) or ())
 
 
 def mutated(target: str, before: str, after: str):
@@ -40,45 +94,141 @@ def mutated(target: str, before: str, after: str):
 
 
 def run(mutants) -> int:
-    if len(sys.argv) == 2:
+    if len(sys.argv) in (2, 3):
         import pytest
 
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
         class Evidence:
-            assertions = 0
-            errors = 0
+            def __init__(self):
+                self.assertions = set()
+                self.failed_calls = set()
+                self.errors = 0
+                self.passed = set()
+                self.nonpassing = 0
+                self.collection = None
+                self.activated = False
+
+            @pytest.hookimpl(tryfirst=True)
+            def pytest_runtestloop(self, session):
+                # All collection hooks and wrappers have returned. Keep their
+                # parameter construction unmutated; activate before fixtures.
+                self.collection = [item.nodeid for item in session.items]
+                if not baseline:
+                    function.__code__ = prepared
+                    self.activated = True
 
             def pytest_runtest_makereport(self, item, call):
                 if call.excinfo is not None:
                     if call.when == "call" and call.excinfo.errisinstance(
                         (AssertionError, pytest.fail.Exception)
                     ):
-                        self.assertions += 1
+                        self.assertions.add(item.nodeid)
                     else:
                         self.errors += 1
 
             def pytest_collectreport(self, report):
                 if report.failed:
                     self.errors += 1
+                if report.skipped:
+                    self.nonpassing += 1
+
+            def pytest_runtest_logreport(self, report):
+                if report.when == "call" and report.failed and not hasattr(report, "wasxfail"):
+                    self.failed_calls.add(report.nodeid)
+                if not report.passed or hasattr(report, "wasxfail"):
+                    self.nonpassing += 1
+                elif report.when == "call":
+                    self.passed.add(report.nodeid)
 
         _, target, before, after, test = mutants[int(sys.argv[1])]
-        function, tree = mutated(target, before, after)
-        namespace = dict(function.__globals__)
-        exec(compile(tree, function.__code__.co_filename, "exec"), namespace)
-        function.__code__ = namespace[function.__name__].__code__
+        baseline = len(sys.argv) == 3 and sys.argv[2] == "--baseline"
+        if baseline:
+            # Match the mutant's pre-pytest import; different modules cannot
+            # share baseline evidence even when they select the same test.
+            importlib.import_module(target.split(":")[0])
+        else:
+            function, tree = mutated(target, before, after)
+            if len(tree.body) != 1 or not isinstance(
+                tree.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)
+            ):
+                raise RuntimeError("mutation must define exactly one function")
+            # Compile but never execute the definition: defaults/annotations
+            # must not run again and manufacture a test failure of their own.
+            module = compile(tree, function.__code__.co_filename, "exec")
+            codes = [code for code in module.co_consts if isinstance(code, CodeType)
+                     and code.co_name == tree.body[0].name]
+            if len(codes) != 1:
+                raise RuntimeError("mutation must compile exactly one matching function")
+            prepared = codes[0]
         evidence = Evidence()
         status = int(pytest.main(["-q", "--tb=short", test], plugins=[evidence]))
-        if status == 1 and evidence.assertions and not evidence.errors:
-            print("MUTATION_ASSERTION_FAILURE")
+        assertions = evidence.assertions & evidence.failed_calls
+        if evidence.collection is not None:
+            print("MUTATION_COLLECTION", json.dumps(evidence.collection))
+        if baseline and evidence.collection and status == 0 and evidence.passed and not (
+            evidence.errors or evidence.nonpassing
+        ):
+            print("MUTATION_BASELINE_PASSED", json.dumps(sorted(evidence.passed)))
+        elif evidence.activated and status == 1 and assertions and not evidence.errors:
+            print("MUTATION_ASSERTION_FAILURE", json.dumps(sorted(assertions)))
         return status
 
+    # Cache belongs to this invocation only. Every child uses these same
+    # execution inputs, and final success also requires unchanged source bytes.
+    environment = os.environ.copy()
+    directory = Path.cwd()
+    executable, inventory = sys.executable, str(Path(sys.argv[0]).resolve())
+    try:
+        source = source_snapshot()
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"inventory: NOT PROVEN (source snapshot: {str(exc)[-3000:]})", flush=True)
+        return 1
+    baselines = {}
+    outcomes = []
     failed = False
-    for index, (name, *_) in enumerate(mutants):
+    for index, (name, target, _before, _after, test) in enumerate(mutants):
+        selection = (test, target.split(":")[0])
+        if selection not in baselines:
+            started = time.monotonic()
+            try:
+                baseline = subprocess.run(
+                    [executable, inventory, str(index), "--baseline"],
+                    cwd=directory, env=environment, stdin=subprocess.DEVNULL,
+                    capture_output=True, text=True, timeout=60,
+                )
+                passed = (
+                    evidence_nodeids(baseline.stdout, "MUTATION_BASELINE_PASSED")
+                    if baseline.returncode == 0 else set()
+                )
+                collection = evidence_collection(baseline.stdout, "MUTATION_COLLECTION")
+                if collection is None:
+                    passed = set()
+                diagnostics = (baseline.stdout[-3000:], baseline.stderr[-3000:])
+            except subprocess.TimeoutExpired as exc:
+                passed = set()
+                diagnostics = (
+                    "baseline harness timeout", diagnostic_tail(exc.stdout),
+                    diagnostic_tail(exc.stderr),
+                )
+            except OSError as exc:
+                passed = set()
+                diagnostics = ("baseline child failed to start", str(exc)[-3000:])
+            elapsed = time.monotonic() - started
+            baselines[selection] = passed, collection if passed else None, diagnostics
+            if passed:
+                print(f"{name}: BASELINE PASSED ({elapsed:.3f}s)", flush=True)
+        passed, collection, diagnostics = baselines[selection]
+        if not passed:
+            print(f"{name}: NOT PROVEN (baseline did not pass)", flush=True)
+            print(*diagnostics)
+            failed = True
+            continue
         started = time.monotonic()
         try:
             result = subprocess.run(
-                [sys.executable, sys.argv[0], str(index)],
+                [executable, inventory, str(index)],
+                cwd=directory, env=environment, stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 timeout=60,
@@ -89,9 +239,26 @@ def run(mutants) -> int:
             failed = True
             continue
         elapsed = time.monotonic() - started
-        killed = result.returncode == 1 and "MUTATION_ASSERTION_FAILURE" in result.stdout
-        print(f"{name}: {'KILLED' if killed else 'NOT PROVEN'} ({elapsed:.3f}s)", flush=True)
+        killed = result.returncode == 1 and collection == evidence_collection(
+            result.stdout, "MUTATION_COLLECTION"
+        ) and bool(
+            passed & evidence_nodeids(result.stdout, "MUTATION_ASSERTION_FAILURE")
+        )
+        outcomes.append((name, killed, elapsed))
         if not killed:
             print(result.stdout[-3000:], result.stderr[-3000:])
             failed = True
+    source_stable = False
+    try:
+        source_stable = source_snapshot() == source
+        if not source_stable:
+            print("inventory: NOT PROVEN (source changed during invocation)", flush=True)
+            failed = True
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"inventory: NOT PROVEN (source snapshot: {str(exc)[-3000:]})", flush=True)
+        failed = True
+    # Do not publish kill credit before the source check can invalidate it.
+    for name, killed, elapsed in outcomes:
+        verdict = "KILLED" if killed and source_stable else "NOT PROVEN"
+        print(f"{name}: {verdict} ({elapsed:.3f}s)", flush=True)
     return int(failed)

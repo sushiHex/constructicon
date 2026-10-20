@@ -13,6 +13,106 @@ From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-
 and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
 subscription route; see the dated section at the end of this record.
 
+## Passing controls for mutation evidence (Refs #266)
+
+The shared code-object runner now requires an affirmative unmutated control
+before any isolated mutant can earn assertion-kill credit. A fresh control
+imports the same target module and invokes exactly the same pytest selection
+as its mutant. Exit zero alone is insufficient: at least one call must pass,
+and every observed report must pass. Failures, errors, collection failures,
+timeouts, no collected calls, skips, expected failures and unexpected passes
+refuse credit. This deliberately also refuses selections mixing passing and
+skipped/expected-failing cases. Child evidence records exact pytest node IDs;
+an assertion-failing mutant needs at least one node ID that affirmatively
+passed its control. Both children collect with the original function; the mutant
+activates only at `pytest_runtestloop`, after all collection hooks and wrappers
+return and before fixture setup. Both emit an affirmative ordered collection
+receipt at that boundary, and credit requires exact ordered equality. Missing,
+duplicate or malformed receipts refuse credit. Mutant credit still requires an
+assertion-only failure; the existing 60-second child bound and fresh-process
+isolation remain.
+
+Controls are cached only inside one inventory invocation, by exact pytest
+selection and target pre-import module. Its executable, working directory and
+child environment are captured once. Different selections or pre-imports need
+distinct controls; later invocations never reuse them. Working-tree snapshots
+hash Git-listed tracked and nonignored untracked bytes at both invocation
+boundaries. Dirty input bytes count, and changed or unreadable input refuses
+the entire inventory before any pending kill is printed. Two scans bound the
+snapshot cost independently of mutant count. This assumes a fixed repository
+and installed runtime: it does not attest external modules, ignored inputs,
+host state or edits that are changed and restored between snapshots.
+
+Deterministic child tests cover the accepting path and already-failing tests,
+call/collection/teardown errors, nonexecution and skips/xfail/xpass. Injected
+process tests prove timeout/start-error refusal, bounded diagnostics, cache
+identity, unchanged child inputs, no cross-invocation reuse and invalidation of
+all pending kills on source drift. Snapshot tests bind dirty and untracked
+bytes independently of Git output order. Review reproduced and adopted an
+introduced collection-identity gap: an initial aggregate-only control credited
+a new mutant parameter node that had never passed. A narrow second review
+reproduced an introduced defect in that fix: a raw assertion later classified
+as expected failure could lend its passed-control node ID to another, newly
+collected failure. Kill candidates now require the same final call report to
+affirmatively fail without expected-failure classification as well as a raw
+assertion. Both real-child regressions run. The proposed generated-cache flaw
+was not reproduced: pytest,
+Hypothesis and coverage artifacts are explicitly ignored. Replacing snapshots
+with a clean-HEAD prerequisite was rejected because dirty working-tree inputs
+are intentionally supported and bound by their actual bytes.
+Root review also reproduced an introduced CI compatibility gap: Git refuses
+a checkout owned by another account before listing its inputs. Snapshot Git
+uses a command-scoped `safe.directory` for only the resolved repository root;
+it changes no global configuration. A regression affirmatively observes the
+ownership refusal, then proves the exact-root snapshot accepts and binds bytes.
+
+Connector review then reproduced another introduced collection-identity gap:
+opaque positional parameter IDs could alias a new failing case, even when a
+same-count replacement preserved the complete node-ID list. This was adopted;
+node-ID equality alone was rejected as an incomplete fix. Deferring activation
+keeps mutation-dependent collection original rather than attempting to serialize
+opaque parameter identities. Mutation preparation compiles the sole function's
+code object without executing its definition, so defaults and annotations do not
+run again and manufacture an unrelated assertion. Real-child regressions cover
+opaque insertion and replacement, an unused target's side-effecting default,
+activation before fixtures, and collection-finish plus collection-wrapper hooks
+observing the original function. An injected missing-loop case cannot emit kill
+evidence; ordered observable collection drift also refuses credit. The existing
+conditional-xfail regression now correctly kills its stable unmarked case when
+the test body invokes the mutant. This boundary assumes trusted tests/plugins;
+it does not establish opaque parameter-value identity or determinism between
+fresh processes. Cached controls may conservatively refuse a later case after
+independent nondeterministic collection drift; there is no retry or new cache.
+The test-first boundary run reproduced seven failures against the old harness
+(and one valid fixture kill); after correction, the focused baseline and timing
+suites passed all 53 cases in 30.03 seconds on Python 3.13. Script/test Ruff and
+whitespace checks passed. Representative inventory results remain separate PR
+evidence, not an inferred consequence of these focused tests.
+
+The first integrated head (`64fdc0a`) passed full verification, qualification,
+all 16 portable inventory jobs and three physical lanes. Foundation passed its
+ordinary service-user containment proof, then exceeded its unchanged 30-minute
+job budget during the final native mutation block. GitHub's timeout annotation,
+not an inferred cause from missing output, establishes that failure. The four
+native review-regression inventories now run serially on the existing mediation
+lane. They use only the common runtime/profile, not foundation's store or relay;
+their commands, service identity, environment, child deadlines and proof sets
+are unchanged. There are still four lanes and no retry or longer job budget.
+The workflow contract pins this routing and unprivileged execution context.
+Only final-head CI can establish execution after that scheduling correction.
+
+Comparing merged #268's `e762a82` run with #270's `24992be` run
+`39376940640`, total elapsed time for the 16 portable jobs rose from 755 to
+1,014 seconds; their maximum grew from 187 to 249 seconds.
+These include setup and different runners, so they are observations rather than
+a controlled attribution of overhead. A Windows full-gate attempt was stopped
+before the scheduling edit to avoid mixed-head evidence: it had no pytest
+completion summary and is not reported as passing.
+
+Relevant inventory and gate results
+belong to the final-head PR evidence; portable results establish no Linux-only
+physical proof and use no vendor process, credential or VM.
+
 ## Pi scripted READ lease assembly (Refs #263)
 
 This successor to merged PR #260 adds an L1 `PiReadProvider` and owned handle
