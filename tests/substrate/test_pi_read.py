@@ -181,8 +181,9 @@ async def test_process_completion_is_independently_required(world, field, value)
     assert outcome.error.kind == ("timeout" if field == "timed_out" and value is True else "exit")
 
 
-async def test_pending_write_is_read_concurrently_and_reentry_poison_is_permanent(world):
-    world[1].block = "prompt"
+@pytest.mark.parametrize("command", ["get_state", "prompt"])
+async def test_pending_write_is_read_concurrently_and_reentry_poison_is_permanent(world, command):
+    world[1].block = command
     pending = asyncio.create_task(execute(world))
     await asyncio.wait_for(world[1].entered.wait(), 2)
     assert world[1].history  # Reader drained while the write was suspended.
@@ -190,11 +191,12 @@ async def test_pending_write_is_read_concurrently_and_reentry_poison_is_permanen
         await execute(world)
     world[1].release.set()
     assert (await pending).status != "success"
-    assert len(world[1].writes) == 2 and world[2].joined
+    assert len(world[1].writes) == (1 if command == "get_state" else 2) and world[2].joined
 
 
-async def test_cancellation_propagates_after_reader_join(world):
-    world[1].block = "prompt"
+@pytest.mark.parametrize("command", ["get_state", "prompt"])
+async def test_cancellation_propagates_after_reader_join(world, command):
+    world[1].block = command
     pending = asyncio.create_task(execute(world))
     await asyncio.wait_for(world[1].entered.wait(), 2)
     pending.cancel()
@@ -289,3 +291,100 @@ async def test_ownership_control_is_rechecked_after_join_before_publishing(world
     with pytest.raises(ContractViolation, match="ownership lost"):
         await execute(world)
     assert len(checked) == 2
+
+
+@pytest.mark.parametrize("phase", ["state-reply", "settlement", "drain"])
+async def test_cancellation_at_remaining_conversation_waits_joins_reader(world, phase):
+    """Pause actual adapter waits; only the bounded process primitive is a double."""
+    io = world[1]
+    entered, cleaning, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    joined = []
+    readers = set()
+    original_write, original_read = io.write, io.read
+    if phase == "settlement":
+        io.transform = lambda records: [item for item in records if item["type"] != "agent_settled"]
+
+    async def write(data):
+        await original_write(data)
+        if phase == "state-reply" and json.loads(data)["type"] == "get_state":
+            io.buffer.clear()  # The request was delivered, but no state reply is available.
+            assert io.read_entered
+            entered.set()
+
+    async def read(maximum=8192):
+        readers.add(asyncio.current_task())
+        if phase == "settlement" and len(io.writes) == 2 and not io.buffer:
+            entered.set()
+        try:
+            chunk = await original_read(maximum)
+            if phase == "drain" and not chunk:
+                entered.set()
+                await asyncio.Event().wait()  # EOF has not reached the decoder.
+            return chunk
+        except asyncio.CancelledError:
+            if entered.is_set():
+                cleaning.set()
+                await release.wait()
+                joined.append(True)
+            raise
+
+    io.write, io.read = write, read
+    pending = asyncio.create_task(execute(world))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        decoder = world[3].conversation.decoder
+        assert not pending.done() and not world[2].joined and not decoder.eof
+        assert len(io.writes) == (1 if phase == "state-reply" else 2)
+        assert decoder.state_observed is (phase != "state-reply")
+        assert decoder.settled is (phase == "drain")
+        if phase == "drain":
+            assert decoder.accepted and decoder.final == "Read: real workspace bytes é"
+        pending.cancel()
+        await asyncio.wait_for(cleaning.wait(), 2)
+        await asyncio.sleep(0)
+        assert not pending.done() and not world[2].joined and joined == []
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+        assert world[2].joined and joined == [True]
+        assert not [task for task in asyncio.all_tasks() if task.get_name() == "pi-read-reader"]
+        assert len(io.writes) == (1 if phase == "state-reply" else 2)
+    finally:
+        release.set()
+        if not pending.done():
+            pending.cancel()
+        await asyncio.gather(pending, *readers, return_exceptions=True)
+
+
+async def test_interrupted_prompt_prefix_stays_spent_without_redispatch(world):
+    io = world[1]
+    entered = asyncio.Event()
+    original_write = io.write
+    prefixes = []
+
+    async def write(data):
+        if json.loads(data)["type"] != "prompt":
+            return await original_write(data)
+        prefixes.append(data[:19])
+        entered.set()
+        await asyncio.Event().wait()
+
+    io.write = write
+    pending = asyncio.create_task(execute(world))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        conversation = world[3].conversation
+        spent = conversation.spent
+        assert prefixes == [b'{"id":"' + conversation.decoder.expected[1].encode()[:12]]
+        assert spent > sum(map(len, io.writes)) + len(prefixes[0])
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+        with pytest.raises(ContractViolation, match="single-use"):
+            await execute(world)
+        assert conversation.spent == spent and len(prefixes) == 1 and len(io.writes) == 1
+        assert world[2].joined
+    finally:
+        if not pending.done():
+            pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)

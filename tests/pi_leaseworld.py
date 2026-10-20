@@ -19,7 +19,7 @@ from tests.piworld import peer_source
 from tests.substrate.test_pi_read import grants
 
 
-async def assemble(root, launcher, *, owner="pi-owner", lease_ttl_s=2, gate=None):
+async def assemble(root, launcher, *, owner="pi-owner", lease_ttl_s=2, gate=None, effects=None):
     """Caller seeds root/authority.git; no vendor or provider fallback exists."""
     journal = SqliteJournal(root / "control.sqlite")
     authority = GitAuthority(root / "authority.git", root / "legacy")
@@ -54,7 +54,7 @@ async def assemble(root, launcher, *, owner="pi-owner", lease_ttl_s=2, gate=None
     system = Constructicon(
         journal=journal, owner_id=owner, lease_ttl_s=lease_ttl_s,
         heartbeat_interval_s=lease_ttl_s / 10, root_grants=grants(),
-        capabilities=capabilities, catalog=catalog,
+        capabilities=capabilities, catalog=catalog, effects=effects,
     )
     return system, journal, executor, workspace
 

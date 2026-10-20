@@ -4,7 +4,14 @@ import json
 
 import pytest
 
-from constructicon.core.executor import ExecutorSuccess, Usage
+from constructicon.core.executor import (
+    ExecutorError,
+    ExecutorFailure,
+    ExecutorPartial,
+    ExecutorSuccess,
+    TransportDamage,
+    Usage,
+)
 from constructicon.substrate.executors import pi_protocol as protocol
 from constructicon.substrate.executors.linux import ProcessResult
 from tests.piworld import cycle, record, state
@@ -305,3 +312,81 @@ def test_provider_done_copy_must_agree_canonically_with_message_end():
         return records
 
     assert decoded(transform=change).outcome(CLEAN).status == "partial"
+
+
+@pytest.mark.parametrize("damage", ["duplicate-call", "unknown-role", "tool-result-error"])
+def test_remaining_read_cycle_refusals_have_an_accepting_control(damage):
+    assert decoded().outcome(CLEAN).status == "success"
+
+    def change(records):
+        if damage == "duplicate-call":
+            message = next(item["message"] for item in records if item["type"] == "message_end"
+                           and item["message"].get("stopReason") == "toolUse")
+            message["content"].append(dict(message["content"][0]))
+        elif damage == "unknown-role":
+            records[2]["message"]["role"] = "controller"
+        else:
+            message = next(item["message"] for item in records if item["type"] == "message_end"
+                           and item["message"].get("role") == "toolResult")
+            message["isError"] = True
+        return records
+
+    decoder = decoded(transform=change)
+    assert decoder.outcome(CLEAN).status == "partial"
+    assert decoder.damage_count > 0
+
+
+@pytest.mark.parametrize("damage", ["wrong-id", "wrong-command", "duplicate", "pre-prompt-work"])
+def test_remaining_response_order_refusals_have_an_accepting_control(damage):
+    decoder = protocol.PiDecoder("read")
+    decoder.request("get_state", "state")
+    response = state("state")
+    if damage == "wrong-id":
+        response["id"] = "another-request"
+    elif damage == "wrong-command":
+        response["command"] = "prompt"
+    elif damage == "pre-prompt-work":
+        decoder.feed(record({"type": "agent_start"}))
+    decoder.feed(record(response))
+    if damage == "duplicate":
+        assert decoder.state_observed and not decoder.damage_count
+        decoder.feed(record(response))
+    assert decoder.outcome(CLEAN).status == "partial"
+    assert decoder.damage_count > 0
+    assert decoded().outcome(CLEAN).status == "success"
+
+
+@pytest.mark.parametrize("field,limit", [
+    ("first_error", 256), ("evidence_excerpt", 1024), ("error_detail", 256),
+])
+def test_diagnostic_publication_bound_binds_at_encoded_bytes(field, limit):
+    def outcome(value):
+        if field == "error_detail":
+            return ExecutorFailure(error=ExecutorError(kind="exit", detail=value))
+        return ExecutorPartial(damage=TransportDamage(
+            malformed_records=1, first_error=value if field == "first_error" else None,
+            evidence_excerpt=value if field == "evidence_excerpt" else None,
+        ))
+
+    assert protocol.publication_fits(outcome("x" * (limit - 2)))
+    assert not protocol.publication_fits(outcome("x" * (limit - 1)))
+    decoder = protocol.PiDecoder("read")
+    decoder.damage("x" * 255, b"x" * 1023)
+    assert len(protocol.encoded(decoder.error)) == 256
+    assert len(protocol.encoded(decoder.excerpt)) == 1024
+    assert protocol.publication_fits(decoder.outcome(CLEAN))
+
+
+def test_entire_serialized_outcome_cap_binds_at_exact_byte():
+    outcome = ExecutorSuccess(output=["x" * 250] * 250)
+    while protocol.OUTCOME_BYTES - len(protocol.encoded(outcome.model_dump(mode="json"))) > 256:
+        outcome.output.append("x" * 250)
+    remaining = protocol.OUTCOME_BYTES - len(protocol.encoded(outcome.model_dump(mode="json")))
+    assert 3 <= remaining <= 256
+    outcome.output.append("x" * (remaining - 3))
+    assert len(protocol.encoded(outcome.model_dump(mode="json"))) == protocol.OUTCOME_BYTES
+    assert protocol.publication_fits(outcome)
+    outcome.output[-1] += "x"
+    assert len(protocol.encoded(outcome.output[-1])) <= 256
+    assert len(protocol.encoded(outcome.model_dump(mode="json"))) == protocol.OUTCOME_BYTES + 1
+    assert not protocol.publication_fits(outcome)

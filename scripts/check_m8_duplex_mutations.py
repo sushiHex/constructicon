@@ -9,6 +9,12 @@ NATIVE = "tests/substrate/test_linux_duplex.py::"
 
 MUTANTS = (
     (
+        "Pi READ composition never requests a writable mount",
+        "constructicon.substrate.executors.pi_read:PiReadExecutor.execute",
+        "posture=Posture.READ", "posture=Posture.WRITE",
+        NATIVE + "test_scripted_pi_startup_bait_scratch_and_authority_attempts",
+    ),
+    (
         "input budget resets per write", IO + "write",
         "self.input_limit - self.spent", "self.input_limit",
         UNIT + "test_input_is_cumulative_and_refusal_delivers_no_prefix",

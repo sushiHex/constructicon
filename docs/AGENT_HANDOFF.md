@@ -15,6 +15,28 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## A fixture closeout keeps its evidence boundaries
+
+The #267 Pi READ tests compose the existing adapter/decoder with startup and
+authority-attempt observations, complete the selected pending-reply/startup
+cancellation witnesses, and run the ordinary counterfactual graph with
+simulate-only effects and discarded leases. They reuse the launcher and
+literal-death matrix rather than introducing another process or recovery law.
+The living M8 record distinguishes the new cases, inherited proofs and exact-
+head Linux evidence. Written or locally skipped physical tests are not results.
+
+Several test premises needed correction: a reader can already be suspended
+inside its primitive when a later state arrives; descriptor-number reuse is
+not inherited authority; a denied chmod is not an attempted write; and disposal
+may legitimately reacquire a guard after joined startup. The assertions now
+record those facts directly. The unrelated Python 3.11 Windows fixture failure
+is tracked separately, not converted into passing coverage.
+
+These are scripted fixture observations. Workspace bait ignored by a fixed
+Python program does not qualify real Pi discovery/tool restrictions, and
+physical containment does not select authentication. Real Pi, Claude-first
+qualification and integrated M8 acceptance retain their independent boundaries.
+
 ## A mutant assertion needs a passing control for the same test
 
 The shared runner requires a fresh unmutated control before an assertion can

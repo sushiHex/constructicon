@@ -8,6 +8,17 @@ READ = "constructicon.substrate.executors.pi_read:PiReadExecutor."
 TEST = "tests/substrate/test_pi_provider.py::"
 
 MUTANTS = (
+    ("startup cleanup joins materialization", HANDLE + "_join_and_release",
+     "(self._materialization, self.active)", "(self.active,)",
+     TEST + "test_materialization_close_or_cancel_joins_partial_guard_before_exposure[close]"),
+    ("counterfactual Pi leases discard after success", "constructicon.runtime.walker:Walker._invoke",
+     '\"discard\" if capability_mode == \"discard\" else \"release\"', '\"release\"',
+     "tests/api/test_pi_leases.py::"
+     "test_scripted_read_counterfactual_simulates_effects_and_discards_both_leases"),
+    ("counterfactual Pi effect only simulates", "constructicon.runtime.walker:Walker._effect_boundary",
+     "receipt = await adapter.simulate(request)", "receipt = await adapter.execute(request)",
+     "tests/api/test_pi_leases.py::"
+     "test_scripted_read_counterfactual_simulates_effects_and_discards_both_leases"),
     ("qualification gates acquisition", PROVIDER + "_check_binding", "not self._qualified",
      "False", TEST + "test_qualification_publishes_only_a_completed_benign_probe"),
     ("qualification reentry poisons original", PROVIDER + "qualify",

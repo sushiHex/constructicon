@@ -251,17 +251,21 @@ async def test_rejected_context_does_not_spend_acquisition(world):
     await provider.close(acquired, "release")
 
 
-@pytest.mark.parametrize("fault", ["refusal", "drift", "loss", "reentry"])
+@pytest.mark.parametrize("fault", ["refusal", "drift", "loss", "reentry", "cancel"])
 async def test_assembly_probe_faults_cannot_publish_availability(world, monkeypatch, fault):
     provider = fresh_provider(world)
     entered, release = asyncio.Event(), asyncio.Event()
     lost = False
+    joined = []
 
     async def probe():
         entered.set()
-        await wait(release)
-        if fault == "refusal":
-            raise ContractViolation("fixture namespace refused")
+        try:
+            await wait(release)
+            if fault == "refusal":
+                raise ContractViolation("fixture namespace refused")
+        finally:
+            joined.append(True)
 
     def control():
         if lost:
@@ -278,10 +282,12 @@ async def test_assembly_probe_faults_cannot_publish_availability(world, monkeypa
     elif fault == "reentry":
         with pytest.raises(ContractViolation):
             await provider.qualify()
+    elif fault == "cancel":
+        pending.cancel()
     release.set()
-    with pytest.raises(ContractViolation):
+    with pytest.raises(asyncio.CancelledError if fault == "cancel" else ContractViolation):
         await pending
-    assert provider.unavailable_reasons
+    assert provider.unavailable_reasons and joined == [True]
 
 
 @pytest.mark.parametrize("field", ["owner", "epoch", "revision", "capability", "grants", "control"])
@@ -763,3 +769,80 @@ async def test_workspace_path_redirected_during_guard_wait_refuses_before_exchan
             original.rename(path)
         await world[2].close(acquired, "discard")
         await world[3].close(view, "discard")
+
+
+@pytest.mark.parametrize("action", ["close", "cancel"])
+async def test_materialization_close_or_cancel_joins_partial_guard_before_exposure(
+    world, monkeypatch, action,
+):
+    provider, launcher = world[2], world[4]
+    acquired = await provider.acquire(executor_context(provider))
+    entered, stopping, join = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    disposing = asyncio.Event()
+    original_guard = pi_provider.acquisition_guard
+    original_dispose = pi_provider.dispose_acquisition
+
+    async def dispose(*args, **kwargs):
+        disposing.set()
+        return await original_dispose(*args, **kwargs)
+
+    @asynccontextmanager
+    async def paused_guard(paths):
+        async with original_guard(paths) as descriptor:
+            entered.set()
+            try:
+                await wait(asyncio.Event())
+            except asyncio.CancelledError:
+                stopping.set()
+                await wait(join)
+                raise
+            yield descriptor
+
+    monkeypatch.setattr(pi_provider, "acquisition_guard", paused_guard)
+    monkeypatch.setattr(pi_provider, "dispose_acquisition", dispose)
+    materializing = asyncio.create_task(acquired.materialize())
+    closing = marker = disposal = None
+    try:
+        await wait(entered)
+        held = dict(launcher.held_guards)
+        assert len(held) == 1 and not acquired.resource.ready and launcher.calls == 0
+        if action == "close":
+            closing = asyncio.create_task(provider.close(acquired, "discard"))
+        else:
+            materializing.cancel()
+        marker = asyncio.create_task(wait(stopping))
+        disposal = asyncio.create_task(wait(disposing))
+        done, _pending = await asyncio.wait(
+            (closing or materializing, marker, disposal), timeout=10,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        assert marker in done and stopping.is_set() and not disposing.is_set()
+        assert not materializing.done() and launcher.held_guards == held
+        assert closing is None or not closing.done()
+        with pytest.raises(ContractViolation, match="not materialized and open"):
+            await acquired.resource.execute(TaskSpec(instruction="must not dispatch"),
+                                             workspace=None, grants=grants())
+        join.set()
+        with pytest.raises(asyncio.CancelledError):
+            await materializing
+        if closing is not None:
+            assert (await closing).disposition == "discarded"
+        else:
+            assert (await provider.close(acquired, "discard")).disposition == "discarded"
+        assert acquired.resource.closed and not acquired.resource.ready
+        assert not launcher.held_guards and launcher.calls == 0
+        assert provider.closure.is_closed(acquired.resource.paths)
+        assert [kind for kind, _ in world[5]] == ["enter", "exit", "enter", "exit"]
+        assert all(identity == acquired.acquisition_id for _kind, identity in world[5])
+    finally:
+        join.set()
+        materializing.cancel()
+        for task in (marker, disposal):
+            if task is not None:
+                task.cancel()
+        await asyncio.gather(
+            materializing, *(task for task in (closing, marker, disposal) if task is not None),
+            return_exceptions=True,
+        )
+        if not acquired.resource.closed:
+            await provider.close(acquired, "discard")

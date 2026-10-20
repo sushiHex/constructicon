@@ -13,6 +13,83 @@ From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-
 and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
 subscription route; see the dated section at the end of this record.
 
+## Pi scripted READ proof closeout (Refs #267)
+
+This bounded test-only successor reconciles the accepted READ design against
+the existing decoder, direct adapter, leased provider, ordinary graph and
+physical launcher. It adds composition evidence rather than another launcher,
+recovery matrix, runtime primitive or provider route. The accepted design's
+bytes remain unchanged. Parent #42, Claude-first qualification and integrated
+M8 acceptance remain separate.
+
+| Design proof group | New fixture witness | Inherited evidence and boundary |
+| --- | --- | --- |
+| Contract/assembly | Existing probe fault table additionally cancels an entered probe and observes its join before unavailable status. | `test_pi_read.py` exact-grant/task/launch-drift refusals and `test_pi_provider.py` fixture identity, descriptor/binding, sealed custody and single-use qualification tests. Fixture availability is not real Pi availability. |
+| READ/authority | `test_scripted_pi_startup_bait_scratch_and_authority_attempts` uses the same adapter/decoder with the Linux launcher. The peer records each attempted chmod, write, authority/home/sibling/store read, original inherited descriptor access, loopback connection and DNS datagram; it also reads admitted bytes, writes private scratch and preserves workspace bytes/ref. | `test_linux_containment.py` supplies the full READ-write, namespace/environment/descriptor, host absence, symlink, network and descendant matrix. The new composition does not duplicate or replace it. |
+| Startup/tool inputs | The composition captures actual fixture argv, isolated-interpreter selection, cwd, environment names, initially empty home and fresh fixture session. Workspace instructions/settings/extension/skill/package bait is visible data; its executable marker stays absent through terminal drain. | Existing provider identity seals the exact fixture program/configuration, runtime and launch law. These are fixed Python-fixture observations, not Pi flags, native tool/resource discovery, package closure or provider authentication evidence. |
+| Wire accepting/refusing | Paired controls add duplicate READ declarations, failed tool-result completion, unknown role, wrong/duplicate command replies and model-work events before prompt. Interrupted prompt delivery retains its spent budget without redispatch. | Existing fragmented UTF-8/LF, early final/settled, complete READ cycle, usage/copy agreement, finality, unsupported authority, damaged-tail and process-completion cases remain the accepting/refusing core. |
+| Bounds/public result | Diagnostic/error strings and the damage excerpt bind at their exact encoded ceilings; the whole serialized outcome binds at exactly 65,536/65,537 bytes. The Linux stderr control emits exactly 16,384/16,385 bytes after a real READ; both retain affirmative final/EOF/clean status and refuse success. | Existing input/record/stdout/count/depth/reply/model/usage/new-field tests and the shared real-pipe ceiling tests cover the remaining limits. Mutation inventories target the selected accepting guards; passing them is not an exhaustive protocol/state-space claim. |
+| Await/cancel/drain | New cancellations pause delivered state without a reply, accepted analysis without settlement, and terminal completion before decoder EOF. A held reader must join before propagation. Both command writes now exercise cancellation/reentry. Provider close/cancel during partial guard entry refuses exposure/dispatch, joins startup before disposal and releases its guard. | Existing provider post-wait revalidation/deadline/ownership and repeated-cancellation/error tests remain. `test_linux_duplex.py` supplies actual full-pipe, spawn, callback, timeout, repeated-cancellation, early EOF and cleanup-failure proofs. The fixture sends no abort command: the permitted zero-abort strategy relies on owned launcher teardown, not an abort reply. |
+| Durable lifecycle | `test_scripted_read_counterfactual_simulates_effects_and_discards_both_leases` runs an ordinary source graph and a fresh single-use fixture assembly for its counterfactual. It observes distinct simulated receipt identity, exactly `simulate()` for the replay, discarded executor/workspace leases, removed payloads and unchanged authority ref/source dispositions. | Existing `test_pi_leases.py` checkpoints and recovery plus `test_pi_recovery.py`'s five literal Linux death phases remain the restart evidence. No new exactly-once computation, cost or bit-identical model-output claim follows. |
+
+The exact global-cap input is a synthetic publication-helper witness, not
+structured output emitted by Pi: the fixture's actual analysis is scalar text.
+The new physical cases live in the already-required Linux duplex file and its
+existing lane. The READ-mount guard is targeted by a mutation in the existing
+duplex inventory whose assertion kill is required in exact-head Linux CI.
+Portable substitutions establish adapter/journal control flow only. Physical
+execution is unestablished on the local Windows host and must be supplied by
+that required CI. Neither source inspection nor a written/skipped case fills
+that cell. Final-head verification, mutation and physical results belong to
+the PR evidence.
+
+Before integration with #266, selected local tests passed 154 cases under
+Python 3.13, and the older assertion-only inventories reported 43 READ and 33
+provider kills. Those unbaselined counts are weaker preparation evidence,
+not passing-control evidence. All three changed inventories' target-resolution
+checks passed in that preparation.
+
+A once-only Windows Python 3.13 run on the temporary #270 integration tree,
+before its collection-timing correction, used the now-superseded runner that
+activated mutants before collection. That runner reported 34 passing READ
+baseline selections, 43 kills and no NOT PROVEN result; provider reported 26
+passing baseline selections, 30 kills and three NOT PROVEN results. One
+counterfactual control reaches the unchanged 60-second baseline child bound;
+its cached failure denies credit to both counterfactual mutants. The workspace
+grants control also times out, retaining only partial pytest progress rather
+than a completed baseline report. Failed-control elapsed time is unemitted;
+the cause is unestablished. Both inventories accept their final source-byte
+comparisons. These are weaker historical preparation results, not proof under
+the current collection-preserving runner or final-head CI. Required Linux CI
+must affirmatively pass the same baseline and mutant selections with that
+current runner before completion; no retries, timeout increases or
+implementation changes follow from these Windows timeouts. No local
+duplex-inventory execution or completed
+full repository gate on the eventual PR head is claimed.
+
+The bounded audit corrected test premises before accepting results. An outer
+`read()` entry did not prove the reader had reached a later state-reply/EOF
+wait; markers now observe delivered/withheld state and actual terminal EOF.
+Descriptor-number reuse does not prove an inherited leak, so the fixture tests
+whether the original descriptor identity is visible. A failed chmod does not
+prove a write was attempted; they are separate probes. Startup cleanup also
+legitimately reacquires its guard during disposal, so the assertion retains
+both entry/exit pairs and their acquisition identity. No runtime defect or
+production source change was established by these corrections.
+
+An initial Python 3.11 Windows attempt exposed the pre-existing portable
+fixture's `Path.is_junction()` compatibility problem, separately tracked in
+[#269](https://github.com/sushiHex/constructicon/issues/269); it is failed,
+interrupted evidence, not a green run. Subsequent portable verification uses
+Python 3.13 with unchanged runtime grants and existing observer budgets.
+
+Completion closes only the selected scripted preparation evidence. Real Pi's exact
+runtime/artifact closure, actual startup/helpers/packages and callable-tool
+restrictions through terminal/drain, native READ semantics, authentication,
+credential/store/egress custody and provider/mode/limit conformance remain
+unqualified. No live authentication route is selected; no vendor binary,
+account, credential, model call, VM, WRITE, installation or deployment is added.
+
 ## Passing controls for mutation evidence (Refs #266)
 
 The shared code-object runner now requires an affirmative unmutated control
