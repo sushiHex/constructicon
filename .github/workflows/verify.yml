@@ -24,6 +24,17 @@ jobs:
         env:
           PYTHONIOENCODING: utf-8
         run: uv run pytest -q tests/test_m8_vm_address.py tests/test_m8_vm_usage.py tests/test_m8_discovery_procedure.py
+      - name: Prove contributor fixtures on Windows Python 3.11
+        env:
+          PYTHONIOENCODING: utf-8
+          UV_PROJECT_ENVIRONMENT: .venv311
+        run: >-
+          uv run --no-active --locked --python 3.11 python -m pytest
+          tests/test_gitworld.py
+          tests/test_portable_acquisition_namespace.py
+          tests/substrate/test_pi_provider.py::test_materialized_task_reads_exact_workspace_and_closes_both_leases
+          tests/api/test_pi_leases.py::test_scripted_read_counterfactual_simulates_effects_and_discards_both_leases
+          -v
 
   verify:
     runs-on: ubuntu-latest

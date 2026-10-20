@@ -42,6 +42,26 @@ def test_portable_aggregate_covers_every_other_job_and_always_runs() -> None:
     assert re.findall(r"^    if: (.+)$", workflow, re.M) == ["always()"]
 
 
+def test_windows_job_keeps_discovery_and_exercises_minimum_python_disposal() -> None:
+    workflow = (WORKFLOWS / "verify.yml").read_text(encoding="utf-8")
+    windows = workflow.split("\n  windows-discovery:\n", 1)[1].split("\n  verify:\n", 1)[0]
+    assert 'python-version: "3.12"' in windows
+    assert "tests/test_m8_discovery_procedure.py" in windows
+    assert "UV_PROJECT_ENVIRONMENT: .venv311" in windows
+    assert "uv run --no-active --locked --python 3.11 python -m pytest" in windows
+    for target in (
+        "tests/test_gitworld.py",
+        "tests/test_portable_acquisition_namespace.py",
+        "tests/substrate/test_pi_provider.py::"
+        "test_materialized_task_reads_exact_workspace_and_closes_both_leases",
+        "tests/api/test_pi_leases.py::"
+        "test_scripted_read_counterfactual_simulates_effects_and_discards_both_leases",
+    ):
+        assert target in windows
+    assert not re.search(r"^\s+if:", windows, re.M)
+    assert "continue-on-error" not in windows
+
+
 def _run_portable_gate(results: dict[str, str]) -> subprocess.CompletedProcess[str]:
     shell = textwrap.dedent(_portable_gate().split("        run: |\n", 1)[1])
     environment = {**os.environ, **results}

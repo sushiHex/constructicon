@@ -9,6 +9,7 @@ and a deliberately failing component for dependency-blocking tests.
 from __future__ import annotations
 
 import asyncio
+import stat
 import sys
 from collections.abc import Mapping
 from contextlib import asynccontextmanager, contextmanager
@@ -72,9 +73,12 @@ def portable_acquisition_namespace(monkeypatch):
 
     def remove(paths, opened):
         assert opened is paths
-        if not paths.payload.exists() and not paths.payload.is_symlink():
+        try:
+            info = paths.payload.lstat()
+        except FileNotFoundError:
             return False
-        if paths.payload.is_symlink() or paths.payload.is_junction():
+        if (not stat.S_ISDIR(info.st_mode)
+                or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
             raise ContractViolation("acquisition payload root must be a real directory")
         if not acquisition.shutil.rmtree.avoids_symlink_attacks:
             raise ContractViolation("symlink-safe acquisition disposal is unavailable")

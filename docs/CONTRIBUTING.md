@@ -67,7 +67,7 @@ The current maintenance application has an existing credential-free rehearsal:
 propose a data-only change → capture an immutable candidate → run the fixed
 trusted exam → publish acceptance evidence, or refuse. It adds no new workflow
 language or model service. From a committed checkout with Git installed and its
-own `uv sync --dev` environment, run this in Bash/Git Bash:
+own `uv sync --dev --python 3.11` environment, run this in Bash/Git Bash:
 
 ```bash
 PYTHONIOENCODING=utf-8 uv run --no-active python -m pytest \
