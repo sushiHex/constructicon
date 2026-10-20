@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import os
 import subprocess
 import sys
@@ -14,8 +15,11 @@ ROOT = Path(__file__).resolve().parents[1]
 ENTRY = ("guard", "subject:value", "return 1", "return 2", "test_subject.py")
 
 
-def inventory(tmp_path: Path, test: str, entries: list[tuple] | None = None):
-    (tmp_path / "subject.py").write_text("def value():\n    return 1\n", encoding="utf-8")
+def inventory(
+    tmp_path: Path, test: str, entries: list[tuple] | None = None, *,
+    subject_source: str = "def value():\n    return 1\n",
+):
+    (tmp_path / "subject.py").write_text(subject_source, encoding="utf-8")
     (tmp_path / "test_subject.py").write_text(test, encoding="utf-8")
     script = tmp_path / "inventory.py"
     script.write_text(
@@ -94,7 +98,7 @@ def test_a_new_mutant_nodeid_has_no_passing_baseline(tmp_path):
     assert "KILLED" not in result.stdout
 
 
-def test_xfailed_assertion_cannot_lend_its_baseline_identity_to_a_new_failure(tmp_path):
+def test_conditional_xfail_is_collected_before_the_body_is_mutated(tmp_path):
     result = inventory(
         tmp_path,
         "import pytest, subject\n"
@@ -104,10 +108,93 @@ def test_xfailed_assertion_cannot_lend_its_baseline_identity_to_a_new_failure(tm
         "@pytest.mark.parametrize('value', values)\n"
         "def test_value(value):\n    assert subject.value() == value == 1\n",
     )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "BASELINE PASSED" in result.stdout
+    assert "guard: KILLED" in result.stdout
+
+
+@pytest.mark.parametrize("replace", [False, True], ids=["insert-before", "same-count-replacement"])
+def test_opaque_positional_ids_cannot_manufacture_a_controlled_case(tmp_path, replace):
+    collection = (
+        "values = [retained if subject.value() == 1 else object()]\n" if replace else
+        "values = [retained]\nif subject.value() != 1:\n    values.insert(0, object())\n"
+    )
+    result = inventory(
+        tmp_path, "import pytest, subject\nretained = object()\n" + collection
+        + "@pytest.mark.parametrize('value', values)\n"
+        "def test_value(value):\n    assert value is retained\n",
+    )
     assert result.returncode == 1, result.stdout + result.stderr
     assert "BASELINE PASSED" in result.stdout
     assert "guard: NOT PROVEN" in result.stdout
     assert "KILLED" not in result.stdout
+
+
+def test_mutation_is_active_before_fixture_setup(tmp_path):
+    result = inventory(
+        tmp_path, "import pytest, subject\n"
+        "@pytest.fixture\ndef observed():\n    return subject.value()\n"
+        "def test_value(observed):\n    assert observed == 1\n",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "guard: KILLED" in result.stdout
+
+
+def test_all_collection_hooks_return_before_mutation_activation(tmp_path):
+    (tmp_path / "conftest.py").write_text(
+        "import pytest, subject\nsubject.collection_events = []\n"
+        "def pytest_collection_finish(session):\n"
+        "    assert subject.value() == 1\n"
+        "    subject.collection_events.append('finish')\n"
+        "@pytest.hookimpl(wrapper=True, tryfirst=True)\n"
+        "def pytest_collection(session):\n"
+        "    result = yield\n"
+        "    assert subject.value() == 1\n"
+        "    subject.collection_events.append('wrapper')\n"
+        "    return result\n",
+        encoding="utf-8",
+    )
+    result = inventory(
+        tmp_path, "import subject\ndef test_value():\n"
+        "    assert subject.collection_events == ['finish', 'wrapper']\n"
+        "    assert subject.value() == 1\n",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "guard: KILLED" in result.stdout
+
+
+def test_preparing_unused_target_does_not_execute_its_default(tmp_path):
+    result = inventory(
+        tmp_path, "import subject\ndef test_value():\n    assert subject.events == ['default']\n",
+        subject_source="events = []\ndef touch():\n    events.append('default')\n"
+        "def value(argument=touch()):\n    return 1\n",
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "BASELINE PASSED" in result.stdout
+    assert "guard: NOT PROVEN" in result.stdout
+    assert "KILLED" not in result.stdout
+
+
+def test_missing_activation_cannot_emit_assertion_credit(monkeypatch, capsys):
+    def original():
+        return 1
+
+    monkeypatch.setattr(mutations.sys, "argv", ["inventory.py", "0"])
+    monkeypatch.setattr(
+        mutations, "mutated",
+        lambda *_args: (original, ast.parse("def original():\n    return 2\n")),
+    )
+
+    def no_test_loop(_args, plugins):
+        evidence = plugins[0]
+        evidence.assertions.add("test::case")
+        evidence.failed_calls.add("test::case")
+        return 1
+
+    monkeypatch.setattr(pytest, "main", no_test_loop)
+    assert mutations.run([ENTRY]) == 1
+    assert "MUTATION_ASSERTION_FAILURE" not in capsys.readouterr().out
+    assert original() == 1
 
 
 def fake_invocation(monkeypatch, results, *, snapshots=(b"source", b"source")):
@@ -128,8 +215,44 @@ def fake_invocation(monkeypatch, results, *, snapshots=(b"source", b"source")):
     return calls
 
 
-PASS = subprocess.CompletedProcess([], 0, 'MUTATION_BASELINE_PASSED ["test::case"]\n', "")
-KILL = subprocess.CompletedProcess([], 1, 'MUTATION_ASSERTION_FAILURE ["test::case"]\n', "")
+COLLECTION = 'MUTATION_COLLECTION ["test::case"]\n'
+PASS = subprocess.CompletedProcess(
+    [], 0, COLLECTION + 'MUTATION_BASELINE_PASSED ["test::case"]\n', "",
+)
+KILL = subprocess.CompletedProcess(
+    [], 1, COLLECTION + 'MUTATION_ASSERTION_FAILURE ["test::case"]\n', "",
+)
+
+
+@pytest.mark.parametrize("phase", ["baseline", "mutant"])
+@pytest.mark.parametrize("collection", [
+    "", "MUTATION_COLLECTION {}\n", "MUTATION_COLLECTION []\n", COLLECTION + COLLECTION,
+], ids=["missing", "malformed", "empty", "duplicate"])
+def test_missing_or_invalid_collection_receipt_refuses_credit(
+    monkeypatch, capsys, phase, collection,
+):
+    marker = 'MUTATION_BASELINE_PASSED ["test::case"]\n' if phase == "baseline" else (
+        'MUTATION_ASSERTION_FAILURE ["test::case"]\n'
+    )
+    bad = subprocess.CompletedProcess([], 0 if phase == "baseline" else 1, collection + marker, "")
+    calls = fake_invocation(monkeypatch, [bad, KILL] if phase == "baseline" else [PASS, bad])
+    assert mutations.run([ENTRY]) == 1
+    assert len(calls) == (1 if phase == "baseline" else 2)
+    assert "KILLED" not in capsys.readouterr().out
+
+
+def test_ordered_collection_drift_refuses_credit(monkeypatch, capsys):
+    baseline = subprocess.CompletedProcess(
+        [], 0, 'MUTATION_COLLECTION ["test::case", "test::other"]\n'
+        'MUTATION_BASELINE_PASSED ["test::case", "test::other"]\n', "",
+    )
+    mutant = subprocess.CompletedProcess(
+        [], 1, 'MUTATION_COLLECTION ["test::other", "test::case"]\n'
+        'MUTATION_ASSERTION_FAILURE ["test::case"]\n', "",
+    )
+    fake_invocation(monkeypatch, [baseline, mutant])
+    assert mutations.run([ENTRY]) == 1
+    assert "KILLED" not in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("phase", ["baseline", "mutant"])
@@ -139,7 +262,8 @@ def test_missing_malformed_or_duplicate_child_evidence_refuses_credit(
 ):
     marker = "MUTATION_BASELINE_PASSED" if phase == "baseline" else "MUTATION_ASSERTION_FAILURE"
     bad = subprocess.CompletedProcess(
-        [], 0 if phase == "baseline" else 1, marker + payload.replace("{marker}", marker), "",
+        [], 0 if phase == "baseline" else 1,
+        COLLECTION + marker + payload.replace("{marker}", marker), "",
     )
     calls = fake_invocation(monkeypatch, [bad] if phase == "baseline" else [PASS, bad])
     assert mutations.run([ENTRY]) == 1

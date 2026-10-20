@@ -15,8 +15,10 @@ def test_run_reports_elapsed_time_without_changing_nonproof_exit_status(
     monkeypatch.setattr(mutations, "source_snapshot", lambda: b"source")
     results = iter(
         (
-            subprocess.CompletedProcess([], 0, 'MUTATION_BASELINE_PASSED ["test::case"]\n', ""),
-            subprocess.CompletedProcess([], 1, 'MUTATION_ASSERTION_FAILURE ["test::case"]\n', ""),
+            subprocess.CompletedProcess([], 0, 'MUTATION_COLLECTION ["test::case"]\n'
+                                        'MUTATION_BASELINE_PASSED ["test::case"]\n', ""),
+            subprocess.CompletedProcess([], 1, 'MUTATION_COLLECTION ["test::case"]\n'
+                                        'MUTATION_ASSERTION_FAILURE ["test::case"]\n', ""),
             subprocess.CompletedProcess([], 1, "ordinary test failure", ""),
             subprocess.CompletedProcess([], 2, "", "harness error"),
             subprocess.TimeoutExpired([], 60),
@@ -72,8 +74,10 @@ def test_run_preserves_success_exit_status_when_every_mutant_is_killed(
         lambda *args, **kwargs: subprocess.CompletedProcess(
             args,
             0 if "--baseline" in args[0] else 1,
-            'MUTATION_BASELINE_PASSED ["test::case"]\n' if "--baseline" in args[0]
-            else 'MUTATION_ASSERTION_FAILURE ["test::case"]\n', "",
+            'MUTATION_COLLECTION ["test::case"]\n' + (
+                'MUTATION_BASELINE_PASSED ["test::case"]\n' if "--baseline" in args[0]
+                else 'MUTATION_ASSERTION_FAILURE ["test::case"]\n'
+            ), "",
         ),
     )
     times = iter((9.0, 9.25, 10.0, 10.75))

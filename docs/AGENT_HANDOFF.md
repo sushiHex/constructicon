@@ -31,6 +31,19 @@ could lend its control identity to another failure. Credit now requires both
 a raw assertion and a final failed call report without expected-failure
 classification for the same node. Real-child regressions cover both cases.
 
+Connector review exposed the limit of node IDs: opaque positional parameters
+can reuse an ID for a different case, even without changing the full ID list.
+Both modes now collect with the original function. At `pytest_runtestloop`,
+after collection hooks and wrappers return, both affirmatively record ordered
+node IDs and the mutant activates before fixture setup. Credit requires equal
+ordered receipts and affirmative activation, not just an intersecting ID.
+Preparation extracts compiled function code without executing its definition;
+otherwise evaluating a default again could itself manufacture a failure.
+Regressions prove opaque insertion/replacement refusal, original collection
+hooks, runtime fixture/body kills and unused-default refusal. This is a trusted
+test/plugin boundary, not opaque-value identity or cross-process determinism;
+independent collection drift can conservatively refuse a cached control.
+
 Working-tree byte snapshots bracket the inventory; drift or unreadable inputs
 invalidate every pending kill. Git's ownership check required an exact-root,
 command-scoped `safe.directory` exception for service-account checkouts, not

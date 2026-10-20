@@ -17,6 +17,7 @@ import sys
 import textwrap
 import time
 from pathlib import Path
+from types import CodeType
 
 
 def source_snapshot() -> bytes:
@@ -48,21 +49,25 @@ def diagnostic_tail(output) -> str:
     return (output or "")[-3000:]
 
 
-def evidence_nodeids(output: str, marker: str) -> set[str]:
+def evidence_collection(output: str, marker: str) -> list[str] | None:
     """Accept exactly one affirmative, structured child report."""
     prefix = marker + " "
     reports = [line[len(prefix):] for line in output.splitlines() if line.startswith(prefix)]
     if len(reports) != 1:
-        return set()
+        return None
     try:
         nodes = json.loads(reports[0])
     except (ValueError, RecursionError):
-        return set()
+        return None
     if not isinstance(nodes, list) or not nodes or any(
         not isinstance(node, str) or not node for node in nodes
     ):
-        return set()
-    return set(nodes)
+        return None
+    return nodes
+
+
+def evidence_nodeids(output: str, marker: str) -> set[str]:
+    return set(evidence_collection(output, marker) or ())
 
 
 def mutated(target: str, before: str, after: str):
@@ -101,6 +106,17 @@ def run(mutants) -> int:
                 self.errors = 0
                 self.passed = set()
                 self.nonpassing = 0
+                self.collection = None
+                self.activated = False
+
+            @pytest.hookimpl(tryfirst=True)
+            def pytest_runtestloop(self, session):
+                # All collection hooks and wrappers have returned. Keep their
+                # parameter construction unmutated; activate before fixtures.
+                self.collection = [item.nodeid for item in session.items]
+                if not baseline:
+                    function.__code__ = prepared
+                    self.activated = True
 
             def pytest_runtest_makereport(self, item, call):
                 if call.excinfo is not None:
@@ -133,17 +149,28 @@ def run(mutants) -> int:
             importlib.import_module(target.split(":")[0])
         else:
             function, tree = mutated(target, before, after)
-            namespace = dict(function.__globals__)
-            exec(compile(tree, function.__code__.co_filename, "exec"), namespace)
-            function.__code__ = namespace[function.__name__].__code__
+            if len(tree.body) != 1 or not isinstance(
+                tree.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)
+            ):
+                raise RuntimeError("mutation must define exactly one function")
+            # Compile but never execute the definition: defaults/annotations
+            # must not run again and manufacture a test failure of their own.
+            module = compile(tree, function.__code__.co_filename, "exec")
+            codes = [code for code in module.co_consts if isinstance(code, CodeType)
+                     and code.co_name == tree.body[0].name]
+            if len(codes) != 1:
+                raise RuntimeError("mutation must compile exactly one matching function")
+            prepared = codes[0]
         evidence = Evidence()
         status = int(pytest.main(["-q", "--tb=short", test], plugins=[evidence]))
         assertions = evidence.assertions & evidence.failed_calls
-        if baseline and status == 0 and evidence.passed and not (
+        if evidence.collection is not None:
+            print("MUTATION_COLLECTION", json.dumps(evidence.collection))
+        if baseline and evidence.collection and status == 0 and evidence.passed and not (
             evidence.errors or evidence.nonpassing
         ):
             print("MUTATION_BASELINE_PASSED", json.dumps(sorted(evidence.passed)))
-        elif not baseline and status == 1 and assertions and not evidence.errors:
+        elif evidence.activated and status == 1 and assertions and not evidence.errors:
             print("MUTATION_ASSERTION_FAILURE", json.dumps(sorted(assertions)))
         return status
 
@@ -174,6 +201,9 @@ def run(mutants) -> int:
                     evidence_nodeids(baseline.stdout, "MUTATION_BASELINE_PASSED")
                     if baseline.returncode == 0 else set()
                 )
+                collection = evidence_collection(baseline.stdout, "MUTATION_COLLECTION")
+                if collection is None:
+                    passed = set()
                 diagnostics = (baseline.stdout[-3000:], baseline.stderr[-3000:])
             except subprocess.TimeoutExpired as exc:
                 passed = set()
@@ -185,10 +215,10 @@ def run(mutants) -> int:
                 passed = set()
                 diagnostics = ("baseline child failed to start", str(exc)[-3000:])
             elapsed = time.monotonic() - started
-            baselines[selection] = passed, diagnostics
+            baselines[selection] = passed, collection if passed else None, diagnostics
             if passed:
                 print(f"{name}: BASELINE PASSED ({elapsed:.3f}s)", flush=True)
-        passed, diagnostics = baselines[selection]
+        passed, collection, diagnostics = baselines[selection]
         if not passed:
             print(f"{name}: NOT PROVEN (baseline did not pass)", flush=True)
             print(*diagnostics)
@@ -209,7 +239,9 @@ def run(mutants) -> int:
             failed = True
             continue
         elapsed = time.monotonic() - started
-        killed = result.returncode == 1 and bool(
+        killed = result.returncode == 1 and collection == evidence_collection(
+            result.stdout, "MUTATION_COLLECTION"
+        ) and bool(
             passed & evidence_nodeids(result.stdout, "MUTATION_ASSERTION_FAILURE")
         )
         outcomes.append((name, killed, elapsed))
