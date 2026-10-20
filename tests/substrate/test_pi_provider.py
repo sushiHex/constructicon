@@ -771,20 +771,50 @@ async def test_workspace_path_redirected_during_guard_wait_refuses_before_exchan
         await world[3].close(view, "discard")
 
 
-@pytest.mark.parametrize("action", ["close", "cancel"])
+@pytest.mark.parametrize(("action", "disposal_guard"), [
+    ("close", "public"), ("close", "namespace"),
+    ("cancel", "public"), ("cancel", "namespace"),
+], ids=["close-public", "close-namespace", "cancel-public", "cancel-namespace"])
 async def test_materialization_close_or_cancel_joins_partial_guard_before_exposure(
-    world, monkeypatch, action,
+    world, monkeypatch, action, disposal_guard,
 ):
+    from constructicon.substrate.git import acquisition
+
     provider, launcher = world[2], world[4]
     acquired = await provider.acquire(executor_context(provider))
     entered, stopping, join = asyncio.Event(), asyncio.Event(), asyncio.Event()
-    disposing = asyncio.Event()
+    disposing, disposed = asyncio.Event(), asyncio.Event()
     original_guard = pi_provider.acquisition_guard
     original_dispose = pi_provider.dispose_acquisition
+    disposal_facts, namespace_lock = [], asyncio.Lock()
+
+    @asynccontextmanager
+    async def disposal_guard_at_namespace(paths, namespace):
+        # Substitute only the platform guard primitive. Exercise both the
+        # portable public-guard delegation and Linux's independent private
+        # namespace route on every host; neither is physical-lock evidence.
+        disposal_facts.append(("enter", paths.acquisition_id))
+        try:
+            if disposal_guard == "public":
+                async with original_guard(paths) as descriptor:
+                    yield descriptor
+            else:
+                async with namespace_lock:
+                    yield 73
+        finally:
+            disposal_facts.append(("exit", paths.acquisition_id))
 
     async def dispose(*args, **kwargs):
         disposing.set()
-        return await original_dispose(*args, **kwargs)
+        # Pin startup release before disposal starts. Linux disposal takes its
+        # private namespace guard; the portable substitute may instead delegate
+        # to the public fake, so its later guard trace is not a startup fact.
+        assert world[5] == [("enter", acquired.acquisition_id),
+                            ("exit", acquired.acquisition_id)]
+        assert not launcher.held_guards
+        result = await original_dispose(*args, **kwargs)
+        disposed.set()
+        return result
 
     @asynccontextmanager
     async def paused_guard(paths):
@@ -800,6 +830,7 @@ async def test_materialization_close_or_cancel_joins_partial_guard_before_exposu
 
     monkeypatch.setattr(pi_provider, "acquisition_guard", paused_guard)
     monkeypatch.setattr(pi_provider, "dispose_acquisition", dispose)
+    monkeypatch.setattr(acquisition, "_guard_at_namespace", disposal_guard_at_namespace)
     materializing = asyncio.create_task(acquired.materialize())
     closing = marker = disposal = None
     try:
@@ -832,8 +863,9 @@ async def test_materialization_close_or_cancel_joins_partial_guard_before_exposu
         assert acquired.resource.closed and not acquired.resource.ready
         assert not launcher.held_guards and launcher.calls == 0
         assert provider.closure.is_closed(acquired.resource.paths)
-        assert [kind for kind, _ in world[5]] == ["enter", "exit", "enter", "exit"]
-        assert all(identity == acquired.acquisition_id for _kind, identity in world[5])
+        assert disposing.is_set() and disposed.is_set()
+        assert disposal_facts == [("enter", acquired.acquisition_id),
+                                  ("exit", acquired.acquisition_id)]
     finally:
         join.set()
         materializing.cancel()

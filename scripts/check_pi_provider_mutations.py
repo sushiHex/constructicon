@@ -10,7 +10,8 @@ TEST = "tests/substrate/test_pi_provider.py::"
 MUTANTS = (
     ("startup cleanup joins materialization", HANDLE + "_join_and_release",
      "(self._materialization, self.active)", "(self.active,)",
-     TEST + "test_materialization_close_or_cancel_joins_partial_guard_before_exposure[close]"),
+     TEST + "test_materialization_close_or_cancel_joins_partial_guard_before_exposure"
+     "[close-namespace]"),
     ("counterfactual Pi leases discard after success", "constructicon.runtime.walker:Walker._invoke",
      '\"discard\" if capability_mode == \"discard\" else \"release\"', '\"release\"',
      "tests/api/test_pi_leases.py::"

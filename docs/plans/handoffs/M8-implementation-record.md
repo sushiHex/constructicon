@@ -72,10 +72,26 @@ The bounded audit corrected test premises before accepting results. An outer
 wait; markers now observe delivered/withheld state and actual terminal EOF.
 Descriptor-number reuse does not prove an inherited leak, so the fixture tests
 whether the original descriptor identity is visible. A failed chmod does not
-prove a write was attempted; they are separate probes. Startup cleanup also
-legitimately reacquires its guard during disposal, so the assertion retains
-both entry/exit pairs and their acquisition identity. No runtime defect or
-production source change was established by these corrections.
+prove a write was attempted; they are separate probes.
+
+The first Linux CI on `ef9db61` rejected an introduced Windows-generalized
+four-event guard assertion. `dispose_acquisition()` takes the private
+`_guard_at_namespace` primitive on Linux; only the non-Linux portable substitute
+delegates that primitive to the public fake guard. Linux therefore records
+only startup's entry/exit in the public fake, not a second disposal pair.
+Substituting only the independent private guard primitive locally reproduced
+both original close/cancel assertion failures. The correction exercises both
+primitive routes for both actions on every host. At disposal entry it requires
+exactly startup's entry/exit for the acquisition and no held startup guard;
+it then affirmatively observes disposal completion and its separately recorded
+guard entry/exit. It does not require an outer waiter to have resumed already,
+accept either trace shape, or replace the real disposal/closure/removal flow.
+All four corrected cases pass locally under Python 3.13. The current shared
+runner passes the targeted close/independent-namespace control (6.306 seconds)
+and assertion-kills the startup-join mutant (4.979 seconds). These targeted
+local results are not a complete inventory or final-head Linux CI result.
+No runtime defect or production source change was established by these
+corrections.
 
 An initial Python 3.11 Windows attempt exposed the pre-existing portable
 fixture's `Path.is_junction()` compatibility problem, separately tracked in

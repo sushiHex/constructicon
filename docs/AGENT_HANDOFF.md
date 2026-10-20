@@ -27,10 +27,15 @@ head Linux evidence. Written or locally skipped physical tests are not results.
 
 Several test premises needed correction: a reader can already be suspended
 inside its primitive when a later state arrives; descriptor-number reuse is
-not inherited authority; a denied chmod is not an attempted write; and disposal
-may legitimately reacquire a guard after joined startup. The assertions now
-record those facts directly. The unrelated Python 3.11 Windows fixture failure
-is tracked separately, not converted into passing coverage.
+not inherited authority; a denied chmod is not an attempted write. Initial Linux
+CI also rejected a four-event public-guard trace inferred from Windows: native
+disposal uses its private namespace guard, while the portable substitute
+delegates to the public fake. Paired close/cancel tests now exercise both
+primitive routes on every host and require startup's exact exit/no-held facts
+at disposal entry plus affirmative disposal completion, not a backend-specific
+final trace or an outer waiter's scheduling order. The unrelated Python 3.11
+Windows fixture failure is tracked separately, not converted into passing
+coverage.
 
 These are scripted fixture observations. Workspace bait ignored by a fixed
 Python program does not qualify real Pi discovery/tool restrictions, and
