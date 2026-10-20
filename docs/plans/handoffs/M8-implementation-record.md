@@ -56,6 +56,11 @@ was not reproduced: pytest,
 Hypothesis and coverage artifacts are explicitly ignored. Replacing snapshots
 with a clean-HEAD prerequisite was rejected because dirty working-tree inputs
 are intentionally supported and bound by their actual bytes.
+Root review also reproduced an introduced CI compatibility gap: Git refuses
+a checkout owned by another account before listing its inputs. Snapshot Git
+uses a command-scoped `safe.directory` for only the resolved repository root;
+it changes no global configuration. A regression affirmatively observes the
+ownership refusal, then proves the exact-root snapshot accepts and binds bytes.
 
 Relevant inventory and gate results
 belong to the final-head PR evidence; portable results establish no Linux-only

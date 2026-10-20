@@ -28,7 +28,8 @@ def source_snapshot() -> bytes:
     """
     root = Path(__file__).resolve().parents[1]
     listed = subprocess.run(
-        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        ["git", "-c", f"safe.directory={root.as_posix()}",
+         "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
         cwd=root, stdin=subprocess.DEVNULL, capture_output=True, check=True, timeout=60,
     )
     digest = hashlib.sha256()

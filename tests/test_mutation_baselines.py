@@ -264,6 +264,28 @@ def test_snapshot_binds_dirty_and_untracked_bytes_and_ignores_list_order(tmp_pat
     assert dirty != original
     untracked.write_text("changed", encoding="utf-8")
     assert mutations.source_snapshot() != dirty
-    assert all(call[0] == ["git", "ls-files", "--cached", "--others",
+    assert all(call[0] == ["git", "-c", f"safe.directory={tmp_path.resolve().as_posix()}",
+                           "ls-files", "--cached", "--others",
                            "--exclude-standard", "-z"] for call in calls)
     assert all(call[1]["stdin"] == subprocess.DEVNULL for call in calls)
+
+
+def test_snapshot_reads_an_exact_checkout_with_different_ownership(tmp_path, monkeypatch):
+    created = subprocess.run(
+        ["git", "init", str(tmp_path)], stdin=subprocess.DEVNULL,
+        capture_output=True, text=True, check=False,
+    )
+    assert created.returncode == 0, created.stdout + created.stderr
+    (tmp_path / "input.py").write_text("input bytes", encoding="utf-8")
+    monkeypatch.setattr(mutations, "__file__", str(tmp_path / "scripts" / "_mutations.py"))
+    monkeypatch.setenv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
+    monkeypatch.setenv("LC_ALL", "C")
+    refused = subprocess.run(
+        ["git", "-c", "safe.directory=", "ls-files"], cwd=tmp_path,
+        stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False,
+    )
+    assert refused.returncode != 0
+    assert "dubious ownership" in refused.stderr
+    first = mutations.source_snapshot()
+    (tmp_path / "input.py").write_text("changed input", encoding="utf-8")
+    assert mutations.source_snapshot() != first
