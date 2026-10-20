@@ -125,14 +125,20 @@ See [adding an executor](docs/CONTRIBUTING.md#adding-an-executor-l1).
 ## Quick start
 
 Constructicon currently targets Python 3.11 or newer and uses
-[`uv`](https://docs.astral.sh/uv/) for development.
+[`uv`](https://docs.astral.sh/uv/) for development. In Bash/Git Bash:
 
 ```bash
 git clone https://github.com/sushiHex/constructicon.git
 cd constructicon
-uv sync --dev
-uv run verify
+uv sync --dev --python 3.11
+PYTHONIOENCODING=utf-8 uv run verify
 ```
+
+The setup command selects standard CPython 3.11, matching the primary CI
+interpreter, rather than an arbitrary installed interpreter variant. This
+does not change the package's Python 3.11+ requirement. In PowerShell, use the
+same setup commands, then `$env:PYTHONIOENCODING = "utf-8"` followed by
+`uv run verify`.
 
 `verify` runs the same credential-free gate as CI: Ruff, strict mypy,
 import-linter, and pytest.

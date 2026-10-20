@@ -13,6 +13,65 @@ From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-
 and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
 subscription route; see the dated section at the end of this record.
 
+## Supported-interpreter portable fixture boundary (Refs #269)
+
+The opted-in non-Linux acquisition fixture previously called
+`Path.is_junction()`, which Python 3.11 does not provide. A new ordinary-
+directory disposal regression first failed with that `AttributeError` on
+Windows CPython 3.11.15. This was a pre-existing test-double defect, not a Pi
+runtime or Linux namespace-custody failure.
+
+The fixture now observes `Path.lstat()` once. Only `FileNotFoundError` means
+absent; other observation errors propagate. A non-directory mode or the
+existing `stat.FILE_ATTRIBUTE_REPARSE_POINT` bit refuses disposal before the
+safe-tree-removal guard. This uses existing Python 3.11 primitives and changes
+no production source, interpreter minimum, timeout, retry or runtime authority.
+The portable substitute remains explicit and test-only.
+
+`test_portable_acquisition_namespace.py` pairs real disposable-directory
+acceptance and repeated absence with refusal cases for synthetic symlink,
+regular-file and reparse metadata, an exact propagated permission error and
+unavailable safe-tree removal. A separate native Windows junction case uses
+the stdlib junction-creation primitive, requires refusal and unchanged target
+bytes, and unlinks only the junction in its finalizer. That case runs on
+Windows; its explicit non-Windows skip is not physical proof. Synthetic
+metadata cases make their weaker boundary explicit.
+
+The focused Windows CPython 3.11.15 run passed 34 tests without skips: all
+eight new fixture cases, the nested UTF-8 Git fixture cases, the CI gate
+contracts and both existing accepting Pi consumers. The same eight new
+fixture cases also passed on Windows CPython 3.13.13 without skips. Changed
+test-file lint and the diff whitespace check passed. These local selections
+are not a completed repository gate or an executed GitHub workflow.
+
+The contributor walkthrough also exposed interpreter selection: an unqualified
+`uv sync --dev` selected an installed free-threaded Python 3.14 interpreter,
+for which locked `pywin32==312` had no matching distribution. Explicit standard
+CPython selection is therefore part of the documented setup; this does not
+raise the declared minimum or promise free-threaded dependency availability.
+The proposed standard CPython 3.11.15 setup synchronized successfully, the
+README demo and durable replay succeeded, and the retained-output consumer
+passed once. The complete Windows 3.11 rehearsal was still executing at this
+record's boundary and is not established by that local evidence. The separate
+standard Python 3.13 walkthrough completed both rehearsal cases without skips
+(110.37 seconds). Neither walkthrough supplies vendor or Linux physical proof.
+
+A temporary local selection used the unchanged passing-control mutation
+runner: three distinct controls passed and four mutants earned assertion-kill
+credit with stable source snapshots. They removed the reparse refusal, removed
+the directory-mode refusal, treated every `OSError` as absence, or bypassed the
+safe-tree-removal guard. The idiomatic `pytest.raises` failures are
+`pytest.fail.Exception`, which the existing runner explicitly classifies as
+assertion failures. No new mutation harness or persistent inventory was added.
+
+The Windows CI job retains its Python 3.12 discovery lane and adds an isolated
+Python 3.11 environment for the portable fixture, nested UTF-8 Git seeding and
+existing Pi materialization/counterfactual disposal consumers. The source
+contract pins this route; actual workflow execution and exact-head repository
+verification remain PR evidence. Portable tests and a native junction refusal
+do not replace Linux descriptor-relative disposal, containment, vendor startup,
+authentication or integrated M8 qualification.
+
 ## Pi scripted READ proof closeout (Refs #267)
 
 This bounded test-only successor reconciles the accepted READ design against

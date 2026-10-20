@@ -15,6 +15,28 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## A supported interpreter needs an accepting fixture path
+
+The #269 ordinary-directory test first reproduced the portable acquisition
+fixture's `Path.is_junction()` failure on Windows Python 3.11. The fixture now
+uses one `lstat()` observation plus the existing mode/reparse metadata. Absence
+requires `FileNotFoundError`; a permission failure remains a failure. Paired
+accepting/refusing tests retain the symlink, junction, other reparse and
+safe-removal boundaries, including a native Windows junction whose target
+bytes remain intact. Production acquisition code is unchanged.
+
+The contributor setup now selects standard Python 3.11 explicitly: an installed
+free-threaded interpreter could otherwise be selected despite an unavailable
+locked Windows dependency wheel. The selected 3.11 setup, demo and durable
+replay passed; the full 3.11 rehearsal was incomplete at the recorded boundary.
+The separately completed 3.13 rehearsal is evidence for that interpreter only.
+
+The Windows minimum-interpreter CI step is separate from the existing 3.12
+discovery checks. Synthetic metadata, portable disposal control flow, native
+Windows junction refusal and Linux descriptor custody are different proofs;
+a non-Windows skip of the native junction case supplies none of the latter.
+The living M8 record carries measured evidence and contributor setup limits.
+
 ## A fixture closeout keeps its evidence boundaries
 
 The #267 Pi READ tests compose the existing adapter/decoder with startup and
