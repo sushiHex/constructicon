@@ -117,6 +117,13 @@ jobs:
           printf 'commit=%s lane=%s image=%s/%s kernel=%s\n' "$EVIDENCE_COMMIT" "$EVIDENCE_LANE" "$ImageOS" "$ImageVersion" "$(uname -r)" > "$RUNNER_TEMP/m8-host.txt"
           id m8-service >> "$RUNNER_TEMP/m8-host.txt"
           sudo cat /sys/kernel/security/apparmor/profiles | awk '/constructicon-m8-/ {print}' >> "$RUNNER_TEMP/m8-host.txt"
+      - name: Prove standalone fake no-further-exec feasibility
+        if: matrix.lane == 'foundation'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo env RUNNER_ENVIRONMENT=github-hosted /usr/bin/python3 scripts/ci/prove_m8_noexec.py \
+            </dev/null | tee "$RUNNER_TEMP/m8-noexec.json"
       - name: Observe frozen P2 stock-utility diagnostics on Ubuntu 24.04
         if: matrix.lane == 'foundation'
         shell: bash
@@ -540,6 +547,7 @@ jobs:
             ${{ runner.temp }}/m8-bridge-runtime.json
             ${{ runner.temp }}/m8-operator-store.json
             ${{ runner.temp }}/m8-host.txt
+            ${{ runner.temp }}/m8-noexec.json
             ${{ env.M8_EVIDENCE }}/boundary.json
             ${{ env.M8_EVIDENCE }}/codex-*.json
             ${{ env.M8_EVIDENCE }}/duplex-*.json
