@@ -7904,3 +7904,49 @@ field was invented. Other reviewed hypotheses were rejected with evidence:
 own model/effort arguments use session state rather than raw settings rows,
 and ADR 0021 does not categorically prohibit the source-qualified byoc flag.
 Those dispositions do not establish vendor support or native qualification.
+
+### Credential-free READ implementation
+
+The implementation separates three existing responsibilities: pure startup
+observations, one bounded duplex transaction, and a fixed reader over an owned
+READ workspace. It does not register an available provider. The transaction
+requires the real SDK handshake, settings and hook observations, one correlated
+user turn, terminal metadata and joined clean transport completion. The sole
+callback receives a relative path and remaining deadline, not a command.
+
+The fixed reader uses the existing workspace owner, closure and use guard. It
+retains custody until its child has joined, rechecks closure after guard release,
+and permanently refuses reuse after interruption or overlapping callbacks. Its
+networkless launcher executes fixed Python source with the path as an argument;
+descriptor-relative traversal refuses symlinks and non-regular files. UTF-8
+output has a 64 KiB bound. Portable tests substitute platform-bound primitives;
+the provisioned foundation lane additionally runs the actual Linux reader.
+Written Linux tests are not credited as physical evidence before that lane runs.
+
+Focused review found two introduced transaction defects: emitted overage facts
+were discarded, and malformed required terminal metadata could admit success.
+Both were reproduced and corrected with accepting and refusing tests. Worker
+tests also exposed cancellation-only exception groups during repeated
+cancellation; cleanup now distinguishes cancellation from substantive cleanup
+failure while still joining before releasing custody.
+
+An integration pass found that valid terminal token counts were being discarded
+and elapsed time defaulted to zero. Outcomes now retain the validated terminal
+input/output counts, including after a later refusal, and measure elapsed time
+through joined teardown. These are turn-main-loop observations, not cumulative
+model totals, backend request counts or a monetary ceiling. Missing or
+uncorrelated terminal evidence remains unknown. The focused transaction suite
+passed 104 tests; seven telemetry mutants were assertion-killed. Independent
+focused review found no new worker or telemetry defect. Full repository and
+provisioned Linux results remain separate gates.
+
+The sole user frame uses the pinned `client_composed` flag. Independent source
+review confirms suppression of slash-command dispatch and typed mentions, not
+all ambient context. The fixed startup contract records that narrower claim;
+zero configured hooks and the other startup constraints remain necessary.
+
+No vendor binary, credential, login, private host or model call is used by these
+new tests. This slice does not compose the standalone no-further-execution
+profile with the native launcher, qualify a native descriptor, or authorize a
+live procedure. Those remain explicit gates rather than inferred consequences
+of successful fake transcripts or a successful fixed worker.

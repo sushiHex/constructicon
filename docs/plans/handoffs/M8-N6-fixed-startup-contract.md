@@ -33,6 +33,19 @@ No CLI or initialize option may add these surfaces later.
 Safe mode is active before preAction: Cr reads raw argv before `--`,
 B@207257643; the action's later SAFE_MODE environment write is not its origin.
 
+The sole user frame sets `client_composed: true`: TaskSpec instructions are
+assembled content, not interactive CLI commands. The declared literal-true
+field (D:6363-6365; native schema B@208203950) sets `skipSlashCommands` at
+B@233760696 and `skipAttachments` through ry at B@233152685. Headless dispatch
+maps the latter to `"mentions"`, B@233442534. Cn B@224403156 excludes slash
+dispatch and the typed-mention expansion path. Ambient context can still be
+attached later through sr/gle(null), B@224402100; this is not an all-context
+suppression claim. Bridge and scheduled-origin overrides are excluded by the
+fixed ordinary user envelope. Prompt hooks, tool permissions and between-tool
+context retain their existing restrictions. No caller may opt this field out
+or add origin/permission fields to the generated frame. Focused independent
+source review confirmed this narrow command/mention exclusion.
+
 Use a fresh process and disposable native state with no inherited home,
 profiles, global configuration, gateway record, transcript or project files.
 The native zone has no workspace. Its writable disposable state is distinct
