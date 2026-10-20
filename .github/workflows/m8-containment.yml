@@ -506,7 +506,9 @@ jobs:
               tests/test_m8_host_runtime.py::test_the_loader_list_resolves_as_ldd_does \
               -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
       - name: Kill the native review-regression mutants
-        if: matrix.lane == 'foundation'
+        # These inventories need only the common runtime, not the store/relay.
+        # Keep their passing controls off foundation's store-heavy critical path.
+        if: matrix.lane == 'mediation'
         shell: bash
         run: |
           set -euo pipefail

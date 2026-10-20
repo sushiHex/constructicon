@@ -126,7 +126,7 @@ PROOFS = {
         "foundation", "tests/test_m8_host_runtime.py",
     ),
     "Kill the native review-regression mutants": (
-        "foundation",
+        "mediation",
         "scripts/check_m8_containment_mutations.py scripts/check_m8_capture_mutations.py "
         "scripts/check_m8_gate_mutations.py scripts/check_m8_duplex_mutations.py",
     ),
@@ -152,6 +152,25 @@ def test_every_existing_proof_runs_once_in_its_isolated_lane():
     )
     assert "lane: [foundation, lifecycle, combined, mediation]" in text
     assert "fail-fast: false" in text
+
+
+def test_native_mutants_keep_the_common_runtime_and_unprivileged_context():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    steps = dict(re.findall(
+        r"      - name: ([^\n]+)\n(.*?)(?=\n      - |\n  \w|\Z)", text, re.S,
+    ))
+    provision = steps["Provision the explicitly authorized disposable Linux host"]
+    assert "if:" not in provision  # Runtime/profile exist in every proof lane.
+    assert "scripts/ci/build_m8_runtime.py" in provision
+    step = steps["Kill the native review-regression mutants"]
+    assert "if: matrix.lane == 'mediation'" in step
+    assert step.count("sudo -u m8-service env -i") == 4
+    assert step.count("M8_CONTAINMENT_REQUIRED=1") == 4
+    assert step.count("M8_LINUX_ROOT=/var/lib/constructicon-m8-launch") == 4
+    assert step.count("PYTEST_ADDOPTS=-pno:cacheprovider") == 4
+    assert "M8_OPERATOR_STORE" not in step and "M8_EGRESS" not in step
+    proofs = text.split("\n  proofs:\n", 1)[1].split("\n  containment:\n", 1)[0]
+    assert "timeout-minutes: 30" in proofs
 
 
 def test_gate_always_checks_the_selected_proof_set_without_bypass():

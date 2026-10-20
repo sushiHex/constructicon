@@ -62,6 +62,25 @@ uses a command-scoped `safe.directory` for only the resolved repository root;
 it changes no global configuration. A regression affirmatively observes the
 ownership refusal, then proves the exact-root snapshot accepts and binds bytes.
 
+The first integrated head (`64fdc0a`) passed full verification, qualification,
+all 16 portable inventory jobs and three physical lanes. Foundation passed its
+ordinary service-user containment proof, then exceeded its unchanged 30-minute
+job budget during the final native mutation block. GitHub's timeout annotation,
+not an inferred cause from missing output, establishes that failure. The four
+native review-regression inventories now run serially on the existing mediation
+lane. They use only the common runtime/profile, not foundation's store or relay;
+their commands, service identity, environment, child deadlines and proof sets
+are unchanged. There are still four lanes and no retry or longer job budget.
+The workflow contract pins this routing and unprivileged execution context.
+Only final-head CI can establish execution after that scheduling correction.
+
+Across the two observed CI runs, total elapsed time for the 16 portable jobs
+rose from 755 to 1,061 seconds; their maximum grew from 187 to 220 seconds.
+These include setup and different runners, so they are observations rather than
+a controlled attribution of overhead. A Windows full-gate attempt was stopped
+before the scheduling edit to avoid mixed-head evidence: it had no pytest
+completion summary and is not reported as passing.
+
 Relevant inventory and gate results
 belong to the final-head PR evidence; portable results establish no Linux-only
 physical proof and use no vendor process, credential or VM.
