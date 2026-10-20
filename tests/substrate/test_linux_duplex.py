@@ -19,6 +19,7 @@ from constructicon.substrate.executors import linux
 from constructicon.substrate.executors.linux import ProcessExchangeError
 from constructicon.substrate.git.acquisition import AcquisitionPaths, acquisition_guard
 from tests.duplexworld import ScriptedIO
+from tests.substrate.test_linux_containment import CONTAINED_ENVIRONMENT_NAMES
 from tests.substrate.test_linux_containment import launcher as launcher
 
 CHALLENGE = """
@@ -194,7 +195,8 @@ import os, socket
 host_paths = {secrets!r}
 home = Path(os.environ['HOME'])
 facts = {{'argv': sys.argv, 'isolated': sys.flags.isolated, 'cwd': str(Path.cwd()),
-         'home': str(home), 'home_initially_empty': not list(home.iterdir()),
+         'pwd': os.environ.get('PWD'), 'home': str(home),
+         'home_initially_empty': not list(home.iterdir()),
          'environment_names': sorted(os.environ), 'attempts': [], 'denied': []}}
 facts['fixed_environment'] = (
     os.environ.get('PATH') == '/usr/bin:/bin' and os.environ.get('LANG') == 'C.UTF-8'
@@ -251,18 +253,24 @@ assert not (home / '.pi').exists()
                                              workspace=view, grants=grants())
             assert outcome.status == "success", outcome
             observed = json.loads(outcome.output.removeprefix("Read: "))
-            assert observed["workspace_text"] == bait["fixture.txt"]
-            assert observed["argv"] == ["-c", "--fixture-read-only"]
-            assert observed["isolated"] == 1 and observed["cwd"] == "/workspace"
-            assert observed["home"] == "/tmp/home" and observed["home_initially_empty"]
-            assert set(observed["environment_names"]) <= {"HOME", "PATH", "LANG", "LC_CTYPE"}
-            assert observed["fixed_environment"] is True
-            assert observed["scratch"] == "private scratch works"
-            assert observed["fresh_session"] and observed["bait_visible"]
-            expected = ["workspace-chmod", "workspace-write", *secrets,
+            # The launcher clears ambient inputs, then bubblewrap sets PWD from
+            # --chdir. Compare every remaining safe synthetic observation at once
+            # so CI reports all differences without publishing a success artifact.
+            names = observed["environment_names"]
+            assert set(names) <= CONTAINED_ENVIRONMENT_NAMES, observed
+            assert {"PI_FIXTURE_AMBIENT", "HTTPS_PROXY"}.isdisjoint(names), observed
+            attempts = ["workspace-chmod", "workspace-write", *secrets,
                         "host-fd", "host-loopback", "dns-datagram"]
-            assert observed["attempts"] == observed["denied"] == expected
-            assert observed["host_fd_original_visible"] is False
+            assert observed == {
+                "workspace_text": bait["fixture.txt"],
+                "argv": ["-c", "--fixture-read-only"], "isolated": 1,
+                "cwd": "/workspace", "pwd": "/workspace", "home": "/tmp/home",
+                "home_initially_empty": True, "environment_names": names,
+                "fixed_environment": True, "scratch": "private scratch works",
+                "fresh_session": True, "bait_visible": True,
+                "attempts": attempts, "denied": attempts,
+                "host_fd_original_visible": False,
+            }, observed
             assert executor.conversation.decoder.eof
         assert {name: (snapshot / name).read_bytes() for name in bait} == before
         assert authority.read_ref("refs/heads/main") == head and view.git_ref().commit == head

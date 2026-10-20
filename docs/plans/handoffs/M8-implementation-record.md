@@ -106,6 +106,24 @@ as do three existing authority/base-movement consumers. No bait was removed,
 seeding route duplicated or production code changed. The native bait case
 still requires affirmative execution in corrected-head Linux CI.
 
+The later Linux baseline on `68970b7` reached the launched peer, but the new
+test's environment-name assertion rejected benign `PWD`. The established
+containment test already permits it. The launcher clears ambient variables,
+sets fixed HOME/PATH/LANG and selects `/workspace` with `--chdir`;
+[bubblewrap 0.9.0's cwd setup](https://github.com/containers/bubblewrap/blob/v0.9.0/bubblewrap.c#L3050-L3070)
+then sets `PWD` to that selected directory before exec. This is another
+introduced test-premise error, not an established containment defect. Both
+physical consumers now use the existing containment test's extracted allowed-
+name constant. The peer separately records `PWD`, whose `/workspace` expectation
+must pass in corrected-head CI, and explicitly refuses the ambient fixture and
+proxy variables. The test compares every other safe synthetic observation in
+one complete expected projection, retaining diagnostic facts on refusal without
+publishing a success artifact early. Source review rechecked argv/isolation,
+cwd/home/session, private scratch, admitted bytes/bait, attempted read/write,
+descriptor identity, network and terminal checks against the shared launcher
+and existing physical tests; no further premise mismatch was found. Local lint
+and collection do not establish native execution of those assertions.
+
 An initial Python 3.11 Windows attempt exposed the pre-existing portable
 fixture's `Path.is_junction()` compatibility problem, separately tracked in
 [#269](https://github.com/sushiHex/constructicon/issues/269); it is failed,

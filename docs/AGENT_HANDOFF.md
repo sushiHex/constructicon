@@ -44,6 +44,16 @@ blob bytes, including retained files. This setup correction is not native
 containment evidence, and the bait observations still require corrected-head
 Linux execution.
 
+The first launched bait control then exposed a second expectation mismatch:
+bubblewrap derives `PWD` from the launcher's selected cwd after clearing the
+ambient environment. The existing containment proof already allowed this
+name. Both physical consumers now share that allowed-name constant; the bait
+peer records and requires the fixed `/workspace` value while still refusing
+ambient fixture/proxy names. Complete synthetic-observation diagnostics do not
+publish a passing artifact before the assertions finish. This is a corrected
+test premise, not proof that native containment failed or that the corrected
+case has executed successfully.
+
 These are scripted fixture observations. Workspace bait ignored by a fixed
 Python program does not qualify real Pi discovery/tool restrictions, and
 physical containment does not select authentication. Real Pi, Claude-first

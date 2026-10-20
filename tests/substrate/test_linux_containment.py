@@ -46,6 +46,9 @@ from constructicon.substrate.git.acquisition import (
 from constructicon.substrate.git.authority import GitAuthority
 from tests.gitworld import seed_authority
 
+# bubblewrap sets PWD after --chdir; Python may add LC_CTYPE during locale coercion.
+CONTAINED_ENVIRONMENT_NAMES = frozenset({"HOME", "PATH", "LANG", "PWD", "LC_CTYPE"})
+
 
 @pytest.fixture
 def launcher():
@@ -290,7 +293,7 @@ print(json.dumps({
     assert "CapEff:\t0000000000000000" in facts["status"]
     assert set(facts["fds"]) == {"0", "1", "2"}
     assert facts["sys"] is False and facts["home"] == "/tmp/home"
-    assert set(facts["environment"]) <= {"HOME", "PATH", "LANG", "PWD", "LC_CTYPE"}
+    assert set(facts["environment"]) <= CONTAINED_ENVIRONMENT_NAMES
     assert " shared:" not in facts["mounts"]
     # --dev introduces an intermediate user namespace; parent-side zero is
     # not host root. These are single-ID maps, not a host identity range.
