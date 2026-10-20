@@ -104,6 +104,21 @@ found descriptor ownership sound and positively instrumented joined success,
 removal error and repeated cancellation with platform primitives substituted;
 that review did not execute Linux confinement.
 
+The first correction head, `779e0f2`, exposed a test-premise error in full Linux
+verification: 7,434 tests passed, but the new workspace-path regression expected
+a Pi-specific refusal while the existing Linux workspace leaf-link check had
+already refused. Its Linux mutant result therefore was not a valid kill against
+a passing baseline. The regression now replaces the acquisition payload ancestor
+while leaving the mount leaf a real directory, so the Pi canonical-path check
+is the relevant refusal on both platforms. Its corrected portable baseline passes
+and its isolated guard-removal mutant fails by assertion; final-head Linux
+verification remains required. The production blobs are unchanged by this test
+correction. Namespace physical proof belongs to the later non-sudo service-user
+step, not the earlier descriptor/store step.
+The bounded [mutation-baseline harness follow-up (#266)](
+https://github.com/sushiHex/constructicon/issues/266) is outside this correction;
+the full verification gate correctly blocked the failing baseline head.
+
 Five literal Linux owner-death cases are written separately for recorded-before-
 materialization, materializing, active child, before checkpoint and after
 checkpoint. They require successor quiescence/fencing before fresh dispatch,

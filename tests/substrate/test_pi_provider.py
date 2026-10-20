@@ -734,22 +734,27 @@ async def test_workspace_path_redirected_during_guard_wait_refuses_before_exchan
         TaskSpec(instruction="Analyze fixture.txt"), workspace=view.resource,
         grants=ctx.binding.effective_grants,
     ))
-    path = Path(view.resource.path)
+    # Replace an ancestor, not the mount leaf: ContainedWorkspace.use already
+    # refuses a leaf symlink on Linux, independently masking this Pi guard.
+    path = view.resource.paths.payload
     original = path.with_name("retained-workspace")
     redirected = tmp_path / "redirected-workspace"
-    redirected.mkdir()
-    (redirected / "fixture.txt").write_text("not the admitted workspace")
+    (redirected / "workspace").mkdir(parents=True)
+    sentinel = redirected / "workspace" / "fixture.txt"
+    sentinel.write_text("not the admitted workspace")
     linked = False
     try:
         await wait(entered)
         path.rename(original)
         directory_link(path, redirected)
         linked = True
+        assert path.resolve() != path
+        assert Path(view.resource.path).is_dir() and not Path(view.resource.path).is_symlink()
         release.set()
         with pytest.raises(ContractViolation, match="workspace namespace"):
             await executing
         assert world[4].calls == 0
-        assert (redirected / "fixture.txt").read_text() == "not the admitted workspace"
+        assert sentinel.read_text() == "not the admitted workspace"
     finally:
         release.set()
         await asyncio.gather(executing, return_exceptions=True)
