@@ -1,5 +1,30 @@
 # Verification tooling evidence
 
+## Bounded locked-wheel acquisition diagnostics (Refs #264)
+
+Locked-controller-wheel acquisition now reports fixed `http`, `timeout`, `tls`,
+`dns`, `connection`, `response-read` or fallback `transport` categories. These
+describe observed exception types or the response-read stage, not an inferred
+upstream cause. Only the immediate typed `URLError.reason` is inspected; opaque
+strings and nested reasons remain generic. HTTP failures may include an exact
+integer status from 100 through 599; missing or malformed status stays absent.
+The renderer allowlists categories and retains the existing bounded package
+label. No exception text, URLs, environment values or host details are rendered.
+
+Credential-free tests exercise every category at both opening and reading,
+hostile messages and status values, CLI exit 1 without a cache file, accepting
+downloads/cache hits, and integrity refusal. The existing 120-second request
+timeout, single attempt, exact lock selection, digest validation and offline
+import proof remain unchanged. A typed timeout observation does not identify
+which network operation timed out; generic transport failure remains unknown.
+No dependency, credential, vendor, VM, workflow or runtime capability changed.
+
+The wheel, controller environment and CI-scope tests passed on Windows Python
+3.11: 177 passed and 23 skipped. The 49 wheel cases also passed separately;
+explicit helper/test lint and the complete source/test lint passed. Skips are
+not offline import or physical proof. Full verification and exact-head CI
+evidence belong on the PR; focused tests alone do not establish them.
+
 ## Child termination status (Refs #195)
 
 The verifier previously retained only failed stage names. Its failure summary

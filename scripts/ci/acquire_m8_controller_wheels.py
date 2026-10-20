@@ -6,7 +6,10 @@ import http.client
 import io
 import os
 import re
+import socket
+import ssl
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -18,11 +21,31 @@ ROOT = Path(__file__).resolve().parents[2]
 class WheelFailure(ValueError):
     """Only a safe package label and fixed failure class reach CI diagnostics."""
 
-    def __init__(self, package: str, failure: str) -> None:
+    def __init__(self, package: str, failure: str, status: object = None) -> None:
         label = (package if isinstance(package, str)
                  and re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,127}", package)
                  else "invalid-package")
-        super().__init__(f"controller wheels: {label}: {failure}")
+        category = failure if failure in {
+            "integrity", "missing", "read", "write", "transport", "http",
+            "timeout", "tls", "dns", "connection", "response-read",
+        } else "unexpected"
+        suffix = (f" status={status}" if category == "http"
+                  and type(status) is int and 100 <= status <= 599 else "")
+        super().__init__(f"controller wheels: {label}: {category}{suffix}")
+
+
+def transport_failure(package: str, error: Exception, fallback: str) -> WheelFailure:
+    """Classify observed types only; messages and nested text are never evidence."""
+    if isinstance(error, urllib.error.HTTPError):
+        return WheelFailure(package, "http", error.code)
+    reason = error.reason if isinstance(error, urllib.error.URLError) else error
+    for kind, category in (
+        (TimeoutError, "timeout"), (ssl.SSLError, "tls"),
+        (socket.gaierror, "dns"), (ConnectionError, "connection"),
+    ):
+        if isinstance(reason, kind):
+            return WheelFailure(package, category)
+    return WheelFailure(package, fallback)
 
 
 def selected_wheels(lock: bytes, glibc: int) -> list[dict[str, str]]:
@@ -56,9 +79,14 @@ def acquire(directory: Path, selected: list[dict[str, str]]) -> None:
         if not os.path.lexists(path):
             try:
                 with urllib.request.urlopen(wheel["url"], timeout=120) as response:
-                    data = response.read()
-            except (OSError, ValueError, http.client.HTTPException):
-                raise WheelFailure(wheel["name"], "transport") from None
+                    try:
+                        data = response.read()
+                    except (OSError, ValueError, http.client.HTTPException) as error:
+                        raise transport_failure(wheel["name"], error, "response-read") from None
+            except WheelFailure:
+                raise
+            except (OSError, ValueError, http.client.HTTPException) as error:
+                raise transport_failure(wheel["name"], error, "transport") from None
             validate(data, wheel)
             try:
                 with path.open("xb") as stream:
