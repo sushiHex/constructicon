@@ -7850,3 +7850,28 @@ was removed, and the contribution's other files and publication text were
 checked for the same class. This correction does not erase earlier public
 revisions; no credential, host address or filesystem path was exposed by that
 label. The vector and executable source bytes are unchanged.
+
+## N6 standalone execution-denial experiment (Refs #175)
+
+The owner prioritized Claude subscription integration and authorized a bounded
+execution-denial experiment alongside source closure. The experiment uses a
+benign compiled fixture and a separate AppArmor profile on disposable hosted CI.
+It does not change the production launcher or execute a vendor binary. The
+[evidence boundary](M8-N6-execution-denial-proof.md) distinguishes an initial
+permitted launch followed by execution denial from prevention of in-process
+computation, file access, or network activity.
+
+Portable tests exercise exact observation requirements, accepting byte exchange,
+and incomplete-exchange cleanup. These are not Linux physical evidence. The
+foundation lane owns the real profile/fixture run and preserves its structured
+result; no successful physical result is claimed merely because the tests were
+written or Windows accepted their evidence parser.
+
+Parallel source review narrowed the environment question: a joined initial
+policy fetch and a spawn-relative deadline below the hourly polling interval
+can exclude that particular update route. Settings projection still is not a
+process-environment observation, and all other mutation/helper paths must be
+accounted for. The documented host-managed-provider switch was examined and
+rejected for this recipe because it skips opaque stored OAuth discovery. No
+token injection, accepted-ADR weakening, permitting READ adapter, or native
+qualification follows from this experiment.

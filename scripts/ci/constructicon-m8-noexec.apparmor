@@ -1,0 +1,27 @@
+# Standalone benign CI feasibility proof. Not a native executor policy.
+# m is intentional: denying exec does not prohibit same-process native/JS code.
+abi <abi/4.0>,
+
+profile constructicon-m8-noexec-launch /opt/constructicon-m8-noexec/launch flags=(attach_disconnected,mediate_deleted) {
+  allow file rwlkm /{**,},
+  allow signal,
+  allow px /opt/constructicon-m8-noexec/payload -> constructicon-m8-noexec-payload,
+}
+
+profile constructicon-m8-noexec-payload flags=(attach_disconnected,mediate_deleted) {
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow signal,
+  deny x /**,
+  deny capability,
+  deny userns,
+  deny ptrace,
+}
+
+# A distinct launcher tests a genuinely absent transition target; no fallback.
+profile constructicon-m8-noexec-missing /opt/constructicon-m8-noexec/missing-launch flags=(attach_disconnected,mediate_deleted) {
+  allow file rwlkm /{**,},
+  allow signal,
+  allow px /opt/constructicon-m8-noexec/payload -> constructicon-m8-noexec-absent,
+}
