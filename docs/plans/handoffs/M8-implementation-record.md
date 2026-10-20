@@ -13,6 +13,54 @@ From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-
 and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
 subscription route; see the dated section at the end of this record.
 
+## Passing controls for mutation evidence (Refs #266)
+
+The shared code-object runner now requires an affirmative unmutated control
+before any isolated mutant can earn assertion-kill credit. A fresh control
+imports the same target module and invokes exactly the same pytest selection
+as its mutant. Exit zero alone is insufficient: at least one call must pass,
+and every observed report must pass. Failures, errors, collection failures,
+timeouts, no collected calls, skips, expected failures and unexpected passes
+refuse credit. This deliberately also refuses selections mixing passing and
+skipped/expected-failing cases. Child evidence records exact pytest node IDs;
+an assertion-failing mutant needs at least one node ID that affirmatively
+passed its control. Changing collection to introduce a failing parameter case
+cannot manufacture that evidence. Mutant credit still requires an assertion-only
+failure; the existing 60-second child bound and fresh-process isolation remain.
+
+Controls are cached only inside one inventory invocation, by exact pytest
+selection and target pre-import module. Its executable, working directory and
+child environment are captured once. Different selections or pre-imports need
+distinct controls; later invocations never reuse them. Working-tree snapshots
+hash Git-listed tracked and nonignored untracked bytes at both invocation
+boundaries. Dirty input bytes count, and changed or unreadable input refuses
+the entire inventory before any pending kill is printed. Two scans bound the
+snapshot cost independently of mutant count. This assumes a fixed repository
+and installed runtime: it does not attest external modules, ignored inputs,
+host state or edits that are changed and restored between snapshots.
+
+Deterministic child tests cover the accepting path and already-failing tests,
+call/collection/teardown errors, nonexecution and skips/xfail/xpass. Injected
+process tests prove timeout/start-error refusal, bounded diagnostics, cache
+identity, unchanged child inputs, no cross-invocation reuse and invalidation of
+all pending kills on source drift. Snapshot tests bind dirty and untracked
+bytes independently of Git output order. Review reproduced and adopted an
+introduced collection-identity gap: an initial aggregate-only control credited
+a new mutant parameter node that had never passed. A narrow second review
+reproduced an introduced defect in that fix: a raw assertion later classified
+as expected failure could lend its passed-control node ID to another, newly
+collected failure. Kill candidates now require the same final call report to
+affirmatively fail without expected-failure classification as well as a raw
+assertion. Both real-child regressions run. The proposed generated-cache flaw
+was not reproduced: pytest,
+Hypothesis and coverage artifacts are explicitly ignored. Replacing snapshots
+with a clean-HEAD prerequisite was rejected because dirty working-tree inputs
+are intentionally supported and bound by their actual bytes.
+
+Relevant inventory and gate results
+belong to the final-head PR evidence; portable results establish no Linux-only
+physical proof and use no vendor process, credential or VM.
+
 ## Pi scripted READ lease assembly (Refs #263)
 
 This successor to merged PR #260 adds an L1 `PiReadProvider` and owned handle
