@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import http.client
 import io
+import socket
+import ssl
 import urllib.error
 from pathlib import Path
 
@@ -129,7 +131,8 @@ def test_cli_reports_success_or_only_a_safe_acquisition_failure(
     assert wheels.main([str(tmp_path / "wheels")]) == (0 if state == "valid" else 1)
     captured = capsys.readouterr()
     if state in {"transport", "truncated"}:
-        assert captured.out == "" and captured.err == "controller wheels: demo: transport\n"
+        category = "response-read" if state == "truncated" else "transport"
+        assert captured.out == "" and captured.err == f"controller wheels: demo: {category}\n"
     elif state == "unexpected":
         assert captured.out == ""
         assert captured.err == "controller wheels: preparation: unexpected\n"
@@ -140,6 +143,90 @@ def test_cli_reports_success_or_only_a_safe_acquisition_failure(
         assert not (tmp_path / "wheels" / wheel["file"]).exists()
     assert str(wheels.WheelFailure("private/path", "transport")) == (
         "controller wheels: invalid-package: transport")
+
+
+SECRET = "https://user:token@private.invalid/path?KEY=secret\nHOME=/private/host"
+
+
+@pytest.mark.parametrize("stage", ["open", "read"])
+@pytest.mark.parametrize(("error", "category"), [
+    (TimeoutError(SECRET), "timeout"),
+    (urllib.error.URLError(TimeoutError(SECRET)), "timeout"),
+    (ssl.SSLCertVerificationError(SECRET), "tls"),
+    (urllib.error.URLError(ssl.SSLError(SECRET)), "tls"),
+    (socket.gaierror(SECRET), "dns"),
+    (urllib.error.URLError(socket.gaierror(SECRET)), "dns"),
+    (ConnectionResetError(SECRET), "connection"),
+    (urllib.error.URLError(ConnectionRefusedError(SECRET)), "connection"),
+    (urllib.error.HTTPError(SECRET, 503, SECRET, {}, None), "http status=503"),
+    (urllib.error.URLError(SECRET), None),
+    (ValueError(SECRET), None),
+    (OSError(SECRET), None),
+    (http.client.IncompleteRead(SECRET.encode()), None),
+])
+def test_cli_classifies_only_observed_types_and_read_stage(
+    wheels, selection, tmp_path: Path, monkeypatch, capsys, stage, error, category,
+) -> None:
+    wheel, data = selection
+    (tmp_path / artifacts.LOCK).write_bytes(fixture_lock())
+    monkeypatch.setattr(wheels, "ROOT", tmp_path)
+    monkeypatch.setattr(wheels.artifacts, "host_glibc", lambda: 39)
+    monkeypatch.setattr(wheels, "selected_wheels", lambda *_: [wheel])
+    calls = []
+
+    class FailedRead(io.BytesIO):
+        def read(self, *_args, **_kwargs):
+            raise error
+
+    def response(url, *, timeout):
+        calls.append((url, timeout))
+        if stage == "open":
+            raise error
+        return FailedRead(data)
+
+    monkeypatch.setattr(wheels.urllib.request, "urlopen", response)
+    destination = tmp_path / "wheels"
+    assert wheels.main([str(destination)]) == 1
+    captured = capsys.readouterr()
+    expected = category or ("response-read" if stage == "read" else "transport")
+    assert captured.out == ""
+    assert captured.err == f"controller wheels: demo: {expected}\n"
+    assert calls == [(wheel["url"], 120)], "one attempt with the existing timeout"
+    assert not (destination / wheel["file"]).exists()
+
+
+@pytest.mark.parametrize("status", [None, True, False, 99, 600, "503", SECRET, 503.0])
+def test_http_status_is_an_exact_bounded_integer(wheels, status) -> None:
+    error = urllib.error.HTTPError(SECRET, status, SECRET, {}, None)
+    assert str(wheels.transport_failure("demo", error, "transport")) == (
+        "controller wheels: demo: http")
+
+
+@pytest.mark.parametrize("status", [100, 599])
+def test_http_status_accepts_the_valid_boundaries(wheels, status) -> None:
+    assert str(wheels.WheelFailure("demo", "http", status)) == (
+        f"controller wheels: demo: http status={status}")
+
+
+def test_failure_renderer_bounds_all_public_fields(wheels) -> None:
+    assert str(wheels.WheelFailure(SECRET, SECRET, SECRET)) == (
+        "controller wheels: invalid-package: unexpected")
+    assert str(wheels.WheelFailure("demo", "transport", 503)) == (
+        "controller wheels: demo: transport")
+    # Text suggesting a cause is still just opaque text, never a typed observation.
+    error = urllib.error.URLError("timeout ssl dns connection refused " + SECRET)
+    assert str(wheels.transport_failure("demo", error, "transport")) == (
+        "controller wheels: demo: transport")
+    nested = urllib.error.URLError(urllib.error.URLError(TimeoutError(SECRET)))
+    assert str(wheels.transport_failure("demo", nested, "transport")) == (
+        "controller wheels: demo: transport")
+
+    class HostileStatus(int):
+        def __str__(self):
+            return SECRET
+
+    assert str(wheels.WheelFailure("demo", "http", HostileStatus(503))) == (
+        "controller wheels: demo: http")
 
 
 def test_isolated_controller_proof_contains_no_network_acquisition() -> None:
