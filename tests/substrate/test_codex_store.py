@@ -39,7 +39,7 @@ from tests.substrate.test_codex_adapter import (
 
 
 @pytest.fixture
-def store_lifecycle(tmp_path, monkeypatch):
+def store_lifecycle(tmp_path, monkeypatch, portable_acquisition_namespace):
     world = StoreWorld(tmp_path)
     world.install(monkeypatch)
 

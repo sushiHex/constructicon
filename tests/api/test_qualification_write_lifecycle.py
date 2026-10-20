@@ -147,7 +147,7 @@ async def sealed_assembly(tmp_path, launcher, binding, authorization=None):
 
 
 @pytest.fixture
-def portable_write_boundary(monkeypatch):
+def portable_write_boundary(monkeypatch, portable_acquisition_namespace):
     # The production Linux syscall/fence and worker/capture boundaries are
     # explicitly substituted. No safety or report guard is removed.
     monkeypatch.setattr(assembly_module, "_private_owner", lambda info: None)

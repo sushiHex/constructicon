@@ -9,7 +9,9 @@ and a deliberately failing component for dependency-blocking tests.
 from __future__ import annotations
 
 import asyncio
+import sys
 from collections.abc import Mapping
+from contextlib import asynccontextmanager, contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -19,6 +21,7 @@ import pytest
 from constructicon.api.system import Constructicon
 from constructicon.core.address import RunId
 from constructicon.core.component import ComponentDef, PythonRef
+from constructicon.core.errors import ContractViolation
 from constructicon.core.executor import Executor, TaskSpec
 from constructicon.core.graph import Connection, Graph, GraphNode, Ref
 from constructicon.core.identity import digest
@@ -41,6 +44,47 @@ BRIEF = Port(name="brief", type_id="test/Brief", schema_hash="s1")
 REVIEW = Port(name="review", type_id="test/Review", schema_hash="s1")
 ANNOUNCED = Port(name="announced", type_id="test/Announced", schema_hash="s1")
 SUMMARY = Port(name="summary", type_id="test/Summary", schema_hash="s1")
+
+@pytest.fixture
+def portable_acquisition_namespace(monkeypatch):
+    """Explicit non-Linux substitute, never descriptor-confinement evidence.
+
+    Callers separately substitute the public guard. Delegating that known fake
+    preserves their lifetime observations without changing production shape or
+    silently providing a physical guard on an unsupported platform.
+    """
+    if sys.platform == "linux":
+        return
+    from constructicon.substrate.git import acquisition
+
+    original = acquisition.acquisition_guard
+
+    @contextmanager
+    def namespace(paths):
+        assert acquisition.acquisition_guard is not original, "a portable guard must be explicit"
+        yield paths
+
+    @asynccontextmanager
+    async def guard(paths, opened):
+        assert opened is paths and acquisition.acquisition_guard is not original
+        async with acquisition.acquisition_guard(paths) as descriptor:
+            yield descriptor
+
+    def remove(paths, opened):
+        assert opened is paths
+        if not paths.payload.exists() and not paths.payload.is_symlink():
+            return False
+        if paths.payload.is_symlink() or paths.payload.is_junction():
+            raise ContractViolation("acquisition payload root must be a real directory")
+        if not acquisition.shutil.rmtree.avoids_symlink_attacks:
+            raise ContractViolation("symlink-safe acquisition disposal is unavailable")
+        acquisition.shutil.rmtree(paths.payload)
+        return True
+
+    monkeypatch.setattr(acquisition, "_acquisition_namespace", namespace)
+    monkeypatch.setattr(acquisition, "_guard_at_namespace", guard)
+    monkeypatch.setattr(acquisition, "_remove_at_namespace", remove)
+
 
 LEASE_TTL_S = 30.0
 TRIAGE_SCRIPT = {"triage": {"title": "fix the flaky retry loop", "risk": "low"}}

@@ -8,14 +8,15 @@ Neither a directory's absence nor an old process's local phase means closed.
 from __future__ import annotations
 
 import asyncio
+import errno
 import hashlib
 import os
 import re
 import shutil
 import stat
 import sys
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Iterator
+from contextlib import ExitStack, asynccontextmanager, contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -146,21 +147,70 @@ class AcquisitionClosure:
         raise ContractViolation("acquisition closure transaction did not converge")
 
 
-@asynccontextmanager
-async def acquisition_guard(paths: AcquisitionPaths) -> AsyncIterator[int]:
-    """An async wait on one stable inode; closing our fd never unlocks copies.
+@dataclass(frozen=True)
+class _AcquisitionNamespace:
+    root_fd: int
+    guards_fd: int
+    payloads_fd: int | None
 
-    The launcher inherits this open file description. Do not call LOCK_UN:
-    it would unlock the supervisor's copy too, including after owner death.
-    The retained guard is outside every payload mount and is never removed.
+
+def _open_child_directory(parent: int, name: str, *, create: bool = False) -> int:
+    if sys.platform != "linux":
+        raise ContractViolation("physical acquisition directories require Linux")
+    if create:
+        with suppress(FileExistsError):
+            os.mkdir(name, mode=0o700, dir_fd=parent)
+    try:
+        return os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                       dir_fd=parent)
+    except OSError as error:
+        if error.errno in (errno.ELOOP, errno.ENOTDIR):
+            raise ContractViolation(
+                "acquisition namespace must contain real directories",
+            ) from error
+        raise
+
+
+@contextmanager
+def _acquisition_namespace(paths: AcquisitionPaths) -> Iterator[_AcquisitionNamespace]:
+    """Pin no-follow directory descriptions before any awaited physical work.
+
+    These descriptors prevent later pathname replacement from redirecting our
+    guard or removal operations. They do not defend arbitrary guard-file changes
+    by a malicious same-UID process with general filesystem access.
     """
 
     if sys.platform != "linux":
         raise ContractViolation("physical acquisition guards require Linux")
+    if any(part in (".", "..") for part in paths.root.parts[1:]):
+        raise ContractViolation("acquisition namespace requires a canonical root")
+    with ExitStack() as owned:
+        current = os.open(paths.root.anchor,
+                          os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        owned.callback(os.close, current)
+        for part in paths.root.parts[1:]:
+            current = _open_child_directory(current, part, create=True)
+            owned.callback(os.close, current)
+        guards = _open_child_directory(current, "guards", create=True)
+        owned.callback(os.close, guards)
+        try:
+            payloads = _open_child_directory(current, "payloads")
+        except FileNotFoundError:
+            payloads = None
+        if payloads is not None:
+            owned.callback(os.close, payloads)
+        yield _AcquisitionNamespace(current, guards, payloads)
+
+
+@asynccontextmanager
+async def _guard_at_namespace(paths: AcquisitionPaths,
+                              namespace: _AcquisitionNamespace) -> AsyncIterator[int]:
+    if sys.platform != "linux":
+        raise ContractViolation("physical acquisition guards require Linux")
     import fcntl
 
-    paths.guard.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd = os.open(paths.guard, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
+    fd = os.open(paths.acquisition_id, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW,
+                 0o600, dir_fd=namespace.guards_fd)
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
@@ -176,25 +226,51 @@ async def acquisition_guard(paths: AcquisitionPaths) -> AsyncIterator[int]:
         os.close(fd)
 
 
+@asynccontextmanager
+async def acquisition_guard(paths: AcquisitionPaths) -> AsyncIterator[int]:
+    """Wait on a pinned guard inode; close never unlocks inherited descriptions."""
+
+    with _acquisition_namespace(paths) as namespace:
+        async with _guard_at_namespace(paths, namespace) as guard:
+            yield guard
+
+
+def _remove_at_namespace(paths: AcquisitionPaths, namespace: _AcquisitionNamespace) -> bool:
+    """Runs only inside the joined worker, with directory custody still retained."""
+
+    with ExitStack() as owned:
+        payloads = namespace.payloads_fd
+        if payloads is None:
+            try:
+                payloads = _open_child_directory(namespace.root_fd, "payloads")
+            except FileNotFoundError:
+                return False
+            owned.callback(os.close, payloads)
+        try:
+            info = os.stat(paths.acquisition_id, dir_fd=payloads, follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        if not stat.S_ISDIR(info.st_mode):
+            raise ContractViolation("acquisition payload root must be a real directory")
+        if not shutil.rmtree.avoids_symlink_attacks:
+            raise ContractViolation("symlink-safe acquisition disposal is unavailable")
+        shutil.rmtree(paths.acquisition_id, dir_fd=payloads)
+        return True
+
+
 async def dispose_acquisition(
     closure: AcquisitionClosure, paths: AcquisitionPaths, *,
     candidate_ref: str | None = None, disposition: Disposition = "discard",
 ) -> bool:
     """Revoke before waiting, then remove only quiescent acquisition payloads."""
 
-    await finish_owned(asyncio.create_task(asyncio.to_thread(
-        closure.commit, paths, candidate_ref=candidate_ref, disposition=disposition,
-    )))
-    async with acquisition_guard(paths):
-        if not paths.payload.exists() and not paths.payload.is_symlink():
-            return False
-        if paths.payload.is_symlink():
-            raise ContractViolation("acquisition payload root was replaced by a symlink")
-        # Linux's fd-based rmtree never follows payload-authored symlinks.
-        if not shutil.rmtree.avoids_symlink_attacks:
-            raise ContractViolation("symlink-safe acquisition disposal is unavailable")
-        # Cancellation cannot release the guard while this worker still has
-        # filesystem authority. This worker only disposes the tree; it never
-        # executes an uncontained Git importer or verifier.
-        await finish_owned(asyncio.create_task(asyncio.to_thread(shutil.rmtree, paths.payload)))
-        return True
+    with _acquisition_namespace(paths) as namespace:
+        await finish_owned(asyncio.create_task(asyncio.to_thread(
+            closure.commit, paths, candidate_ref=candidate_ref, disposition=disposition,
+        )))
+        async with _guard_at_namespace(paths, namespace):
+            # Cancellation cannot release custody while this worker still has
+            # filesystem authority. It only removes the acquisition-relative tree.
+            return await finish_owned(asyncio.create_task(asyncio.to_thread(
+                _remove_at_namespace, paths, namespace,
+            )))

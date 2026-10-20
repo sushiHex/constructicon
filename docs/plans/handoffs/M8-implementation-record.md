@@ -72,6 +72,38 @@ adapter caps private remaining time at the grant without resetting consumed
 budget. Both regressions execute the accepting child path, with guard-removal
 mutants required to fail by assertion. No finding was rejected.
 
+The ready-PR connector found an introduced gap in the Pi custody promise on
+top of pre-existing shared acquisition traversal behavior: an initially absent
+root could later become a directory link. An actual portable directory-link
+reproduction accepted materialization, and recovery deleted a disposable
+outside payload while committing its fence. The class check also reproduced
+missing refusals for both providers' `guards` and `payloads` directories; the
+workspace root and actual Git backing path were already covered by the first
+correction. Pi now checks those finite custody namespaces before external
+writes and checks its actual workspace pathname after awaited guard entry.
+
+The shared physical seam pins no-follow root, guard and existing payload
+directory descriptions before the first await. Revocation still precedes guard
+acquisition and removal. Guard opening and symlink-safe removal are relative
+to those retained descriptions, which remain owned until the removal worker
+joins even through repeated cancellation. If no payload directory existed at
+pinning, its later open remains relative to the retained root and refuses a
+link. Guard release closes only its copy; it never explicitly unlocks an
+inherited description. The public acquisition API and journal law are unchanged.
+
+This protects these operations from following a redirected namespace, not
+from a malicious same-UID process arbitrarily altering guard inodes or the
+filesystem. Required Linux tests exercise ordinary disposal, root/component
+replacement during closure, guard waiting and worker scheduling, and retained
+descriptor lifetime. Their execution belongs to the new final-head foundation
+lane, not the earlier passing head. Portable tests explicitly opt in to
+substituted namespace/lock primitives; their passing control-flow checks are
+not physical descriptor-confinement evidence. The connector finding is adopted;
+no finding in this correction was rejected. Narrow independent source review
+found descriptor ownership sound and positively instrumented joined success,
+removal error and repeated cancellation with platform primitives substituted;
+that review did not execute Linux confinement.
+
 Five literal Linux owner-death cases are written separately for recorded-before-
 materialization, materializing, active child, before checkpoint and after
 checkpoint. They require successor quiescence/fencing before fresh dispatch,

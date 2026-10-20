@@ -2,6 +2,7 @@
 
 import asyncio
 import shutil
+import subprocess
 import sys
 from contextlib import asynccontextmanager, suppress
 from dataclasses import replace
@@ -63,7 +64,7 @@ class PortableLauncher(SubprocessLauncher):
 
 
 @pytest.fixture
-async def world(tmp_path, monkeypatch):
+async def world(tmp_path, monkeypatch, portable_acquisition_namespace):
     from constructicon.substrate.git import acquisition, contained
 
     locks = {}
@@ -86,10 +87,10 @@ async def world(tmp_path, monkeypatch):
         monkeypatch.setattr(module, "acquisition_guard", guard)
     original_remove = shutil.rmtree
 
-    def portable_remove(path):
+    def portable_remove(path, **kwargs):
         # This fixture owns all disposable bytes; this substitutes the unavailable
         # Windows fd-relative deletion primitive, not a physical safety witness.
-        original_remove(path)
+        original_remove(path, **kwargs)
 
     portable_remove.avoids_symlink_attacks = True
     monkeypatch.setattr(acquisition, "shutil", SimpleNamespace(rmtree=portable_remove))
@@ -635,3 +636,125 @@ async def test_launcher_locator_drift_refuses_execution_but_not_owned_disposal(w
     await world[3].close(view, "discard")
     assert acquired.resource.closed and world[2].closure.is_closed(acquired.resource.paths)
     assert not world[4].held_guards and world[4].calls == 0
+
+
+def directory_link(link, target):
+    if sys.platform == "win32":
+        # A junction needs no symlink privilege and exercises real Windows path
+        # resolution rather than substituting the production custody check.
+        subprocess.run(["cmd.exe", "/c", "mklink", "/J", str(link), str(target)],
+                       stdin=subprocess.DEVNULL, capture_output=True, check=True)
+    else:
+        link.symlink_to(target, target_is_directory=True)
+
+
+@pytest.mark.parametrize("phase", ["materialize", "reconcile"])
+async def test_late_acquisition_root_link_refuses_before_guard_or_fence(world, tmp_path, phase):
+    provider = world[2]
+    ctx = executor_context(provider)
+    acquired = await provider.acquire(ctx)
+    assert not provider.acquisition_root.exists()
+    outside = tmp_path / "unrelated"
+    sentinel = outside / "payloads" / acquired.acquisition_id / "keep.txt"
+    sentinel.parent.mkdir(parents=True)
+    sentinel.write_text("another acquisition must remain", encoding="utf-8")
+    directory_link(provider.acquisition_root, outside)
+    refused = False
+    try:
+        try:
+            if phase == "materialize":
+                await acquired.materialize()
+            else:
+                await provider.reconcile(executor_context(provider, epoch=2),
+                                         (stale_row(acquired, ctx),))
+        except ContractViolation:
+            refused = True
+        assert refused, (acquired.resource.ready, sentinel.exists(),
+                         provider.closure.is_closed(acquired.resource.paths))
+        assert sentinel.read_text("utf-8") == "another acquisition must remain"
+        assert not provider.closure.is_closed(acquired.resource.paths)
+        assert not world[5] and world[4].calls == 0
+    finally:
+        if sys.platform == "win32":
+            provider.acquisition_root.rmdir()
+        else:
+            provider.acquisition_root.unlink()
+        await provider.relinquish(acquired)
+
+
+@pytest.mark.parametrize("field", ["workspace", "authority", "executor_guards",
+                                   "executor_payloads", "workspace_guards", "workspace_payloads"])
+async def test_related_custody_namespaces_refuse_links_before_entry(world, tmp_path, field):
+    provider = world[2]
+    acquired = await provider.acquire(executor_context(provider))
+    root = world[3].root if field.startswith("workspace") else provider.acquisition_root
+    path = root if "_" not in field else root / field.split("_")[1]
+    if field == "authority":
+        path = world[3].authority._repo
+    path.parent.mkdir(parents=True, exist_ok=True)
+    outside = tmp_path / "redirected-custody"
+    moved = path.exists()
+    if moved:
+        path.rename(outside)
+    else:
+        outside.mkdir()
+    directory_link(path, outside)
+    try:
+        with pytest.raises(ContractViolation):
+            await acquired.materialize()
+        assert world[4].calls == 0 and not world[5]
+    finally:
+        if sys.platform == "win32":
+            path.rmdir()
+        else:
+            path.unlink()
+        if moved:
+            outside.rename(path)
+        await provider.relinquish(acquired)
+
+
+async def test_workspace_path_redirected_during_guard_wait_refuses_before_exchange(
+    world, monkeypatch, tmp_path,
+):
+    from constructicon.substrate.git import contained
+
+    ctx, acquired, view = await acquired_pair(world)
+    entered, release = asyncio.Event(), asyncio.Event()
+    guard = contained.acquisition_guard
+
+    @asynccontextmanager
+    async def paused(paths):
+        async with guard(paths) as descriptor:
+            entered.set()
+            await wait(release)
+            yield descriptor
+
+    monkeypatch.setattr(contained, "acquisition_guard", paused)
+    executing = asyncio.create_task(acquired.resource.execute(
+        TaskSpec(instruction="Analyze fixture.txt"), workspace=view.resource,
+        grants=ctx.binding.effective_grants,
+    ))
+    path = Path(view.resource.path)
+    original = path.with_name("retained-workspace")
+    redirected = tmp_path / "redirected-workspace"
+    redirected.mkdir()
+    (redirected / "fixture.txt").write_text("not the admitted workspace")
+    linked = False
+    try:
+        await wait(entered)
+        path.rename(original)
+        directory_link(path, redirected)
+        linked = True
+        release.set()
+        with pytest.raises(ContractViolation, match="workspace namespace"):
+            await executing
+        assert world[4].calls == 0
+        assert (redirected / "fixture.txt").read_text() == "not the admitted workspace"
+    finally:
+        release.set()
+        await asyncio.gather(executing, return_exceptions=True)
+        if linked:
+            path.rmdir() if sys.platform == "win32" else path.unlink()
+            original.rename(path)
+        await world[2].close(acquired, "discard")
+        await world[3].close(view, "discard")

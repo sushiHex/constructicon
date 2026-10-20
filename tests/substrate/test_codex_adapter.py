@@ -1641,7 +1641,7 @@ LINUX = pytest.mark.skipif(
 
 
 @pytest.fixture
-def substituted_guard(monkeypatch):
+def substituted_guard(monkeypatch, portable_acquisition_namespace):
     """Replace only the adapter's reference to the guard, never the guard."""
 
     @asynccontextmanager

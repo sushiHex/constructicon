@@ -101,6 +101,12 @@ MUTANTS = (
     ("execution launcher locator seal", PROVIDER + "_check_sealed",
      "self.launcher.root != self._launcher_root", "False",
      TEST + "test_launcher_locator_drift_refuses_execution_but_not_owned_disposal[execute]"),
+    ("canonical custody before external fence", PROVIDER + "_check_custody",
+     "if path.resolve(strict=False) != path or path.is_symlink():", "if False:",
+     TEST + "test_related_custody_namespaces_refuse_links_before_entry[authority]"),
+    ("workspace pathname after guarded wait", HANDLE + "_workspace",
+     "if path.resolve(strict=False) != path or path.is_symlink():", "if False:",
+     TEST + "test_workspace_path_redirected_during_guard_wait_refuses_before_exchange"),
 )
 
 if __name__ == "__main__":

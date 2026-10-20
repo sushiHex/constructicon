@@ -53,6 +53,16 @@ Git closure/path/authority checks without requiring the fixture executable or
 launcher locator to remain available. One benign assembly probe permits one
 acquisition per provider instance; it is not real Pi availability.
 
+A canonical locator at assembly is not physical custody later. The ready-PR
+review reproduced redirected acquisition-root traversal, including deletion of
+a disposable outside payload. Pi now refuses already redirected custody
+namespaces before external writes. Shared acquisition work retains no-follow
+directory descriptions across closure, guard waiting and joined removal, and
+uses relative descriptor operations rather than reopening replaced pathnames.
+Closing a guard copy never explicitly unlocks inherited descriptions. This
+bounded namespace guarantee does not defend arbitrary same-UID filesystem or
+guard-inode edits; portable primitive substitutes are not its Linux proof.
+
 Early recovery tests supplied live-only control and source-graph fields absent
 from the ordinary walker recovery context, hiding an introduced refusal. The
 reference now uses independently supplied manifest/binding/epoch facts, while

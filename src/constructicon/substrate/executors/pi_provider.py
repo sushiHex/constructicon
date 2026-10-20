@@ -185,6 +185,13 @@ class PiReadProvider:
                 or self.workspace_provider.authority is not self._authority_owner
                 or local != self._custody):
             raise ContractViolation("scripted READ local custody drifted")
+        for path in (self.acquisition_root, self.workspace_provider.root,
+                     self.workspace_provider.authority._repo,
+                     self.acquisition_root / "guards", self.acquisition_root / "payloads",
+                     self.workspace_provider.root / "guards",
+                     self.workspace_provider.root / "payloads"):
+            if path.resolve(strict=False) != path or path.is_symlink():
+                raise ContractViolation("scripted READ custody namespace was redirected")
 
     def _check_sealed(self) -> None:
         self._check_custody()
@@ -388,6 +395,9 @@ class PiReadHandle:
 
     def _workspace(self, view: WorkspaceView | None) -> ContainedWorkspace:
         workspace = self.provider.workspace_provider.owned_view(view, self.context)
+        path = Path(workspace.path)
+        if path.resolve(strict=False) != path or path.is_symlink():
+            raise ContractViolation("scripted READ workspace namespace was redirected")
         actual, expected = workspace.context, self.context
         if actual.check_control is None:
             raise ContractViolation("scripted READ workspace has no invocation control")

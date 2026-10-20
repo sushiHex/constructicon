@@ -97,7 +97,8 @@ PROOFS = {
     "Prove containment as the non-sudo service user": (
         "foundation",
         "tests/substrate/test_linux_containment.py tests/substrate/test_contained_workspace.py "
-        "tests/substrate/test_acquisition_closure.py tests/substrate/test_recorded_executor.py "
+        "tests/substrate/test_acquisition_closure.py tests/substrate/test_acquisition_namespace.py "
+        "tests/substrate/test_recorded_executor.py "
         "tests/substrate/test_linux_duplex.py tests/substrate/test_process_io.py "
         "tests/substrate/test_lifetime.py tests/substrate/test_contained_capture.py "
         "tests/substrate/test_git_pack.py tests/substrate/test_capture_lifecycle.py "

@@ -488,6 +488,7 @@ jobs:
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_linux_containment.py \
               tests/substrate/test_contained_workspace.py tests/substrate/test_acquisition_closure.py \
+              tests/substrate/test_acquisition_namespace.py \
               tests/substrate/test_recorded_executor.py \
               tests/substrate/test_linux_duplex.py tests/substrate/test_process_io.py \
               tests/substrate/test_lifetime.py \
