@@ -132,7 +132,7 @@ def events():
 
 
 @pytest.fixture
-def recorded_guard(monkeypatch, events):
+def recorded_guard(monkeypatch, events, portable_acquisition_namespace):
     @asynccontextmanager
     async def guard(paths):
         paths.guard.parent.mkdir(parents=True, exist_ok=True)

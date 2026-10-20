@@ -100,7 +100,7 @@ def context(granted, **changes):
 
 
 @pytest.fixture
-def portable_guards(monkeypatch):
+def portable_guards(monkeypatch, portable_acquisition_namespace):
     # Only the POSIX lock primitive is replaced. Concrete custody/closure code runs.
     monkeypatch.setattr(codex, "acquisition_guard", portable_guard)
     monkeypatch.setattr(contained, "acquisition_guard", portable_guard)

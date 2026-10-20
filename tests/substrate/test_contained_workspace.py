@@ -486,10 +486,10 @@ async def test_deletion_yields_but_keeps_its_guard_through_repeated_cancellation
     started, finish = threading.Event(), threading.Event()
     remove = acquisition.shutil.rmtree
 
-    def blocked_remove(path):
+    def blocked_remove(path, **kwargs):
         started.set()
         finish.wait(5)  # A watchdog, not the event-loop synchronization mechanism.
-        remove(path)
+        remove(path, **kwargs)
 
     blocked_remove.avoids_symlink_attacks = remove.avoids_symlink_attacks
     monkeypatch.setattr(acquisition.shutil, "rmtree", blocked_remove)

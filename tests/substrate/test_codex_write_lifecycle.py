@@ -279,7 +279,7 @@ async def _portable_guard(paths):
 
 @pytest.mark.parametrize("worker_cleanup_failure", (False, True))
 async def test_close_joins_worker_before_workspace_exit_and_uses_remaining_deadline(
-    tmp_path, monkeypatch, worker_cleanup_failure,
+    tmp_path, monkeypatch, worker_cleanup_failure, portable_acquisition_namespace,
 ):
     """The actual WRITE handle owns both cancellation ordering and one deadline.
 

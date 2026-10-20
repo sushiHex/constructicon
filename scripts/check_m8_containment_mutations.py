@@ -14,6 +14,8 @@ OS = "tests/substrate/test_linux_containment.py::"
 LEASE = "tests/substrate/test_contained_workspace.py::"
 CLOSURE = "constructicon.substrate.git.acquisition:AcquisitionClosure."
 FACT = "tests/substrate/test_acquisition_closure.py::"
+NAMESPACE = "tests/substrate/test_acquisition_namespace.py::"
+ACQUISITION = "constructicon.substrate.git.acquisition:"
 OPEN_CHECK = (
     "await finish_owned(asyncio.create_task(asyncio.to_thread(\n"
     "            self.provider.closure.require_open, self.paths,\n        )))"
@@ -24,8 +26,8 @@ BASE_READ = (
 )
 COMMIT = (
     "await finish_owned(asyncio.create_task(asyncio.to_thread(\n"
-    "        closure.commit, paths, candidate_ref=candidate_ref, disposition=disposition,\n"
-    "    )))"
+    "            closure.commit, paths, candidate_ref=candidate_ref, disposition=disposition,\n"
+    "        )))"
 )
 METADATA = (
     ("acquire", WORKSPACE + "acquire", BASE_READ,
@@ -205,15 +207,16 @@ MUTANTS = (
     ),
     (
         "guard does not serialize physical work",
-        "constructicon.substrate.git.acquisition:acquisition_guard.__wrapped__",
+        "constructicon.substrate.git.acquisition:_guard_at_namespace.__wrapped__",
         "fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)", "pass",
         LEASE + "test_reconciliation_commits_revocation_before_waiting_for_physical_quiescence",
     ),
     (
         "closure waits behind the producer",
         "constructicon.substrate.git.acquisition:dispose_acquisition",
-        f"{COMMIT}\n    async with acquisition_guard(paths):",
-        f"async with acquisition_guard(paths):\n        {COMMIT}",
+        f"{COMMIT}\n        async with _guard_at_namespace(paths, namespace):",
+        "async with _guard_at_namespace(paths, namespace):\n            "
+        + COMMIT.replace("\n", "\n    "),
         LEASE + "test_reconciliation_commits_revocation_before_waiting_for_physical_quiescence",
     ),
     (
@@ -242,8 +245,9 @@ MUTANTS = (
     (
         "deletion monopolizes the event loop",
         "constructicon.substrate.git.acquisition:dispose_acquisition",
-        "await finish_owned(asyncio.create_task(asyncio.to_thread(shutil.rmtree, paths.payload)))",
-        "shutil.rmtree(paths.payload)",
+        "return await finish_owned(asyncio.create_task(asyncio.to_thread(\n"
+        "                _remove_at_namespace, paths, namespace,\n            )))",
+        "return _remove_at_namespace(paths, namespace)",
         LEASE + "test_deletion_yields_but_keeps_its_guard_through_repeated_cancellation",
     ),
     (
@@ -251,6 +255,58 @@ MUTANTS = (
         "constructicon.substrate._lifetime:finish_owned",
         "await asyncio.wait((task,))", "await task",
         LEASE + "test_deletion_yields_but_keeps_its_guard_through_repeated_cancellation",
+    ),
+    (
+        "directory traversal follows a redirected component",
+        ACQUISITION + "_open_child_directory", " | os.O_NOFOLLOW", "",
+        NAMESPACE + "test_redirected_namespace_refuses_before_committing_fence",
+    ),
+    (
+        "guard reopens a replaced child namespace",
+        ACQUISITION + "_guard_at_namespace.__wrapped__", "dir_fd=namespace.guards_fd",
+        "dir_fd=os.open(paths.root / 'guards', os.O_RDONLY | os.O_DIRECTORY)",
+        NAMESPACE + "test_child_namespace_replacement_after_pin_uses_retained_descriptions[guards]",
+    ),
+    (
+        "removal reopens a replaced payload namespace",
+        ACQUISITION + "_remove_at_namespace", "payloads = namespace.payloads_fd",
+        "payloads = os.open(paths.root / 'payloads', os.O_RDONLY | os.O_DIRECTORY)",
+        NAMESPACE + "test_child_namespace_replacement_after_pin_uses_retained_descriptions"
+        "[payloads]",
+    ),
+    (
+        "removal follows the replaced root pathname",
+        ACQUISITION + "_remove_at_namespace",
+        "shutil.rmtree(paths.acquisition_id, dir_fd=payloads)",
+        "shutil.rmtree(paths.payload)",
+        NAMESPACE + "test_root_replacement_during_closure_await_uses_original_namespace",
+    ),
+    (
+        "namespace descriptors outlive unjoined removal",
+        ACQUISITION + "dispose_acquisition",
+        "return await finish_owned(asyncio.create_task(asyncio.to_thread(\n"
+        "                _remove_at_namespace, paths, namespace,\n            )))",
+        "return await asyncio.to_thread(_remove_at_namespace, paths, namespace)",
+        NAMESPACE + "test_worker_schedule_replacement_and_cancellation_retain_namespace_until_join"
+        "[True]",
+    ),
+    (
+        "guard close explicitly unlocks inherited descriptions",
+        ACQUISITION + "_guard_at_namespace.__wrapped__", "os.close(fd)",
+        "fcntl.flock(fd, fcntl.LOCK_UN)\n        os.close(fd)",
+        NAMESPACE + "test_guard_closes_only_its_copy_and_never_explicitly_unlocks",
+    ),
+    (
+        "guard leaf follows an outside file",
+        ACQUISITION + "_guard_at_namespace.__wrapped__", " | os.O_NOFOLLOW", "",
+        NAMESPACE + "test_guard_leaf_symlink_refuses_without_opening_the_outside_file",
+    ),
+    (
+        "late payload directory reopens the replaced root",
+        ACQUISITION + "_remove_at_namespace",
+        '_open_child_directory(namespace.root_fd, "payloads")',
+        '_open_child_directory(os.open(paths.root, os.O_RDONLY | os.O_DIRECTORY), "payloads")',
+        NAMESPACE + "test_payloads_created_after_namespace_pin_use_the_pinned_root[False]",
     ),
 )
 

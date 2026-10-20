@@ -1,13 +1,14 @@
 """One credential-free scripted READ task on the existing owned process seam.
 
-This direct executor publishes no provider descriptor or availability. Leased
-assembly and durable recovery are deliberately subsequent work; trusted tests
-supply an existing acquisition's guards. No Pi binary or provider is launched.
+This direct executor publishes no provider descriptor or availability. The leased
+fixture assembly supplies its acquisition guards through the same seam as trusted
+direct tests. No Pi binary or model provider is launched.
 """
 
 from __future__ import annotations
 
 import asyncio
+import math
 import secrets
 from collections.abc import Callable
 from pathlib import Path
@@ -132,7 +133,8 @@ class PiReadExecutor:
 
     def __init__(self, launcher: LinuxLauncher, command: tuple[str, ...], *,
                  guard_fds: tuple[int, ...],
-                 check_control: Callable[[], None] | None = None) -> None:
+                 check_control: Callable[[], None] | None = None,
+                 _deadline: float | None = None) -> None:
         if launcher.limits != PI_LIMITS or launcher.vendor is not None:
             raise ContractViolation("Pi fixture requires its exact networkless launch profile")
         if not command or not guard_fds:
@@ -141,6 +143,9 @@ class PiReadExecutor:
         self.command = command
         self.guard_fds = guard_fds
         self.check_control = check_control
+        if _deadline is not None and not math.isfinite(_deadline):
+            raise ContractViolation("Pi fixture deadline must be finite")
+        self._deadline = _deadline
         self.entered = False
         self.conversation: PiReadConversation | None = None
 
@@ -181,10 +186,17 @@ class PiReadExecutor:
         if self.check_control is not None:
             self.check_control()
         self.conversation = PiReadConversation(task, input_limit=PI_LIMITS.input_bytes)
+        remaining = grants.timeout_s if self._deadline is None else (
+            min(grants.timeout_s, self._deadline - asyncio.get_running_loop().time())
+        )
+        if remaining <= 0:
+            return ExecutorFailure(error=ExecutorError(
+                kind="timeout", detail="Pi fixture deadline expired before launch",
+            ))
         result = await self.launcher.exchange(
             self.command, workspace=Path(workspace.path), posture=Posture.READ,
             guard_fds=self.guard_fds, conversation=self.conversation,
-            timeout_s=grants.timeout_s,
+            timeout_s=remaining,
         )
         if self.check_control is not None:
             self.check_control()

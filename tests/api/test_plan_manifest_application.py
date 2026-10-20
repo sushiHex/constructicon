@@ -558,7 +558,7 @@ class PortableVectorWriter(Writer):
 
 
 @pytest.fixture
-async def concrete_application(tmp_path, monkeypatch, request):
+async def concrete_application(tmp_path, monkeypatch, request, portable_acquisition_namespace):
     from constructicon.substrate.gates import contained as gate_module
 
     if getattr(request, "param", None) == "committed-tree":
@@ -607,6 +607,8 @@ async def concrete_application(tmp_path, monkeypatch, request):
     def portable_rmtree(root, **kwargs):
         # The genuine Windows primitive has no fd-based unlink. Substitute
         # only that primitive over these owned, positively link-free fixtures.
+        if "dir_fd" in kwargs:
+            return original_rmtree(root, **kwargs)  # Linux keeps its physical primitive.
         root = Path(root)
         assert root.resolve().is_relative_to(tmp_path.resolve()) and not root.is_symlink()
         for path in root.rglob("*"):

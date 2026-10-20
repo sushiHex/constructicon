@@ -13,6 +13,123 @@ From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-
 and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
 subscription route; see the dated section at the end of this record.
 
+## Pi scripted READ lease assembly (Refs #263)
+
+This successor to merged PR #260 adds an L1 `PiReadProvider` and owned handle
+around the same fixed harmless peer and portable adapter. It is explicitly a
+credential-free fixture profile, not actual Pi availability. One benign
+existing-launcher assembly probe must finish before fixture availability is
+published. Qualification is single-use; each provider instance permits one
+acquisition, latched before relevant awaits, and each handle permits one task.
+A spent provider remains unavailable after close. Recovery reconstructs a fresh
+assembly rather than widening this accepted fixture limitation.
+
+The public launch identity binds the supplied executable/program/runtime,
+adapter/decoder/isolation revisions, semantic workspace configuration, profile
+and limits. Installation paths belong to a separate private custody seal, not
+the content identity. The seal also covers the actual Git backing path, both
+closure objects and their authorities. Owned disposal checks custody without
+requiring the fixture executable to remain available. An actual descriptor in
+test assembly supplies the workspace capability ID and revision to L1 and is
+the same descriptor registered with the runtime; L1 imports no L2 descriptor.
+The `workspace.snapshot` kind follows the existing READ lease consumer in
+`tests/substrate/_lease_owner.py`, not a new vocabulary or physical-revision
+claim. Actual READ provider identity and owner/control checks remain required.
+
+Acquisition remains inert until journal recording precedes materialization.
+The task deadline starts before the executor guard wait and is retained through
+materialization and execution. Both actual held guard descriptors are passed
+to the process boundary and retained through joined teardown. Post-wait checks
+revalidate sealed inputs and the exact executor/workspace invocation, grants,
+binding, owner epoch and both available live control callbacks. Relinquishment
+joins pending startup or active exchange without durable closure writes;
+repeated cancellation and a concurrent cleanup error remain observable.
+
+Recovery validates the entire canonical reference batch before any fence. Its
+minimal reference uses the independently supplied run, acquisition epoch, path,
+manifest and binding facts. It intentionally does not echo a prior owner ID or
+require source-graph data absent from the ordinary walker recovery context;
+the manifest already binds the source graph. The original live handle context
+is separately sealed by provider-minted weak membership. No new L0 contract,
+walker branch, durable inventory or credential route is introduced.
+
+Portable tests exercise real fixture-file READ bytes through the process and
+ordinary ControlPlane/RunHost graph, checkpoint and both lease releases. Fresh
+assemblies before and after checkpoint establish two dispatches only for an
+uncheckpointed task and no redispatch for a restored checkpoint. These orderly
+host-abandonment cases are not controller-death claims. A separate injected
+hard-death seam runs immediately after the real executor lease record and
+before materialization; a fresh ControlPlane must reconcile that actual active
+row using the ordinary walker's recovery context, then finish successfully.
+
+Independent review adopted two introduced blockers. Initial portable tests
+invented live-only recovery fields, hiding refusal of the actual walker
+context; the new after-record crash regression reproduced that refusal before
+the recovery validation/reference correction. A public mutable deadline also
+allowed an actual child a roughly 600-second launch timeout under a 10-second
+grant. The handle now exposes its original deadline read-only, and the direct
+adapter caps private remaining time at the grant without resetting consumed
+budget. Both regressions execute the accepting child path, with guard-removal
+mutants required to fail by assertion. No finding was rejected.
+
+The ready-PR connector found an introduced gap in the Pi custody promise on
+top of pre-existing shared acquisition traversal behavior: an initially absent
+root could later become a directory link. An actual portable directory-link
+reproduction accepted materialization, and recovery deleted a disposable
+outside payload while committing its fence. The class check also reproduced
+missing refusals for both providers' `guards` and `payloads` directories; the
+workspace root and actual Git backing path were already covered by the first
+correction. Pi now checks those finite custody namespaces before external
+writes and checks its actual workspace pathname after awaited guard entry.
+
+The shared physical seam pins no-follow root, guard and existing payload
+directory descriptions before the first await. Revocation still precedes guard
+acquisition and removal. Guard opening and symlink-safe removal are relative
+to those retained descriptions, which remain owned until the removal worker
+joins even through repeated cancellation. If no payload directory existed at
+pinning, its later open remains relative to the retained root and refuses a
+link. Guard release closes only its copy; it never explicitly unlocks an
+inherited description. The public acquisition API and journal law are unchanged.
+
+This protects these operations from following a redirected namespace, not
+from a malicious same-UID process arbitrarily altering guard inodes or the
+filesystem. Required Linux tests exercise ordinary disposal, root/component
+replacement during closure, guard waiting and worker scheduling, and retained
+descriptor lifetime. Their execution belongs to the new final-head foundation
+lane, not the earlier passing head. Portable tests explicitly opt in to
+substituted namespace/lock primitives; their passing control-flow checks are
+not physical descriptor-confinement evidence. The connector finding is adopted;
+no finding in this correction was rejected. Narrow independent source review
+found descriptor ownership sound and positively instrumented joined success,
+removal error and repeated cancellation with platform primitives substituted;
+that review did not execute Linux confinement.
+
+The first correction head, `779e0f2`, exposed a test-premise error in full Linux
+verification: 7,434 tests passed, but the new workspace-path regression expected
+a Pi-specific refusal while the existing Linux workspace leaf-link check had
+already refused. Its Linux mutant result therefore was not a valid kill against
+a passing baseline. The regression now replaces the acquisition payload ancestor
+while leaving the mount leaf a real directory, so the Pi canonical-path check
+is the relevant refusal on both platforms. Its corrected portable baseline passes
+and its isolated guard-removal mutant fails by assertion; final-head Linux
+verification remains required. The production blobs are unchanged by this test
+correction. Namespace physical proof belongs to the later non-sudo service-user
+step, not the earlier descriptor/store step.
+The bounded [mutation-baseline harness follow-up (#266)](
+https://github.com/sushiHex/constructicon/issues/266) is outside this correction;
+the full verification gate correctly blocked the failing baseline head.
+
+Five literal Linux owner-death cases are written separately for recorded-before-
+materialization, materializing, active child, before checkpoint and after
+checkpoint. They require successor quiescence/fencing before fresh dispatch,
+both physical guard locks while the old controller is stopped, actual READ
+bytes and checkpoint/no-redispatch evidence. They remain unexecuted locally on
+the portable host; only the required lifecycle CI execution and final artifacts
+can establish those physical claims. This slice runs no vendor binary,
+credentials, model request or VM action and does not close parent #42 or alter
+Claude-first qualification. Exact-head gate, mutation and physical results
+belong in its PR evidence.
+
 ## Pi READ conversation slice (Refs #259)
 
 This first implementation separates the finite Pi-shaped decoder from a
