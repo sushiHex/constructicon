@@ -93,6 +93,19 @@ local results are not a complete inventory or final-head Linux CI result.
 No runtime defect or production source change was established by these
 corrections.
 
+That first Linux mediation run also stopped the new startup-bait case before
+launch: the shared test seeder wrote `.pi/settings.json` without creating its
+parent. This is an introduced fixture-setup assumption over the pre-existing
+flat-file helper, not a containment failure or an executed native authority
+proof. A portable test first reproduced that missing-parent failure and the
+helper's implicit-encoding failure for non-cp1252 text. The existing helper now
+creates nested parents and explicitly writes UTF-8 without newline translation.
+Two portable seed/update cases verify exact Git tree names and raw blob bytes,
+including nested additions, changed settings and retained files; both pass,
+as do three existing authority/base-movement consumers. No bait was removed,
+seeding route duplicated or production code changed. The native bait case
+still requires affirmative execution in corrected-head Linux CI.
+
 An initial Python 3.11 Windows attempt exposed the pre-existing portable
 fixture's `Path.is_junction()` compatibility problem, separately tracked in
 [#269](https://github.com/sushiHex/constructicon/issues/269); it is failed,

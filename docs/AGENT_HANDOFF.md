@@ -37,6 +37,13 @@ final trace or an outer waiter's scheduling order. The unrelated Python 3.11
 Windows fixture failure is tracked separately, not converted into passing
 coverage.
 
+The first native bait case also failed during test seeding, before launch:
+the shared helper assumed flat paths. It now creates nested parents and writes
+explicit UTF-8; portable seed/update regressions check exact tree names and
+blob bytes, including retained files. This setup correction is not native
+containment evidence, and the bait observations still require corrected-head
+Linux execution.
+
 These are scripted fixture observations. Workspace bait ignored by a fixed
 Python program does not qualify real Pi discovery/tool restrictions, and
 physical containment does not select authentication. Real Pi, Claude-first
