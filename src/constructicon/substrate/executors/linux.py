@@ -44,6 +44,7 @@ from constructicon.substrate.executors.claude_native import (
     SECURE_ROOT,
     STORAGE_PARENT,
     ClaudeNativeLayout,
+    ClaudeNativeRecipe,
     ClaudeNativeStoreMount,
     ClaudeNativeVendor,
     native_environment,
@@ -532,8 +533,13 @@ class LinuxLauncher:
     limits: ProcessLimits = DEFAULT_PROCESS_LIMITS
     vendor: NativeVendor | None = None
     claude: ClaudeNativeVendor | None = None
+    claude_recipe: ClaudeNativeRecipe = ClaudeNativeRecipe.STREAM_JSON
 
     def __post_init__(self) -> None:
+        if type(self.claude_recipe) is not ClaudeNativeRecipe:
+            raise ContractViolation("a Claude launcher requires a fixed recipe selection")
+        if self.claude is None and self.claude_recipe is not ClaudeNativeRecipe.STREAM_JSON:
+            raise ContractViolation("the login recipe requires a Claude vendor")
         if self.vendor is not None and self.claude is not None:
             raise ContractViolation("a launcher selects exactly one fixed native recipe")
 
@@ -578,6 +584,11 @@ class LinuxLauncher:
         }
         if self.claude is not None:
             identity["claude"] = self.claude.revision
+            identity["claude_recipe"] = {
+                "selection": self.claude_recipe.value,
+                "command": self.claude_recipe.command(self.claude),
+                "policy": self.claude_recipe.policy,
+            }
         return digest("linux-launch", 1, identity)
 
     def argv(
@@ -593,7 +604,8 @@ class LinuxLauncher:
             raise ContractViolation("a native store and worker workspace cannot share a namespace")
         if isinstance(native_store, ClaudeNativeStoreMount):
             if (self.claude is None or not isinstance(layout, ClaudeNativeLayout)
-                    or command != self.claude.command):
+                    or layout.recipe is not self.claude_recipe
+                    or command != self.claude_recipe.command(self.claude)):
                 raise ContractViolation("a Claude launch requires its exact sealed native recipe")
             if native_store.egress is None:
                 raise ContractViolation("the Claude native recipe requires its fixed egress bridge")
@@ -706,7 +718,7 @@ class LinuxLauncher:
         # After the probe's custody check, so the catalog sealed is the one checked.
         layout: NativeLayout | ClaudeNativeLayout | None = None
         if isinstance(native_store, ClaudeNativeStoreMount):
-            layout = ClaudeNativeLayout.seal()
+            layout = ClaudeNativeLayout.seal(self.claude_recipe)
         elif native_store is not None:
             layout = NativeLayout.seal(self.vendor)
         try:

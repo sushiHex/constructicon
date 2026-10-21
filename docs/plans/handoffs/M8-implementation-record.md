@@ -8337,3 +8337,38 @@ be lost and invalid input can request correction, so the bounded procedure
 must not pre-feed or silently retry it. The executable recipe, exact egress
 inputs and fake accepting/refusing composition remain separate required proof;
 design review alone establishes none of them.
+
+### Finite login command and policy preparation — PR #282
+
+The first implementation seam is a closed `ClaudeNativeRecipe` selection on
+the immutable Linux launcher. Login pairs only the fixed safe-mode Claude.ai
+login command with the login-only sealed policy; the selected recipe, command
+and policy enter the launch identity. Layout selection must match the launcher.
+The existing vendor `command` remains stream JSON, so the READ adapter cannot
+reinterpret login as its own command. There is no arbitrary command/policy
+option and no new provider or public login entry point.
+
+This is not yet a safe attended login assembly. In particular, the existing
+egress socket is still supplied by trusted assembly: the proposed login-only
+destination policy, private input lifecycle, refresh observer, reload proof and
+exact host procedure remain to be implemented and qualified. No account,
+credential, host or model action was taken, and no vendor binary ran locally.
+
+Independent static code review found a coverage gap, not a production defect:
+the first READ/login test refused on the old command check and supplied an
+invalid binding. The revised test uses a valid binding and exercises both
+command choices through real layout sealing and command admission, substituting
+only the physical process seam. An explicit spawn observation catches a widened
+route even when the READ adapter converts an exception into a refusal. A narrow
+follow-up found no defect in this correction. Direct cross-layout tests prove
+tag/command pairing; separate exchange tests inspect the actual sealed policy
+bytes. Neither is mislabeled as physical containment proof.
+
+Local verification passed 965 Claude-related tests with 23 platform skips,
+119 recipe/inventory tests, changed-source/test Ruff, strict mypy on 135 source
+files and all five import contracts. Sixteen new and two retargeted mutants
+were assertion-killed with passing baselines and unchanged source snapshots
+using the repository harness. An earlier broad inventory run was stopped before
+editing the tests and earns no completion or kill credit. Full CI, the full
+inventory and Linux physical lanes on the new head remain required; these
+focused results are not a full Windows `verify` pass or a resolution of #281.

@@ -162,6 +162,192 @@ def launcher(tmp_path):
     )
 
 
+def test_login_recipe_is_exact_and_does_not_select_model_authority(tmp_path):
+    native = recipe_module()
+    subject = launcher(tmp_path)
+    login = native.ClaudeNativeRecipe.LOGIN
+    assert native.LOGIN_COMMAND == (native.EXECUTABLE, "--safe-mode", "auth", "login", "--claudeai")
+    assert login.command(subject.claude) == native.LOGIN_COMMAND
+    assert login.policy == {**fixed_policy(), "forceLoginMethod": "claudeai"}
+    assert native.ClaudeNativeRecipe.STREAM_JSON.command(subject.claude) == subject.claude.command
+    assert native.ClaudeNativeRecipe.STREAM_JSON.policy == fixed_policy()
+    changed = replace(subject.claude, model="other", effort="low")
+    assert login.command(changed) == native.LOGIN_COMMAND
+    assert subject.claude.command != native.LOGIN_COMMAND
+    policy = login.policy
+    policy["forceRemoteSettingsRefresh"] = False
+    assert login.policy == {**fixed_policy(), "forceLoginMethod": "claudeai"}
+
+
+def test_recipe_selection_is_closed_and_login_requires_a_claude_vendor(tmp_path, monkeypatch):
+    native = recipe_module()
+    subject = launcher(tmp_path)
+    for selection in ["login", "stream-json", "arbitrary", None, True]:
+        with pytest.raises(ContractViolation):
+            replace(subject, claude_recipe=selection)
+        with pytest.raises(ContractViolation):
+            native.ClaudeNativeLayout(733, 734, recipe=selection)
+        allocated = []
+        monkeypatch.setattr(linux, "sealed_data_fd",
+                            lambda raw, allocated=allocated: allocated.append(raw) or 733)
+        refusal = None
+        try:
+            native.ClaudeNativeLayout.seal(selection)
+        except Exception as exc:
+            refusal = exc
+        assert isinstance(refusal, ContractViolation), refusal
+        assert allocated == []
+    with pytest.raises(ContractViolation):
+        replace(subject, claude=None, claude_recipe=native.ClaudeNativeRecipe.LOGIN)
+
+
+def test_login_launch_identity_binds_selection_command_and_policy(tmp_path, monkeypatch):
+    native = recipe_module()
+    subject = launcher(tmp_path)
+    login = replace(subject, claude_recipe=native.ClaudeNativeRecipe.LOGIN)
+    assert login.revision != subject.revision
+    captured = []
+    actual_digest = linux.digest
+
+    def capture(domain, version, value):
+        if domain == "linux-launch":
+            captured.append(value)
+        return actual_digest(domain, version, value)
+
+    monkeypatch.setattr(linux, "digest", capture)
+    _ = login.revision
+    assert captured[0]["claude_recipe"] == {
+        "selection": "login", "command": native.LOGIN_COMMAND,
+        "policy": {**fixed_policy(), "forceLoginMethod": "claudeai"},
+    }
+
+
+@pytest.mark.parametrize("login", [False, True])
+async def test_exchange_auto_seals_the_selected_fixed_recipe_and_closes_it(
+    tmp_path, on_linux, monkeypatch, login,
+):
+    native = recipe_module()
+    selection = native.ClaudeNativeRecipe.LOGIN if login else native.ClaudeNativeRecipe.STREAM_JSON
+    subject = replace(launcher(tmp_path), claude_recipe=selection)
+    sealed, closed, events = {}, [], []
+
+    def seal(raw):
+        fd = len(sealed) + 733
+        sealed[fd] = raw
+        return fd
+
+    async def probe(self, *, deadline):
+        events.append("probe")
+
+    async def run(self, command, **arguments):
+        events.append("run")
+        layout = arguments["layout"]
+        assert layout.recipe is selection
+        assert json.loads(sealed[layout.policy_fd]) == (
+            {**fixed_policy(), "forceLoginMethod": "claudeai"} if login else fixed_policy())
+        assert json.loads(sealed[layout.mcp_fd]) == {"mcpServers": {}}
+        args = self.argv(command, workspace=None, posture=Posture.READ,
+                         native_store=arguments["native_store"], layout=layout)
+        assert args[args.index("--"):][1:] == [
+            "/usr/bin/python3", "-I", linux.BRIDGE_SCRIPT, *selection.command(self.claude)]
+        return linux.ProcessResult(0, b"", b"", .01, payload_returncode=0)
+
+    async def conversation(_io):
+        raise AssertionError("the platform seam owns this fake launch")
+
+    monkeypatch.setattr(linux, "sealed_data_fd", seal)
+    monkeypatch.setattr(native.os, "close", closed.append)
+    monkeypatch.setattr(linux.LinuxLauncher, "probe", probe)
+    monkeypatch.setattr(linux.LinuxLauncher, "_run", run)
+    result = await subject.exchange(
+        selection.command(subject.claude), workspace=None, posture=Posture.READ,
+        guard_fds=(731,), conversation=conversation, timeout_s=1,
+        native_store=native.ClaudeNativeStoreMount(731, 732, lambda: None,
+                                                   egress(tmp_path, events)),
+    )
+    assert result.payload_returncode == 0
+    assert events == ["probe", "run", "leaf"]
+    assert closed == [733, 734]
+
+
+@pytest.mark.parametrize("selection", ["stream-json", "login"])
+@pytest.mark.parametrize("damage", [None, "command", "layout", "extension"])
+def test_each_recipe_accepts_only_its_paired_fixed_command_and_policy(
+    tmp_path, on_linux, selection, damage,
+):
+    native = recipe_module()
+    recipe = native.ClaudeNativeRecipe(selection)
+    other = (native.ClaudeNativeRecipe.LOGIN if recipe is native.ClaudeNativeRecipe.STREAM_JSON
+             else native.ClaudeNativeRecipe.STREAM_JSON)
+    subject = replace(launcher(tmp_path), claude_recipe=recipe)
+    command = recipe.command(subject.claude)
+    layout = native.ClaudeNativeLayout(733, 734, recipe=recipe)
+    if damage == "command":
+        command = other.command(subject.claude)
+    elif damage == "layout":
+        layout = replace(layout, recipe=other)
+    elif damage == "extension":
+        command += ("--untrusted",)
+    store = native.ClaudeNativeStoreMount(731, 732, lambda: None, egress(tmp_path, []))
+    arguments = dict(workspace=None, posture=Posture.READ, native_store=store, layout=layout)
+    if damage is None:
+        args = subject.argv(command, **arguments)
+        assert "--clearenv" in args
+        assert not {"BROWSER", "DISPLAY", "WAYLAND_DISPLAY"} & set(native.native_environment())
+        assert args[args.index("--"):][1:] == [
+            "/usr/bin/python3", "-I", linux.BRIDGE_SCRIPT, *command]
+    else:
+        with pytest.raises(ContractViolation):
+            subject.argv(command, **arguments)
+
+
+@pytest.mark.parametrize("login_command", [False, True])
+async def test_read_admission_cannot_select_login(tmp_path, on_linux, monkeypatch, login_command):
+    from constructicon.core.executor import ExecutorFailure, TaskSpec
+    from constructicon.substrate.executors.claude_protocol import ClaudePlan
+    from constructicon.substrate.executors.claude_read import run_read_transaction
+
+    native = recipe_module()
+    subject = replace(launcher(tmp_path), claude_recipe=native.ClaudeNativeRecipe.LOGIN)
+    events = []
+
+    binding = BindingCheck(digest("login-test", 1, "retained binding"))
+
+    def check_binding():
+        events.append("binding")
+        return binding
+
+    async def probe(self, *, deadline):
+        events.append("probe")
+
+    async def run(self, command, **arguments):
+        # Preserve real command/layout admission; replace only the physical
+        # process seam. A widened pairing would reach the explicit assertion.
+        self.argv(command, workspace=None, posture=Posture.READ,
+                  native_store=arguments["native_store"], layout=arguments["layout"])
+        events.append("spawn")
+        raise AssertionError("READ must never spawn the login recipe")
+
+    sealed, closed = [], []
+    monkeypatch.setattr(linux, "sealed_data_fd",
+                        lambda raw: sealed.append(raw) or 732 + len(sealed))
+    monkeypatch.setattr(native.os, "close", closed.append)
+    monkeypatch.setattr(linux.LinuxLauncher, "probe", probe)
+    monkeypatch.setattr(linux.LinuxLauncher, "_run", run)
+    outcome = await run_read_transaction(
+        subject, native.LOGIN_COMMAND if login_command else subject.claude.command,
+        TaskSpec(instruction="Read a fixed file"),
+        selected_plan=ClaudePlan.PRO, model="model", effort="high", worker=None,
+        guard_fds=(731,), timeout_s=1,
+        native_store=native.ClaudeNativeStoreMount(731, 732, check_binding,
+                                                   egress(tmp_path, events)),
+    )
+    assert isinstance(outcome, ExecutorFailure)
+    assert "spawn" not in events
+    assert events == ([] if login_command else ["binding", "probe", "binding"])
+    assert closed == ([] if login_command else [733, 734])
+
+
 @pytest.fixture
 def on_linux(monkeypatch):
     monkeypatch.setattr(linux, "sys", SimpleNamespace(platform="linux"))
