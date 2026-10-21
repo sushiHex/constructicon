@@ -848,5 +848,83 @@ MUTANTS += (
      + "test_main_rejects_arguments_without_launching_or_publishing_private_error"),
 )
 
+STARTUP_RUNTIME = "scripts.ci.build_m8_claude_startup_fixture:curate_runtime"
+MUTANTS += (
+    ("pinned startup runtime must be fresh", STARTUP_BUILD,
+     'not runtime.exists()', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_builder_refuses_without_publishing[runtime-destination]"),
+    ("pinned startup copies all three known missing libraries", STARTUP_RUNTIME,
+     'for name in LIBRARIES:', 'for name in LIBRARIES[:1]:',
+     STARTUP_BUILD_TEST + "test_pinned_builder_copies_only_verified_member_and_publishes_last"),
+    ("host library ancestors must be real directories", STARTUP_RUNTIME,
+     'stat.S_ISDIR(info.st_mode)', 'True',
+     STARTUP_BUILD_TEST
+     + "test_pinned_runtime_refuses_untrusted_library_sources[ancestor-nonregular]"),
+    ("host library ancestors must belong to root", STARTUP_RUNTIME,
+     'stat.S_ISDIR(info.st_mode) and info.st_uid == 0', 'stat.S_ISDIR(info.st_mode)',
+     STARTUP_BUILD_TEST + "test_pinned_runtime_refuses_untrusted_library_sources[ancestor-owner]"),
+    ("host library ancestors cannot be service-writable", STARTUP_RUNTIME,
+     'not info.st_mode & 0o022', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_runtime_refuses_untrusted_library_sources[ancestor-write]"),
+    ("host library sources cannot resolve elsewhere", STARTUP_RUNTIME,
+     'source.resolve(strict=True) == source', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_runtime_refuses_untrusted_library_sources[escape]"),
+    ("host library sources must be regular files", STARTUP_RUNTIME,
+     'stat.S_ISREG(info.st_mode)', 'True',
+     STARTUP_BUILD_TEST
+     + "test_pinned_runtime_refuses_untrusted_library_sources[source-nonregular]"),
+    ("host library sources must belong to root", STARTUP_RUNTIME,
+     'stat.S_ISREG(info.st_mode) and info.st_uid == 0', 'stat.S_ISREG(info.st_mode)',
+     STARTUP_BUILD_TEST + "test_pinned_runtime_refuses_untrusted_library_sources[source-owner]"),
+    ("host library sources cannot be service-writable", STARTUP_RUNTIME,
+     'not info.st_mode & 0o6022', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_runtime_refuses_untrusted_library_sources[source-write]"),
+    ("host library reads are bounded", STARTUP_RUNTIME,
+     '0 < len(raw) <= LIBRARY_BYTES', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_runtime_refuses_untrusted_library_sources[oversize]"),
+    ("runtime library placement must be a directory", STARTUP_RUNTIME,
+     'directory.is_dir()', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_runtime_refuses_non_directory_library_placement[file]"),
+    ("runtime library placement cannot follow a link", STARTUP_RUNTIME,
+     'not directory.is_symlink()', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_runtime_refuses_non_directory_library_placement[link]"),
+    ("runtime additions cannot overwrite curated content", STARTUP_RUNTIME,
+     '.open("xb")', '.open("wb")',
+     STARTUP_BUILD_TEST + "test_pinned_runtime_never_overwrites_a_preexisting_curated_library"),
+    ("runtime library copies preserve captured bytes", STARTUP_RUNTIME,
+     'target.write(raw)', 'target.write(raw + b"corrupt")',
+     STARTUP_BUILD_TEST + "test_pinned_builder_copies_only_verified_member_and_publishes_last"),
+    ("runtime library metadata identifies captured bytes", STARTUP_RUNTIME,
+     'hashlib.sha256(raw).hexdigest()', '"0" * 64',
+     STARTUP_BUILD_TEST + "test_pinned_builder_copies_only_verified_member_and_publishes_last"),
+    ("pinned runtime is frozen before publication", STARTUP_RUNTIME,
+     'path.chmod(0o555 if path.is_dir() or path.stat().st_mode & 0o111 else 0o444)',
+     'path.chmod(0o755 if path.is_dir() or path.stat().st_mode & 0o111 else 0o644)',
+     STARTUP_BUILD_TEST + "test_pinned_builder_copies_only_verified_member_and_publishes_last"),
+    ("pinned runtime is independently inventoried", STARTUP_RUNTIME,
+     'runtime_inventory(destination)', 'None',
+     STARTUP_BUILD_TEST + "test_pinned_builder_copies_only_verified_member_and_publishes_last"),
+    ("pinned runtime digest is not the vendor digest", STARTUP_BUILD,
+     'str(runtime_digest(runtime))', 'str(runtime_digest(vendor))',
+     STARTUP_BUILD_TEST + "test_pinned_builder_copies_only_verified_member_and_publishes_last"),
+)
+
+MUTANTS += (
+    ("pinned startup consumer uses its separate runtime", STARTUP_OBSERVE + "hosted_observation",
+     'runtime_root=ROOT / "pinned-runtime"', 'runtime_root=ROOT / "runtime"',
+     STARTUP_OBSERVE_TEST
+     + "test_hosted_helper_is_not_bound_to_pytest_argv_and_publishes_only_pinned_fields"),
+    ("pinned startup consumer checks its own runtime digest",
+     STARTUP_OBSERVE + "hosted_observation",
+     'expected_runtime=pinned_runtime_digest', 'expected_runtime=Digest(fixture["runtime_digest"])',
+     STARTUP_OBSERVE_TEST
+     + "test_hosted_helper_is_not_bound_to_pytest_argv_and_publishes_only_pinned_fields"),
+    ("pinned startup evidence identifies the selected runtime",
+     STARTUP_OBSERVE + "hosted_observation",
+     '"runtime_digest": str(pinned_runtime_digest)', '"runtime_digest": str(vendor_digest)',
+     STARTUP_OBSERVE_TEST
+     + "test_hosted_helper_is_not_bound_to_pytest_argv_and_publishes_only_pinned_fields"),
+)
+
 if __name__ == "__main__":
     raise SystemExit(run(MUTANTS))

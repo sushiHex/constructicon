@@ -408,11 +408,12 @@ async def test_hosted_helper_is_not_bound_to_pytest_argv_and_publishes_only_pinn
         "version": builder.VERSION, "member_sha256": builder.MEMBER_SHA256,
         "member_size": builder.MEMBER_SIZE, "archive_sha256": builder.ARCHIVE_SHA256,
         "vendor_digest": str(digest("diagnostic-test", 1, "vendor")),
+        "runtime_digest": str(digest("diagnostic-test", 1, "pinned-runtime")),
         "production_available": False, "subscription_qualified": False, "claude_qualified": False,
     }
     (tmp_path / "pinned-startup.json").write_text(json.dumps(pins))
     (tmp_path / "fixture.json").write_text(json.dumps({
-        "runtime_digest": str(digest("diagnostic-test", 1, "runtime")),
+        "runtime_digest": str(digest("diagnostic-test", 1, "fake-runtime")),
         "policy_sha256": "1" * 64,
     }))
     monkeypatch.setattr(diagnostic, "ROOT", tmp_path)
@@ -421,7 +422,9 @@ async def test_hosted_helper_is_not_bound_to_pytest_argv_and_publishes_only_pinn
     monkeypatch.setattr(sys, "argv", ["pytest", "private-not-an-observer-option"])
     monkeypatch.setenv("RUNNER_ENVIRONMENT", "github-hosted")
 
-    def launcher(**_arguments):
+    def launcher(**arguments):
+        assert arguments["runtime_root"] == tmp_path / "pinned-runtime"
+        assert arguments["expected_runtime"] == Digest(pins["runtime_digest"])
         value = Launcher()
         value.revision = digest("diagnostic-test", 1, "recipe")
         return value
@@ -442,12 +445,13 @@ async def test_hosted_helper_is_not_bound_to_pytest_argv_and_publishes_only_pinn
     assert diagnostic.successful(report)
     extras = {"proxy_accepted_connections", "proxy_bound_exceeded", "proxy_joined",
               "launch_revision", "vendor_digest", "member_sha256", "archive_sha256",
-              "member_size", "version"}
+              "member_size", "version", "runtime_digest"}
     assert_report({key: value for key, value in report.items() if key not in extras})
     assert {key: report[key] for key in extras} == {
         "proxy_accepted_connections": 0, "proxy_bound_exceeded": False, "proxy_joined": True,
         "launch_revision": str(digest("diagnostic-test", 1, "recipe")),
         "vendor_digest": pins["vendor_digest"], "member_sha256": builder.MEMBER_SHA256,
+        "runtime_digest": pins["runtime_digest"],
         "archive_sha256": builder.ARCHIVE_SHA256, "member_size": builder.MEMBER_SIZE,
         "version": builder.VERSION,
     }

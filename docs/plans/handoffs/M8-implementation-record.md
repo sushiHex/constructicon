@@ -8120,6 +8120,32 @@ Local measurement killed all 44 new mutants by assertion after passing their
 baselines: 17 installation guards and 27 diagnostic guards. The diagnostic
 suite passed 72 tests with three hosted physical cases skipped on Windows;
 the installer suite passed 18. Both scripts pass explicit Linux-target strict
-mypy and ruff. These are portable controls, not claims that the pinned CLI
-has run. Hosted execution remains unmeasured; frozen plans and production
-availability remain unchanged.
+mypy and ruff. At that local gate these were portable controls only; hosted
+execution remained unmeasured. Frozen plans and production availability remain
+unchanged.
+
+On `2c83846`, the hosted foundation ran all 74 nonvendor diagnostic controls
+successfully. The pinned process then exited 127 without a protocol response;
+EOF, stdin closure, joined teardown and three binding checks were observed,
+with zero accepted proxy connections. Static `readelf` inspection of the
+rehashed member confirms three missing direct dependencies in the recorded
+runtime: `librt.so.1`, `libpthread.so.0` and `libdl.so.2`. This is a concrete
+closure defect consistent with the exit, not proof of the first loader error
+or absence of later compatibility defects. The correction supplies only these
+libraries in a separately sealed diagnostic runtime, leaving the fake fixture,
+Codex runtime and confinement rules unchanged.
+
+That head's full CI verification passed 8,098 tests with 474 skips and failed
+one workflow-inventory assertion: the new module's deliberately separate fake
+and pinned invocations were missing from its inventory. The corrected test
+must preserve those ordered commands and the existing proof inventory. The
+unfinished local full gate was interrupted before these corrections; it is
+not final-head evidence. New hosted execution remains required.
+
+The correction's builder suite passes 31 tests; its 18 new mutants and the
+three runtime-selection/evidence mutants all fail by assertion after passing
+baselines. The diagnostic suite remains at 72 portable passes and three
+physical skips locally. The 54-test workflow suite and 45 mutation-inventory
+checks pass. Independent review found no further blocker in the runtime repair.
+The complete 267-mutant inventory still requires final-head CI measurement;
+earlier measurements do not substitute for it.

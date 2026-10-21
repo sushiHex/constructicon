@@ -154,6 +154,9 @@ jobs:
           sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" \
             scripts/ci/build_m8_claude_startup_fixture.py "$RUNNER_TEMP/claude-startup.tgz" \
             </dev/null | tee "$RUNNER_TEMP/m8-claude-startup-fixture.json"
+          # Inspect trusted host-library metadata only; never run a vendor loader trace.
+          /usr/bin/readelf --dynamic \
+            /usr/lib/x86_64-linux-gnu/{librt.so.1,libpthread.so.0,libdl.so.2} </dev/null
           sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
             M8_CLAUDE_COMPOSITION_REQUIRED=1 M8_CLAUDE_STARTUP_REQUIRED=1 \

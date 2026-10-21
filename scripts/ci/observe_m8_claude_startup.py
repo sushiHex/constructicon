@@ -369,8 +369,9 @@ async def hosted_observation() -> dict[str, object]:
                 "production_available", "subscription_qualified", "claude_qualified"))):
         raise _Refused()
     vendor_digest = Digest(pins["vendor_digest"])
+    pinned_runtime_digest = Digest(pins["runtime_digest"])
     launcher = LinuxLauncher(
-        runtime_root=ROOT / "runtime", expected_runtime=Digest(fixture["runtime_digest"]),
+        runtime_root=ROOT / "pinned-runtime", expected_runtime=pinned_runtime_digest,
         bubblewrap=ROOT / "bwrap", policy=POLICY,
         expected_policy_sha256=fixture["policy_sha256"],
         claude=ClaudeNativeVendor(ROOT / "pinned-vendor", MODEL, EFFORT,
@@ -386,6 +387,7 @@ async def hosted_observation() -> dict[str, object]:
                    "proxy_bound_exceeded": peer.bound_exceeded,
                    "proxy_joined": peer.joined, "launch_revision": str(launcher.revision),
                    "vendor_digest": str(vendor_digest), "member_sha256": MEMBER_SHA256,
+                   "runtime_digest": str(pinned_runtime_digest),
                    "archive_sha256": ARCHIVE_SHA256, "member_size": MEMBER_SIZE,
                    "version": VERSION})
     return report

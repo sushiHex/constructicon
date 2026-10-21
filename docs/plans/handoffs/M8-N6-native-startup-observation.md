@@ -22,6 +22,14 @@ Verify the downloaded archive and selected regular member before installation;
 do not execute an installer, package script or version command. The existing
 launcher independently verifies the installed tree before native execution.
 
+The first hosted observation exposed an incomplete runtime closure: static ELF
+inspection confirms this member also needs `librt.so.1`, `libpthread.so.0` and
+`libdl.so.2`, absent from the Python/Git fixture. Provision a separate fresh
+diagnostic runtime with those three fixed, custody-checked system libraries,
+freeze it and record its own digest. Preserve the original fixture and Codex
+closure. No loader trace of the vendor, executable permission expansion or
+broader host mount is needed to supply these declared dependencies.
+
 The test sends only one correlated bare initialize request. It registers no
 SDK server and writes no user message. Subscription admission must refuse the
 empty-store observation. A mode mismatch alone is insufficient diagnostic
