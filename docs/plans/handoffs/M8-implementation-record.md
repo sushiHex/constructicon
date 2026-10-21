@@ -8096,3 +8096,192 @@ physical boundaries. It does not establish vendor-native subscription
 qualification, production availability or a live READ. Issue #175 retains
 those separate gates; no new vendor binary, account, private-host session or
 model call was performed in this slice.
+
+### Credential-free pinned Claude startup diagnostic
+
+The successor uses the reviewed native launcher for a real pinned-CLI startup
+observation on disposable hosted Linux. It is not an authenticated readiness
+gate: an empty store must produce the exact no-auth projection, and the
+production subscription judge remains unchanged. Source inspection rechecked
+`vl`, `xRe` and `Vg` against the pinned member; the initialize model catalog is
+not selected-model evidence. No account, private-host session or model turn
+belongs to this diagnostic.
+
+Two independent design inspections found no blocker in the finite installation
+and exchange. Initial implementation review caught an unbounded cleanup await
+after cancellation and a counter omitting its final refused connection. The
+corrected design leaves failed-exchange termination to the existing launcher
+and counts every accepted connection, including the one exceeding the bound.
+Follow-up inspection also found that peer cleanup could replace an escaping
+cancellation with its own failure. Cleanup now preserves the primary failure
+while recording an unsuccessful join; a regression exercises both directions.
+
+Local measurement killed all 44 new mutants by assertion after passing their
+baselines: 17 installation guards and 27 diagnostic guards. The diagnostic
+suite passed 72 tests with three hosted physical cases skipped on Windows;
+the installer suite passed 18. Both scripts pass explicit Linux-target strict
+mypy and ruff. At that local gate these were portable controls only; hosted
+execution remained unmeasured. Frozen plans and production availability remain
+unchanged.
+
+On `2c83846`, the hosted foundation ran all 74 nonvendor diagnostic controls
+successfully. The pinned process then exited 127 without a protocol response;
+EOF, stdin closure, joined teardown and three binding checks were observed,
+with zero accepted proxy connections. Static `readelf` inspection of the
+rehashed member confirms three missing direct dependencies in the recorded
+runtime: `librt.so.1`, `libpthread.so.0` and `libdl.so.2`. This is a concrete
+closure defect consistent with the exit, not proof of the first loader error
+or absence of later compatibility defects. The correction supplies only these
+libraries in a separately sealed diagnostic runtime, leaving the fake fixture,
+Codex runtime and confinement rules unchanged.
+
+That head's full CI verification passed 8,098 tests with 474 skips and failed
+one workflow-inventory assertion: the new module's deliberately separate fake
+and pinned invocations were missing from its inventory. The corrected test
+must preserve those ordered commands and the existing proof inventory. The
+unfinished local full gate was interrupted before these corrections; it is
+not final-head evidence. New hosted execution remains required.
+
+The correction's builder suite passes 31 tests; its 18 new mutants and the
+three runtime-selection/evidence mutants all fail by assertion after passing
+baselines. The diagnostic suite remains at 72 portable passes and three
+physical skips locally. The 54-test workflow suite and 45 mutation-inventory
+checks pass. Independent review found no further blocker in the runtime repair.
+The complete 267-mutant inventory still requires final-head CI measurement;
+earlier measurements do not substitute for it.
+
+On `0f419e3`, all 74 nonvendor controls passed again. The actual pinned process
+then exited zero with clean joined lifecycle, EOF, stdin closure, three binding
+checks and zero accepted proxy connections. This gets beyond the earlier
+loader failure, but the protocol verdict is `invalid`; no-auth initialization
+is not yet established. The first diagnostic collapsed all schema refusals and
+surplus output into that one value, so it cannot identify the mismatch.
+The next correction adds only a closed, first-refusal reason enum, retaining
+neither raw vendor output nor account metadata. It does not relax acceptance.
+
+Independent review reproduced a diagnostic precedence edge: with a reduced
+output ceiling, a wrong-version frame plus surplus reports `version-mismatch`
+when fragmented but `output-bound` when the first read exceeds the ceiling.
+Both refuse. The design retains the first observed refusal, checks read bounds
+before parsing, and does not inspect over-budget bytes to refine telemetry.
+This limit is documented and tested; fragmentation consistency is asserted
+within the output budget, not claimed for rejected reads.
+
+The diagnostic correction passes 111 portable tests (three physical tests
+remain Linux-only), 45 inventory checks, 60 CI-scope checks, manual Ruff and
+strict Linux-target script mypy. All seven new telemetry mutants are measured
+assertion kills on the final local sources. The complete 274-entry inventory
+and pinned observation require the next hosted run. On `0f419e3`, verify,
+qualification and the other three containment lanes passed; foundation alone
+failed at the actual pinned protocol observation.
+
+On `c87a53a`, the hosted probe reports `unexpected-system` with a clean joined
+lifecycle (containment run `39555172500`, foundation job `119073209656`). This
+establishes the first record's type, not its subtype or a successful initialize
+response. Static source contains pre-initialize notification paths, but no
+specific warning has been observed. The next diagnostic distinguishes only
+source-known system subtypes and two known notification keys with fixed
+refusal labels; all unknown values retain generic refusals. No warning text or
+account metadata is published, and no notification is accepted or skipped.
+N6b's frozen narrow transaction still forbids notifications; a more general
+handshake is a separate design decision, not an implicit repair to this gate.
+
+Source evidence: `LFt` at B@225501790 creates `system/notification`, and
+`uRe` at B@210011256 drains the queue through `FL` at B@233566838 before
+initialize handling. The startup keys are `model-effort-cap` (B@225532206)
+and `model-context-window` (B@225533394). The fixed low effort does not select
+the valid effort-cap warning; the context warning remains an unproven
+candidate. The `system/init` constructor at B@222723392 and the literal
+status, state-change, hook and session-metadata families are not evidence
+that any of them was emitted in this run. The projection never publishes
+their text, key values outside the allowlist, identifiers or metadata.
+
+The subtype projection passes 149 portable diagnostic tests with three
+Linux-only skips; its 38 discriminator cases still pass after cleanup. Both
+new mutants are measured assertion kills with passing baselines on stable
+sources, and all 276 inventory targets match. Manual Ruff and strict Linux
+script mypy pass. Actual subtype identification remains a hosted measurement,
+not a conclusion from these fake tests or the static source.
+
+On `f7c4fd9`, all 151 nonvendor controls passed and the pinned observation
+still reported `unexpected-system` (run `39557200754`, foundation job
+`119079668743`). Checkout SHA and the newly added discriminator cases were
+checked in that same log: this is not a stale-head observation. The small
+subtype map was insufficient; the actual subtype remains unidentified.
+
+A broader static producer/schema scan finds 72 literal system subtypes,
+including `informational` and `init_milestone`. Use one fixed whitelist of
+these source literals for diagnostic labels, preserving generic categories
+for missing, nonstring and unlisted subtypes. Never publish the unlisted
+value. This is a finite disclosure policy, not a claim that source scanning
+proved protocol completeness: computed properties, spreads, forwarding and
+raw stdout paths remain outside that enumeration. No record is newly
+accepted, ignored or reparsed after the first refusal.
+
+The complete finite projection passes 299 portable tests (three Linux-only
+skips), script/test Ruff and strict Linux script mypy. Both new whitelist
+mutants and the preceding two projection mutants are measured assertion kills
+on stable final sources, with passing baselines. All 278 inventory targets
+match. Every emitted reason remains at most 32 characters and belongs to
+the independently asserted finite vocabulary. Hosted identification and the
+complete final-head CI remain pending.
+
+The `98cd149` hosted run identifies the first record as
+`system/ui_invalidate` (run `39558419754`, foundation job `119084213047`),
+after 301 nonvendor controls passed. Checkout SHA and the expanded cases
+were checked in the same log. This is a real incompatibility with the
+original single-record diagnostic, not evidence that initialization passed.
+
+Pinned source `aF` at B@208350315 defines this event as a fire-and-forget
+render-cache invalidation; producer B@233650357 can enqueue it before
+initialize handling. Its schema requires `event: "ui.render"` and string
+`uuid`/`session_id`, with optional string-only instance descriptors. The
+shared ID schema is a string, not an invented UUID-format constraint.
+The observed discriminator alone does not establish this full shape, the
+trigger, a later response or account mode.
+
+A scope review distinguishes N6b's frozen, deliberately narrow nonvendor
+binding from this separate native diagnostic. N6b and `ClaudeInitialization`
+remain byte/behavior unchanged; ADR 0021 does not impose a universal
+single-record wire grammar. The living startup design now explicitly defines
+an additive diagnostic framing contract within the authorized credential-free
+wave, not a silent relaxation of the old callback or a production gate.
+
+Independent design review found no blocker: allow at most eight strictly
+shaped UI invalidations across prefix and tail, discard their contents, and
+require the same sole correlated no-auth response, stdin close, EOF and joined
+teardown. All other notifications/requests, partial EOF and duplicate responses
+refuse. The shared budget never resets at the response; reentry must poison
+every resumed continuation. Byte/deadline bounds and all authority remain
+unchanged. Implementation and its new hosted permitting proof are still
+pending; these design/source facts do not qualify Claude.
+
+The framing implementation now passes 363 portable diagnostic tests, with
+five physical tests reserved for hosted Linux. Two distinct fake modes emit
+four UI records before the response, require stdin EOF, then emit four or
+five more: the compiled portable controls accept eight and refuse nine.
+The existing workflow selects these physical controls before the pinned
+vendor observation; no new vendor invocation or workflow change is needed.
+
+Test-first execution also reproduced a diagnostic reentry defect: a resumed
+callback could overwrite its earlier refusal. An explicit poison now survives
+each await and buffered-frame transition. Ten reentry cases and five
+cancellation cases cover write, response read, close, tail data and EOF.
+Refused streams drain opaque and never regain acceptance through later data.
+The shared count, exact UI schema, byte limits and bounded public projection
+are pinned by permitting and refusing tests.
+
+All 21 affected/new mutants are measured assertion kills with passing
+baselines on unchanged sources; all 293 inventory targets match. Independent
+fixture/workflow/scope checks pass 145 tests and inventory checks pass 45.
+Script/test Ruff and explicit Linux-target strict script mypy pass. On the
+preceding `98cd149` head, verify, qualification, all mutation jobs and the
+other three containment lanes passed; foundation alone refused the observed
+UI record. The new full gate, independent implementation review and hosted
+permitting result remain required before review-ready status.
+
+The narrow independent implementation review found no actionable introduced
+defect and ran 63 focused framing, schema, reentry, cancellation and compiled
+peer cases. It confirmed the single count, irreversible opaque drain and
+close-attempt latch; this is not a claim of a new full-PR review. Full-gate
+and hosted evidence remain pending on the new head.

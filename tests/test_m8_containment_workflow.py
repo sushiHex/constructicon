@@ -37,6 +37,10 @@ PROOFS = {
         "foundation", "tests/substrate/test_claude_native_containment.py "
         "tests/substrate/test_claude_native_read.py",
     ),
+    "Observe pinned Claude startup without credentials or provider egress": (
+        "foundation", "tests/substrate/test_claude_native_startup.py "
+        "tests/substrate/test_claude_native_startup.py",
+    ),
     "Observe frozen P2 stock-utility diagnostics on Ubuntu 24.04": (
         "foundation", "tests/test_m8_stock_utility_diagnostics.py",
     ),
@@ -158,6 +162,19 @@ def test_every_existing_proof_runs_once_in_its_isolated_lane():
     )
     assert "lane: [foundation, lifecycle, combined, mediation]" in text
     assert "fail-fast: false" in text
+
+    # Startup runs its nonvendor controls first, then the exact pinned CLI
+    # observation. Keep both invocations explicit in the inventory above.
+    names = list(steps)
+    fake_step = "Prove the fake Claude native final transition and bounded layout"
+    startup_name = "Observe pinned Claude startup without credentials or provider egress"
+    assert names.index(fake_step) < names.index(startup_name)
+    startup = steps[startup_name]
+    assert startup.count("-m pytest") == 2
+    controls = "-k 'not test_pinned_credential_free_startup_has_only_a_noauth_observation'"
+    exact_probe = ("tests/substrate/test_claude_native_startup.py::"
+                   "test_pinned_credential_free_startup_has_only_a_noauth_observation")
+    assert startup.index(controls) < startup.index(exact_probe)
 
 
 def test_native_mutants_keep_the_common_runtime_and_unprivileged_context():

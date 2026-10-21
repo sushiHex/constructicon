@@ -6,6 +6,8 @@ MODULE = "constructicon.substrate.executors.claude_protocol:"
 JUDGE = MODULE + "judge_initialize"
 REQUEST = MODULE + "initialize_request"
 TEST = "tests/substrate/test_claude_protocol.py::"
+STARTUP_BUILD = "scripts.ci.build_m8_claude_startup_fixture:build"
+STARTUP_BUILD_TEST = "tests/test_m8_claude_startup_fixture.py::"
 
 MUTANTS = (
     ("initialize ids are exact scalar strings", MODULE + "_require_id",
@@ -688,6 +690,355 @@ MUTANTS += (
     ("READ worker cannot carry Claude native authority", WORKER + "ClaudeReadWorker._owned",
      'or self._launcher.claude is not None', 'or False',
      WORKER_TEST + "test_wrong_owner_and_unbounded_or_native_launcher_refuse"),
+    ("pinned startup provisioning accepts exactly one archive", STARTUP_BUILD,
+     'len(sys.argv) == 2', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_builder_refuses_unsupported_invocations[arguments]"),
+    ("pinned startup provisioning requires Linux", STARTUP_BUILD,
+     'sys.platform == "linux"', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_builder_refuses_unsupported_invocations[platform]"),
+    ("pinned startup provisioning requires root", STARTUP_BUILD,
+     'os.geteuid() == 0', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_builder_refuses_unsupported_invocations[root]"),
+    ("pinned startup provisioning requires a disposable hosted runner", STARTUP_BUILD,
+     'os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted"', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_builder_refuses_unsupported_invocations[host]"),
+    ("pinned startup download path is absolute", STARTUP_BUILD,
+     'archive.is_absolute()', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_builder_refuses_unsupported_invocations[relative]"),
+    ("pinned startup download is a regular file", STARTUP_BUILD,
+     'stat.S_ISREG(before.st_mode)', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_builder_refuses_without_publishing[nonregular]"),
+    ("pinned startup archive is authenticated before parsing", STARTUP_BUILD,
+     'hashlib.sha256(raw).hexdigest() == ARCHIVE_SHA256', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_builder_refuses_without_publishing[archive]"),
+    ("pinned startup reuses only the unchanged curated runtime", STARTUP_BUILD,
+     'str(runtime_digest(ROOT / "runtime")) == pins["runtime_digest"]', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_builder_refuses_without_publishing[runtime]"),
+    ("pinned startup vendor directory must be fresh", STARTUP_BUILD,
+     'not vendor.exists()', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_builder_refuses_without_publishing[existing]"),
+    ("pinned startup report must be fresh", STARTUP_BUILD,
+     'not report_path.exists()', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_builder_refuses_without_publishing[report]"),
+    ("pinned startup tar member enumeration is bounded", STARTUP_BUILD,
+     'index < 32', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_builder_refuses_without_publishing[count]"),
+    ("pinned startup selected member is unique", STARTUP_BUILD,
+     'len(selected) == 1', 'len(selected) >= 1',
+     STARTUP_BUILD_TEST + "test_pinned_builder_refuses_without_publishing[duplicate]"),
+    ("pinned startup selected member cannot be a link", STARTUP_BUILD,
+     'member.isreg()', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_builder_refuses_without_publishing[symlink]"),
+    ("pinned startup selected member has the exact size", STARTUP_BUILD,
+     'member.size == MEMBER_SIZE', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_builder_refuses_without_publishing[size]"),
+    ("pinned startup authenticates extracted member bytes", STARTUP_BUILD,
+     'observed.hexdigest() == MEMBER_SHA256', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_builder_refuses_without_publishing[member]"),
+    ("pinned startup explicitly preserves native executability", STARTUP_BUILD,
+     'payload.chmod(0o555)', 'payload.chmod(0o444)',
+     STARTUP_BUILD_TEST + "test_pinned_builder_copies_only_verified_member_and_publishes_last"),
+    ("pinned startup refuses oversized downloads before opening", STARTUP_BUILD,
+     '0 < before.st_size <= ARCHIVE_BYTES', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_builder_refuses_without_publishing[oversize]"),
+)
+
+STARTUP_OBSERVE = "scripts.ci.observe_m8_claude_startup:"
+STARTUP_OBSERVE_TEST = "tests/substrate/test_claude_native_startup.py::"
+MUTANTS += (
+    ("startup observation needs exact noauth, not arbitrary mismatch", STARTUP_OBSERVE + "classify",
+     'if account == {"apiProvider": "firstParty", "tokenSource": "none"}:', 'if True:',
+     STARTUP_OBSERVE_TEST + "test_non_noauth_damage_never_counts_as_observation_but_closes_stdin"
+     "[subscription-8192]"),
+    ("startup observation correlates its host id", STARTUP_OBSERVE + "classify",
+     'or envelope["request_id"] != identifier', 'or False',
+     STARTUP_OBSERVE_TEST + "test_non_noauth_damage_never_counts_as_observation_but_closes_stdin"
+     "[wrong-id-8192]"),
+    ("startup observation refuses pending authority", STARTUP_OBSERVE + "classify",
+     'if envelope["pending_permission_requests"] != []:', 'if False:',
+     STARTUP_OBSERVE_TEST + "test_non_noauth_damage_never_counts_as_observation_but_closes_stdin"
+     "[pending-8192]"),
+    ("startup observation checks the pinned version", STARTUP_OBSERVE + "classify",
+     'body.get("claude_code_version") != CLAUDE_CODE_VERSION', 'False',
+     STARTUP_OBSERVE_TEST + "test_non_noauth_damage_never_counts_as_observation_but_closes_stdin"
+     "[version-8192]"),
+    ("startup observation requires idle state", STARTUP_OBSERVE + "classify",
+     'body.get("session_state") != "idle"', 'False',
+     STARTUP_OBSERVE_TEST + "test_non_noauth_damage_never_counts_as_observation_but_closes_stdin"
+     "[running-8192]"),
+    ("startup observation record ceiling binds", STARTUP_OBSERVE + "classify",
+     'if len(record) > RECORD_BYTES:', 'if False:',
+     STARTUP_OBSERVE_TEST + "test_exact_record_ceiling_binds_and_duplicate_json_facts_refuse"),
+    ("startup observation shares duplicate JSON refusal", STARTUP_OBSERVE + "classify",
+     'parse_json_value(record[:-1].decode("utf-8"))', 'json.loads(record[:-1].decode("utf-8"))',
+     STARTUP_OBSERVE_TEST + "test_exact_record_ceiling_binds_and_duplicate_json_facts_refuse"),
+    ("startup observation rejects CRLF frames", STARTUP_OBSERVE + "classify",
+     'or b"\\r" in record', 'or False',
+     STARTUP_OBSERVE_TEST + "test_classifier_rejects_invalid_shapes_without_disclosing_fields[crlf]"),
+    ("startup observation checks response tags", STARTUP_OBSERVE + "classify",
+     'if value.get("type") != "control_response":', 'if False:',
+     STARTUP_OBSERVE_TEST + "test_classifier_rejects_invalid_shapes_without_disclosing_fields[type]"),
+    ("startup observation retains account schema", STARTUP_OBSERVE + "classify",
+     'or any(type(item) is not str for item in account.values())', 'or False',
+     STARTUP_OBSERVE_TEST
+     + "test_classifier_rejects_invalid_shapes_without_disclosing_fields[account-value]"),
+    ("startup probe cumulative output bound binds", STARTUP_OBSERVE + "_Probe.read",
+     'if self.output_bytes > self.output_limit:', 'if False:',
+     STARTUP_OBSERVE_TEST + "test_process_damage_and_cumulative_output_bound_prevent_success[stdout]"),
+    ("startup probe input bound precedes delivery", STARTUP_OBSERVE + "_Probe.__call__",
+     'if len(request) > self.input_limit:', 'if False:',
+     STARTUP_OBSERVE_TEST + "test_input_bound_binds_before_the_only_write"),
+    ("startup probe requires complete frame before noauth", STARTUP_OBSERVE + "_Probe.__call__",
+     'elif not response_seen:\n            self.reason = "eof-before-frame"',
+     'elif not response_seen:\n            self.reason = "eof-before-frame"\n'
+     '            self.protocol = "correlated-noauth"',
+     STARTUP_OBSERVE_TEST + "test_non_noauth_damage_never_counts_as_observation_but_closes_stdin"
+     "[empty-8192]"),
+    ("startup probe rejects coalesced extra bytes", STARTUP_OBSERVE + "_Probe.__call__",
+     'elif response_seen:', 'elif False:',
+     STARTUP_OBSERVE_TEST + "test_non_noauth_damage_never_counts_as_observation_but_closes_stdin"
+     "[duplicate-8192]"),
+    ("startup probe rejects later tail bytes", STARTUP_OBSERVE + "_Probe.__call__",
+     'elif buffered:', 'elif False:',
+     STARTUP_OBSERVE_TEST + "test_non_noauth_damage_never_counts_as_observation_but_closes_stdin"
+     "[partial-extra-1]"),
+    ("startup probe is single use", STARTUP_OBSERVE + "_Probe.__call__",
+     'if self.used:', 'if False:',
+     STARTUP_OBSERVE_TEST + "test_callback_is_single_use_and_deadline_checked_before_any_write"),
+    ("startup probe checks deadline before work", STARTUP_OBSERVE + "_Probe.check",
+     'if asyncio.get_running_loop().time() >= self.deadline:', 'if False:',
+     STARTUP_OBSERVE_TEST + "test_callback_is_single_use_and_deadline_checked_before_any_write"),
+    ("startup probe never awaits cleanup after cancelled read", STARTUP_OBSERVE + "_Probe.read",
+     'value = await io.read(maximum)',
+     'try:\n        value = await io.read(maximum)\n    except BaseException:\n'
+     '        with suppress(BaseException):\n            await io.close_stdin()\n        raise',
+     STARTUP_OBSERVE_TEST + "test_cancelled_read_never_awaits_a_blocking_close_after_cancellation"),
+    ("startup observation requires initial binding", STARTUP_OBSERVE + "observe_startup",
+     'if type(initial) is not BindingCheck:', 'if False:',
+     STARTUP_OBSERVE_TEST
+     + "test_binding_change_or_absence_refuses_and_prespawn_change_cannot_recover[True-0]"),
+    ("startup observation pins prelaunch generation", STARTUP_OBSERVE + "observe_startup",
+     'or checked != initial', 'or False',
+     STARTUP_OBSERVE_TEST
+     + "test_binding_change_or_absence_refuses_and_prespawn_change_cannot_recover[False-1]"),
+    ("startup observation supplies wrapped prelaunch check", STARTUP_OBSERVE + "observe_startup",
+     'native_store=launch_store,', 'native_store=native_store,',
+     STARTUP_OBSERVE_TEST
+     + "test_binding_change_or_absence_refuses_and_prespawn_change_cannot_recover[False-1]"),
+    ("startup observation rechecks binding after join", STARTUP_OBSERVE + "observe_startup",
+     'check_binding()\n        lifecycle = "clean"', 'pass\n        lifecycle = "clean"',
+     STARTUP_OBSERVE_TEST
+     + "test_exact_noauth_observation_requires_close_eof_join_and_three_bindings[8192]"),
+    ("startup terminal refusal preserves fatal primary", STARTUP_OBSERVE + "observe_startup",
+     'with suppress(BaseException):', 'if True:',
+     STARTUP_OBSERVE_TEST + "test_fatal_exchange_is_preserved_when_terminal_check_fails"),
+    ("startup observation needs clean joined process", STARTUP_OBSERVE + "observe_startup",
+     '"clean" if _clean(result) else "process-refused"', '"clean"',
+     STARTUP_OBSERVE_TEST
+     + "test_process_damage_and_cumulative_output_bound_prevent_success[supervisor]"),
+    ("startup peer accepts only a bounded count", STARTUP_OBSERVE + "DenyPeer.serve",
+     'if self.attempts > PROXY_ATTEMPTS:', 'if False:',
+     STARTUP_OBSERVE_TEST + "test_deny_peer_bound_counts_the_refused_ninth_attempt_and_stops"),
+    ("startup peer cleanup cannot mask primary", STARTUP_OBSERVE + "DenyPeer.__aexit__",
+     'if error is None:', 'if True:',
+     STARTUP_OBSERVE_TEST + "test_deny_peer_cleanup_failure_never_masks_primary_control_flow[True]"),
+    ("startup CLI rejects options before launch", STARTUP_OBSERVE + "main",
+     'if len(sys.argv) != 1:', 'if False:',
+     STARTUP_OBSERVE_TEST
+     + "test_main_rejects_arguments_without_launching_or_publishing_private_error"),
+)
+
+STARTUP_RUNTIME = "scripts.ci.build_m8_claude_startup_fixture:curate_runtime"
+MUTANTS += (
+    ("pinned startup runtime must be fresh", STARTUP_BUILD,
+     'not runtime.exists()', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_builder_refuses_without_publishing[runtime-destination]"),
+    ("pinned startup copies all three known missing libraries", STARTUP_RUNTIME,
+     'for name in LIBRARIES:', 'for name in LIBRARIES[:1]:',
+     STARTUP_BUILD_TEST + "test_pinned_builder_copies_only_verified_member_and_publishes_last"),
+    ("host library ancestors must be real directories", STARTUP_RUNTIME,
+     'stat.S_ISDIR(info.st_mode)', 'True',
+     STARTUP_BUILD_TEST
+     + "test_pinned_runtime_refuses_untrusted_library_sources[ancestor-nonregular]"),
+    ("host library ancestors must belong to root", STARTUP_RUNTIME,
+     'stat.S_ISDIR(info.st_mode) and info.st_uid == 0', 'stat.S_ISDIR(info.st_mode)',
+     STARTUP_BUILD_TEST + "test_pinned_runtime_refuses_untrusted_library_sources[ancestor-owner]"),
+    ("host library ancestors cannot be service-writable", STARTUP_RUNTIME,
+     'not info.st_mode & 0o022', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_runtime_refuses_untrusted_library_sources[ancestor-write]"),
+    ("host library sources cannot resolve elsewhere", STARTUP_RUNTIME,
+     'source.resolve(strict=True) == source', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_runtime_refuses_untrusted_library_sources[escape]"),
+    ("host library sources must be regular files", STARTUP_RUNTIME,
+     'stat.S_ISREG(info.st_mode)', 'True',
+     STARTUP_BUILD_TEST
+     + "test_pinned_runtime_refuses_untrusted_library_sources[source-nonregular]"),
+    ("host library sources must belong to root", STARTUP_RUNTIME,
+     'stat.S_ISREG(info.st_mode) and info.st_uid == 0', 'stat.S_ISREG(info.st_mode)',
+     STARTUP_BUILD_TEST + "test_pinned_runtime_refuses_untrusted_library_sources[source-owner]"),
+    ("host library sources cannot be service-writable", STARTUP_RUNTIME,
+     'not info.st_mode & 0o6022', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_runtime_refuses_untrusted_library_sources[source-write]"),
+    ("host library reads are bounded", STARTUP_RUNTIME,
+     '0 < len(raw) <= LIBRARY_BYTES', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_runtime_refuses_untrusted_library_sources[oversize]"),
+    ("runtime library placement must be a directory", STARTUP_RUNTIME,
+     'directory.is_dir()', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_runtime_refuses_non_directory_library_placement[file]"),
+    ("runtime library placement cannot follow a link", STARTUP_RUNTIME,
+     'not directory.is_symlink()', 'True',
+     STARTUP_BUILD_TEST + "test_pinned_runtime_refuses_non_directory_library_placement[link]"),
+    ("runtime additions cannot overwrite curated content", STARTUP_RUNTIME,
+     '.open("xb")', '.open("wb")',
+     STARTUP_BUILD_TEST + "test_pinned_runtime_never_overwrites_a_preexisting_curated_library"),
+    ("runtime library copies preserve captured bytes", STARTUP_RUNTIME,
+     'target.write(raw)', 'target.write(raw + b"corrupt")',
+     STARTUP_BUILD_TEST + "test_pinned_builder_copies_only_verified_member_and_publishes_last"),
+    ("runtime library metadata identifies captured bytes", STARTUP_RUNTIME,
+     'hashlib.sha256(raw).hexdigest()', '"0" * 64',
+     STARTUP_BUILD_TEST + "test_pinned_builder_copies_only_verified_member_and_publishes_last"),
+    ("pinned runtime is frozen before publication", STARTUP_RUNTIME,
+     'path.chmod(0o555 if path.is_dir() or path.stat().st_mode & 0o111 else 0o444)',
+     'path.chmod(0o755 if path.is_dir() or path.stat().st_mode & 0o111 else 0o644)',
+     STARTUP_BUILD_TEST + "test_pinned_builder_copies_only_verified_member_and_publishes_last"),
+    ("pinned runtime is independently inventoried", STARTUP_RUNTIME,
+     'runtime_inventory(destination)', 'None',
+     STARTUP_BUILD_TEST + "test_pinned_builder_copies_only_verified_member_and_publishes_last"),
+    ("pinned runtime digest is not the vendor digest", STARTUP_BUILD,
+     'str(runtime_digest(runtime))', 'str(runtime_digest(vendor))',
+     STARTUP_BUILD_TEST + "test_pinned_builder_copies_only_verified_member_and_publishes_last"),
+)
+
+MUTANTS += (
+    ("pinned startup consumer uses its separate runtime", STARTUP_OBSERVE + "hosted_observation",
+     'runtime_root=ROOT / "pinned-runtime"', 'runtime_root=ROOT / "runtime"',
+     STARTUP_OBSERVE_TEST
+     + "test_hosted_helper_is_not_bound_to_pytest_argv_and_publishes_only_pinned_fields"),
+    ("pinned startup consumer checks its own runtime digest",
+     STARTUP_OBSERVE + "hosted_observation",
+     'expected_runtime=pinned_runtime_digest', 'expected_runtime=Digest(fixture["runtime_digest"])',
+     STARTUP_OBSERVE_TEST
+     + "test_hosted_helper_is_not_bound_to_pytest_argv_and_publishes_only_pinned_fields"),
+    ("pinned startup evidence identifies the selected runtime",
+     STARTUP_OBSERVE + "hosted_observation",
+     '"runtime_digest": str(pinned_runtime_digest)', '"runtime_digest": str(vendor_digest)',
+     STARTUP_OBSERVE_TEST
+     + "test_hosted_helper_is_not_bound_to_pytest_argv_and_publishes_only_pinned_fields"),
+)
+
+MUTANTS += (
+    ("startup protocol reason retains its first refusal", STARTUP_OBSERVE + "_Probe.reject",
+     'if self.reason in {"incomplete", "none"}:', 'if True:',
+     STARTUP_OBSERVE_TEST + "test_first_protocol_refusal_survives_opaque_drain_bound"),
+    ("startup coalesced surplus has a static output reason", STARTUP_OBSERVE + "_Probe.__call__",
+     'elif response_seen:\n                self.reject("extra-output")',
+     'elif response_seen:\n                self.reject("read-contract")',
+     STARTUP_OBSERVE_TEST + "test_non_noauth_damage_never_counts_as_observation_but_closes_stdin"
+     "[duplicate-8192]"),
+    ("startup later surplus has the same output reason", STARTUP_OBSERVE + "_Probe.__call__",
+     'self.reject("extra-output" if response_seen else "framing")',
+     'self.reject("read-contract" if response_seen else "framing")',
+     STARTUP_OBSERVE_TEST + "test_non_noauth_damage_never_counts_as_observation_but_closes_stdin"
+     "[partial-extra-1]"),
+    ("startup unexpected type cannot be an unhashable lookup", STARTUP_OBSERVE + "classify",
+     'type(kind) is str', 'True',
+     STARTUP_OBSERVE_TEST
+     + "test_classifier_rejects_invalid_shapes_without_disclosing_fields[unhashable-type]"),
+    ("startup published protocol reason stays in its closed bound",
+     STARTUP_OBSERVE + "observe_startup",
+     '"protocol_reason": probe.reason', '"protocol_reason": "unknown" * 1024',
+     STARTUP_OBSERVE_TEST
+     + "test_exact_noauth_observation_requires_close_eof_join_and_three_bindings[8192]"),
+    ("startup unexpected type never echoes arbitrary vendor text", STARTUP_OBSERVE + "classify",
+     'kinds.get(kind, "unexpected-other")', 'kind',
+     STARTUP_OBSERVE_TEST
+     + "test_classifier_rejects_invalid_shapes_without_disclosing_fields[unknown-type]"),
+    ("startup successful classification has no refusal reason", STARTUP_OBSERVE + "classify",
+     'return "correlated-noauth", "none"', 'return "correlated-noauth", "other-mode"',
+     STARTUP_OBSERVE_TEST
+     + "test_exact_noauth_observation_requires_close_eof_join_and_three_bindings[8192]"),
+)
+
+MUTANTS += (
+    ("startup system subtype projection is actually applied", STARTUP_OBSERVE + "classify",
+     'if kind == "system":', 'if False:',
+     STARTUP_OBSERVE_TEST
+     + "test_system_discriminators_are_finite_refusals_not_skipped_frames[init-8192]"),
+    ("startup notification key cannot be an unhashable lookup", STARTUP_OBSERVE + "classify",
+     'type(key) is str', 'True',
+     STARTUP_OBSERVE_TEST
+     + "test_system_discriminators_are_finite_refusals_not_skipped_frames[dict-key-8192]"),
+)
+
+MUTANTS += (
+    ("startup subtype projection cannot bypass its literal whitelist",
+     STARTUP_OBSERVE + "classify",
+     'if subtype not in SYSTEM_SUBTYPES:', 'if False:',
+     STARTUP_OBSERVE_TEST
+     + "test_system_discriminators_are_finite_refusals_not_skipped_frames[private-subtype-8192]"),
+    ("startup distinguishes absent subtype from nonstring subtype",
+     STARTUP_OBSERVE + "classify",
+     'return "invalid", "system-subtype-missing"',
+     'return "invalid", "system-subtype-nonstr"',
+     STARTUP_OBSERVE_TEST
+     + "test_system_discriminators_are_finite_refusals_not_skipped_frames[missing-subtype-8192]"),
+)
+
+MUTANTS += (
+    ("startup UI records have no extension fields", STARTUP_OBSERVE + "classify",
+     'set(value) not in (required, required | {"instances"})', 'False',
+     STARTUP_OBSERVE_TEST + "test_ui_schema_is_exact_and_refused_stream_is_never_reparsed[extra]"),
+    ("startup UI event is the fixed render tag", STARTUP_OBSERVE + "classify",
+     'value.get("event") != "ui.render"', 'False',
+     STARTUP_OBSERVE_TEST + "test_ui_schema_is_exact_and_refused_stream_is_never_reparsed[event]"),
+    ("startup UI uuid is an opaque string", STARTUP_OBSERVE + "classify",
+     'type(value.get("uuid")) is not str', 'False',
+     STARTUP_OBSERVE_TEST + "test_ui_schema_is_exact_and_refused_stream_is_never_reparsed[uuid]"),
+    ("startup UI session is an opaque string", STARTUP_OBSERVE + "classify",
+     'type(value.get("session_id")) is not str', 'False',
+     STARTUP_OBSERVE_TEST + "test_ui_schema_is_exact_and_refused_stream_is_never_reparsed[session]"),
+    ("startup UI instance collection is a list", STARTUP_OBSERVE + "classify",
+     'type(instances) is not list', 'False',
+     STARTUP_OBSERVE_TEST
+     + "test_ui_schema_is_exact_and_refused_stream_is_never_reparsed[instances-type]"),
+    ("startup UI instance entries are objects", STARTUP_OBSERVE + "classify",
+     'type(item) is not dict', 'False',
+     STARTUP_OBSERVE_TEST
+     + "test_ui_schema_is_exact_and_refused_stream_is_never_reparsed[entry-type]"),
+    ("startup UI instance entries have exact fields", STARTUP_OBSERVE + "classify",
+     'set(item) != {"surface", "component", "instance_id"}', 'False',
+     STARTUP_OBSERVE_TEST
+     + "test_ui_schema_is_exact_and_refused_stream_is_never_reparsed[entry-extra]"),
+    ("startup UI instance fields are strings", STARTUP_OBSERVE + "classify",
+     'any(type(field) is not str for field in item.values())', 'False',
+     STARTUP_OBSERVE_TEST + "test_ui_schema_is_exact_and_refused_stream_is_never_reparsed[surface]"),
+    ("startup UI budget is shared across response and EOF", STARTUP_OBSERVE + "_Probe.__call__",
+     'if self.accepted_ui_records >= 8:', 'if False:',
+     STARTUP_OBSERVE_TEST
+     + "test_ui_framing_never_substitutes_for_response_or_resets_budget[ninth-split-8192]"),
+    ("startup accepted UI count records actual accepted frames", STARTUP_OBSERVE + "_Probe.__call__",
+     'self.accepted_ui_records += 1', 'self.accepted_ui_records += 0',
+     STARTUP_OBSERVE_TEST
+     + "test_only_exact_ui_records_share_one_budget_across_response_and_eof[True-4-4-8192]"),
+    ("startup refusal drains opaque without reclassifying", STARTUP_OBSERVE + "_Probe.__call__",
+     'if refused:', 'if False:',
+     STARTUP_OBSERVE_TEST + "test_ui_schema_is_exact_and_refused_stream_is_never_reparsed[extra]"),
+    ("startup reentry poisons the original continuation", STARTUP_OBSERVE + "_Probe.__call__",
+     'self.poisoned = True', 'self.poisoned = False',
+     STARTUP_OBSERVE_TEST
+     + "test_reentry_poison_survives_every_resume_and_buffered_frame[True-close]"),
+    ("startup resumed awaits observe callback poison", STARTUP_OBSERVE + "_Probe.check",
+     'if self.poisoned:', 'if False:',
+     STARTUP_OBSERVE_TEST
+     + "test_reentry_poison_survives_every_resume_and_buffered_frame[True-read]"),
+    ("startup per-record bound still binds with UI framing", STARTUP_OBSERVE + "_Probe.__call__",
+     'if len(buffered) == RECORD_BYTES:', 'if False:',
+     STARTUP_OBSERVE_TEST
+     + "test_ui_record_and_cumulative_bounds_bind_without_publishing_private_fields[True]"),
+    ("startup published UI count is bounded and affirmative", STARTUP_OBSERVE + "observe_startup",
+     '"accepted_ui_records": probe.accepted_ui_records', '"accepted_ui_records": 9',
+     STARTUP_OBSERVE_TEST
+     + "test_exact_noauth_observation_requires_close_eof_join_and_three_bindings[8192]"),
 )
 
 if __name__ == "__main__":

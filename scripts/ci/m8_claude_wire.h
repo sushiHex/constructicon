@@ -59,6 +59,11 @@ static void wire_background(void) {
          "\"uuid\":\"" WIRE_UUID "\",\"session_id\":\"" WIRE_SESSION "\"}");
 }
 
+static void wire_ui(void) {
+    puts("{\"type\":\"system\",\"subtype\":\"ui_invalidate\",\"event\":\"ui.render\","
+         "\"uuid\":\"plain-id\",\"session_id\":\"\",\"instances\":[]}");
+}
+
 static void wire_observation(const char *kind, const char *model, int background) {
     char identifier[128];
     wire_read();
@@ -107,7 +112,11 @@ static void wire_ack(const char *outer, const char *rpc) {
 }
 
 static int claude_wire(int argc, char **argv) {
-    if (argc != 14 || (strcmp(argv[11], "fixture-read") && strcmp(argv[11], "fixture-zero")))
+    if (argc != 14 || (strcmp(argv[11], "fixture-read") && strcmp(argv[11], "fixture-zero") &&
+                      strcmp(argv[11], "fixture-startup") &&
+                      strcmp(argv[11], "fixture-startup-subscribed") &&
+                      strcmp(argv[11], "fixture-startup-ui") &&
+                      strcmp(argv[11], "fixture-startup-ui-overflow")))
         return -1;
 #ifdef _WIN32
     WIRE_CHECK(_setmode(_fileno(stdin), _O_BINARY) != -1);
@@ -120,6 +129,30 @@ static int claude_wire(int argc, char **argv) {
         WIRE_CHECK(!strcmp(argv[i + 1], fixed[i]));
     WIRE_CHECK(!strcmp(argv[12], "--effort") && !strcmp(argv[13], "low"));
     const char *model = argv[11];
+    int ui = !strcmp(model, "fixture-startup-ui") ||
+             !strcmp(model, "fixture-startup-ui-overflow");
+    if (!strcmp(model, "fixture-startup") || !strcmp(model, "fixture-startup-subscribed") || ui) {
+        char identifier[128], expected[512];
+        wire_read();
+        wire_token("\"request_id\":", identifier, sizeof(identifier));
+        int length = snprintf(expected, sizeof(expected),
+            "{\"type\":\"control_request\",\"request_id\":%s,"
+            "\"request\":{\"subtype\":\"initialize\"}}\n", identifier);
+        WIRE_CHECK(length > 0 && (size_t)length < sizeof(expected));
+        WIRE_CHECK(!strcmp(wire_frame, expected));
+        if (ui) for (int i = 0; i < 4; i++) wire_ui();
+        wire_success(identifier, strcmp(model, "fixture-startup-subscribed")
+            ? "{\"account\":{\"apiProvider\":\"firstParty\",\"tokenSource\":\"none\"},"
+              "\"claude_code_version\":\"2.1.296\",\"session_state\":\"idle\"}"
+            : "{\"account\":{\"apiProvider\":\"firstParty\",\"subscriptionType\":\"Claude Pro\"},"
+              "\"claude_code_version\":\"2.1.296\",\"session_state\":\"idle\"}", 1);
+        WIRE_CHECK(fgetc(stdin) == EOF && !ferror(stdin));
+        if (ui) {
+            int count = !strcmp(model, "fixture-startup-ui-overflow") ? 5 : 4;
+            for (int i = 0; i < count; i++) wire_ui();
+        }
+        return 0;
+    }
     int callback = !strcmp(model, "fixture-read");
     wire_observation("\"subtype\":\"initialize\"", model, 0);
     wire_observation("\"subtype\":\"get_settings\"", model, 0);
