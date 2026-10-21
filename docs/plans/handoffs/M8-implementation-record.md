@@ -8027,6 +8027,13 @@ retains that byte while continuing to refuse absent readiness. It preserves
 the supervisor's refusal status rather than claiming a native program ran.
 The new physical refusal and complete-wave results remain required gates.
 
+A follow-up async-resume audit reproduced a second framing case with a real
+pipe: cancellation can precede arrival of a valid readiness byte and exit
+report. Joined cleanup must recognize that late frame without authorizing a
+conversation. It accepts at most the one as-yet-unconsumed readiness byte;
+duplicate readiness, surplus bytes and invalid exit codes remain damage.
+This is a reporting correction, not permission to dispatch after expiry.
+
 A bounded C wire fixture now exercises the same READ transaction through its
 startup observations, SDK/MCP handshake, correlated turn, postchecks and EOF.
 Its read result echoes the actual worker response, checked against the fixed

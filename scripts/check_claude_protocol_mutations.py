@@ -543,6 +543,19 @@ NATIVE = "constructicon.substrate.executors.claude_native:"
 NATIVE_TEST = "tests/substrate/test_claude_native_recipe.py::"
 LINUX = "constructicon.substrate.executors.linux:LinuxLauncher."
 NATIVE_RECIPE_MUTANTS = (
+    ("Claude joined cleanup accepts one nonauthorizing late readiness frame", LINUX + "_run",
+     "raw_report = raw_report[1:]", "raw_report = raw_report",
+     NATIVE_TEST + "test_late_private_readiness_is_transport_only_and_damage_stays_damage"
+     "[valid-deadline]"),
+    ("Claude already consumed readiness cannot normalize a second frame", LINUX + "_run",
+     'and not native_ready_consumed and raw_report.startswith(b"\\x01")',
+     'and raw_report.startswith(b"\\x01")',
+     NATIVE_TEST + "test_consumed_readiness_cannot_hide_a_duplicate_frame_during_cleanup"),
+    ("Claude late readiness framing reads enough bytes to expose surplus", LINUX + "_run",
+     "6 if isinstance(native_store, ClaudeNativeStoreMount)",
+     "5 if isinstance(native_store, ClaudeNativeStoreMount)",
+     NATIVE_TEST + "test_late_private_readiness_is_transport_only_and_damage_stays_damage"
+     "[surplus-deadline]"),
     ("Claude refusal preserves the consumed exit record prefix", LINUX + "_run",
      "raw_report = ready", 'raw_report = b""',
      NATIVE_TEST + "test_exit_record_before_readiness_is_preserved_and_damage_still_refuses[125]"),

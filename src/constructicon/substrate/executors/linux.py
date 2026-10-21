@@ -819,6 +819,7 @@ class LinuxLauncher:
         stderr_head = bytearray()
         stderr_tail = bytearray()
         raw_report = b""
+        native_ready_consumed = False
         bound: str | None = None
         timed_out = False
         tasks: list[asyncio.Task[None]] = []
@@ -1004,6 +1005,7 @@ class LinuxLauncher:
                                     # prefix for the complete cleanup parser.
                                     raw_report = ready
                                     raise ContractViolation("native transition was not affirmed")
+                                native_ready_consumed = True
                                 break
                             if process.returncode is not None or stop_reason is not None:
                                 raise ContractViolation("native transition ended before readiness")
@@ -1060,7 +1062,11 @@ class LinuxLauncher:
                         cleanup_errors.append(exc)
                     observe_protocol()
                 with suppress(BlockingIOError):
-                    raw_report += os.read(report_read, 5 - len(raw_report))
+                    report_bound = (
+                        6 if isinstance(native_store, ClaudeNativeStoreMount)
+                        and not native_ready_consumed else 5
+                    )
+                    raw_report += os.read(report_read, report_bound - len(raw_report))
             except BaseException as exc:
                 cleanup_errors.append(exc)
             finally:
@@ -1068,6 +1074,11 @@ class LinuxLauncher:
                 close_fd(report_write)
         payload_returncode = None
         try:
+            if (isinstance(native_store, ClaudeNativeStoreMount)
+                    and not native_ready_consumed and raw_report.startswith(b"\x01")):
+                # A valid readiness frame may arrive during joined shutdown.
+                # It records transport progress only; admission has ended.
+                raw_report = raw_report[1:]
             if len(raw_report) == 4:
                 payload_returncode = struct.unpack("!i", raw_report)[0]
                 if not 0 <= payload_returncode <= 255:

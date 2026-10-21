@@ -375,23 +375,29 @@ async def test_conversation_waits_for_private_transition_and_joins_all_paths(
     arguments = dict(workspace=None, posture=Posture.READ, guard_fds=(731,), deadline=deadline,
                      conversation=conversation, native_store=store,
                      layout=native.ClaudeNativeLayout(733, 734))
+    try:
+        outcome = await subject._run(subject.claude.command, **arguments)
+    except BaseException as failure:
+        outcome = failure
+    # Assert the actual completion class, including malformed cleanup failures.
+    # An unexpected exception is a failed contract assertion, not a harness error
+    # that hides the accepting/refusing controls in other parameter cases.
     if ready == "cancel":
-        with pytest.raises(asyncio.CancelledError):
-            await subject._run(subject.claude.command, **arguments)
+        assert isinstance(outcome, asyncio.CancelledError)
     elif ready in [b"\x00", b"", "exited", "ready-exit", "bound"]:
-        with pytest.raises(linux.ProcessExchangeError):
-            await subject._run(subject.claude.command, **arguments)
+        assert isinstance(outcome, linux.ProcessExchangeError)
     else:
-        result = await subject._run(subject.claude.command, **arguments)
-        assert result.payload_returncode == 0
-        assert result.timed_out == (ready == "deadline")
+        assert isinstance(outcome, linux.ProcessResult)
+        assert outcome.payload_returncode == 0
+        assert outcome.timed_out == (ready == "deadline")
     assert "joined" in events and "stdin-closed" in events
     assert ("conversation" in events) == (ready == b"\x01")
     assert ("stdin" in events) == (ready == b"\x01")
     if ready == b"\x01":
         assert "ready" in events
         assert events.index("ready") < events.index("conversation") < events.index("stdin")
-    assert read_sizes[0] == 1 and read_sizes[-1] == (4 if ready == b"\x00" else 5)
+    last_read = 5 if ready in [b"\x00", b"\x01", "ready-exit"] else 6
+    assert read_sizes[0] == 1 and read_sizes[-1] == last_read
 
 
 @pytest.mark.parametrize("reported", [0, 125, 126, "truncated", "surplus", "invalid-code"])
@@ -466,3 +472,177 @@ async def test_exit_record_before_readiness_is_preserved_and_damage_still_refuse
         expected = "invalid" if reported == "invalid-code" else "malformed"
         assert str(failures[1]) == f"{expected} private payload exit report"
     assert events == ["stdin-closed", "joined"]
+
+
+@pytest.mark.parametrize("stop", ["cancel", "deadline", "bound"])
+@pytest.mark.parametrize("frame", ["valid", "duplicate", "surplus", "truncated", "ready-only"])
+async def test_late_private_readiness_is_transport_only_and_damage_stays_damage(
+    tmp_path, on_linux, monkeypatch, stop, frame,
+):
+    """Actual late bytes arrive in the pipe only when joined shutdown starts."""
+    native = recipe_module()
+    subject = launcher(tmp_path)
+    events = []
+    private_fd = None
+    actual_read = os.read
+    loop = asyncio.get_running_loop()
+    actual_time = loop.time
+    clock_offset = 0.0
+    if stop == "deadline":
+        monkeypatch.setattr(loop, "time", lambda: actual_time() + clock_offset)
+    report = b"\x01" + struct.pack("!i", 125)
+    if frame == "duplicate":
+        report = b"\x01" + report
+    elif frame == "surplus":
+        report += b"x"
+    elif frame == "truncated":
+        report = report[:-1]
+    elif frame == "ready-only":
+        report = report[:1]
+
+    class Writer:
+        def close(self):
+            events.append("stdin-closed")
+
+    process = SimpleNamespace(stdin=Writer(), stdout=asyncio.StreamReader(),
+                              stderr=asyncio.StreamReader(), returncode=None)
+    if stop != "bound":
+        process.stdout.feed_eof()
+    process.stderr.feed_eof()
+
+    async def wait():
+        events.append("joined")
+        assert os.write(private_fd, report) == len(report)
+        process.returncode = 125
+        return 125
+
+    process.wait = wait
+
+    async def spawn(*args, **kwargs):
+        nonlocal private_fd
+        private_fd = int(next(arg.split("=", 1)[1] for arg in args
+                              if arg.startswith("--report-fd=")))
+        return process
+
+    def read(fd, maximum):
+        nonlocal clock_offset
+        if maximum == 1:
+            if not events:
+                events.append("readiness-pending")
+                if stop == "cancel":
+                    asyncio.current_task().cancel()
+                elif stop == "deadline":
+                    # Expire only after entering the intended readiness await.
+                    clock_offset = 61.0
+                elif stop == "bound":
+                    process.stdout.feed_data(b"xx")
+                    process.stdout.feed_eof()
+            raise BlockingIOError
+        return actual_read(fd, maximum)
+
+    async def conversation(_io):
+        events.append("conversation")
+
+    monkeypatch.setattr(linux.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(linux.os, "set_blocking", lambda *args: None, raising=False)
+    monkeypatch.setattr(linux.os, "read", read)
+    if stop == "bound":
+        subject = replace(subject, limits=replace(subject.limits, stdout_bytes=1))
+    store = native.ClaudeNativeStoreMount(731, 732, lambda: BindingCheck(
+        binding_digest=digest("test-binding", 1, "fake")), egress(tmp_path, []))
+    failure, result = None, None
+    try:
+        result = await subject._run(
+            subject.claude.command, workspace=None, posture=Posture.READ,
+            guard_fds=(731,), deadline=loop.time() + (60 if stop == "deadline" else 2),
+            conversation=conversation, native_store=store,
+            layout=native.ClaudeNativeLayout(733, 734),
+        )
+    except BaseException as exc:
+        failure = exc
+    finally:
+        clock_offset = 0.0
+    assert events[0] == "readiness-pending" and events.count("joined") == 1
+    assert set(events) == {"readiness-pending", "stdin-closed", "joined"}
+    assert events.index("stdin-closed") < events.index("joined")
+    if frame in {"valid", "ready-only"}:
+        expected_exit = 125 if frame == "valid" else None
+        if stop == "cancel":
+            assert isinstance(failure, asyncio.CancelledError), failure
+        elif stop == "deadline":
+            assert failure is None, failure
+            assert result.timed_out and result.payload_returncode == expected_exit
+        else:
+            assert isinstance(failure, linux.ProcessExchangeError), failure
+            assert failure.result.bound_exceeded == "stdout"
+            assert failure.result.payload_returncode == expected_exit
+    else:
+        if stop == "deadline":
+            assert isinstance(failure, ContractViolation), failure
+            failures = (failure,)
+        else:
+            assert isinstance(failure, BaseExceptionGroup), failure
+            failures = failure.exceptions
+            assert len(failures) == 2
+        assert any(isinstance(item, ContractViolation)
+                   and str(item) == "malformed private payload exit report" for item in failures)
+
+
+async def test_consumed_readiness_cannot_hide_a_duplicate_frame_during_cleanup(
+    tmp_path, on_linux, monkeypatch,
+):
+    native = recipe_module()
+    subject = launcher(tmp_path)
+    events = []
+    private_fd = None
+
+    class Writer:
+        def close(self):
+            events.append("stdin-closed")
+
+    process = SimpleNamespace(stdin=Writer(), stdout=asyncio.StreamReader(),
+                              stderr=asyncio.StreamReader(), returncode=None)
+    process.stdout.feed_eof()
+    process.stderr.feed_eof()
+
+    async def wait():
+        events.append("joined")
+        assert os.write(private_fd, b"\x01" + struct.pack("!i", 125)) == 5
+        process.returncode = 125
+        return 125
+
+    process.wait = wait
+
+    async def spawn(*args, **kwargs):
+        nonlocal private_fd
+        private_fd = int(next(arg.split("=", 1)[1] for arg in args
+                              if arg.startswith("--report-fd=")))
+        assert os.write(private_fd, b"\x01") == 1
+        return process
+
+    async def conversation(_io):
+        events.append("conversation")
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(linux.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(linux.os, "set_blocking", lambda *args: None, raising=False)
+    store = native.ClaudeNativeStoreMount(731, 732, lambda: BindingCheck(
+        binding_digest=digest("test-binding", 1, "fake")), egress(tmp_path, []))
+    failure = None
+    try:
+        await subject._run(
+            subject.claude.command, workspace=None, posture=Posture.READ,
+            guard_fds=(731,), deadline=asyncio.get_running_loop().time() + 2,
+            conversation=conversation, native_store=store,
+            layout=native.ClaudeNativeLayout(733, 734),
+        )
+    except BaseException as exc:
+        failure = exc
+    assert isinstance(failure, BaseExceptionGroup), failure
+    assert len(failure.exceptions) == 2
+    assert isinstance(failure.exceptions[0], asyncio.CancelledError)
+    assert isinstance(failure.exceptions[1], ContractViolation)
+    assert str(failure.exceptions[1]) == "malformed private payload exit report"
+    assert events[0] == "conversation" and events.count("joined") == 1
+    assert set(events) == {"conversation", "stdin-closed", "joined"}
+    assert events.index("stdin-closed") < events.index("joined")
