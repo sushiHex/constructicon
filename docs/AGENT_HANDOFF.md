@@ -15,6 +15,26 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## Claude native composition is physically proved with a nonvendor peer
+
+PR #277 merged as `f4cb9c9`, tree-identical to reviewed `b4339fd`.
+The finite native recipe and separate READ worker now compose through the
+actual Linux boundary. Callback and zero-callback cases, missing-profile
+refusal, retained binding and joined cleanup ran physically. Exact-head CI
+passed 8,009 tests with 471 skips, five import contracts, all four Linux lanes
+and 202 assertion-killed Claude mutants. Final connector review had no findings.
+
+Review corrected two accepting-path gaps: the pre-launch binding must equal
+the initial observation, and every joined exchange outcome must attempt the
+terminal check without masking a primary cancellation or fatal error. The
+shared launcher double previously omitted the pre-launch callback; it now
+exercises that boundary. Protected descriptor closure is proved by trusted
+self-inspection, not by weakening peer-inspection denial.
+
+This establishes fake-backed physical composition, not pinned-vendor behavior,
+subscription qualification, login or a live model result. No new vendor binary,
+credential or private-host run was performed for this slice.
+
 ## Claude native composition has an explicit proof boundary
 
 PR #276 merged as `302e20b`, tree-identical to reviewed `9f50cbb`. Its source-
