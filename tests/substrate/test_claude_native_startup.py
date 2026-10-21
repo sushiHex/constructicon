@@ -121,6 +121,208 @@ async def observe(launcher, *, values=None, timeout=1):
     return report, checked
 
 
+def ui_record(**changes):
+    value = {"type": "system", "subtype": "ui_invalidate", "event": "ui.render",
+             "uuid": "private arbitrary non-UUID", "session_id": ""}
+    value.update(changes)
+    return json.dumps(value, separators=(",", ":")).encode() + b"\n"
+
+
+@pytest.mark.parametrize("fragment", [1, 8192])
+@pytest.mark.parametrize("prefix,tail", [(0, 0), (8, 0), (0, 8), (4, 4)])
+@pytest.mark.parametrize("coalesced", [False, True])
+async def test_only_exact_ui_records_share_one_budget_across_response_and_eof(
+    fragment, prefix, tail, coalesced,
+):
+    ui = ui_record(instances=[{"surface": "private", "component": "", "instance_id": "任意"}])
+    channel = Channel(lambda raw: ui * prefix + raw + (ui * tail if coalesced else b""),
+                      fragment=fragment)
+    original_close = channel.close_stdin
+
+    async def close():
+        await original_close()
+        if not coalesced:
+            channel.output.extend(ui * tail)
+
+    channel.close_stdin = close
+    report, checked = await observe(Launcher(channel))
+    assert diagnostic.successful(report), report
+    assert report["accepted_ui_records"] == prefix + tail
+    assert channel.close_attempts == 1 and len(channel.writes) == 1
+    assert checked == [False, False, True] and report["eof"] is True
+    assert "private" not in json.dumps(report) and "任意" not in json.dumps(report)
+    assert_report(report)
+
+
+@pytest.mark.parametrize("fragment", [1, 8192])
+@pytest.mark.parametrize("case", ["ui-only", "ninth-prefix", "ninth-tail", "ninth-split",
+                                    "partial-ui", "duplicate", "callback", "other-system"])
+async def test_ui_framing_never_substitutes_for_response_or_resets_budget(case, fragment):
+    ui = ui_record()
+
+    def transform(raw):
+        return {"ui-only": ui * 8, "ninth-prefix": ui * 9 + raw,
+                "ninth-tail": raw + ui * 9, "ninth-split": ui * 4 + raw + ui * 5,
+                "partial-ui": raw + ui[:-1], "duplicate": raw + raw,
+                "callback": ui + b'{"type":"control_request"}\n' + raw,
+                "other-system": ui + b'{"type":"system","subtype":"ui_status"}\n' + raw}[case]
+
+    launcher = Launcher(Channel(transform, fragment=fragment))
+    report, _ = await observe(launcher)
+    assert not diagnostic.successful(report), report
+    assert report["protocol"] == ("incomplete" if case == "ui-only" else "invalid")
+    assert report["accepted_ui_records"] == (8 if case.startswith("ninth") or case == "ui-only"
+                                              else 1 if case in {"callback", "other-system"}
+                                              else 0)
+    assert report["protocol_reason"] == (
+        "eof-before-frame" if case == "ui-only" else "ui-bound" if case.startswith("ninth")
+        else "unexpected-control-request" if case == "callback"
+        else "system-ui_status" if case == "other-system" else "extra-output"
+    )
+    assert launcher.channel.close_attempts == 1 and launcher.joined
+    assert_report(report)
+
+
+@pytest.mark.parametrize("case", ["missing-event", "extra", "event", "uuid", "session",
+                                    "instances-type", "entry-type", "entry-extra", "entry-missing",
+                                    "surface", "component", "instance-id"])
+async def test_ui_schema_is_exact_and_refused_stream_is_never_reparsed(case, monkeypatch):
+    value = json.loads(ui_record(instances=[{"surface": "private", "component": "private",
+                                            "instance_id": "private"}]))
+    if case == "missing-event":
+        del value["event"]
+    elif case == "extra":
+        value["private"] = []
+    elif case in {"event", "uuid", "session"}:
+        value[{"session": "session_id"}.get(case, case)] = (
+            "private.event" if case == "event" else ["private"])
+    elif case == "instances-type":
+        value["instances"] = {}
+    elif case == "entry-type":
+        value["instances"] = [7]
+    elif case == "entry-extra":
+        value["instances"][0]["private"] = "private"
+    elif case == "entry-missing":
+        del value["instances"][0]["surface"]
+    else:
+        value["instances"][0][{"instance-id": "instance_id"}.get(case, case)] = 7
+    first = json.dumps(value, separators=(",", ":")).encode() + b"\n"
+    seen = []
+    original = diagnostic.classify
+
+    def classify(record, identifier):
+        seen.append(record)
+        return original(record, identifier)
+
+    monkeypatch.setattr(diagnostic, "classify", classify)
+    report, _ = await observe(Launcher(Channel(lambda raw: first + ui_record() + raw)))
+    assert report["protocol"] == "invalid" and report["protocol_reason"] == "ui-shape"
+    assert report["accepted_ui_records"] == 0 and seen == [first]
+    assert not diagnostic.successful(report) and report["eof"] is True
+    assert "private" not in json.dumps(report)
+    assert_report(report)
+
+
+@pytest.mark.parametrize("stage", ["write", "read", "close", "tail", "eof"])
+@pytest.mark.parametrize("coalesced", [False, True])
+async def test_reentry_poison_survives_every_resume_and_buffered_frame(stage, coalesced):
+    channel = Channel(lambda raw: ui_record() + raw + (ui_record() if coalesced else b""))
+    probe = diagnostic._Probe(deadline=asyncio.get_running_loop().time() + 2,
+                              input_limit=8192, output_limit=RECORD_BYTES)
+    fired, recursive_failure = [], []
+    original_close = channel.close_stdin
+
+    async def close():
+        await original_close()
+        channel.output.extend(ui_record())
+
+    channel.close_stdin = close
+
+    async def seam(current):
+        actual = "eof" if current == "tail" and not channel.output else current
+        if actual == stage and not fired:
+            fired.append(True)
+            try:
+                await probe(channel)
+            except BaseException as error:
+                recursive_failure.append(error)
+
+    channel.seam = seam
+    failure = None
+    try:
+        await probe(channel)
+    except BaseException as error:
+        failure = error
+    assert fired and len(recursive_failure) == 1
+    assert isinstance(recursive_failure[0], diagnostic._Refused)
+    assert isinstance(failure, diagnostic._Refused)
+    assert probe.protocol == "invalid" and probe.reason == "single-use"
+    assert not probe.eof and len(channel.writes) == 1
+    assert channel.close_attempts == int(stage in {"close", "tail", "eof"})
+
+
+async def test_first_protocol_refusal_survives_opaque_drain_bound():
+    channel = Channel(lambda raw: raw.replace(b"2.1.296", b"2.1.295") + b"x" * 100,
+                      fragment=1)
+    launcher = Launcher(channel)
+    launcher.limits = replace(launcher.limits, stdout_bytes=len(response("0" * 32)) + 10)
+    report, _ = await observe(launcher)
+    assert report["protocol_reason"] == "version-mismatch"
+    assert report["protocol"] == "invalid" and report["lifecycle"] == "failed"
+    assert not diagnostic.successful(report) and launcher.joined
+    assert_report(report)
+
+
+@pytest.mark.parametrize("stage", ["write", "read", "close", "tail", "eof"])
+async def test_ui_framing_cancellation_joins_without_another_protocol_operation(stage):
+    channel = Channel(lambda raw: ui_record() + raw + ui_record())
+    entered, operations = asyncio.Event(), []
+    original_close = channel.close_stdin
+
+    async def close():
+        await original_close()
+        channel.output.extend(ui_record())
+
+    async def seam(current):
+        actual = "eof" if current == "tail" and not channel.output else current
+        operations.append(actual)
+        if actual == stage:
+            entered.set()
+            await asyncio.Future()
+
+    channel.close_stdin, channel.seam = close, seam
+    launcher = Launcher(channel)
+    task = asyncio.create_task(observe(launcher))
+    await asyncio.wait_for(entered.wait(), 1)
+    suspended = list(operations)
+    task.cancel()
+    failure = None
+    try:
+        await task
+    except BaseException as error:
+        failure = error
+    assert isinstance(failure, asyncio.CancelledError)
+    assert launcher.joined and operations == suspended
+    assert len(channel.writes) == 1
+    assert channel.close_attempts == int(stage in {"close", "tail", "eof"})
+
+
+@pytest.mark.parametrize("tail", [False, True])
+async def test_ui_record_and_cumulative_bounds_bind_without_publishing_private_fields(tail):
+    ui = ui_record(uuid="private" + "x" * RECORD_BYTES)
+    report, _ = await observe(Launcher(Channel(lambda raw: (raw + ui) if tail else (ui + raw))))
+    assert report["protocol"] == "invalid" and report["protocol_reason"] == "record-bound"
+    assert report["accepted_ui_records"] == 0 and not diagnostic.successful(report)
+    assert "private" not in json.dumps(report)
+    assert_report(report)
+    # Each record fits; the combined stream exceeds the existing cumulative cap.
+    ui = ui_record(uuid="private" + "x" * (RECORD_BYTES // 2))
+    report, _ = await observe(Launcher(Channel(lambda raw: ui * 8 + raw)))
+    assert report["protocol"] == "invalid" and report["protocol_reason"] == "output-bound"
+    assert not diagnostic.successful(report) and 0 < report["accepted_ui_records"] < 8
+    assert_report(report)
+
+
 @pytest.mark.parametrize("fragment", [1, 7, 8192])
 @pytest.mark.parametrize("damage,reason", [("none", "none"), ("version", "version-mismatch"),
                                            ("extra", "extra-output"),
@@ -194,7 +396,10 @@ async def test_all_source_literal_system_subtypes_remain_closed_refusals(subtype
     launcher = Launcher(Channel(lambda raw: first + raw, fragment=fragment))
     report, _ = await observe(launcher)
     assert report["protocol"] == "invalid"
-    assert report["protocol_reason"] == LEGACY_SYSTEM_REASONS.get(subtype, "system-" + subtype)
+    assert report["protocol_reason"] == (
+        "ui-shape" if subtype == "ui_invalidate"
+        else LEGACY_SYSTEM_REASONS.get(subtype, "system-" + subtype)
+    )
     assert diagnostic.SYSTEM_SUBTYPES == SOURCE_SYSTEM_SUBTYPES
     assert type(diagnostic.SYSTEM_SUBTYPES) is frozenset
     assert not diagnostic.successful(report)  # The following valid reply cannot authorize.
@@ -286,7 +491,7 @@ REASONS = frozenset({
     "unexpected-other", "envelope-shape", "response-not-success", "request-mismatch",
     "pending-permissions", "pending-dialogs", "body-shape", "version-mismatch", "state-not-idle",
     "account-shape", "account-fields", "other-mode", "read-contract", "output-bound", "single-use",
-    "input-bound", "eof-before-frame", "extra-output",
+    "input-bound", "eof-before-frame", "extra-output", "ui-shape", "ui-bound",
 }) | frozenset(LEGACY_SYSTEM_REASONS.get(value, "system-" + value)
               for value in SOURCE_SYSTEM_SUBTYPES)
 REASON_BYTES = 32
@@ -307,6 +512,7 @@ def assert_report(report, *, variant="base"):
         "stdin_closed": lambda value: type(value) is bool,
         "eof": lambda value: type(value) is bool,
         "binding_checks": lambda value: type(value) is int and 0 <= value <= 3,
+        "accepted_ui_records": lambda value: type(value) is int and 0 <= value <= 8,
         "supervisor_returncode": lambda value: value is None or (
             type(value) is int and -255 <= value <= 255),
         "payload_returncode": lambda value: value is None or (
@@ -390,7 +596,7 @@ async def test_non_noauth_damage_never_counts_as_observation_but_closes_stdin(da
     report, checked = await observe(launcher, timeout=10 if damage == "oversized" else 1)
     assert not diagnostic.successful(report), report
     assert report["protocol"] != "correlated-noauth", report
-    expected = ("incomplete" if damage in {"missing-lf", "empty"} else "other-mode"
+    expected = ("incomplete" if damage == "empty" else "other-mode"
                 if damage in {"subscription", "missing-none", "extra-account"} else "invalid")
     assert report["protocol"] == expected, report
     reasons = {"subscription": "other-mode", "wrong-id": "request-mismatch",
@@ -398,7 +604,7 @@ async def test_non_noauth_damage_never_counts_as_observation_but_closes_stdin(da
                "running": "state-not-idle", "missing-none": "other-mode",
                "extra-account": "other-mode", "malformed": "json",
                "duplicate": "extra-output", "partial-extra": "extra-output",
-               "missing-lf": "eof-before-frame", "empty": "eof-before-frame",
+               "missing-lf": "framing", "empty": "eof-before-frame",
                "oversized": "record-bound"}
     assert report["protocol_reason"] == reasons[damage]
     assert launcher.channel.close_attempts == 1 and checked == [False, False, True]
@@ -851,7 +1057,8 @@ async def test_deny_peer_cleanup_failure_never_masks_primary_control_flow(monkey
     assert failure is primary and not peer.joined and listener.fileno() == -1
 
 
-@pytest.mark.parametrize("model", ["fixture-startup", "fixture-startup-subscribed"])
+@pytest.mark.parametrize("model", ["fixture-startup", "fixture-startup-subscribed",
+                                  "fixture-startup-ui", "fixture-startup-ui-overflow"])
 async def test_compiled_fake_uses_the_same_diagnostic_callback_and_requires_eof(wire_peer, model):
     launcher = Launcher()
     launcher.claude = replace(launcher.claude, model=model)
@@ -891,7 +1098,10 @@ async def test_compiled_fake_uses_the_same_diagnostic_callback_and_requires_eof(
 
     launcher.exchange = exchange
     report, checked = await observe(launcher, timeout=5)
-    assert diagnostic.successful(report) is (model == "fixture-startup"), report
+    assert diagnostic.successful(report) is (model in {"fixture-startup", "fixture-startup-ui"})
+    assert report["accepted_ui_records"] == (8 if "-ui" in model else 0)
+    if model == "fixture-startup-ui-overflow":
+        assert report["protocol"] == "invalid" and report["protocol_reason"] == "ui-bound"
     assert report["lifecycle"] == "clean" and report["eof"] is True
     assert checked == [False, False, True]
     assert_report(report)
@@ -914,7 +1124,8 @@ def physical_launcher(model):
     )
 
 
-@pytest.mark.parametrize("model", ["fixture-startup", "fixture-startup-subscribed"])
+@pytest.mark.parametrize("model", ["fixture-startup", "fixture-startup-subscribed",
+                                  "fixture-startup-ui", "fixture-startup-ui-overflow"])
 async def test_physical_fake_startup_control_precedes_pinned_observation(model):
     launcher = physical_launcher(model)
     deadline = asyncio.get_running_loop().time() + 20
@@ -922,9 +1133,14 @@ async def test_physical_fake_startup_control_precedes_pinned_observation(model):
         report = await diagnostic.observe_startup(
             launcher, mount, timeout_s=deadline - asyncio.get_running_loop().time(),
         )
-    assert diagnostic.successful(report) is (model == "fixture-startup"), report
-    assert report["protocol"] == ("correlated-noauth" if model == "fixture-startup"
-                                  else "other-mode")
+    assert diagnostic.successful(report) is (model in {"fixture-startup", "fixture-startup-ui"})
+    assert report["protocol"] == (
+        "invalid" if model == "fixture-startup-ui-overflow"
+        else "other-mode" if model == "fixture-startup-subscribed" else "correlated-noauth"
+    )
+    assert report["accepted_ui_records"] == (8 if "-ui" in model else 0)
+    if model == "fixture-startup-ui-overflow":
+        assert report["protocol_reason"] == "ui-bound"
     assert report["lifecycle"] == "clean" and report["eof"] is report["stdin_closed"] is True
     assert peer.joined and peer.attempts == 0 and not peer.bound_exceeded
     assert_report(report)

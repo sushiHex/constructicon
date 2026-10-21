@@ -102,6 +102,23 @@ def classify(record: bytes, identifier: str) -> tuple[str, str]:
                 return "invalid", "system-subtype-nonstr"
             if subtype not in SYSTEM_SUBTYPES:
                 return "invalid", "system-subtype-unlisted"
+            if subtype == "ui_invalidate":
+                required = {"type", "subtype", "event", "uuid", "session_id"}
+                if (set(value) not in (required, required | {"instances"})
+                        or value.get("event") != "ui.render"
+                        or type(value.get("uuid")) is not str
+                        or type(value.get("session_id")) is not str):
+                    return "invalid", "ui-shape"
+                if "instances" in value:
+                    instances = value["instances"]
+                    if type(instances) is not list or any(
+                        type(item) is not dict
+                        or set(item) != {"surface", "component", "instance_id"}
+                        or any(type(field) is not str for field in item.values())
+                        for item in instances
+                    ):
+                        return "invalid", "ui-shape"
+                return "ui-invalidate", "none"  # Private framing kind, never a public verdict.
             subtypes = {
                 "init": "unexpected-system-init", "notification": "unexpected-system-notification",
                 "status": "unexpected-system-status",
@@ -169,6 +186,8 @@ class _Probe:
         self.close_attempted = self.closed = self.eof = False
         self.output_bytes = 0
         self.used = False
+        self.poisoned = False
+        self.accepted_ui_records = 0
 
     def reject(self, reason: str) -> None:
         """Retain one static first refusal from reads within their output bound."""
@@ -177,6 +196,8 @@ class _Probe:
         self.protocol = "invalid"
 
     def check(self) -> None:
+        if self.poisoned:
+            raise _Refused()
         current = asyncio.current_task()
         if current is not None and current.cancelling():
             raise asyncio.CancelledError()
@@ -210,6 +231,7 @@ class _Probe:
     async def __call__(self, io: ProcessIO) -> None:
         if self.used:
             self.reject("single-use")
+            self.poisoned = True
             raise _Refused()
         self.used = True
         self.check()
@@ -222,27 +244,49 @@ class _Probe:
         await io.write(request)
         self.check()
         buffered = bytearray()
-        while True:
-            chunk = await self.read(io, min(8192, RECORD_BYTES - len(buffered)))
-            if not chunk:
-                self.reason = "eof-before-frame"
-                break
-            buffered.extend(chunk)
+        response_seen = False
+        refused = False
+        while not self.eof:
+            self.check()
+            if refused:
+                buffered.clear()
+                await self.read(io)
+                continue
             newline = buffered.find(b"\n")
             if newline >= 0:
-                self.protocol, self.reason = classify(bytes(buffered[:newline + 1]), identifier)
-                if newline + 1 != len(buffered):
+                kind, reason = classify(bytes(buffered[:newline + 1]), identifier)
+                del buffered[:newline + 1]
+                if kind == "ui-invalidate":
+                    if self.accepted_ui_records >= 8:
+                        self.reject("ui-bound")
+                        refused = True
+                    else:
+                        self.accepted_ui_records += 1
+                elif response_seen:
                     self.reject("extra-output")
-                break
+                    refused = True
+                else:
+                    self.protocol, self.reason = kind, reason
+                    response_seen = kind == "correlated-noauth"
+                    refused = not response_seen
+                if response_seen or refused:
+                    await self.close(io)
+                continue
             if len(buffered) == RECORD_BYTES:
                 self.reject("record-bound")
-                break
-        # Protocol I/O failure/cancellation is joined by LinuxLauncher. Never
-        # await a second protocol operation after its deadline/cancellation fired.
+                refused = True
+                await self.close(io)
+                continue
+            chunk = await self.read(io, min(8192, RECORD_BYTES - len(buffered)))
+            if chunk:
+                buffered.extend(chunk)
+            elif buffered:
+                self.reject("extra-output" if response_seen else "framing")
+            elif not response_seen:
+                self.reason = "eof-before-frame"
+        # I/O failure/cancellation never starts another protocol operation;
+        # LinuxLauncher alone owns termination and joins on those paths.
         await self.close(io)
-        while not self.eof:
-            if await self.read(io):
-                self.reject("extra-output")
 
 
 async def observe_startup(
@@ -306,6 +350,7 @@ async def observe_startup(
         "protocol_reason": probe.reason,
         "lifecycle": lifecycle, "request_writes": probe.writes,
         "stdin_closed": probe.closed, "eof": probe.eof, "binding_checks": checks,
+        "accepted_ui_records": probe.accepted_ui_records,
         "supervisor_returncode": (
             observed.returncode if observed is not None and type(observed.returncode) is int
             and -255 <= observed.returncode <= 255 else None

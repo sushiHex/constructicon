@@ -789,18 +789,17 @@ MUTANTS += (
      'if len(request) > self.input_limit:', 'if False:',
      STARTUP_OBSERVE_TEST + "test_input_bound_binds_before_the_only_write"),
     ("startup probe requires complete frame before noauth", STARTUP_OBSERVE + "_Probe.__call__",
-     'if not chunk:\n            self.reason = "eof-before-frame"\n            break',
-     'if not chunk:\n            self.reason = "eof-before-frame"\n'
-     '            self.protocol = "correlated-noauth"\n            break',
+     'elif not response_seen:\n            self.reason = "eof-before-frame"',
+     'elif not response_seen:\n            self.reason = "eof-before-frame"\n'
+     '            self.protocol = "correlated-noauth"',
      STARTUP_OBSERVE_TEST + "test_non_noauth_damage_never_counts_as_observation_but_closes_stdin"
      "[empty-8192]"),
     ("startup probe rejects coalesced extra bytes", STARTUP_OBSERVE + "_Probe.__call__",
-     'if newline + 1 != len(buffered):', 'if False:',
+     'elif response_seen:', 'elif False:',
      STARTUP_OBSERVE_TEST + "test_non_noauth_damage_never_counts_as_observation_but_closes_stdin"
      "[duplicate-8192]"),
     ("startup probe rejects later tail bytes", STARTUP_OBSERVE + "_Probe.__call__",
-     'if await self.read(io):\n            self.reject("extra-output")',
-     'if await self.read(io):\n            pass',
+     'elif buffered:', 'elif False:',
      STARTUP_OBSERVE_TEST + "test_non_noauth_damage_never_counts_as_observation_but_closes_stdin"
      "[partial-extra-1]"),
     ("startup probe is single use", STARTUP_OBSERVE + "_Probe.__call__",
@@ -930,18 +929,17 @@ MUTANTS += (
 MUTANTS += (
     ("startup protocol reason retains its first refusal", STARTUP_OBSERVE + "_Probe.reject",
      'if self.reason in {"incomplete", "none"}:', 'if True:',
-     STARTUP_OBSERVE_TEST + "test_protocol_reason_is_fragmentation_stable_within_output_budget"
-     "[version-extra-version-mismatch-8192]"),
+     STARTUP_OBSERVE_TEST + "test_first_protocol_refusal_survives_opaque_drain_bound"),
     ("startup coalesced surplus has a static output reason", STARTUP_OBSERVE + "_Probe.__call__",
-     'if newline + 1 != len(buffered):\n                self.reject("extra-output")',
-     'if newline + 1 != len(buffered):\n                self.reject("read-contract")',
-     STARTUP_OBSERVE_TEST + "test_protocol_reason_is_fragmentation_stable_within_output_budget"
-     "[extra-extra-output-8192]"),
+     'elif response_seen:\n                self.reject("extra-output")',
+     'elif response_seen:\n                self.reject("read-contract")',
+     STARTUP_OBSERVE_TEST + "test_non_noauth_damage_never_counts_as_observation_but_closes_stdin"
+     "[duplicate-8192]"),
     ("startup later surplus has the same output reason", STARTUP_OBSERVE + "_Probe.__call__",
-     'if await self.read(io):\n            self.reject("extra-output")',
-     'if await self.read(io):\n            self.reject("read-contract")',
-     STARTUP_OBSERVE_TEST + "test_protocol_reason_is_fragmentation_stable_within_output_budget"
-     "[extra-extra-output-1]"),
+     'self.reject("extra-output" if response_seen else "framing")',
+     'self.reject("read-contract" if response_seen else "framing")',
+     STARTUP_OBSERVE_TEST + "test_non_noauth_damage_never_counts_as_observation_but_closes_stdin"
+     "[partial-extra-1]"),
     ("startup unexpected type cannot be an unhashable lookup", STARTUP_OBSERVE + "classify",
      'type(kind) is str', 'True',
      STARTUP_OBSERVE_TEST
@@ -984,6 +982,63 @@ MUTANTS += (
      'return "invalid", "system-subtype-nonstr"',
      STARTUP_OBSERVE_TEST
      + "test_system_discriminators_are_finite_refusals_not_skipped_frames[missing-subtype-8192]"),
+)
+
+MUTANTS += (
+    ("startup UI records have no extension fields", STARTUP_OBSERVE + "classify",
+     'set(value) not in (required, required | {"instances"})', 'False',
+     STARTUP_OBSERVE_TEST + "test_ui_schema_is_exact_and_refused_stream_is_never_reparsed[extra]"),
+    ("startup UI event is the fixed render tag", STARTUP_OBSERVE + "classify",
+     'value.get("event") != "ui.render"', 'False',
+     STARTUP_OBSERVE_TEST + "test_ui_schema_is_exact_and_refused_stream_is_never_reparsed[event]"),
+    ("startup UI uuid is an opaque string", STARTUP_OBSERVE + "classify",
+     'type(value.get("uuid")) is not str', 'False',
+     STARTUP_OBSERVE_TEST + "test_ui_schema_is_exact_and_refused_stream_is_never_reparsed[uuid]"),
+    ("startup UI session is an opaque string", STARTUP_OBSERVE + "classify",
+     'type(value.get("session_id")) is not str', 'False',
+     STARTUP_OBSERVE_TEST + "test_ui_schema_is_exact_and_refused_stream_is_never_reparsed[session]"),
+    ("startup UI instance collection is a list", STARTUP_OBSERVE + "classify",
+     'type(instances) is not list', 'False',
+     STARTUP_OBSERVE_TEST
+     + "test_ui_schema_is_exact_and_refused_stream_is_never_reparsed[instances-type]"),
+    ("startup UI instance entries are objects", STARTUP_OBSERVE + "classify",
+     'type(item) is not dict', 'False',
+     STARTUP_OBSERVE_TEST
+     + "test_ui_schema_is_exact_and_refused_stream_is_never_reparsed[entry-type]"),
+    ("startup UI instance entries have exact fields", STARTUP_OBSERVE + "classify",
+     'set(item) != {"surface", "component", "instance_id"}', 'False',
+     STARTUP_OBSERVE_TEST
+     + "test_ui_schema_is_exact_and_refused_stream_is_never_reparsed[entry-extra]"),
+    ("startup UI instance fields are strings", STARTUP_OBSERVE + "classify",
+     'any(type(field) is not str for field in item.values())', 'False',
+     STARTUP_OBSERVE_TEST + "test_ui_schema_is_exact_and_refused_stream_is_never_reparsed[surface]"),
+    ("startup UI budget is shared across response and EOF", STARTUP_OBSERVE + "_Probe.__call__",
+     'if self.accepted_ui_records >= 8:', 'if False:',
+     STARTUP_OBSERVE_TEST
+     + "test_ui_framing_never_substitutes_for_response_or_resets_budget[ninth-split-8192]"),
+    ("startup accepted UI count records actual accepted frames", STARTUP_OBSERVE + "_Probe.__call__",
+     'self.accepted_ui_records += 1', 'self.accepted_ui_records += 0',
+     STARTUP_OBSERVE_TEST
+     + "test_only_exact_ui_records_share_one_budget_across_response_and_eof[True-4-4-8192]"),
+    ("startup refusal drains opaque without reclassifying", STARTUP_OBSERVE + "_Probe.__call__",
+     'if refused:', 'if False:',
+     STARTUP_OBSERVE_TEST + "test_ui_schema_is_exact_and_refused_stream_is_never_reparsed[extra]"),
+    ("startup reentry poisons the original continuation", STARTUP_OBSERVE + "_Probe.__call__",
+     'self.poisoned = True', 'self.poisoned = False',
+     STARTUP_OBSERVE_TEST
+     + "test_reentry_poison_survives_every_resume_and_buffered_frame[True-close]"),
+    ("startup resumed awaits observe callback poison", STARTUP_OBSERVE + "_Probe.check",
+     'if self.poisoned:', 'if False:',
+     STARTUP_OBSERVE_TEST
+     + "test_reentry_poison_survives_every_resume_and_buffered_frame[True-read]"),
+    ("startup per-record bound still binds with UI framing", STARTUP_OBSERVE + "_Probe.__call__",
+     'if len(buffered) == RECORD_BYTES:', 'if False:',
+     STARTUP_OBSERVE_TEST
+     + "test_ui_record_and_cumulative_bounds_bind_without_publishing_private_fields[True]"),
+    ("startup published UI count is bounded and affirmative", STARTUP_OBSERVE + "observe_startup",
+     '"accepted_ui_records": probe.accepted_ui_records', '"accepted_ui_records": 9',
+     STARTUP_OBSERVE_TEST
+     + "test_exact_noauth_observation_requires_close_eof_join_and_three_bindings[8192]"),
 )
 
 if __name__ == "__main__":

@@ -8225,3 +8225,63 @@ on stable final sources, with passing baselines. All 278 inventory targets
 match. Every emitted reason remains at most 32 characters and belongs to
 the independently asserted finite vocabulary. Hosted identification and the
 complete final-head CI remain pending.
+
+The `98cd149` hosted run identifies the first record as
+`system/ui_invalidate` (run `39558419754`, foundation job `119084213047`),
+after 301 nonvendor controls passed. Checkout SHA and the expanded cases
+were checked in the same log. This is a real incompatibility with the
+original single-record diagnostic, not evidence that initialization passed.
+
+Pinned source `aF` at B@208350315 defines this event as a fire-and-forget
+render-cache invalidation; producer B@233650357 can enqueue it before
+initialize handling. Its schema requires `event: "ui.render"` and string
+`uuid`/`session_id`, with optional string-only instance descriptors. The
+shared ID schema is a string, not an invented UUID-format constraint.
+The observed discriminator alone does not establish this full shape, the
+trigger, a later response or account mode.
+
+A scope review distinguishes N6b's frozen, deliberately narrow nonvendor
+binding from this separate native diagnostic. N6b and `ClaudeInitialization`
+remain byte/behavior unchanged; ADR 0021 does not impose a universal
+single-record wire grammar. The living startup design now explicitly defines
+an additive diagnostic framing contract within the authorized credential-free
+wave, not a silent relaxation of the old callback or a production gate.
+
+Independent design review found no blocker: allow at most eight strictly
+shaped UI invalidations across prefix and tail, discard their contents, and
+require the same sole correlated no-auth response, stdin close, EOF and joined
+teardown. All other notifications/requests, partial EOF and duplicate responses
+refuse. The shared budget never resets at the response; reentry must poison
+every resumed continuation. Byte/deadline bounds and all authority remain
+unchanged. Implementation and its new hosted permitting proof are still
+pending; these design/source facts do not qualify Claude.
+
+The framing implementation now passes 363 portable diagnostic tests, with
+five physical tests reserved for hosted Linux. Two distinct fake modes emit
+four UI records before the response, require stdin EOF, then emit four or
+five more: the compiled portable controls accept eight and refuse nine.
+The existing workflow selects these physical controls before the pinned
+vendor observation; no new vendor invocation or workflow change is needed.
+
+Test-first execution also reproduced a diagnostic reentry defect: a resumed
+callback could overwrite its earlier refusal. An explicit poison now survives
+each await and buffered-frame transition. Ten reentry cases and five
+cancellation cases cover write, response read, close, tail data and EOF.
+Refused streams drain opaque and never regain acceptance through later data.
+The shared count, exact UI schema, byte limits and bounded public projection
+are pinned by permitting and refusing tests.
+
+All 21 affected/new mutants are measured assertion kills with passing
+baselines on unchanged sources; all 293 inventory targets match. Independent
+fixture/workflow/scope checks pass 145 tests and inventory checks pass 45.
+Script/test Ruff and explicit Linux-target strict script mypy pass. On the
+preceding `98cd149` head, verify, qualification, all mutation jobs and the
+other three containment lanes passed; foundation alone refused the observed
+UI record. The new full gate, independent implementation review and hosted
+permitting result remain required before review-ready status.
+
+The narrow independent implementation review found no actionable introduced
+defect and ran 63 focused framing, schema, reentry, cancellation and compiled
+peer cases. It confirmed the single count, irreversible opaque drain and
+close-attempt latch; this is not a claim of a new full-PR review. Full-gate
+and hosted evidence remain pending on the new head.
