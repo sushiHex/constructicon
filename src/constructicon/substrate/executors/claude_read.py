@@ -31,6 +31,7 @@ from constructicon.core.identity import parse_json_value
 from constructicon.core.process import ProcessIO
 from constructicon.substrate.executors.claude_initialize import _cancelled, _clean
 from constructicon.substrate.executors.claude_native import ClaudeNativeStoreMount
+from constructicon.substrate.executors.claude_native_events import exact_ui_invalidate
 from constructicon.substrate.executors.claude_protocol import (
     RECORD_BYTES,
     ClaudeInitializeVerdict,
@@ -51,6 +52,7 @@ from constructicon.substrate.executors.operator_store import BindingCheck
 
 TEXT_BYTES = 64 * 1024
 CALL_LIMIT = 1
+UI_RECORDS = 8
 SERVER = "constructicon_read"
 READ_TOOL: dict[str, object] = {
     "name": "read_file", "description": "Read one relative workspace file.",
@@ -175,6 +177,7 @@ class ClaudeReadTransaction:
         self._rpc_ids: set[tuple[type[object], str | int]] = set()
         self._calls = 0
         self._calls_completed = 0
+        self._ui_records = 0
         self._reply: str | None = None
         self._rate_limit: RateLimitInfo | None = None
         self._usage: Usage | None = None
@@ -234,9 +237,20 @@ class ClaudeReadTransaction:
                 and value.get("session_id") == (self._session or self._startup_session)
                 and _uuid(value.get("uuid")))
 
+    def _ui(self, value: dict[str, object]) -> bool:
+        if value.get("type") != "system" or value.get("subtype") != "ui_invalidate":
+            return False
+        if not exact_ui_invalidate(value) or self._ui_records >= UI_RECORDS:
+            raise _Refused()
+        self._ui_records += 1
+        return True
+
     def _quiet(self) -> None:
         self._audit()
-        while self._records and self._background(_parse(self._records[0])):
+        while self._records:
+            value = _parse(self._records[0])
+            if not (self._background(value) or self._ui(value)):
+                break
             self._records.pop(0)
         if self._records or self._buffer or self._eof:
             raise _Refused()
@@ -267,7 +281,7 @@ class ClaudeReadTransaction:
         while True:
             response = await self._next()
             value = _parse(response)
-            if self._background(value):
+            if self._ui(value) or self._background(value):
                 continue
             if register and value.get("type") == "control_request":
                 await self._mcp(value, handshake=True)
@@ -288,6 +302,8 @@ class ClaudeReadTransaction:
         if kind == "initialize" and (register or self._state == "terminal"):
             while True:
                 snapshot = _parse(await self._next())
+                if self._ui(snapshot):
+                    continue
                 if register and snapshot.get("type") == "control_request":
                     await self._mcp(snapshot, handshake=True)
                     continue
@@ -426,6 +442,8 @@ class ClaudeReadTransaction:
                                  "parent_tool_use_id": None, "client_composed": True}))
         while True:
             value = _parse(await self._next())
+            if self._ui(value):
+                continue
             if value.get("type") == "control_request":
                 await self._mcp(value)
             elif value.get("type") == "system" and value.get("subtype") == "init":
@@ -526,7 +544,8 @@ class ClaudeReadTransaction:
         self._audit()
         while not self._eof or self._records:
             if self._records:
-                if not self._background(_parse(self._records.pop(0))):
+                value = _parse(self._records.pop(0))
+                if not (self._ui(value) or self._background(value)):
                     raise _Refused()
             elif self._pending is not None:
                 pending, self._pending = self._pending, None

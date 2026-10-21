@@ -8435,3 +8435,47 @@ wrappers now resolve those platform attributes at use without type ignores;
 the fake seams and Linux behavior are unchanged. Strict mypy passes with both
 Windows and Linux platform selection. The corrected head still requires CI;
 the earlier physical evidence does not automatically qualify later changes.
+
+### Attended conversation and READ framing — PR #282, in progress
+
+The login conversation now composes one bounded operator-line read with one
+native stdout pump. The write task rechecks observed EOF/failure immediately
+before spending its sole input attempt, including after task scheduling. It
+never retries an uncertain delivery. Owned tasks join on cancellation without
+an abortable cleanup timeout. A completed callback leaves private operator I/O
+available for the caller's later bounded stderr forwarding; a refused callback
+invalidates it. Shared byte constants keep the concrete descriptor helper and
+conversation on one budget law. Its finite facts report callback completion,
+not process exit, authentication or persisted credentials.
+
+Pre-commit review caught unconditional operator-I/O invalidation on success,
+an EOF scheduling gap before input delivery, and cleanup failure replacing an
+earlier cancellation. Regression tests cover all three, including a full-callback
+scheduled EOF case and repeated cancellation while an owned reader joins.
+An independent reviewer raised retained Python exception context as a possible
+public leak, then retracted that classification: internal exceptions and the
+launcher's private result are not the published facts. The displayed refusal
+is fixed; session assembly must never publish its internal exception chain.
+
+Production READ now uses the same exact UI-invalidate predicate as diagnostics
+and maintenance. One eight-record allowance spans the whole transaction. UI
+records never establish a session or replace either mandatory bound empty
+background snapshot. The frozen codec and one-shot initialization bytes remain
+unchanged. The focused READ suite passed 148 tests and the new login callback
+suite passed 28; broader verification and mutation evidence remain required.
+
+These changes still do not provide an attended command. Exact login-only relay
+assembly, physical fake composition, fresh-process reload composition, reviewed
+host commands and authenticated qualification remain. No login, account-side
+mutation, credential inspection, VM action or model call supplied this evidence.
+
+The selected inventory then assertion-killed all 29 new READ/login mutants
+with passing baselines and an unchanged source snapshot. Input-bound, cleanup
+and reentry tests were strengthened before that run so violations produce
+assertions with deterministic cleanup, not timeout errors. The broader Claude
+selection passed 1,090 tests with 27 platform skips; login and inventory checks
+passed 73 tests after the test strengthening. Ruff and strict mypy for both
+Windows and Linux platform selection passed on 139 source files. The focused
+independent callback review found no blocking defect; it confirmed that a false
+`stdin_closed` flag means unconfirmed closure, not proof of a physically open
+handle. Final-head CI remains required.

@@ -226,6 +226,17 @@ through a blocked synchronous write. Post-join forwarding gets no renewed
 deadline; exhausted time means no further output, not extended custody.
 Input/output tasks are joined before the maintenance lane returns.
 
+The login coordinator races one operator-line read against one native-stdout
+pump. Observed stdout EOF or failure takes priority when both tasks are ready;
+an attempted input write is spent even if its completion is uncertain. The
+current `ProcessIO` exposes stdout EOF, not physical process exit. Therefore
+this rule does not claim to detect an exit still hidden behind buffered output
+or a blocked private sink. The shared deadline stops further work; the joined
+launcher result supplies the later process fact. Deadline expiry never permits
+abandoning cleanup or releasing custody before owned tasks, processes and
+connections have joined. Cleanup receives no permission for further native or
+operator I/O merely because joining can outlast the work deadline.
+
 The borrowed streams must be Linux pipes or sockets with distinct backing
 identities. Different descriptor numbers alone do not prove independence:
 duplicates share their nonblocking flag, so restoring one could block another
@@ -250,7 +261,7 @@ facts as unknown; do not name a report `login_success` on the strength of exit 0
 | --- | --- | --- |
 | Maintenance entry | Prior generation still active; owner death; stale inherited descriptor | Affirmative retained custody and durable withdrawal before any native write |
 | Credential open and launch | Same-path replacement; cancellation; partial bootstrap | Checked physical file and current custody; existing pre-launch fence |
-| Private input read | Operator EOF, buffered input, native exit or deadline | One bounded owned read; cancellation and native termination win over later delivery |
+| Private input read | Operator EOF, buffered input, native exit or deadline | One bounded owned read; cancellation and observed native EOF/failure win over later delivery; unseen process exit is not inferred |
 | Input write | Prefix delivered before failure | Input spent; no resend or successful-login inference |
 | Login output read | Sensitive bytes, over-bound output, denied network attempt | Bounded private forwarding; no raw evidence publication |
 | Login join | Credentials partly written; payload clean but persistence failed | Joined cleanup and custody check only; store remains withdrawn |
