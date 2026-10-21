@@ -8426,3 +8426,12 @@ strict mypy on 138 source files, and all five import contracts passed. These
 remain focused results, not a full Windows verification or a resolution of
 #281. Final-head hosted verification and physical Linux proofs are still
 required before this batch is review-ready.
+
+At head `5b5bade`, all four hosted Linux proof lanes, runner qualification and
+the complete mutation jobs passed. Hosted pytest passed 8,506 tests with 477
+skips. Verification nevertheless failed: two platform-specific type-ignore
+comments needed by Windows Python 3.11 were unused under Linux. The primitive
+wrappers now resolve those platform attributes at use without type ignores;
+the fake seams and Linux behavior are unchanged. Strict mypy passes with both
+Windows and Linux platform selection. The corrected head still requires CI;
+the earlier physical evidence does not automatically qualify later changes.

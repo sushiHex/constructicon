@@ -34,11 +34,13 @@ def _write_fd(fd: int, data: bytes) -> int:
 
 
 def _get_blocking(fd: int) -> bool:
-    return bool(os.get_blocking(fd))  # type: ignore[attr-defined]
+    # This Linux primitive is absent from the Windows Python 3.11 interface.
+    return bool(getattr(os, "get_blocking")(fd))  # noqa: B009
 
 
 def _set_blocking(fd: int, blocking: bool) -> None:
-    os.set_blocking(fd, blocking)  # type: ignore[attr-defined]
+    # Resolve at use, so Windows can import and test the substituted seam.
+    getattr(os, "set_blocking")(fd, blocking)  # noqa: B009
 
 
 def _fd_details(fd: int) -> tuple[int, int, int]:
