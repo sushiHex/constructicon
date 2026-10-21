@@ -652,7 +652,7 @@ MUTANTS += (
     ("native READ cannot change binding generation", READ + "run_read_transaction",
      'or terminal_binding != initial_binding', 'or False',
      READ_TEST + "test_native_read_binding_is_checked_before_dispatch_and_after_join"),
-    ("READ worker cannot carry Claude native authority", WORKER + "ClaudeReadWorker.__init__",
+    ("READ worker cannot carry Claude native authority", WORKER + "ClaudeReadWorker._owned",
      'or self._launcher.claude is not None', 'or False',
      WORKER_TEST + "test_wrong_owner_and_unbounded_or_native_launcher_refuse"),
 )
