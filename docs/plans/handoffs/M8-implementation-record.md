@@ -86,6 +86,60 @@ local Windows verify attempt was stopped after source refinements made it a
 mixed-snapshot run; it is not credited as a completed gate. Final-head hosted
 verification and physical lanes remain required before readiness or merge.
 
+## Claude private-host artifact composition (Refs #283)
+
+The proposed installation helper is stdlib-only, unprivileged and offline.
+It stages a fresh Claude launch set, judges it against independently reviewed
+configuration bytes and verifies the installed result by rederiving it without
+staging. Root installation remains a fixed stock-tool sequence in a separately
+reviewed operator package. No helper executes the vendor, accesses credentials,
+activates a store or launches a model request.
+
+The fixed Claude root is separate from the existing Codex launch/store tree.
+The runtime is curated from host sources, not copied from that installed tree.
+The vendor archive and selected regular member are pinned; the policy keeps
+the credential-free hosted profile's enforcement body. Configuration identity
+includes the runtime, vendor, policy, selected model/effort and each phase's
+finite egress policy. The stage's hash is an observation for independent
+review, not authority for its own installation.
+
+The existing host helper's named exception under `scripts/ci/` is narrower
+than its path suggests. This work does not extend it or execute the hosted
+Claude fixture on the private host. Small provenance/custody algorithms are
+reused in the new standalone helper rather than moving the old self-pinned
+helper and changing its frozen installation contract.
+
+Accepting-path review caught two implementation mistakes before publication:
+the ordinary file bound was smaller than the pinned vendor executable, and
+empty runtime mount placeholders were being treated as missing content.
+The verifier now distinguishes those artifact kinds without weakening archive
+or configuration checks. Negative results remain explicit phase refusals;
+partial writes or an absent success record do not authorize continuation.
+Follow-up review applied the same rule to legitimate empty Python modules in
+the host stdlib: the generic byte reader preserves empty files, while semantic
+callers retain their nonempty and exact-hash requirements. Loader and input
+custody are established before tracing dependencies, with normal root-owned
+Ubuntu usr-merge links accepted rather than accidentally excluded.
+
+The final focused Windows selection passed 123 tests with four Linux-only
+skips, including the helper, policy, CI-scope and mutation-inventory checks.
+All twelve selected authority mutants were assertion-killed on the corrected
+source snapshot. Explicit helper/test lint passed. Focused independent review
+found no remaining blocker. Its initial empty-extension concern was withdrawn
+after tracing the positive-size check before the loader; no speculative
+filename rule was added. The repository gate and hosted proof remain pending.
+
+Portable tests and the proposed foundation proof cover stage/judge/verify
+with synthetic artifacts. The Linux proof substitutes only synthetic archive
+pins and current PR source blobs, installs via fixed stock tools, verifies
+with staging retired, and exercises a joined fake native peer. That scope
+does not prove main-line source authority, vendor authentication or production
+availability. Hosted execution and final exact-head evidence are pending.
+
+The [installation proposal](M8-N6-private-host-installation.md) records the
+phase/crash reasoning and the remaining exact-package prerequisites. No VM,
+account, credential or live vendor action was performed for this slice.
+
 ## Supported-interpreter portable fixture boundary (Refs #269)
 
 The opted-in non-Linux acquisition fixture previously called

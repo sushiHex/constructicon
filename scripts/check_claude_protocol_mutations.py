@@ -1584,5 +1584,47 @@ SESSION_MUTANTS = (
 )
 MUTANTS += SESSION_MUTANTS
 
+HOST_ARTIFACTS = "scripts.claude_host_artifacts:"
+HOST_TEST = "tests/test_claude_host_artifacts.py::"
+HOST_ARTIFACT_MUTANTS = (
+    ("host archive matches reviewed bytes", HOST_ARTIFACTS + "read_vendor",
+     "sha256(raw) == ARCHIVE_SHA256", "True",
+     HOST_TEST + "test_archive_selects_only_pinned_regular_member_from_exact_bytes"),
+    ("host vendor member matches reviewed bytes", HOST_ARTIFACTS + "read_vendor",
+     "sha256(payload) == MEMBER_SHA256", "True",
+     HOST_TEST + "test_archive_selects_only_pinned_regular_member_from_exact_bytes"),
+    ("host vendor member is unique", HOST_ARTIFACTS + "read_vendor",
+     "len(selected) == 1", "bool(selected)",
+     HOST_TEST + "test_archive_selects_only_pinned_regular_member_from_exact_bytes"),
+    ("host archive member-count bound binds", HOST_ARTIFACTS + "read_vendor",
+     "index < ARCHIVE_MEMBERS", "True",
+     HOST_TEST + "test_archive_total_bytes_and_member_count_bounds_bind"),
+    ("host source commit belongs to main first-parent history", HOST_ARTIFACTS + "prove_sources",
+     "commit in line.stdout.decode().split()", "True",
+     HOST_TEST + "test_first_parent_provenance_and_running_helper_bytes"),
+    ("host source blobs have non-executable regular mode", HOST_ARTIFACTS + "prove_sources",
+     'match[1] == b"100644"', "True",
+     HOST_TEST + "test_first_parent_provenance_and_running_helper_bytes"),
+    ("running host helper matches the reviewed source", HOST_ARTIFACTS + "prove_sources",
+     'blobs[SCRIPT] == Path(__file__).read_bytes()', "True",
+     HOST_TEST + "test_first_parent_provenance_and_running_helper_bytes"),
+    ("host configuration has independent reviewed identity", HOST_ARTIFACTS + "check_config_pin",
+     "current.config_sha256 == expected_sha256", "True",
+     HOST_TEST + "test_main_accepts_staged_then_installed_facts_without_private_values"),
+    ("installed host tree is compared with the derived plan", HOST_ARTIFACTS + "verify",
+     "not differences(tree_inventory(installed), current.inventory, ROOT_UID)", "True",
+     HOST_TEST + "test_stage_judge_verify_independent_of_staging_and_fail_closed"),
+    ("installed profiles must positively enforce", HOST_ARTIFACTS + "verify",
+     "== sorted(CLAUDE_PROFILES.splitlines())", "is not None",
+     HOST_TEST + "test_main_accepts_staged_then_installed_facts_without_private_values"),
+    ("host tree owner participates in equality", HOST_ARTIFACTS + "differences",
+     "or found[name][2] != owner", "or False",
+     HOST_TEST + "test_full_tree_comparison_includes_mode_owner_and_extra_entries"),
+    ("host tree mode participates in equality", HOST_ARTIFACTS + "differences",
+     "found[name][:2] != wanted[name]", "found[name][1] != wanted[name][1]",
+     HOST_TEST + "test_full_tree_comparison_includes_mode_owner_and_extra_entries"),
+)
+MUTANTS += HOST_ARTIFACT_MUTANTS
+
 if __name__ == "__main__":
     raise SystemExit(run(MUTANTS))

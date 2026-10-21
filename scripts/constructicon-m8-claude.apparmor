@@ -1,0 +1,46 @@
+# Proposed private-host Claude maintenance policy; loading requires the
+# separately reviewed installation procedure and owner authorization.
+# Enforcement matches the credential-free hosted Claude profile. Installation
+# alone establishes neither subscription qualification nor production use.
+# The fixed namespace/mount recipe remains the filesystem/network boundary.
+abi <abi/4.0>,
+
+profile constructicon-m8-claude-launch /var/lib/constructicon-m8-claude/bwrap flags=(attach_disconnected,mediate_deleted) {
+  allow capability,
+  allow userns,
+  allow mount,
+  allow umount,
+  allow pivot_root,
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow signal,
+  allow ptrace,
+  allow px /usr/bin/python3{,.12} -> constructicon-m8-claude-launch//&constructicon-m8-claude-bootstrap,
+  allow px /opt/claude/claude -> constructicon-m8-claude-launch//&constructicon-m8-claude-bootstrap//&constructicon-m8-claude-native,
+}
+
+profile constructicon-m8-claude-bootstrap flags=(attach_disconnected,mediate_deleted) {
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow signal,
+  allow ptrace,
+  allow ix /usr/bin/python3{,.12},
+  allow px /opt/claude/claude -> constructicon-m8-claude-launch//&constructicon-m8-claude-bootstrap//&constructicon-m8-claude-native,
+  deny capability,
+  deny userns,
+}
+
+profile constructicon-m8-claude-native flags=(attach_disconnected,mediate_deleted) {
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow signal (receive),
+  allow signal (send) peer=constructicon-m8-claude-bootstrap//&constructicon-m8-claude-launch//&constructicon-m8-claude-native,
+  allow ptrace (readby),
+  deny ptrace (read, trace),
+  deny x /**,
+  deny capability,
+  deny userns,
+}

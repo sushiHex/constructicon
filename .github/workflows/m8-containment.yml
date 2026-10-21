@@ -124,6 +124,114 @@ jobs:
           set -euo pipefail
           sudo env RUNNER_ENVIRONMENT=github-hosted /usr/bin/python3 scripts/ci/prove_m8_noexec.py \
             </dev/null | tee "$RUNNER_TEMP/m8-noexec.json"
+      - name: Prove staged Claude host runtime with a synthetic native peer
+        if: matrix.lane == 'foundation'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # This disposable proof substitutes a fake archive and current PR blobs;
+          # it is not main-line source authority, vendor login, or installation approval.
+          test ! -e /var/lib/constructicon-m8-claude-host-proof
+          test ! -L /var/lib/constructicon-m8-claude-host-proof
+          test ! -e /var/lib/constructicon-m8-claude
+          test ! -L /var/lib/constructicon-m8-claude
+          test ! -e /etc/apparmor.d/constructicon-m8-claude
+          test ! -L /etc/apparmor.d/constructicon-m8-claude
+          if sudo grep -q '^constructicon-m8-claude-' /sys/kernel/security/apparmor/profiles; then
+            exit 1
+          else
+            test "$?" -eq 1
+          fi
+          owned=0
+          cleanup() {
+            primary=$?
+            trap - EXIT
+            set +e
+            clean=0
+            if [ "$owned" -eq 1 ] && \
+               sudo grep -q '^constructicon-m8-claude-' /sys/kernel/security/apparmor/profiles; then
+              test ! -L /etc/apparmor.d/constructicon-m8-claude || clean=1
+              test "$(stat -c '%u:%g' /etc/apparmor.d/constructicon-m8-claude)" = 0:0 || clean=1
+              if [ "$clean" -eq 0 ]; then
+                sudo apparmor_parser --remove --skip-cache \
+                  /etc/apparmor.d/constructicon-m8-claude || clean=1
+              fi
+            else
+              test "$?" -eq 1 || clean=1
+            fi
+            if [ "$owned" -eq 1 ] && \
+               { [ -e /etc/apparmor.d/constructicon-m8-claude ] || \
+                 [ -L /etc/apparmor.d/constructicon-m8-claude ]; }; then
+              test ! -L /etc/apparmor.d/constructicon-m8-claude || clean=1
+              test "$(stat -c '%u:%g' /etc/apparmor.d/constructicon-m8-claude)" = 0:0 || clean=1
+              if [ "$clean" -eq 0 ]; then
+                sudo rm -- /etc/apparmor.d/constructicon-m8-claude || clean=1
+              fi
+            fi
+            if [ "$owned" -eq 1 ] && \
+               { [ -e /var/lib/constructicon-m8-claude ] || \
+                 [ -L /var/lib/constructicon-m8-claude ]; }; then
+              test ! -L /var/lib/constructicon-m8-claude || clean=1
+              owner="$(stat -c '%U' /var/lib/constructicon-m8-claude)"
+              # A failed copy can leave the staging owner's mode/uid before chown.
+              test "$owner" = root || test "$owner" = m8-service || clean=1
+              if [ "$clean" -eq 0 ]; then
+                sudo rm -r -- /var/lib/constructicon-m8-claude || clean=1
+              fi
+            fi
+            if [ "$owned" -eq 1 ]; then
+              test ! -L /var/lib/constructicon-m8-claude-host-proof || clean=1
+              test "$(stat -c '%U' /var/lib/constructicon-m8-claude-host-proof)" = m8-service || clean=1
+              if [ "$clean" -eq 0 ]; then
+                sudo rm -r -- /var/lib/constructicon-m8-claude-host-proof || clean=1
+              fi
+            fi
+            if sudo grep -q '^constructicon-m8-claude-' /sys/kernel/security/apparmor/profiles; then
+              clean=1
+            else
+              test "$?" -eq 1 || clean=1
+            fi
+            test ! -e /etc/apparmor.d/constructicon-m8-claude || clean=1
+            test ! -L /etc/apparmor.d/constructicon-m8-claude || clean=1
+            test ! -e /var/lib/constructicon-m8-claude || clean=1
+            test ! -L /var/lib/constructicon-m8-claude || clean=1
+            test ! -e /var/lib/constructicon-m8-claude-host-proof || clean=1
+            test ! -L /var/lib/constructicon-m8-claude-host-proof || clean=1
+            if [ "$clean" -ne 0 ]; then exit 1; fi
+            exit "$primary"
+          }
+          trap cleanup EXIT
+          sudo install -d -o m8-service -g m8-service -m 0700 \
+            /var/lib/constructicon-m8-claude-host-proof
+          owned=1
+          sudo cat /sys/kernel/security/apparmor/profiles \
+            | sudo tee /var/lib/constructicon-m8-claude-host-proof/profiles-before > /dev/null
+          sudo chown m8-service:m8-service /var/lib/constructicon-m8-claude-host-proof/profiles-before
+          sudo chmod 0444 /var/lib/constructicon-m8-claude-host-proof/profiles-before
+          sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
+            M8_CLAUDE_HOST_PROOF_REQUIRED=1 \
+            "$PWD/.venv/bin/python" -m pytest \
+              tests/substrate/test_claude_host_installation.py::test_stage_and_judge_synthetic_host_runtime \
+              -v --tb=short -p no:cacheprovider </dev/null
+          sudo cp -a -- /var/lib/constructicon-m8-claude-host-proof/staging/constructicon-m8-claude \
+            /var/lib/constructicon-m8-claude
+          sudo chown -R root:root /var/lib/constructicon-m8-claude
+          sudo install -o root -g root -m 0444 \
+            /var/lib/constructicon-m8-claude-host-proof/staging/constructicon-m8-claude.apparmor \
+            /etc/apparmor.d/constructicon-m8-claude
+          sudo apparmor_parser --add --skip-cache /etc/apparmor.d/constructicon-m8-claude
+          sudo cat /sys/kernel/security/apparmor/profiles \
+            | sudo tee /var/lib/constructicon-m8-claude-host-proof/profiles-after > /dev/null
+          sudo chown m8-service:m8-service /var/lib/constructicon-m8-claude-host-proof/profiles-after
+          sudo chmod 0444 /var/lib/constructicon-m8-claude-host-proof/profiles-after
+          sudo -u m8-service mv \
+            /var/lib/constructicon-m8-claude-host-proof/staging \
+            /var/lib/constructicon-m8-claude-host-proof/staging-retired
+          sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
+            M8_CLAUDE_HOST_PROOF_REQUIRED=1 \
+            "$PWD/.venv/bin/python" -m pytest \
+              tests/substrate/test_claude_host_installation.py::test_verified_install_launches_joined_fake_peer \
+              -v --tb=short -p no:cacheprovider </dev/null
       - name: Prove the fake Claude native final transition and bounded layout
         if: matrix.lane == 'foundation'
         shell: bash
