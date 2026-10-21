@@ -15,6 +15,30 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## Claude's bounded READ path is implemented, not native-qualified
+
+PR #274 merged as `ec1aa4c`, tree-identical to reviewed head `021b41d`.
+It establishes source-qualified startup observations, a bounded one-turn duplex
+transaction and a fixed READ worker over the existing owned workspace/launcher.
+The worker retains its guard through joined cleanup, refuses symlinks and
+non-regular files, and bounds UTF-8 output. Exact-head CI passed 7,891 tests
+with 461 skips, all four Linux lanes and the 162-mutant Claude inventory.
+Foundation actually ran the Linux worker and seven Unix primitive cases;
+Windows skips are not credited for those proofs. The connector review found
+no findings, following focused independent source, transaction and worker review.
+
+Review corrected three tempting inferences: successful settings loading need
+not mean a fetch or notification; `client_composed` suppresses slash dispatch
+and typed mentions, not all ambient context; terminal turn token counts are
+observations, not backend totals or a monetary ceiling. Actual overage facts,
+terminal metadata and elapsed time now survive the bounded outcome path.
+
+This does not compose the native executable with no-further-exec, store and
+egress confinement. No available Claude provider, native qualification, login,
+credential, private-host or model result follows from these fake transcripts
+and the fixed reader's physical proof. Source candidates and remaining proof
+obligations are distinct from successful implementation evidence.
+
 ## Execution denial is one ingredient, not Claude qualification
 
 PR #273 merged as `7281d7d`, with the same tree as reviewed head `9c188fe`.

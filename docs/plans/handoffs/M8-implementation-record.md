@@ -7950,3 +7950,35 @@ new tests. This slice does not compose the standalone no-further-execution
 profile with the native launcher, qualify a native descriptor, or authorize a
 live procedure. Those remain explicit gates rather than inferred consequences
 of successful fake transcripts or a successful fixed worker.
+
+PR #274 merged as `ec1aa4c`, tree-identical to reviewed `021b41d`. Exact-head
+CI passed full verification (7,891 passed, 461 skipped, one warning), strict
+mypy, five import contracts, runner qualification and all four Linux lanes.
+The foundation non-sudo step passed 422 tests and positively ran the contained
+READ worker plus all seven Unix primitive cases. The 162-entry Claude mutation
+inventory passed in CI and in a stable local run. The final focused local suite
+passed 598 tests with eight expected Linux skips. An obsolete full Windows run
+was stopped after CI exposed a missing proof-file inventory entry; it is not
+credited as a full gate. The one-line inventory correction passed the complete
+final-head CI gate. Connector review on that head completed with no findings.
+
+### Proposed native composition boundary
+
+The [native composition state review](M8-N6-native-composition-state-review.md)
+is a proposal, not qualification or a live procedure. Source inspection found
+a candidate fixed proxy route and a single opaque credential file with writable
+disposable staging directories. Atomic rename does not alone disqualify that
+mount: the pinned writer has an `EBUSY` fallback, but staging must first succeed.
+Likewise a refresh disposition is not affirmative persistence; the inspected
+refresh path can ignore a save-failure disposition. Neither source observation
+is a physical credential result.
+
+Focused independent design review found no blocking contradiction. It sharpened
+two obligations: the legacy refresh lock needs a writable disposable containing
+directory, and the final native enforcing label must be observed by trusted
+supervision, not inferred from a generic probe or native stdout. The proposal
+keeps existing launcher ownership and a separate fixed worker; native noexec,
+store persistence and egress composition require fake physical proofs before
+any separately authorized vendor qualification. Issue #275 records the
+independent CI efficiency improvement: check proof-inventory drift before
+expensive containment provisioning.
