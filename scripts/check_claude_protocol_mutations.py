@@ -755,7 +755,7 @@ MUTANTS += (
      STARTUP_OBSERVE_TEST + "test_non_noauth_damage_never_counts_as_observation_but_closes_stdin"
      "[wrong-id-8192]"),
     ("startup observation refuses pending authority", STARTUP_OBSERVE + "classify",
-     'or envelope["pending_permission_requests"] != []', 'or False',
+     'if envelope["pending_permission_requests"] != []:', 'if False:',
      STARTUP_OBSERVE_TEST + "test_non_noauth_damage_never_counts_as_observation_but_closes_stdin"
      "[pending-8192]"),
     ("startup observation checks the pinned version", STARTUP_OBSERVE + "classify",
@@ -767,7 +767,7 @@ MUTANTS += (
      STARTUP_OBSERVE_TEST + "test_non_noauth_damage_never_counts_as_observation_but_closes_stdin"
      "[running-8192]"),
     ("startup observation record ceiling binds", STARTUP_OBSERVE + "classify",
-     'or len(record) > RECORD_BYTES', 'or False',
+     'if len(record) > RECORD_BYTES:', 'if False:',
      STARTUP_OBSERVE_TEST + "test_exact_record_ceiling_binds_and_duplicate_json_facts_refuse"),
     ("startup observation shares duplicate JSON refusal", STARTUP_OBSERVE + "classify",
      'parse_json_value(record[:-1].decode("utf-8"))', 'json.loads(record[:-1].decode("utf-8"))',
@@ -776,7 +776,7 @@ MUTANTS += (
      'or b"\\r" in record', 'or False',
      STARTUP_OBSERVE_TEST + "test_classifier_rejects_invalid_shapes_without_disclosing_fields[crlf]"),
     ("startup observation checks response tags", STARTUP_OBSERVE + "classify",
-     'or value["type"] != "control_response"', 'or False',
+     'if value.get("type") != "control_response":', 'if False:',
      STARTUP_OBSERVE_TEST + "test_classifier_rejects_invalid_shapes_without_disclosing_fields[type]"),
     ("startup observation retains account schema", STARTUP_OBSERVE + "classify",
      'or any(type(item) is not str for item in account.values())', 'or False',
@@ -789,8 +789,9 @@ MUTANTS += (
      'if len(request) > self.input_limit:', 'if False:',
      STARTUP_OBSERVE_TEST + "test_input_bound_binds_before_the_only_write"),
     ("startup probe requires complete frame before noauth", STARTUP_OBSERVE + "_Probe.__call__",
-     'if not chunk:\n            break',
-     'if not chunk:\n            self.protocol = "correlated-noauth"\n            break',
+     'if not chunk:\n            self.reason = "eof-before-frame"\n            break',
+     'if not chunk:\n            self.reason = "eof-before-frame"\n'
+     '            self.protocol = "correlated-noauth"\n            break',
      STARTUP_OBSERVE_TEST + "test_non_noauth_damage_never_counts_as_observation_but_closes_stdin"
      "[empty-8192]"),
     ("startup probe rejects coalesced extra bytes", STARTUP_OBSERVE + "_Probe.__call__",
@@ -798,7 +799,7 @@ MUTANTS += (
      STARTUP_OBSERVE_TEST + "test_non_noauth_damage_never_counts_as_observation_but_closes_stdin"
      "[duplicate-8192]"),
     ("startup probe rejects later tail bytes", STARTUP_OBSERVE + "_Probe.__call__",
-     'if await self.read(io):\n            self.protocol = "invalid"',
+     'if await self.read(io):\n            self.reject("extra-output")',
      'if await self.read(io):\n            pass',
      STARTUP_OBSERVE_TEST + "test_non_noauth_damage_never_counts_as_observation_but_closes_stdin"
      "[partial-extra-1]"),
@@ -924,6 +925,40 @@ MUTANTS += (
      '"runtime_digest": str(pinned_runtime_digest)', '"runtime_digest": str(vendor_digest)',
      STARTUP_OBSERVE_TEST
      + "test_hosted_helper_is_not_bound_to_pytest_argv_and_publishes_only_pinned_fields"),
+)
+
+MUTANTS += (
+    ("startup protocol reason retains its first refusal", STARTUP_OBSERVE + "_Probe.reject",
+     'if self.reason in {"incomplete", "none"}:', 'if True:',
+     STARTUP_OBSERVE_TEST + "test_protocol_reason_is_fragmentation_stable_within_output_budget"
+     "[version-extra-version-mismatch-8192]"),
+    ("startup coalesced surplus has a static output reason", STARTUP_OBSERVE + "_Probe.__call__",
+     'if newline + 1 != len(buffered):\n                self.reject("extra-output")',
+     'if newline + 1 != len(buffered):\n                self.reject("read-contract")',
+     STARTUP_OBSERVE_TEST + "test_protocol_reason_is_fragmentation_stable_within_output_budget"
+     "[extra-extra-output-8192]"),
+    ("startup later surplus has the same output reason", STARTUP_OBSERVE + "_Probe.__call__",
+     'if await self.read(io):\n            self.reject("extra-output")',
+     'if await self.read(io):\n            self.reject("read-contract")',
+     STARTUP_OBSERVE_TEST + "test_protocol_reason_is_fragmentation_stable_within_output_budget"
+     "[extra-extra-output-1]"),
+    ("startup unexpected type cannot be an unhashable lookup", STARTUP_OBSERVE + "classify",
+     'type(kind) is str', 'True',
+     STARTUP_OBSERVE_TEST
+     + "test_classifier_rejects_invalid_shapes_without_disclosing_fields[unhashable-type]"),
+    ("startup published protocol reason stays in its closed bound",
+     STARTUP_OBSERVE + "observe_startup",
+     '"protocol_reason": probe.reason', '"protocol_reason": "unknown" * 1024',
+     STARTUP_OBSERVE_TEST
+     + "test_exact_noauth_observation_requires_close_eof_join_and_three_bindings[8192]"),
+    ("startup unexpected type never echoes arbitrary vendor text", STARTUP_OBSERVE + "classify",
+     'kinds.get(kind, "unexpected-other")', 'kind',
+     STARTUP_OBSERVE_TEST
+     + "test_classifier_rejects_invalid_shapes_without_disclosing_fields[unknown-type]"),
+    ("startup successful classification has no refusal reason", STARTUP_OBSERVE + "classify",
+     'return "correlated-noauth", "none"', 'return "correlated-noauth", "other-mode"',
+     STARTUP_OBSERVE_TEST
+     + "test_exact_noauth_observation_requires_close_eof_join_and_three_bindings[8192]"),
 )
 
 if __name__ == "__main__":

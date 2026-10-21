@@ -57,39 +57,61 @@ class _Refused(Exception):
     pass
 
 
-def classify(record: bytes, identifier: str) -> str:
+def classify(record: bytes, identifier: str) -> tuple[str, str]:
     """Classify one private correlated frame; mismatch alone is not no-auth."""
-    if (type(record) is not bytes or len(record) > RECORD_BYTES
-            or not record.endswith(b"\n") or b"\n" in record[:-1] or b"\r" in record):
-        return "invalid"
+    if type(record) is not bytes:
+        return "invalid", "record-type"
+    if len(record) > RECORD_BYTES:
+        return "invalid", "record-bound"
+    if not record.endswith(b"\n") or b"\n" in record[:-1] or b"\r" in record:
+        return "invalid", "framing"
     try:
         value = parse_json_value(record[:-1].decode("utf-8"))
     except (ValueError, UnicodeError, RecursionError):
-        return "invalid"
-    if (type(value) is not dict or set(value) != {"type", "response"}
-            or value["type"] != "control_response" or type(value["response"]) is not dict):
-        return "invalid"
+        return "invalid", "json"
+    if type(value) is not dict:
+        return "invalid", "outer-shape"
+    if value.get("type") != "control_response":
+        kinds = {"system": "unexpected-system", "result": "unexpected-result",
+                 "assistant": "unexpected-assistant",
+                 "control_request": "unexpected-control-request"}
+        kind = value.get("type")
+        return "invalid", kinds.get(kind, "unexpected-other") if type(kind) is str else (
+            "unexpected-other"
+        )
+    if set(value) != {"type", "response"}:
+        return "invalid", "outer-shape"
+    if type(value["response"]) is not dict:
+        return "invalid", "envelope-shape"
     envelope = value["response"]
-    if (set(envelope) != {"subtype", "request_id", "response",
-                          "pending_permission_requests", "pending_user_dialog_requests"}
-            or envelope["subtype"] != "success"
-            or type(envelope["request_id"]) is not str
-            or envelope["request_id"] != identifier
-            or envelope["pending_permission_requests"] != []
-            or envelope["pending_user_dialog_requests"] != []):
-        return "invalid"
+    if set(envelope) != {"subtype", "request_id", "response",
+                         "pending_permission_requests", "pending_user_dialog_requests"}:
+        return "invalid", "envelope-shape"
+    if envelope["subtype"] != "success":
+        return "invalid", "response-not-success"
+    if type(envelope["request_id"]) is not str or envelope["request_id"] != identifier:
+        return "invalid", "request-mismatch"
+    if envelope["pending_permission_requests"] != []:
+        return "invalid", "pending-permissions"
+    if envelope["pending_user_dialog_requests"] != []:
+        return "invalid", "pending-dialogs"
     body = envelope["response"]
-    if (type(body) is not dict or body.get("claude_code_version") != CLAUDE_CODE_VERSION
-            or body.get("session_state") != "idle" or type(body.get("account")) is not dict):
-        return "invalid"
+    if type(body) is not dict:
+        return "invalid", "body-shape"
+    if body.get("claude_code_version") != CLAUDE_CODE_VERSION:
+        return "invalid", "version-mismatch"
+    if body.get("session_state") != "idle":
+        return "invalid", "state-not-idle"
+    if type(body.get("account")) is not dict:
+        return "invalid", "account-shape"
     account = body["account"]
     if (not set(account) <= {"apiProvider", "tokenSource", "apiKeySource", "subscriptionType",
                             "email", "organization"}
             or any(type(item) is not str for item in account.values())):
-        return "invalid"
+        return "invalid", "account-fields"
     if account == {"apiProvider": "firstParty", "tokenSource": "none"}:
-        return "correlated-noauth"
-    return "other-mode"
+        return "correlated-noauth", "none"
+    return "other-mode", "other-mode"
 
 
 class _Probe:
@@ -97,10 +119,17 @@ class _Probe:
         self.deadline, self.input_limit = deadline, input_limit
         self.output_limit = min(output_limit, OUTPUT_BYTES)
         self.protocol = "incomplete"
+        self.reason = "incomplete"
         self.writes = 0
         self.close_attempted = self.closed = self.eof = False
         self.output_bytes = 0
         self.used = False
+
+    def reject(self, reason: str) -> None:
+        """Retain one static first refusal from reads within their output bound."""
+        if self.reason in {"incomplete", "none"}:
+            self.reason = reason
+        self.protocol = "invalid"
 
     def check(self) -> None:
         current = asyncio.current_task()
@@ -114,11 +143,11 @@ class _Probe:
         value = await io.read(maximum)
         self.check()
         if type(value) is not bytes or len(value) > maximum:
-            self.protocol = "invalid"
+            self.reject("read-contract")
             raise _Refused()
         self.output_bytes += len(value)
         if self.output_bytes > self.output_limit:
-            self.protocol = "invalid"
+            self.reject("output-bound")
             raise _Refused()
         if not value:
             self.eof = True
@@ -135,13 +164,14 @@ class _Probe:
 
     async def __call__(self, io: ProcessIO) -> None:
         if self.used:
-            self.protocol = "invalid"
+            self.reject("single-use")
             raise _Refused()
         self.used = True
         self.check()
         identifier = secrets.token_hex(16)
         request = initialize_request(identifier)
         if len(request) > self.input_limit:
+            self.reason = "input-bound"
             raise _Refused()
         self.writes = 1  # Delivery is spent before its first await.
         await io.write(request)
@@ -150,23 +180,24 @@ class _Probe:
         while True:
             chunk = await self.read(io, min(8192, RECORD_BYTES - len(buffered)))
             if not chunk:
+                self.reason = "eof-before-frame"
                 break
             buffered.extend(chunk)
             newline = buffered.find(b"\n")
             if newline >= 0:
-                self.protocol = classify(bytes(buffered[:newline + 1]), identifier)
+                self.protocol, self.reason = classify(bytes(buffered[:newline + 1]), identifier)
                 if newline + 1 != len(buffered):
-                    self.protocol = "invalid"
+                    self.reject("extra-output")
                 break
             if len(buffered) == RECORD_BYTES:
-                self.protocol = "invalid"
+                self.reject("record-bound")
                 break
         # Protocol I/O failure/cancellation is joined by LinuxLauncher. Never
         # await a second protocol operation after its deadline/cancellation fired.
         await self.close(io)
         while not self.eof:
             if await self.read(io):
-                self.protocol = "invalid"
+                self.reject("extra-output")
 
 
 async def observe_startup(
@@ -227,6 +258,7 @@ async def observe_startup(
     observed = result if type(result) is ProcessResult else None
     return {
         "schema_version": 1, "scope": SCOPE, "protocol": probe.protocol,
+        "protocol_reason": probe.reason,
         "lifecycle": lifecycle, "request_writes": probe.writes,
         "stdin_closed": probe.closed, "eof": probe.eof, "binding_checks": checks,
         "supervisor_returncode": (
@@ -400,6 +432,7 @@ def main() -> int:
         report = asyncio.run(hosted_observation())
     except (Exception, asyncio.CancelledError):
         print(json.dumps({"schema_version": 1, "scope": SCOPE, "lifecycle": "failed",
+                          "protocol_reason": "incomplete",
                           "production_available": False, "subscription_qualified": False,
                           "claude_qualified": False}, sort_keys=True))
         return 1

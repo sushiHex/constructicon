@@ -46,6 +46,13 @@ This source expectation is not an observed startup result: the real process
 may instead refuse before a control response, which fails this proof.
 
 No raw vendor response, stderr, account metadata or prompt enters evidence.
+A closed `protocol_reason` enum preserves the first observed protocol refusal; no
+attacker-controlled value, field name, record hash or error text is copied.
+This distinguishes a framing mismatch from surplus output without relaxing
+the permitting predicate or retaining a second raw stream.
+Read-contract and cumulative-byte bounds precede frame parsing. A read that
+exceeds either is not parsed for a more specific reason; consequently, outside
+the output budget the reported first refusal can depend on read fragmentation.
 Publish bounded dispositions and counts, artifact/recipe identities and
 explicit false subscription-qualified/production-available fields. A timeout,
 missing response, malformed frame or failed cleanup is not a successful probe.

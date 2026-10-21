@@ -8149,3 +8149,28 @@ physical skips locally. The 54-test workflow suite and 45 mutation-inventory
 checks pass. Independent review found no further blocker in the runtime repair.
 The complete 267-mutant inventory still requires final-head CI measurement;
 earlier measurements do not substitute for it.
+
+On `0f419e3`, all 74 nonvendor controls passed again. The actual pinned process
+then exited zero with clean joined lifecycle, EOF, stdin closure, three binding
+checks and zero accepted proxy connections. This gets beyond the earlier
+loader failure, but the protocol verdict is `invalid`; no-auth initialization
+is not yet established. The first diagnostic collapsed all schema refusals and
+surplus output into that one value, so it cannot identify the mismatch.
+The next correction adds only a closed, first-refusal reason enum, retaining
+neither raw vendor output nor account metadata. It does not relax acceptance.
+
+Independent review reproduced a diagnostic precedence edge: with a reduced
+output ceiling, a wrong-version frame plus surplus reports `version-mismatch`
+when fragmented but `output-bound` when the first read exceeds the ceiling.
+Both refuse. The design retains the first observed refusal, checks read bounds
+before parsing, and does not inspect over-budget bytes to refine telemetry.
+This limit is documented and tested; fragmentation consistency is asserted
+within the output budget, not claimed for rejected reads.
+
+The diagnostic correction passes 111 portable tests (three physical tests
+remain Linux-only), 45 inventory checks, 60 CI-scope checks, manual Ruff and
+strict Linux-target script mypy. All seven new telemetry mutants are measured
+assertion kills on the final local sources. The complete 274-entry inventory
+and pinned observation require the next hosted run. On `0f419e3`, verify,
+qualification and the other three containment lanes passed; foundation alone
+failed at the actual pinned protocol observation.

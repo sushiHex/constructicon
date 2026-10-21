@@ -122,6 +122,40 @@ async def observe(launcher, *, values=None, timeout=1):
 
 
 @pytest.mark.parametrize("fragment", [1, 7, 8192])
+@pytest.mark.parametrize("damage,reason", [("none", "none"), ("version", "version-mismatch"),
+                                           ("extra", "extra-output"),
+                                           ("version-extra", "version-mismatch")])
+async def test_protocol_reason_is_fragmentation_stable_within_output_budget(
+    damage, reason, fragment,
+):
+    def transform(raw):
+        if damage.startswith("version"):
+            raw = raw.replace(b"2.1.296", b"2.1.295")
+        return raw + b"private surplus\n" if "extra" in damage else raw
+
+    report, _ = await observe(Launcher(Channel(transform, fragment=fragment)))
+    assert "protocol_reason" in report
+    assert report["protocol_reason"] == reason
+    assert diagnostic.successful(report) is (damage == "none")
+    assert "private" not in json.dumps(report)
+    assert_report(report)
+
+
+@pytest.mark.parametrize("fragment,reason", [(1, "version-mismatch"), (8192, "output-bound")])
+async def test_output_bound_precedes_parsing_a_whole_overbudget_read(fragment, reason):
+    channel = Channel(lambda raw: raw.replace(b"2.1.296", b"2.1.295") + b"x" * 100,
+                      fragment=fragment)
+    launcher = Launcher(channel)
+    launcher.limits = replace(launcher.limits, stdout_bytes=len(response("0" * 32)) + 10)
+    report, checked = await observe(launcher)
+    assert not diagnostic.successful(report)
+    assert report["protocol"] == "invalid" and report["protocol_reason"] == reason
+    assert report["lifecycle"] == "failed"
+    assert launcher.joined and checked == [False, False, True]
+    assert_report(report)
+
+
+@pytest.mark.parametrize("fragment", [1, 7, 8192])
 async def test_exact_noauth_observation_requires_close_eof_join_and_three_bindings(fragment):
     launcher = Launcher(Channel(fragment=fragment))
     report, checked = await observe(launcher)
@@ -137,13 +171,25 @@ async def test_exact_noauth_observation_requires_close_eof_join_and_three_bindin
     assert_report(report)
 
 
-def assert_report(report):
+REASONS = frozenset({
+    "incomplete", "none", "record-type", "record-bound", "framing", "json", "outer-shape",
+    "unexpected-system", "unexpected-result", "unexpected-assistant", "unexpected-control-request",
+    "unexpected-other", "envelope-shape", "response-not-success", "request-mismatch",
+    "pending-permissions", "pending-dialogs", "body-shape", "version-mismatch", "state-not-idle",
+    "account-shape", "account-fields", "other-mode", "read-contract", "output-bound", "single-use",
+    "input-bound", "eof-before-frame", "extra-output",
+})
+
+
+def assert_report(report, *, variant="base"):
     schema = {
         "schema_version": lambda value: type(value) is int and value == 1,
         "scope": lambda value: value == "credential_free_native_startup_observation",
-        "protocol": lambda value: value in {"correlated-noauth", "other-mode", "invalid",
-                                            "incomplete"},
-        "lifecycle": lambda value: value in {"clean", "failed", "timeout", "process-refused"},
+        "protocol": lambda value: type(value) is str and value in {
+            "correlated-noauth", "other-mode", "invalid", "incomplete"},
+        "protocol_reason": lambda value: type(value) is str and value in REASONS,
+        "lifecycle": lambda value: type(value) is str and value in {
+            "clean", "failed", "timeout", "process-refused"},
         "request_writes": lambda value: type(value) is int and 0 <= value <= 1,
         "stdin_closed": lambda value: type(value) is bool,
         "eof": lambda value: type(value) is bool,
@@ -158,9 +204,38 @@ def assert_report(report):
         "subscription_qualified": lambda value: value is False,
         "claude_qualified": lambda value: value is False,
     }
+    if variant == "hosted":
+        def sha256(value):
+            return (type(value) is str and len(value) == 64
+                    and all(character in "0123456789abcdef" for character in value))
+
+        def identity_digest(value):
+            return (type(value) is str and value.startswith("sha256:")
+                    and sha256(value.removeprefix("sha256:")))
+
+        schema.update({
+            "proxy_accepted_connections": lambda value: type(value) is int and 0 <= value <= 9,
+            "proxy_bound_exceeded": lambda value: type(value) is bool,
+            "proxy_joined": lambda value: type(value) is bool,
+            "launch_revision": identity_digest, "vendor_digest": identity_digest,
+            "runtime_digest": identity_digest,
+            "member_sha256": sha256, "archive_sha256": sha256,
+            "member_size": lambda value: type(value) is int and value == 257068216,
+            "version": lambda value: type(value) is str and value == "2.1.296",
+        })
+    elif variant == "failure":
+        fields = {"schema_version", "scope", "lifecycle", "protocol_reason",
+                  "production_available", "subscription_qualified", "claude_qualified"}
+        schema = {key: predicate for key, predicate in schema.items() if key in fields}
+    else:
+        assert variant == "base"
     assert set(report) == set(schema)
     for key, value in report.items():
         assert schema[key](value), key
+    if report.get("protocol") == "correlated-noauth":
+        assert report["protocol_reason"] == "none"
+    if report.get("protocol") == "incomplete":
+        assert report["protocol_reason"] in {"incomplete", "input-bound", "eof-before-frame"}
 
 
 @pytest.mark.parametrize("fragment", [1, 8192])
@@ -205,6 +280,14 @@ async def test_non_noauth_damage_never_counts_as_observation_but_closes_stdin(da
     expected = ("incomplete" if damage in {"missing-lf", "empty"} else "other-mode"
                 if damage in {"subscription", "missing-none", "extra-account"} else "invalid")
     assert report["protocol"] == expected, report
+    reasons = {"subscription": "other-mode", "wrong-id": "request-mismatch",
+               "pending": "pending-permissions", "version": "version-mismatch",
+               "running": "state-not-idle", "missing-none": "other-mode",
+               "extra-account": "other-mode", "malformed": "json",
+               "duplicate": "extra-output", "partial-extra": "extra-output",
+               "missing-lf": "eof-before-frame", "empty": "eof-before-frame",
+               "oversized": "record-bound"}
+    assert report["protocol_reason"] == reasons[damage]
     assert launcher.channel.close_attempts == 1 and checked == [False, False, True]
     assert launcher.joined and len(launcher.channel.writes) == 1
     assert_report(report)
@@ -218,6 +301,7 @@ async def test_io_failures_cannot_publish_and_never_retry_write_or_close(stage):
     assert len(launcher.channel.writes) == 1
     assert launcher.channel.close_attempts == int(stage in {"close", "tail"})
     assert launcher.joined and checked == [False, False, True]
+    assert_report(report)
 
 
 @pytest.mark.parametrize("index", [0, 1, 2])
@@ -231,6 +315,7 @@ async def test_binding_change_or_absence_refuses_and_prespawn_change_cannot_reco
     assert not diagnostic.successful(report)
     assert launcher.spawned is (index == 2)
     assert len(checked) == (1 if index == 0 and absent else 3)
+    assert_report(report)
 
 
 async def test_input_bound_binds_before_the_only_write():
@@ -239,6 +324,8 @@ async def test_input_bound_binds_before_the_only_write():
     report, _ = await observe(launcher)
     assert not diagnostic.successful(report) and launcher.channel.writes == []
     assert launcher.channel.close_attempts == 0
+    assert report["protocol_reason"] == "input-bound"
+    assert_report(report)
 
 
 @pytest.mark.parametrize("stage", ["write", "read", "close", "tail"])
@@ -309,6 +396,7 @@ async def test_expired_read_never_awaits_a_blocking_close_after_deadline():
     assert report["lifecycle"] == "timeout" and not diagnostic.successful(report)
     assert launcher.joined and checked == [False, False, True]
     assert closes == []
+    assert_report(report)
 
 
 @pytest.mark.parametrize("damage", ["stdout", "supervisor", "payload", "timeout", "bound"])
@@ -327,21 +415,66 @@ async def test_process_damage_and_cumulative_output_bound_prevent_success(damage
     report, _ = await observe(launcher)
     assert not diagnostic.successful(report), report
     assert launcher.joined
+    assert report["protocol_reason"] == ("output-bound" if damage == "stdout" else "none")
     assert_report(report)
+
+
+@pytest.mark.parametrize("value", ["private non-bytes", b"x" * 8193])
+async def test_read_contract_failure_reports_only_a_static_reason(value):
+    channel = Channel()
+
+    async def read(maximum=8192):
+        return value
+
+    channel.read = read
+    report, _ = await observe(Launcher(channel))
+    assert report["protocol"] == "invalid" and report["protocol_reason"] == "read-contract"
+    assert not diagnostic.successful(report)
+    assert_report(report)
+
+
+@pytest.mark.parametrize("variant", ["base", "hosted", "failure"])
+async def test_shared_schema_walks_every_published_field(variant):
+    report, _ = await observe(Launcher())
+    if variant == "hosted":
+        identity = str(digest("diagnostic-schema-test", 1, "opaque"))
+        report.update({"proxy_accepted_connections": 0, "proxy_bound_exceeded": False,
+                       "proxy_joined": True, "launch_revision": identity,
+                       "vendor_digest": identity, "runtime_digest": identity,
+                       "member_sha256": "0" * 64, "archive_sha256": "0" * 64,
+                       "member_size": 257068216, "version": "2.1.296"})
+    elif variant == "failure":
+        report = {"schema_version": 1, "scope": diagnostic.SCOPE, "lifecycle": "failed",
+                  "protocol_reason": "incomplete", "production_available": False,
+                  "subscription_qualified": False, "claude_qualified": False}
+    assert_report(report, variant=variant)
+    for key in report:
+        damaged = {**report, key: "private unbounded sentinel" * 1024}
+        failure = None
+        try:
+            assert_report(damaged, variant=variant)
+        except Exception as error:
+            failure = error
+        assert isinstance(failure, AssertionError), key
 
 
 async def test_exact_record_ceiling_binds_and_duplicate_json_facts_refuse():
     raw = response("id")
     padded = raw[:-1] + b" " * (RECORD_BYTES - len(raw)) + b"\n"
-    assert diagnostic.classify(padded, "id") == "correlated-noauth"
-    assert diagnostic.classify(padded[:-1] + b" \n", "id") == "invalid"
+    assert diagnostic.classify(padded, "id") == ("correlated-noauth", "none")
+    assert diagnostic.classify(padded[:-1] + b" \n", "id") == ("invalid", "record-bound")
     duplicate = raw.replace(b'"tokenSource":"none"',
                             b'"tokenSource":"private","tokenSource":"none"')
-    assert diagnostic.classify(duplicate, "id") == "invalid"
+    assert diagnostic.classify(duplicate, "id") == ("invalid", "json")
 
 
 @pytest.mark.parametrize("damage", ["outer", "type", "envelope", "subtype", "body", "account",
-                                    "account-value", "account-key", "crlf"])
+                                    "account-value", "account-key", "crlf", "system", "result",
+                                    "assistant", "unknown-type", "unhashable-type",
+                                    "unhashable-subtype", "request-type", "request-mismatch",
+                                    "pending-permissions", "pending-dialogs", "envelope-extra",
+                                    "version", "state", "json", "non-object", "record-type",
+                                    "framing", "record-bound", "noauth", "other-mode"])
 def test_classifier_rejects_invalid_shapes_without_disclosing_fields(damage):
     value = json.loads(response("id"))
     if damage == "outer":
@@ -360,8 +493,66 @@ def test_classifier_rejects_invalid_shapes_without_disclosing_fields(damage):
         value["response"]["response"]["account"]["tokenSource"] = 0
     elif damage == "account-key":
         value["response"]["response"]["account"]["private"] = "not allowed"
+    elif damage in {"system", "result", "assistant"}:
+        value["type"] = damage
+    elif damage == "unknown-type":
+        value["type"] = "private unrecognized type" * 100
+    elif damage == "unhashable-type":
+        value["type"] = {"private": []}
+    elif damage == "unhashable-subtype":
+        value["response"]["subtype"] = {"private": []}
+    elif damage == "request-type":
+        value["response"]["request_id"] = []
+    elif damage == "request-mismatch":
+        value["response"]["request_id"] = "private other id"
+    elif damage in {"pending-permissions", "pending-dialogs"}:
+        field = ("pending_permission_requests" if damage == "pending-permissions"
+                 else "pending_user_dialog_requests")
+        value["response"][field] = [{"private": "prompt"}]
+    elif damage == "envelope-extra":
+        value["response"]["private"] = "not allowed"
+    elif damage == "version":
+        value["response"]["response"]["claude_code_version"] = "private version"
+    elif damage == "state":
+        value["response"]["response"]["session_state"] = []
+    elif damage == "non-object":
+        value = []
+    elif damage == "other-mode":
+        value["response"]["response"]["account"]["tokenSource"] = "private token source"
     raw = json.dumps(value).encode() + (b"\r\n" if damage == "crlf" else b"\n")
-    assert diagnostic.classify(raw, "id") == "invalid"
+    if damage == "json":
+        raw = b"private malformed\n"
+    elif damage == "record-type":
+        raw = "private not bytes"
+    elif damage == "framing":
+        raw = raw[:-1]
+    elif damage == "record-bound":
+        raw += b" " * RECORD_BYTES
+    reasons = {
+        "outer": "outer-shape", "type": "unexpected-control-request",
+        "envelope": "envelope-shape", "subtype": "response-not-success", "body": "body-shape",
+        "account": "account-shape", "account-value": "account-fields",
+        "account-key": "account-fields", "crlf": "framing", "system": "unexpected-system",
+        "result": "unexpected-result", "assistant": "unexpected-assistant",
+        "unknown-type": "unexpected-other", "unhashable-type": "unexpected-other",
+        "unhashable-subtype": "response-not-success", "request-type": "request-mismatch",
+        "request-mismatch": "request-mismatch", "pending-permissions": "pending-permissions",
+        "pending-dialogs": "pending-dialogs", "envelope-extra": "envelope-shape",
+        "version": "version-mismatch", "state": "state-not-idle", "json": "json",
+        "non-object": "outer-shape", "record-type": "record-type", "framing": "framing",
+        "record-bound": "record-bound", "noauth": "none", "other-mode": "other-mode",
+    }
+    failure, observed = None, None
+    try:
+        observed = diagnostic.classify(raw, "id")
+    except Exception as error:
+        failure = error
+    assert failure is None
+    protocol = ("correlated-noauth" if damage == "noauth" else "other-mode"
+                if damage == "other-mode" else "invalid")
+    assert observed == (protocol, reasons[damage])
+    assert observed[1] in REASONS and len(observed[1]) <= 32
+    assert "private" not in json.dumps(observed)
 
 
 async def test_callback_is_single_use_and_deadline_checked_before_any_write():
@@ -375,6 +566,7 @@ async def test_callback_is_single_use_and_deadline_checked_before_any_write():
     except BaseException as error:
         failure = error
     assert isinstance(failure, diagnostic._Refused) and len(channel.writes) == 1
+    assert probe.reason == "single-use"
     expired = diagnostic._Probe(deadline=asyncio.get_running_loop().time() - 1,
                                 input_limit=8192, output_limit=RECORD_BYTES)
     failure = None
@@ -392,10 +584,13 @@ def test_main_rejects_arguments_without_launching_or_publishing_private_error(mo
     monkeypatch.setattr(sys, "argv", ["observe", "private-unexpected"])
     monkeypatch.setattr(diagnostic, "hosted_observation", forbidden)
     assert diagnostic.main() == 1
-    assert json.loads(capsys.readouterr().out) == {
+    report = json.loads(capsys.readouterr().out)
+    assert report == {
         "schema_version": 1, "scope": diagnostic.SCOPE, "lifecycle": "failed",
+        "protocol_reason": "incomplete",
         "production_available": False, "subscription_qualified": False, "claude_qualified": False,
     }
+    assert_report(report, variant="failure")
 
 
 async def test_hosted_helper_is_not_bound_to_pytest_argv_and_publishes_only_pinned_fields(
@@ -446,7 +641,7 @@ async def test_hosted_helper_is_not_bound_to_pytest_argv_and_publishes_only_pinn
     extras = {"proxy_accepted_connections", "proxy_bound_exceeded", "proxy_joined",
               "launch_revision", "vendor_digest", "member_sha256", "archive_sha256",
               "member_size", "version", "runtime_digest"}
-    assert_report({key: value for key, value in report.items() if key not in extras})
+    assert_report(report, variant="hosted")
     assert {key: report[key] for key in extras} == {
         "proxy_accepted_connections": 0, "proxy_bound_exceeded": False, "proxy_joined": True,
         "launch_revision": str(digest("diagnostic-test", 1, "recipe")),
@@ -627,6 +822,7 @@ async def test_pinned_credential_free_startup_has_only_a_noauth_observation():
     physical_launcher("fixture-startup")  # Required fixture/platform failures are never skips.
     report = await diagnostic.hosted_observation()
     write_evidence("n6-claude-pinned-startup.json", report)
+    assert_report(report, variant="hosted")
     assert diagnostic.successful(report), report
     assert report["proxy_joined"] is True and report["proxy_bound_exceeded"] is False
     assert (type(report["proxy_accepted_connections"]) is int
