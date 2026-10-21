@@ -8077,3 +8077,22 @@ that secondary check fails, preserving cancellation and fatal control flow;
 after a normal exchange return, terminal failure still refuses acceptance.
 No deadline, generic launcher or Codex store law changes. The correction's
 complete final-head gates remain unmeasured until executed.
+
+### Native composition final-head evidence and merge
+
+PR #277 merged as `f4cb9c9` from `b4339fd`; both trees are
+`787ecae3d7219f4a0c893eb398b3076f60027e00`. On that exact reviewed head,
+full verification passed 8,009 tests with 471 skips, strict mypy over 135
+files, ruff and five import contracts. All four Linux proof lanes, containment,
+runner qualification, Windows discovery and mutation jobs passed. All 202
+Claude mutants failed by assertion. The actual native/worker composition
+passed both callback and zero-callback cases; missing-profile refusal ran
+separately and passed. Final connector review reported no findings, and both
+earlier binding findings have verified replies and resolved conversations.
+
+This supersedes the preceding unmeasured status, not the historical failure
+record. The evidence is a compiled nonvendor peer and fake credentials through
+physical boundaries. It does not establish vendor-native subscription
+qualification, production availability or a live READ. Issue #175 retains
+those separate gates; no new vendor binary, account, private-host session or
+model call was performed in this slice.
