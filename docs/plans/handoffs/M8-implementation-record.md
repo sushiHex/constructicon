@@ -8096,3 +8096,30 @@ physical boundaries. It does not establish vendor-native subscription
 qualification, production availability or a live READ. Issue #175 retains
 those separate gates; no new vendor binary, account, private-host session or
 model call was performed in this slice.
+
+### Credential-free pinned Claude startup diagnostic
+
+The successor uses the reviewed native launcher for a real pinned-CLI startup
+observation on disposable hosted Linux. It is not an authenticated readiness
+gate: an empty store must produce the exact no-auth projection, and the
+production subscription judge remains unchanged. Source inspection rechecked
+`vl`, `xRe` and `Vg` against the pinned member; the initialize model catalog is
+not selected-model evidence. No account, private-host session or model turn
+belongs to this diagnostic.
+
+Two independent design inspections found no blocker in the finite installation
+and exchange. Initial implementation review caught an unbounded cleanup await
+after cancellation and a counter omitting its final refused connection. The
+corrected design leaves failed-exchange termination to the existing launcher
+and counts every accepted connection, including the one exceeding the bound.
+Follow-up inspection also found that peer cleanup could replace an escaping
+cancellation with its own failure. Cleanup now preserves the primary failure
+while recording an unsuccessful join; a regression exercises both directions.
+
+Local measurement killed all 44 new mutants by assertion after passing their
+baselines: 17 installation guards and 27 diagnostic guards. The diagnostic
+suite passed 72 tests with three hosted physical cases skipped on Windows;
+the installer suite passed 18. Both scripts pass explicit Linux-target strict
+mypy and ruff. These are portable controls, not claims that the pinned CLI
+has run. Hosted execution remains unmeasured; frozen plans and production
+availability remain unchanged.

@@ -142,6 +142,34 @@ jobs:
           # The root helper restores the exact native policy in its finally block.
           sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" \
             scripts/ci/prove_m8_claude_missing.py </dev/null
+      - name: Observe pinned Claude startup without credentials or provider egress
+        if: matrix.lane == 'foundation'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --proto '=https' --max-time 120 \
+            --max-filesize 268435456 \
+            --output "$RUNNER_TEMP/claude-startup.tgz" \
+            https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.296.tgz </dev/null
+          sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" \
+            scripts/ci/build_m8_claude_startup_fixture.py "$RUNNER_TEMP/claude-startup.tgz" \
+            </dev/null | tee "$RUNNER_TEMP/m8-claude-startup-fixture.json"
+          sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
+            M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
+            M8_CLAUDE_COMPOSITION_REQUIRED=1 M8_CLAUDE_STARTUP_REQUIRED=1 \
+            RUNNER_ENVIRONMENT=github-hosted \
+            M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
+            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_claude_native_startup.py \
+              -k 'not test_pinned_credential_free_startup_has_only_a_noauth_observation' \
+              -v --tb=short --durations=10 -p no:cacheprovider </dev/null
+          # Real vendor execution follows successful nonvendor controls only.
+          sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
+            M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
+            M8_CLAUDE_COMPOSITION_REQUIRED=1 M8_CLAUDE_STARTUP_REQUIRED=1 \
+            RUNNER_ENVIRONMENT=github-hosted M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
+            "$PWD/.venv/bin/python" -m pytest \
+              tests/substrate/test_claude_native_startup.py::test_pinned_credential_free_startup_has_only_a_noauth_observation \
+              -v --tb=short --durations=10 -p no:cacheprovider </dev/null
       - name: Observe frozen P2 stock-utility diagnostics on Ubuntu 24.04
         if: matrix.lane == 'foundation'
         shell: bash
@@ -569,6 +597,7 @@ jobs:
             ${{ runner.temp }}/m8-host.txt
             ${{ runner.temp }}/m8-noexec.json
             ${{ runner.temp }}/m8-claude-fixture.json
+            ${{ runner.temp }}/m8-claude-startup-fixture.json
             ${{ env.M8_EVIDENCE }}/boundary.json
             ${{ env.M8_EVIDENCE }}/codex-*.json
             ${{ env.M8_EVIDENCE }}/duplex-*.json

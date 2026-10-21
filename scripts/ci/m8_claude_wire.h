@@ -107,7 +107,9 @@ static void wire_ack(const char *outer, const char *rpc) {
 }
 
 static int claude_wire(int argc, char **argv) {
-    if (argc != 14 || (strcmp(argv[11], "fixture-read") && strcmp(argv[11], "fixture-zero")))
+    if (argc != 14 || (strcmp(argv[11], "fixture-read") && strcmp(argv[11], "fixture-zero") &&
+                      strcmp(argv[11], "fixture-startup") &&
+                      strcmp(argv[11], "fixture-startup-subscribed")))
         return -1;
 #ifdef _WIN32
     WIRE_CHECK(_setmode(_fileno(stdin), _O_BINARY) != -1);
@@ -120,6 +122,23 @@ static int claude_wire(int argc, char **argv) {
         WIRE_CHECK(!strcmp(argv[i + 1], fixed[i]));
     WIRE_CHECK(!strcmp(argv[12], "--effort") && !strcmp(argv[13], "low"));
     const char *model = argv[11];
+    if (!strcmp(model, "fixture-startup") || !strcmp(model, "fixture-startup-subscribed")) {
+        char identifier[128], expected[512];
+        wire_read();
+        wire_token("\"request_id\":", identifier, sizeof(identifier));
+        int length = snprintf(expected, sizeof(expected),
+            "{\"type\":\"control_request\",\"request_id\":%s,"
+            "\"request\":{\"subtype\":\"initialize\"}}\n", identifier);
+        WIRE_CHECK(length > 0 && (size_t)length < sizeof(expected));
+        WIRE_CHECK(!strcmp(wire_frame, expected));
+        wire_success(identifier, !strcmp(model, "fixture-startup")
+            ? "{\"account\":{\"apiProvider\":\"firstParty\",\"tokenSource\":\"none\"},"
+              "\"claude_code_version\":\"2.1.296\",\"session_state\":\"idle\"}"
+            : "{\"account\":{\"apiProvider\":\"firstParty\",\"subscriptionType\":\"Claude Pro\"},"
+              "\"claude_code_version\":\"2.1.296\",\"session_state\":\"idle\"}", 1);
+        WIRE_CHECK(fgetc(stdin) == EOF && !ferror(stdin));
+        return 0;
+    }
     int callback = !strcmp(model, "fixture-read");
     wire_observation("\"subtype\":\"initialize\"", model, 0);
     wire_observation("\"subtype\":\"get_settings\"", model, 0);

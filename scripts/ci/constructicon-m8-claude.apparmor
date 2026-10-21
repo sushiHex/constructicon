@@ -1,4 +1,5 @@
-# Fake-only composition candidate. Loading it is not Claude qualification.
+# Hosted composition and credential-free startup diagnostic policy.
+# Loading it is not subscription qualification or a production deployment.
 # The fixed namespace/mount recipe remains the filesystem/network boundary.
 # All exec targets retain existing profile components under no_new_privs.
 abi <abi/4.0>,
