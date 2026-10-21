@@ -171,8 +171,7 @@ def forwarders():
     # exec'd this client in its own place.
     me = os.getpid()
     children = open(f'/proc/{me}/task/{me}/children').read().split()
-    return [{name: os.readlink(f'/proc/{child}/fd/{name}')
-             for name in os.listdir(f'/proc/{child}/fd')} for child in children]
+    return [errno_of(lambda: os.listdir(f'/proc/{child}/fd')) for child in children]
 
 results = {
     'ssl': True,
@@ -234,11 +233,7 @@ async def test_an_environment_proxy_client_reaches_only_the_pinned_peer(
                                  "body": "harmless-peer"}
     assert facts["decoy"] == {"connect": "refused"}
     assert facts["direct"] == errno.ENETUNREACH
-    assert len(facts["forwarders"]) == 1, facts["forwarders"]
-    descriptors = facts["forwarders"][0]
-    assert {descriptors[name] for name in ("0", "1", "2")} == {"/dev/null"}, descriptors
-    rest = [target for name, target in descriptors.items() if name not in {"0", "1", "2"}]
-    assert rest and all(target.startswith("socket:") for target in rest), descriptors
+    assert facts["forwarders"] == [errno.EACCES], facts["forwarders"]
     assert [head.startswith(preface(host, port)) for head, (host, port) in zip(
         heads, [(ALLOWED, allowed.port), (DECOY, decoy.port)], strict=True,
     )] == [True, True], heads
@@ -255,7 +250,7 @@ async def test_an_environment_proxy_client_reaches_only_the_pinned_peer(
         "observed": dict(relay.observed),
         "connect_heads": [head.decode("ascii") for head in heads],
         "zone": {key: facts[key] for key in ("environment", "listening", "direct")},
-        "forwarder_fds": descriptors,
+        "forwarder_fd_inspection_errno": facts["forwarders"],
     })
 
 

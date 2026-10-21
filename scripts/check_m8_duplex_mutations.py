@@ -110,8 +110,8 @@ MUTANTS = (
     ),
     (
         "private report failure hides the callback failure", PUMP,
-        "raw_report = os.read(report_read, 5)",
-        "\n                try: raw_report = os.read(report_read, 5)"
+        "raw_report += os.read(report_read, report_bound - len(raw_report))",
+        "\n                try: raw_report += os.read(report_read, report_bound - len(raw_report))"
         "\n                except BaseException: errors.clear(); raise",
         NATIVE + "test_cleanup_failure_keeps_the_original_callback_error[report]",
     ),

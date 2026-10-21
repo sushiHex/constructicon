@@ -15,6 +15,23 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## Claude native composition has an explicit proof boundary
+
+PR #276 merged as `302e20b`, tree-identical to reviewed `9f50cbb`. Its source-
+grounded design retains one launcher owner and a separate READ worker. It
+distinguishes a final-native-exec confinement transition from the trusted
+bootstrap, and a fixed proxy candidate from measured transport compatibility.
+Independent review and the exact-head connector review found no blockers;
+documentation checks and CI passed. The docs-only containment route deliberately
+did not run new physical proofs.
+
+Two source facts corrected premature incompatibility claims: the credential
+writer's atomic rename has an `EBUSY` in-place fallback after successful staging,
+and its refresh path can return `refreshed` while ignoring a save-failure result.
+A writable disposable staging parent is therefore a candidate, not evidence of
+durable credentials. The design establishes no native availability, subscription
+turn, deployment or vendor qualification.
+
 ## Claude's bounded READ path is implemented, not native-qualified
 
 PR #274 merged as `ec1aa4c`, tree-identical to reviewed head `021b41d`.

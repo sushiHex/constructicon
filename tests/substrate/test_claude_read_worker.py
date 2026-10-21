@@ -299,6 +299,10 @@ async def test_wrong_owner_and_unbounded_or_native_launcher_refuse(custody):
         worker.ClaudeReadWorker(provider=provider, context=ctx,
                                workspace=acquired.resource,
                                launcher=replace(launch, vendor=object()))
+    with pytest.raises(ContractViolation, match="fixed networkless"):
+        worker.ClaudeReadWorker(provider=provider, context=ctx,
+                               workspace=acquired.resource,
+                               launcher=replace(launch, claude=object()))
     with pytest.raises(ContractViolation, match="minted"):
         worker.ClaudeReadWorker(provider=provider, context=ctx,
                                workspace=copy.copy(acquired.resource), launcher=launch)

@@ -29,7 +29,26 @@ from constructicon.core.identity import Digest, digest
 from constructicon.core.process import ProcessIO
 from constructicon.substrate._lifetime import finish_owned
 from constructicon.substrate.executors._egress_bridge import BRIDGE_SCRIPT
-from constructicon.substrate.executors._supervisor import NAMESPACE_SCRIPT
+from constructicon.substrate.executors._supervisor import (
+    CLAUDE_BOOTSTRAP_LABEL,
+    CLAUDE_NATIVE_LABEL,
+    NAMESPACE_SCRIPT,
+)
+from constructicon.substrate.executors.claude_native import (
+    ADMIN_ROOT,
+    ANTHROPIC_ROOT,
+    CONFIG_ROOT,
+    CREDENTIAL_MOUNT,
+    MCP_MOUNT,
+    POLICY_MOUNT,
+    SECURE_ROOT,
+    STORAGE_PARENT,
+    ClaudeNativeLayout,
+    ClaudeNativeStoreMount,
+    ClaudeNativeVendor,
+    native_environment,
+)
+from constructicon.substrate.executors.claude_native import VENDOR_MOUNT as CLAUDE_VENDOR_MOUNT
 from constructicon.substrate.executors.egress import ZONE_SOCKET, EgressSocket
 from constructicon.substrate.executors.operator_store import CREDENTIAL_FILE, BindingCheck
 
@@ -512,6 +531,11 @@ class LinuxLauncher:
     expected_policy_sha256: str
     limits: ProcessLimits = DEFAULT_PROCESS_LIMITS
     vendor: NativeVendor | None = None
+    claude: ClaudeNativeVendor | None = None
+
+    def __post_init__(self) -> None:
+        if self.vendor is not None and self.claude is not None:
+            raise ContractViolation("a launcher selects exactly one fixed native recipe")
 
     @property
     def root(self) -> Path:
@@ -524,6 +548,10 @@ class LinuxLauncher:
             require_fixed_artifact(path)
         if self.vendor is not None:
             self.vendor.check()
+        if self.claude is not None:
+            self.claude.check()
+            if runtime_digest(self.claude.tree) != self.claude.expected_tree:
+                raise ContractViolation("Claude vendor content differs from the admitted identity")
         if _sha(self.bubblewrap) != BWRAP_SHA256:
             raise ContractViolation("bubblewrap content differs from the supported build")
         if _sha(self.policy) != self.expected_policy_sha256:
@@ -536,7 +564,7 @@ class LinuxLauncher:
 
     @property
     def revision(self) -> Digest:
-        return digest("linux-launch", 1, {
+        identity = {
             "runtime": self.expected_runtime,
             "bubblewrap": BWRAP_SHA256,
             "recipe": _sha(Path(__file__)),
@@ -547,11 +575,15 @@ class LinuxLauncher:
             "vendor": None if self.vendor is None else [
                 str(self.vendor.tree), str(self.vendor.catalog),
             ],
-        })
+        }
+        if self.claude is not None:
+            identity["claude"] = self.claude.revision
+        return digest("linux-launch", 1, identity)
 
     def argv(
         self, command: tuple[str, ...], *, workspace: Path | None, posture: Posture,
-        native_store: NativeStoreMount | None = None, layout: NativeLayout | None = None,
+        native_store: NativeStoreMount | ClaudeNativeStoreMount | None = None,
+        layout: NativeLayout | ClaudeNativeLayout | None = None,
     ) -> list[str]:
         if sys.platform != "linux":
             raise ContractViolation("contained command construction requires Linux")
@@ -559,9 +591,17 @@ class LinuxLauncher:
             raise ContractViolation("contained command requires a fixed absolute executable")
         if native_store is not None and workspace is not None:
             raise ContractViolation("a native store and worker workspace cannot share a namespace")
-        if (native_store is None) != (layout is None) or (
-            layout is not None and (layout.catalog_fd is None) != (self.vendor is None)
-        ):
+        if isinstance(native_store, ClaudeNativeStoreMount):
+            if (self.claude is None or not isinstance(layout, ClaudeNativeLayout)
+                    or command != self.claude.command):
+                raise ContractViolation("a Claude launch requires its exact sealed native recipe")
+            if native_store.egress is None:
+                raise ContractViolation("the Claude native recipe requires its fixed egress bridge")
+        elif ((native_store is None) != (layout is None)
+              or isinstance(layout, ClaudeNativeLayout)
+              or (native_store is not None and self.claude is not None)
+              or (isinstance(layout, NativeLayout)
+                  and (layout.catalog_fd is None) != (self.vendor is None))):
             raise ContractViolation("a native store launches with exactly the launcher's layout")
         args = [
             str(self.bubblewrap), "--unshare-user", "--unshare-pid", "--unshare-ipc",
@@ -577,7 +617,22 @@ class LinuxLauncher:
                 "--ro-bind" if posture is Posture.READ else "--bind",
                 str(workspace), "/workspace",
             ]
-        if native_store is not None and layout is not None:
+        if isinstance(native_store, ClaudeNativeStoreMount):
+            assert isinstance(layout, ClaudeNativeLayout) and self.claude is not None
+            args += [
+                "--perms", "0700", "--dir", CONFIG_ROOT,
+                "--perms", "0700", "--dir", STORAGE_PARENT,
+                "--perms", "0700", "--dir", SECURE_ROOT,
+                "--perms", "0700", "--dir", ANTHROPIC_ROOT,
+                "--dir", ADMIN_ROOT,
+                "--ro-bind-data", str(layout.policy_fd), POLICY_MOUNT,
+                "--ro-bind-data", str(layout.mcp_fd), MCP_MOUNT,
+                "--bind-fd", str(native_store.credential_fd), CREDENTIAL_MOUNT,
+                "--ro-bind", str(self.claude.tree), CLAUDE_VENDOR_MOUNT,
+            ]
+            for name, value in native_environment().items():
+                args += ["--setenv", name, value]
+        if isinstance(native_store, NativeStoreMount) and isinstance(layout, NativeLayout):
             args += [
                 "--dir", NATIVE_HOME,
                 "--ro-bind-data", str(native_store.configuration_fd), f"{NATIVE_HOME}/config.toml",
@@ -592,11 +647,11 @@ class LinuxLauncher:
                     "--ro-bind", str(self.vendor.tree), VENDOR_MOUNT,
                     "--ro-bind-data", str(layout.catalog_fd), CATALOG_MOUNT,
                 ]
-            if native_store.egress is not None:
-                native_store.egress.require_current()
-                args += ["--ro-bind", str(native_store.egress.path), ZONE_SOCKET]
-                # The proxy bridge travels only with the leaf (M8-N4-proxy-bridge.md).
-                command = ("/usr/bin/python3", "-I", BRIDGE_SCRIPT, *command)
+        if native_store is not None and native_store.egress is not None:
+            native_store.egress.require_current()
+            args += ["--ro-bind", str(native_store.egress.path), ZONE_SOCKET]
+            # The proxy bridge travels only with the leaf (M8-N4-proxy-bridge.md).
+            command = ("/usr/bin/python3", "-I", BRIDGE_SCRIPT, *command)
         args += ["--chdir", "/workspace" if workspace is not None else "/tmp", "--", *command]
         return args
 
@@ -622,7 +677,7 @@ class LinuxLauncher:
     async def exchange(
         self, command: tuple[str, ...], *, workspace: Path | None, posture: Posture,
         guard_fds: tuple[int, ...], conversation: Conversation, timeout_s: float,
-        native_store: NativeStoreMount | None = None,
+        native_store: NativeStoreMount | ClaudeNativeStoreMount | None = None,
     ) -> ProcessResult:
         """Exchange bytes within the same owned, networkless process lifetime."""
 
@@ -636,7 +691,7 @@ class LinuxLauncher:
         self, command: tuple[str, ...], *, workspace: Path | None, posture: Posture,
         guard_fds: tuple[int, ...], stdin: bytes, input_limit: int,
         conversation: Conversation | None, timeout_s: float,
-        native_store: NativeStoreMount | None = None,
+        native_store: NativeStoreMount | ClaudeNativeStoreMount | None = None,
     ) -> ProcessResult:
 
         started = time.monotonic()
@@ -649,7 +704,11 @@ class LinuxLauncher:
         except TimeoutError:
             return ProcessResult(125, b"", b"", time.monotonic() - started, timed_out=True)
         # After the probe's custody check, so the catalog sealed is the one checked.
-        layout = None if native_store is None else NativeLayout.seal(self.vendor)
+        layout: NativeLayout | ClaudeNativeLayout | None = None
+        if isinstance(native_store, ClaudeNativeStoreMount):
+            layout = ClaudeNativeLayout.seal()
+        elif native_store is not None:
+            layout = NativeLayout.seal(self.vendor)
         try:
             result = await self._run(
                 command, workspace=workspace, posture=posture, guard_fds=guard_fds,
@@ -694,7 +753,10 @@ class LinuxLauncher:
         try:
             facts = json.loads(result.stdout)
             correct = (
-                facts["profile"] == "constructicon-m8-launch//&constructicon-m8-workload (enforce)"
+                facts["profile"] == (
+                    "constructicon-m8-launch//&constructicon-m8-workload (enforce)"
+                    if self.claude is None else CLAUDE_BOOTSTRAP_LABEL
+                )
                 and facts["nested_denied"] and facts["sys_absent"]
                 and "NoNewPrivs:\t1" in facts["status"]
                 and "CapEff:\t0000000000000000" in facts["status"]
@@ -712,7 +774,8 @@ class LinuxLauncher:
         self, command: tuple[str, ...], *, workspace: Path | None, posture: Posture,
         guard_fds: tuple[int, ...], stdin: bytes = b"", deadline: float,
         input_limit: int | None = None, conversation: Conversation | None = None,
-        native_store: NativeStoreMount | None = None, layout: NativeLayout | None = None,
+        native_store: NativeStoreMount | ClaudeNativeStoreMount | None = None,
+        layout: NativeLayout | ClaudeNativeLayout | None = None,
     ) -> ProcessResult:
         if sys.platform != "linux":
             raise ContractViolation("contained process ownership requires Linux")
@@ -730,11 +793,16 @@ class LinuxLauncher:
         if native_store is not None:
             if native_store.lock_fd not in guard_fds:
                 raise ContractViolation("the native store requires its retained supervisor guard")
+            if (isinstance(native_store, ClaudeNativeStoreMount)
+                    and len(set(mount_fds)) != len(mount_fds)):
+                raise ContractViolation("Claude native mount descriptors must be distinct")
             if set(mount_fds) & set(guard_fds):
                 raise ContractViolation("a native mount descriptor cannot also be a guard")
             checked = native_store.before_spawn()
             if not isinstance(checked, BindingCheck):
                 raise ContractViolation("the native store did not complete its binding check")
+        if asyncio.get_running_loop().time() >= deadline:
+            return ProcessResult(125, b"", b"", 0, timed_out=True)
         mount_argument = (
             (f"--mount-fds={','.join(str(fd) for fd in mount_fds)}",) if mount_fds else ()
         )
@@ -750,6 +818,7 @@ class LinuxLauncher:
         stderr_head = bytearray()
         stderr_tail = bytearray()
         raw_report = b""
+        native_ready_consumed = False
         bound: str | None = None
         timed_out = False
         tasks: list[asyncio.Task[None]] = []
@@ -877,7 +946,10 @@ class LinuxLauncher:
                 f"{self.root}/lib/x86_64-linux-gnu:{self.root}/usr/lib/x86_64-linux-gnu",
                 str(self.root / "usr/bin/python3.12"), "-I", str(self.root / SUPERVISOR_PATH),
                 str(owner_read), ",".join(str(fd) for fd in guard_fds),
-                str(child_deadline), f"--report-fd={report_write}", *mount_argument, *args,
+                str(child_deadline), f"--report-fd={report_write}", *mount_argument,
+                *((f"--native-label={CLAUDE_NATIVE_LABEL}",)
+                  if isinstance(native_store, ClaudeNativeStoreMount) else ()),
+                *args,
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE, close_fds=True,
                 pass_fds=(owner_read, report_write, *guard_fds, *mount_fds),
@@ -911,12 +983,42 @@ class LinuxLauncher:
             ]
             if cancellation is not None:
                 raise cancellation
-            if stop_reason is None:
-                protocol = asyncio.create_task(converse())
             if owner_write >= 0:
                 # Refused/expired setup retains its observable exit status.
                 with suppress(BrokenPipeError):
                     os.write(owner_write, b"\x01")
+            if isinstance(native_store, ClaudeNativeStoreMount) and stop_reason is None:
+                # Drain from spawn, but expose neither stdin nor conversation
+                # until trusted PID 1 observed the actual final native label.
+                try:
+                    async with asyncio.timeout_at(deadline):
+                        while True:
+                            try:
+                                ready = os.read(report_read, 1)
+                            except BlockingIOError:
+                                ready = None
+                            if ready is not None:
+                                if ready != b"\x01":
+                                    # A refusal can publish its exit record
+                                    # before readiness. Preserve the consumed
+                                    # prefix for the complete cleanup parser.
+                                    raw_report = ready
+                                    raise ContractViolation("native transition was not affirmed")
+                                native_ready_consumed = True
+                                break
+                            if process.returncode is not None or stop_reason is not None:
+                                raise ContractViolation("native transition ended before readiness")
+                            await asyncio.sleep(0.01)
+                except TimeoutError:
+                    timed_out = True
+                    stop("deadline")
+                if not timed_out and (
+                    process.returncode is not None or stop_reason is not None
+                    or asyncio.get_running_loop().time() >= deadline
+                ):
+                    raise ContractViolation("the native transition lost its launch ownership")
+            if stop_reason is None:
+                protocol = asyncio.create_task(converse())
             completion = asyncio.create_task(finish())
             try:
                 async with asyncio.timeout_at(deadline):
@@ -959,7 +1061,11 @@ class LinuxLauncher:
                         cleanup_errors.append(exc)
                     observe_protocol()
                 with suppress(BlockingIOError):
-                    raw_report = os.read(report_read, 5)
+                    report_bound = (
+                        6 if isinstance(native_store, ClaudeNativeStoreMount)
+                        and not native_ready_consumed else 5
+                    )
+                    raw_report += os.read(report_read, report_bound - len(raw_report))
             except BaseException as exc:
                 cleanup_errors.append(exc)
             finally:
@@ -967,6 +1073,11 @@ class LinuxLauncher:
                 close_fd(report_write)
         payload_returncode = None
         try:
+            if (isinstance(native_store, ClaudeNativeStoreMount)
+                    and not native_ready_consumed and raw_report.startswith(b"\x01")):
+                # A valid readiness frame may arrive during joined shutdown.
+                # It records transport progress only; admission has ended.
+                raw_report = raw_report[1:]
             if len(raw_report) == 4:
                 payload_returncode = struct.unpack("!i", raw_report)[0]
                 if not 0 <= payload_returncode <= 255:

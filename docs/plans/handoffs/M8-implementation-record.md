@@ -7982,3 +7982,98 @@ store persistence and egress composition require fake physical proofs before
 any separately authorized vendor qualification. Issue #275 records the
 independent CI efficiency improvement: check proof-inventory drift before
 expensive containment provisioning.
+
+### Native composition implementation candidate
+
+PR #276 merged as `302e20b`, tree-identical to reviewed `9f50cbb`, after green
+CI and an exact-head connector review with no findings. The owner authorized
+implementation of the reviewed composition direction. The proposed document's
+historical status wording is retained; this is not vendor qualification.
+
+The next slice adds a finite Claude native layout beside Codex, preserving the
+existing supervisor/launcher ownership. Only one opaque fake credential file
+is persistent; staging and refresh-lock ancestors are disposable and separate
+from immutable admin inputs. The proxy value is an explicit successor recipe,
+not an unnoticed change to the original empty-proxy startup contract.
+
+Trusted namespace PID 1 observes its own unreaped child's enforcing label and
+no-new-privileges status. A private readiness byte travels through the existing
+supervisor channel before the controller permits a conversation. Native stdout
+is not the authority. Expiry, unexpected labels, early exit and malformed or
+absent readiness refuse; cleanup retains existing joined custody. The READ
+transaction additionally binds initial and terminal store checks and does not
+renew the acquisition deadline. The fixed worker excludes both native recipes.
+
+New physical tests use a compiled nonvendor peer and fake credential bytes.
+They target final-exec denial, native/worker separation, bootstrap protection,
+mount-point persistence and bridge byte transport. These tests are unmeasured
+until their hosted lane executes; a portable pass is not their evidence.
+Neither a live Claude transcript nor full native subscription qualification is
+claimed by this implementation candidate. Public provider availability remains
+unchanged. No private host, account, real credential or vendor process is used.
+
+The first hosted run exposed a fixture defect: copied execution controls lost
+their executable bits, so their failures could not prove the controls worked.
+Explicit copy modes and a portable test exercising actual copying/freezing
+corrected it. On `8a0a494`, all seven positive physical tests passed, including
+the actual final transition, five execution controls, ptrace control, opaque
+fake-file persistence and later-process reload. This is native-boundary
+evidence, not a complete READ transaction or subscription qualification.
+
+The subsequent missing-profile phase found an introduced reporting defect:
+readiness checking consumed the first byte of the supervisor's refusal report,
+then cleanup misclassified the remaining bytes as a damaged report. The fix
+retains that byte while continuing to refuse absent readiness. It preserves
+the supervisor's refusal status rather than claiming a native program ran.
+The new physical refusal and complete-wave results remain required gates.
+
+A follow-up async-resume audit reproduced a second framing case with a real
+pipe: cancellation can precede arrival of a valid readiness byte and exit
+report. Joined cleanup must recognize that late frame without authorizing a
+conversation. It accepts at most the one as-yet-unconsumed readiness byte;
+duplicate readiness, surplus bytes and invalid exit codes remain damage.
+This is a reporting correction, not permission to dispatch after expiry.
+
+A bounded C wire fixture now exercises the same READ transaction through its
+startup observations, SDK/MCP handshake, correlated turn, postchecks and EOF.
+Its read result echoes the actual worker response, checked against the fixed
+workspace content; a separate zero-callback case proves that valid path too.
+Portable tests execute the compiled wire peer. Separate mandatory Linux tests
+compose the native launcher and real isolated READ worker, with matching
+initial/spawn/terminal binding checks and workspace disposal. Written physical
+tests are not credited before execution. The fixture uses no vendor code or
+account and cannot qualify a subscription.
+
+On `0047432`, the complete native READ fixture and missing-profile refusal
+passed their hosted step; the Claude inventory killed all 199 mutants. The
+whole gate still failed: two older bridge tests inspected the now-protected
+forwarder's descriptors from another process. They now require affirmative
+`EACCES`. A separate Linux child exercises the real isolation function and
+reports its own exact descriptor set while remaining alive for the parent's
+denial check. The stdio mutant moves to that proof, alongside a new inherited
+descriptor-closure mutant; protection is not weakened to satisfy inspection.
+Those revised physical checks still require execution on the new head.
+
+The same hosted gate exposed a fixture test's root-permission assumption and
+a Linux-only type-narrowing error hidden by Windows platform pruning. The
+fixture keeps actual copying and final freezing while substituting only source
+host metadata; the launcher uses direct type narrowing. Explicit Linux-target
+mypy now supplements the local Windows check. These are gate corrections,
+not evidence of vendor qualification or permission for a live session.
+
+On `3c71bad`, full verification passed 7,985 tests with 471 skips, all five
+import contracts, and all four Linux lanes. All 199 Claude mutants and both
+descriptor-closure mutants were killed. Exact-head connector review then found
+two introduced binding gaps: an exchange exception skipped terminal checking,
+and the pre-launch observation was not compared with the initial binding.
+Twenty new cases failed before correction, including an observed A-to-B-to-A
+sequence that incorrectly succeeded. The common launcher double now performs
+the pre-launch check rather than leaving that production boundary unexercised.
+
+The correction captures one binding and wraps the existing store callback to
+require it at both later boundaries. Every joined exchange outcome attempts
+terminal checking. An already escaping exchange error remains primary even if
+that secondary check fails, preserving cancellation and fatal control flow;
+after a normal exchange return, terminal failure still refuses acceptance.
+No deadline, generic launcher or Codex store law changes. The correction's
+complete final-head gates remain unmeasured until executed.

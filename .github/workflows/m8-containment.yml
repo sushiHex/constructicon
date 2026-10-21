@@ -124,6 +124,24 @@ jobs:
           set -euo pipefail
           sudo env RUNNER_ENVIRONMENT=github-hosted /usr/bin/python3 scripts/ci/prove_m8_noexec.py \
             </dev/null | tee "$RUNNER_TEMP/m8-noexec.json"
+      - name: Prove the fake Claude native final transition and bounded layout
+        if: matrix.lane == 'foundation'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" \
+            scripts/ci/build_m8_claude_fixture.py </dev/null \
+            | tee "$RUNNER_TEMP/m8-claude-fixture.json"
+          sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
+            M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
+            M8_CLAUDE_COMPOSITION_REQUIRED=1 M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
+            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_claude_native_containment.py \
+              tests/substrate/test_claude_native_read.py \
+              -v --tb=short --durations=10 -p no:cacheprovider </dev/null
+          # All accepting invocations have joined before the target is removed.
+          # The root helper restores the exact native policy in its finally block.
+          sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" \
+            scripts/ci/prove_m8_claude_missing.py </dev/null
       - name: Observe frozen P2 stock-utility diagnostics on Ubuntu 24.04
         if: matrix.lane == 'foundation'
         shell: bash
@@ -372,6 +390,7 @@ jobs:
             M8_TRUST_PKI=/var/lib/constructicon-m8-launch/trust-pki \
             M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
             "$PWD/.venv/bin/python" -m pytest tests/substrate/test_native_egress_bridge.py \
+              tests/substrate/test_egress_bridge.py::test_isolated_forwarder_reports_its_own_closed_descriptor_set \
               -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           uv run python scripts/check_m8_n4_bridge_mutations.py
           # Production's own launch path, so these run in the zone the test above used.
@@ -549,6 +568,7 @@ jobs:
             ${{ runner.temp }}/m8-operator-store.json
             ${{ runner.temp }}/m8-host.txt
             ${{ runner.temp }}/m8-noexec.json
+            ${{ runner.temp }}/m8-claude-fixture.json
             ${{ env.M8_EVIDENCE }}/boundary.json
             ${{ env.M8_EVIDENCE }}/codex-*.json
             ${{ env.M8_EVIDENCE }}/duplex-*.json
@@ -557,6 +577,7 @@ jobs:
             ${{ env.M8_EVIDENCE }}/n3c-*.json
             ${{ env.M8_EVIDENCE }}/n4-*.json
             ${{ env.M8_EVIDENCE }}/n5-*.json
+            ${{ env.M8_EVIDENCE }}/n6-*.json
           if-no-files-found: error
           retention-days: 7
       - name: Report bounded launch-policy denials
