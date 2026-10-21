@@ -51,7 +51,8 @@ def test_fixed_command_has_no_prompt_or_expansion_and_seals_model_effort(tmp_pat
                               "--tools", "", "--model", "model", "--effort", "high")
     assert replace(vendor, model="other").revision != vendor.revision
     assert replace(vendor, effort="low").revision != vendor.revision
-    assert replace(vendor, expected_tree=digest("fake-vendor", 1, "other")).revision != vendor.revision
+    other_tree = replace(vendor, expected_tree=digest("fake-vendor", 1, "other"))
+    assert other_tree.revision != vendor.revision
 
 
 @pytest.mark.parametrize("selection", [
