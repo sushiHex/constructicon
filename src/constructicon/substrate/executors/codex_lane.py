@@ -541,8 +541,11 @@ class EvidenceFile:
     failure removes both, so a failed run leaves no file there (RL-6).
     """
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, domain: str = EVIDENCE_DOMAIN) -> None:
         self.path = path
+        if type(domain) is not str or not domain:
+            raise ValueError("invalid evidence domain")
+        self._domain = domain
         if os.path.lexists(path):
             raise FileExistsError(errno.EEXIST, "the evidence path already exists", str(path))
         self.temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.pending")
@@ -579,7 +582,7 @@ class EvidenceFile:
         except BaseException:
             self.abandon()
             raise
-        return digest(EVIDENCE_DOMAIN, 1, json.loads(canonical_json(complete)))
+        return digest(self._domain, 1, json.loads(canonical_json(complete)))
 
     def abandon(self) -> None:
         if self._fd >= 0:

@@ -15,6 +15,30 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## Claude maintenance primitives keep login and observation separate
+
+PR #282 merged as `167ea69`. Its rebased head `d3aaffe` is tree-identical
+to connector-reviewed `b8a4ce3`; fresh verification, mutation jobs, runner
+qualification and all four containment lanes passed. Bounded private login IO
+and separate mode observation/reload are now available as primitives.
+
+These establish neither a complete attended host entry point nor authenticated
+subscription qualification. A completed login callback is not proof of clean
+process exit, persisted credentials or a subscription mode. No live login,
+credential operation or model call was performed for this slice.
+
+## Pinned Claude startup is observed, not authenticated
+
+PR #279 merged as `f7bac70`, tree-identical to reviewed `01e7f6a`.
+Exact-head CI, all four containment lanes and the connector review passed.
+The diagnostic admits only the pinned, bounded native startup framing; it
+does not establish login, persisted credentials, subscription mode or a model
+turn. Startup UI notifications are framing, never authority evidence.
+
+The owner explicitly accepted proceeding while the separate unexplained
+Windows timeout remains tracked in #281. One instrumented Windows run passed
+without an exception; that is a nondiagnostic observation, not a cause or fix.
+
 ## Claude native composition is physically proved with a nonvendor peer
 
 PR #277 merged as `f4cb9c9`, tree-identical to reviewed `b4339fd`.

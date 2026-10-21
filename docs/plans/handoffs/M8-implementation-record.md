@@ -13,6 +13,79 @@ From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-
 and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
 subscription route; see the dated section at the end of this record.
 
+## Claude maintenance entry composition (Refs #40)
+
+The entry composes the existing root-held maintenance custody, finite native
+recipes, acquisition relay, private login callback and mode observer. Login,
+observe and reload are separate explicit invocations. No invocation publishes
+a descriptor, activates a binding or submits a model message. An explicitly
+requested first-login file is created exclusively; ordinary use opens the
+existing opaque vendor file without parsing, copying or hashing it.
+
+The closed configuration is bounded before parsing and checked against a
+separately supplied reviewed SHA-256. This is an assembly input in the fixed
+root-helper command, not a hash the configuration supplies about itself. It
+binds actual artifact identities, exact phase-specific host/address pins and
+finite connection budgets. Login excludes the API-key-creation destination;
+the broader observation policy cannot be selected with the login recipe.
+The session does not accept a duplicate "reviewed budget" argument: comparing
+the policy's count with that same count supplied by its caller proves nothing
+independent. The reviewed configuration hash binds the numeric budget; the
+existing policy contract checks its type/range, and the session checks the
+phase's destination set. The redundant equality and its mutant were removed,
+not credited as authority evidence.
+
+One absolute phase deadline is shared by the private transport, callback,
+launcher and relay. Terminal custody is checked after joined teardown even
+when cleanup outlasts that deadline. Cleanup cannot gain a new I/O budget.
+Public output consists of typed finite facts, artifact identities and explicit
+false qualification/availability fields. The reused create-exclusive evidence
+writer has a dedicated Claude domain; existing Codex callers retain their
+original domain and serialization.
+
+The pre-implementation await review identified existing withdrawn state,
+credential creation before launch, buffered native EOF before input delivery,
+incomplete process/relay teardown, and cancellation during post-join private
+stderr as separate states. Review of the first implementation found two
+introduced defects: configuration content lacked an independent review pin,
+and a later cleanup exception could overwrite a cancellation. The external
+configuration hash and monotonic cleanup-error collection address those
+classes. Tests must prove their accepting and refusing paths; written tests
+are not credited until their reported execution.
+
+The [operator procedure draft](M8-N6-maintenance-operator-procedure.md) records
+the remaining private-host installation prerequisite. Existing hosted Claude
+fixtures are not host installers; generic controller attestation does not
+install the Claude vendor tree, runtime closure or AppArmor policy. No actual
+address pin, host installation, login, persistence, authenticated qualification
+or READ result is established by this source change. Accepted plans and ADRs
+are unchanged.
+
+The final 42 new CLI/session mutants were assertion-killed by the unchanged
+mutation harness, with passing baselines and a stable source snapshot. One
+earlier alias-lock mutant was correctly NOT PROVEN: test cleanup's second
+close masked its body assertion. Cleanup now tolerates an already-closed test
+descriptor while the body still requires the borrowed lock to remain open.
+No production guard was removed to obtain that kill.
+
+Portable tests compose the actual CLI, configuration hash check, session,
+login/mode callbacks and evidence publication over fake launch/custody/private
+transport primitives. They prove persisted synthetic state across distinct
+phase instances and reject the in-memory-only countercase. A separate Linux
+Unix-socket test exercises the real relay's destination denial before upstream
+allocation. Windows skips of that test and the two native configuration-race
+tests supply no Linux proof. The configuration loader also refuses replacement
+file kinds/identities before reading, uses nonblocking/no-follow open where
+available, and preserves exact binary bytes on Windows.
+
+The focused CLI/session/composition and existing Codex lane selection passed
+175 tests with three Linux-only skips. Ruff over source/tests, strict mypy
+under both Windows and Linux platform selections (141 source files), and all
+five import contracts passed. The broad
+local Windows verify attempt was stopped after source refinements made it a
+mixed-snapshot run; it is not credited as a completed gate. Final-head hosted
+verification and physical lanes remain required before readiness or merge.
+
 ## Supported-interpreter portable fixture boundary (Refs #269)
 
 The opted-in non-Linux acquisition fixture previously called
