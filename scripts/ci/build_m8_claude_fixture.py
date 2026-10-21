@@ -71,8 +71,10 @@ def build() -> dict[str, object]:
     vendor.chmod(0o555)
     (runtime / "opt/claude").mkdir(parents=True)
     shutil.copyfile(vendor / "claude", runtime / "opt/claude/claude")
+    (runtime / "opt/claude/claude").chmod(0o555)
     (runtime / "bin").mkdir(exist_ok=True)
     shutil.copyfile("/bin/sh", runtime / "bin/sh")
+    (runtime / "bin/sh").chmod(0o555)
     admin = runtime / "etc/claude-code"
     admin.mkdir(parents=True)
     for name in ("managed-settings.json", "managed-mcp.json"):

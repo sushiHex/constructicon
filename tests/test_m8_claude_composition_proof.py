@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -55,3 +56,71 @@ def test_physical_proof_has_one_mandatory_hosted_route_and_retained_evidence():
     assert step.count("</dev/null") == 3
     assert "${{ runner.temp }}/m8-claude-fixture.json" in workflow
     assert "${{ env.M8_EVIDENCE }}/n6-*.json" in workflow
+
+
+def test_builder_preserves_executable_control_copies(monkeypatch, tmp_path):
+    """Run actual copying/freezing; substitute host provisioning primitives only."""
+    root = tmp_path / "fixture"
+    base = tmp_path / "base"
+    policy = tmp_path / "policy"
+    original_stat, original_lstat = Path.stat, Path.lstat
+    original_chmod, original_read = Path.chmod, Path.read_text
+    original_copy = fixture.shutil.copyfile
+    modes = {}
+
+    def chmod(path, mode, *args, **kwargs):
+        modes[path] = mode
+        original_chmod(path, mode, *args, **kwargs)
+
+    def metadata(path, original, *args, **kwargs):
+        observed = original(path, *args, **kwargs)
+        values = list(observed)
+        values[4] = 0  # Hosted provisioning runs as root.
+        if os.name == "nt" and path in modes:
+            # Windows chmod does not implement Linux executable permission bits.
+            values[0] = (values[0] & ~0o7777) | modes[path]
+        return os.stat_result(values)
+
+    monkeypatch.setattr(Path, "chmod", chmod)
+    monkeypatch.setattr(Path, "stat", lambda path, *a, **kw:
+                        metadata(path, original_stat, *a, **kw))
+    monkeypatch.setattr(Path, "lstat", lambda path, *a, **kw:
+                        metadata(path, original_lstat, *a, **kw))
+    monkeypatch.setattr(Path, "read_text", lambda path, *a, **kw:
+                        "" if path == Path("/sys/kernel/security/apparmor/profiles")
+                        else original_read(path, *a, **kw))
+    base.mkdir()
+    (base / "runtime").mkdir()
+    (base / "runtime").chmod(0o555)
+    (base / "bwrap").write_bytes(b"fixed bubblewrap substitute")
+    shell = tmp_path / "shell-source"
+    shell.write_bytes(b"fixed shell substitute")
+    shell.chmod(0o555)
+
+    def copy(source, destination, **kwargs):
+        return original_copy(shell if str(source) == "/bin/sh" else source,
+                             destination, **kwargs)
+
+    def checked(argv):
+        if argv[0] == "/usr/bin/cc":
+            Path(argv[-1]).write_bytes(b"compiled fixed peer substitute")
+        else:
+            assert argv[:3] == ["/usr/sbin/apparmor_parser", "--add", "--skip-cache"]
+
+    monkeypatch.setattr(fixture, "ROOT", root)
+    monkeypatch.setattr(fixture, "BASE", base)
+    monkeypatch.setattr(fixture, "POLICY", policy)
+    monkeypatch.setattr(fixture.shutil, "copyfile", copy)
+    monkeypatch.setattr(fixture, "checked", checked)
+    monkeypatch.setattr(sys, "argv", ["proof"])
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setenv("RUNNER_ENVIRONMENT", "github-hosted")
+    report = fixture.build()
+    for name in ("opt/claude/claude", "bin/sh"):
+        assert (root / "runtime" / name).stat().st_mode & 0o777 == 0o555
+    assert (root / "runtime/opt/claude/claude").read_bytes() == (
+        root / "fake-vendor/claude"
+    ).read_bytes()
+    assert (root / "runtime/bin/sh").read_bytes() == shell.read_bytes()
+    assert report["scope"] == "fake_native_composition_fixture"
