@@ -15,6 +15,24 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## Execution denial is one ingredient, not Claude qualification
+
+PR #273 merged as `7281d7d`, with the same tree as reviewed head `9c188fe`.
+Its standalone benign fixture permits the initial executable and byte exchange,
+then proves direct, shell, self, descriptor and descendant execution denial.
+The Linux artifact requires exact enforcing labels, a refused missing transition,
+joined child and completed cleanup. Same-process file and socket operations
+remain possible deliberately; execution denial does not contain arbitrary code
+already running inside the process.
+
+Exact-head CI passed 7,654 tests with 460 skips and one warning, all four Linux
+lanes and eight new assertion-killed mutants. Independent and connector reviews
+found no blockers. The separate full local Windows result was not recovered
+and is not credited. The artifact explicitly reports production unavailable
+and Claude unqualified: no store, authentication, startup-helper, complete
+launcher composition or live subscription proof follows from this ingredient.
+The living M8 record and #175 retain the distinct evidence boundaries.
+
 ## A supported interpreter needs an accepting fixture path
 
 The #269 ordinary-directory test first reproduced the portable acquisition

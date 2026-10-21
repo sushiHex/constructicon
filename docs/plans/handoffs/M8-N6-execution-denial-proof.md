@@ -113,3 +113,22 @@ These results do not include C compilation or AppArmor enforcement on Windows.
 The foundation CI step must produce the physical result before either is
 reported as measured. The uploaded `m8-noexec.json` distinguishes this
 standalone experiment from production availability and Claude qualification.
+
+## Measured physical result
+
+PR #273 merged as `7281d7d`, tree-identical to reviewed head `9c188fe`.
+[Containment run 39499259607](https://github.com/sushiHex/constructicon/actions/runs/39499259607)
+passed all four lanes. Its foundation artifact records the initial exchange,
+all six execution denials, exact enforcing label, missing-transition refusal,
+joined child and completed cleanup affirmatively. The orchestrator independently
+read and rehashed `m8-noexec.json`:
+
+```text
+5a35711274a0bdc7cc943933afc80f1f40a92bcf76ba5040fd8d97620a6ce7bf
+```
+
+Same-process file/socket operations succeeded, as intended. The artifact keeps
+`production_available=false` and `claude_qualified=false`. Full CI verification
+passed 7,654 tests with 460 skips and one warning; skips are not executed proof.
+The connector review completed on the same head without findings. The separate
+full local Windows result was not recovered and is not credited.
