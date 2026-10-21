@@ -8285,3 +8285,55 @@ defect and ran 63 focused framing, schema, reentry, cancellation and compiled
 peer cases. It confirmed the single count, irreversible opaque drain and
 close-attempt latch; this is not a claim of a new full-PR review. Full-gate
 and hosted evidence remain pending on the new head.
+
+### Pinned credential-free startup result and subscription login boundary
+
+PR #279 head `01e7f6a2c203fe41e276e8fda11f18476266ebee` passed the
+hosted foundation proof in run `39561275335`, job `119092927386`: 367
+nonvendor controls followed by the actual pinned startup test. The checked
+artifact records one accepted UI notification, a correlated no-auth response,
+one request write, three binding checks, stdin closure, actual EOF and clean
+joined payload/supervisor completion. It records zero accepted proxy
+connections, not a universal claim that no connection attempt occurred.
+Production availability and subscription qualification remain false.
+
+The same head passed Linux `verify` with 8,403 tests and 476 skips, all four
+containment lanes, qualification and the complete mutation jobs. The exact-head
+connector review returned no findings. A separate Windows fail-fast API run
+recorded 319 passes and one checker `TimeoutError` in the committed-tree
+maintenance contribution case. One instrumented execution of that case passed
+without changing deadlines or primitives; it did not explain the failure.
+[Issue #281](https://github.com/sushiHex/constructicon/issues/281) owns that
+unresolved diagnosis. A prior interrupted full-run failure remains unattributed.
+
+The owner expressly prohibited API-key creation during subsequent login.
+The [subscription maintenance design draft](M8-N6-subscription-maintenance-state-review.md)
+therefore excludes the entire key-creation destination during login and
+separates later vendor-owned refresh and fresh-process reload. Static source
+supports this delayed candidate, not a guaranteed successful bounded attempt.
+The client's unknown subscription metadata can render as `Claude API`; that
+literal is not proof of subscription or refresh in progress. Positive selected
+Pro/Max mode and actual reload remain required.
+
+No live login, credential handling, VM operation or model call was performed
+for this source/design work. Frozen N6a/N6b/N6c and ADR bytes remain unchanged.
+The proposed private input transport reuses a deliberately operator-started
+fixed-command SSH session and the existing inherited descriptors; automated
+commands retain closed stdin. Source confirmation, independent review and
+fake-backed physical proof still precede executable attended commands.
+
+Independent design review corrected an output overclaim: the existing process
+interface streams stdout, while stderr has bounded retained head/tail capture,
+not a cumulative emitted-byte ceiling. The draft now states those different
+bounds and keeps private forwarding cancellable under the original deadline.
+It also requires the observation reader to remain owned during spacing, with
+already-observed failures taking priority over another write, and makes clear
+that excluding ambient credentials never authorizes clearing the selected
+store. A narrow follow-up found no new blocker in those corrections.
+
+The source-confirmed manual login handler accepts pipe input without a TTY and
+prints its URL/prompt to stdout after installing the resolver. Early input can
+be lost and invalid input can request correction, so the bounded procedure
+must not pre-feed or silently retry it. The executable recipe, exact egress
+inputs and fake accepting/refusing composition remain separate required proof;
+design review alone establishes none of them.
