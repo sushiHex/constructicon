@@ -689,6 +689,21 @@ def test_evidence_is_create_exclusive_completed_last_and_content_addressed(tmp_p
     assert os.listdir(tmp_path) == ["evidence.json"]
 
 
+def test_evidence_domain_can_be_distinct_without_changing_codex_default(tmp_path):
+    codex_path = tmp_path / "codex.json"
+    claude_path = tmp_path / "claude.json"
+    codex_revision = EvidenceFile(codex_path).publish({"schema_version": 1})
+    claude_revision = EvidenceFile(
+        claude_path, domain="claude-maintenance-entry-evidence",
+    ).publish({"schema_version": 1})
+    codex_record = json.loads(codex_path.read_text())
+    claude_record = json.loads(claude_path.read_text())
+    assert codex_record == claude_record
+    assert codex_revision == digest(EVIDENCE_DOMAIN, 1, codex_record)
+    assert claude_revision == digest("claude-maintenance-entry-evidence", 1, claude_record)
+    assert codex_revision != claude_revision
+
+
 def test_evidence_never_marks_itself_completed_early(tmp_path):
     with pytest.raises(ContractViolation, match="last act"):
         write_evidence(tmp_path / "evidence.json", {"completed": True})
