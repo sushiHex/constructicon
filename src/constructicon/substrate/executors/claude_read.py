@@ -28,6 +28,7 @@ from constructicon.core.grants import Posture
 from constructicon.core.identity import parse_json_value
 from constructicon.core.process import ProcessIO
 from constructicon.substrate.executors.claude_initialize import _cancelled, _clean
+from constructicon.substrate.executors.claude_native import ClaudeNativeStoreMount
 from constructicon.substrate.executors.claude_protocol import (
     RECORD_BYTES,
     ClaudeInitializeVerdict,
@@ -44,6 +45,7 @@ from constructicon.substrate.executors.claude_startup import (
     settings_request,
 )
 from constructicon.substrate.executors.linux import LinuxLauncher
+from constructicon.substrate.executors.operator_store import BindingCheck
 
 TEXT_BYTES = 64 * 1024
 CALL_LIMIT = 1
@@ -564,6 +566,7 @@ async def run_read_transaction(
     launcher: LinuxLauncher, command: tuple[str, ...], task: TaskSpec, *,
     selected_plan: ClaudePlan, model: str, effort: str, worker: ReadWorker,
     guard_fds: tuple[int, ...], timeout_s: float,
+    native_store: ClaudeNativeStoreMount | None = None,
 ) -> ExecutorOutcome:
     """Publish only after this same exchange and all owned work have joined."""
     if (type(selected_plan) is not ClaudePlan or not _text(model, 256) or not model
@@ -582,11 +585,26 @@ async def run_read_transaction(
         deadline=started_at + timeout_s,
     )
     try:
-        async with asyncio.timeout(timeout_s):
+        initial_binding = None
+        if native_store is not None:
+            if (type(native_store) is not ClaudeNativeStoreMount
+                    or native_store.lock_fd not in guard_fds or launcher.claude is None
+                    or command != launcher.claude.command
+                    or model != launcher.claude.model or effort != launcher.claude.effort):
+                raise _Refused()
+            initial_binding = native_store.before_spawn()
+            if type(initial_binding) is not BindingCheck:
+                raise _Refused()
+        async with asyncio.timeout_at(started_at + timeout_s):
             result = await launcher.exchange(
                 command, workspace=None, posture=Posture.READ, guard_fds=guard_fds,
-                conversation=conversation, timeout_s=timeout_s,
+                conversation=conversation, timeout_s=started_at + timeout_s - loop.time(),
+                native_store=native_store,
             )
+        if native_store is not None:
+            terminal_binding = native_store.before_spawn()
+            if type(terminal_binding) is not BindingCheck or terminal_binding != initial_binding:
+                raise _Refused()
         conversation._check()
         success = _clean(result) and conversation._state == "drained"
         timed_out = result.timed_out is True

@@ -1,0 +1,45 @@
+# Fake-only composition candidate. Loading it is not Claude qualification.
+# The fixed namespace/mount recipe remains the filesystem/network boundary.
+# All exec targets retain existing profile components under no_new_privs.
+abi <abi/4.0>,
+
+profile constructicon-m8-claude-launch /var/lib/constructicon-m8-claude/bwrap flags=(attach_disconnected,mediate_deleted) {
+  allow capability,
+  allow userns,
+  allow mount,
+  allow umount,
+  allow pivot_root,
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow signal,
+  allow ptrace,
+  allow px /usr/bin/python3{,.12} -> constructicon-m8-claude-launch//&constructicon-m8-claude-bootstrap,
+  allow px /opt/claude/claude -> constructicon-m8-claude-launch//&constructicon-m8-claude-bootstrap//&constructicon-m8-claude-native,
+}
+
+profile constructicon-m8-claude-bootstrap flags=(attach_disconnected,mediate_deleted) {
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow signal,
+  allow ptrace,
+  allow ix /usr/bin/python3{,.12},
+  allow px /opt/claude/claude -> constructicon-m8-claude-launch//&constructicon-m8-claude-bootstrap//&constructicon-m8-claude-native,
+  deny capability,
+  deny userns,
+}
+
+profile constructicon-m8-claude-native flags=(attach_disconnected,mediate_deleted) {
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow signal (receive),
+  allow signal (send) peer=constructicon-m8-claude-bootstrap//&constructicon-m8-claude-launch//&constructicon-m8-claude-native,
+  # A trusted parent may observe our kernel label; we cannot inspect/control it.
+  allow ptrace (readby),
+  deny ptrace (read, trace),
+  deny x /**,
+  deny capability,
+  deny userns,
+}

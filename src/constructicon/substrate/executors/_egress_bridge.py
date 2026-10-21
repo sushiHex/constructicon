@@ -17,6 +17,7 @@ terminates and reaps it with the payload.
 
 from __future__ import annotations
 
+import ctypes
 import os
 import signal
 import socket
@@ -120,6 +121,9 @@ def _isolate(*keep: int) -> None:
     """
     if sys.platform != "linux":
         raise OSError("descriptor isolation requires Linux")
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(4, 0, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "cannot protect proxy forwarder")
     null = os.open(os.devnull, os.O_RDWR)
     for fd in (0, 1, 2):
         os.dup2(null, fd)

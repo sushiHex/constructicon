@@ -17,16 +17,16 @@ MUTANTS = (
     (
         "N5-Z1 production mounts the seal, not the installed catalog",
         LAUNCH,
-        "layout = None if native_store is None else NativeLayout.seal(self.vendor)",
-        "layout = None if native_store is None else NativeLayout("
+        "layout = NativeLayout.seal(self.vendor)",
+        "layout = NativeLayout("
         "sealed_data_fd(NATIVE_ENVIRONMENTS), sealed_data_fd(self.vendor.catalog.read_bytes()))",
         ZONE,
     ),
     (
         "N5-Z2 production mounts the launcher's environment file",
         LAUNCH,
-        "layout = None if native_store is None else NativeLayout.seal(self.vendor)",
-        "layout = None if native_store is None else replace("
+        "layout = NativeLayout.seal(self.vendor)",
+        "layout = replace("
         "NativeLayout.seal(self.vendor), environments_fd=sealed_data_fd(b''))",
         ZONE,
     ),

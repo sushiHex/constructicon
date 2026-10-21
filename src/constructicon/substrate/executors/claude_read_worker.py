@@ -107,6 +107,7 @@ class ClaudeReadWorker:
         if self._poisoned:
             raise ContractViolation("Claude READ worker is permanently refused")
         if (self._provider.posture is not Posture.READ or self._launcher.vendor is not None
+                or self._launcher.claude is not None
                 or self._launcher.limits != READ_WORKER_LIMITS):
             raise ContractViolation("Claude READ worker requires its fixed networkless launcher")
         owned = self._provider.owned_view(self._workspace, self._context)

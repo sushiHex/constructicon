@@ -28,6 +28,34 @@ from pathlib import Path
 
 NAMESPACE_SCRIPT = "/usr/libexec/constructicon-supervisor.py"
 TERM_GRACE_S = 2.0
+CLAUDE_BOOTSTRAP_LABEL = (
+    "constructicon-m8-claude-bootstrap//&constructicon-m8-claude-launch (enforce)"
+)
+CLAUDE_NATIVE_LABEL = (
+    "constructicon-m8-claude-bootstrap//&constructicon-m8-claude-launch"
+    "//&constructicon-m8-claude-native (enforce)"
+)
+NATIVE_READY = b"\x01"
+
+
+def _native_transition(pid: int) -> bool:
+    """Observe our unreaped child, never a PID or label supplied by the payload."""
+    try:
+        with open(f"/proc/{pid}/attr/current", "rb") as stream:
+            label = stream.read(1025)
+        with open(f"/proc/{pid}/status", "rb") as stream:
+            status = stream.read(16385)
+    except FileNotFoundError:
+        return False  # Exit before observation is not affirmative readiness.
+    if len(label) > 1024 or len(status) > 16384:
+        raise OSError("native process observation exceeded its bound")
+    if label.rstrip(b"\n") == CLAUDE_BOOTSTRAP_LABEL.encode():
+        return False
+    if label.rstrip(b"\n") != CLAUDE_NATIVE_LABEL.encode():
+        raise OSError("native process has an unexpected enforcing label")
+    if b"NoNewPrivs:\t1" not in status.splitlines():
+        raise OSError("native process lost no-new-privileges")
+    return True
 
 
 def _owner_closed(events: list[tuple[int, int]]) -> bool:
@@ -66,6 +94,7 @@ class _Shutdown:
 def _reap(
     child: subprocess.Popen[bytes], owner_fd: int, shutdown: _Shutdown,
     begin_term: Callable[[], float | None], force: Callable[[], None],
+    observe: Callable[[], None] | None = None,
 ) -> int:
     if sys.platform != "linux":
         raise OSError("owned child reaping requires Linux")
@@ -85,6 +114,8 @@ def _reap(
         while True:
             if poller.poll(0):
                 shutdown.request()
+            if observe is not None:
+                observe()
             advance()
             try:
                 pid, status = os.waitpid(-1, os.WNOHANG)
@@ -119,7 +150,9 @@ def _signal_namespace(force: bool) -> None:
         os.kill(-1, signal.SIGKILL if force else signal.SIGTERM)
 
 
-def supervise_namespace(control: socket.socket, deadline: float, argv: list[str]) -> int:
+def supervise_namespace(
+    control: socket.socket, deadline: float, argv: list[str], *, native: bool = False,
+) -> int:
     """Trusted PID 1 replaces bwrap's init; the payload inherits no private fd."""
 
     if sys.platform != "linux" or os.getpid() != 1:
@@ -135,6 +168,14 @@ def supervise_namespace(control: socket.socket, deadline: float, argv: list[str]
     if poller.poll(0) or shutdown.requested:
         return 125
     child = subprocess.Popen(argv, close_fds=True, env=dict(os.environ))
+    native_ready = False
+
+    def observe() -> None:
+        nonlocal native_ready
+        if (native and not native_ready and child.returncode is None
+                and not shutdown.requested and _native_transition(child.pid)):
+            control.sendall(NATIVE_READY)
+            native_ready = True
 
     def begin_term() -> float:
         _signal_namespace(False)
@@ -147,7 +188,10 @@ def supervise_namespace(control: socket.socket, deadline: float, argv: list[str]
 
     result = _reap(
         child, control.fileno(), shutdown, begin_term, lambda: _signal_namespace(True),
+        observe=observe if native else None,
     )
+    if native and not native_ready:
+        result = 125
     # This descriptor belongs to trusted PID 1, never the repository check.
     # Four-byte exit facts are distinct from the existing eight-byte TERM ack.
     control.send(struct.pack("!i", result))
@@ -184,6 +228,7 @@ def _terminate_owned_children() -> None:
 def supervise(
     owner_fd: int, deadline: float, argv: list[str], *, report_fd: int | None = None,
     mount_fds: tuple[int, ...] = (),
+    native: bool = False,
 ) -> int:
     if sys.platform != "linux":
         raise OSError("child supervision requires Linux")
@@ -227,12 +272,18 @@ def supervise(
         requested = False
         payload_exit: int | None = None
         term_time: float | None = None
+        native_ready = False
 
         def read_control() -> None:
-            nonlocal payload_exit, term_time
+            nonlocal payload_exit, term_time, native_ready
             with suppress(BlockingIOError, ConnectionResetError):
                 while message := control.recv(9):
-                    if len(message) == 8:
+                    if message == NATIVE_READY and native and not native_ready:
+                        if report_fd is None:
+                            raise OSError("native readiness has no private recipient")
+                        os.write(report_fd, NATIVE_READY)
+                        native_ready = True
+                    elif len(message) == 8:
                         term_time = float(struct.unpack("!d", message)[0])
                     elif len(message) == 4 and payload_exit is None:
                         payload_exit = int(struct.unpack("!i", message)[0])
@@ -255,7 +306,9 @@ def supervise(
         command = [
             *argv[:split], "--as-pid-1", "--sync-fd", str(namespace_fd), "--",
             "/usr/bin/python3", "-I", NAMESPACE_SCRIPT, "--namespace",
-            str(namespace_fd), str(deadline), *argv[split + 1:],
+            str(namespace_fd), str(deadline),
+            *([f"--native-label={CLAUDE_NATIVE_LABEL}"] if native else []),
+            *argv[split + 1:],
         ]
         if shutdown.requested or _owner_closed(poller.poll(0)):
             return 125
@@ -265,7 +318,10 @@ def supervise(
             command, close_fds=True, pass_fds=(namespace_fd, *mount_fds), env=dict(os.environ),
         )
         namespace.close()
-        result = _reap(child, owner_fd, shutdown, begin_term, _terminate_owned_children)
+        result = _reap(
+            child, owner_fd, shutdown, begin_term, _terminate_owned_children,
+            observe=read_control if native else None,
+        )
         read_control()
         if report_fd is not None and payload_exit is not None:
             os.write(report_fd, struct.pack("!i", payload_exit))
@@ -278,8 +334,10 @@ def main() -> int:
         deadline = float(sys.argv[3])
         if not math.isfinite(deadline):
             raise ValueError("a finite monotonic deadline is required")
+        arguments = sys.argv[4:]
+        native = _native_option(arguments)
         with socket.socket(fileno=owner_fd) as control:
-            return supervise_namespace(control, deadline, sys.argv[4:])
+            return supervise_namespace(control, deadline, arguments, native=native)
     owner_fd = int(sys.argv[1])
     guards = tuple(int(value) for value in sys.argv[2].split(","))
     deadline = float(sys.argv[3])
@@ -300,9 +358,11 @@ def main() -> int:
         mount_fds = tuple(int(value) for value in arguments.pop(0).split("=", 1)[1].split(","))
         for mount_fd in mount_fds:
             os.fstat(mount_fd)
+    native = _native_option(arguments)
     try:
         return supervise(
             owner_fd, deadline, arguments, report_fd=report_fd, mount_fds=mount_fds,
+            native=native,
         )
     except OSError as exc:
         print(f"constructicon supervisor refused: errno={exc.errno or errno.EIO}", file=sys.stderr)
@@ -315,6 +375,14 @@ def main() -> int:
             os.close(mount_fd)
         if report_fd is not None:
             os.close(report_fd)
+
+
+def _native_option(arguments: list[str]) -> bool:
+    if not arguments or not arguments[0].startswith("--native-label="):
+        return False
+    if arguments.pop(0) != f"--native-label={CLAUDE_NATIVE_LABEL}":
+        raise ValueError("native label must be the fixed Claude transition")
+    return True
 
 
 if __name__ == "__main__":

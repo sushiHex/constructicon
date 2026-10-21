@@ -6,14 +6,21 @@ import asyncio
 import json
 from contextlib import suppress
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from constructicon.core.executor import ExecutorFailure, ExecutorSuccess, TaskSpec, Usage
+from constructicon.core.identity import digest
 from constructicon.substrate.executors import claude_read
+from constructicon.substrate.executors.claude_native import (
+    ClaudeNativeStoreMount,
+    ClaudeNativeVendor,
+)
 from constructicon.substrate.executors.claude_protocol import ClaudePlan
 from constructicon.substrate.executors.linux import DEFAULT_PROCESS_LIMITS, ProcessResult
+from constructicon.substrate.executors.operator_store import BindingCheck
 from tests.substrate._claude_wire import hooks_body, settings_body
 
 SESSION = "00000000-0000-4000-8000-000000000001"
@@ -223,6 +230,48 @@ async def run(launcher, *, worker=None, plan=ClaudePlan.PRO, timeout=5):
         guard_fds=(), timeout_s=timeout,
     )
     return outcome, calls
+
+
+@pytest.mark.parametrize("defect", [None, "initial-absent", "terminal-absent", "changed",
+                                   "guard", "model", "effort", "command"])
+async def test_native_read_binding_is_checked_before_dispatch_and_after_join(defect):
+    launcher = Launcher()
+    launcher.claude = ClaudeNativeVendor(
+        Path("/fixed-vendor"), "model", "high", digest("test", 1, "vendor"),
+    )
+    checked = []
+    initial = BindingCheck(digest("test", 1, "binding"))
+
+    def check():
+        checked.append(launcher.joined)
+        if ((defect == "initial-absent" and not launcher.joined)
+                or (defect == "terminal-absent" and launcher.joined)):
+            return None
+        if defect == "changed" and launcher.joined:
+            return BindingCheck(digest("test", 1, "replacement"))
+        return initial
+
+    store = ClaudeNativeStoreMount(lock_fd=42, credential_fd=43, before_spawn=check)
+
+    async def worker(path, remaining):
+        assert checked == [False]
+        return "file text"
+
+    outcome = await claude_read.run_read_transaction(
+        launcher, ("/wrong",) if defect == "command" else launcher.claude.command,
+        TaskSpec(instruction="read the file"), selected_plan=ClaudePlan.PRO,
+        model="wrong" if defect == "model" else "model",
+        effort="low" if defect == "effort" else "high", worker=worker,
+        guard_fds=() if defect == "guard" else (42,), timeout_s=5, native_store=store,
+    )
+    assert isinstance(outcome, ExecutorSuccess if defect is None else ExecutorFailure)
+    if defect in {"guard", "model", "effort", "command"}:
+        assert checked == [] and not launcher.peer.users
+    elif defect == "initial-absent":
+        assert checked == [False] and not launcher.peer.users
+    else:
+        assert checked == [False, True] and launcher.joined
+        assert len(launcher.peer.users) == 1
 
 
 @pytest.mark.parametrize("plan", list(ClaudePlan))
@@ -648,7 +697,8 @@ async def test_terminal_usage_and_measured_elapsed_survive_later_refusal(monkeyp
     if failure == "process":
         launcher.result = replace(launcher.result, payload_returncode=1)
     original_exchange = launcher.exchange
-    observed_time = 100.0
+    started_time = asyncio.get_running_loop().time()
+    observed_time = started_time
 
     async def exchange(command, **arguments):
         nonlocal observed_time
@@ -658,7 +708,7 @@ async def test_terminal_usage_and_measured_elapsed_survive_later_refusal(monkeyp
                 raise OSError("private joined teardown error")
             return result
         finally:
-            observed_time = 103.25
+            observed_time = started_time + 3.25
 
     launcher.exchange = exchange
     monkeypatch.setattr(claude_read.asyncio, "get_running_loop",

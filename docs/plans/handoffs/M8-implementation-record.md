@@ -7982,3 +7982,32 @@ store persistence and egress composition require fake physical proofs before
 any separately authorized vendor qualification. Issue #275 records the
 independent CI efficiency improvement: check proof-inventory drift before
 expensive containment provisioning.
+
+### Native composition implementation candidate
+
+PR #276 merged as `302e20b`, tree-identical to reviewed `9f50cbb`, after green
+CI and an exact-head connector review with no findings. The owner authorized
+implementation of the reviewed composition direction. The proposed document's
+historical status wording is retained; this is not vendor qualification.
+
+The next slice adds a finite Claude native layout beside Codex, preserving the
+existing supervisor/launcher ownership. Only one opaque fake credential file
+is persistent; staging and refresh-lock ancestors are disposable and separate
+from immutable admin inputs. The proxy value is an explicit successor recipe,
+not an unnoticed change to the original empty-proxy startup contract.
+
+Trusted namespace PID 1 observes its own unreaped child's enforcing label and
+no-new-privileges status. A private readiness byte travels through the existing
+supervisor channel before the controller permits a conversation. Native stdout
+is not the authority. Expiry, unexpected labels, early exit and malformed or
+absent readiness refuse; cleanup retains existing joined custody. The READ
+transaction additionally binds initial and terminal store checks and does not
+renew the acquisition deadline. The fixed worker excludes both native recipes.
+
+New physical tests use a compiled nonvendor peer and fake credential bytes.
+They target final-exec denial, native/worker separation, bootstrap protection,
+mount-point persistence and bridge byte transport. These tests are unmeasured
+until their hosted lane executes; a portable pass is not their evidence.
+Neither a live Claude transcript nor full native subscription qualification is
+claimed by this implementation candidate. Public provider availability remains
+unchanged. No private host, account, real credential or vendor process is used.

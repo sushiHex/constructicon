@@ -57,15 +57,15 @@ MUTANTS = (
     (
         "native store layout is present",
         LAUNCHER + "LinuxLauncher.argv",
-        "if native_store is not None and layout is not None:",
+        "if isinstance(native_store, NativeStoreMount) and isinstance(layout, NativeLayout):",
         "if False:",
         TEST + "test_the_native_layout_binds_its_descriptors_into_a_disposable_codex_home",
     ),
     (
         "the credential is bound by its descriptor, never a path",
         LAUNCHER + "LinuxLauncher.argv",
-        '"--bind-fd", str(native_store.credential_fd)',
-        '"--bind", str(native_store.credential_fd)',
+        '"--bind-fd", str(native_store.credential_fd), f"{NATIVE_HOME}/{CREDENTIAL_FILE}"',
+        '"--bind", str(native_store.credential_fd), f"{NATIVE_HOME}/{CREDENTIAL_FILE}"',
         TEST + "test_the_native_layout_binds_its_descriptors_into_a_disposable_codex_home",
     ),
     (
@@ -489,8 +489,8 @@ MUTANTS = (
     (
         "L14 the supervisor is told which descriptors bwrap receives",
         LAUNCHER + "LinuxLauncher._run",
-        "*mount_argument, *args,",
-        "*args,",
+        "*mount_argument,",
+        "",
         TEST + "test_the_supervisor_alone_is_told_which_descriptors_bwrap_receives",
     ),
     (

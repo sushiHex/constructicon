@@ -33,6 +33,9 @@ MAINTENANCE_LITERAL_EVIDENCE_NAMES = [
 # Every provisioned proof belongs to exactly one isolated runner. These are not
 # sampled smoke tests: removing a file or mutation inventory must fail here.
 PROOFS = {
+    "Prove the fake Claude native final transition and bounded layout": (
+        "foundation", "tests/substrate/test_claude_native_containment.py",
+    ),
     "Observe frozen P2 stock-utility diagnostics on Ubuntu 24.04": (
         "foundation", "tests/test_m8_stock_utility_diagnostics.py",
     ),
