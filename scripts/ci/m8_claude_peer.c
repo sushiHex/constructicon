@@ -14,6 +14,7 @@
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include "m8_claude_wire.h"
 
 #define SELF "/opt/claude/claude"
 #define CREDENTIAL "/tmp/claude-storage/secure/.credentials.json"
@@ -180,6 +181,8 @@ static void bootstrap(void) {
 
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
+    int wire_status = claude_wire(argc, argv);
+    if (wire_status >= 0) return wire_status;
     if (argc == 2 && !strcmp(argv[1], "--landed")) return 0;
     if (argc == 3 && !strcmp(argv[1], "--control")) {
         label("control-label");

@@ -34,7 +34,8 @@ MAINTENANCE_LITERAL_EVIDENCE_NAMES = [
 # sampled smoke tests: removing a file or mutation inventory must fail here.
 PROOFS = {
     "Prove the fake Claude native final transition and bounded layout": (
-        "foundation", "tests/substrate/test_claude_native_containment.py",
+        "foundation", "tests/substrate/test_claude_native_containment.py "
+        "tests/substrate/test_claude_native_read.py",
     ),
     "Observe frozen P2 stock-utility diagnostics on Ubuntu 24.04": (
         "foundation", "tests/test_m8_stock_utility_diagnostics.py",

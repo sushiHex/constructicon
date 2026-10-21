@@ -543,6 +543,9 @@ NATIVE = "constructicon.substrate.executors.claude_native:"
 NATIVE_TEST = "tests/substrate/test_claude_native_recipe.py::"
 LINUX = "constructicon.substrate.executors.linux:LinuxLauncher."
 NATIVE_RECIPE_MUTANTS = (
+    ("Claude refusal preserves the consumed exit record prefix", LINUX + "_run",
+     "raw_report = ready", 'raw_report = b""',
+     NATIVE_TEST + "test_exit_record_before_readiness_is_preserved_and_damage_still_refuses[125]"),
     ("Claude successor proxy is initially protected", NATIVE + "native_environment",
      '"HTTPS_PROXY": "http://127.0.0.1:18080"', '"HTTPS_PROXY": ""',
      NATIVE_TEST + "test_successor_environment_is_finite_initial_and_uses_only_fixed_bridge"),

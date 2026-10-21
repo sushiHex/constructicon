@@ -256,6 +256,8 @@ async def test_missing_native_profile_refuses_before_conversation(claude_launche
             )
         result = refused.value.result
         assert admitted == [] and failures == []
-        assert result.returncode != 0 and result.payload_returncode != 0
+        # The existing supervisor reports refusal 125 when no native transition
+        # was affirmed. This is not an observed native executable exit status.
+        assert result.returncode == result.payload_returncode == 125
         assert b"constructicon egress bridge refused: exec" in result.stderr
         assert credential.read_bytes() == b"fake-initial\n"

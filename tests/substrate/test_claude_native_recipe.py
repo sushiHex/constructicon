@@ -330,7 +330,8 @@ async def test_conversation_waits_for_private_transition_and_joins_all_paths(
         nonlocal polls
         read_sizes.append(maximum)
         if maximum != 1:
-            return struct.pack("!i", 0)
+            value = struct.pack("!i", 0)
+            return value[1:] if ready == b"\x00" else value
         assert authorized, "trusted bootstrap must first receive owned-start authorization"
         polls += 1
         if polls == 1:
@@ -390,4 +391,78 @@ async def test_conversation_waits_for_private_transition_and_joins_all_paths(
     if ready == b"\x01":
         assert "ready" in events
         assert events.index("ready") < events.index("conversation") < events.index("stdin")
-    assert read_sizes[0] == 1 and read_sizes[-1] == 5
+    assert read_sizes[0] == 1 and read_sizes[-1] == (4 if ready == b"\x00" else 5)
+
+
+@pytest.mark.parametrize("reported", [0, 125, 126, "truncated", "surplus", "invalid-code"])
+async def test_exit_record_before_readiness_is_preserved_and_damage_still_refuses(
+    tmp_path, on_linux, monkeypatch, reported,
+):
+    """Use a real pipe: one readiness read consumes the exit record's first byte."""
+    native = recipe_module()
+    subject = launcher(tmp_path)
+    events = []
+    report = struct.pack("!i", reported if type(reported) is int else 125)
+    if reported == "truncated":
+        report = report[:-1]
+    elif reported == "surplus":
+        report += b"x"
+    elif reported == "invalid-code":
+        report = struct.pack("!i", 256)
+
+    class Writer:
+        def close(self):
+            events.append("stdin-closed")
+
+    process = SimpleNamespace(stdin=Writer(), stdout=asyncio.StreamReader(),
+                              stderr=asyncio.StreamReader(), returncode=None)
+    process.stdout.feed_eof()
+    process.stderr.feed_data(b"constructicon egress bridge refused: exec\n")
+    process.stderr.feed_eof()
+
+    async def wait():
+        events.append("joined")
+        process.returncode = 125
+        return 125
+
+    process.wait = wait
+
+    async def spawn(*args, **kwargs):
+        report_fd = int(next(arg.split("=", 1)[1] for arg in args
+                             if arg.startswith("--report-fd=")))
+        assert os.write(report_fd, report) == len(report)
+        return process
+
+    async def conversation(_io):
+        events.append("conversation")
+
+    monkeypatch.setattr(linux.asyncio, "create_subprocess_exec", spawn)
+    # Every real pipe read below has bytes waiting. Windows Python 3.11 lacks
+    # the Linux pipe nonblocking primitive; no pipe data or read is substituted.
+    monkeypatch.setattr(linux.os, "set_blocking", lambda fd, blocking: None, raising=False)
+    store = native.ClaudeNativeStoreMount(731, 732, lambda: BindingCheck(
+        binding_digest=digest("test-binding", 1, "fake")), egress(tmp_path, []))
+    arguments = dict(workspace=None, posture=Posture.READ, guard_fds=(731,),
+                     deadline=asyncio.get_running_loop().time() + 2,
+                     conversation=conversation, native_store=store,
+                     layout=native.ClaudeNativeLayout(733, 734))
+    if type(reported) is int:
+        refusal = None
+        try:
+            await subject._run(subject.claude.command, **arguments)
+        except Exception as exc:
+            refusal = exc
+        assert isinstance(refusal, linux.ProcessExchangeError), refusal
+        assert refusal.result.returncode == 125
+        assert refusal.result.payload_returncode == reported
+        assert isinstance(refusal.__cause__, ContractViolation)
+        assert str(refusal.__cause__) == "native transition was not affirmed"
+    else:
+        with pytest.raises(ExceptionGroup) as damaged:
+            await subject._run(subject.claude.command, **arguments)
+        failures = damaged.value.exceptions
+        assert len(failures) == 2 and all(isinstance(f, ContractViolation) for f in failures)
+        assert str(failures[0]) == "native transition was not affirmed"
+        expected = "invalid" if reported == "invalid-code" else "malformed"
+        assert str(failures[1]) == f"{expected} private payload exit report"
+    assert events == ["stdin-closed", "joined"]

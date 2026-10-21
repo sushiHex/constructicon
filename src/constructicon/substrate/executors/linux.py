@@ -999,6 +999,10 @@ class LinuxLauncher:
                                 ready = None
                             if ready is not None:
                                 if ready != b"\x01":
+                                    # A refusal can publish its exit record
+                                    # before readiness. Preserve the consumed
+                                    # prefix for the complete cleanup parser.
+                                    raw_report = ready
                                     raise ContractViolation("native transition was not affirmed")
                                 break
                             if process.returncode is not None or stop_reason is not None:
@@ -1056,7 +1060,7 @@ class LinuxLauncher:
                         cleanup_errors.append(exc)
                     observe_protocol()
                 with suppress(BlockingIOError):
-                    raw_report = os.read(report_read, 5)
+                    raw_report += os.read(report_read, 5 - len(raw_report))
             except BaseException as exc:
                 cleanup_errors.append(exc)
             finally:

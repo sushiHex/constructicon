@@ -51,6 +51,7 @@ def test_physical_proof_has_one_mandatory_hosted_route_and_retained_evidence():
     assert "if: matrix.lane == 'foundation'" in step
     assert step.count("scripts/ci/build_m8_claude_fixture.py") == 1
     assert step.count("tests/substrate/test_claude_native_containment.py") == 1
+    assert step.count("tests/substrate/test_claude_native_read.py") == 1
     assert step.count("scripts/ci/prove_m8_claude_missing.py") == 1
     assert "M8_CLAUDE_COMPOSITION_REQUIRED=1" in step
     assert step.count("</dev/null") == 3

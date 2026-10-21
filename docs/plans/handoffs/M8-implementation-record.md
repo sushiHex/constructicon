@@ -8011,3 +8011,28 @@ until their hosted lane executes; a portable pass is not their evidence.
 Neither a live Claude transcript nor full native subscription qualification is
 claimed by this implementation candidate. Public provider availability remains
 unchanged. No private host, account, real credential or vendor process is used.
+
+The first hosted run exposed a fixture defect: copied execution controls lost
+their executable bits, so their failures could not prove the controls worked.
+Explicit copy modes and a portable test exercising actual copying/freezing
+corrected it. On `8a0a494`, all seven positive physical tests passed, including
+the actual final transition, five execution controls, ptrace control, opaque
+fake-file persistence and later-process reload. This is native-boundary
+evidence, not a complete READ transaction or subscription qualification.
+
+The subsequent missing-profile phase found an introduced reporting defect:
+readiness checking consumed the first byte of the supervisor's refusal report,
+then cleanup misclassified the remaining bytes as a damaged report. The fix
+retains that byte while continuing to refuse absent readiness. It preserves
+the supervisor's refusal status rather than claiming a native program ran.
+The new physical refusal and complete-wave results remain required gates.
+
+A bounded C wire fixture now exercises the same READ transaction through its
+startup observations, SDK/MCP handshake, correlated turn, postchecks and EOF.
+Its read result echoes the actual worker response, checked against the fixed
+workspace content; a separate zero-callback case proves that valid path too.
+Portable tests execute the compiled wire peer. Separate mandatory Linux tests
+compose the native launcher and real isolated READ worker, with matching
+initial/spawn/terminal binding checks and workspace disposal. Written physical
+tests are not credited before execution. The fixture uses no vendor code or
+account and cannot qualify a subscription.
