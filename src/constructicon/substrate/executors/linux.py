@@ -591,8 +591,7 @@ class LinuxLauncher:
             raise ContractViolation("contained command requires a fixed absolute executable")
         if native_store is not None and workspace is not None:
             raise ContractViolation("a native store and worker workspace cannot share a namespace")
-        claude_native = isinstance(native_store, ClaudeNativeStoreMount)
-        if claude_native:
+        if isinstance(native_store, ClaudeNativeStoreMount):
             if (self.claude is None or not isinstance(layout, ClaudeNativeLayout)
                     or command != self.claude.command):
                 raise ContractViolation("a Claude launch requires its exact sealed native recipe")

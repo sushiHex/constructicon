@@ -12,7 +12,9 @@ from __future__ import annotations
 import asyncio
 import errno
 import hashlib
+import json
 import os
+import select
 import signal
 import socket
 import struct
@@ -415,16 +417,74 @@ def test_the_script_execs_only_after_the_forwarder_is_ready(unix_leaf, monkeypat
         assert seen["env"]["HTTPS_PROXY"] == f"http://127.0.0.1:{bridge.PROXY_PORT}"
         assert seen["listener_closed"], "the vendor would inherit the listener"
         assert seen["leaf_bytes"] == b"through"
-        fds = {name: os.readlink(f"/proc/{started[0]}/fd/{name}")
-               for name in os.listdir(f"/proc/{started[0]}/fd")}
-        assert {fds[str(fd)] for fd in (0, 1, 2)} == {"/dev/null"}, fds
-        rest = [target for name, target in fds.items() if name not in {"0", "1", "2"}]
-        assert rest and all(target.startswith("socket:") for target in rest), fds
+        with pytest.raises(PermissionError) as protected:
+            os.listdir(f"/proc/{started[0]}/fd")
+        assert protected.value.errno == errno.EACCES
     finally:
         for kind, handler in before.items():
             signal.signal(kind, handler)
         for pid in started:
             reap(pid)
+
+
+@LINUX
+def test_isolated_forwarder_reports_its_own_closed_descriptor_set(tmp_path):
+    """A trusted test child observes itself while its parent remains excluded."""
+    report_read, report_write = os.pipe()
+    extra_read, extra_write = os.pipe()
+    extra_file = os.open(tmp_path / "inherited-marker", os.O_CREAT | os.O_RDWR, 0o600)
+    control, child_control = socket.socketpair()
+    extra_socket = socket.socket()
+    kept = (report_write, child_control.fileno())
+    child_control.settimeout(5)
+    pid = os.fork()
+    if pid == 0:
+        status = 91
+        try:
+            bridge._isolate(*kept)
+            descriptors = {}
+            for name in os.listdir("/proc/self/fd"):
+                # The listing's own descriptor was already closed.
+                with suppress(FileNotFoundError):
+                    descriptors[name] = os.readlink(f"/proc/self/fd/{name}")
+            record = json.dumps(descriptors).encode() + b"\n"
+            while record:
+                written = os.write(report_write, record)
+                record = record[written:]
+            if child_control.recv(1) == b"x":
+                status = 0
+        finally:
+            os._exit(status)
+    joined = False
+    os.close(report_write)
+    child_control.close()
+    try:
+        data = bytearray()
+        while not data.endswith(b"\n"):
+            assert select.select([report_read], [], [], 5)[0], "self-inventory never arrived"
+            chunk = os.read(report_read, 4096)
+            assert chunk, "the trusted child exited before its self-inventory"
+            data.extend(chunk)
+            assert len(data) <= 32768
+        descriptors = json.loads(data)
+        assert set(descriptors) == {"0", "1", "2", *(str(fd) for fd in kept)}, descriptors
+        assert {descriptors[str(fd)] for fd in (0, 1, 2)} == {"/dev/null"}, descriptors
+        assert descriptors[str(kept[0])].startswith("pipe:"), descriptors
+        assert descriptors[str(kept[1])].startswith("socket:"), descriptors
+        with pytest.raises(PermissionError) as protected:
+            os.listdir(f"/proc/{pid}/fd")
+        assert protected.value.errno == errno.EACCES
+        control.sendall(b"x")
+        observed, status = os.waitpid(pid, 0)
+        joined = True
+        assert observed == pid and os.waitstatus_to_exitcode(status) == 0
+    finally:
+        if not joined:
+            reap(pid)
+        for fd in (report_read, extra_read, extra_write, extra_file):
+            os.close(fd)
+        control.close()
+        extra_socket.close()
 
 
 @LINUX

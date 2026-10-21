@@ -77,7 +77,11 @@ def test_builder_preserves_executable_control_copies(monkeypatch, tmp_path):
         observed = original(path, *args, **kwargs)
         values = list(observed)
         values[4] = 0  # Hosted provisioning runs as root.
-        if os.name == "nt" and path in modes:
+        if path == base / "runtime":
+            # Root can populate a copied read-only directory. Let the actual
+            # unprivileged copy remain writable while reporting its host mode.
+            values[0] = (values[0] & ~0o7777) | 0o555
+        elif os.name == "nt" and path in modes:
             # Windows chmod does not implement Linux executable permission bits.
             values[0] = (values[0] & ~0o7777) | modes[path]
         return os.stat_result(values)
@@ -92,7 +96,6 @@ def test_builder_preserves_executable_control_copies(monkeypatch, tmp_path):
                         else original_read(path, *a, **kw))
     base.mkdir()
     (base / "runtime").mkdir()
-    (base / "runtime").chmod(0o555)
     (base / "bwrap").write_bytes(b"fixed bubblewrap substitute")
     shell = tmp_path / "shell-source"
     shell.write_bytes(b"fixed shell substitute")

@@ -294,7 +294,14 @@ MUTANTS = (
         BRIDGE + "_isolate",
         "for fd in (0, 1, 2):",
         "for fd in (0, 2):",
-        B + "test_the_script_execs_only_after_the_forwarder_is_ready",
+        B + "test_isolated_forwarder_reports_its_own_closed_descriptor_set",
+    ),
+    (
+        "16b isolation closes every non-kept inherited descriptor",
+        BRIDGE + "_isolate",
+        "if fd > 2 and fd not in keep:",
+        "if False:",
+        B + "test_isolated_forwarder_reports_its_own_closed_descriptor_set",
     ),
     (
         "17 the parent drops its listener before exec",

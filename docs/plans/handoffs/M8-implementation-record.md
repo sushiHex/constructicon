@@ -8043,3 +8043,20 @@ compose the native launcher and real isolated READ worker, with matching
 initial/spawn/terminal binding checks and workspace disposal. Written physical
 tests are not credited before execution. The fixture uses no vendor code or
 account and cannot qualify a subscription.
+
+On `0047432`, the complete native READ fixture and missing-profile refusal
+passed their hosted step; the Claude inventory killed all 199 mutants. The
+whole gate still failed: two older bridge tests inspected the now-protected
+forwarder's descriptors from another process. They now require affirmative
+`EACCES`. A separate Linux child exercises the real isolation function and
+reports its own exact descriptor set while remaining alive for the parent's
+denial check. The stdio mutant moves to that proof, alongside a new inherited
+descriptor-closure mutant; protection is not weakened to satisfy inspection.
+Those revised physical checks still require execution on the new head.
+
+The same hosted gate exposed a fixture test's root-permission assumption and
+a Linux-only type-narrowing error hidden by Windows platform pruning. The
+fixture keeps actual copying and final freezing while substituting only source
+host metadata; the launcher uses direct type narrowing. Explicit Linux-target
+mypy now supplements the local Windows check. These are gate corrections,
+not evidence of vendor qualification or permission for a live session.
