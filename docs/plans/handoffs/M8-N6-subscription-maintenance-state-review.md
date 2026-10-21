@@ -226,6 +226,14 @@ through a blocked synchronous write. Post-join forwarding gets no renewed
 deadline; exhausted time means no further output, not extended custody.
 Input/output tasks are joined before the maintenance lane returns.
 
+The borrowed streams must be Linux pipes or sockets with distinct backing
+identities. Different descriptor numbers alone do not prove independence:
+duplicates share their nonblocking flag, so restoring one could block another
+operation. Admission rejects repeated `(st_dev, st_ino)` pairs before changing
+flags. This deliberately also refuses separate opens of the same FIFO. The
+caller lends the streams exclusively, including aliases it holds elsewhere;
+the helper neither closes borrowed descriptors nor discovers outside aliases.
+
 A dropped SSH connection is not evidence of remote cleanup. Do not advance to
 another phase until remote joined termination/current custody is positively
 established; any uncertain session leaves the store withdrawn.

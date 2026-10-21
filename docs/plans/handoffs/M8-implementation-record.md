@@ -8372,3 +8372,57 @@ using the repository harness. An earlier broad inventory run was stopped before
 editing the tests and earns no completion or kill credit. Full CI, the full
 inventory and Linux physical lanes on the new head remain required; these
 focused results are not a full Windows `verify` pass or a resolution of #281.
+
+### Subscription maintenance building blocks — PR #282, in progress
+
+The maintenance observer is separate from the frozen one-shot initialization
+adapter and codec. It owns one phase and one joined process: at most two bare
+initialize requests for observation, or one for reload. Only the exact
+ambiguous first-party API projection permits the spaced second observation.
+An observed selected subscription mode is a phase-local result, not evidence of
+refresh, durable reload, or production qualification. The continuous reader
+checks buffered records, partial frames and EOF before any further write.
+The diagnostic and observer share one exact UI-framing predicate; that
+exception carries no authority and does not replace the correlated response.
+
+Independent review found reentry could poison a conversation while leaving it
+parked on a silent read until the deadline. Active owner cancellation and
+reader joining close that gap. Reviewing the fix found that retaining the
+owner after callback completion could cancel unrelated later work; the
+outermost cleanup now releases that ownership even when reader join fails.
+Both active and completed-owner cases have regression tests. A narrow
+independent follow-up found no defect in those corrections, and the local
+maintenance suite passed 55 tests. Mutation proof and final-head CI remain
+required; this is not a completed integration claim.
+
+The private operator I/O helper borrows pipe/socket descriptors, accepts one
+bounded LF input line, and forwards bounded bytes under one absolute deadline.
+It never owns credentials or interprets OAuth content. Independent review found
+that distinct descriptor numbers can alias the same open file description:
+restoring blocking mode in one operation could then block another. Admission
+now rejects repeated device/inode identities before changing flags, while
+retaining the caller's exclusive-borrow obligation for outside aliases. Fake
+tests cover the refusal and distinct-endpoint acceptance; a Linux dup-socket
+test is written but has not yet run on this head. A narrow static follow-up
+found no defect in the correction. These primitives are not yet composed into
+an attended-login command or qualified against an authenticated vendor process.
+
+The first focused mutation run exposed five proof gaps, not five credited
+kills: a record-bound case reached a different guard first, a ninth UI record
+raised the public report's constructor error, one EOF case reached a later
+defensive assertion, and two mutated tests hung. The tests and inventory must
+make each intended boundary independently observable before claiming proof.
+The twenty private-I/O mutants were assertion-killed with passing baselines
+and an unchanged source snapshot in that run. Linux descriptor proofs and
+final-head verification remain pending.
+
+Those five proof gaps were corrected and rerun: the final focused inventory
+assertion-killed 63 new or retargeted mutants with passing baselines and stable
+source snapshots. This includes a separate telemetry mutant: a byte-budget
+refusal before delivery must not count as an attempted request write; a write
+whose delivery is uncertain still counts. The final local Claude, inventory
+and CI-scope test selection passed 1,155 tests with 27 platform skips. Ruff,
+strict mypy on 138 source files, and all five import contracts passed. These
+remain focused results, not a full Windows verification or a resolution of
+#281. Final-head hosted verification and physical Linux proofs are still
+required before this batch is review-ready.

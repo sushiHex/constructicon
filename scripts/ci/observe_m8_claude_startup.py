@@ -31,6 +31,7 @@ from constructicon.substrate.executors.claude_native import (
     ClaudeNativeStoreMount,
     ClaudeNativeVendor,
 )
+from constructicon.substrate.executors.claude_native_events import exact_ui_invalidate
 from constructicon.substrate.executors.claude_protocol import (
     CLAUDE_CODE_VERSION,
     RECORD_BYTES,
@@ -103,21 +104,8 @@ def classify(record: bytes, identifier: str) -> tuple[str, str]:
             if subtype not in SYSTEM_SUBTYPES:
                 return "invalid", "system-subtype-unlisted"
             if subtype == "ui_invalidate":
-                required = {"type", "subtype", "event", "uuid", "session_id"}
-                if (set(value) not in (required, required | {"instances"})
-                        or value.get("event") != "ui.render"
-                        or type(value.get("uuid")) is not str
-                        or type(value.get("session_id")) is not str):
+                if not exact_ui_invalidate(value):
                     return "invalid", "ui-shape"
-                if "instances" in value:
-                    instances = value["instances"]
-                    if type(instances) is not list or any(
-                        type(item) is not dict
-                        or set(item) != {"surface", "component", "instance_id"}
-                        or any(type(field) is not str for field in item.values())
-                        for item in instances
-                    ):
-                        return "invalid", "ui-shape"
                 return "ui-invalidate", "none"  # Private framing kind, never a public verdict.
             subtypes = {
                 "init": "unexpected-system-init", "notification": "unexpected-system-notification",
