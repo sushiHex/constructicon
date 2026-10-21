@@ -51,6 +51,27 @@ EFFORT = "low"
 OUTPUT_BYTES = RECORD_BYTES + 8192
 PROXY_ATTEMPTS = 8
 SCOPE = "credential_free_native_startup_observation"
+# Literal system subtypes enumerated in pinned 2.1.296 source, not a claim of
+# whole-program coverage: computed/spread/forwarded output remains unlisted.
+SYSTEM_SUBTYPES = frozenset({
+    "agents_killed", "api_error", "api_retry", "away_summary", "background_tasks_changed",
+    "bridge_state", "bridge_status", "cloud_session_delta", "cloud_session_status",
+    "code_change_published", "commands_changed", "compact_boundary", "control_request_progress",
+    "dev_intent", "elicitation_complete", "feedback_draft_queued", "file_attachments_missing",
+    "file_snapshot", "files_persisted", "hook_progress", "hook_response", "hook_started",
+    "informational", "init", "init_milestone", "instruction_size_warning", "local_command",
+    "local_command_output", "memory_recall", "memory_saved", "mirror_error",
+    "model_consent_fallback", "model_fallback", "model_refusal_fallback",
+    "model_refusal_no_fallback", "notification", "peer_message_hold", "per_turn_effort_changed",
+    "permission_check_status", "permission_denied", "permission_retry", "plugin_install",
+    "post_turn_summary", "scheduled_task_fire", "session_metadata", "session_state_changed",
+    "session_title_changed", "status", "stop_hook_summary", "task_notification", "task_progress",
+    "task_started", "task_summary", "task_updated", "thinking", "thinking_tokens",
+    "tool_host_result", "turn_duration", "turn_handoff_available", "turn_preempted",
+    "turn_starting", "ui_focus", "ui_invalidate", "ui_log", "ui_panes", "ui_scroll", "ui_status",
+    "ui_toast", "upgrade_relay_marker", "vcs_state_changed", "worker_shutting_down",
+    "workflow_launch_result",
+})
 
 
 class _Refused(Exception):
@@ -74,6 +95,13 @@ def classify(record: bytes, identifier: str) -> tuple[str, str]:
     if value.get("type") != "control_response":
         kind = value.get("type")
         if kind == "system":
+            if "subtype" not in value:
+                return "invalid", "system-subtype-missing"
+            subtype = value["subtype"]
+            if type(subtype) is not str:
+                return "invalid", "system-subtype-nonstr"
+            if subtype not in SYSTEM_SUBTYPES:
+                return "invalid", "system-subtype-unlisted"
             subtypes = {
                 "init": "unexpected-system-init", "notification": "unexpected-system-notification",
                 "status": "unexpected-system-status",
@@ -83,9 +111,7 @@ def classify(record: bytes, identifier: str) -> tuple[str, str]:
                 "hook_response": "unexpected-system-hook-response",
                 "session_metadata": "unexpected-system-metadata",
             }
-            subtype = value.get("subtype")
-            reason = (subtypes.get(subtype, "unexpected-system") if type(subtype) is str
-                      else "unexpected-system")
+            reason = subtypes.get(subtype, "system-" + subtype)
             if subtype == "notification":
                 warnings = {"model-effort-cap": "system-model-effort-warning",
                             "model-context-window": "system-model-context-warning"}

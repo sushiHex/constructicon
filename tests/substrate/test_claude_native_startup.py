@@ -155,11 +155,61 @@ async def test_output_bound_precedes_parsing_a_whole_overbudget_read(fragment, r
     assert_report(report)
 
 
+SOURCE_SYSTEM_SUBTYPES = frozenset({
+    "agents_killed", "api_error", "api_retry", "away_summary", "background_tasks_changed",
+    "bridge_state", "bridge_status", "cloud_session_delta", "cloud_session_status",
+    "code_change_published", "commands_changed", "compact_boundary", "control_request_progress",
+    "dev_intent", "elicitation_complete", "feedback_draft_queued", "file_attachments_missing",
+    "file_snapshot", "files_persisted", "hook_progress", "hook_response", "hook_started",
+    "informational", "init", "init_milestone", "instruction_size_warning", "local_command",
+    "local_command_output", "memory_recall", "memory_saved", "mirror_error",
+    "model_consent_fallback", "model_fallback", "model_refusal_fallback",
+    "model_refusal_no_fallback", "notification", "peer_message_hold", "per_turn_effort_changed",
+    "permission_check_status", "permission_denied", "permission_retry", "plugin_install",
+    "post_turn_summary", "scheduled_task_fire", "session_metadata", "session_state_changed",
+    "session_title_changed", "status", "stop_hook_summary", "task_notification", "task_progress",
+    "task_started", "task_summary", "task_updated", "thinking", "thinking_tokens",
+    "tool_host_result", "turn_duration", "turn_handoff_available", "turn_preempted",
+    "turn_starting", "ui_focus", "ui_invalidate", "ui_log", "ui_panes", "ui_scroll", "ui_status",
+    "ui_toast", "upgrade_relay_marker", "vcs_state_changed", "worker_shutting_down",
+    "workflow_launch_result",
+})
+LEGACY_SYSTEM_REASONS = {
+    "init": "unexpected-system-init", "notification": "unexpected-system-notification",
+    "status": "unexpected-system-status", "session_state_changed": "unexpected-system-state",
+    "hook_started": "unexpected-system-hook-started",
+    "hook_progress": "unexpected-system-hook-progress",
+    "hook_response": "unexpected-system-hook-response",
+    "session_metadata": "unexpected-system-metadata",
+}
+
+
+@pytest.mark.parametrize("fragment", [1, 8192])
+@pytest.mark.parametrize("subtype", sorted(SOURCE_SYSTEM_SUBTYPES))
+async def test_all_source_literal_system_subtypes_remain_closed_refusals(subtype, fragment):
+    assert len(SOURCE_SYSTEM_SUBTYPES) == 72
+    frame = {"type": "system", "subtype": subtype, "text": "private text",
+             "account": {"private": "metadata"}}
+    first = json.dumps(frame, separators=(",", ":")).encode() + b"\n"
+    launcher = Launcher(Channel(lambda raw: first + raw, fragment=fragment))
+    report, _ = await observe(launcher)
+    assert report["protocol"] == "invalid"
+    assert report["protocol_reason"] == LEGACY_SYSTEM_REASONS.get(subtype, "system-" + subtype)
+    assert diagnostic.SYSTEM_SUBTYPES == SOURCE_SYSTEM_SUBTYPES
+    assert type(diagnostic.SYSTEM_SUBTYPES) is frozenset
+    assert not diagnostic.successful(report)  # The following valid reply cannot authorize.
+    assert report["request_writes"] == 1 and launcher.channel.close_attempts == 1
+    assert report["eof"] is True and launcher.joined
+    assert "private" not in json.dumps(report)
+    assert_report(report)
+
+
 @pytest.mark.parametrize("fragment", [1, 8192])
 @pytest.mark.parametrize("case", [
     "init", "notification", "status", "session_state_changed", "hook_started", "hook_progress",
     "hook_response", "session_metadata", "model-effort-cap", "model-context-window",
-    "missing-subtype", "private-subtype", "list-subtype", "dict-subtype", "private-key",
+    "missing-subtype", "private-subtype", "list-subtype", "dict-subtype", "null-subtype",
+    "int-subtype", "unlisted-subtype", "private-key",
     "list-key", "dict-key", "missing-key", "key-outside-notification",
 ])
 async def test_system_discriminators_are_finite_refusals_not_skipped_frames(case, fragment):
@@ -192,8 +242,12 @@ async def test_system_discriminators_are_finite_refusals_not_skipped_frames(case
     else:
         if case != "missing-subtype":
             frame["subtype"] = {"private-subtype": "private arbitrary subtype" * 8,
-                                "list-subtype": ["private"], "dict-subtype": {"private": []}}[case]
-        reason = "unexpected-system"
+                                "list-subtype": ["private"], "dict-subtype": {"private": []},
+                                "null-subtype": None, "int-subtype": 7,
+                                "unlisted-subtype": "not_in_source"}[case]
+        reason = ("system-subtype-missing" if case == "missing-subtype"
+                  else "system-subtype-unlisted" if case in {"private-subtype", "unlisted-subtype"}
+                  else "system-subtype-nonstr")
     first = json.dumps(frame, separators=(",", ":")).encode() + b"\n"
     launcher = Launcher(Channel(lambda raw: first + raw, fragment=fragment))
     report, _ = await observe(launcher)
@@ -223,7 +277,8 @@ async def test_exact_noauth_observation_requires_close_eof_join_and_three_bindin
 
 REASONS = frozenset({
     "incomplete", "none", "record-type", "record-bound", "framing", "json", "outer-shape",
-    "unexpected-system", "unexpected-result", "unexpected-assistant", "unexpected-control-request",
+    "system-subtype-missing", "system-subtype-nonstr", "system-subtype-unlisted",
+    "unexpected-result", "unexpected-assistant", "unexpected-control-request",
     "unexpected-system-init", "unexpected-system-notification", "unexpected-system-status",
     "unexpected-system-state", "unexpected-system-hook-started", "unexpected-system-hook-progress",
     "unexpected-system-hook-response", "unexpected-system-metadata", "system-model-effort-warning",
@@ -232,7 +287,10 @@ REASONS = frozenset({
     "pending-permissions", "pending-dialogs", "body-shape", "version-mismatch", "state-not-idle",
     "account-shape", "account-fields", "other-mode", "read-contract", "output-bound", "single-use",
     "input-bound", "eof-before-frame", "extra-output",
-})
+}) | frozenset(LEGACY_SYSTEM_REASONS.get(value, "system-" + value)
+              for value in SOURCE_SYSTEM_SUBTYPES)
+REASON_BYTES = 32
+assert max(map(len, REASONS)) == REASON_BYTES
 
 
 def assert_report(report, *, variant="base"):
@@ -241,7 +299,8 @@ def assert_report(report, *, variant="base"):
         "scope": lambda value: value == "credential_free_native_startup_observation",
         "protocol": lambda value: type(value) is str and value in {
             "correlated-noauth", "other-mode", "invalid", "incomplete"},
-        "protocol_reason": lambda value: type(value) is str and value in REASONS,
+        "protocol_reason": lambda value: (type(value) is str and value in REASONS
+                                          and len(value) <= REASON_BYTES),
         "lifecycle": lambda value: type(value) is str and value in {
             "clean", "failed", "timeout", "process-refused"},
         "request_writes": lambda value: type(value) is int and 0 <= value <= 1,
@@ -586,7 +645,7 @@ def test_classifier_rejects_invalid_shapes_without_disclosing_fields(damage):
         "outer": "outer-shape", "type": "unexpected-control-request",
         "envelope": "envelope-shape", "subtype": "response-not-success", "body": "body-shape",
         "account": "account-shape", "account-value": "account-fields",
-        "account-key": "account-fields", "crlf": "framing", "system": "unexpected-system",
+        "account-key": "account-fields", "crlf": "framing", "system": "system-subtype-missing",
         "result": "unexpected-result", "assistant": "unexpected-assistant",
         "unknown-type": "unexpected-other", "unhashable-type": "unexpected-other",
         "unhashable-subtype": "response-not-success", "request-type": "request-mismatch",
@@ -605,7 +664,7 @@ def test_classifier_rejects_invalid_shapes_without_disclosing_fields(damage):
     protocol = ("correlated-noauth" if damage == "noauth" else "other-mode"
                 if damage == "other-mode" else "invalid")
     assert observed == (protocol, reasons[damage])
-    assert observed[1] in REASONS and len(observed[1]) <= 32
+    assert observed[1] in REASONS and len(observed[1]) <= REASON_BYTES
     assert "private" not in json.dumps(observed)
 
 

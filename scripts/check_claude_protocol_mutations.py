@@ -972,5 +972,19 @@ MUTANTS += (
      + "test_system_discriminators_are_finite_refusals_not_skipped_frames[dict-key-8192]"),
 )
 
+MUTANTS += (
+    ("startup subtype projection cannot bypass its literal whitelist",
+     STARTUP_OBSERVE + "classify",
+     'if subtype not in SYSTEM_SUBTYPES:', 'if False:',
+     STARTUP_OBSERVE_TEST
+     + "test_system_discriminators_are_finite_refusals_not_skipped_frames[private-subtype-8192]"),
+    ("startup distinguishes absent subtype from nonstring subtype",
+     STARTUP_OBSERVE + "classify",
+     'return "invalid", "system-subtype-missing"',
+     'return "invalid", "system-subtype-nonstr"',
+     STARTUP_OBSERVE_TEST
+     + "test_system_discriminators_are_finite_refusals_not_skipped_frames[missing-subtype-8192]"),
+)
+
 if __name__ == "__main__":
     raise SystemExit(run(MUTANTS))

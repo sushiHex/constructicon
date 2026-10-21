@@ -8202,3 +8202,26 @@ new mutants are measured assertion kills with passing baselines on stable
 sources, and all 276 inventory targets match. Manual Ruff and strict Linux
 script mypy pass. Actual subtype identification remains a hosted measurement,
 not a conclusion from these fake tests or the static source.
+
+On `f7c4fd9`, all 151 nonvendor controls passed and the pinned observation
+still reported `unexpected-system` (run `39557200754`, foundation job
+`119079668743`). Checkout SHA and the newly added discriminator cases were
+checked in that same log: this is not a stale-head observation. The small
+subtype map was insufficient; the actual subtype remains unidentified.
+
+A broader static producer/schema scan finds 72 literal system subtypes,
+including `informational` and `init_milestone`. Use one fixed whitelist of
+these source literals for diagnostic labels, preserving generic categories
+for missing, nonstring and unlisted subtypes. Never publish the unlisted
+value. This is a finite disclosure policy, not a claim that source scanning
+proved protocol completeness: computed properties, spreads, forwarding and
+raw stdout paths remain outside that enumeration. No record is newly
+accepted, ignored or reparsed after the first refusal.
+
+The complete finite projection passes 299 portable tests (three Linux-only
+skips), script/test Ruff and strict Linux script mypy. Both new whitelist
+mutants and the preceding two projection mutants are measured assertion kills
+on stable final sources, with passing baselines. All 278 inventory targets
+match. Every emitted reason remains at most 32 characters and belongs to
+the independently asserted finite vocabulary. Hosted identification and the
+complete final-head CI remain pending.
