@@ -8060,3 +8060,20 @@ fixture keeps actual copying and final freezing while substituting only source
 host metadata; the launcher uses direct type narrowing. Explicit Linux-target
 mypy now supplements the local Windows check. These are gate corrections,
 not evidence of vendor qualification or permission for a live session.
+
+On `3c71bad`, full verification passed 7,985 tests with 471 skips, all five
+import contracts, and all four Linux lanes. All 199 Claude mutants and both
+descriptor-closure mutants were killed. Exact-head connector review then found
+two introduced binding gaps: an exchange exception skipped terminal checking,
+and the pre-launch observation was not compared with the initial binding.
+Twenty new cases failed before correction, including an observed A-to-B-to-A
+sequence that incorrectly succeeded. The common launcher double now performs
+the pre-launch check rather than leaving that production boundary unexercised.
+
+The correction captures one binding and wraps the existing store callback to
+require it at both later boundaries. Every joined exchange outcome attempts
+terminal checking. An already escaping exchange error remains primary even if
+that secondary check fails, preserving cancellation and fatal control flow;
+after a normal exchange return, terminal failure still refuses acceptance.
+No deadline, generic launcher or Codex store law changes. The correction's
+complete final-head gates remain unmeasured until executed.

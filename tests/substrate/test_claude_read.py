@@ -205,12 +205,19 @@ class Launcher:
         self.result = result or ProcessResult(0, b"private stdout", b"private stderr", .1,
                                              payload_returncode=0)
         self.joined = False
+        self.spawned = False
         self.conversation = None
 
     async def exchange(self, command, **kwargs):
         self.conversation = kwargs["conversation"]
         assert kwargs["workspace"] is None and kwargs["posture"].value == "read"
         try:
+            if kwargs.get("native_store") is not None:
+                await asyncio.sleep(0)  # The launcher's prerequisite probe may yield.
+                checked = kwargs["native_store"].before_spawn()
+                if not isinstance(checked, BindingCheck):
+                    raise OSError("pre-spawn binding absent")
+            self.spawned = True
             await self.conversation(self.peer)
             return self.result
         finally:
@@ -254,7 +261,7 @@ async def test_native_read_binding_is_checked_before_dispatch_and_after_join(def
     store = ClaudeNativeStoreMount(lock_fd=42, credential_fd=43, before_spawn=check)
 
     async def worker(path, remaining):
-        assert checked == [False]
+        assert checked == [False, False]
         return "file text"
 
     outcome = await claude_read.run_read_transaction(
@@ -270,8 +277,115 @@ async def test_native_read_binding_is_checked_before_dispatch_and_after_join(def
     elif defect == "initial-absent":
         assert checked == [False] and not launcher.peer.users
     else:
-        assert checked == [False, True] and launcher.joined
+        assert checked == [False, False, True] and launcher.joined
         assert len(launcher.peer.users) == 1
+
+
+@pytest.mark.parametrize("sequence", ["same", "spawn-changed", "spawn-absent",
+                                      "terminal-changed", "terminal-absent", "initial-absent"])
+async def test_native_binding_is_pinned_across_async_probe_and_terminal_join(sequence):
+    launcher = Launcher()
+    launcher.claude = ClaudeNativeVendor(
+        Path("/fixed-vendor"), "model", "high", digest("test", 1, "vendor"),
+    )
+    initial = BindingCheck(digest("test", 1, "binding-a"))
+    replacement = BindingCheck(digest("test", 1, "binding-b"))
+    values = [initial, initial, initial]
+    changed_index = 0 if sequence == "initial-absent" else (
+        1 if sequence.startswith("spawn-") else 2)
+    if sequence != "same":
+        values[changed_index] = None if sequence.endswith("absent") else replacement
+    checked = []
+
+    def check():
+        checked.append(launcher.joined)
+        return values[len(checked) - 1]
+
+    store = ClaudeNativeStoreMount(lock_fd=42, credential_fd=43, before_spawn=check)
+
+    async def worker(_path, _remaining):
+        return "file text"
+
+    outcome = await claude_read.run_read_transaction(
+        launcher, launcher.claude.command, TaskSpec(instruction="read the file"),
+        selected_plan=ClaudePlan.PRO, model="model", effort="high", worker=worker,
+        guard_fds=(42,), timeout_s=5, native_store=store,
+    )
+    assert isinstance(outcome, ExecutorSuccess if sequence == "same" else ExecutorFailure)
+    assert checked == ([False] if sequence == "initial-absent" else [False, False, True])
+    permitted_spawn = sequence in {"same", "terminal-changed", "terminal-absent"}
+    assert launcher.spawned is permitted_spawn
+    assert len(launcher.peer.users) == int(permitted_spawn)
+    assert store.before_spawn is check
+
+
+@pytest.mark.parametrize("exchange_error", ["operational", "timeout", "explicit-cancel",
+                                            "task-cancel", "fatal", "fatal-group"])
+@pytest.mark.parametrize("terminal", ["valid", "changed", "raises"])
+async def test_joined_exchange_failure_still_checks_binding_and_preserves_control_flow(
+    exchange_error, terminal,
+):
+    launcher = Launcher(Peer(callback=False))
+    launcher.claude = ClaudeNativeVendor(
+        Path("/fixed-vendor"), "model", "high", digest("test", 1, "vendor"),
+    )
+    initial = BindingCheck(digest("test", 1, "binding"))
+    checked = []
+
+    def check():
+        checked.append(launcher.joined)
+        if launcher.joined:
+            if terminal == "raises":
+                raise OSError("private terminal binding failure")
+            if terminal == "changed":
+                return BindingCheck(digest("test", 1, "replacement"))
+        return initial
+
+    store = ClaudeNativeStoreMount(lock_fd=42, credential_fd=43, before_spawn=check)
+    original_exchange = launcher.exchange
+
+    class Fatal(BaseException):
+        pass
+
+    primary = {
+        "operational": OSError("private joined exchange failure"),
+        "timeout": TimeoutError("private joined timeout"),
+        "explicit-cancel": asyncio.CancelledError("private explicit cancellation"),
+        "fatal": Fatal("private fatal failure"),
+        "fatal-group": BaseExceptionGroup("private fatal group", [Fatal("private fatal")]),
+    }.get(exchange_error)
+
+    async def exchange(command, **arguments):
+        await original_exchange(command, **arguments)
+        if exchange_error == "task-cancel":
+            asyncio.current_task().cancel()
+            await asyncio.sleep(0)
+        raise primary
+
+    launcher.exchange = exchange
+
+    async def worker(_path, _remaining):
+        pytest.fail("zero-callback transaction cannot invoke its worker")
+
+    failure, outcome = None, None
+    try:
+        outcome = await claude_read.run_read_transaction(
+            launcher, launcher.claude.command, TaskSpec(instruction="read the file"),
+            selected_plan=ClaudePlan.PRO, model="model", effort="high", worker=worker,
+            guard_fds=(42,), timeout_s=5, native_store=store,
+        )
+    except BaseException as error:
+        failure = error
+    assert checked == [False, False, True] and launcher.joined
+    if exchange_error in {"explicit-cancel", "task-cancel"}:
+        assert isinstance(failure, asyncio.CancelledError), failure
+    elif exchange_error in {"fatal", "fatal-group"}:
+        assert failure is primary
+    else:
+        assert failure is None, failure
+        assert isinstance(outcome, ExecutorFailure)
+        assert outcome.error.kind == ("timeout" if exchange_error == "timeout" else "exit")
+        assert outcome.usage == Usage(input_tokens=1, output_tokens=1)
 
 
 @pytest.mark.parametrize("plan", list(ClaudePlan))

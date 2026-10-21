@@ -13,6 +13,8 @@ import math
 import secrets
 import uuid
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
+from dataclasses import replace
 from typing import Literal
 
 from constructicon.core.executor import (
@@ -585,7 +587,7 @@ async def run_read_transaction(
         deadline=started_at + timeout_s,
     )
     try:
-        initial_binding = None
+        launch_store = native_store
         if native_store is not None:
             if (type(native_store) is not ClaudeNativeStoreMount
                     or native_store.lock_fd not in guard_fds or launcher.claude is None
@@ -595,16 +597,30 @@ async def run_read_transaction(
             initial_binding = native_store.before_spawn()
             if type(initial_binding) is not BindingCheck:
                 raise _Refused()
-        async with asyncio.timeout_at(started_at + timeout_s):
-            result = await launcher.exchange(
-                command, workspace=None, posture=Posture.READ, guard_fds=guard_fds,
-                conversation=conversation, timeout_s=started_at + timeout_s - loop.time(),
-                native_store=native_store,
-            )
-        if native_store is not None:
-            terminal_binding = native_store.before_spawn()
-            if type(terminal_binding) is not BindingCheck or terminal_binding != initial_binding:
-                raise _Refused()
+
+            def check_binding() -> BindingCheck:
+                checked = native_store.before_spawn()
+                if type(checked) is not BindingCheck or checked != initial_binding:
+                    raise _Refused()
+                return checked
+
+            launch_store = replace(native_store, before_spawn=check_binding)
+        try:
+            async with asyncio.timeout_at(started_at + timeout_s):
+                result = await launcher.exchange(
+                    command, workspace=None, posture=Posture.READ, guard_fds=guard_fds,
+                    conversation=conversation, timeout_s=started_at + timeout_s - loop.time(),
+                    native_store=launch_store,
+                )
+        except BaseException:
+            if launch_store is not None:
+                # exchange has joined; check retained custody on every outcome.
+                # Its primary cancellation/fatal failure must remain primary.
+                with suppress(BaseException):
+                    launch_store.before_spawn()
+            raise
+        if launch_store is not None:
+            launch_store.before_spawn()
         conversation._check()
         success = _clean(result) and conversation._state == "drained"
         timed_out = result.timed_out is True
