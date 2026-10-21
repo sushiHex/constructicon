@@ -8174,3 +8174,31 @@ assertion kills on the final local sources. The complete 274-entry inventory
 and pinned observation require the next hosted run. On `0f419e3`, verify,
 qualification and the other three containment lanes passed; foundation alone
 failed at the actual pinned protocol observation.
+
+On `c87a53a`, the hosted probe reports `unexpected-system` with a clean joined
+lifecycle (containment run `39555172500`, foundation job `119073209656`). This
+establishes the first record's type, not its subtype or a successful initialize
+response. Static source contains pre-initialize notification paths, but no
+specific warning has been observed. The next diagnostic distinguishes only
+source-known system subtypes and two known notification keys with fixed
+refusal labels; all unknown values retain generic refusals. No warning text or
+account metadata is published, and no notification is accepted or skipped.
+N6b's frozen narrow transaction still forbids notifications; a more general
+handshake is a separate design decision, not an implicit repair to this gate.
+
+Source evidence: `LFt` at B@225501790 creates `system/notification`, and
+`uRe` at B@210011256 drains the queue through `FL` at B@233566838 before
+initialize handling. The startup keys are `model-effort-cap` (B@225532206)
+and `model-context-window` (B@225533394). The fixed low effort does not select
+the valid effort-cap warning; the context warning remains an unproven
+candidate. The `system/init` constructor at B@222723392 and the literal
+status, state-change, hook and session-metadata families are not evidence
+that any of them was emitted in this run. The projection never publishes
+their text, key values outside the allowlist, identifiers or metadata.
+
+The subtype projection passes 149 portable diagnostic tests with three
+Linux-only skips; its 38 discriminator cases still pass after cleanup. Both
+new mutants are measured assertion kills with passing baselines on stable
+sources, and all 276 inventory targets match. Manual Ruff and strict Linux
+script mypy pass. Actual subtype identification remains a hosted measurement,
+not a conclusion from these fake tests or the static source.

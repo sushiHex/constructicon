@@ -72,10 +72,29 @@ def classify(record: bytes, identifier: str) -> tuple[str, str]:
     if type(value) is not dict:
         return "invalid", "outer-shape"
     if value.get("type") != "control_response":
-        kinds = {"system": "unexpected-system", "result": "unexpected-result",
+        kind = value.get("type")
+        if kind == "system":
+            subtypes = {
+                "init": "unexpected-system-init", "notification": "unexpected-system-notification",
+                "status": "unexpected-system-status",
+                "session_state_changed": "unexpected-system-state",
+                "hook_started": "unexpected-system-hook-started",
+                "hook_progress": "unexpected-system-hook-progress",
+                "hook_response": "unexpected-system-hook-response",
+                "session_metadata": "unexpected-system-metadata",
+            }
+            subtype = value.get("subtype")
+            reason = (subtypes.get(subtype, "unexpected-system") if type(subtype) is str
+                      else "unexpected-system")
+            if subtype == "notification":
+                warnings = {"model-effort-cap": "system-model-effort-warning",
+                            "model-context-window": "system-model-context-warning"}
+                key = value.get("key")
+                reason = warnings.get(key, reason) if type(key) is str else reason
+            return "invalid", reason
+        kinds = {"result": "unexpected-result",
                  "assistant": "unexpected-assistant",
                  "control_request": "unexpected-control-request"}
-        kind = value.get("type")
         return "invalid", kinds.get(kind, "unexpected-other") if type(kind) is str else (
             "unexpected-other"
         )

@@ -961,5 +961,16 @@ MUTANTS += (
      + "test_exact_noauth_observation_requires_close_eof_join_and_three_bindings[8192]"),
 )
 
+MUTANTS += (
+    ("startup system subtype projection is actually applied", STARTUP_OBSERVE + "classify",
+     'if kind == "system":', 'if False:',
+     STARTUP_OBSERVE_TEST
+     + "test_system_discriminators_are_finite_refusals_not_skipped_frames[init-8192]"),
+    ("startup notification key cannot be an unhashable lookup", STARTUP_OBSERVE + "classify",
+     'type(key) is str', 'True',
+     STARTUP_OBSERVE_TEST
+     + "test_system_discriminators_are_finite_refusals_not_skipped_frames[dict-key-8192]"),
+)
+
 if __name__ == "__main__":
     raise SystemExit(run(MUTANTS))

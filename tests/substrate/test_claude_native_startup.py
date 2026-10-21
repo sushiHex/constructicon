@@ -155,6 +155,56 @@ async def test_output_bound_precedes_parsing_a_whole_overbudget_read(fragment, r
     assert_report(report)
 
 
+@pytest.mark.parametrize("fragment", [1, 8192])
+@pytest.mark.parametrize("case", [
+    "init", "notification", "status", "session_state_changed", "hook_started", "hook_progress",
+    "hook_response", "session_metadata", "model-effort-cap", "model-context-window",
+    "missing-subtype", "private-subtype", "list-subtype", "dict-subtype", "private-key",
+    "list-key", "dict-key", "missing-key", "key-outside-notification",
+])
+async def test_system_discriminators_are_finite_refusals_not_skipped_frames(case, fragment):
+    reasons = {
+        "init": "unexpected-system-init", "notification": "unexpected-system-notification",
+        "status": "unexpected-system-status", "session_state_changed": "unexpected-system-state",
+        "hook_started": "unexpected-system-hook-started",
+        "hook_progress": "unexpected-system-hook-progress",
+        "hook_response": "unexpected-system-hook-response",
+        "session_metadata": "unexpected-system-metadata",
+        "model-effort-cap": "system-model-effort-warning",
+        "model-context-window": "system-model-context-warning",
+    }
+    frame = {"type": "system", "text": "private text", "account": {"private": "metadata"}}
+    if case in {"model-effort-cap", "model-context-window"}:
+        frame.update(subtype="notification", key=case)
+        reason = reasons[case]
+    elif case in reasons:
+        frame["subtype"] = case
+        reason = reasons[case]
+    elif case in {"private-key", "list-key", "dict-key", "missing-key"}:
+        frame["subtype"] = "notification"
+        if case != "missing-key":
+            frame["key"] = {"private-key": "private arbitrary key" * 8,
+                            "list-key": ["private"], "dict-key": {"private": []}}[case]
+        reason = "unexpected-system-notification"
+    elif case == "key-outside-notification":
+        frame.update(subtype="init", key="model-effort-cap")
+        reason = "unexpected-system-init"
+    else:
+        if case != "missing-subtype":
+            frame["subtype"] = {"private-subtype": "private arbitrary subtype" * 8,
+                                "list-subtype": ["private"], "dict-subtype": {"private": []}}[case]
+        reason = "unexpected-system"
+    first = json.dumps(frame, separators=(",", ":")).encode() + b"\n"
+    launcher = Launcher(Channel(lambda raw: first + raw, fragment=fragment))
+    report, _ = await observe(launcher)
+    assert report["protocol"] == "invalid" and report["protocol_reason"] == reason
+    assert not diagnostic.successful(report)  # A later valid initialize is never accepted.
+    assert report["request_writes"] == 1 and launcher.channel.close_attempts == 1
+    assert report["eof"] is True and launcher.joined
+    assert "private" not in json.dumps(report)
+    assert_report(report)
+
+
 @pytest.mark.parametrize("fragment", [1, 7, 8192])
 async def test_exact_noauth_observation_requires_close_eof_join_and_three_bindings(fragment):
     launcher = Launcher(Channel(fragment=fragment))
@@ -174,6 +224,10 @@ async def test_exact_noauth_observation_requires_close_eof_join_and_three_bindin
 REASONS = frozenset({
     "incomplete", "none", "record-type", "record-bound", "framing", "json", "outer-shape",
     "unexpected-system", "unexpected-result", "unexpected-assistant", "unexpected-control-request",
+    "unexpected-system-init", "unexpected-system-notification", "unexpected-system-status",
+    "unexpected-system-state", "unexpected-system-hook-started", "unexpected-system-hook-progress",
+    "unexpected-system-hook-response", "unexpected-system-metadata", "system-model-effort-warning",
+    "system-model-context-warning",
     "unexpected-other", "envelope-shape", "response-not-success", "request-mismatch",
     "pending-permissions", "pending-dialogs", "body-shape", "version-mismatch", "state-not-idle",
     "account-shape", "account-fields", "other-mode", "read-contract", "output-bound", "single-use",
