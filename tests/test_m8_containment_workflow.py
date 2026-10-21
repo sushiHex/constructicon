@@ -100,6 +100,7 @@ PROOFS = {
         "tests/substrate/test_acquisition_closure.py tests/substrate/test_acquisition_namespace.py "
         "tests/substrate/test_recorded_executor.py "
         "tests/substrate/test_linux_duplex.py tests/substrate/test_process_io.py "
+        "tests/substrate/test_claude_read_worker.py "
         "tests/substrate/test_lifetime.py tests/substrate/test_contained_capture.py "
         "tests/substrate/test_git_pack.py tests/substrate/test_capture_lifecycle.py "
         "tests/substrate/test_codex_write_capture.py tests/substrate/test_codex_write_restart.py "
