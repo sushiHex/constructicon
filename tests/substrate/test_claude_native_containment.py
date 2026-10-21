@@ -19,6 +19,7 @@ from constructicon.core.grants import Posture
 from constructicon.core.identity import Digest, digest
 from constructicon.substrate.executors.claude_native import (
     CLAUDE_PROFILE,
+    ClaudeNativeRecipe,
     ClaudeNativeStoreMount,
     ClaudeNativeVendor,
 )
@@ -152,9 +153,14 @@ async def test_same_namespace_parent_child_ptrace_control_really_attaches(
     assert result.stdout == b"child-ptrace:0\n" and result.stderr == b""
 
 
+@pytest.mark.parametrize("recipe", list(ClaudeNativeRecipe))
 async def test_final_transition_noexec_bootstrap_protection_and_fake_persistence(
-    claude_launcher, tmp_path,
+    claude_launcher, tmp_path, recipe,
 ):
+    # The synthetic executable exercises physical authority under both finite
+    # argv/policy pairs. It does not implement or prove vendor authentication.
+    claude_launcher = replace(claude_launcher, claude_recipe=recipe)
+    command = recipe.command(claude_launcher.claude)
     output = bytearray()
     admitted = []
 
@@ -170,7 +176,7 @@ async def test_final_transition_noexec_bootstrap_protection_and_fake_persistence
     with fake_mount(tmp_path) as (mount, credential, received, failures, peer):
         peer.start()
         result = await claude_launcher.exchange(
-            claude_launcher.claude.command, workspace=None, posture=Posture.READ,
+            command, workspace=None, posture=Posture.READ,
             guard_fds=(mount.lock_fd,), conversation=conversation, timeout_s=20,
             native_store=mount,
         )
@@ -218,7 +224,7 @@ async def test_final_transition_noexec_bootstrap_protection_and_fake_persistence
                 reloaded.extend(chunk)
 
         later = await claude_launcher.exchange(
-            claude_launcher.claude.command, workspace=None, posture=Posture.READ,
+            command, workspace=None, posture=Posture.READ,
             guard_fds=(mount.lock_fd,), conversation=reload, timeout_s=15,
             native_store=mount,
         )
@@ -227,10 +233,14 @@ async def test_final_transition_noexec_bootstrap_protection_and_fake_persistence
         assert bytes(reloaded) == later.stdout == (
             f"reload-label:{CLAUDE_PROFILE}\ncredential-reload:fake-refreshed\n".encode()
         )
-        write_evidence("n6-claude-native-composition.json", {
+        evidence_name = ("n6-claude-native-composition.json"
+                         if recipe is ClaudeNativeRecipe.STREAM_JSON
+                         else "n6-claude-login-recipe-composition.json")
+        write_evidence(evidence_name, {
             "schema_version": 1, "scope": "fake_physical_native_boundary_only",
             "production_available": False, "claude_qualified": False,
             "launch_revision": str(claude_launcher.revision),
+            "recipe": recipe.value,
             "trusted_final_transition_gated_conversation": True,
             "fake_peer_report": facts, "fake_credential_persisted": True,
             "later_native_process_reloaded_fake_credential": True,

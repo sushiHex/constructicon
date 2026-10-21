@@ -31,6 +31,11 @@ def wire(value):
     return json.dumps(value, separators=(",", ":")).encode() + b"\n"
 
 
+def ui_invalidate(**changes):
+    return {"type": "system", "subtype": "ui_invalidate", "event": "ui.render",
+            "uuid": "opaque", "session_id": "", **changes}
+
+
 class Peer:
     def __init__(self, *, plan=ClaudePlan.PRO, callback=True, fragment=8192, defect=None):
         self.plan, self.callback, self.fragment, self.defect = plan, callback, fragment, defect
@@ -412,6 +417,116 @@ async def test_accepting_one_read_joins_native_and_worker_with_fresh_checks(plan
 async def test_zero_callback_is_a_real_permitting_path():
     outcome, calls = await run(Launcher(Peer(callback=False)))
     assert isinstance(outcome, ExecutorSuccess) and calls == []
+
+
+@pytest.mark.parametrize("extra_tail", [0, 1])
+async def test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime(extra_tail):
+    peer = Peer()
+    original_emit = peer.emit
+    inserted = {"initial": False, "registration": False, "body": False,
+                "result": False, "terminal": False}
+
+    def emit(value):
+        if (value.get("type") == "control_response" and not inserted["initial"]):
+            inserted["initial"] = True
+            original_emit(ui_invalidate())
+            original_emit(ui_invalidate())
+        elif (value.get("subtype") == "background_tasks_changed"
+              and peer.registration and not peer.post and not inserted["registration"]):
+            inserted["registration"] = True
+            original_emit(ui_invalidate())
+            original_emit(ui_invalidate())
+        elif value.get("subtype") == "init" and not inserted["body"]:
+            inserted["body"] = True
+            original_emit(ui_invalidate())
+        elif value.get("type") == "result" and not inserted["result"]:
+            inserted["result"] = True
+            original_emit(ui_invalidate())
+        elif (value.get("subtype") == "background_tasks_changed"
+              and peer.post and not inserted["terminal"]):
+            inserted["terminal"] = True
+            original_emit(ui_invalidate())
+        original_emit(value)
+
+    peer.emit = emit
+    original_close = peer.close_stdin
+
+    async def close():
+        peer.output.extend(wire(ui_invalidate()) * (1 + extra_tail))
+        await original_close()
+
+    peer.close_stdin = close
+    launcher = Launcher(peer)
+    outcome, calls = await run(launcher)
+    assert inserted == dict.fromkeys(inserted, True)
+    assert launcher.conversation._ui_records == 8
+    assert len(peer.users) == 1 and len(calls) == 1 and launcher.joined
+    assert isinstance(outcome, ExecutorSuccess if extra_tail == 0 else ExecutorFailure)
+
+
+@pytest.mark.parametrize("damage", ["missing-snapshot", "missing-terminal-snapshot",
+                                    "wrong-startup-session", "wrong-session", "nonempty",
+                                    "extension", "wrong-event", "carriage-return",
+                                    "unknown-system"])
+async def test_ui_cannot_replace_snapshot_or_admit_malformed_system_record(damage):
+    peer = Peer()
+    original_emit = peer.emit
+
+    def emit(value):
+        if value.get("subtype") == "background_tasks_changed" and (
+            peer.registration or peer.post
+        ):
+            if damage == "missing-snapshot" and peer.registration:
+                original_emit(ui_invalidate())
+                return
+            if damage == "missing-terminal-snapshot" and peer.post:
+                original_emit(ui_invalidate())
+                return
+            if damage == "wrong-session" and peer.post:
+                value["session_id"] = NATIVE_UUID
+            if damage == "wrong-startup-session" and peer.registration:
+                value["session_id"] = NATIVE_UUID
+            if damage == "nonempty":
+                value["tasks"] = [{}]
+        if value.get("subtype") == "init":
+            if damage == "extension":
+                original_emit(ui_invalidate(extra="private"))
+            elif damage == "wrong-event":
+                original_emit(ui_invalidate(event="other"))
+            elif damage == "carriage-return":
+                peer.output.extend(wire(ui_invalidate()).replace(b"\n", b"\r\n"))
+            elif damage == "unknown-system":
+                original_emit({"type": "system", "subtype": "other"})
+        original_emit(value)
+
+    peer.emit = emit
+    outcome, calls = await run(
+        Launcher(peer), timeout=.1 if damage.startswith("missing-") else 5,
+    )
+    assert isinstance(outcome, ExecutorFailure)
+    if damage in {"missing-snapshot", "nonempty"}:
+        assert calls == [] and peer.users == []
+    elif damage in {"wrong-startup-session", "extension", "wrong-event",
+                    "carriage-return", "unknown-system"}:
+        assert calls == [] and len(peer.users) == 1
+    else:
+        assert len(calls) == 1 and len(peer.users) == 1
+
+
+async def test_ui_during_worker_is_inert_without_weakening_pending_record_checks():
+    peer = Peer()
+    observed = []
+
+    async def worker(path, remaining):
+        observed.append(path)
+        peer.emit(ui_invalidate())
+        await asyncio.sleep(0)
+        return "file text"
+
+    launcher = Launcher(peer)
+    outcome, _ = await run(launcher, worker=worker)
+    assert isinstance(outcome, ExecutorSuccess)
+    assert observed == ["README.md"] and launcher.conversation._ui_records == 1
 
 
 @pytest.mark.parametrize("defect", ["user-write", "callback-write", "co-buffered-terminal"])

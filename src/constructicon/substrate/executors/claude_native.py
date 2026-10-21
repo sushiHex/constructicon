@@ -14,6 +14,7 @@ import re
 import stat
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 from constructicon.core.errors import ContractViolation
@@ -25,6 +26,7 @@ from constructicon.substrate.executors.operator_store import BindingCheck
 
 VENDOR_MOUNT = "/opt/claude"
 EXECUTABLE = f"{VENDOR_MOUNT}/claude"
+LOGIN_COMMAND = (EXECUTABLE, "--safe-mode", "auth", "login", "--claudeai")
 CONFIG_ROOT = "/tmp/claude-config"
 STORAGE_PARENT = "/tmp/claude-storage"
 SECURE_ROOT = f"{STORAGE_PARENT}/secure"
@@ -37,6 +39,23 @@ MANAGED_MCP = b'{"mcpServers":{}}\n'
 CLAUDE_PROFILE = CLAUDE_NATIVE_LABEL
 _MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
+
+
+class ClaudeNativeRecipe(StrEnum):
+    """Closed assembly selection; login never gains the READ command's tools."""
+
+    STREAM_JSON = "stream-json"
+    LOGIN = "login"
+
+    def command(self, vendor: ClaudeNativeVendor) -> tuple[str, ...]:
+        return LOGIN_COMMAND if self is ClaudeNativeRecipe.LOGIN else vendor.command
+
+    @property
+    def policy(self) -> dict[str, object]:
+        policy = fixed_policy()
+        if self is ClaudeNativeRecipe.LOGIN:
+            policy["forceLoginMethod"] = "claudeai"
+        return policy
 
 
 def native_environment() -> dict[str, str]:
@@ -130,20 +149,27 @@ class ClaudeNativeLayout:
 
     policy_fd: int
     mcp_fd: int
+    recipe: ClaudeNativeRecipe = ClaudeNativeRecipe.STREAM_JSON
 
     def __post_init__(self) -> None:
+        if type(self.recipe) is not ClaudeNativeRecipe:
+            raise ContractViolation("the Claude layout requires a fixed recipe selection")
         fds = (self.policy_fd, self.mcp_fd)
         if any(type(fd) is not int or fd < 0 for fd in fds) or len(set(fds)) != len(fds):
             raise ContractViolation("the Claude layout requires two distinct descriptors")
 
     @classmethod
-    def seal(cls) -> ClaudeNativeLayout:
+    def seal(
+        cls, recipe: ClaudeNativeRecipe = ClaudeNativeRecipe.STREAM_JSON,
+    ) -> ClaudeNativeLayout:
         # Local import keeps the shared sealed-data primitive single-defined.
         from constructicon.substrate.executors.linux import sealed_data_fd
 
-        policy = sealed_data_fd(json.dumps(fixed_policy(), sort_keys=True).encode() + b"\n")
+        if type(recipe) is not ClaudeNativeRecipe:
+            raise ContractViolation("the Claude policy requires a fixed recipe selection")
+        policy = sealed_data_fd(json.dumps(recipe.policy, sort_keys=True).encode() + b"\n")
         try:
-            return cls(policy, sealed_data_fd(MANAGED_MCP))
+            return cls(policy, sealed_data_fd(MANAGED_MCP), recipe)
         except BaseException:
             os.close(policy)
             raise

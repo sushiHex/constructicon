@@ -8285,3 +8285,197 @@ defect and ran 63 focused framing, schema, reentry, cancellation and compiled
 peer cases. It confirmed the single count, irreversible opaque drain and
 close-attempt latch; this is not a claim of a new full-PR review. Full-gate
 and hosted evidence remain pending on the new head.
+
+### Pinned credential-free startup result and subscription login boundary
+
+PR #279 head `01e7f6a2c203fe41e276e8fda11f18476266ebee` passed the
+hosted foundation proof in run `39561275335`, job `119092927386`: 367
+nonvendor controls followed by the actual pinned startup test. The checked
+artifact records one accepted UI notification, a correlated no-auth response,
+one request write, three binding checks, stdin closure, actual EOF and clean
+joined payload/supervisor completion. It records zero accepted proxy
+connections, not a universal claim that no connection attempt occurred.
+Production availability and subscription qualification remain false.
+
+The same head passed Linux `verify` with 8,403 tests and 476 skips, all four
+containment lanes, qualification and the complete mutation jobs. The exact-head
+connector review returned no findings. A separate Windows fail-fast API run
+recorded 319 passes and one checker `TimeoutError` in the committed-tree
+maintenance contribution case. One instrumented execution of that case passed
+without changing deadlines or primitives; it did not explain the failure.
+[Issue #281](https://github.com/sushiHex/constructicon/issues/281) owns that
+unresolved diagnosis. A prior interrupted full-run failure remains unattributed.
+
+The owner expressly prohibited API-key creation during subsequent login.
+The [subscription maintenance design draft](M8-N6-subscription-maintenance-state-review.md)
+therefore excludes the entire key-creation destination during login and
+separates later vendor-owned refresh and fresh-process reload. Static source
+supports this delayed candidate, not a guaranteed successful bounded attempt.
+The client's unknown subscription metadata can render as `Claude API`; that
+literal is not proof of subscription or refresh in progress. Positive selected
+Pro/Max mode and actual reload remain required.
+
+No live login, credential handling, VM operation or model call was performed
+for this source/design work. Frozen N6a/N6b/N6c and ADR bytes remain unchanged.
+The proposed private input transport reuses a deliberately operator-started
+fixed-command SSH session and the existing inherited descriptors; automated
+commands retain closed stdin. Source confirmation, independent review and
+fake-backed physical proof still precede executable attended commands.
+
+Independent design review corrected an output overclaim: the existing process
+interface streams stdout, while stderr has bounded retained head/tail capture,
+not a cumulative emitted-byte ceiling. The draft now states those different
+bounds and keeps private forwarding cancellable under the original deadline.
+It also requires the observation reader to remain owned during spacing, with
+already-observed failures taking priority over another write, and makes clear
+that excluding ambient credentials never authorizes clearing the selected
+store. A narrow follow-up found no new blocker in those corrections.
+
+The source-confirmed manual login handler accepts pipe input without a TTY and
+prints its URL/prompt to stdout after installing the resolver. Early input can
+be lost and invalid input can request correction, so the bounded procedure
+must not pre-feed or silently retry it. The executable recipe, exact egress
+inputs and fake accepting/refusing composition remain separate required proof;
+design review alone establishes none of them.
+
+### Finite login command and policy preparation — PR #282
+
+The first implementation seam is a closed `ClaudeNativeRecipe` selection on
+the immutable Linux launcher. Login pairs only the fixed safe-mode Claude.ai
+login command with the login-only sealed policy; the selected recipe, command
+and policy enter the launch identity. Layout selection must match the launcher.
+The existing vendor `command` remains stream JSON, so the READ adapter cannot
+reinterpret login as its own command. There is no arbitrary command/policy
+option and no new provider or public login entry point.
+
+This is not yet a safe attended login assembly. In particular, the existing
+egress socket is still supplied by trusted assembly: the proposed login-only
+destination policy, private input lifecycle, refresh observer, reload proof and
+exact host procedure remain to be implemented and qualified. No account,
+credential, host or model action was taken, and no vendor binary ran locally.
+
+Independent static code review found a coverage gap, not a production defect:
+the first READ/login test refused on the old command check and supplied an
+invalid binding. The revised test uses a valid binding and exercises both
+command choices through real layout sealing and command admission, substituting
+only the physical process seam. An explicit spawn observation catches a widened
+route even when the READ adapter converts an exception into a refusal. A narrow
+follow-up found no defect in this correction. Direct cross-layout tests prove
+tag/command pairing; separate exchange tests inspect the actual sealed policy
+bytes. Neither is mislabeled as physical containment proof.
+
+Local verification passed 965 Claude-related tests with 23 platform skips,
+119 recipe/inventory tests, changed-source/test Ruff, strict mypy on 135 source
+files and all five import contracts. Sixteen new and two retargeted mutants
+were assertion-killed with passing baselines and unchanged source snapshots
+using the repository harness. An earlier broad inventory run was stopped before
+editing the tests and earns no completion or kill credit. Full CI, the full
+inventory and Linux physical lanes on the new head remain required; these
+focused results are not a full Windows `verify` pass or a resolution of #281.
+
+### Subscription maintenance building blocks — PR #282, in progress
+
+The maintenance observer is separate from the frozen one-shot initialization
+adapter and codec. It owns one phase and one joined process: at most two bare
+initialize requests for observation, or one for reload. Only the exact
+ambiguous first-party API projection permits the spaced second observation.
+An observed selected subscription mode is a phase-local result, not evidence of
+refresh, durable reload, or production qualification. The continuous reader
+checks buffered records, partial frames and EOF before any further write.
+The diagnostic and observer share one exact UI-framing predicate; that
+exception carries no authority and does not replace the correlated response.
+
+Independent review found reentry could poison a conversation while leaving it
+parked on a silent read until the deadline. Active owner cancellation and
+reader joining close that gap. Reviewing the fix found that retaining the
+owner after callback completion could cancel unrelated later work; the
+outermost cleanup now releases that ownership even when reader join fails.
+Both active and completed-owner cases have regression tests. A narrow
+independent follow-up found no defect in those corrections, and the local
+maintenance suite passed 55 tests. Mutation proof and final-head CI remain
+required; this is not a completed integration claim.
+
+The private operator I/O helper borrows pipe/socket descriptors, accepts one
+bounded LF input line, and forwards bounded bytes under one absolute deadline.
+It never owns credentials or interprets OAuth content. Independent review found
+that distinct descriptor numbers can alias the same open file description:
+restoring blocking mode in one operation could then block another. Admission
+now rejects repeated device/inode identities before changing flags, while
+retaining the caller's exclusive-borrow obligation for outside aliases. Fake
+tests cover the refusal and distinct-endpoint acceptance; a Linux dup-socket
+test is written but has not yet run on this head. A narrow static follow-up
+found no defect in the correction. These primitives are not yet composed into
+an attended-login command or qualified against an authenticated vendor process.
+
+The first focused mutation run exposed five proof gaps, not five credited
+kills: a record-bound case reached a different guard first, a ninth UI record
+raised the public report's constructor error, one EOF case reached a later
+defensive assertion, and two mutated tests hung. The tests and inventory must
+make each intended boundary independently observable before claiming proof.
+The twenty private-I/O mutants were assertion-killed with passing baselines
+and an unchanged source snapshot in that run. Linux descriptor proofs and
+final-head verification remain pending.
+
+Those five proof gaps were corrected and rerun: the final focused inventory
+assertion-killed 63 new or retargeted mutants with passing baselines and stable
+source snapshots. This includes a separate telemetry mutant: a byte-budget
+refusal before delivery must not count as an attempted request write; a write
+whose delivery is uncertain still counts. The final local Claude, inventory
+and CI-scope test selection passed 1,155 tests with 27 platform skips. Ruff,
+strict mypy on 138 source files, and all five import contracts passed. These
+remain focused results, not a full Windows verification or a resolution of
+#281. Final-head hosted verification and physical Linux proofs are still
+required before this batch is review-ready.
+
+At head `5b5bade`, all four hosted Linux proof lanes, runner qualification and
+the complete mutation jobs passed. Hosted pytest passed 8,506 tests with 477
+skips. Verification nevertheless failed: two platform-specific type-ignore
+comments needed by Windows Python 3.11 were unused under Linux. The primitive
+wrappers now resolve those platform attributes at use without type ignores;
+the fake seams and Linux behavior are unchanged. Strict mypy passes with both
+Windows and Linux platform selection. The corrected head still requires CI;
+the earlier physical evidence does not automatically qualify later changes.
+
+### Attended conversation and READ framing — PR #282, in progress
+
+The login conversation now composes one bounded operator-line read with one
+native stdout pump. The write task rechecks observed EOF/failure immediately
+before spending its sole input attempt, including after task scheduling. It
+never retries an uncertain delivery. Owned tasks join on cancellation without
+an abortable cleanup timeout. A completed callback leaves private operator I/O
+available for the caller's later bounded stderr forwarding; a refused callback
+invalidates it. Shared byte constants keep the concrete descriptor helper and
+conversation on one budget law. Its finite facts report callback completion,
+not process exit, authentication or persisted credentials.
+
+Pre-commit review caught unconditional operator-I/O invalidation on success,
+an EOF scheduling gap before input delivery, and cleanup failure replacing an
+earlier cancellation. Regression tests cover all three, including a full-callback
+scheduled EOF case and repeated cancellation while an owned reader joins.
+An independent reviewer raised retained Python exception context as a possible
+public leak, then retracted that classification: internal exceptions and the
+launcher's private result are not the published facts. The displayed refusal
+is fixed; session assembly must never publish its internal exception chain.
+
+Production READ now uses the same exact UI-invalidate predicate as diagnostics
+and maintenance. One eight-record allowance spans the whole transaction. UI
+records never establish a session or replace either mandatory bound empty
+background snapshot. The frozen codec and one-shot initialization bytes remain
+unchanged. The focused READ suite passed 148 tests and the new login callback
+suite passed 28; broader verification and mutation evidence remain required.
+
+These changes still do not provide an attended command. Exact login-only relay
+assembly, physical fake composition, fresh-process reload composition, reviewed
+host commands and authenticated qualification remain. No login, account-side
+mutation, credential inspection, VM action or model call supplied this evidence.
+
+The selected inventory then assertion-killed all 29 new READ/login mutants
+with passing baselines and an unchanged source snapshot. Input-bound, cleanup
+and reentry tests were strengthened before that run so violations produce
+assertions with deterministic cleanup, not timeout errors. The broader Claude
+selection passed 1,090 tests with 27 platform skips; login and inventory checks
+passed 73 tests after the test strengthening. Ruff and strict mypy for both
+Windows and Linux platform selection passed on 139 source files. The focused
+independent callback review found no blocking defect; it confirmed that a false
+`stdin_closed` flag means unconfirmed closure, not proof of a physically open
+handle. Final-head CI remains required.
