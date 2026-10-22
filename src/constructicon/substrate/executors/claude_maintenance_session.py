@@ -1,4 +1,4 @@
-"""One withdrawn-store Claude maintenance phase, never login qualification.
+"""One withdrawn-store Claude maintenance or startup-qualification phase.
 
 The caller owns the maintenance lock and the operator transport. This seam
 owns only the credential descriptor it opens, its relay, and one joined native
@@ -55,6 +55,11 @@ from constructicon.substrate.executors.claude_operator_io import (
     STDOUT_BYTES as LOGIN_OUTPUT_BYTES,
 )
 from constructicon.substrate.executors.claude_protocol import RECORD_BYTES, ClaudePlan
+from constructicon.substrate.executors.claude_startup_qualification import (
+    ClaudeQualificationLifecycle,
+    ClaudeStartupQualification,
+    ClaudeStartupQualificationFacts,
+)
 from constructicon.substrate.executors.egress import EgressPolicy, EgressRelay
 from constructicon.substrate.executors.linux import (
     LinuxLauncher,
@@ -75,6 +80,7 @@ class ClaudeMaintenanceSessionPhase(StrEnum):
     LOGIN = "login"
     OBSERVE = "observe"
     RELOAD = "reload"
+    QUALIFY = "qualify"
 
 
 class ClaudeMaintenanceSessionLifecycle(StrEnum):
@@ -93,6 +99,7 @@ class ClaudeMaintenanceSessionFacts:
     relay_closed: bool | None
     custody_current: bool | None
     credential_closed: bool | None
+    qualification: ClaudeStartupQualificationFacts | None = None
 
     def __post_init__(self) -> None:
         if (type(self.phase) is not ClaudeMaintenanceSessionPhase
@@ -101,15 +108,21 @@ class ClaudeMaintenanceSessionFacts:
                     and type(self.login_facts) is not ClaudeLoginConversationFacts)
                 or (self.mode_observation is not None
                     and type(self.mode_observation) is not ClaudeMaintenanceObservation)
+                or (self.qualification is not None
+                    and type(self.qualification) is not ClaudeStartupQualificationFacts)
                 or any(value is not None and type(value) is not bool for value in (
                     self.process_clean, self.relay_closed, self.custody_current,
                     self.credential_closed,
                 ))):
             raise ValueError("invalid Claude maintenance session facts")
         if self.phase is ClaudeMaintenanceSessionPhase.LOGIN:
-            if self.mode_observation is not None:
+            if self.mode_observation is not None or self.qualification is not None:
                 raise ValueError("login cannot carry mode observation")
+        elif self.phase is ClaudeMaintenanceSessionPhase.QUALIFY:
+            if self.login_facts is not None or self.mode_observation is not None:
+                raise ValueError("qualification cannot carry maintenance observation")
         elif (self.login_facts is not None or self.process_clean is not None
+              or self.qualification is not None
               or (self.mode_observation is not None
                   and self.mode_observation.phase.value != self.phase.value)):
             raise ValueError("mode phase cannot carry login evidence")
@@ -122,6 +135,11 @@ class ClaudeMaintenanceSessionFacts:
                         or self.login_facts.lifecycle
                         is not ClaudeLoginConversationLifecycle.COMPLETED):
                     raise ValueError("joined login needs affirmative process evidence")
+            elif self.phase is ClaudeMaintenanceSessionPhase.QUALIFY:
+                if (self.process_clean is not True or self.qualification is None
+                        or self.qualification.lifecycle
+                        is not ClaudeQualificationLifecycle.QUALIFIED):
+                    raise ValueError("joined qualification needs affirmative evidence")
             elif (self.mode_observation is None or self.mode_observation.lifecycle
                   is not ClaudeMaintenanceLifecycle.OBSERVED):
                 raise ValueError("joined mode needs affirmative observation")
@@ -155,7 +173,7 @@ async def run_maintenance_session(
     operator: PrivateMaintenanceIO | None = None, first_login: bool = False,
     deadline: float | None = None,
 ) -> ClaudeMaintenanceSessionFacts:
-    """Run exactly one attended login or no-model mode-observation phase.
+    """Run one attended login, mode observation or no-dispatch qualification.
 
     ``deadline`` is the loop's absolute monotonic deadline. A caller using an
     FD operator must construct it with this same deadline. Prompt-first input
@@ -171,6 +189,7 @@ async def run_maintenance_session(
     relay: EgressRelay | None = None
     result: ProcessResult | None = None
     login_conversation: ClaudeLoginConversation | None = None
+    qualification_conversation: ClaudeStartupQualification | None = None
     observation: ClaudeMaintenanceObservation | None = None
     body_error: BaseException | None = None
     cleanup_errors: list[BaseException] = []
@@ -234,6 +253,22 @@ async def run_maintenance_session(
                         guard_fds=(custody.lock_fd,), conversation=login_conversation,
                         timeout_s=end - loop.time(), native_store=native_store,
                     )
+            elif phase is ClaudeMaintenanceSessionPhase.QUALIFY:
+                assert selected_plan is not None and launcher.claude is not None
+                qualification_conversation = ClaudeStartupQualification(
+                    selected_plan=selected_plan, model=launcher.claude.model,
+                    effort=launcher.claude.effort,
+                    input_limit=launcher.limits.input_bytes,
+                    output_limit=launcher.limits.stdout_bytes, deadline=end,
+                    check_control=relay_check,
+                )
+                async with asyncio.timeout_at(end):
+                    result = await launcher.exchange(
+                        launcher.claude.command, workspace=None, posture=Posture.READ,
+                        guard_fds=(custody.lock_fd,),
+                        conversation=qualification_conversation,
+                        timeout_s=end - loop.time(), native_store=native_store,
+                    )
             else:
                 assert selected_plan is not None
                 async with asyncio.timeout_at(end):
@@ -255,9 +290,12 @@ async def run_maintenance_session(
             relay_closed = relay.closed is True
 
     # The relay and process have joined. Private stderr is not a public report.
-    if (login and result is not None and (type(result) is not ProcessResult
+    if ((login or phase is ClaudeMaintenanceSessionPhase.QUALIFY)
+            and result is not None and (type(result) is not ProcessResult
                                           or type(result.stdout) is not bytes
-                                          or len(result.stdout) > LOGIN_OUTPUT_BYTES
+                                          or (login and len(result.stdout) > LOGIN_OUTPUT_BYTES)
+                                          or (phase is ClaudeMaintenanceSessionPhase.QUALIFY
+                                              and len(result.stdout) > MODE_OUTPUT_BYTES)
                                           or type(result.stderr) is not bytes
                                           or len(result.stderr) > STDERR_BYTES)):
         cleanup_errors.append(ValueError("Claude maintenance process output refused"))
@@ -299,14 +337,21 @@ async def run_maintenance_session(
         if not isinstance(cleanup_failure, Exception):
             raise cleanup_failure
     login_facts = login_conversation.facts if login_conversation is not None else None
-    process_clean = _clean(result) if login and result is not None else None
+    process_clean = _clean(result) if (
+        login or phase is ClaudeMaintenanceSessionPhase.QUALIFY
+    ) and result is not None else None
+    qualification = (qualification_conversation.facts
+                     if qualification_conversation is not None else None)
     complete = (
         body_error is None and not cleanup_errors and loop.time() < end
         and relay_closed is True and credential_closed is True and custody_current is True
         and ((login and process_clean is True and login_facts is not None
               and login_facts.lifecycle is ClaudeLoginConversationLifecycle.COMPLETED)
              or (not login and observation is not None
-                 and observation.lifecycle is ClaudeMaintenanceLifecycle.OBSERVED))
+                 and observation.lifecycle is ClaudeMaintenanceLifecycle.OBSERVED)
+             or (phase is ClaudeMaintenanceSessionPhase.QUALIFY
+                 and process_clean is True and qualification is not None
+                 and qualification.lifecycle is ClaudeQualificationLifecycle.QUALIFIED))
     )
     incomplete = (isinstance(body_error, TimeoutError)
                   or (observation is not None
@@ -317,5 +362,5 @@ async def run_maintenance_session(
                  else ClaudeMaintenanceSessionLifecycle.REFUSED)
     return ClaudeMaintenanceSessionFacts(
         phase, lifecycle, login_facts, observation, process_clean, relay_closed,
-        custody_current, credential_closed,
+        custody_current, credential_closed, qualification,
     )
