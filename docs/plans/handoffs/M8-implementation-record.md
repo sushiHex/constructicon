@@ -8788,3 +8788,24 @@ each with that one failure. Updating the explicit inventory preserves the
 exactly-once lane assertion rather than weakening it. The corrected head still
 requires its own full gate and final review; the previous physical successes
 do not constitute live Claude qualification.
+
+## Claude READ provider composition closure — 2026-10-22 (Refs #40)
+
+PR #289 merged as `c08a937c960c1c108b0e1916e4dc6d45813d7e5f`, tree-identical
+to reviewed head `54b711de781fca9ba067de3cbae10e6870cc4308`. Exact-head CI
+passed 8,767 tests with 481 skips, all five import contracts, strict typing
+across 146 source files, runner qualification and all four physical
+containment lanes. The fake-backed READ composition's physical lane
+passed. The connector reported no findings and no unresolved threads. The
+first mediation attempt stalled downloading APT indexes and was cancelled;
+only that same mediation job was rerun, passing in 12m05s. The provisioning
+reliability follow-up is #291. The full Windows gate was still running at merge
+and is not credited as green.
+
+Exact-head evidence: [verify run](https://github.com/sushiHex/constructicon/actions/runs/39836213889),
+[containment rerun](https://github.com/sushiHex/constructicon/actions/runs/39836213738/attempts/2),
+and [connector review](https://github.com/sushiHex/constructicon/pull/289#issuecomment-6349401442).
+
+PR #288 recorded actual unprivileged staging only; it did not perform root
+installation or login. Neither PR establishes live authentication, private
+host installation or a model result.

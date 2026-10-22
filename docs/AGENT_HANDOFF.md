@@ -15,6 +15,26 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## Claude startup and READ composition has credential-free physical proof
+
+PR #289 merged as `c08a937`, with a tree identical to reviewed head `54b711d`.
+Exact-head CI passed 8,767 tests with 481 skips, all five import contracts,
+strict typing across 146 source files, runner qualification and all four
+physical containment lanes. The physical lane exercised the fake-backed READ
+provider composition. The connector review found no findings or unresolved
+threads. The first mediation attempt stalled during APT package-index download
+and was cancelled; rerunning only that same job passed in 12m05s. PR #288's
+recorded host activity was unprivileged staging only: it did not include root
+installation or login.
+
+The first full gate exposed an omitted workflow-inventory entry, not a skipped
+physical test. Adding that exact entry preserved the assertion's strictness.
+
+This establishes the reviewed source composition and fake-backed physical
+proof, not live authentication, private-host installation or a model result.
+The separate full Windows gate was still running at merge and is not credited
+as green.
+
 ## Claude staging commands have executable preparation proofs
 
 PR #287 merged as `0485748`, tree-identical to reviewed `4709e5b`.
