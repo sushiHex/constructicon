@@ -304,6 +304,138 @@ def test_judge_rechecks_staged_bytes_not_prior_stage_report(fake_plan):
                       profile_list="other (enforce)\n", host_root=root) == {"ready": False}
 
 
+def test_plan_uses_one_runtime_inventory_even_if_host_source_changes_after_hash(
+    fake_plan, monkeypatch,
+):
+    workspace, root = fake_plan
+    source = workspace.parent / "source.py"
+    original = host.inventory
+    changed = False
+
+    def drift_after_runtime_hash(entries):
+        nonlocal changed
+        result = original(entries)
+        if not changed and any(item.name == "usr/bin/python3" for item in entries):
+            changed = True
+            source.write_bytes(b"changed after runtime hash")
+        return result
+
+    monkeypatch.setattr(host, "inventory", drift_after_runtime_hash)
+    current = host.plan("a" * 40, workspace, root)
+    assert changed
+    expected = "sha256:" + host.sha256(b"source")
+    runtime_record = json.loads(next(
+        host.entry_bytes(item.source) for item in current.entries
+        if item.name == "runtime.json"
+    ))
+    assert ["usr/bin/python3", 0o555, expected] in runtime_record["entries"]
+    assert ("runtime/usr/bin/python3", 0o555, expected) in current.inventory
+
+
+def test_plan_uses_checked_bwrap_identity_without_later_host_reread(fake_plan, monkeypatch):
+    workspace, root = fake_plan
+    bwrap = root / "usr/bin/bwrap"
+    original = host.inventory
+    changed = False
+
+    def drift_after_runtime_hash(entries):
+        nonlocal changed
+        result = original(entries)
+        if not changed and any(item.name == "usr/bin/python3" for item in entries):
+            changed = True
+            bwrap.write_bytes(b"changed after checked pin")
+        return result
+
+    monkeypatch.setattr(host, "inventory", drift_after_runtime_hash)
+    current = host.plan("a" * 40, workspace, root)
+    assert changed
+    assert ("bwrap", 0o555, "sha256:" + host.BWRAP_SHA256) in current.inventory
+
+
+def test_stage_refuses_host_source_drift_after_plan_before_copy(fake_plan, monkeypatch):
+    workspace, root = fake_plan
+    source = workspace.parent / "source.py"
+    original = host.materialize
+
+    def drift_before_copy(entries, destination):
+        source.write_bytes(b"changed before staged copy")
+        return original(entries, destination)
+
+    monkeypatch.setattr(host, "materialize", drift_before_copy)
+    with pytest.raises(ValueError, match="staging differs"):
+        host.stage("a" * 40, workspace, host_root=root)
+
+
+def test_judge_refuses_staged_and_host_drift_after_plan_before_staging_check(
+    fake_plan, monkeypatch,
+):
+    workspace, root = fake_plan
+    pin = host.stage("a" * 40, workspace, host_root=root)["launch_config_sha256"]
+    captured = host.staging_inventory(host.plan("a" * 40, workspace, root))
+    source = workspace.parent / "source.py"
+    original_tree = host.tree_inventory
+    original_differences = host.differences
+    compared = []
+
+    def drift_after_staging_read(top):
+        if top == workspace / host.STAGING:
+            source.write_bytes(b"changed after judge plan")
+            staged = top / "constructicon-m8-claude/runtime/usr/bin/python3"
+            staged.chmod(0o755)
+            staged.write_bytes(b"changed after judge plan")
+            staged.chmod(0o555)
+        return original_tree(top)
+
+    def compare(observed, expected, owner):
+        compared.append(expected)
+        return original_differences(observed, expected, owner)
+
+    monkeypatch.setattr(host, "tree_inventory", drift_after_staging_read)
+    monkeypatch.setattr(host, "differences", compare)
+    assert host.judge("a" * 40, workspace, expected_sha256=pin,
+                      profile_list="other (enforce)\n", host_root=root) == {"ready": False}
+    assert compared == [captured]
+
+
+def test_staging_expectation_projects_only_captured_plan_bytes(fake_plan):
+    workspace, root = fake_plan
+    current = host.plan("a" * 40, workspace, root)
+    captured = dict((name, content) for name, _, content in current.inventory)
+    (workspace.parent / "source.py").write_bytes(b"later host bytes")
+    expected = host.staging_inventory(current)
+    assert ("constructicon-m8-claude/runtime/usr/bin/python3", 0o555,
+            captured["runtime/usr/bin/python3"]) in expected
+    assert ("constructicon-m8-claude.apparmor", 0o444,
+            "sha256:" + current.policy_sha256) in expected
+    assert expected[0] == (".", 0o700, "directory")
+
+
+def test_verify_accepts_unchanged_installed_artifact_after_host_source_change(
+    fake_plan, monkeypatch,
+):
+    workspace, root = fake_plan
+    pin = host.stage("a" * 40, workspace, host_root=root)["launch_config_sha256"]
+    installed = root / host.INSTALL_ROOT
+    installed.parent.mkdir(parents=True)
+    shutil.copytree(workspace / "staging" / "constructicon-m8-claude", installed)
+    policy = root / host.POLICY_DEST
+    policy.write_bytes((workspace / "staging" / "constructicon-m8-claude.apparmor").read_bytes())
+    policy.chmod(0o444)
+    source = workspace.parent / "source.py"
+    original = host.tree_inventory
+
+    def drift_after_installed_read(top):
+        observed = original(top)
+        if top == installed:
+            source.write_bytes(b"changed after verify plan")
+        return observed
+
+    monkeypatch.setattr(host, "tree_inventory", drift_after_installed_read)
+    result = host.verify("a" * 40, workspace, expected_sha256=pin,
+                         profile_list=host.CLAUDE_PROFILES, host_root=root)
+    assert result["installed"] is True
+
+
 def test_full_tree_comparison_includes_mode_owner_and_extra_entries():
     expected = ((".", 0o755, "directory"), ("vendor/claude", 0o555, "sha256:abc"))
     accepted = ((".", 0o755, "directory", 0),
