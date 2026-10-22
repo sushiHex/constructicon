@@ -9,6 +9,7 @@ import os
 import stat
 import sys
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -34,6 +35,11 @@ from constructicon.substrate.executors.claude_native import ClaudeNativeRecipe
 from constructicon.substrate.executors.claude_protocol import (
     ClaudeInitializeVerdict,
     ClaudePlan,
+)
+from constructicon.substrate.executors.claude_startup import ClaudeStartupVerdict
+from constructicon.substrate.executors.claude_startup_qualification import (
+    ClaudeQualificationLifecycle,
+    ClaudeStartupQualificationFacts,
 )
 from constructicon.substrate.executors.linux import BWRAP_SHA256
 
@@ -87,6 +93,8 @@ def facts(phase: ClaudeMaintenanceSessionPhase) -> ClaudeMaintenanceSessionFacts
         )
         mode = None
         process_clean = True
+    elif phase is ClaudeMaintenanceSessionPhase.QUALIFY:
+        login, mode, process_clean = None, None, True
     else:
         login = None
         mode = ClaudeMaintenanceObservation(
@@ -100,6 +108,10 @@ def facts(phase: ClaudeMaintenanceSessionPhase) -> ClaudeMaintenanceSessionFacts
         phase=phase, lifecycle=ClaudeMaintenanceSessionLifecycle.JOINED_CLEAN,
         login_facts=login, mode_observation=mode, relay_closed=True,
         custody_current=True, credential_closed=True, process_clean=process_clean,
+        qualification=(ClaudeStartupQualificationFacts(
+            ClaudeQualificationLifecycle.QUALIFIED, ClaudeInitializeVerdict.MODE_MATCH,
+            ClaudeStartupVerdict.MATCH, ClaudeStartupVerdict.MATCH, 3, 0, True, True,
+        ) if phase is ClaudeMaintenanceSessionPhase.QUALIFY else None),
     )
 
 
@@ -123,6 +135,76 @@ def test_closed_config_selects_only_paired_launcher_and_phase_egress(tmp_path):
     assert {item.host for item in loaded.egress["observe"].destinations} == {
         "platform.claude.com", "api.anthropic.com",
     }
+    assert loaded.launcher(ClaudeMaintenanceSessionPhase.QUALIFY).claude_recipe is (
+        ClaudeNativeRecipe.STREAM_JSON
+    )
+
+
+@pytest.mark.parametrize("name,expected", [("pro", ClaudePlan.PRO), ("max", ClaudePlan.MAX)])
+def test_actual_qualification_record_seals_for_exact_plan(tmp_path, name, expected):
+    from constructicon.substrate.executors import claude_host
+    from tests.substrate.test_claude_host import seal
+
+    path = configuration(tmp_path)
+    loaded = claude_lane.read_configuration(
+        path, expected_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+    )
+    phase = ClaudeMaintenanceSessionPhase.QUALIFY
+    plan = ClaudePlan.PRO if name == "pro" else ClaudePlan.MAX
+    record = claude_lane._record(
+        facts(phase), loaded.launcher(phase), loaded.egress["observe"], loaded,
+        selected_plan=plan,
+    )
+    record["completed"] = True
+    evidence = tmp_path / "actual-qualification.json"
+    assert claude_host.sealed_plan(seal(record, evidence), evidence, loaded) is expected
+
+
+@pytest.mark.parametrize("source", [
+    "claude_startup_qualification.py", "claude_initialize.py",
+    "identity.py", "_lifetime.py",
+])
+def test_qualification_revision_binds_actual_source_bytes(monkeypatch, source):
+    initial = claude_lane.qualification_revision()
+    original = Path.read_bytes
+
+    def changed(path):
+        raw = original(path)
+        return raw + b"# changed\n" if path.name == source else raw
+
+    monkeypatch.setattr(Path, "read_bytes", changed)
+    assert claude_lane.qualification_revision() != initial
+
+
+@pytest.mark.parametrize("symbol", ["EvidenceFile", "_fsync_directory"])
+def test_qualification_revision_binds_evidence_publication_source(monkeypatch, symbol):
+    initial = claude_lane.qualification_revision()
+    original = claude_lane.inspect.getsource
+
+    def changed(obj):
+        source = original(obj)
+        return source + "\n# changed" if obj is getattr(claude_lane, symbol) else source
+
+    monkeypatch.setattr(claude_lane.inspect, "getsource", changed)
+    assert claude_lane.qualification_revision() != initial
+
+
+def test_refused_qualification_retains_bounded_partial_facts(tmp_path):
+    path = configuration(tmp_path)
+    loaded = claude_lane.read_configuration(
+        path, expected_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+    )
+    phase = ClaudeMaintenanceSessionPhase.QUALIFY
+    partial = replace(facts(phase), lifecycle=ClaudeMaintenanceSessionLifecycle.REFUSED,
+                      process_clean=False)
+    record = claude_lane._record(
+        partial, loaded.launcher(phase), loaded.egress["observe"], loaded,
+        selected_plan=ClaudePlan.PRO,
+    )
+    assert record["facts"]["lifecycle"] == "refused"
+    assert record["facts"]["process_clean"] is False
+    assert record["facts"]["qualification"]["lifecycle"] == "qualified"
+    assert record["subscription_qualified"] is record["production_available"] is False
 
 
 def test_config_hash_uses_exact_crlf_bytes(tmp_path):
@@ -280,11 +362,16 @@ def test_config_refuses_ambiguity_or_policy_widening_before_entry(tmp_path, dama
 
 @pytest.mark.parametrize("phase", [ClaudeMaintenanceSessionPhase.LOGIN,
                                    ClaudeMaintenanceSessionPhase.OBSERVE,
-                                   ClaudeMaintenanceSessionPhase.RELOAD])
+                                   ClaudeMaintenanceSessionPhase.RELOAD,
+                                   ClaudeMaintenanceSessionPhase.QUALIFY])
 def test_main_reserves_evidence_and_publishes_only_finite_unqualified_facts(
     tmp_path, monkeypatch, capsys, phase,
 ):
-    configuration(tmp_path)
+    configured = configuration(tmp_path)
+    if phase is ClaudeMaintenanceSessionPhase.QUALIFY:
+        changed = json.loads(configured.read_text(encoding="utf-8"))
+        changed["egress"]["reload"]["connections"] = 5
+        configured.write_text(json.dumps(changed), encoding="utf-8")
     seen = []
     revisions = []
     original_publish = claude_lane.EvidenceFile.publish
@@ -325,6 +412,13 @@ def test_main_reserves_evidence_and_publishes_only_finite_unqualified_facts(
         assert launcher.limits.stdout_bytes == (
             256 * 1024 if phase is ClaudeMaintenanceSessionPhase.LOGIN else 512 * 1024
         )
+        if phase is ClaudeMaintenanceSessionPhase.QUALIFY:
+            assert policy == claude_lane.read_configuration(
+                tmp_path / "launch-config.json",
+                expected_sha256=hashlib.sha256(
+                    (tmp_path / "launch-config.json").read_bytes(),
+                ).hexdigest(),
+            ).egress["observe"]
         seen.append(("engine", phase))
         return facts(phase)
 
@@ -353,11 +447,14 @@ def test_main_reserves_evidence_and_publishes_only_finite_unqualified_facts(
     ).hexdigest()
     if phase is ClaudeMaintenanceSessionPhase.LOGIN:
         assert written["facts"]["login"]["stdout_bytes"] == 12
+    elif phase is ClaudeMaintenanceSessionPhase.QUALIFY:
+        assert written["facts"]["qualification"]["request_writes"] == 3
+        assert written["facts"]["qualification"]["model"] == "reviewed-model"
     else:
         assert written["facts"]["mode"]["request_writes"] == 1
         assert written["facts"]["mode"]["ui_records"] == 0
     serialized = json.dumps(written)
-    for private in (str(tmp_path), "test-claude", "8.8.8.8", "1.1.1.1", "reviewed-model"):
+    for private in (str(tmp_path), "test-claude", "8.8.8.8", "1.1.1.1"):
         assert private not in serialized
 
 
@@ -453,8 +550,12 @@ def test_every_published_field_has_a_declared_finite_bound(tmp_path, phase):
     loaded = claude_lane.read_configuration(
         path, expected_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
     )
-    record = claude_lane._record(facts(phase), loaded.launcher(phase),
-                                loaded.egress[phase.value], loaded)
+    record = claude_lane._record(
+        facts(phase), loaded.launcher(phase),
+        loaded.egress["observe" if phase is ClaudeMaintenanceSessionPhase.QUALIFY
+                      else phase.value], loaded,
+        selected_plan=ClaudePlan.PRO if phase is ClaudeMaintenanceSessionPhase.QUALIFY else None,
+    )
     published = tmp_path / "bounded-evidence.json"
     claude_lane.EvidenceFile(published, domain=claude_lane.EVIDENCE_DOMAIN).publish(record)
     record = json.loads(published.read_text(encoding="utf-8"))
@@ -462,14 +563,18 @@ def test_every_published_field_has_a_declared_finite_bound(tmp_path, phase):
         "schema_version", "subscription_qualified", "production_available", "facts",
         "runtime_digest", "vendor_digest", "launch_policy_sha256", "launch_config_sha256",
         "launch_revision", "egress", "completed",
-    }
+    } | ({"qualification_revision"} if phase is ClaudeMaintenanceSessionPhase.QUALIFY else set())
     assert record["completed"] is True
     assert type(record["schema_version"]) is int and record["schema_version"] == 1
     assert record["subscription_qualified"] is record["production_available"] is False
-    for key in ("runtime_digest", "vendor_digest", "launch_revision"):
+    for key in ("runtime_digest", "vendor_digest", "launch_revision", *(
+        ("qualification_revision",) if phase is ClaudeMaintenanceSessionPhase.QUALIFY else ()
+    )):
         value = record[key]
         assert type(value) is str and len(value) == 71 and value.startswith("sha256:")
         assert set(value[7:]) <= set("0123456789abcdef")
+    if phase is ClaudeMaintenanceSessionPhase.QUALIFY:
+        assert record["qualification_revision"] == str(claude_lane.qualification_revision())
     for key in ("launch_policy_sha256", "launch_config_sha256"):
         assert type(record[key]) is str and len(record[key]) == 64
         assert set(record[key]) <= set("0123456789abcdef")
@@ -484,8 +589,8 @@ def test_every_published_field_has_a_declared_finite_bound(tmp_path, phase):
     assert set(public) == {
         "phase", "lifecycle", "login", "mode", "relay_closed", "custody_current",
         "credential_closed", "process_clean",
-    }
-    assert public["phase"] in {"login", "observe", "reload"}
+    } | ({"qualification"} if phase is ClaudeMaintenanceSessionPhase.QUALIFY else set())
+    assert public["phase"] in {"login", "observe", "reload", "qualify"}
     assert public["lifecycle"] in {"joined-clean", "refused", "incomplete"}
     for key in ("relay_closed", "custody_current", "credential_closed", "process_clean"):
         assert public[key] is None or type(public[key]) is bool
@@ -499,6 +604,23 @@ def test_every_published_field_has_a_declared_finite_bound(tmp_path, phase):
         for key in ("input_write_attempted", "stdin_closed", "stdout_eof"):
             assert type(login[key]) is bool
         assert type(login["stdout_bytes"]) is int and 0 <= login["stdout_bytes"] <= 256 * 1024
+    elif phase is ClaudeMaintenanceSessionPhase.QUALIFY:
+        assert public["login"] is public["mode"] is None
+        qual = public["qualification"]
+        assert set(qual) == {"lifecycle", "initialize_verdict", "settings_verdict",
+                             "hooks_verdict", "request_writes", "ui_records",
+                             "stdin_closed", "eof", "selected_plan", "model", "effort"}
+        assert qual["lifecycle"] in {item.value for item in ClaudeQualificationLifecycle}
+        assert qual["initialize_verdict"] in {
+            item.value for item in ClaudeInitializeVerdict
+        } | {None}
+        for key in ("settings_verdict", "hooks_verdict"):
+            assert qual[key] in {item.value for item in ClaudeStartupVerdict} | {None}
+        assert type(qual["request_writes"]) is int and 0 <= qual["request_writes"] <= 3
+        assert type(qual["ui_records"]) is int and 0 <= qual["ui_records"] <= 8
+        assert type(qual["stdin_closed"]) is type(qual["eof"]) is bool
+        assert qual["selected_plan"] in {"pro", "max"}
+        assert qual["model"] == loaded.model and qual["effort"] == loaded.effort
     else:
         assert public["login"] is None
         mode = public["mode"]

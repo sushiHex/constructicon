@@ -1584,6 +1584,64 @@ SESSION_MUTANTS = (
 )
 MUTANTS += SESSION_MUTANTS
 
+QUALIFY = "constructicon.substrate.executors.claude_startup_qualification:"
+QUALIFY_TEST = "tests/substrate/test_claude_startup_qualification.py::"
+QUALIFIED_STARTUP_MUTANTS = (
+    ("qualification sends all three observations before closing",
+     QUALIFY + "ClaudeStartupQualification.__call__",
+     'for kind in ("initialize", "get_settings", "get_hooks_listing"):',
+     'for kind in ("initialize", "get_settings"):',
+     QUALIFY_TEST + "test_three_observations_accept_without_dispatch"),
+    ("qualification never retries an ambiguous mode",
+     QUALIFY + "ClaudeStartupQualification._judge_control",
+     "if self.initialize_verdict is not ClaudeInitializeVerdict.MODE_MATCH:", "if False:",
+     QUALIFY_TEST + "test_mode_ambiguity_and_tail_refuse[Claude API-]"),
+    ("qualification requires effective settings match",
+     QUALIFY + "ClaudeStartupQualification._judge_control",
+     "if self.settings_verdict is not ClaudeStartupVerdict.MATCH:", "if False:",
+     QUALIFY_TEST + "test_each_startup_judge_must_match[get_settings]"),
+    ("qualification requires hooks listing match",
+     QUALIFY + "ClaudeStartupQualification._judge_control",
+     "if self.hooks_verdict is not ClaudeStartupVerdict.MATCH:", "if False:",
+     QUALIFY_TEST + "test_each_startup_judge_must_match[get_hooks_listing]"),
+    ("qualification rejects a partial frame before another write",
+     QUALIFY + "ClaudeStartupQualification._write_control",
+     "or self._buffer or self.eof", "or False or self.eof",
+     QUALIFY_TEST + "test_partial_frame_before_next_control_refuses_without_next_write"),
+    ("qualification consumes exact UI frames before next control",
+     QUALIFY + "ClaudeStartupQualification._write_control",
+     "self._consume_ui_records()", "None",
+     QUALIFY_TEST + "test_exact_ui_after_first_response_is_consumed_before_next_write"),
+    ("session wires retained custody into qualification callback",
+     SESSION + "run_maintenance_session",
+     "check_control=relay_check,", "check_control=None,",
+     SESSION_TEST + "test_qualification_custody_change_during_initialize_blocks_later_controls"),
+    ("qualification session requires positive process exit",
+     SESSION + "run_maintenance_session",
+     "and process_clean is True and qualification is not None",
+     "and True and qualification is not None",
+     SESSION_TEST + "test_qualification_refuses_ambiguity_or_unclean_process[Claude Pro-False]"),
+    ("qualify uses the reviewed observe egress rather than reload",
+     "constructicon.substrate.executors.claude_lane:_run",
+     'configuration.egress["observe" if phase is ClaudeMaintenanceSessionPhase.QUALIFY',
+     'configuration.egress["reload" if phase is ClaudeMaintenanceSessionPhase.QUALIFY',
+     "tests/substrate/test_claude_lane.py::"
+     + "test_main_reserves_evidence_and_publishes_only_finite_unqualified_facts[qualify]"),
+    ("qualification record preserves the selected Pro plan",
+     "constructicon.substrate.executors.claude_lane:_public_facts",
+     '"pro" if selected_plan is ClaudePlan.PRO else "max"',
+     '"max" if selected_plan is ClaudePlan.PRO else "pro"',
+     "tests/substrate/test_claude_lane.py::"
+     + "test_actual_qualification_record_seals_for_exact_plan[pro-Claude Pro]"),
+    ("qualification record names its current source law",
+     "constructicon.substrate.executors.claude_lane:_record",
+     'record["qualification_revision"] = str(qualification_revision())',
+     'record["qualification_revision"] = "sha256:" + "0" * 64',
+     "tests/substrate/test_claude_lane.py::"
+     + "test_every_published_field_has_a_declared_finite_bound[qualify]"),
+)
+MUTANTS += QUALIFIED_STARTUP_MUTANTS
+
 HOST_ARTIFACTS = "scripts.claude_host_artifacts:"
 HOST_TEST = "tests/test_claude_host_artifacts.py::"
 HOST_ARTIFACT_MUTANTS = (
@@ -1643,6 +1701,80 @@ HOST_ARTIFACT_MUTANTS = (
      HOST_TEST + "test_full_tree_comparison_includes_mode_owner_and_extra_entries"),
 )
 MUTANTS += HOST_ARTIFACT_MUTANTS
+
+PROVIDER = "constructicon.substrate.executors.claude_provider:"
+PROVIDER_TEST = "tests/substrate/test_claude_provider.py::"
+QUALIFIED_READ_MUTANTS = (
+    ("READ intent durability is followed by another authority check",
+     PROVIDER + "ClaudeOperatorHandle._before_user",
+     "# Durability may block past expiry; it never supplies a renewed authorization.\n    self._check()",
+     "# Durability may block past expiry; it never supplies a renewed authorization.\n    pass",
+     PROVIDER_TEST
+     + "test_intent_is_durable_before_user_write_and_expiry_rechecked_after_durability[expiry]"),
+    ("READ relay denial demotes native success", PROVIDER + "ClaudeOperatorHandle._run",
+     "not self.relay_closed or self.relay_denied", "not self.relay_closed",
+     PROVIDER_TEST + "test_native_success_cannot_replace_callback_relay_or_protocol_proof[relay-denial]"),
+    ("READ qualification requires a completed callback", PROVIDER + "ClaudeOperatorHandle._run",
+     "or self._callback_started != 1 or self._callback_completed != 1", "or False",
+     PROVIDER_TEST + "test_native_success_cannot_replace_callback_relay_or_protocol_proof[no-callback]"),
+    ("READ completed evidence must be durable", PROVIDER + "ClaudeOperatorHandle._settle",
+     "if isinstance(outcome, ExecutorSuccess):", "if False:",
+     PROVIDER_TEST + "test_completed_outcome_must_be_durable_before_success_is_published"),
+    ("READ calls the durable dispatch hook",
+     "constructicon.substrate.executors.claude_read:ClaudeReadTransaction._write",
+     "if user and self._before_user is not None:", "if False:",
+     "tests/substrate/test_claude_read.py::"
+     + "test_before_user_hook_is_after_startup_and_immediately_before_one_user_write[True]"),
+    ("startup evidence names both sealed revisions",
+     "constructicon.substrate.executors.claude_host:sealed_plan",
+     "or revision != store.store_conformance_revision", "or False",
+     "tests/substrate/test_claude_host.py::"
+     + "test_both_sealed_revisions_name_exact_evidence[store_conformance_revision]"),
+    ("startup evidence requires every affirmative fact",
+     "constructicon.substrate.executors.claude_host:validate_startup_evidence",
+     "if not all(checks) or type(plan) is not str", "if False or type(plan) is not str",
+     "tests/substrate/test_claude_host.py::"
+     + "test_each_affirmative_fact_is_required_even_when_record_is_sealed"),
+    ("startup evidence names current installed inputs",
+     "constructicon.substrate.executors.claude_host:validate_startup_evidence",
+     "if any(record[name] != value for name, value in expected.items()):", "if False:",
+     "tests/substrate/test_claude_host.py::"
+     + "test_each_affirmative_fact_is_required_even_when_record_is_sealed"),
+    ("startup evidence is closed at every depth",
+     "constructicon.substrate.executors.claude_host:validate_startup_evidence",
+     "or set(qualification) != _QUALIFICATION_FIELDS", "or False",
+     "tests/substrate/test_claude_host.py::test_new_or_missing_evidence_fields_refuse[qualification]"),
+    ("READ fixture binds shared Git configuration",
+     "constructicon.api._claude_read_fixture:_revision",
+     '"shared_config": hashlib.sha256(_CONFIG).hexdigest(),', '"shared_config": "",',
+     "tests/api/test_claude_read_fixture.py::"
+     + "test_shared_git_configuration_drift_changes_revision_before_git"),
+    ("READ fixture requires the service owner",
+     "constructicon.api._claude_read_fixture:_service_owner",
+     "or info.st_uid != uid", "or False",
+     "tests/api/test_claude_read_fixture.py::"
+     + "test_service_owner_primitive_requires_nonroot_private_posix_owner"),
+    ("READ fixture parents are not writable by other users",
+     "constructicon.api._claude_read_fixture:_ancestor_owner",
+     "or info.st_mode & 0o022", "or False",
+     "tests/api/test_claude_read_fixture.py::"
+     + "test_ancestor_owner_primitive_requires_trusted_nonwritable_parent"),
+    ("READ materialization has its archive bound, not file-reader limits",
+     "constructicon.api._claude_read_fixture:workspace_provider",
+     "launcher=replace(launcher, limits=MATERIALIZATION_LIMITS),", "launcher=launcher,",
+     "tests/api/test_claude_read_fixture.py::test_real_workspace_acquires_the_pinned_ref"),
+    ("READ qualification is fixed to the exact authorization",
+     "constructicon.api.claude_qualification:require_coherent",
+     'or authorization.capability_id != CAPABILITY', 'or False',
+     "tests/api/test_claude_qualification.py::"
+     + "test_wrong_authorization_refuses_before_opening_journal"),
+    ("READ qualification checks the fixed answer after a completed callback",
+     "constructicon.api.claude_qualification:read_node",
+     'or result.raw_reply.strip() != "ready"', 'or False',
+     "tests/api/test_claude_qualification.py::"
+     + "test_a_completed_callback_still_requires_the_fixed_answer"),
+)
+MUTANTS += QUALIFIED_READ_MUTANTS
 
 if __name__ == "__main__":
     raise SystemExit(run(MUTANTS))

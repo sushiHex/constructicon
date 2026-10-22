@@ -27,6 +27,7 @@ from constructicon.substrate.executors.claude_protocol import ClaudeInitializeVe
 from constructicon.substrate.executors.egress import EgressDestination, EgressPolicy, EgressSocket
 from constructicon.substrate.executors.linux import ProcessLimits, ProcessResult
 from constructicon.substrate.executors.operator_store import BindingCheck
+from tests.substrate.test_claude_startup_qualification import Channel
 
 
 class Custody:
@@ -116,6 +117,155 @@ class Launcher:
         if self.fail:
             return ProcessResult(1, b"", b"private", 0, payload_returncode=1)
         return ProcessResult(0, b"", b"private", 0, payload_returncode=0)
+
+
+class QualificationLauncher(Launcher):
+    claude_recipe = ClaudeNativeRecipe.STREAM_JSON
+    claude = type("Vendor", (), {"command": ("fixed-claude-stream",),
+                                 "model": "claude-sonnet-4-6", "effort": "low"})()
+    limits = ProcessLimits(input_bytes=8192, stdout_bytes=512 * 1024,
+                           record_bytes=256 * 1024, stderr_bytes=64 * 1024)
+
+    def __init__(self, *, mode: str = "Claude Pro", clean: bool = True,
+                 stdout: bytes = b"") -> None:
+        super().__init__()
+        self.native = Channel(mode=mode)
+        self.clean = clean
+        self.stdout = stdout
+        self.joined = False
+
+    async def exchange(self, command: tuple[str, ...], **kwargs: Any) -> ProcessResult:
+        self.calls += 1
+        kwargs["native_store"].before_spawn()
+        try:
+            await kwargs["conversation"](self.native)
+            return ProcessResult(0 if self.clean else 1, self.stdout, b"", 0,
+                                 payload_returncode=0 if self.clean else 1)
+        finally:
+            self.joined = True
+
+
+@pytest.mark.asyncio
+async def test_qualification_requires_three_controls_and_joined_lifecycle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from constructicon.substrate.executors import claude_maintenance_session as session
+
+    monkeypatch.setattr(session, "EgressRelay", Relay)
+    custody, launcher = Custody(), QualificationLauncher()
+    try:
+        facts = await run_maintenance_session(
+            custody, launcher, policy("platform.claude.com", "api.anthropic.com"),
+            tmp_path / "lane", phase=ClaudeMaintenanceSessionPhase.QUALIFY,
+            selected_plan=ClaudePlan.PRO,
+        )
+        assert facts.lifecycle is ClaudeMaintenanceSessionLifecycle.JOINED_CLEAN
+        assert facts.qualification is not None
+        assert facts.qualification.request_writes == 3
+        assert facts.process_clean is True
+        assert facts.custody_current is facts.credential_closed is facts.relay_closed is True
+        assert custody.checks >= 8
+        assert launcher.joined is True
+        assert launcher.native.writes == ["initialize", "get_settings", "get_hooks_listing"]
+    finally:
+        custody.finish()
+
+
+@pytest.mark.asyncio
+async def test_qualification_custody_change_during_initialize_blocks_later_controls(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from constructicon.substrate.executors import claude_maintenance_session as session
+
+    monkeypatch.setattr(session, "EgressRelay", Relay)
+    custody, launcher = Custody(), QualificationLauncher()
+
+    class ChangeDuringInitialize(Channel):
+        async def write(self, raw: bytes) -> None:
+            await super().write(raw)
+            custody.changed = True
+
+    launcher.native = ChangeDuringInitialize()
+    try:
+        facts = await run_maintenance_session(
+            custody, launcher, policy("platform.claude.com", "api.anthropic.com"),
+            tmp_path / "lane", phase=ClaudeMaintenanceSessionPhase.QUALIFY,
+            selected_plan=ClaudePlan.PRO,
+        )
+        assert launcher.native.writes == ["initialize"]
+        assert launcher.joined is True
+        assert facts.lifecycle is ClaudeMaintenanceSessionLifecycle.REFUSED
+        assert facts.custody_current is False
+        assert facts.relay_closed is facts.credential_closed is True
+    finally:
+        custody.finish()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode,clean", [("Claude API", True), ("Claude Pro", False)])
+async def test_qualification_refuses_ambiguity_or_unclean_process(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mode: str, clean: bool,
+) -> None:
+    from constructicon.substrate.executors import claude_maintenance_session as session
+
+    monkeypatch.setattr(session, "EgressRelay", Relay)
+    custody, launcher = Custody(), QualificationLauncher(mode=mode, clean=clean)
+    try:
+        try:
+            facts = await run_maintenance_session(
+                custody, launcher, policy("platform.claude.com", "api.anthropic.com"),
+                tmp_path / "lane", phase=ClaudeMaintenanceSessionPhase.QUALIFY,
+                selected_plan=ClaudePlan.PRO,
+            )
+        except ValueError:
+            pytest.fail("an unclean process must return finite refusal facts")
+        assert facts.lifecycle is not ClaudeMaintenanceSessionLifecycle.JOINED_CLEAN
+        assert facts.custody_current is facts.credential_closed is facts.relay_closed is True
+        if mode == "Claude API":
+            assert launcher.native.writes == ["initialize"]
+        else:
+            assert facts.process_clean is False
+    finally:
+        custody.finish()
+
+
+@pytest.mark.asyncio
+async def test_qualification_policy_refuses_before_store_open(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from constructicon.substrate.executors import claude_maintenance_session as session
+
+    monkeypatch.setattr(session, "EgressRelay", Relay)
+    custody, launcher = Custody(), QualificationLauncher()
+    facts = await run_maintenance_session(
+        custody, launcher, policy("platform.claude.com"), tmp_path / "lane",
+        phase=ClaudeMaintenanceSessionPhase.QUALIFY, selected_plan=ClaudePlan.PRO,
+    )
+    assert facts.lifecycle is ClaudeMaintenanceSessionLifecycle.REFUSED
+    assert launcher.calls == custody.opened == custody.created == 0
+    assert facts.qualification is None
+
+
+@pytest.mark.asyncio
+async def test_qualification_malicious_result_bound_refuses_after_join(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from constructicon.substrate.executors import claude_maintenance_session as session
+
+    monkeypatch.setattr(session, "EgressRelay", Relay)
+    custody, launcher = Custody(), QualificationLauncher(stdout=b"x" * (512 * 1024 + 1))
+    try:
+        facts = await run_maintenance_session(
+            custody, launcher, policy("platform.claude.com", "api.anthropic.com"),
+            tmp_path / "lane", phase=ClaudeMaintenanceSessionPhase.QUALIFY,
+            selected_plan=ClaudePlan.PRO,
+        )
+        assert facts.lifecycle is ClaudeMaintenanceSessionLifecycle.REFUSED
+        assert facts.qualification is not None
+        assert facts.qualification.lifecycle.value == "qualified"
+        assert facts.custody_current is facts.credential_closed is facts.relay_closed is True
+    finally:
+        custody.finish()
 
 
 class Relay:
@@ -760,7 +910,7 @@ async def test_missing_login_callback_cannot_claim_joined_clean(
 def test_public_shape_is_finite() -> None:
     assert {item.name for item in fields(session_facts_type())} == {
         "phase", "lifecycle", "login_facts", "mode_observation", "process_clean",
-        "relay_closed", "custody_current", "credential_closed",
+        "relay_closed", "custody_current", "credential_closed", "qualification",
     }
 
 

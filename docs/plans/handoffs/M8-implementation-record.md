@@ -8696,3 +8696,95 @@ Windows and Linux platform selection passed on 139 source files. The focused
 independent callback review found no blocking defect; it confirmed that a false
 `stdin_closed` flag means unconfirmed closure, not proof of a physically open
 handle. Final-head CI remains required.
+
+### Claude startup qualification and admitted READ composition — issue #40
+
+The post-staging delivery audit found a real composition gap: the maintenance
+entry supported login, observe and reload, while the READ transaction and worker
+were not yet assembled into an admitted provider. This slice adds a no-dispatch
+QUALIFY observation and a separately authorized fixed READ through the existing
+Graph, two capability leases, journal and RunHost. It introduces no core schema,
+alternate scheduler, API-key path or generally available provider. The lifecycle
+and evidence boundaries are in
+[the state review](M8-N6-qualified-read-state-review.md).
+
+QUALIFY reuses the three existing pure startup judges and the owned maintenance
+reader. Its public record carries finite affirmative facts, selected Pro/Max
+mode and actual source/installation identities. The root-sealed record must
+match both conformance revisions before host assembly. The READ provider holds
+the acquisition guard and store lock, records dispatch intent before its sole
+user message, rechecks after durability, and requires a completed contained
+callback rather than treating native success as READ evidence. Durable result
+publication precedes success. Refusals preserve observed telemetry without
+publishing task text. The provider remains unavailable outside its exact
+qualification authorization.
+
+The accepting graph tests exposed two real composition mistakes before any
+host action: population had inherited the file worker's one-byte artifact
+limit, although Git archive needs 10,240 bytes, and the component read `output`
+although this unstructured protocol reports its answer in `raw_reply`. Separate
+population limits and the actual text field correct those mistakes. A direct
+fixture source review also added the reused Git configuration and helpers to
+its identity. Stripped answer equality was retained intentionally: this proof
+requires the word `ready`, not exact surrounding whitespace.
+
+The first selected 24-mutant run had passing baselines and an unchanged source
+snapshot: 21 assertion kills and three NOT PROVEN. Two tests encountered later
+defensive exceptions instead of asserting the intended earlier boundary; the
+fixture-source mutant encountered a stale import-time revision before reaching
+its drift test. These are test-evidence gaps, not credited kills.
+
+Fable's requested review did not execute because its subscription quota refused
+the call. An independent Sol review reproduced three introduced defects:
+custody was checked around the process but not inside qualification resumes;
+the qualification source identity omitted reused judgment/publication helpers;
+and a valid UI-invalidate frame buffered after a response was refused. Each
+requires a focused correction and regression before final-head acceptance.
+
+At this record's preparation, the real admitted-graph selection passed four
+tests, static mutation-inventory checks passed 45, and ruff plus strict mypy
+passed on 146 source files. Provider/read/worker tests passed 223 with eight
+platform skips before the final telemetry-only correction; the affected final
+six-test matrix passed afterward. These are local fake-path observations, not
+final-head CI or physical/live qualification. The new hosted provider composition
+test collects but skips on Windows. No VM start, vendor binary, login,
+credential access or model call supplied this evidence. Final correction,
+mutation, full-gate and hosted evidence must be appended before merge.
+
+The three review corrections then passed eight independent targeted tests and
+an eight-case fake interleaving matrix. Custody changes during initialize and
+stdin-close resumes refuse with joined cleanup; exact UI frames after each
+response accept, while partial, unknown and excessive frames refuse. Six new
+assembly/CLI checks also passed, including real reviewed-configuration hashing
+and the separate materialization/worker limits.
+
+The expanded local mutation run positively killed 26 guards with passing
+baselines and an unchanged source snapshot. One additional duplicate mutant on
+the overridden `_check` method was NOT PROVEN: the harness cannot replace a
+code object carrying the zero-argument `super()` closure. That unsupported
+target was removed, not counted as a kill. The independently killed session
+wiring mutant removes the same effective custody guard; the accepting and
+mid-initialize refusal regressions remain. Production code and the harness
+were not contorted to accommodate that duplicate target. Final-head full-gate
+and hosted evidence remain pending.
+
+The complete operator-sequence audit then separated pure evidence validation
+from the store-generation comparison. S5 needs the validated digest before
+publication, not a fabricated provisional store identity. Both consumers now
+reuse one bounded read and one predicate; no new CLI or duplicate runbook
+judgment is needed. Accepting Pro/Max, the entire refusal matrix, and one-read
+snapshot behavior are tested through this seam. The in-flight local gate was
+stopped before this source change rather than reported as exact-head evidence.
+The narrow independent follow-up found no blocking defect and passed 51
+targeted cases. All four affected evidence mutants were assertion-killed again
+with passing baselines and unchanged source bytes after the extraction.
+
+At `a621d21`, all four hosted containment lanes, runner qualification and
+mutation jobs passed. Full verification independently caught the same single
+introduced inventory omission on both platforms: the new physical provider
+test was in the workflow but not in its asserted proof inventory. Local pytest
+reported 8,367 passed and 880 skipped; CI reported 8,766 passed and 481 skipped,
+each with that one failure. Updating the explicit inventory preserves the
+exactly-once lane assertion rather than weakening it. The corrected head still
+requires its own full gate and final review; the previous physical successes
+do not constitute live Claude qualification.

@@ -157,9 +157,12 @@ class ClaudeReadTransaction:
     def __init__(
         self, task: TaskSpec, *, selected_plan: ClaudePlan, model: str, effort: str,
         worker: ReadWorker, input_limit: int, output_limit: int, deadline: float,
+        before_user: Callable[[], None] | None = None,
+        check_control: Callable[[], None] | None = None,
     ) -> None:
         self._task, self._plan, self._model, self._effort = task, selected_plan, model, effort
         self._worker = worker
+        self._before_user, self._check_control = before_user, check_control
         self._input_limit, self._output_limit, self._deadline = input_limit, output_limit, deadline
         self._state: Literal["new", "startup", "ready", "dispatched", "terminal",
                              "checked", "drained", "refused"] = "new"
@@ -183,6 +186,8 @@ class ClaudeReadTransaction:
         self._usage: Usage | None = None
 
     def _check(self) -> None:
+        if self._check_control is not None:
+            self._check_control()
         task = asyncio.current_task()
         if (self._state == "refused" or asyncio.get_running_loop().time() >= self._deadline
                 or (task is not None and task.cancelling())):
@@ -255,12 +260,14 @@ class ClaudeReadTransaction:
         if self._records or self._buffer or self._eof:
             raise _Refused()
 
-    async def _write(self, raw: bytes) -> None:
+    async def _write(self, raw: bytes, *, user: bool = False) -> None:
         self._check()
         self._input_bytes += len(raw)  # Spent before delivery, including uncertain writes.
         if self._input_bytes > self._input_limit or len(raw) > RECORD_BYTES:
             raise _Refused()
         assert self._io is not None
+        if user and self._before_user is not None:
+            self._before_user()
         await self._io.write(raw)
         self._audit()
 
@@ -439,7 +446,7 @@ class ClaudeReadTransaction:
         self._state = "dispatched"
         await self._write(_wire({"type": "user", "uuid": self._user_uuid,
                                  "message": {"role": "user", "content": self._task.instruction},
-                                 "parent_tool_use_id": None, "client_composed": True}))
+                                 "parent_tool_use_id": None, "client_composed": True}), user=True)
         while True:
             value = _parse(await self._next())
             if self._ui(value):
@@ -588,6 +595,8 @@ async def run_read_transaction(
     selected_plan: ClaudePlan, model: str, effort: str, worker: ReadWorker,
     guard_fds: tuple[int, ...], timeout_s: float,
     native_store: ClaudeNativeStoreMount | None = None,
+    before_user: Callable[[], None] | None = None,
+    check_control: Callable[[], None] | None = None,
 ) -> ExecutorOutcome:
     """Publish only after this same exchange and all owned work have joined."""
     if (type(selected_plan) is not ClaudePlan or not _text(model, 256) or not model
@@ -604,6 +613,7 @@ async def run_read_transaction(
         task, selected_plan=selected_plan, model=model, effort=effort, worker=worker,
         input_limit=launcher.limits.input_bytes, output_limit=launcher.limits.stdout_bytes,
         deadline=started_at + timeout_s,
+        before_user=before_user, check_control=check_control,
     )
     try:
         launch_store = native_store

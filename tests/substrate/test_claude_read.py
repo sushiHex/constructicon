@@ -244,6 +244,55 @@ async def run(launcher, *, worker=None, plan=ClaudePlan.PRO, timeout=5):
     return outcome, calls
 
 
+@pytest.mark.parametrize("refuse", [False, True])
+async def test_before_user_hook_is_after_startup_and_immediately_before_one_user_write(refuse):
+    launcher = Launcher()
+    called = []
+
+    def before_user():
+        assert launcher.peer.handshake == ["initialize", "initialized", "list"]
+        assert not launcher.peer.users
+        called.append("intent")
+        if refuse:
+            raise OSError("private failed durable intent")
+
+    async def worker(path, remaining):
+        assert called == ["intent"]
+        return "file text"
+
+    outcome = await claude_read.run_read_transaction(
+        launcher, ("fixed-nonvendor-peer",), TaskSpec(instruction="read the file"),
+        selected_plan=ClaudePlan.PRO, model="model", effort="high", worker=worker,
+        guard_fds=(), timeout_s=5, before_user=before_user,
+    )
+    assert isinstance(outcome, ExecutorFailure if refuse else ExecutorSuccess)
+    assert called == ["intent"]
+    assert len(launcher.peer.users) == (0 if refuse else 1)
+    assert launcher.joined
+
+
+async def test_control_check_refuses_at_read_resume_before_any_user_write():
+    launcher = Launcher()
+    checked = []
+
+    def control():
+        checked.append(len(launcher.peer.writes))
+        if launcher.peer.writes:
+            raise OSError("private lost ownership")
+
+    async def worker(path, remaining):
+        raise AssertionError("closed invocation cannot authorize worker")
+
+    outcome = await claude_read.run_read_transaction(
+        launcher, ("fixed-nonvendor-peer",), TaskSpec(instruction="read the file"),
+        selected_plan=ClaudePlan.PRO, model="model", effort="high", worker=worker,
+        guard_fds=(), timeout_s=5, check_control=control,
+    )
+    assert isinstance(outcome, ExecutorFailure)
+    assert checked and checked[-1] == 1
+    assert not launcher.peer.users and launcher.joined
+
+
 @pytest.mark.parametrize("defect", [None, "initial-absent", "terminal-absent", "changed",
                                    "guard", "model", "effort", "command"])
 async def test_native_read_binding_is_checked_before_dispatch_and_after_join(defect):

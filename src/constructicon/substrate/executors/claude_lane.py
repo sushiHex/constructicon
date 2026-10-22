@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import inspect
 import os
 import re
 import stat
@@ -18,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
 
-from constructicon.core.identity import Digest, parse_json_value
+from constructicon.core.identity import Digest, digest, parse_json_value
 from constructicon.substrate.executors.claude_maintenance_login import (
     LIFETIME_SECONDS as LOGIN_SECONDS,
 )
@@ -56,7 +57,7 @@ from constructicon.substrate.executors.claude_protocol import (
     RECORD_BYTES,
     ClaudePlan,
 )
-from constructicon.substrate.executors.codex_lane import EvidenceFile
+from constructicon.substrate.executors.codex_lane import EvidenceFile, _fsync_directory
 from constructicon.substrate.executors.egress import (
     EgressDestination,
     EgressPolicy,
@@ -79,6 +80,40 @@ _CONFIG_FIELDS = frozenset({
     "launch_policy", "launch_policy_sha256", "vendor_tree", "vendor_digest",
     "vendor_version", "model", "effort", "egress",
 })
+_QUALIFICATION_SOURCES = (
+    "constructicon.substrate.executors.claude_lane",
+    "constructicon.substrate.executors.claude_maintenance_session",
+    "constructicon.substrate.executors.claude_startup_qualification",
+    "constructicon.substrate.executors.claude_maintenance_mode",
+    "constructicon.substrate.executors.claude_startup",
+    "constructicon.substrate.executors.claude_protocol",
+    "constructicon.substrate.executors.claude_native_events",
+    "constructicon.substrate.executors.claude_initialize",
+    "constructicon.substrate._lifetime",
+    "constructicon.core.identity",
+)
+
+
+def qualification_revision() -> Digest:
+    """Bind QUALIFY evidence to the actual source law, not a stable label."""
+    sources: dict[str, Path] = {}
+    for name in _QUALIFICATION_SOURCES:
+        module = sys.modules.get(name)
+        source = inspect.getsourcefile(module) if module is not None else None
+        if source is None or Path(source).suffix != ".py":
+            raise ValueError("Claude qualification source is not loaded")
+        sources[name] = Path(source)
+    source_hashes = {
+        name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for name, path in sources.items()
+    }
+    source_hashes["codex.EvidenceFile"] = hashlib.sha256(
+        inspect.getsource(EvidenceFile).encode("utf-8")
+    ).hexdigest()
+    source_hashes["codex._fsync_directory"] = hashlib.sha256(
+        inspect.getsource(_fsync_directory).encode("utf-8")
+    ).hexdigest()
+    return digest("claude-startup-qualification-source", 1, source_hashes)
 
 
 class _Parser(argparse.ArgumentParser):
@@ -224,10 +259,13 @@ def read_configuration(path: Path, *, expected_sha256: str) -> LaneConfiguration
     )
 
 
-def _public_facts(facts: ClaudeMaintenanceSessionFacts) -> dict[str, object]:
+def _public_facts(
+    facts: ClaudeMaintenanceSessionFacts, *, selected_plan: ClaudePlan | None = None,
+    configuration: LaneConfiguration | None = None,
+) -> dict[str, object]:
     login = facts.login_facts
     mode = facts.mode_observation
-    return {
+    public: dict[str, object] = {
         "phase": facts.phase.value,
         "lifecycle": facts.lifecycle.value,
         "login": None if login is None else {
@@ -251,19 +289,45 @@ def _public_facts(facts: ClaudeMaintenanceSessionFacts) -> dict[str, object]:
         "credential_closed": facts.credential_closed,
         "process_clean": facts.process_clean,
     }
+    if facts.phase is ClaudeMaintenanceSessionPhase.QUALIFY:
+        if type(selected_plan) is not ClaudePlan or configuration is None:
+            raise ValueError("qualification evidence requires sealed selection")
+        qualification = facts.qualification
+        public["qualification"] = {
+            "lifecycle": None if qualification is None else qualification.lifecycle.value,
+            "initialize_verdict": (None if qualification is None
+                                   or qualification.initialize_verdict is None
+                                   else qualification.initialize_verdict.value),
+            "settings_verdict": (None if qualification is None
+                                 or qualification.settings_verdict is None
+                                 else qualification.settings_verdict.value),
+            "hooks_verdict": (None if qualification is None
+                              or qualification.hooks_verdict is None
+                              else qualification.hooks_verdict.value),
+            "request_writes": None if qualification is None else qualification.request_writes,
+            "ui_records": None if qualification is None else qualification.ui_records,
+            "stdin_closed": None if qualification is None else qualification.stdin_closed,
+            "eof": None if qualification is None else qualification.eof,
+            "selected_plan": "pro" if selected_plan is ClaudePlan.PRO else "max",
+            "model": configuration.model,
+            "effort": configuration.effort,
+        }
+    return public
 
 
 def _record(
     facts: ClaudeMaintenanceSessionFacts, launcher: LinuxLauncher,
     policy: EgressPolicy, configuration: LaneConfiguration,
+    *, selected_plan: ClaudePlan | None = None,
 ) -> dict[str, object]:
     if type(facts) is not ClaudeMaintenanceSessionFacts:
         raise ValueError("invalid Claude maintenance session facts")
-    return {
+    record: dict[str, object] = {
         "schema_version": EVIDENCE_SCHEMA,
         "subscription_qualified": False,
         "production_available": False,
-        "facts": _public_facts(facts),
+        "facts": _public_facts(facts, selected_plan=selected_plan,
+                               configuration=configuration),
         "runtime_digest": str(configuration.runtime_digest),
         "vendor_digest": str(configuration.vendor_digest),
         "launch_policy_sha256": configuration.launch_policy_sha256,
@@ -271,6 +335,9 @@ def _record(
         "launch_revision": str(launcher.revision),
         "egress": {name: str(value) for name, value in identity_digests(policy).items()},
     }
+    if facts.phase is ClaudeMaintenanceSessionPhase.QUALIFY:
+        record["qualification_revision"] = str(qualification_revision())
+    return record
 
 
 async def _run(
@@ -284,7 +351,8 @@ async def _run(
                                    deadline=deadline)
                 if phase is ClaudeMaintenanceSessionPhase.LOGIN else None)
     launcher = configuration.launcher(phase)
-    policy = configuration.egress[phase.value]
+    policy = configuration.egress["observe" if phase is ClaudeMaintenanceSessionPhase.QUALIFY
+                                  else phase.value]
     with inherit_maintenance(store_root, key, lock_fd,
                              generation_floor=floor, parent=os.getppid()) as custody:
         facts = await run_maintenance_session(
@@ -297,7 +365,7 @@ async def _run(
 
 def main(argv: list[str] | None = None) -> int:
     parser = _Parser(prog="claude_lane", allow_abbrev=False)
-    parser.add_argument("phase", choices=("login", "observe", "reload"))
+    parser.add_argument("phase", choices=("login", "observe", "reload", "qualify"))
     parser.add_argument("--launch-config", type=Path, required=True)
     parser.add_argument("--launch-config-sha256", required=True)
     parser.add_argument("--lane-dir", type=Path, required=True)
@@ -331,7 +399,8 @@ def main(argv: list[str] | None = None) -> int:
                 key=options.key, lock_fd=options.lock_fd, floor=options.floor,
                 lane_dir=options.lane_dir,
             ))
-            evidence = _record(facts, launcher, policy, configuration)
+            evidence = _record(facts, launcher, policy, configuration,
+                               selected_plan=selected_plan)
             reservation.publish(evidence)
         except BaseException:
             reservation.abandon()

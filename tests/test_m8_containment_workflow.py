@@ -39,7 +39,8 @@ PROOFS = {
     ),
     "Prove the fake Claude native final transition and bounded layout": (
         "foundation", "tests/substrate/test_claude_native_containment.py "
-        "tests/substrate/test_claude_native_read.py",
+        "tests/substrate/test_claude_native_read.py "
+        "tests/substrate/test_claude_provider_physical.py",
     ),
     "Observe pinned Claude startup without credentials or provider egress": (
         "foundation", "tests/substrate/test_claude_native_startup.py "
