@@ -13,6 +13,33 @@ From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-
 and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
 subscription route; see the dated section at the end of this record.
 
+## Claude private staging execution — 2026-10-22 (Refs #283)
+
+PR #287 merged as `04857489a6388e6cfde4619cadb903514fbcc764`, with a
+tree identical to reviewed head `4709e5b`. Exact-head hosted verification
+passed 8,636 tests with 479 skips; all four containment lanes and runner
+qualification passed. The connector's local-copy overwrite finding was
+reproduced, corrected and resolved before merge. A focused independent
+review of the correction found no blocker.
+
+Under exclusive operator custody, the separately reviewed private package
+passed fresh-boot D2 record preservation, verifier/probe and guarded drift.
+Unprivileged staging then emitted exactly `boot-checked`, `drift-checked`
+and `claude-stage-recorded`, with empty stage stderr. The package manifest
+SHA-256 was
+`3fe0aaa987ebaa8789ddff79ed7c8b7200d529b4d508ededf71f6fe97806d602`.
+Two independently assembled packages were byte-identical before execution.
+The complete transport captures and bound host values remain private.
+
+The VM was parked and a separate usage query affirmatively confirmed it
+Off/idle before custody was released. No Claude process, credential, login,
+root installation, model call or baseline change was involved. The stage
+result does not establish the independent configuration/inventory review:
+the reviewed procedure ends before artifact readback and installation.
+Those exact commands remain a prerequisite, rather than an implied extension
+of the successful stage. The outcome and continuation are recorded on
+[#283](https://github.com/sushiHex/constructicon/issues/283#issuecomment-6335047358).
+
 ## Claude private staging package (Refs #283)
 
 The staging-only procedure in [M8-N6-host-session.md](M8-N6-host-session.md)
