@@ -15,6 +15,20 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## Claude maintenance entry joins custody, relay and native cleanup
+
+PR #284 merged as `7635017`, tree-identical to reviewed `a76faa6`.
+Exact-head hosted verification passed 8,603 tests with 477 skips; runner
+qualification, all four containment lanes and the final connector review
+passed. Login, observation and reload are separate explicit invocations under
+the existing maintenance custody. Configuration bytes require an independent
+reviewed digest, and cleanup records positive joined/closed facts.
+
+This establishes the entry composition, not an installed private-host runtime,
+persisted subscription login, authenticated qualification or a model result.
+No private-host, credential or model operation was performed. The unfinished
+local Windows gate is not credited as a completed verification run.
+
 ## Claude maintenance primitives keep login and observation separate
 
 PR #282 merged as `167ea69`. Its rebased head `d3aaffe` is tree-identical

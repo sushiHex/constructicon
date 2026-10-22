@@ -33,6 +33,10 @@ MAINTENANCE_LITERAL_EVIDENCE_NAMES = [
 # Every provisioned proof belongs to exactly one isolated runner. These are not
 # sampled smoke tests: removing a file or mutation inventory must fail here.
 PROOFS = {
+    "Prove staged Claude host runtime with a synthetic native peer": (
+        "foundation", "tests/substrate/test_claude_host_installation.py "
+        "tests/substrate/test_claude_host_installation.py",
+    ),
     "Prove the fake Claude native final transition and bounded layout": (
         "foundation", "tests/substrate/test_claude_native_containment.py "
         "tests/substrate/test_claude_native_read.py",
@@ -166,9 +170,19 @@ def test_every_existing_proof_runs_once_in_its_isolated_lane():
     # Startup runs its nonvendor controls first, then the exact pinned CLI
     # observation. Keep both invocations explicit in the inventory above.
     names = list(steps)
+    host_name = "Prove staged Claude host runtime with a synthetic native peer"
     fake_step = "Prove the fake Claude native final transition and bounded layout"
     startup_name = "Observe pinned Claude startup without credentials or provider egress"
-    assert names.index(fake_step) < names.index(startup_name)
+    assert names.index(host_name) < names.index(fake_step) < names.index(startup_name)
+    host_step = steps[host_name]
+    stage_target = ("tests/substrate/test_claude_host_installation.py::"
+                    "test_stage_and_judge_synthetic_host_runtime")
+    verify_target = ("tests/substrate/test_claude_host_installation.py::"
+                     "test_verified_install_launches_joined_fake_peer")
+    assert host_step.count("-m pytest") == 2
+    assert host_step.count("M8_CLAUDE_HOST_PROOF_REQUIRED=1") == 2
+    assert host_step.count(stage_target) == host_step.count(verify_target) == 1
+    assert host_step.index(stage_target) < host_step.index(verify_target)
     startup = steps[startup_name]
     assert startup.count("-m pytest") == 2
     controls = "-k 'not test_pinned_credential_free_startup_has_only_a_noauth_observation'"
