@@ -8750,3 +8750,20 @@ final-head CI or physical/live qualification. The new hosted provider compositio
 test collects but skips on Windows. No VM start, vendor binary, login,
 credential access or model call supplied this evidence. Final correction,
 mutation, full-gate and hosted evidence must be appended before merge.
+
+The three review corrections then passed eight independent targeted tests and
+an eight-case fake interleaving matrix. Custody changes during initialize and
+stdin-close resumes refuse with joined cleanup; exact UI frames after each
+response accept, while partial, unknown and excessive frames refuse. Six new
+assembly/CLI checks also passed, including real reviewed-configuration hashing
+and the separate materialization/worker limits.
+
+The expanded local mutation run positively killed 26 guards with passing
+baselines and an unchanged source snapshot. One additional duplicate mutant on
+the overridden `_check` method was NOT PROVEN: the harness cannot replace a
+code object carrying the zero-argument `super()` closure. That unsupported
+target was removed, not counted as a kill. The independently killed session
+wiring mutant removes the same effective custody guard; the accepting and
+mid-initialize refusal regressions remain. Production code and the harness
+were not contorted to accommodate that duplicate target. Final-head full-gate
+and hosted evidence remain pending.

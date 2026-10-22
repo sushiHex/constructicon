@@ -25,7 +25,8 @@ partial frames, EOF, cancellation, deadline and store binding. A request ID and
 write count are spent before an uncertain write. After every await it rechecks
 state and observes any completed read; a frame arriving during write or between
 controls cannot be treated as a later correlated response. Exact UI invalidate
-frames alone may interleave, up to eight total. Unknown system/callback,
+frames alone may interleave, including immediately after a response before the
+next control, up to eight total. Unknown system/callback,
 duplicate, malformed, oversized and trailing frames refuse. Positive callback
 facts require three matching judges, exactly three writes, stdin close and EOF.
 
@@ -44,6 +45,9 @@ Public evidence is bounded enums/counts/booleans: phase, lifecycle, three
 verdicts, three-at-most write attempts, eight-at-most UI records, close/EOF,
 process/relay/credential/binding facts, selected plan, model and effort bound
 to the reviewed configuration and existing exact installation identities.
+QUALIFY alone records a revision of the loaded qualification, framing,
+judgment, custody/cleanup and evidence-publication source law; older maintenance
+record shapes remain unchanged.
 There are no wire records, errors, prompts, account fields, credential hashes,
 or inferred subscription/production-availability flags. A JOINED_CLEAN
 qualification is an observed phase fact, not a production-ready grant.
