@@ -8778,3 +8778,13 @@ stopped before this source change rather than reported as exact-head evidence.
 The narrow independent follow-up found no blocking defect and passed 51
 targeted cases. All four affected evidence mutants were assertion-killed again
 with passing baselines and unchanged source bytes after the extraction.
+
+At `a621d21`, all four hosted containment lanes, runner qualification and
+mutation jobs passed. Full verification independently caught the same single
+introduced inventory omission on both platforms: the new physical provider
+test was in the workflow but not in its asserted proof inventory. Local pytest
+reported 8,367 passed and 880 skipped; CI reported 8,766 passed and 481 skipped,
+each with that one failure. Updating the explicit inventory preserves the
+exactly-once lane assertion rather than weakening it. The corrected head still
+requires its own full gate and final review; the previous physical successes
+do not constitute live Claude qualification.
