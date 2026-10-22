@@ -113,7 +113,7 @@ test "$(/usr/bin/wc -c < "$LOCAL_SELECTION")" -eq 424
 test "$(/usr/bin/sha256sum "$LOCAL_SELECTION" | /usr/bin/cut -d ' ' -f 1)" = "$SELECTION_SHA256"
 test "$(/usr/bin/sha256sum "$PACKAGE_DIR/MANIFEST.sha256" | /usr/bin/cut -d ' ' -f 1)" = "$MANIFEST_SHA256"
 (cd "$PACKAGE_DIR" && /usr/bin/sha256sum --check --strict --quiet MANIFEST.sha256)
-/usr/bin/install -m 0600 "$LOCAL_SELECTION" "$PACKAGE_DIR/selection.json"
+/usr/bin/cat "$LOCAL_SELECTION" > "$PACKAGE_DIR/selection.json"
 /usr/bin/printf '%s\n' \
   'mkdir m8-claude-input' \
   'chmod 700 m8-claude-input' \

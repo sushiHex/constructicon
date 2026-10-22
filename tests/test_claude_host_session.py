@@ -266,3 +266,29 @@ def test_transport_noclobber_refuses_late_local_output_occupant(tmp_path):
     assert (directory / "input.batch").read_bytes() == b"sentinel"
     assert outside.read_bytes() == b"outside unchanged"
     assert not (directory / "claude-stage.stdout").exists()
+
+
+def test_transport_selection_copy_refuses_late_occupant_but_old_install_does_not(tmp_path):
+    local, env, directory = _local_transport(tmp_path)
+    copy = '/usr/bin/cat "$LOCAL_SELECTION" > "$PACKAGE_DIR/selection.json"'
+    assert local.count(copy) == 1
+    race = 'printf sentinel > "$PACKAGE_DIR/selection.json"\n'
+    raced = local.replace(copy, race + copy)
+    refused = subprocess.run([git_bash(), "-c", raced], env=env,
+                             stdin=subprocess.DEVNULL, capture_output=True, check=False)
+    assert refused.returncode != 0
+    assert (directory / "selection.json").read_bytes() == b"sentinel"
+    assert not (directory / "input.batch").exists()
+
+    # Synthetic counterexample: the former install command overwrites the
+    # competing file despite the same earlier freshness checks and `set -C`.
+    other = tmp_path / "old-install-counterexample"
+    other.mkdir()
+    old_local, old_env, old_directory = _local_transport(other)
+    old = '/usr/bin/install -m 0600 "$LOCAL_SELECTION" "$PACKAGE_DIR/selection.json"'
+    changed = old_local.replace(copy, race + old)
+    assert changed != old_local
+    overwritten = subprocess.run([git_bash(), "-c", changed], env=old_env,
+                                 stdin=subprocess.DEVNULL, capture_output=True, check=False)
+    assert overwritten.returncode == 0
+    assert (old_directory / "selection.json").read_bytes() == b"x" * 424

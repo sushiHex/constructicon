@@ -43,6 +43,9 @@ Git Bash; it now uses the repository's existing Git Bash selector.
 Follow-up review caught an `errexit` exception in an AND-list freshness
 check. Each condition is now a standalone check, so an existing ordinary
 file refuses as well as a dangling link.
+Connector review then found that `install` bypassed noclobber for the local
+selection copy. That copy now uses the same exclusive shell-redirection law
+as the batch and captured output; a late occupant must survive unchanged.
 
 ## Claude maintenance entry composition (Refs #40)
 
