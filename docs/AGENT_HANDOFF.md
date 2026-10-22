@@ -15,6 +15,22 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## Claude staging expectations preserve the captured identity
+
+PR #286 merged as `41e416f`, tree-identical to reviewed `6fbeeda`.
+Exact-head verification passed 8,629 tests with 479 skips; all four containment
+lanes, runner qualification and mutation jobs passed. The connector reported
+no findings. The helper now composes expected staged and installed inventories
+from the same captured runtime identity that supplies the configuration digest.
+
+The reproduced bug was a positive staging verdict over inconsistent bytes,
+not a failed private-host installation. Five new assertion-killed mutants
+cover the snapshot projections and phase comparisons. A trailing host-source
+reread was rejected: it cannot establish an atomic host snapshot, and an
+unchanged installed artifact can still match its captured identity after the
+original source changes. No live Claude authentication or model result was
+established by this correction.
+
 ## Claude host artifacts have a physically exercised installation path
 
 PR #285 merged as `b5dac72`, tree-identical to reviewed `04903f7`.
