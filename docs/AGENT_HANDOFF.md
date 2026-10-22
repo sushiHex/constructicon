@@ -15,6 +15,22 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## Claude host artifacts have a physically exercised installation path
+
+PR #285 merged as `b5dac72`, tree-identical to reviewed `04903f7`.
+Exact-head hosted verification passed 8,623 tests with 479 skips, all five
+import contracts, runner qualification and all four containment lanes. The
+Claude inventory logged 447 assertion-killed mutants, and the final connector
+review reported no findings. The synthetic host proof stages, installs,
+verifies independently of staging and launches a joined nonvendor peer.
+
+This does not establish installation on the private host, subscription login,
+fresh-process persistence or a model result. Subsequent operator-package review
+reproduced a staging false positive under host-source drift: expected contents
+were reread after computing the configuration digest. The passing physical
+proof did not exercise that interleaving. Preserve that distinction when using
+the recorded evidence; a successful review is not proof that no defect exists.
+
 ## Claude maintenance entry joins custody, relay and native cleanup
 
 PR #284 merged as `7635017`, tree-identical to reviewed `a76faa6`.

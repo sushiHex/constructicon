@@ -498,6 +498,20 @@ def inventory(entries: list[Entry]) -> tuple[tuple[str, int, str], ...]:
     return tuple(result)
 
 
+def prefixed_inventory(
+    prefix: str, entries: tuple[tuple[str, int, str], ...],
+) -> tuple[tuple[str, int, str], ...]:
+    """Reuse captured content identities without reopening source files."""
+    return tuple((prefix if name == "." else f"{prefix}/{name}", mode, content)
+                 for name, mode, content in entries)
+
+
+def ordered_inventory(
+    entries: tuple[tuple[str, int, str], ...],
+) -> tuple[tuple[str, int, str], ...]:
+    return tuple(sorted(entries, key=lambda item: PurePosixPath(item[0]).parts))
+
+
 def plan(commit: str, workspace: Path, host_root: Path) -> Plan:
     require_unprivileged()
     require_custody(workspace)
@@ -514,7 +528,8 @@ def plan(commit: str, workspace: Path, host_root: Path) -> Plan:
     runtime_digest = identity_digest("linux-runtime-root", runtime_inventory)
     vendor_entries = [Entry(".", "directory", 0o555, None),
                       Entry("claude", "file", 0o555, ("bytes", vendor))]
-    vendor_digest = identity_digest("linux-runtime-root", inventory(vendor_entries))
+    vendor_inventory = inventory(vendor_entries)
+    vendor_digest = identity_digest("linux-runtime-root", vendor_inventory)
     policy = blobs[POLICY_SOURCE]
     require_policy(policy)
     policy_sha256 = sha256(policy)
@@ -542,7 +557,15 @@ def plan(commit: str, workspace: Path, host_root: Path) -> Plan:
                *prefixed("runtime", runtime), *prefixed("vendor", vendor_entries),
                Entry("runtime.json", "file", 0o444, ("bytes", runtime_document)),
                Entry("launch-config.json", "file", 0o444, ("bytes", config))]
-    return Plan(tuple(entries), inventory(entries), policy, config, sha256(config),
+    complete_inventory = ordered_inventory((
+        (".", 0o755, "directory"),
+        ("bwrap", 0o555, "sha256:" + BWRAP_SHA256),
+        *prefixed_inventory("runtime", runtime_inventory),
+        *prefixed_inventory("vendor", vendor_inventory),
+        ("runtime.json", 0o444, "sha256:" + sha256(runtime_document)),
+        ("launch-config.json", 0o444, "sha256:" + sha256(config)),
+    ))
+    return Plan(tuple(entries), complete_inventory, policy, config, sha256(config),
                 vendor, runtime_digest, vendor_digest, policy_sha256)
 
 
@@ -622,6 +645,15 @@ def staging_entries(current: Plan) -> list[Entry]:
                   ("bytes", current.policy))]
 
 
+def staging_inventory(current: Plan) -> tuple[tuple[str, int, str], ...]:
+    return ordered_inventory((
+        (".", 0o700, "directory"),
+        *prefixed_inventory("constructicon-m8-claude", current.inventory),
+        ("constructicon-m8-claude.apparmor", 0o444,
+         "sha256:" + current.policy_sha256),
+    ))
+
+
 def stage(commit: str, workspace: Path, *, host_root: Path = HOST_ROOT) -> dict:
     current = plan(commit, workspace, host_root)
     staging = workspace / STAGING
@@ -629,7 +661,7 @@ def stage(commit: str, workspace: Path, *, host_root: Path = HOST_ROOT) -> dict:
             "staging must be fresh")
     entries = staging_entries(current)
     materialize(entries, staging)
-    expected = inventory(entries)
+    expected = staging_inventory(current)
     drift = differences(tree_inventory(staging), expected, operator_uid())
     require(not drift, "staging differs from reviewed plan: " + repr(drift[:8]))
     return {"staged": True, "launch_config_sha256": current.config_sha256,
@@ -659,8 +691,8 @@ def judge(commit: str, workspace: Path, *, expected_sha256: str,
         require_tools(host_root)
         require_destination_ancestors(host_root)
         staging = workspace / STAGING
-        entries = staging_entries(current)
-        require(not differences(tree_inventory(staging), inventory(entries), operator_uid()),
+        require(not differences(tree_inventory(staging), staging_inventory(current),
+                                operator_uid()),
                 "staging differs from reviewed plan")
         require(not (host_root / INSTALL_ROOT).exists()
                 and not (host_root / INSTALL_ROOT).is_symlink(),

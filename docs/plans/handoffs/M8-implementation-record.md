@@ -88,6 +88,27 @@ verification and physical lanes remain required before readiness or merge.
 
 ## Claude private-host artifact composition (Refs #283)
 
+Post-merge operator-package review reproduced a source-drift defect in this
+slice. The runtime digest used one inventory, while the full plan and later
+staging comparison reread source files. A host change between those reads
+could produce `staged: true` for bytes different from the configuration's
+runtime identity. The original physical proof and connector review did not
+exercise this interleaving. No private-host execution preceded discovery.
+
+The correction preserves the first captured content inventory and composes
+the full installed/staging expectations from it. Copying remains bounded per
+file; no whole-runtime byte snapshot or new installer is added.
+Later host bytes cannot rewrite the expected evidence. The claim is equality
+to that captured plan, not an atomic snapshot of the whole host or a promise
+that host sources never change after observation. Stage, judge and verify
+must still inspect the actual artifact tree before their positive verdicts.
+Five focused mutants pass their baselines and fail by assertion: runtime
+inventory reread, bubblewrap reread, staging projection, stage expectation and
+judge expectation. The original runtime-inventory and pre-copy drift cases
+failed before the fix. The judge case deliberately changes both source and
+staged bytes while restoring the staged file's mode; source-only drift after
+capturing an unchanged installed artifact remains an accepting case.
+
 The proposed installation helper is stdlib-only, unprivileged and offline.
 It stages a fresh Claude launch set, judges it against independently reviewed
 configuration bytes and verifies the installed result by rederiving it without
