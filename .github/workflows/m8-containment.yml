@@ -212,7 +212,7 @@ jobs:
             M8_CLAUDE_HOST_PROOF_REQUIRED=1 \
             "$PWD/.venv/bin/python" -m pytest \
               tests/substrate/test_claude_host_installation.py::test_stage_and_judge_synthetic_host_runtime \
-              -v --tb=short -p no:cacheprovider </dev/null
+              -v --tb=short --durations=10 -p no:cacheprovider </dev/null
           sudo cp -a -- /var/lib/constructicon-m8-claude-host-proof/staging/constructicon-m8-claude \
             /var/lib/constructicon-m8-claude
           sudo chown -R root:root /var/lib/constructicon-m8-claude
@@ -231,7 +231,7 @@ jobs:
             M8_CLAUDE_HOST_PROOF_REQUIRED=1 \
             "$PWD/.venv/bin/python" -m pytest \
               tests/substrate/test_claude_host_installation.py::test_verified_install_launches_joined_fake_peer \
-              -v --tb=short -p no:cacheprovider </dev/null
+              -v --tb=short --durations=10 -p no:cacheprovider </dev/null
       - name: Prove the fake Claude native final transition and bounded layout
         if: matrix.lane == 'foundation'
         shell: bash

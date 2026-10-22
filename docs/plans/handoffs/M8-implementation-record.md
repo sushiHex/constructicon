@@ -127,14 +127,22 @@ All twelve selected authority mutants were assertion-killed on the corrected
 source snapshot. Explicit helper/test lint passed. Focused independent review
 found no remaining blocker. Its initial empty-extension concern was withdrawn
 after tracing the positive-size check before the loader; no speculative
-filename rule was added. The repository gate and hosted proof remain pending.
+filename rule was added.
 
 Portable tests and the proposed foundation proof cover stage/judge/verify
 with synthetic artifacts. The Linux proof substitutes only synthetic archive
 pins and current PR source blobs, installs via fixed stock tools, verifies
 with staging retired, and exercises a joined fake native peer. That scope
 does not prove main-line source authority, vendor authentication or production
-availability. Hosted execution and final exact-head evidence are pending.
+availability. On `a47476f`, all four hosted containment lanes, runner
+qualification and mutation jobs passed, including this physical proof.
+The repository gate failed its workflow inventory assertion (8,622 passed,
+479 skipped): the new two-phase proof was missing from the explicit inventory.
+The correction names both distinct test selectors exactly once, keeps them in
+the foundation lane and adds the required duration reporting to both commands.
+The unchanged inventory law and the added selector checks pass locally.
+Final exact-head verification remains required; earlier physical evidence does
+not substitute for the corrected head's gates.
 
 The [installation proposal](M8-N6-private-host-installation.md) records the
 phase/crash reasoning and the remaining exact-package prerequisites. No VM,
