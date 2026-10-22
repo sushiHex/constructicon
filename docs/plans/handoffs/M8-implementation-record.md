@@ -13,6 +13,37 @@ From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-
 and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
 subscription route; see the dated section at the end of this record.
 
+## Claude private staging package (Refs #283)
+
+The staging-only procedure in [M8-N6-host-session.md](M8-N6-host-session.md)
+pins merged source `41e416f` and an independently checked private selection.
+It composes the existing package builder, boot check and guarded drift capture
+with the production artifact helper. Input custody and digest checks precede
+workspace creation. Transport uses fresh directories, strict host-key checks,
+closed stdin and a separately reviewed manifest; partial output is retained,
+not retried or treated as an empty success.
+
+The package stops after unprivileged staging. Its configuration digest is an
+observation requiring independent review, not installation authorization.
+Controller replacement, root installation, attended subscription login,
+fresh-process observation and authenticated READ are not established here.
+The concrete model/effort selection comes from the pinned startup fixture;
+its live availability and finite connection-budget sufficiency remain
+unmeasured. No host session, vendor process or account operation supplied this
+preparation evidence. Credential-free package and custody tests are the
+verification boundary; host-specific prerequisites remain separate.
+
+Preparation review found that an absent-file test also accepted a dangling
+symlink in local transport outputs. The procedure now refuses such paths and
+uses shell noclobber, under separately reviewed private local directory
+custody. Unix mode bits are not claimed as proof of Windows ACLs. The stdout
+length check is explicitly post-completion, not a streaming disk bound or
+whole-session deadline. A Windows test also selected the WSL shim instead of
+Git Bash; it now uses the repository's existing Git Bash selector.
+Follow-up review caught an `errexit` exception in an AND-list freshness
+check. Each condition is now a standalone check, so an existing ordinary
+file refuses as well as a dangling link.
+
 ## Claude maintenance entry composition (Refs #40)
 
 The entry composes the existing root-held maintenance custody, finite native
