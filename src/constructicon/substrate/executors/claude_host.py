@@ -15,7 +15,7 @@ from typing import Any
 from constructicon.core.address import GitSha
 from constructicon.core.errors import ContractViolation
 from constructicon.core.grants import EffectiveGrants, ModelSelection, Posture
-from constructicon.core.identity import digest
+from constructicon.core.identity import Digest, digest
 from constructicon.core.native_operator import (
     NativeEgressIdentityV1,
     NativeOperatorExecutorProfileV3,
@@ -62,14 +62,22 @@ _QUALIFICATION_FIELDS = frozenset({
 def sealed_plan(
     store: NativeOperatorStoreIdentityV1, evidence: Path, configuration: LaneConfiguration,
 ) -> ClaudePlan:
-    """Require affirmative joined startup facts for exactly these installed inputs."""
+    """Bind already-validated startup facts to this published store generation."""
+    plan, revision = validate_startup_evidence(evidence, configuration)
+    if (revision != store.subscription_mode_adapter_revision
+            or revision != store.store_conformance_revision):
+        raise ContractViolation("Claude startup evidence is not sealed by this generation")
+    return plan
+
+
+def validate_startup_evidence(
+    evidence: Path, configuration: LaneConfiguration,
+) -> tuple[ClaudePlan, Digest]:
+    """Validate before publication, without inventing an already-sealed store."""
     # Reuse the existing bounded regular-file/duplicate-key reader. It does no
     # Codex operation and never reads an operator credential.
     record = _evidence(evidence)
     revision = digest(claude_lane.EVIDENCE_DOMAIN, 1, record)
-    if (revision != store.subscription_mode_adapter_revision
-            or revision != store.store_conformance_revision):
-        raise ContractViolation("Claude startup evidence is not sealed by this generation")
     facts = record.get("facts")
     qualification = facts.get("qualification") if type(facts) is dict else None
     if (set(record) != _RECORD_FIELDS or type(facts) is not dict
@@ -114,7 +122,7 @@ def sealed_plan(
     }
     if any(record[name] != value for name, value in expected.items()):
         raise ContractViolation("Claude startup evidence names different installed inputs")
-    return plans[plan]
+    return plans[plan], revision
 
 
 def read_grants(configuration: LaneConfiguration) -> EffectiveGrants:

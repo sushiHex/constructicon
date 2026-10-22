@@ -65,6 +65,10 @@ def seal(record, path):
 def test_complete_sealed_startup_permits_compatible_subscription(case, name, expected):
     config, record, path = case
     record["facts"]["qualification"]["selected_plan"] = name
+    path.write_text(canonical_json(record), encoding="utf-8")
+    assert claude_host.validate_startup_evidence(path, config) == (
+        expected, digest(claude_lane.EVIDENCE_DOMAIN, 1, record),
+    )
     assert claude_host.sealed_plan(seal(record, path), path, config) is expected
     profile, grants = claude_host.read_profile(config), claude_host.read_grants(config)
     assert profile.grant_faults(grants) == ()
@@ -101,8 +105,27 @@ def test_each_affirmative_fact_is_required_even_when_record_is_sealed(case, scop
     if scope == "qualification":
         target = target["qualification"]
     target[field] = value
+    path.write_text(canonical_json(record), encoding="utf-8")
+    with pytest.raises(ContractViolation):
+        claude_host.validate_startup_evidence(path, config)
     with pytest.raises(ContractViolation):
         claude_host.sealed_plan(seal(record, path), path, config)
+
+
+def test_sealed_validation_reads_one_snapshot_and_reuses_its_digest(case, monkeypatch):
+    config, record, path = case
+    store = seal(record, path)
+    original = claude_host._evidence
+    reads = []
+
+    def read(candidate):
+        reads.append(candidate)
+        assert reads == [path]
+        return original(candidate)
+
+    monkeypatch.setattr(claude_host, "_evidence", read)
+    assert claude_host.sealed_plan(store, path, config) is ClaudePlan.MAX
+    assert reads == [path]
 
 
 @pytest.mark.parametrize("scope", ["record", "facts", "qualification"])

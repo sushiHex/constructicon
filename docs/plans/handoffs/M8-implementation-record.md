@@ -8767,3 +8767,14 @@ wiring mutant removes the same effective custody guard; the accepting and
 mid-initialize refusal regressions remain. Production code and the harness
 were not contorted to accommodate that duplicate target. Final-head full-gate
 and hosted evidence remain pending.
+
+The complete operator-sequence audit then separated pure evidence validation
+from the store-generation comparison. S5 needs the validated digest before
+publication, not a fabricated provisional store identity. Both consumers now
+reuse one bounded read and one predicate; no new CLI or duplicate runbook
+judgment is needed. Accepting Pro/Max, the entire refusal matrix, and one-read
+snapshot behavior are tested through this seam. The in-flight local gate was
+stopped before this source change rather than reported as exact-head evidence.
+The narrow independent follow-up found no blocking defect and passed 51
+targeted cases. All four affected evidence mutants were assertion-killed again
+with passing baselines and unchanged source bytes after the extraction.

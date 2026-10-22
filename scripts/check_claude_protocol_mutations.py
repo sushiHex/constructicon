@@ -1731,17 +1731,17 @@ QUALIFIED_READ_MUTANTS = (
      "tests/substrate/test_claude_host.py::"
      + "test_both_sealed_revisions_name_exact_evidence[store_conformance_revision]"),
     ("startup evidence requires every affirmative fact",
-     "constructicon.substrate.executors.claude_host:sealed_plan",
+     "constructicon.substrate.executors.claude_host:validate_startup_evidence",
      "if not all(checks) or type(plan) is not str", "if False or type(plan) is not str",
      "tests/substrate/test_claude_host.py::"
      + "test_each_affirmative_fact_is_required_even_when_record_is_sealed"),
     ("startup evidence names current installed inputs",
-     "constructicon.substrate.executors.claude_host:sealed_plan",
+     "constructicon.substrate.executors.claude_host:validate_startup_evidence",
      "if any(record[name] != value for name, value in expected.items()):", "if False:",
      "tests/substrate/test_claude_host.py::"
      + "test_each_affirmative_fact_is_required_even_when_record_is_sealed"),
     ("startup evidence is closed at every depth",
-     "constructicon.substrate.executors.claude_host:sealed_plan",
+     "constructicon.substrate.executors.claude_host:validate_startup_evidence",
      "or set(qualification) != _QUALIFICATION_FIELDS", "or False",
      "tests/substrate/test_claude_host.py::test_new_or_missing_evidence_fields_refuse[qualification]"),
     ("READ fixture binds shared Git configuration",

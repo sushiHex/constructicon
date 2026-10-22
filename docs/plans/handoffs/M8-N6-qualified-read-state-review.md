@@ -61,6 +61,10 @@ reentry and resume races. No fake success asserts vendor live behavior.
 
 The host reader checks the complete bounded qualification record against both
 sealed store revisions and the installed configuration and source identities.
+Before publication, the service-side operator composition uses the same pure
+validator to obtain the selected plan and evidence digest without inventing an
+already-sealed store. The sealed reader adds only the two actual generation
+comparisons; each validation reads one evidence snapshot.
 Every required observation is affirmative; absence, a new unknown field, or a
 record about different inputs refuses. Pro and Max select their corresponding
 observed subscription mode; this is not an account identity claim.
