@@ -15,6 +15,22 @@ a slice merges, newest first. Nothing here authorizes work.
 
 ---
 
+## Claude staging commands have executable preparation proofs
+
+PR #287 merged as `0485748`, tree-identical to reviewed `4709e5b`.
+Exact-head verification passed 8,636 tests with 479 skips; all four containment
+lanes and runner qualification passed. The package composes existing boot,
+drift and artifact-staging laws, stopping before root installation or login.
+Private configuration bytes still require an independent post-stage review.
+
+Transport review found that an absent-path check admits dangling links, that
+an AND-list can bypass Bash `errexit`, and that `install` ignores shell
+noclobber. Standalone checks and exclusive redirection close those cases;
+tests retain the accepting path and reproduce the former overwrite. Local
+Windows ACL custody is a separate prerequisite, not a Unix-mode inference.
+Output size checks are post-completion verdicts, not physical streaming bounds.
+This merge established no live authentication, persistence or model result.
+
 ## Claude staging expectations preserve the captured identity
 
 PR #286 merged as `41e416f`, tree-identical to reviewed `6fbeeda`.
