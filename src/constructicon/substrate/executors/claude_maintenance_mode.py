@@ -316,10 +316,13 @@ class ClaudeMaintenanceConversation:
         while True:
             self._audit()
             self._consume_ui_records()  # Duplicate, callback or early reply refuses.
-            if self.eof or self._buffer:
-                self._latch(ClaudeMaintenanceRefusalCode.EOF if self.eof
-                            else ClaudeMaintenanceRefusalCode.PARTIAL_RECORD)
+            if self.eof:
+                self._latch(ClaudeMaintenanceRefusalCode.PARTIAL_RECORD if self._buffer
+                            else ClaudeMaintenanceRefusalCode.EOF)
                 raise _Refused()
+            if self._buffer:
+                await self._next_ui()  # Finish this bounded frame before any later write.
+                continue
             if _monotonic() >= boundary:
                 self._audit()  # Completed read at the timer edge wins over write.
                 if self._records or self._buffer or self.eof:

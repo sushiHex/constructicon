@@ -16,6 +16,21 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## A process read is not a complete Claude UI record
+
+The schema-3 live diagnostic identified `partial-record` after one ambiguous
+response and one accepted UI notification. That names the stopping guard,
+not the unread stream contents or an API-billing mode. A deterministic fake
+then reproduced those counters by splitting an otherwise valid UI record
+across reads; the identical unsplit stream completed the observation.
+
+Spacing must keep the existing sole reader assembling that bounded record,
+validate it, and only then consider the next write. A timer expiring cannot
+authorize a write with an unfinished frame. EOF with a partial frame, invalid
+records, callbacks, duplicates, cancellation and the original absolute limits
+remain refusals. This corrects framing, not subscription acceptance, and does
+not establish a live successful observation, qualification or READ.
+
 ## Claude observer cause is not its last mode classification
 
 The schema-2 live observation retained one `ambiguous-api` classification and

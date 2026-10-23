@@ -13,6 +13,38 @@ From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-
 and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
 subscription route; see the dated section at the end of this record.
 
+## Claude spacing preserves incremental framing (Refs #40)
+
+Controller `0e52d702fab854825cb5bd747c2d020f4e5003b9` was installed and
+independently verified on October 23. Fresh D2, controller and Claude launch
+checks passed. One no-model observation refused; the repository-owned checker
+validated schema-3 evidence with `partial-record`, one classified response,
+one attempted write and one UI record. The last mode was `mode-mismatch` with
+reason `ambiguous-api`. The evidence digest is
+`sha256:e05b7ee02a7c55ab7a8d355f71996fde451ec8fb5fd7cba22f92e5c2552c72d5`.
+Shutdown and independent off/idle checks passed; custody was released. No
+login, refresh, qualification, model call, checkpoint or re-baseline followed.
+
+A local fake reproduction exposed a framing defect: the same valid UI stream
+passes when delivered in complete records and refuses when a UI record spans
+reads during spacing. ProcessIO explicitly permits partial-message reads.
+The live counters match that reproduction, but no retained fact establishes
+the actual live fragment's contents. API billing is not inferred from it.
+
+The correction keeps the sole reader and incremental parser active until a
+fragment completes, then applies the existing exact UI rules. Timer expiry
+alone cannot admit a second write while a fragment remains. The minimum
+spacing, original absolute deadline, input/output/record/UI bounds, request
+limit and cancellation ownership remain unchanged. Partial EOF, malformed
+records, duplicate responses and callbacks still refuse. Approved plan bytes
+and public evidence schemas are unchanged.
+
+Focused deterministic interleaving proofs and the relevant mutation inventory
+cover this change; exact executed results and independent review are recorded
+in the delivery PR. No full local suite is duplicated. Required final-head CI
+remains the broad gate. This correction does not claim a successful live mode
+observation, fresh reload, authenticated startup qualification or admitted READ.
+
 ## Claude observer refusal boundary (Refs #40)
 
 The next October 23 observation passed fresh host, installed-controller and
