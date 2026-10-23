@@ -1182,8 +1182,11 @@ MAINTENANCE_MUTANTS = (
      MAINTENANCE_TEST + "test_input_budget_refuses_before_unattempted_write"),
     ("maintenance pre-delivery refusal is not a write attempt",
      MAINTENANCE + "ClaudeMaintenanceConversation._write",
-     "if proposed_bytes > self.input_limit:\n        raise _Refused()",
-     "if proposed_bytes > self.input_limit:\n        self.request_writes += 1\n        raise _Refused()",
+     "if proposed_bytes > self.input_limit:\n"
+     "        self._latch(ClaudeMaintenanceRefusalCode.INPUT_LIMIT)\n        raise _Refused()",
+     "if proposed_bytes > self.input_limit:\n"
+     "        self._latch(ClaudeMaintenanceRefusalCode.INPUT_LIMIT)\n"
+     "        self.request_writes += 1\n        raise _Refused()",
      MAINTENANCE_TEST + "test_input_budget_refuses_before_unattempted_write"),
     ("maintenance never writes the second request before 30 seconds",
      MAINTENANCE + "ClaudeMaintenanceConversation._spacing",
@@ -1290,6 +1293,36 @@ DIAGNOSTIC_MUTANTS = (
      "tests/substrate/test_claude_lane.py::test_wire_account_data_never_enters_published_mode_fields"),
 )
 MUTANTS += DIAGNOSTIC_MUTANTS
+
+REFUSAL_MUTANTS = (
+    ("maintenance refusal keeps the first known guard",
+     MAINTENANCE + "ClaudeMaintenanceConversation._latch",
+     "if self.refusal_code is None:", "if True:",
+     MAINTENANCE_TEST
+     + "test_first_known_refusal_is_not_overwritten_and_exceptions_are_unchanged"),
+    ("maintenance refusal code is a closed enum", DIAGNOSTIC_OBSERVATION,
+     "type(self.refusal_code) is not ClaudeMaintenanceRefusalCode", "False",
+     MAINTENANCE_TEST + "test_report_constructor_refuses_unbounded_or_coerced_fields"),
+    ("maintenance positive observation has no refusal code", DIAGNOSTIC_OBSERVATION,
+     "or self.refusal_code is not None)):", "or False)):",
+     MAINTENANCE_TEST + "test_report_constructor_refuses_unbounded_or_coerced_fields"),
+    ("maintenance spacing partial is not an unexpected complete record",
+     MAINTENANCE + "ClaudeMaintenanceConversation._spacing",
+     "else ClaudeMaintenanceRefusalCode.PARTIAL_RECORD)",
+     "else ClaudeMaintenanceRefusalCode.UNEXPECTED_RECORD)",
+     MAINTENANCE_TEST + "test_duplicate_callback_or_partial_during_spacing_defeats_second_write"),
+    ("maintenance audited read failure is not a wire classification",
+     MAINTENANCE + "ClaudeMaintenanceConversation._audit",
+     "self._latch(ClaudeMaintenanceRefusalCode.READ_ERROR)",
+     "self._latch(ClaudeMaintenanceRefusalCode.UNEXPECTED_RECORD)",
+     MAINTENANCE_TEST + "test_read_boundaries_reraise_original_error_and_do_not_label_cancellation"),
+    ("maintenance evidence publishes only its finite refusal code",
+     "constructicon.substrate.executors.claude_lane:_public_facts",
+     "else mode.refusal_code.value", "else None",
+     "tests/substrate/test_claude_lane.py::"
+     + "test_public_refusal_code_is_only_a_closed_first_guard_not_raw_data"),
+)
+MUTANTS += REFUSAL_MUTANTS
 
 OPERATOR_IO = "constructicon.substrate.executors.claude_operator_io:"
 OPERATOR_IO_TEST = "tests/substrate/test_claude_operator_io.py::"

@@ -16,6 +16,24 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Claude observer cause is not its last mode classification
+
+The schema-2 live observation retained one `ambiguous-api` classification and
+one write, but several observer exits can produce those same facts. They do
+not establish an API-account problem or the reason a second write did not run.
+The subsequent diagnostic distinguishes a closed first known observer refusal
+code from the last response's classification. Unknown external failures stay
+unknown, and cleanup cannot replace an earlier known cause. New evidence uses
+schema 3; old evidence is not upgraded or retroactively explained.
+
+The repository-owned phase checker separates positive receipts from bounded
+refusal diagnostics and exercises actual CLI execution. This follows two real
+operational failures: a readback capture limit narrower than its record bound,
+and an inline diagnostic loader failing at dataclass module resolution before
+it examined evidence. Neither failure was a Claude subscription verdict.
+The slice changes no acceptance, stream, timing or account policy and proves no
+new live qualification or READ. Installation and live evidence remain separate.
+
 ## Claude mismatch evidence separates writes from classified replies
 
 PR #293 adds seven closed mode-mismatch reasons and an affirmative count of

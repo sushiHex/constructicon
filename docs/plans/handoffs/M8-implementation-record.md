@@ -13,6 +13,58 @@ From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-
 and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
 subscription route; see the dated section at the end of this record.
 
+## Claude observer refusal boundary (Refs #40)
+
+The next October 23 observation passed fresh host, installed-controller and
+Claude launch verification, but refused with one classified response and one
+attempted write. Its last response was `ambiguous-api`; no second write was
+reserved. This does not identify why the observer stopped. Existing fake cases
+show that unexpected records and partial buffered input can produce the same
+counts, and a read failure is another possible exit. No account-mode conclusion,
+delay change, login retry or relaxed stream guard follows from this evidence.
+The host was parked and custody released; qualification and READ did not run.
+
+Two operational defects were reproduced separately. A successful 4,827-byte
+installed-record readback exceeded its local capture primitive's 4,096-byte
+default; applying the existing bounded record allowance only during that fetch
+cleared the live check without widening vendor-output limits. The refusal
+checker then failed before interpreting evidence because its inline loader
+did not register the module used by a future-annotated dataclass. The unchanged
+checker validated the retained refusal offline against pinned configuration
+and controller identities, with explicit Windows path and source-line-ending
+interpretation. That is not a positive remote receipt or current qualification.
+
+The follow-up records one closed optional observer refusal code at the actual
+terminal guard, separately from the last classified mode reason. The first
+known cause is retained without an await; an unobserved external failure stays
+unknown rather than acquiring a guessed cause during cleanup. New evidence is
+schema 3. Historical schema 1/2 bytes and configuration schema remain unchanged.
+Acceptance, guard order, timing, write limits and cancellation remain unchanged.
+
+A repository-owned phase checker provides separate positive and diagnostic
+CLI paths so later command packages can test the real invocation rather than
+recreate an inline loader. Diagnostic output is bounded and cannot mint a
+positive phase receipt. The source change needs final-head verification and
+review, then fresh reviewed installation before any new live observation.
+No refusal code is retroactively assigned to the retained attempt.
+
+PR #296 review found an introduced diagnostic consistency gap: the checker
+accepted `mode-mismatch` without a reason, although the classifier always emits
+a closed reason with that verdict. A real-CLI regression failed by assertion
+before the correction. The checker now requires the equivalence in both
+directions; unknown pre-classification results remain valid negative evidence.
+This tightens diagnostic telemetry only, not observer or positive acceptance.
+
+Local evidence on the implementation candidate: 260 focused observer/lane/host
+tests passed with two Linux-only skips; 37 checker tests passed, including real
+subprocess positive and diagnostic CLI paths. The assembled first-read error
+case preserves a zero classification count and reports `read-error`, not an
+invented mode mismatch. Ruff and strict typing of the affected source passed.
+Mutation metadata checks passed 45 tests; seven selected mutants had passing
+baselines and assertion-failure kills with unchanged source snapshots. No full
+local suite was repeated. Final-head CI and independent review disposition
+belong to the delivery PR, not a claim of live qualification.
+
 ## Claude maintenance mismatch diagnostic (Refs #40)
 
 The October 23 private continuation independently validated the completed
