@@ -204,8 +204,8 @@ until each revision is deleted by hand.
 - **Read the PR conversation, review comments and reviews before marking ready
   or merging.** Unaddressed comments block. "One instance found" and "one
   instance exists" are different claims: check the class, not the report.
-- **Mark review-ready PRs ready.** Once implementation and verification are
-  complete for the selected tier, mark it ready to trigger the
+- **Mark review-ready PRs ready.** Once implementation and the selected local
+  checks are complete, mark it ready while CI runs to trigger the
   `chatgpt-codex-connector` review. Use the canonical stalled-review fallback;
   a pending service is neither a completed review nor an indefinite hold.
   Ready for review is not approval to merge; address its findings and obtain

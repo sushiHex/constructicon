@@ -191,8 +191,11 @@ after a clean, sufficient review. Wording-only changes need factual checking,
 not another adversarial implementation pass. Record the reviewed revision and
 any later delta; a materially changed boundary needs a fresh focused review.
 
-Mark verified PRs ready to trigger the connector once. Do not repeatedly request
-the same review while it is pending. If the connector fails, reports unavailable,
+Mark PRs ready once implementation and the selected local checks are complete;
+run connector review and CI in parallel. Ready for review is not ready to merge:
+the selected final-head CI and sufficient review must both finish before merge.
+Trigger the connector once; do not repeatedly request the same review while it
+is pending. If the connector fails, reports unavailable,
 or remains pending 30 minutes after its recorded trigger, it may be replaced by
 an independent review covering the final head. An already completed independent
 review counts when it covers that head; do not commission a duplicate. Record
