@@ -119,6 +119,8 @@ def _mode(facts, phase):
                       and mode["mode_verdict"] in _VERDICTS))
              and ((mode["classified_responses"] > 0)
                   == (mode["mode_verdict"] is not None))
+             and ((mode["mode_verdict"] == "mode-mismatch")
+                  == (mode["mode_mismatch_reason"] is not None))
              and (mode["mode_mismatch_reason"] is None
                   or (type(mode["mode_mismatch_reason"]) is str
                       and mode["mode_mismatch_reason"] in _REASONS

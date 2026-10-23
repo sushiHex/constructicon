@@ -48,6 +48,13 @@ positive phase receipt. The source change needs final-head verification and
 review, then fresh reviewed installation before any new live observation.
 No refusal code is retroactively assigned to the retained attempt.
 
+PR #296 review found an introduced diagnostic consistency gap: the checker
+accepted `mode-mismatch` without a reason, although the classifier always emits
+a closed reason with that verdict. A real-CLI regression failed by assertion
+before the correction. The checker now requires the equivalence in both
+directions; unknown pre-classification results remain valid negative evidence.
+This tightens diagnostic telemetry only, not observer or positive acceptance.
+
 Local evidence on the implementation candidate: 260 focused observer/lane/host
 tests passed with two Linux-only skips; 37 checker tests passed, including real
 subprocess positive and diagnostic CLI paths. The assembled first-read error

@@ -155,6 +155,7 @@ def test_generic_observer_refusal_before_or_after_classification(
 @pytest.mark.parametrize(
     ("verdict", "reason", "classified"),
     [(None, None, 1), ("mode-match", "ambiguous-api", 1),
+     ("mode-mismatch", None, 1),
      ("private-sentinel", None, 1)],
 )
 def test_generic_diagnostic_rejects_inconsistent_classification(
