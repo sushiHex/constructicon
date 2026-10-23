@@ -30,13 +30,16 @@ def _entry(
 @pytest.mark.parametrize(
     "entries",
     [
-        (_entry("README.md"),),
+        (_entry("AGENTS.md"),),
         (_entry("AGENTS.md", status="D"),),
-        (_entry("CONTRIBUTING.md", status="A"),),
-        (_entry("docs/new.md", status="A"),),
-        (_entry("docs/deep/archive.md", status="D"),),
+        (_entry("CLAUDE.md"),),
+        (_entry("docs/CONTRIBUTING.md", status="A"),),
+        (_entry("docs/ARCHITECTURE.md", status="A"),),
+        (_entry("docs/CONTRIBUTING.md", status="D"),),
+        (_entry("docs/plans/handoffs/M8-implementation-record.md"),),
         (_entry("docs/plans/MANIFEST.sha256"),),
-        (_entry("docs/old.md", status="D"), _entry("docs/new.md", status="A")),
+        (_entry("docs/ARCHITECTURE.md", status="D"),
+         _entry("docs/CONTRIBUTING.md", status="A")),
     ],
 )
 def test_only_plain_allowlisted_prose_changes_select_docs(
@@ -48,19 +51,22 @@ def test_only_plain_allowlisted_prose_changes_select_docs(
 @pytest.mark.parametrize(
     "entry",
     [
-        _entry("CLAUDE.md"),
+        _entry("README.md"),
+        _entry("CONTRIBUTING.md", status="A"),
         _entry(".github/pull_request_template.md"),
         _entry("notes/example.md"),
+        _entry("docs/unknown.md"),
+        _entry("docs/plans/handoffs/M8-N6-host-session.md"),
         _entry("src/constructicon/core/run.py"),
         _entry("docs/image.png"),
         _entry("../docs/escape.md"),
         _entry("docs\\windows.md"),
-        _entry("docs/tool.md", new_mode="100755"),
-        _entry("docs/link.md", status="A", new_mode="120000"),
-        _entry("docs/submodule.md", status="A", new_mode="160000"),
-        _entry("docs/conflict.md", status="U"),
-        _entry("docs/type.md", status="T"),
-        _entry("docs/renamed.md", status="R"),
+        _entry("docs/ARCHITECTURE.md", new_mode="100755"),
+        _entry("docs/ARCHITECTURE.md", status="A", new_mode="120000"),
+        _entry("docs/ARCHITECTURE.md", status="A", new_mode="160000"),
+        _entry("docs/ARCHITECTURE.md", status="U"),
+        _entry("docs/ARCHITECTURE.md", status="T"),
+        _entry("docs/ARCHITECTURE.md", status="R"),
     ],
 )
 def test_unknown_path_mode_or_status_selects_full(entry: scope.DiffEntry) -> None:
@@ -68,7 +74,7 @@ def test_unknown_path_mode_or_status_selects_full(entry: scope.DiffEntry) -> Non
 
 
 def test_one_unknown_entry_makes_the_whole_change_full() -> None:
-    entries = (_entry("docs/guide.md"), _entry("tests/test_behavior.py"))
+    entries = (_entry("docs/ARCHITECTURE.md"), _entry("tests/test_behavior.py"))
     assert scope.classify_changes(entries) == "full"
 
 
@@ -127,7 +133,7 @@ def git_repository(tmp_path: Path) -> tuple[Path, str]:
     _run_git(repository, "config", "user.name", "CI Test")
     _run_git(repository, "config", "user.email", "ci@example.invalid")
     (repository / "docs").mkdir()
-    (repository / "docs/guide.md").write_text("guide\n", encoding="utf-8")
+    (repository / "docs/ARCHITECTURE.md").write_text("guide\n", encoding="utf-8")
     (repository / "README.md").write_text("readme\n", encoding="utf-8")
     (repository / "source.py").write_text("value = 1\n", encoding="utf-8")
     return repository, _commit(repository, "base")
@@ -137,7 +143,7 @@ def test_repository_classifier_uses_the_committed_docs_diff(
     git_repository: tuple[Path, str],
 ) -> None:
     repository, base = git_repository
-    (repository / "docs/guide.md").write_text("changed\n", encoding="utf-8")
+    (repository / "docs/ARCHITECTURE.md").write_text("changed\n", encoding="utf-8")
     head = _commit(repository, "docs")
     assert scope.classify_repository(repository, base, head) == "docs"
 
@@ -146,7 +152,7 @@ def test_repository_classifier_treats_a_docs_rename_as_delete_plus_add(
     git_repository: tuple[Path, str],
 ) -> None:
     repository, base = git_repository
-    _run_git(repository, "mv", "docs/guide.md", "docs/moved.md")
+    _run_git(repository, "mv", "docs/ARCHITECTURE.md", "docs/CONTRIBUTING.md")
     head = _commit(repository, "rename docs")
     assert scope.classify_repository(repository, base, head) == "docs"
 
@@ -155,9 +161,18 @@ def test_repository_classifier_allows_a_regular_docs_deletion(
     git_repository: tuple[Path, str],
 ) -> None:
     repository, base = git_repository
-    (repository / "docs/guide.md").unlink()
+    (repository / "docs/ARCHITECTURE.md").unlink()
     head = _commit(repository, "delete docs")
     assert scope.classify_repository(repository, base, head) == "docs"
+
+
+def test_repository_classifier_rename_to_an_unknown_markdown_path_requires_full(
+    git_repository: tuple[Path, str],
+) -> None:
+    repository, base = git_repository
+    _run_git(repository, "mv", "docs/ARCHITECTURE.md", "docs/unknown.md")
+    head = _commit(repository, "rename to unknown docs")
+    assert scope.classify_repository(repository, base, head) == "full"
 
 
 def test_repository_classifier_selects_full_for_code(
@@ -173,7 +188,7 @@ def test_repository_classifier_selects_full_for_an_executable_doc(
     git_repository: tuple[Path, str],
 ) -> None:
     repository, base = git_repository
-    _run_git(repository, "update-index", "--chmod=+x", "docs/guide.md")
+    _run_git(repository, "update-index", "--chmod=+x", "docs/ARCHITECTURE.md")
     _run_git(repository, "commit", "-m", "executable docs")
     head = _run_git(repository, "rev-parse", "HEAD")
     assert scope.classify_repository(repository, base, head) == "full"
@@ -183,8 +198,9 @@ def test_repository_classifier_selects_full_for_a_symlink_record(
     git_repository: tuple[Path, str],
 ) -> None:
     repository, base = git_repository
-    blob = _run_git(repository, "hash-object", "-w", "--stdin", input_bytes=b"guide.md")
-    _run_git(repository, "update-index", "--add", "--cacheinfo", f"120000,{blob},docs/link.md")
+    blob = _run_git(repository, "hash-object", "-w", "--stdin", input_bytes=b"ARCHITECTURE.md")
+    _run_git(repository, "update-index", "--add", "--cacheinfo",
+             f"120000,{blob},docs/ARCHITECTURE.md")
     _run_git(repository, "commit", "-m", "symlink docs")
     head = _run_git(repository, "rev-parse", "HEAD")
     assert scope.classify_repository(repository, base, head) == "full"
@@ -195,7 +211,7 @@ def test_repository_classifier_uses_merge_base_not_base_branch_only_changes(
 ) -> None:
     repository, common = git_repository
     _run_git(repository, "checkout", "-b", "feature")
-    (repository / "docs/guide.md").write_text("feature docs\n", encoding="utf-8")
+    (repository / "docs/ARCHITECTURE.md").write_text("feature docs\n", encoding="utf-8")
     head = _commit(repository, "feature docs")
     _run_git(repository, "checkout", "main")
     (repository / "source.py").write_text("base branch code\n", encoding="utf-8")
@@ -270,6 +286,12 @@ def test_docs_validation_refuses_a_missing_relative_target(docs_repository: Path
         scope.verify_docs(docs_repository)
 
 
+def test_docs_validation_still_scans_unallowlisted_markdown(docs_repository: Path) -> None:
+    (docs_repository / "docs/unallowlisted.md").write_text("[missing](missing.md)\n")
+    with pytest.raises(scope.ScopeError, match="missing relative link"):
+        scope.verify_docs(docs_repository)
+
+
 def test_docs_validation_refuses_a_manifest_digest_mismatch(docs_repository: Path) -> None:
     (docs_repository / "docs/plans/archive/item.md").write_text("changed\n")
     with pytest.raises(scope.ScopeError, match="digest mismatch"):
@@ -334,7 +356,7 @@ def test_cli_classify_prints_only_the_scope(
     git_repository: tuple[Path, str], capsys: pytest.CaptureFixture[str]
 ) -> None:
     repository, base = git_repository
-    (repository / "docs/guide.md").write_text("changed\n", encoding="utf-8")
+    (repository / "docs/ARCHITECTURE.md").write_text("changed\n", encoding="utf-8")
     head = _commit(repository, "docs")
     result = scope.main(
         ["classify", "--base", base, "--head", head, "--repository", str(repository)]

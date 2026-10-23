@@ -41,8 +41,27 @@ generation-floor readback was unnecessary: existing publication checks a
 proposed next generation under its retained lock. Neither extra store reads
 nor a retry are justified by the missing historical floor field.
 
-Implementation and verification results belong to this slice's exact head;
-this design entry itself establishes no new live authentication or READ.
+Implementation at `d993921` retains every initialization acceptance/refusal
+rule and the existing request, spacing, deadline and teardown limits. The
+focused protocol, maintenance, lane and host suite passed 364 tests with two
+platform skips. The selected official-harness inventory assertion-killed all
+85 mutants: 36 existing protocol guards, 28 maintenance guards and 21 diagnostic
+guards. Each had a passing baseline and matching collection; the source
+snapshot stayed unchanged. An independent old/new differential audit covered
+3,502 synthetic classifications with identical public verdicts and all seven
+reason categories exercised. Independent boundary review found no introduced
+blocker in guard precedence, the response/count update or evidence publication.
+
+Reconciliation with main preserves the contributor policy and earlier closure
+records. The diagnostic source, tests and inventory remain byte-identical to
+that tested revision; inherited policy CI changes are separate. These local
+results are not relabeled as runs on a later head. No completed full local gate
+is claimed; final-head CI and connector status are recorded in
+[PR #293](https://github.com/sushiHex/constructicon/pull/293).
+
+The schema-2 checker and modified controller require reviewed installation
+before a live diagnostic. This implementation establishes no new login,
+subscription persistence, authenticated qualification or READ result.
 
 ## Claude private staging execution — 2026-10-22 (Refs #283)
 
@@ -8819,3 +8838,24 @@ each with that one failure. Updating the explicit inventory preserves the
 exactly-once lane assertion rather than weakening it. The corrected head still
 requires its own full gate and final review; the previous physical successes
 do not constitute live Claude qualification.
+
+## Claude READ provider composition closure — 2026-10-22 (Refs #40)
+
+PR #289 merged as `c08a937c960c1c108b0e1916e4dc6d45813d7e5f`, tree-identical
+to reviewed head `54b711de781fca9ba067de3cbae10e6870cc4308`. Exact-head CI
+passed 8,767 tests with 481 skips, all five import contracts, strict typing
+across 146 source files, runner qualification and all four physical
+containment lanes. The fake-backed READ composition's physical lane
+passed. The connector reported no findings and no unresolved threads. The
+first mediation attempt stalled downloading APT indexes and was cancelled;
+only that same mediation job was rerun, passing in 12m05s. The provisioning
+reliability follow-up is #291. The full Windows gate was still running at merge
+and is not credited as green.
+
+Exact-head evidence: [verify run](https://github.com/sushiHex/constructicon/actions/runs/39836213889),
+[containment rerun](https://github.com/sushiHex/constructicon/actions/runs/39836213738/attempts/2),
+and [connector review](https://github.com/sushiHex/constructicon/pull/289#issuecomment-6349401442).
+
+PR #288 recorded actual unprivileged staging only; it did not perform root
+installation or login. Neither PR establishes live authentication, private
+host installation or a model result.

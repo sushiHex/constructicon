@@ -11,9 +11,68 @@ in an issue comment, not here. Query the issues before resuming.
 **This document is context, not a parallel task ledger.** It carries what
 outlives a single issue: what a slice actually established, what it deliberately
 did not, and which reported facts turned out to be wrong. An entry is added when
-a slice merges, newest first. Nothing here authorizes work.
+a slice merges, newest first; prepare it in the delivery PR rather than opening
+a second PR just to record the merge. Nothing here authorizes work.
 
 ---
+
+## Claude mismatch evidence separates writes from classified replies
+
+PR #293 adds seven closed mode-mismatch reasons and an affirmative count of
+classified responses. One shared classifier preserves the public verdict and
+the exact ambiguity permitted before the existing second request. Verdict,
+reason and count update together without a new await. New evidence uses schema
+2; historical bytes remain unchanged and absent legacy fields stay unknown.
+
+The source, tests and inventory at `d993921` passed 364 focused tests with two
+platform skips and 85 selected assertion-killed mutants (36 protocol, 28
+maintenance, 21 diagnostic). An independent differential audit covered 3,502
+synthetic classifications with unchanged verdicts; independent boundary review
+found no introduced blocker. Later reconciliation preserves those diagnostic
+blobs and main's contributor policy. Final-head CI belongs to the delivery PR;
+no completed full local gate is inferred from the focused evidence.
+
+The corrected premise matters: two attempted writes do not prove a second
+classified reply. Write/read failure can retain the first mismatch. The old
+finite evidence cannot recover the missing response or its cause. This slice
+performs no host, vendor, login or model operation; reviewed checker/controller
+installation and fresh live observations remain separate prerequisites.
+
+## Risk-proportionate delivery is shared contributor policy
+
+The owner-approved process correction in issue #294 makes
+[WORK_TRACKING.md](WORK_TRACKING.md#delivery-policy) canonical for both Codex
+and Claude Code. Local iteration uses affected tests; code CI remains the full
+broad gate, while trusted-base classification selects links and manifest checks
+for explicitly allowlisted prose/status files. Runnable handoffs and unknown
+changes retain full checks. No routine duplicate
+Windows full suite or broad review is required without a concrete risk.
+
+One sufficient independent review can replace a failed or 30-minute-stalled
+connector with an explicit PR record; required checks and unresolved findings
+still block. Implementation and durable evidence belong together. This changes
+delivery procedure, not invariants, frozen plans, live authorization or Claude's
+unproven subscription READ. Counts of passing tests never established that result.
+
+## Claude startup and READ composition has credential-free physical proof
+
+PR #289 merged as `c08a937`, with a tree identical to reviewed head `54b711d`.
+Exact-head CI passed 8,767 tests with 481 skips, all five import contracts,
+strict typing across 146 source files, runner qualification and all four
+physical containment lanes. The physical lane exercised the fake-backed READ
+provider composition. The connector review found no findings or unresolved
+threads. The first mediation attempt stalled during APT package-index download
+and was cancelled; rerunning only that same job passed in 12m05s. PR #288's
+recorded host activity was unprivileged staging only: it did not include root
+installation or login.
+
+The first full gate exposed an omitted workflow-inventory entry, not a skipped
+physical test. Adding that exact entry preserved the assertion's strictness.
+
+This establishes the reviewed source composition and fake-backed physical
+proof, not live authentication, private-host installation or a model result.
+The separate full Windows gate was still running at merge and is not credited
+as green.
 
 ## Claude staging commands have executable preparation proofs
 
