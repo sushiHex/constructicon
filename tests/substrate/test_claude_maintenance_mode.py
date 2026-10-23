@@ -318,6 +318,43 @@ async def test_unfinished_spacing_frame_keeps_refusal_priority(monkeypatch, endi
         await asyncio.gather(task, return_exceptions=True)
 
 
+async def test_stalled_spacing_fragment_reports_outer_deadline_and_joins_reader(monkeypatch):
+    # Keep the per-I/O check before its deadline: only the real outer timer can stop this read.
+    monkeypatch.setattr(maintenance, "_monotonic", lambda: 0.0)
+    channel = SpacingChannel()
+    task = asyncio.create_task(observe(channel, timeout=0.25))
+    try:
+        await channel.pending_read(task)
+        channel.emit(ui()[:5])
+        await channel.pending_read(task)
+        report, launcher, _ = await asyncio.wait_for(task, 1)
+        assert report.refusal_code is Code.DEADLINE
+        assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.REFUSED
+        assert report.request_writes == report.classified_responses == len(channel.writes) == 1
+        assert report.mode_mismatch_reason is ClaudeModeMismatchReason.AMBIGUOUS_API
+        assert report.ui_records == 0 and not report.stdin_closed and not report.eof
+        assert launcher.joined and channel.active_readers == 0 and channel.read_cancelled
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_unrelated_timeout_keeps_unknown_refusal_before_outer_deadline():
+    class TimedOutWrite(Channel):
+        async def write(self, raw):
+            await super().write(raw)
+            raise TimeoutError("private write timeout")
+
+    channel = TimedOutWrite([response("@ID@")])
+    report, launcher, _ = await observe(channel)
+    assert report.refusal_code is None
+    assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.REFUSED
+    assert report.request_writes == len(channel.writes) == 1
+    assert report.classified_responses == 0 and report.mode_verdict is None
+    assert not report.stdin_closed and not report.eof
+    assert launcher.joined and channel.active_readers == 0
+
+
 async def test_ambiguous_mode_is_never_a_reload_retry():
     channel = Channel([response("@ID@", "Claude API")])
     started = time.monotonic()

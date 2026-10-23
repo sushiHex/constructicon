@@ -427,6 +427,7 @@ async def observe_maintenance_mode(
         deadline=_monotonic() + timeout_s,
     )
     lifecycle = ClaudeMaintenanceLifecycle.REFUSED
+    work_timeout = asyncio.timeout_at(deadline)
     try:
         if (type(native_store) is not ClaudeNativeStoreMount or launcher.claude is None
                 or launcher.claude_recipe is not ClaudeNativeRecipe.STREAM_JSON
@@ -444,7 +445,7 @@ async def observe_maintenance_mode(
 
         launch_store = replace(native_store, before_spawn=check_binding)
         try:
-            async with asyncio.timeout_at(deadline):
+            async with work_timeout:
                 result = await launcher.exchange(
                     launcher.claude.command, workspace=None, posture=Posture.READ,
                     guard_fds=(native_store.lock_fd,), conversation=conversation,
@@ -469,6 +470,8 @@ async def observe_maintenance_mode(
             raise asyncio.CancelledError("Claude maintenance cancelled") from None
         if not isinstance(error, Exception):
             raise
+        if isinstance(error, TimeoutError) and work_timeout.expired():
+            conversation._latch(ClaudeMaintenanceRefusalCode.DEADLINE)
         if isinstance(error, TimeoutError) and conversation._state != "refused":
             lifecycle = ClaudeMaintenanceLifecycle.INCOMPLETE
     return ClaudeMaintenanceObservation(

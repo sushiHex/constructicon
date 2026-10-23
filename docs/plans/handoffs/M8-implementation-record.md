@@ -39,6 +39,13 @@ limit and cancellation ownership remain unchanged. Partial EOF, malformed
 records, duplicate responses and callbacks still refuse. Approved plan bytes
 and public evidence schemas are unchanged.
 
+The PR review identified a missing diagnostic on a genuinely stalled fragment:
+the outer deadline cancels the conversation before its next read returns, so
+the synchronous read-resume check never records the timeout. The correction
+uses the existing timeout owner's affirmative expiry state to retain `deadline`;
+it adds no competing timer and does not classify unrelated `TimeoutError`
+exceptions as observed deadline expiry. External cancellation remains distinct.
+
 Focused deterministic interleaving proofs and the relevant mutation inventory
 cover this change; exact executed results and independent review are recorded
 in the delivery PR. No full local suite is duplicated. Required final-head CI
