@@ -85,7 +85,8 @@ def test_scope_conditions_select_docs_or_all_existing_code_jobs() -> None:
 
 
 @pytest.mark.parametrize("path,expected", [
-    ("README.md", "docs"), ("CLAUDE.md", "docs"),
+    ("AGENTS.md", "docs"), ("CLAUDE.md", "docs"), ("README.md", "full"),
+    ("CONTRIBUTING.md", "full"),
     ("docs/ARCHITECTURE.md", "docs"), ("source.py", "full"),
     ("docs/plans/handoffs/M8-implementation-record.md", "docs"),
     ("docs/plans/handoffs/M8-N6-host-session.md", "full"),
@@ -115,7 +116,7 @@ def test_mixed_change_and_pr_classifier_self_exemption_still_require_full(
     classifier_repository: tuple[Path, str], tmp_path: Path,
 ) -> None:
     repository, base = classifier_repository
-    (repository / "README.md").write_text("candidate prose\n", encoding="utf-8")
+    (repository / "AGENTS.md").write_text("candidate prose\n", encoding="utf-8")
     (repository / "scripts/ci/m8_ci_scope.py").write_text('print("docs")\n', encoding="utf-8")
     head = _commit(repository, "candidate tries to exempt itself")
     completed, emitted = _run_classifier(repository, base, head, tmp_path)
@@ -127,7 +128,7 @@ def test_main_push_always_selects_full_even_for_docs(
     classifier_repository: tuple[Path, str], tmp_path: Path,
 ) -> None:
     repository, base = classifier_repository
-    (repository / "README.md").write_text("changed\n", encoding="utf-8")
+    (repository / "AGENTS.md").write_text("changed\n", encoding="utf-8")
     head = _commit(repository, "prose push")
     completed, emitted = _run_classifier(repository, base, head, tmp_path, event="push")
     assert completed.returncode == 0, completed.stderr
@@ -144,7 +145,7 @@ def test_docs_command_checks_merge_tree_when_base_deleted_a_link_target(
     _write_manifest(repository)
     _commit(repository, "shared link target")
     _run_git(repository, "checkout", "-b", "feature")
-    (repository / "README.md").write_text("[guide](docs/guide.md)\n", encoding="utf-8")
+    (repository / "AGENTS.md").write_text("[guide](docs/guide.md)\n", encoding="utf-8")
     head = _commit(repository, "prose links to existing target")
     scope.verify_docs(repository)
     _run_git(repository, "checkout", "main")
@@ -168,7 +169,7 @@ def test_base_without_classifier_selects_full(
     git_repository: tuple[Path, str], tmp_path: Path,
 ) -> None:
     repository, base = git_repository
-    (repository / "README.md").write_text("changed\n", encoding="utf-8")
+    (repository / "AGENTS.md").write_text("changed\n", encoding="utf-8")
     head = _commit(repository, "introducing change")
     completed, emitted = _run_classifier(repository, base, head, tmp_path)
     assert completed.returncode == 0

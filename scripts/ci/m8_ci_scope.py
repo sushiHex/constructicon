@@ -29,7 +29,8 @@ REFERENCE_LINK_RE = re.compile(r"^\s*\[[^\]\n]+\]:\s*(\S+)", re.MULTILINE)
 ABSENT_MODE = "000000"
 REGULAR_MODE = "100644"
 ZERO_OID = "0" * 40
-ROOT_PROSE = frozenset({"README.md", "AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md"})
+ROOT_MARKDOWN = frozenset({"README.md", "AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md"})
+ROOT_PROSE = frozenset({"AGENTS.md", "CLAUDE.md"})
 DOCS_PROSE = frozenset({
     "docs/AGENT_HANDOFF.md", "docs/ARCHITECTURE.md", "docs/CONTRIBUTING.md",
     "docs/WORK_TRACKING.md", "docs/plans/README.md", "docs/plans/MANIFEST.sha256",
@@ -240,7 +241,8 @@ def _link_target(raw: str) -> str | None:
 
 
 def _markdown_documents(repository: Path) -> tuple[Path, ...]:
-    documents = [repository / name for name in sorted(ROOT_PROSE) if (repository / name).is_file()]
+    documents = [repository / name for name in sorted(ROOT_MARKDOWN)
+                 if (repository / name).is_file()]
     docs = repository / "docs"
     if docs.is_dir():
         documents.extend(sorted(docs.rglob("*.md")))

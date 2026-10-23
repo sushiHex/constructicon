@@ -30,10 +30,10 @@ def _entry(
 @pytest.mark.parametrize(
     "entries",
     [
-        (_entry("README.md"),),
+        (_entry("AGENTS.md"),),
         (_entry("AGENTS.md", status="D"),),
         (_entry("CLAUDE.md"),),
-        (_entry("CONTRIBUTING.md", status="A"),),
+        (_entry("docs/CONTRIBUTING.md", status="A"),),
         (_entry("docs/ARCHITECTURE.md", status="A"),),
         (_entry("docs/CONTRIBUTING.md", status="D"),),
         (_entry("docs/plans/handoffs/M8-implementation-record.md"),),
@@ -51,6 +51,8 @@ def test_only_plain_allowlisted_prose_changes_select_docs(
 @pytest.mark.parametrize(
     "entry",
     [
+        _entry("README.md"),
+        _entry("CONTRIBUTING.md", status="A"),
         _entry(".github/pull_request_template.md"),
         _entry("notes/example.md"),
         _entry("docs/unknown.md"),
