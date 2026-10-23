@@ -125,6 +125,34 @@ class Launcher:
             self.joined = True
 
 
+class SpacingChannel(Channel):
+    """Expose each pending empty read without advancing the observer's clock."""
+
+    def __init__(self):
+        super().__init__([response("@ID@", "Claude API"), response("@ID@")])
+        self.waiting = asyncio.Queue()
+
+    async def read(self, maximum=8192):
+        if self.writes and not self.output and not self.closed:
+            self.waiting.put_nowait(None)
+        return await super().read(maximum)
+
+    def emit(self, raw):
+        self.output.extend(raw)
+        self.changed.set()
+
+    async def pending_read(self, task):
+        waiting = asyncio.create_task(self.waiting.get())
+        try:
+            done, _ = await asyncio.wait((waiting, task), timeout=1,
+                                         return_when=asyncio.FIRST_COMPLETED)
+            assert waiting in done and not task.done(), "unfinished frame must keep reading"
+            assert len(self.writes) == 1 and self.active_readers == 1
+        finally:
+            waiting.cancel()
+            await asyncio.gather(waiting, return_exceptions=True)
+
+
 async def observe(
     channel: Channel, *, phase: maintenance.ClaudeMaintenancePhase | None = None,
     result: ProcessResult = CLEAN,
@@ -220,6 +248,111 @@ async def test_ambiguous_first_observation_can_reach_second_after_real_spacing(m
     assert report.mode_mismatch_reason is None
     assert report.classified_responses == 2
     assert launcher.joined and channel.max_readers == 1
+
+
+@pytest.mark.parametrize("fragment_at", [29.0, 30.0])
+async def test_split_ui_during_spacing_finishes_before_second_write(monkeypatch, fragment_at):
+    clock = [0.0]
+    monkeypatch.setattr(maintenance, "_monotonic", lambda: clock[0])
+    channel = SpacingChannel()
+    task = asyncio.create_task(observe(channel, timeout=120))
+    try:
+        await channel.pending_read(task)
+        clock[0] = 28.0
+        channel.emit(ui())
+        await channel.pending_read(task)
+        clock[0] = fragment_at
+        channel.emit(ui()[:5])
+        await channel.pending_read(task)
+        clock[0] = 31.0
+        channel.emit(ui()[5:])
+        report, launcher, _ = await asyncio.wait_for(task, 1)
+        assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.OBSERVED
+        assert report.request_writes == report.classified_responses == 2
+        assert report.ui_records == 2 and report.refusal_code is None
+        assert report.stdin_closed and report.eof and launcher.joined
+        assert channel.max_readers == 1 and channel.active_readers == 0
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("ending", ["eof", "duplicate", "callback", "cancel", "deadline"])
+async def test_unfinished_spacing_frame_keeps_refusal_priority(monkeypatch, ending):
+    clock = [0.0]
+    monkeypatch.setattr(maintenance, "_monotonic", lambda: clock[0])
+    channel = SpacingChannel()
+    task = asyncio.create_task(observe(channel, timeout=120))
+    try:
+        await channel.pending_read(task)
+        raw = (response(json.loads(channel.writes[0])["request_id"], "Claude API")
+               if ending == "duplicate" else b'{"type":"control_request"}\n'
+               if ending == "callback" else ui())
+        clock[0] = 30.0
+        channel.emit(raw[:5])
+        await channel.pending_read(task)
+        if ending == "cancel":
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert channel.read_cancelled
+        else:
+            if ending == "eof":
+                channel.closed = True
+                channel.changed.set()
+            else:
+                clock[0] = 120.0 if ending == "deadline" else 31.0
+                channel.emit(raw[5:])
+            report, launcher, _ = await asyncio.wait_for(task, 1)
+            assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.REFUSED
+            assert report.request_writes == report.classified_responses == 1
+            assert report.refusal_code is (
+                Code.PARTIAL_RECORD if ending == "eof" else Code.DEADLINE
+                if ending == "deadline" else Code.UNEXPECTED_RECORD
+            )
+            assert report.eof is (ending == "eof")
+            assert report.ui_records == 0 and not report.stdin_closed and launcher.joined
+        assert len(channel.writes) == 1 and channel.active_readers == 0
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_stalled_spacing_fragment_reports_outer_deadline_and_joins_reader(monkeypatch):
+    # Keep the per-I/O check before its deadline: only the real outer timer can stop this read.
+    monkeypatch.setattr(maintenance, "_monotonic", lambda: 0.0)
+    channel = SpacingChannel()
+    task = asyncio.create_task(observe(channel, timeout=0.25))
+    try:
+        await channel.pending_read(task)
+        channel.emit(ui()[:5])
+        await channel.pending_read(task)
+        report, launcher, _ = await asyncio.wait_for(task, 1)
+        assert report.refusal_code is Code.DEADLINE
+        assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.REFUSED
+        assert report.request_writes == report.classified_responses == len(channel.writes) == 1
+        assert report.mode_mismatch_reason is ClaudeModeMismatchReason.AMBIGUOUS_API
+        assert report.ui_records == 0 and not report.stdin_closed and not report.eof
+        assert launcher.joined and channel.active_readers == 0 and channel.read_cancelled
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_unrelated_timeout_keeps_unknown_refusal_before_outer_deadline():
+    class TimedOutWrite(Channel):
+        async def write(self, raw):
+            await super().write(raw)
+            raise TimeoutError("private write timeout")
+
+    channel = TimedOutWrite([response("@ID@")])
+    report, launcher, _ = await observe(channel)
+    assert report.refusal_code is None
+    assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.REFUSED
+    assert report.request_writes == len(channel.writes) == 1
+    assert report.classified_responses == 0 and report.mode_verdict is None
+    assert not report.stdin_closed and not report.eof
+    assert launcher.joined and channel.active_readers == 0
 
 
 async def test_ambiguous_mode_is_never_a_reload_retry():
@@ -429,12 +562,11 @@ def test_exact_ambiguous_shape_is_only_one_narrow_mismatch():
 @pytest.mark.parametrize("extra,code", [
     (response("@ID@", "Claude API"), Code.UNEXPECTED_RECORD),
     (b'{"type":"control_request"}\n', Code.UNEXPECTED_RECORD),
-    (b"partial", Code.PARTIAL_RECORD),
     (b"private\r\n", Code.RECORD_FORMAT),
     (b"{private-invalid-json}\n", Code.RECORD_FORMAT),
     (b'{"type":"system","subtype":"private-unsupported-ui"}\n', Code.UI_RECORD),
 ])
-async def test_duplicate_callback_or_partial_during_spacing_defeats_second_write(extra, code):
+async def test_duplicate_callback_or_malformed_during_spacing_defeats_second_write(extra, code):
     channel = Channel([response("@ID@", "Claude API") + extra])
     started = time.monotonic()
     report, _, _ = await observe(channel)
