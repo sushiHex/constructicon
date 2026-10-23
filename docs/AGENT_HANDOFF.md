@@ -11,9 +11,26 @@ in an issue comment, not here. Query the issues before resuming.
 **This document is context, not a parallel task ledger.** It carries what
 outlives a single issue: what a slice actually established, what it deliberately
 did not, and which reported facts turned out to be wrong. An entry is added when
-a slice merges, newest first. Nothing here authorizes work.
+a slice merges, newest first; prepare it in the delivery PR rather than opening
+a second PR just to record the merge. Nothing here authorizes work.
 
 ---
+
+## Risk-proportionate delivery is shared contributor policy
+
+The owner-approved process correction in issue #294 makes
+[WORK_TRACKING.md](WORK_TRACKING.md#delivery-policy) canonical for both Codex
+and Claude Code. Local iteration uses affected tests; code CI remains the full
+broad gate, while trusted-base classification selects links and manifest checks
+for explicitly allowlisted prose/status files. Runnable handoffs and unknown
+changes retain full checks. No routine duplicate
+Windows full suite or broad review is required without a concrete risk.
+
+One sufficient independent review can replace a failed or 30-minute-stalled
+connector with an explicit PR record; required checks and unresolved findings
+still block. Implementation and durable evidence belong together. This changes
+delivery procedure, not invariants, frozen plans, live authorization or Claude's
+unproven subscription READ. Counts of passing tests never established that result.
 
 ## Claude startup and READ composition has credential-free physical proof
 
