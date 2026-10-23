@@ -1,7 +1,7 @@
 # Constructicon — agent contributor guide
 
-Agents are this repository's first-class contributor. Everything you need is
-four documents and one command:
+Agents are this repository's first-class contributor. Start with these
+documents and the canonical delivery policy below:
 
 - `docs/INVARIANTS.md` — the thirteen laws, the four-noun execution kernel,
   and the never list. Read first; a change that violates one is wrong even if
@@ -15,7 +15,7 @@ four documents and one command:
   it when arriving cold; it is context, never a task ledger.
 
 ```bash
-uv run verify        # ruff + mypy --strict + import-linter + pytest — what CI runs
+uv run verify        # full code gate in CI; local checks are risk-proportionate
 ```
 
 ## Work tracking
@@ -26,6 +26,22 @@ accepted ADRs own design authority. Query current issues and linked PRs before
 starting, and leave a branch/head handoff when pausing. Do not keep a second
 TODO in Markdown or infer approval from an issue or `ready` label. Review and
 status requests alone do not authorize external mutations.
+
+## Canonical delivery policy — all agent sessions
+
+The [delivery policy](docs/WORK_TRACKING.md#delivery-policy) is binding for
+Codex, Claude Code, subagents and human-assisted sessions. It owns verification
+tiers, review sufficiency and fallback, batching, and delivery focus. Do not
+invent additional routine gates or treat full local verification as mandatory
+for every edit. Invariants, accepted decisions, explicit owner restrictions and
+required GitHub checks still apply; efficiency never grants authority.
+
+State the concrete outcome and risk tier before implementation. Use focused
+tests while iterating, one full CI gate on the stable code candidate, and extra
+platform/physical/mutation checks only for the affected risk or an explicit
+requirement. Delegate bounded work efficiently; reserve high-effort independent
+review for consequential boundaries. Report the outcome, evidence and blockers,
+not test counts or PR counts as a substitute for delivery.
 
 ## The map
 
@@ -183,13 +199,15 @@ until each revision is deleted by hand.
   disagree with. Only the first two block. **Record what you reject and why**,
   beside what you adopt, or it gets re-litigated.
 - **Expect a defect inside the fix.** Every review round on N2 found one in the
-  previous round's fix — four for four. A narrow follow-up pass attacking only
-  the newest change is cheap and has paid for itself every time.
+  previous round's fix — four for four. Review consequential fixes narrowly;
+  do not restart broad review or demand another review for a wording-only fix.
 - **Read the PR conversation, review comments and reviews before marking ready
   or merging.** Unaddressed comments block. "One instance found" and "one
   instance exists" are different claims: check the class, not the report.
 - **Mark review-ready PRs ready.** Once implementation and verification are
-  complete, mark it ready to trigger the `chatgpt-codex-connector` review.
+  complete for the selected tier, mark it ready to trigger the
+  `chatgpt-codex-connector` review. Use the canonical stalled-review fallback;
+  a pending service is neither a completed review nor an indefinite hold.
   Ready for review is not approval to merge; address its findings and obtain
   the required final-head evidence before recommending merge.
 - **Resolve findings, not just threads.** The default branch requires resolved

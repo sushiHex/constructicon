@@ -29,7 +29,12 @@ REFERENCE_LINK_RE = re.compile(r"^\s*\[[^\]\n]+\]:\s*(\S+)", re.MULTILINE)
 ABSENT_MODE = "000000"
 REGULAR_MODE = "100644"
 ZERO_OID = "0" * 40
-ROOT_PROSE = frozenset({"README.md", "AGENTS.md", "CONTRIBUTING.md"})
+ROOT_PROSE = frozenset({"README.md", "AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md"})
+DOCS_PROSE = frozenset({
+    "docs/AGENT_HANDOFF.md", "docs/ARCHITECTURE.md", "docs/CONTRIBUTING.md",
+    "docs/WORK_TRACKING.md", "docs/plans/README.md", "docs/plans/MANIFEST.sha256",
+    "docs/plans/handoffs/M8-implementation-record.md",
+})
 JOB_RESULTS = frozenset({"success", "failure", "cancelled", "skipped"})
 
 
@@ -98,12 +103,9 @@ def _safe_repo_path(path: str) -> bool:
 def _is_prose_path(path: str) -> bool:
     if not _safe_repo_path(path):
         return False
-    if path in ROOT_PROSE:
-        return True
-    if path == "docs/plans/MANIFEST.sha256":
-        return True
-    parsed = PurePosixPath(path)
-    return len(parsed.parts) >= 2 and parsed.parts[0] == "docs" and parsed.suffix == ".md"
+    # Some Markdown is executed or extracted by tests. Only these known prose
+    # records may bypass those proofs; new paths and runbooks need full CI.
+    return path in ROOT_PROSE or path in DOCS_PROSE
 
 
 def _is_plain_file_change(entry: DiffEntry) -> bool:

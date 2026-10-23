@@ -73,10 +73,12 @@ what remains, and the exact blocker or next action. Release/reconfirm ownership
 as appropriate. Restore `ready` only if the work is actually available and
 unblocked. Issue comments are handoffs and decisions, not raw session logs.
 
-A *pause* hands over in the issue. A *merge* adds one entry to
-`docs/AGENT_HANDOFF.md`: what the slice established, what it deliberately did
-not, and any reported fact that turned out to be wrong. That file carries what
-outlives an issue and holds no open work — the issue keeps that.
+A *pause* hands over in the issue. A delivery PR includes one entry to
+`docs/AGENT_HANDOFF.md` that becomes durable on merge: what the slice established,
+what it deliberately did not, and any reported fact that turned out to be wrong.
+Do not invent a merge SHA before merge or require a follow-up PR to insert it.
+That file carries what outlives an issue and holds no open work — the issue keeps
+that. Incidental prose corrections do not require a new handoff entry.
 
 ## Implement, review, close
 
@@ -90,11 +92,11 @@ outlives an issue and holds no open work — the issue keeps that.
    implementation. Closing keywords are interpreted by
    [GitHub](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue),
    not a custom bot.
-3. Before merge, require the repository gate and CI on the exact head, relevant
-   native/mutation/compatibility proofs, and independent review with no
-   unresolved blockers. State checks not run and why; Windows skips are not
-   physical proof. Docs-only validation includes links, archive digests, and
-   truthful source/status claims; a green baseline is not new behavior proof.
+3. Before merge, apply the [delivery policy](#delivery-policy): selected CI on
+   the exact head, risk-relevant proofs and sufficient independent review with
+   no unresolved blockers. A second full local suite is not a universal gate.
+   State checks not run and why; Windows skips are not physical proof. A green
+   baseline is not new behavior proof.
 4. Put exact-head evidence in the PR and durable milestone results in the
    living implementation record. Preserve approved plans; update only the
    intended archive digests. Close completed work with the merged PR/evidence.
@@ -126,6 +128,117 @@ the limit. If GitHub is unavailable, report that current ownership/status is
 unverified. Do not create a replacement backlog or treat a cached label as
 permission to start conflicting work. A review/status request alone does not
 authorize posting, assignment, or other external changes.
+
+## Delivery policy
+
+This is the single binding delivery policy for every Codex, Claude Code,
+subagent and contributor session. It replaces routine duplicated verification,
+not the invariants, accepted decisions, explicit owner restrictions or required
+repository checks. A stricter task-specific requirement still applies; record
+why it applies rather than generalizing it into a new universal gate.
+
+### 1. Match verification to risk
+
+Before implementation, state the observable delivery outcome, risk tier and
+smallest relevant proof set in the issue or PR. Use the highest applicable tier;
+small diffs can carry consequential risk. Do not create a separate plan document
+for a routine change solely to state these three facts.
+
+| Tier | Scope | Required evidence |
+| --- | --- | --- |
+| Prose | Non-executable documentation, status or wording only | Links, applicable archive digests, and focused factual review. No full local suite or mutation run. |
+| Code | Ordinary implementation, tests, dependencies or tooling | Affected tests locally, accepting and refusing cases for changed behavior, and the full code CI gate on the final candidate. |
+| Consequential | Authority, credentials, containment, custody, durable state, concurrency, evidence acceptance or merge-gate selection | Code-tier evidence plus independent review of the affected boundary and relevant physical, interleaving, compatibility or mutation proofs. |
+
+Runnable instructions, extracted fixtures and executable configuration are not
+prose merely because they are in Markdown. Run their affected tests and review
+the command boundary before execution. CI path classification is an optimization,
+not authority to understate the semantic tier or skip an explicitly required proof.
+
+During iteration, run focused tests. Do not repeat the full local suite after
+each edit. Exact-head full CI is the default broad code gate; a second full local
+run requires a stated diagnostic or platform reason. Use targeted Windows tests
+for Windows boundaries, not a blanket full Windows run alongside Linux CI.
+Platform skips are not physical evidence. The trusted-base classifier gives the
+docs fast path only to its explicit prose/status allowlist; runnable handoffs and
+unknown paths retain full CI. Docs-only CI must positively validate links and
+archive digests in the proposed merge tree rather than silently pass. Expanding
+that allowlist is a consequential change, not an author's label or opt-out.
+
+For changed safety gates, choose mutants that exercise distinct failure modes
+and use inputs where bounds actually bind. Do not add redundant mutants merely
+to increase a count. Run affected inventories locally when needed; existing
+required CI inventories remain enforced. Missing/erroring tests are not proof.
+Do not introduce a generalized test-selection framework to optimize one change.
+
+Freeze a coherent candidate before expensive verification. A later code change
+requires fresh applicable CI; a local focused rerun covers the affected behavior.
+Do not rerun unchanged manual proofs for prose-only follow-ups: compare the
+relevant source/test blobs and retain the original tested revision explicitly.
+Required final-head CI must still pass; never relabel old results as new runs.
+
+### 2. Review once meaningfully
+
+One independent, risk-appropriate review is sufficient. It may be a human,
+another agent, or the connector; self-review alone is not independent review.
+For consequential work, the review must inspect the relevant authority,
+interleaving and evidence assumptions, not just summarize the diff. Delegate
+routine checks to lower-cost models and reserve high effort for these boundaries.
+
+Reproduce findings, fix their class and review consequential fixes narrowly.
+Do not automatically restart broad reviews or commission multiple reviewers
+after a clean, sufficient review. Wording-only changes need factual checking,
+not another adversarial implementation pass. Record the reviewed revision and
+any later delta; a materially changed boundary needs a fresh focused review.
+
+Mark verified PRs ready to trigger the connector once. Do not repeatedly request
+the same review while it is pending. If the connector fails, reports unavailable,
+or remains pending 30 minutes after its recorded trigger, it may be replaced by
+an independent review covering the final head. An already completed independent
+review counts when it covers that head; do not commission a duplicate. Record
+the connector status/time, substitute reviewer, revision, scope and findings in
+the PR. This is a review fallback, never a claim that the connector completed.
+
+Before merge, reread discussion, reviews and inline conversations, including any
+late connector response. All actionable findings must have a verified disposition
+and review threads must be resolved. The fallback does not bypass required checks,
+required approvals, rulesets or owner authorization. If GitHub still requires the
+unavailable check, report that blocker; do not bypass it. A substantive late finding
+after merge must be triaged as a regression, not discarded because the PR closed.
+
+### 3. Batch delivery and evidence
+
+Keep implementation, regression tests and durable evidence in the same PR where
+possible. Include the handoff entry in that PR without inventing a future merge
+SHA. Use the PR for final CI receipts that arrive after the commit; do not make
+a second docs-only closure PR just to restate that the first merged. A separate
+record is justified by genuinely new live evidence or a substantive correction.
+
+Keep one issue as the work ledger. A PR needs a concise outcome, tier, proof set,
+review disposition and remaining limits, not repeated chronological transcripts.
+Do not create extra research documents, helpers or issues for every minor step.
+Frozen artifacts remain unchanged; refresh only the intended living manifest
+entries from staged blobs. Existing in-scope deficiencies are addressed on the
+same PR; unrelated improvements stay deferred unless they block delivery or safety.
+
+### 4. Optimize for the delivery outcome
+
+Keep one active delivery objective, with parallel work only where it advances
+that objective independently. Before adding a helper, test, review or document,
+identify the concrete delivery uncertainty it resolves or the consequential
+boundary it protects. If it does neither, defer it. Prefer existing components
+and the smallest correct design over new general-purpose infrastructure.
+
+Test the real boundary that failed: for example, actual subprocess argument
+transport rather than only string construction. Stop repeating a nondiagnostic
+live run; define a new bounded evidence question first. This does not relax live
+host custody, exact installation, credential, deployment or model-call authority.
+
+Progress reports lead with working behavior, the remaining critical-path blocker
+and the next action. Test counts, mutation counts and merged PRs are supporting
+evidence, not delivery milestones. When a gate blocks, diagnose it or use the
+defined review fallback; do not replace the objective with unrelated hardening.
+Measure critical-path time and useful defects found before adding more process.
 
 ## Keep the system small
 

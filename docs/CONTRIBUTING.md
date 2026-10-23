@@ -1,15 +1,17 @@
 # Contributing
 
-The expected contributor is an agent (I9). One command verifies everything CI
-checks:
+The expected contributor is an agent (I9). Follow the canonical
+[delivery policy](WORK_TRACKING.md#delivery-policy) for risk-proportionate local
+checks and review. The full code gate is:
 
 ```bash
 uv run verify        # ruff + mypy --strict + import-linter + pytest
 ```
 
-Green locally is the goal `verify` serves; CI runs the same command. The full
-lifecycle runs with zero credentials (I7) — if your change needs a secret to be
-tested, the design is wrong.
+CI runs this command for code changes; a duplicate full local run is not required
+without a concrete reason. Additional CI jobs cover platform and physical proofs
+that this command does not. The full lifecycle runs with zero credentials (I7)
+— if your change needs a secret to be tested, the design is wrong.
 
 The root pytest bootstrap checks that `constructicon` resolves to this
 checkout's `src/constructicon/__init__.py` before importing test fixtures or
@@ -120,7 +122,8 @@ containment. Neither command changes the target implementation, defines its
 own exam, installs a candidate or grants a new live attempt. Inspect the
 [entry test](../tests/api/test_maintenance_entry.py) and
 [shared witness](../tests/maintenance_task_world.py) to follow the assertions.
-These focused commands supplement, not replace, `uv run verify` and PR review.
+These focused commands are local development checks; code changes still require
+the full CI gate and risk-appropriate PR review under the delivery policy.
 
 ## Finding and tracking work
 
