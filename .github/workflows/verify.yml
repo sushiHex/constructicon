@@ -44,7 +44,7 @@ jobs:
           fi
           case "$scope" in docs|full) ;; *) exit 1 ;; esac
           printf 'scope=%s\n' "$scope" >> "$GITHUB_OUTPUT"
-          printf 'Portable scope: **%s** (head `%s`).\n' "$scope" "$HEAD_SHA" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Portable scope: %s (head %s).\n' "$scope" "$HEAD_SHA" >> "$GITHUB_STEP_SUMMARY"
 
   docs:
     needs: classify
