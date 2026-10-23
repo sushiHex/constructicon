@@ -16,6 +16,28 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Claude mismatch evidence separates writes from classified replies
+
+PR #293 adds seven closed mode-mismatch reasons and an affirmative count of
+classified responses. One shared classifier preserves the public verdict and
+the exact ambiguity permitted before the existing second request. Verdict,
+reason and count update together without a new await. New evidence uses schema
+2; historical bytes remain unchanged and absent legacy fields stay unknown.
+
+The source, tests and inventory at `d993921` passed 364 focused tests with two
+platform skips and 85 selected assertion-killed mutants (36 protocol, 28
+maintenance, 21 diagnostic). An independent differential audit covered 3,502
+synthetic classifications with unchanged verdicts; independent boundary review
+found no introduced blocker. Later reconciliation preserves those diagnostic
+blobs and main's contributor policy. Final-head CI belongs to the delivery PR;
+no completed full local gate is inferred from the focused evidence.
+
+The corrected premise matters: two attempted writes do not prove a second
+classified reply. Write/read failure can retain the first mismatch. The old
+finite evidence cannot recover the missing response or its cause. This slice
+performs no host, vendor, login or model operation; reviewed checker/controller
+installation and fresh live observations remain separate prerequisites.
+
 ## Risk-proportionate delivery is shared contributor policy
 
 The owner-approved process correction in issue #294 makes

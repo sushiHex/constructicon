@@ -3,7 +3,7 @@
 from _mutations import run
 
 MODULE = "constructicon.substrate.executors.claude_protocol:"
-JUDGE = MODULE + "judge_initialize"
+JUDGE = MODULE + "_classify_initialize"
 REQUEST = MODULE + "initialize_request"
 TEST = "tests/substrate/test_claude_protocol.py::"
 STARTUP_BUILD = "scripts.ci.build_m8_claude_startup_fixture:build"
@@ -103,7 +103,7 @@ MUTANTS = (
      'if body["session_state"] != "idle":', "if False:",
      TEST + "test_nonidle_state_refuses_without_startup_claim"),
     ("account shape is not affirmative", JUDGE,
-     "if type(account) is not dict:\n        return verdict.MODE_MISMATCH",
+     "if type(account) is not dict:\n        return reason.ACCOUNT_SHAPE",
      "if type(account) is not dict:\n        return verdict.MODE_MATCH",
      TEST + "test_wrong_nested_shapes_refuse"),
     ("account has only the pinned projection fields", JUDGE,
@@ -1112,25 +1112,9 @@ MUTANTS += (
 MAINTENANCE = "constructicon.substrate.executors.claude_maintenance_mode:"
 MAINTENANCE_TEST = "tests/substrate/test_claude_maintenance_mode.py::"
 MAINTENANCE_MUTANTS = (
-    ("maintenance ambiguity depends on the unchanged strict judge",
+    ("maintenance ambiguity delegates to the shared finite classifier",
      MAINTENANCE + "exact_ambiguous_api_mode",
-     "is not ClaudeInitializeVerdict.MODE_MISMATCH:",
-     "is ClaudeInitializeVerdict.MODE_MISMATCH:",
-     MAINTENANCE_TEST + "test_exact_ambiguous_shape_is_only_one_narrow_mismatch"),
-    ("maintenance ambiguity excludes key-source and extension fields",
-     MAINTENANCE + "exact_ambiguous_api_mode", "set(account) <= fields", "True",
-     MAINTENANCE_TEST + "test_exact_ambiguous_shape_is_only_one_narrow_mismatch"),
-    ("maintenance ambiguity requires first-party mode",
-     MAINTENANCE + "exact_ambiguous_api_mode",
-     'account.get("apiProvider") == "firstParty"', "True",
-     MAINTENANCE_TEST + "test_exact_ambiguous_shape_is_only_one_narrow_mismatch"),
-    ("maintenance ambiguity is exactly Claude API",
-     MAINTENANCE + "exact_ambiguous_api_mode",
-     'account.get("subscriptionType") == "Claude API"', "True",
-     MAINTENANCE_TEST + "test_exact_ambiguous_shape_is_only_one_narrow_mismatch"),
-    ("maintenance ambiguity optional account fields remain typed",
-     MAINTENANCE + "exact_ambiguous_api_mode",
-     "all(type(item) is str for item in account.values())", "True",
+     "return reason is ClaudeModeMismatchReason.AMBIGUOUS_API", "return True",
      MAINTENANCE_TEST + "test_exact_ambiguous_shape_is_only_one_narrow_mismatch"),
     ("maintenance refuses login recipe before acquisition",
      MAINTENANCE + "observe_maintenance_mode",
@@ -1243,6 +1227,69 @@ MAINTENANCE_MUTANTS = (
      MAINTENANCE_TEST + "test_report_constructor_refuses_unbounded_or_coerced_fields"),
 )
 MUTANTS += MAINTENANCE_MUTANTS
+
+DIAGNOSTIC_TEST = TEST + "test_shared_classifier_preserves_refusal_categories_and_precedence"
+DIAGNOSTIC_OBSERVATION = MAINTENANCE + "ClaudeMaintenanceObservation.__post_init__"
+DIAGNOSTIC_CONSTRUCTOR = (
+    MAINTENANCE_TEST
+    + "test_diagnostic_constructor_requires_closed_reason_and_affirmative_count"
+)
+DIAGNOSTIC_MUTANTS = (
+    *(("mode mismatch reason preserves " + member, JUDGE,
+       "return reason." + member, "return reason.SUBSCRIPTION_MISMATCH", DIAGNOSTIC_TEST)
+      for member in ("ACCOUNT_SHAPE", "UNSUPPORTED_ACCOUNT_FIELD", "CREDENTIAL_SOURCE_PRESENT",
+                     "ACCOUNT_VALUE_TYPE", "PROVIDER_MISMATCH", "AMBIGUOUS_API")),
+    ("other subscription mismatch is not ambiguous API", JUDGE,
+     "return reason.SUBSCRIPTION_MISMATCH", "return reason.AMBIGUOUS_API", DIAGNOSTIC_TEST),
+    ("API ambiguity is the exact existing literal", JUDGE,
+     'if account.get("subscriptionType") == "Claude API":', "if True:", DIAGNOSTIC_TEST),
+    ("diagnostic projection preserves the old mode mismatch verdict", MODULE + "classify_initialize",
+     "return ClaudeInitializeVerdict.MODE_MISMATCH, result",
+     "return ClaudeInitializeVerdict.MODE_MATCH, result", DIAGNOSTIC_TEST),
+    ("diagnostic projection retains its finite mismatch reason", MODULE + "classify_initialize",
+     "return ClaudeInitializeVerdict.MODE_MISMATCH, result",
+     "return ClaudeInitializeVerdict.MODE_MISMATCH, None", DIAGNOSTIC_TEST),
+    ("public judge keeps the original refusal projection", MODULE + "judge_initialize",
+     "return verdict", "return ClaudeInitializeVerdict.MODE_MATCH", DIAGNOSTIC_TEST),
+    ("maintenance replaces the last reason on non-mode replies",
+     MAINTENANCE + "ClaudeMaintenanceConversation._response",
+     "self.mode_verdict, self.mode_mismatch_reason = classify_initialize(\n"
+     "            record, expected_request_id=identifier, selected_plan=self.plan,\n"
+     "        )",
+     "self.mode_verdict, reason = classify_initialize(\n"
+     "            record, expected_request_id=identifier, selected_plan=self.plan,\n"
+     "        )\n"
+     "        self.mode_mismatch_reason = reason or self.mode_mismatch_reason",
+     MAINTENANCE_TEST + "test_response_state_clears_prior_reason_before_report_validation"),
+    ("maintenance counts classified responses affirmatively",
+     MAINTENANCE + "ClaudeMaintenanceConversation._response",
+     "self.classified_responses += 1", "pass",
+     MAINTENANCE_TEST + "test_response_state_clears_prior_reason_before_report_validation"),
+    ("maintenance diagnostic reason is a closed enum", DIAGNOSTIC_OBSERVATION,
+     "type(self.mode_mismatch_reason) is not ClaudeModeMismatchReason", "False",
+     DIAGNOSTIC_CONSTRUCTOR),
+    ("maintenance diagnostic reason requires mismatch", DIAGNOSTIC_OBSERVATION,
+     "self.mode_verdict is not ClaudeInitializeVerdict.MODE_MISMATCH", "False",
+     MAINTENANCE_TEST + "test_reason_requires_a_mode_mismatch"),
+    ("maintenance classified response count is an exact integer", DIAGNOSTIC_OBSERVATION,
+     "type(self.classified_responses) is not int", "False", DIAGNOSTIC_CONSTRUCTOR),
+    ("maintenance classified response count is bounded by writes", DIAGNOSTIC_OBSERVATION,
+     "not 0 <= self.classified_responses <= self.request_writes", "False", DIAGNOSTIC_CONSTRUCTOR),
+    ("maintenance known count agrees with presence of a verdict", DIAGNOSTIC_OBSERVATION,
+     "(self.classified_responses > 0) != (self.mode_verdict is not None)", "False",
+     DIAGNOSTIC_CONSTRUCTOR),
+    ("maintenance reason requires a known response count", DIAGNOSTIC_OBSERVATION,
+     "and self.classified_responses is None", "and False", DIAGNOSTIC_CONSTRUCTOR),
+    ("maintenance evidence publishes its reason",
+     "constructicon.substrate.executors.claude_lane:_public_facts",
+     "else mode.mode_mismatch_reason.value", "else None",
+     "tests/substrate/test_claude_lane.py::test_public_mode_reason_is_only_closed_diagnostic_evidence"),
+    ("maintenance evidence publishes its classified response count",
+     "constructicon.substrate.executors.claude_lane:_public_facts",
+     '"classified_responses": mode.classified_responses', '"classified_responses": None',
+     "tests/substrate/test_claude_lane.py::test_wire_account_data_never_enters_published_mode_fields"),
+)
+MUTANTS += DIAGNOSTIC_MUTANTS
 
 OPERATOR_IO = "constructicon.substrate.executors.claude_operator_io:"
 OPERATOR_IO_TEST = "tests/substrate/test_claude_operator_io.py::"

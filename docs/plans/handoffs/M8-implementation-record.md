@@ -13,6 +13,56 @@ From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-
 and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
 subscription route; see the dated section at the end of this record.
 
+## Claude maintenance mismatch diagnostic (Refs #40)
+
+The October 23 private continuation independently validated the completed
+login lifecycle, fresh host prerequisites and installed artifacts, then
+stopped at a fresh observation's `mode-mismatch`. Two writes establish that
+the first reply matched the observer's exact ambiguous Claude API predicate;
+the retained verdict does not prove that a second response was classified,
+let alone why it mismatched. An earlier report asserted a second mismatch from
+the write count; source review refuted that premise because a write/read
+failure can leave the first verdict intact. The new classified-response count
+records that missing fact affirmatively rather than inferring it from writes.
+The VM was parked and positively observed off, with the store preserved.
+No reload, qualification, publication or model dispatch followed.
+
+The bounded follow-up design is [M8-N6-mode-diagnostic.md](M8-N6-mode-diagnostic.md).
+Independent pre-implementation review accepted one shared classification with
+seven closed reasons, a bounded classified-response count, the unchanged public
+mode verdict, and schema 2 for new evidence. Reasons replace together with
+their response's verdict and classification count, not at write time. A reason
+never supplies account authority or weakens a mode refusal.
+Historical evidence and accepted plan bytes remain unchanged.
+
+The narrower two-category alternative was considered and rejected: it could
+leave another live refusal without an actionable category. Conversely, a new
+generation-floor readback was unnecessary: existing publication checks a
+proposed next generation under its retained lock. Neither extra store reads
+nor a retry are justified by the missing historical floor field.
+
+Implementation at `d993921` retains every initialization acceptance/refusal
+rule and the existing request, spacing, deadline and teardown limits. The
+focused protocol, maintenance, lane and host suite passed 364 tests with two
+platform skips. The selected official-harness inventory assertion-killed all
+85 mutants: 36 existing protocol guards, 28 maintenance guards and 21 diagnostic
+guards. Each had a passing baseline and matching collection; the source
+snapshot stayed unchanged. An independent old/new differential audit covered
+3,502 synthetic classifications with identical public verdicts and all seven
+reason categories exercised. Independent boundary review found no introduced
+blocker in guard precedence, the response/count update or evidence publication.
+
+Reconciliation with main preserves the contributor policy and earlier closure
+records. The diagnostic source, tests and inventory remain byte-identical to
+that tested revision; inherited policy CI changes are separate. These local
+results are not relabeled as runs on a later head. No completed full local gate
+is claimed; final-head CI and connector status are recorded in
+[PR #293](https://github.com/sushiHex/constructicon/pull/293).
+
+The schema-2 checker and modified controller require reviewed installation
+before a live diagnostic. This implementation establishes no new login,
+subscription persistence, authenticated qualification or READ result.
+
 ## Claude private staging execution — 2026-10-22 (Refs #283)
 
 PR #287 merged as `04857489a6388e6cfde4619cadb903514fbcc764`, with a

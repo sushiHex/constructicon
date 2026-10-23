@@ -19,6 +19,7 @@ from constructicon.substrate.executors.claude_native import (
 from constructicon.substrate.executors.claude_native_events import exact_ui_invalidate
 from constructicon.substrate.executors.claude_protocol import (
     ClaudeInitializeVerdict,
+    ClaudeModeMismatchReason,
     ClaudePlan,
     initialize_request,
 )
@@ -158,6 +159,8 @@ async def test_first_positive_mode_closes_drains_and_joins_without_second_write(
     )
     assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.OBSERVED
     assert report.mode_verdict is ClaudeInitializeVerdict.MODE_MATCH
+    assert report.mode_mismatch_reason is None
+    assert report.classified_responses == 1
     assert report.request_writes == 1 and report.ui_records == 8
     assert report.stdin_closed and report.eof and launcher.joined
     assert channel.max_readers == 1 and len(channel.writes) < count + 1
@@ -212,6 +215,8 @@ async def test_ambiguous_first_observation_can_reach_second_after_real_spacing(m
     report, launcher, _ = await asyncio.wait_for(task, 1)
     assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.OBSERVED
     assert report.request_writes == 2 and report.ui_records == 2
+    assert report.mode_mismatch_reason is None
+    assert report.classified_responses == 2
     assert launcher.joined and channel.max_readers == 1
 
 
@@ -222,7 +227,164 @@ async def test_ambiguous_mode_is_never_a_reload_retry():
     assert time.monotonic() - started < 1
     assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.REFUSED
     assert report.mode_verdict is ClaudeInitializeVerdict.MODE_MISMATCH
+    assert report.mode_mismatch_reason is ClaudeModeMismatchReason.AMBIGUOUS_API
     assert report.request_writes == 1 and launcher.joined
+
+
+@pytest.mark.parametrize("plan", list(ClaudePlan))
+@pytest.mark.parametrize("second,expected_verdict,expected_reason", [
+    ("selected", "MODE_MATCH", None),
+    ("ambiguous", "MODE_MISMATCH", "AMBIGUOUS_API"),
+    ("different", "MODE_MISMATCH", "SUBSCRIPTION_MISMATCH"),
+    ("credential", "MODE_MISMATCH", "CREDENTIAL_SOURCE_PRESENT"),
+    ("invalid", "RESPONSE_INVALID", None),
+    ("write-failed", "MODE_MISMATCH", "AMBIGUOUS_API"),
+    ("read-failed", "MODE_MISMATCH", "AMBIGUOUS_API"),
+])
+async def test_reason_describes_last_classified_reply_after_second_write(
+    monkeypatch, plan, second, expected_verdict, expected_reason,
+):
+    clock = [0.0]
+    monkeypatch.setattr(maintenance, "_monotonic", lambda: clock[0])
+    answers = {
+        "selected": response("@ID@", plan.value, email="private-email"),
+        "ambiguous": response("@ID@", "Claude API", organization="private-organization"),
+        "different": response("@ID@", "private-plan"),
+        "credential": response("@ID@", "Claude API", tokenSource="private-source"),
+        "invalid": b'{"type":"private-invalid"}\n',
+        "write-failed": response("@ID@", plan.value),
+        "read-failed": b"private-partial",
+    }
+
+    class SecondWrite(Channel):
+        def __init__(self, answers):
+            super().__init__(answers)
+            self.waiting = asyncio.Event()
+
+        async def write(self, raw):
+            await super().write(raw)
+            if second == "write-failed" and len(self.writes) == 2:
+                raise OSError("private write failure")
+
+        async def read(self, maximum=8192):
+            if second == "read-failed" and len(self.writes) == 2:
+                raise OSError("private read failure")
+            if len(self.writes) == 1 and not self.output:
+                self.waiting.set()
+            return await super().read(maximum)
+
+    channel = SecondWrite([response("@ID@", "Claude API"), answers[second]])
+    task = asyncio.create_task(observe(channel, timeout=120, plan=plan))
+    await asyncio.wait_for(channel.waiting.wait(), 1)
+    assert len(channel.writes) == 1 and channel.active_readers == 1
+    clock[0] = 30.0
+    channel.output.extend(ui())
+    channel.changed.set()
+    report, launcher, _ = await asyncio.wait_for(task, 1)
+    assert report.request_writes == 2 and len(channel.writes) == 2
+    assert report.classified_responses == (1 if second.endswith("failed") else 2)
+    assert report.mode_verdict is ClaudeInitializeVerdict[expected_verdict]
+    assert report.mode_mismatch_reason is (
+        None if expected_reason is None else ClaudeModeMismatchReason[expected_reason]
+    )
+    assert report.lifecycle is (
+        maintenance.ClaudeMaintenanceLifecycle.OBSERVED if second == "selected"
+        else maintenance.ClaudeMaintenanceLifecycle.REFUSED
+    )
+    assert launcher.joined and channel.active_readers == 0
+    assert "private" not in repr(report)
+
+
+def test_legacy_mismatch_constructor_preserves_unknown_reason():
+    report = maintenance.ClaudeMaintenanceObservation(
+        maintenance.ClaudeMaintenancePhase.OBSERVE, ClaudeInitializeVerdict.MODE_MISMATCH,
+        maintenance.ClaudeMaintenanceLifecycle.REFUSED, 1, 0, False, False,
+    )
+    assert report.mode_mismatch_reason is None
+    assert report.classified_responses is None
+
+
+@pytest.mark.parametrize("raw,expected", [(response("id"), "MODE_MATCH"),
+                                         (b'{"type":"private-invalid"}\n', "RESPONSE_INVALID")])
+async def test_response_state_clears_prior_reason_before_report_validation(raw, expected):
+    callback = maintenance.ClaudeMaintenanceConversation(
+        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, selected_plan=ClaudePlan.PRO,
+        input_limit=8192, output_limit=512 * 1024, deadline=maintenance._monotonic() + 5,
+    )
+    callback._state = "running"
+    callback.request_writes = 1
+    callback._records = [response("id", "Claude API")]
+    assert (await callback._response("id"))[0] is False
+    assert callback.mode_mismatch_reason is ClaudeModeMismatchReason.AMBIGUOUS_API
+    assert callback.classified_responses == 1
+    callback.request_writes = 2
+    callback._records = [raw]
+    if expected == "MODE_MATCH":
+        assert (await callback._response("id"))[0] is True
+    else:
+        with pytest.raises(maintenance._Refused):
+            await callback._response("id")
+    assert callback.mode_verdict is ClaudeInitializeVerdict[expected]
+    assert callback.mode_mismatch_reason is None
+    assert callback.classified_responses == 2
+
+
+async def test_cancelled_spacing_preserves_last_classified_facts_and_joins_reader():
+    class SpacingChannel(Channel):
+        def __init__(self):
+            super().__init__([response("@ID@", "Claude API")])
+            self.waiting = asyncio.Event()
+
+        async def read(self, maximum=8192):
+            if self.writes and not self.output:
+                self.waiting.set()
+            return await super().read(maximum)
+
+    channel = SpacingChannel()
+    callback = maintenance.ClaudeMaintenanceConversation(
+        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, selected_plan=ClaudePlan.PRO,
+        input_limit=8192, output_limit=512 * 1024, deadline=maintenance._monotonic() + 120,
+    )
+    task = asyncio.create_task(callback(channel))
+    await asyncio.wait_for(channel.waiting.wait(), 1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert callback.mode_verdict is ClaudeInitializeVerdict.MODE_MISMATCH
+    assert callback.mode_mismatch_reason is ClaudeModeMismatchReason.AMBIGUOUS_API
+    assert callback.classified_responses == callback.request_writes == 1
+    assert callback._owner is None and channel.active_readers == 0 and channel.read_cancelled
+
+
+@pytest.mark.parametrize("change", [
+    {"mode_mismatch_reason": "private"}, {"classified_responses": None},
+    {"classified_responses": True}, {"classified_responses": 0},
+    {"classified_responses": -1}, {"classified_responses": 2},
+    {"mode_mismatch_reason": None, "mode_verdict": None},
+])
+def test_diagnostic_constructor_requires_closed_reason_and_affirmative_count(change):
+    values = {
+        "phase": maintenance.ClaudeMaintenancePhase.OBSERVE,
+        "mode_verdict": ClaudeInitializeVerdict.MODE_MISMATCH,
+        "lifecycle": maintenance.ClaudeMaintenanceLifecycle.REFUSED,
+        "request_writes": 1, "ui_records": 0, "stdin_closed": False, "eof": False,
+        "mode_mismatch_reason": ClaudeModeMismatchReason.AMBIGUOUS_API,
+        "classified_responses": 1,
+    }
+    values.update(change)
+    with pytest.raises(ValueError, match=r"^invalid Claude maintenance observation$"):
+        maintenance.ClaudeMaintenanceObservation(**values)
+
+
+@pytest.mark.parametrize("verdict", [None, ClaudeInitializeVerdict.MODE_MATCH,
+                                    ClaudeInitializeVerdict.RESPONSE_INVALID])
+def test_reason_requires_a_mode_mismatch(verdict):
+    with pytest.raises(ValueError, match=r"^invalid Claude maintenance observation$"):
+        maintenance.ClaudeMaintenanceObservation(
+            maintenance.ClaudeMaintenancePhase.OBSERVE, verdict,
+            maintenance.ClaudeMaintenanceLifecycle.REFUSED, 1, 0, False, False,
+            ClaudeModeMismatchReason.AMBIGUOUS_API, 1,
+        )
 
 
 def test_exact_ambiguous_shape_is_only_one_narrow_mismatch():
@@ -707,10 +869,12 @@ async def test_public_report_is_finite_and_contains_no_private_values():
     report, _, _ = await observe(Channel([response("@ID@")]))
     values = asdict(report)
     assert {field.name for field in fields(report)} == set(values)
-    assert set(values) == {"phase", "mode_verdict", "lifecycle", "request_writes",
+    assert set(values) == {"phase", "mode_verdict", "mode_mismatch_reason", "classified_responses",
+                           "lifecycle", "request_writes",
                            "ui_records", "stdin_closed", "eof"}
     assert all(type(value) in (maintenance.ClaudeMaintenancePhase,
                                ClaudeInitializeVerdict, maintenance.ClaudeMaintenanceLifecycle,
+                               ClaudeModeMismatchReason,
                                bool, int, type(None)) for value in values.values())
     assert 0 <= values["request_writes"] <= 2 and 0 <= values["ui_records"] <= 8
     assert all(len(value.value.encode()) <= 32 for value in values.values()
@@ -723,6 +887,10 @@ async def test_public_report_is_finite_and_contains_no_private_values():
     {"ui_records": True}, {"stdin_closed": "yes"}, {"stdin_closed": False},
     {"eof": 1}, {"eof": False}, {"phase": "observe"},
     {"mode_verdict": "private"}, {"mode_verdict": None}, {"lifecycle": "observed"},
+    {"mode_mismatch_reason": "private"},
+    {"mode_mismatch_reason": ClaudeModeMismatchReason.AMBIGUOUS_API},
+    {"classified_responses": True}, {"classified_responses": -1},
+    {"classified_responses": 2}, {"classified_responses": 0},
     {"phase": maintenance.ClaudeMaintenancePhase.RELOAD, "request_writes": 2},
 ])
 def test_report_constructor_refuses_unbounded_or_coerced_fields(change):

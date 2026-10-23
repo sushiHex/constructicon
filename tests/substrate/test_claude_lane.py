@@ -34,6 +34,7 @@ from constructicon.substrate.executors.claude_maintenance_session import (
 from constructicon.substrate.executors.claude_native import ClaudeNativeRecipe
 from constructicon.substrate.executors.claude_protocol import (
     ClaudeInitializeVerdict,
+    ClaudeModeMismatchReason,
     ClaudePlan,
 )
 from constructicon.substrate.executors.claude_startup import ClaudeStartupVerdict
@@ -565,7 +566,7 @@ def test_every_published_field_has_a_declared_finite_bound(tmp_path, phase):
         "launch_revision", "egress", "completed",
     } | ({"qualification_revision"} if phase is ClaudeMaintenanceSessionPhase.QUALIFY else set())
     assert record["completed"] is True
-    assert type(record["schema_version"]) is int and record["schema_version"] == 1
+    assert type(record["schema_version"]) is int and record["schema_version"] == 2
     assert record["subscription_qualified"] is record["production_available"] is False
     for key in ("runtime_digest", "vendor_digest", "launch_revision", *(
         ("qualification_revision",) if phase is ClaudeMaintenanceSessionPhase.QUALIFY else ()
@@ -625,13 +626,71 @@ def test_every_published_field_has_a_declared_finite_bound(tmp_path, phase):
         assert public["login"] is None
         mode = public["mode"]
         assert set(mode) == {
-            "phase", "mode_verdict", "lifecycle", "request_writes", "ui_records",
+            "phase", "mode_verdict", "mode_mismatch_reason", "classified_responses",
+            "lifecycle", "request_writes", "ui_records",
             "stdin_closed", "eof",
         }
         assert mode["phase"] in {"observe", "reload"}
         assert mode["mode_verdict"] in {item.value for item in ClaudeInitializeVerdict} | {None}
+        assert mode["mode_mismatch_reason"] in {
+            item.value for item in ClaudeModeMismatchReason
+        } | {None}
+        count = mode["classified_responses"]
+        assert count is None or (type(count) is int and 0 <= count <= mode["request_writes"])
         assert mode["lifecycle"] in {"observed", "refused", "incomplete", "process-refused"}
         for key in ("stdin_closed", "eof"):
             assert type(mode[key]) is bool
         assert type(mode["request_writes"]) is int and 0 <= mode["request_writes"] <= 2
         assert type(mode["ui_records"]) is int and 0 <= mode["ui_records"] <= 8
+
+
+@pytest.mark.parametrize("reason", [None, *ClaudeModeMismatchReason])
+def test_public_mode_reason_is_only_closed_diagnostic_evidence(reason):
+    original = facts(ClaudeMaintenanceSessionPhase.OBSERVE)
+    mode = replace(
+        original.mode_observation, mode_verdict=ClaudeInitializeVerdict.MODE_MISMATCH,
+        lifecycle=ClaudeMaintenanceLifecycle.REFUSED, mode_mismatch_reason=reason,
+        classified_responses=1,
+    )
+    public = claude_lane._public_facts(replace(
+        original, lifecycle=ClaudeMaintenanceSessionLifecycle.REFUSED, mode_observation=mode,
+    ))
+    assert public["mode"]["mode_mismatch_reason"] == (None if reason is None else reason.value)
+    assert set(public["mode"]) == {
+        "phase", "mode_verdict", "mode_mismatch_reason", "classified_responses", "lifecycle",
+        "request_writes", "ui_records", "stdin_closed", "eof",
+    }
+    assert len(json.dumps(public)) < 1024
+    assert all(len(item.value.encode()) <= 32 for item in ClaudeModeMismatchReason)
+    assert "private" not in json.dumps(public)
+
+
+@pytest.mark.parametrize("account,expected", [
+    ("private-account", "ACCOUNT_SHAPE"),
+    ({"private-field": "private-value"}, "UNSUPPORTED_ACCOUNT_FIELD"),
+    ({"tokenSource": "private-source"}, "CREDENTIAL_SOURCE_PRESENT"),
+    ({"email": {"private-nested": "private-value"}}, "ACCOUNT_VALUE_TYPE"),
+    ({"apiProvider": "private-provider"}, "PROVIDER_MISMATCH"),
+    ({"apiProvider": "firstParty", "subscriptionType": "Claude API",
+      "email": "private-email", "organization": "private-organization"}, "AMBIGUOUS_API"),
+    ({"apiProvider": "firstParty", "subscriptionType": "private-plan"}, "SUBSCRIPTION_MISMATCH"),
+    ({"apiProvider": "firstParty", "subscriptionType": "Claude Pro",
+      "email": "private-email", "organization": "private-organization"}, None),
+])
+async def test_wire_account_data_never_enters_published_mode_fields(account, expected):
+    from tests.substrate.test_claude_maintenance_mode import Channel, observe, response
+
+    value = json.loads(response("@ID@"))
+    value["response"]["response"]["account"] = account
+    raw = json.dumps(value, separators=(",", ":")).encode() + b"\n"
+    report, _, _ = await observe(Channel([raw]), phase=ClaudeMaintenancePhase.RELOAD)
+    original = facts(ClaudeMaintenanceSessionPhase.RELOAD)
+    public = claude_lane._public_facts(replace(
+        original, lifecycle=ClaudeMaintenanceSessionLifecycle.REFUSED, mode_observation=report,
+    ))
+    assert public["mode"]["mode_mismatch_reason"] == (
+        None if expected is None else ClaudeModeMismatchReason[expected].value
+    )
+    assert public["mode"]["classified_responses"] == 1
+    assert "private" not in json.dumps(public)
+    assert len(json.dumps(public)) < 1024

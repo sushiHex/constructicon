@@ -28,9 +28,10 @@ from constructicon.substrate.executors.claude_native_events import exact_ui_inva
 from constructicon.substrate.executors.claude_protocol import (
     RECORD_BYTES,
     ClaudeInitializeVerdict,
+    ClaudeModeMismatchReason,
     ClaudePlan,
+    classify_initialize,
     initialize_request,
-    judge_initialize,
 )
 from constructicon.substrate.executors.linux import LinuxLauncher
 from constructicon.substrate.executors.operator_store import BindingCheck
@@ -63,16 +64,27 @@ class ClaudeMaintenanceObservation:
     ui_records: int
     stdin_closed: bool
     eof: bool
+    mode_mismatch_reason: ClaudeModeMismatchReason | None = None
+    classified_responses: int | None = None
 
     def __post_init__(self) -> None:
         if (type(self.phase) is not ClaudeMaintenancePhase
                 or (self.mode_verdict is not None
                     and type(self.mode_verdict) is not ClaudeInitializeVerdict)
+                or (self.mode_mismatch_reason is not None
+                    and (type(self.mode_mismatch_reason) is not ClaudeModeMismatchReason
+                         or self.mode_verdict is not ClaudeInitializeVerdict.MODE_MISMATCH))
                 or type(self.lifecycle) is not ClaudeMaintenanceLifecycle
                 or type(self.request_writes) is not int
                 or not 0 <= self.request_writes <= (
                     2 if self.phase is ClaudeMaintenancePhase.OBSERVE else 1
                 )
+                or (self.classified_responses is not None
+                    and (type(self.classified_responses) is not int
+                         or not 0 <= self.classified_responses <= self.request_writes
+                         or (self.classified_responses > 0) != (self.mode_verdict is not None)))
+                or (self.mode_mismatch_reason is not None
+                    and self.classified_responses is None)
                 or type(self.ui_records) is not int or not 0 <= self.ui_records <= UI_RECORDS
                 or type(self.stdin_closed) is not bool or type(self.eof) is not bool):
             raise ValueError("invalid Claude maintenance observation")
@@ -96,30 +108,13 @@ def exact_ambiguous_api_mode(
 ) -> bool:
     """Recognize only an idle, correlated first-party Claude API projection.
 
-    The unchanged positive judge must first establish a mode mismatch. Its
-    envelope, pending-action, reported-version and idle checks then remain in
-    force; this predicate further narrows the otherwise broad mismatch.
+    The shared classifier retains every envelope, pending-action, version,
+    idle and account check before identifying this exact ambiguity.
     """
-    if judge_initialize(record, expected_request_id=expected_request_id,
-                        selected_plan=selected_plan) is not ClaudeInitializeVerdict.MODE_MISMATCH:
-        return False
-    try:
-        value = parse_json_value(record[:-1].decode("utf-8"))
-    except (ValueError, UnicodeError, RecursionError):
-        return False
-    if type(value) is not dict or type(value.get("response")) is not dict:
-        return False
-    envelope = value["response"]
-    if type(envelope.get("response")) is not dict:
-        return False
-    account = envelope["response"].get("account")
-    if type(account) is not dict:
-        return False
-    fields = {"apiProvider", "subscriptionType", "email", "organization"}
-    return (set(account) <= fields
-            and account.get("apiProvider") == "firstParty"
-            and account.get("subscriptionType") == "Claude API"
-            and all(type(item) is str for item in account.values()))
+    _, reason = classify_initialize(
+        record, expected_request_id=expected_request_id, selected_plan=selected_plan,
+    )
+    return reason is ClaudeModeMismatchReason.AMBIGUOUS_API
 
 
 class ClaudeMaintenanceConversation:
@@ -140,6 +135,8 @@ class ClaudeMaintenanceConversation:
         self.deadline = deadline
         self._state: Literal["new", "running", "completed", "refused"] = "new"
         self.mode_verdict: ClaudeInitializeVerdict | None = None
+        self.mode_mismatch_reason: ClaudeModeMismatchReason | None = None
+        self.classified_responses = 0
         self.request_writes = self.ui_records = self.input_bytes = self.output_bytes = 0
         self.stdin_closed = self.eof = False
         self._buffer = bytearray()
@@ -223,16 +220,15 @@ class ClaudeMaintenanceConversation:
             record = await self._next()
             if self._ui(record):
                 continue
-            self.mode_verdict = judge_initialize(
+            self.mode_verdict, self.mode_mismatch_reason = classify_initialize(
                 record, expected_request_id=identifier, selected_plan=self.plan,
             )
+            self.classified_responses += 1
             received_at = _monotonic()
             if self.mode_verdict is ClaudeInitializeVerdict.MODE_MATCH:
                 return True, received_at
             if (self.phase is ClaudeMaintenancePhase.OBSERVE and self.request_writes == 1
-                    and exact_ambiguous_api_mode(
-                        record, expected_request_id=identifier, selected_plan=self.plan,
-                    )):
+                    and self.mode_mismatch_reason is ClaudeModeMismatchReason.AMBIGUOUS_API):
                 return False, received_at
             raise _Refused()
 
@@ -406,4 +402,6 @@ async def observe_maintenance_mode(
     return ClaudeMaintenanceObservation(
         phase, conversation.mode_verdict, lifecycle, conversation.request_writes,
         conversation.ui_records, conversation.stdin_closed, conversation.eof,
+        conversation.mode_mismatch_reason,
+        conversation.classified_responses,
     )
