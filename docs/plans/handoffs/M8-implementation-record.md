@@ -13,6 +13,37 @@ From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-
 and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
 subscription route; see the dated section at the end of this record.
 
+## Claude maintenance mismatch diagnostic (Refs #40)
+
+The October 23 private continuation independently validated the completed
+login lifecycle, fresh host prerequisites and installed artifacts, then
+stopped at a fresh observation's `mode-mismatch`. Two writes establish that
+the first reply matched the observer's exact ambiguous Claude API predicate;
+the retained verdict does not prove that a second response was classified,
+let alone why it mismatched. An earlier report asserted a second mismatch from
+the write count; source review refuted that premise because a write/read
+failure can leave the first verdict intact. The new classified-response count
+records that missing fact affirmatively rather than inferring it from writes.
+The VM was parked and positively observed off, with the store preserved.
+No reload, qualification, publication or model dispatch followed.
+
+The bounded follow-up design is [M8-N6-mode-diagnostic.md](M8-N6-mode-diagnostic.md).
+Independent pre-implementation review accepted one shared classification with
+seven closed reasons, a bounded classified-response count, the unchanged public
+mode verdict, and schema 2 for new evidence. Reasons replace together with
+their response's verdict and classification count, not at write time. A reason
+never supplies account authority or weakens a mode refusal.
+Historical evidence and accepted plan bytes remain unchanged.
+
+The narrower two-category alternative was considered and rejected: it could
+leave another live refusal without an actionable category. Conversely, a new
+generation-floor readback was unnecessary: existing publication checks a
+proposed next generation under its retained lock. Neither extra store reads
+nor a retry are justified by the missing historical floor field.
+
+Implementation and verification results belong to this slice's exact head;
+this design entry itself establishes no new live authentication or READ.
+
 ## Claude private staging execution — 2026-10-22 (Refs #283)
 
 PR #287 merged as `04857489a6388e6cfde4619cadb903514fbcc764`, with a

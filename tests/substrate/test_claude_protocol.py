@@ -44,6 +44,72 @@ def test_selected_plan_permits_exact_current_initialize(plan):
     selected = protocol.ClaudePlan[plan]
     result = judge(wire(reply(selected.value)), selected)
     assert result is protocol.ClaudeInitializeVerdict.MODE_MATCH
+    assert protocol.classify_initialize(
+        wire(reply(selected.value)), expected_request_id="initialize-1", selected_plan=selected,
+    ) == (result, None)
+
+
+@pytest.mark.parametrize("plan", list(protocol.ClaudePlan))
+@pytest.mark.parametrize("account,expected", [
+    (None, "ACCOUNT_SHAPE"),
+    ([], "ACCOUNT_SHAPE"),
+    ({"private-field": "private-value", "tokenSource": None}, "UNSUPPORTED_ACCOUNT_FIELD"),
+    ({"tokenSource": None}, "CREDENTIAL_SOURCE_PRESENT"),
+    ({"apiKeySource": "private-source"}, "CREDENTIAL_SOURCE_PRESENT"),
+    ({"apiProvider": "private-provider", "email": None}, "ACCOUNT_VALUE_TYPE"),
+    ({"apiProvider": "private-provider", "subscriptionType": "Claude API"}, "PROVIDER_MISMATCH"),
+    ({"subscriptionType": "Claude API"}, "PROVIDER_MISMATCH"),
+    ({"apiProvider": "firstParty"}, "SUBSCRIPTION_MISMATCH"),
+    ({"apiProvider": "firstParty", "subscriptionType": "private-plan"}, "SUBSCRIPTION_MISMATCH"),
+    ({"apiProvider": "firstParty", "subscriptionType": "Claude API",
+      "email": "private-identity", "organization": "private-organization"}, "AMBIGUOUS_API"),
+])
+def test_shared_classifier_preserves_refusal_categories_and_precedence(plan, account, expected):
+    value = reply()
+    value["response"]["response"]["account"] = account
+    raw = wire(value)
+    result = protocol.classify_initialize(
+        raw, expected_request_id="initialize-1", selected_plan=plan,
+    )
+    assert result == (protocol.ClaudeInitializeVerdict.MODE_MISMATCH,
+                      protocol.ClaudeModeMismatchReason[expected])
+    assert judge(raw, plan) is result[0]
+    assert "private" not in repr(result)
+
+
+@pytest.mark.parametrize("damage,expected", [
+    ("record", "RECORD_INVALID"), ("response", "RESPONSE_INVALID"),
+    ("request", "REQUEST_MISMATCH"), ("error", "INITIALIZE_ERROR"),
+    ("pending", "INITIALIZE_BUSY"), ("version", "RESPONSE_INVALID"),
+    ("state", "INITIALIZE_BUSY"), ("bound", "RECORD_TOO_LARGE"),
+])
+def test_non_mode_refusals_never_publish_account_reason(damage, expected):
+    value = reply("Claude API")
+    envelope = value["response"]
+    if damage == "response":
+        value["private-field"] = "private-value"
+    elif damage == "request":
+        envelope["request_id"] = "private-id"
+    elif damage == "error":
+        value["response"] = {"subtype": "error", "request_id": "initialize-1",
+                             "error": "private-error"}
+    elif damage == "pending":
+        envelope["pending_user_dialog_requests"] = [{"prompt": "private-prompt"}]
+    elif damage == "version":
+        envelope["response"]["claude_code_version"] = "private-version"
+    elif damage == "state":
+        envelope["response"]["session_state"] = "running"
+    raw = wire(value)
+    if damage == "record":
+        raw = raw[:-1]
+    elif damage == "bound":
+        raw = b" " * protocol.RECORD_BYTES + raw
+    result = protocol.classify_initialize(
+        raw, expected_request_id="initialize-1", selected_plan=protocol.ClaudePlan.PRO,
+    )
+    assert result == (protocol.ClaudeInitializeVerdict[expected], None)
+    assert judge(raw) is result[0]
+    assert "private" not in repr(result)
 
 
 def test_request_is_only_documented_bare_initialize_and_lf():

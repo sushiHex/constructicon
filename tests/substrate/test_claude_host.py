@@ -27,7 +27,7 @@ def case(tmp_path):
     )
     launcher = config.launcher(ClaudeMaintenanceSessionPhase.OBSERVE)
     record = {
-        "schema_version": 1, "completed": True,
+        "schema_version": claude_lane.EVIDENCE_SCHEMA, "completed": True,
         "subscription_qualified": False, "production_available": False,
         "qualification_revision": str(claude_lane.qualification_revision()),
         "facts": {

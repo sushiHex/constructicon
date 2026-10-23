@@ -36,6 +36,16 @@ class ClaudeInitializeVerdict(StrEnum):
     MODE_MISMATCH = "mode-mismatch"
 
 
+class ClaudeModeMismatchReason(StrEnum):
+    ACCOUNT_SHAPE = "account-shape"
+    UNSUPPORTED_ACCOUNT_FIELD = "unsupported-account-field"
+    CREDENTIAL_SOURCE_PRESENT = "credential-source-present"
+    ACCOUNT_VALUE_TYPE = "account-value-type"
+    PROVIDER_MISMATCH = "provider-mismatch"
+    AMBIGUOUS_API = "ambiguous-api"
+    SUBSCRIPTION_MISMATCH = "subscription-mismatch"
+
+
 def _require_id(value: str) -> None:
     if type(value) is not str or not value:
         raise ValueError("invalid initialize request id")
@@ -56,9 +66,9 @@ def initialize_request(request_id: str) -> bytes:
     return record
 
 
-def judge_initialize(
+def _classify_initialize(
     record: bytes, *, expected_request_id: str, selected_plan: ClaudePlan
-) -> ClaudeInitializeVerdict:
+) -> ClaudeInitializeVerdict | ClaudeModeMismatchReason:
     """Return one finite mode verdict, never the vendor's fields or exceptions.
 
     This accepts a complete LF-terminated record, not arbitrary ProcessIO chunks.
@@ -120,18 +130,43 @@ def judge_initialize(
     if body["session_state"] != "idle":
         return verdict.INITIALIZE_BUSY
     account = body["account"]
+    reason = ClaudeModeMismatchReason
     if type(account) is not dict:
-        return verdict.MODE_MISMATCH
+        return reason.ACCOUNT_SHAPE
     fields = {"apiProvider", "subscriptionType", "email", "organization",
               "tokenSource", "apiKeySource"}
     if not set(account) <= fields:
-        return verdict.MODE_MISMATCH
+        return reason.UNSUPPORTED_ACCOUNT_FIELD
     if "tokenSource" in account or "apiKeySource" in account:
-        return verdict.MODE_MISMATCH
+        return reason.CREDENTIAL_SOURCE_PRESENT
     if any(type(item) is not str for item in account.values()):
-        return verdict.MODE_MISMATCH
+        return reason.ACCOUNT_VALUE_TYPE
     if account.get("apiProvider") != "firstParty":
-        return verdict.MODE_MISMATCH
+        return reason.PROVIDER_MISMATCH
     if account.get("subscriptionType") != selected_plan.value:
-        return verdict.MODE_MISMATCH
+        if account.get("subscriptionType") == "Claude API":
+            return reason.AMBIGUOUS_API
+        return reason.SUBSCRIPTION_MISMATCH
     return verdict.MODE_MATCH
+
+
+def classify_initialize(
+    record: bytes, *, expected_request_id: str, selected_plan: ClaudePlan,
+) -> tuple[ClaudeInitializeVerdict, ClaudeModeMismatchReason | None]:
+    """Classify once, retaining only a closed reported-mode mismatch reason."""
+    result = _classify_initialize(
+        record, expected_request_id=expected_request_id, selected_plan=selected_plan,
+    )
+    if isinstance(result, ClaudeModeMismatchReason):
+        return ClaudeInitializeVerdict.MODE_MISMATCH, result
+    return result, None
+
+
+def judge_initialize(
+    record: bytes, *, expected_request_id: str, selected_plan: ClaudePlan,
+) -> ClaudeInitializeVerdict:
+    """Preserve the original finite verdict projection, without account data."""
+    verdict, _ = classify_initialize(
+        record, expected_request_id=expected_request_id, selected_plan=selected_plan,
+    )
+    return verdict
