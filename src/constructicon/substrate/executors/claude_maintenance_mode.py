@@ -55,6 +55,27 @@ class ClaudeMaintenanceLifecycle(StrEnum):
     PROCESS_REFUSED = "process-refused"
 
 
+class ClaudeMaintenanceRefusalCode(StrEnum):
+    """First observed guard failure, never inferred from a reply or exception text."""
+
+    STATE = "state"
+    DEADLINE = "deadline"
+    READ_CONTRACT = "read-contract"
+    READ_ERROR = "read-error"
+    READ_UNAVAILABLE = "read-unavailable"
+    OUTPUT_LIMIT = "output-limit"
+    RECORD_LIMIT = "record-limit"
+    RECORD_FORMAT = "record-format"
+    UI_RECORD = "ui-record"
+    UNEXPECTED_RECORD = "unexpected-record"
+    PARTIAL_RECORD = "partial-record"
+    EOF = "eof"
+    WRITE_LIMIT = "write-limit"
+    REQUEST_ID_REUSE = "request-id-reuse"
+    INPUT_LIMIT = "input-limit"
+    RESPONSE_VERDICT = "response-verdict"
+
+
 @dataclass(frozen=True, slots=True)
 class ClaudeMaintenanceObservation:
     phase: ClaudeMaintenancePhase
@@ -66,6 +87,7 @@ class ClaudeMaintenanceObservation:
     eof: bool
     mode_mismatch_reason: ClaudeModeMismatchReason | None = None
     classified_responses: int | None = None
+    refusal_code: ClaudeMaintenanceRefusalCode | None = None
 
     def __post_init__(self) -> None:
         if (type(self.phase) is not ClaudeMaintenancePhase
@@ -85,12 +107,15 @@ class ClaudeMaintenanceObservation:
                          or (self.classified_responses > 0) != (self.mode_verdict is not None)))
                 or (self.mode_mismatch_reason is not None
                     and self.classified_responses is None)
+                or (self.refusal_code is not None
+                    and type(self.refusal_code) is not ClaudeMaintenanceRefusalCode)
                 or type(self.ui_records) is not int or not 0 <= self.ui_records <= UI_RECORDS
                 or type(self.stdin_closed) is not bool or type(self.eof) is not bool):
             raise ValueError("invalid Claude maintenance observation")
         if (self.lifecycle is ClaudeMaintenanceLifecycle.OBSERVED
                 and (self.mode_verdict is not ClaudeInitializeVerdict.MODE_MATCH
-                     or not self.request_writes or not self.stdin_closed or not self.eof)):
+                     or not self.request_writes or not self.stdin_closed or not self.eof
+                     or self.refusal_code is not None)):
             raise ValueError("observed maintenance requires joined mode evidence")
 
 
@@ -137,6 +162,7 @@ class ClaudeMaintenanceConversation:
         self.mode_verdict: ClaudeInitializeVerdict | None = None
         self.mode_mismatch_reason: ClaudeModeMismatchReason | None = None
         self.classified_responses = 0
+        self.refusal_code: ClaudeMaintenanceRefusalCode | None = None
         self.request_writes = self.ui_records = self.input_bytes = self.output_bytes = 0
         self.stdin_closed = self.eof = False
         self._buffer = bytearray()
@@ -146,13 +172,19 @@ class ClaudeMaintenanceConversation:
         self._owner: asyncio.Task[None] | None = None
         self._io: ProcessIO | None = None
 
+    def _latch(self, code: ClaudeMaintenanceRefusalCode) -> None:
+        if self.refusal_code is None:
+            self.refusal_code = code
+
     def _check(self) -> None:
         current = asyncio.current_task()
         if current is not None and current.cancelling():
             raise asyncio.CancelledError()
         if self._state != "running":
+            self._latch(ClaudeMaintenanceRefusalCode.STATE)
             raise _Refused()
         if _monotonic() >= self.deadline:
+            self._latch(ClaudeMaintenanceRefusalCode.DEADLINE)
             raise TimeoutError()
 
     def _start_read(self) -> None:
@@ -161,9 +193,11 @@ class ClaudeMaintenanceConversation:
 
     def _receive(self, chunk: bytes) -> None:
         if type(chunk) is not bytes or len(chunk) > 8192:
+            self._latch(ClaudeMaintenanceRefusalCode.READ_CONTRACT)
             raise _Refused()
         self.output_bytes += len(chunk)
         if self.output_bytes > self.output_limit:
+            self._latch(ClaudeMaintenanceRefusalCode.OUTPUT_LIMIT)
             raise _Refused()
         if not chunk:
             self.eof = True
@@ -171,10 +205,12 @@ class ClaudeMaintenanceConversation:
         self._buffer.extend(chunk)
         while (newline := self._buffer.find(b"\n")) >= 0:
             if newline + 1 > RECORD_BYTES:
+                self._latch(ClaudeMaintenanceRefusalCode.RECORD_LIMIT)
                 raise _Refused()
             self._records.append(bytes(self._buffer[:newline + 1]))
             del self._buffer[:newline + 1]
         if len(self._buffer) >= RECORD_BYTES:
+            self._latch(ClaudeMaintenanceRefusalCode.RECORD_LIMIT)
             raise _Refused()
         self._start_read()
 
@@ -182,15 +218,26 @@ class ClaudeMaintenanceConversation:
         self._check()
         while self._reader is not None and self._reader.done():
             reader, self._reader = self._reader, None
-            self._receive(reader.result())
+            try:
+                chunk = reader.result()
+            except Exception:
+                self._latch(ClaudeMaintenanceRefusalCode.READ_ERROR)
+                raise
+            self._receive(chunk)
 
     async def _next(self) -> bytes:
         self._audit()
         while not self._records:
             if self.eof or self._reader is None:
+                self._latch(ClaudeMaintenanceRefusalCode.EOF if self.eof
+                            else ClaudeMaintenanceRefusalCode.READ_UNAVAILABLE)
                 raise _Refused()
             reader = self._reader
-            chunk = await reader
+            try:
+                chunk = await reader
+            except Exception:
+                self._latch(ClaudeMaintenanceRefusalCode.READ_ERROR)
+                raise
             self._reader = None
             self._check()
             self._receive(chunk)
@@ -198,13 +245,16 @@ class ClaudeMaintenanceConversation:
 
     def _ui(self, record: bytes) -> bool:
         if b"\r" in record:
+            self._latch(ClaudeMaintenanceRefusalCode.RECORD_FORMAT)
             raise _Refused()
         try:
             value = parse_json_value(record[:-1].decode("utf-8"))
         except (ValueError, UnicodeError, RecursionError):
+            self._latch(ClaudeMaintenanceRefusalCode.RECORD_FORMAT)
             raise _Refused() from None
         if type(value) is dict and value.get("type") == "system":
             if not exact_ui_invalidate(value) or self.ui_records >= UI_RECORDS:
+                self._latch(ClaudeMaintenanceRefusalCode.UI_RECORD)
                 raise _Refused()
             self.ui_records += 1
             return True
@@ -213,6 +263,7 @@ class ClaudeMaintenanceConversation:
     def _consume_ui_records(self) -> None:
         while self._records:
             if not self._ui(self._records.pop(0)):
+                self._latch(ClaudeMaintenanceRefusalCode.UNEXPECTED_RECORD)
                 raise _Refused()
 
     async def _response(self, identifier: str) -> tuple[bool, float]:
@@ -230,20 +281,27 @@ class ClaudeMaintenanceConversation:
             if (self.phase is ClaudeMaintenancePhase.OBSERVE and self.request_writes == 1
                     and self.mode_mismatch_reason is ClaudeModeMismatchReason.AMBIGUOUS_API):
                 return False, received_at
+            self._latch(ClaudeMaintenanceRefusalCode.RESPONSE_VERDICT)
             raise _Refused()
 
     async def _write(self) -> str:
         self._audit()
         if self._records or self._buffer or self.eof:
+            self._latch(ClaudeMaintenanceRefusalCode.UNEXPECTED_RECORD if self._records else
+                        ClaudeMaintenanceRefusalCode.PARTIAL_RECORD if self._buffer else
+                        ClaudeMaintenanceRefusalCode.EOF)
             raise _Refused()
         if self.request_writes >= (2 if self.phase is ClaudeMaintenancePhase.OBSERVE else 1):
+            self._latch(ClaudeMaintenanceRefusalCode.WRITE_LIMIT)
             raise _Refused()
         identifier = secrets.token_hex(16)
         if identifier in self._ids:
+            self._latch(ClaudeMaintenanceRefusalCode.REQUEST_ID_REUSE)
             raise _Refused()
         raw = initialize_request(identifier)
         proposed_bytes = self.input_bytes + len(raw)
         if proposed_bytes > self.input_limit:
+            self._latch(ClaudeMaintenanceRefusalCode.INPUT_LIMIT)
             raise _Refused()
         self._ids.add(identifier)
         self.request_writes += 1  # Uncertain write attempts remain spent.
@@ -259,6 +317,8 @@ class ClaudeMaintenanceConversation:
             self._audit()
             self._consume_ui_records()  # Duplicate, callback or early reply refuses.
             if self.eof or self._buffer:
+                self._latch(ClaudeMaintenanceRefusalCode.EOF if self.eof
+                            else ClaudeMaintenanceRefusalCode.PARTIAL_RECORD)
                 raise _Refused()
             if _monotonic() >= boundary:
                 self._audit()  # Completed read at the timer edge wins over write.
@@ -276,21 +336,28 @@ class ClaudeMaintenanceConversation:
             self._consume_ui_records()
             if self.eof:
                 if self._buffer:
+                    self._latch(ClaudeMaintenanceRefusalCode.PARTIAL_RECORD)
                     raise _Refused()
                 return
             await self._next_ui()
 
     async def _next_ui(self) -> None:
         if self._reader is None:
+            self._latch(ClaudeMaintenanceRefusalCode.READ_UNAVAILABLE)
             raise _Refused()
         reader = self._reader
-        chunk = await reader
+        try:
+            chunk = await reader
+        except Exception:
+            self._latch(ClaudeMaintenanceRefusalCode.READ_ERROR)
+            raise
         self._reader = None
         self._check()
         self._receive(chunk)
 
     async def __call__(self, io: ProcessIO) -> None:
         if self._state != "new":
+            self._latch(ClaudeMaintenanceRefusalCode.STATE)
             self._state = "refused"
             owner = self._owner
             if owner is not None and owner is not asyncio.current_task() and not owner.done():
@@ -307,10 +374,12 @@ class ClaudeMaintenanceConversation:
                 identifier = await self._write()
                 matched, _ = await self._response(identifier)
             if not matched:
+                self._latch(ClaudeMaintenanceRefusalCode.RESPONSE_VERDICT)
                 raise _Refused()
             self._audit()
             self._consume_ui_records()
             if self.eof:
+                self._latch(ClaudeMaintenanceRefusalCode.EOF)
                 raise _Refused()
             assert self._io is not None
             await self._io.close_stdin()
@@ -404,4 +473,5 @@ async def observe_maintenance_mode(
         conversation.ui_records, conversation.stdin_closed, conversation.eof,
         conversation.mode_mismatch_reason,
         conversation.classified_responses,
+        conversation.refusal_code,
     )

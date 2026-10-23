@@ -27,6 +27,7 @@ from constructicon.substrate.executors.linux import DEFAULT_PROCESS_LIMITS, Proc
 from constructicon.substrate.executors.operator_store import BindingCheck
 
 CLEAN = ProcessResult(0, b"private-output", b"private-error", 0.1, payload_returncode=0)
+Code = maintenance.ClaudeMaintenanceRefusalCode
 
 
 def response(identifier: str, plan: str = "Claude Pro", **account: object) -> bytes:
@@ -161,6 +162,7 @@ async def test_first_positive_mode_closes_drains_and_joins_without_second_write(
     assert report.mode_verdict is ClaudeInitializeVerdict.MODE_MATCH
     assert report.mode_mismatch_reason is None
     assert report.classified_responses == 1
+    assert report.refusal_code is None
     assert report.request_writes == 1 and report.ui_records == 8
     assert report.stdin_closed and report.eof and launcher.joined
     assert channel.max_readers == 1 and len(channel.writes) < count + 1
@@ -424,15 +426,23 @@ def test_exact_ambiguous_shape_is_only_one_narrow_mismatch():
         ), mutation
 
 
-@pytest.mark.parametrize("extra", [response("@ID@", "Claude API"),
-                                     b'{"type":"control_request"}\n', b"partial"])
-async def test_duplicate_callback_or_partial_during_spacing_defeats_second_write(extra):
+@pytest.mark.parametrize("extra,code", [
+    (response("@ID@", "Claude API"), Code.UNEXPECTED_RECORD),
+    (b'{"type":"control_request"}\n', Code.UNEXPECTED_RECORD),
+    (b"partial", Code.PARTIAL_RECORD),
+    (b"private\r\n", Code.RECORD_FORMAT),
+    (b"{private-invalid-json}\n", Code.RECORD_FORMAT),
+    (b'{"type":"system","subtype":"private-unsupported-ui"}\n', Code.UI_RECORD),
+])
+async def test_duplicate_callback_or_partial_during_spacing_defeats_second_write(extra, code):
     channel = Channel([response("@ID@", "Claude API") + extra])
     started = time.monotonic()
     report, _, _ = await observe(channel)
     assert time.monotonic() - started < 1
     assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.REFUSED
     assert report.request_writes == 1
+    assert report.refusal_code is code
+    assert report.classified_responses == 1
 
 
 @pytest.mark.parametrize("extra", [response("@ID@"), b'{"type":"control_request"}\n',
@@ -452,6 +462,7 @@ async def test_ninth_ui_record_refuses_across_prefix_and_tail():
     report, _, _ = await observe(channel)
     assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.REFUSED
     assert report.ui_records == 8 and report.request_writes == 1
+    assert report.refusal_code is Code.UI_RECORD
 
 
 async def test_ninth_ui_record_refuses_inside_conversation_before_report_validation():
@@ -476,6 +487,7 @@ async def test_cumulative_stdout_limit_binds_before_eighth_ui_record():
     report, _, _ = await observe(channel)
     assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.REFUSED
     assert report.ui_records == 5 and report.mode_verdict is None
+    assert report.refusal_code is Code.OUTPUT_LIMIT
 
 
 async def test_record_ceiling_accepts_exact_ui_frame_and_refuses_next_byte():
@@ -493,6 +505,7 @@ async def test_record_ceiling_accepts_exact_ui_frame_and_refuses_next_byte():
     report, _, _ = await observe(Channel([oversized + response("@ID@")], fragment=8191))
     assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.REFUSED
     assert report.ui_records == 0 and report.mode_verdict is None
+    assert report.refusal_code is Code.RECORD_LIMIT
 
 
 async def test_eof_during_spacing_refuses_without_a_second_write():
@@ -508,6 +521,7 @@ async def test_eof_during_spacing_refuses_without_a_second_write():
     assert report.mode_verdict is ClaudeInitializeVerdict.MODE_MISMATCH
     assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.REFUSED
     assert report.request_writes == 1 and not report.stdin_closed and report.eof
+    assert report.refusal_code is Code.EOF
 
 
 async def test_spacing_early_eof_uses_typed_refusal_before_reader_assertion():
@@ -524,6 +538,7 @@ async def test_spacing_early_eof_uses_typed_refusal_before_reader_assertion():
     except BaseException as error:
         caught = error
     assert type(caught) is maintenance._Refused
+    assert callback.refusal_code is Code.EOF
 
 
 @pytest.mark.parametrize("raw", [b"", response("@ID@")[:-1], b"partial-json"])
@@ -538,6 +553,7 @@ async def test_eof_before_complete_first_mode_never_triggers_retry(raw):
     report, _, _ = await observe(channel)
     assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.REFUSED
     assert report.mode_verdict is None and report.request_writes == 1
+    assert report.refusal_code is Code.EOF
     assert len(channel.writes) == 1 and report.eof and not report.stdin_closed
 
 
@@ -552,6 +568,7 @@ async def test_reader_contract_damage_refuses_before_mode_parsing(damage):
     report, _, _ = await observe(DamagedRead([response("@ID@")]))
     assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.REFUSED
     assert report.mode_verdict is None and report.request_writes == 1
+    assert report.refusal_code is Code.READ_CONTRACT
 
 
 async def test_reentry_poison_survives_await_and_cancels_owned_reader():
@@ -695,6 +712,7 @@ async def test_uncertain_write_and_close_failure_never_retry_or_publish_mode():
     assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.REFUSED
     assert report.mode_verdict is None and report.request_writes == 1
     assert len(channel.writes) == 1 and channel.active_readers == 0 and launcher.joined
+    assert report.refusal_code is None
 
     class FailedClose(Channel):
         async def close_stdin(self):
@@ -705,6 +723,7 @@ async def test_uncertain_write_and_close_failure_never_retry_or_publish_mode():
     assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.REFUSED
     assert report.mode_verdict is ClaudeInitializeVerdict.MODE_MATCH
     assert not report.stdin_closed and len(channel.writes) == 1
+    assert report.refusal_code is None
     assert channel.active_readers == 0 and launcher.joined
 
 
@@ -748,6 +767,7 @@ async def test_second_request_needs_a_new_identifier_after_spacing(monkeypatch):
     assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.REFUSED
     assert report.request_writes == 1 and len(channel.writes) == 1
     assert launcher.joined and channel.active_readers == 0
+    assert report.refusal_code is Code.REQUEST_ID_REUSE
 
 
 async def test_input_budget_refuses_before_unattempted_write(monkeypatch):
@@ -755,6 +775,7 @@ async def test_input_budget_refuses_before_unattempted_write(monkeypatch):
     report, _, _ = await observe(first, input_bytes=1)
     assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.REFUSED
     assert report.request_writes == 0 and first.writes == []
+    assert report.refusal_code is Code.INPUT_LIMIT
 
     clock = [0.0]
     monkeypatch.setattr(maintenance, "_monotonic", lambda: clock[0])
@@ -838,6 +859,7 @@ async def test_deadline_expiring_during_write_refuses_before_response(monkeypatc
     report, _, _ = await observe(channel, timeout=5)
     assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.REFUSED
     assert report.request_writes == 1 and len(channel.writes) == 1
+    assert report.refusal_code is Code.DEADLINE
     assert report.mode_verdict is None and not report.stdin_closed
 
 
@@ -870,11 +892,13 @@ async def test_public_report_is_finite_and_contains_no_private_values():
     values = asdict(report)
     assert {field.name for field in fields(report)} == set(values)
     assert set(values) == {"phase", "mode_verdict", "mode_mismatch_reason", "classified_responses",
+                           "refusal_code",
                            "lifecycle", "request_writes",
                            "ui_records", "stdin_closed", "eof"}
     assert all(type(value) in (maintenance.ClaudeMaintenancePhase,
                                ClaudeInitializeVerdict, maintenance.ClaudeMaintenanceLifecycle,
                                ClaudeModeMismatchReason,
+                               Code,
                                bool, int, type(None)) for value in values.values())
     assert 0 <= values["request_writes"] <= 2 and 0 <= values["ui_records"] <= 8
     assert all(len(value.value.encode()) <= 32 for value in values.values()
@@ -891,6 +915,12 @@ async def test_public_report_is_finite_and_contains_no_private_values():
     {"mode_mismatch_reason": ClaudeModeMismatchReason.AMBIGUOUS_API},
     {"classified_responses": True}, {"classified_responses": -1},
     {"classified_responses": 2}, {"classified_responses": 0},
+    {"refusal_code": "private-raw"}, {"refusal_code": True},
+    {"refusal_code": Code.PARTIAL_RECORD},
+    {"lifecycle": maintenance.ClaudeMaintenanceLifecycle.REFUSED, "refusal_code": "private"},
+    {"lifecycle": maintenance.ClaudeMaintenanceLifecycle.REFUSED, "refusal_code": True},
+    {"lifecycle": maintenance.ClaudeMaintenanceLifecycle.REFUSED,
+     "refusal_code": ClaudeModeMismatchReason.AMBIGUOUS_API},
     {"phase": maintenance.ClaudeMaintenancePhase.RELOAD, "request_writes": 2},
 ])
 def test_report_constructor_refuses_unbounded_or_coerced_fields(change):
@@ -901,3 +931,108 @@ def test_report_constructor_refuses_unbounded_or_coerced_fields(change):
     values.update(change)
     with pytest.raises(ValueError):
         maintenance.ClaudeMaintenanceObservation(**values)
+
+
+async def test_read_failure_after_first_ambiguous_reply_is_not_a_second_reply():
+    failure = OSError("private-read-failure")
+
+    class FailedRead(Channel):
+        def __init__(self):
+            super().__init__([response("@ID@", "Claude API")])
+            self.received = False
+            self.waiting, self.release = asyncio.Event(), asyncio.Event()
+
+        async def read(self, maximum=8192):
+            if self.received:
+                self.waiting.set()
+                await self.release.wait()
+                raise failure
+            chunk = await super().read(maximum)
+            self.received = True
+            return chunk
+
+    channel = FailedRead()
+    pending = asyncio.create_task(observe(channel, timeout=120))
+    await asyncio.wait_for(channel.waiting.wait(), 1)
+    channel.release.set()
+    report, launcher, _ = await asyncio.wait_for(pending, 1)
+    assert report.refusal_code is Code.READ_ERROR
+    assert report.mode_mismatch_reason is ClaudeModeMismatchReason.AMBIGUOUS_API
+    assert report.classified_responses == report.request_writes == 1
+    assert report.ui_records == 0 and not report.eof and not report.stdin_closed
+    assert launcher.joined and channel.active_readers == 0
+    assert "private" not in repr(report)
+
+
+async def test_read_failure_before_first_classification_keeps_empty_response_facts():
+    class FailedRead(Channel):
+        async def read(self, maximum=8192):
+            raise OSError("private-before-first-reply")
+
+    report, launcher, _ = await observe(FailedRead([]))
+    assert report.refusal_code is Code.READ_ERROR
+    assert report.mode_verdict is report.mode_mismatch_reason is None
+    assert report.classified_responses == 0 and report.request_writes == 1
+    assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.REFUSED
+    assert launcher.joined and not report.stdin_closed and not report.eof
+
+
+async def test_first_known_refusal_is_not_overwritten_and_exceptions_are_unchanged(monkeypatch):
+    callback = maintenance.ClaudeMaintenanceConversation(
+        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, selected_plan=ClaudePlan.PRO,
+        input_limit=8192, output_limit=512 * 1024, deadline=1.0,
+    )
+    callback._state = "running"
+    with pytest.raises(maintenance._Refused):
+        callback._receive(bytearray(b"private"))
+    assert callback.refusal_code is Code.READ_CONTRACT
+    monkeypatch.setattr(maintenance, "_monotonic", lambda: 2.0)
+    with pytest.raises(TimeoutError):
+        callback._check()
+    assert callback.refusal_code is Code.READ_CONTRACT
+
+    other = maintenance.ClaudeMaintenanceConversation(
+        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, selected_plan=ClaudePlan.PRO,
+        input_limit=8192, output_limit=512 * 1024, deadline=1.0,
+    )
+    other._state = "running"
+    with pytest.raises(TimeoutError):
+        other._check()
+    assert other.refusal_code is Code.DEADLINE
+
+
+@pytest.mark.parametrize("code", [None, *Code])
+def test_refusal_constructor_keeps_legacy_unknown_or_exact_closed_code(code):
+    report = maintenance.ClaudeMaintenanceObservation(
+        maintenance.ClaudeMaintenancePhase.OBSERVE, None,
+        maintenance.ClaudeMaintenanceLifecycle.REFUSED, 0, 0, False, False,
+        refusal_code=code,
+    )
+    assert report.refusal_code is code
+    assert all(len(item.value.encode()) <= 32 for item in Code)
+
+
+@pytest.mark.parametrize("method", ["_audit", "_next", "_next_ui"])
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_read_boundaries_reraise_original_error_and_do_not_label_cancellation(
+    method, cancelled,
+):
+    callback = maintenance.ClaudeMaintenanceConversation(
+        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, selected_plan=ClaudePlan.PRO,
+        input_limit=8192, output_limit=512 * 1024, deadline=maintenance._monotonic() + 5,
+    )
+    callback._state = "running"
+    reader = asyncio.get_running_loop().create_future()
+    callback._reader = reader
+    failure = asyncio.CancelledError("private-cancel") if cancelled else OSError("private-io")
+    if method == "_audit":
+        reader.set_exception(failure)
+    else:
+        asyncio.get_running_loop().call_soon(reader.set_exception, failure)
+    with pytest.raises(type(failure)) as caught:
+        if method == "_audit":
+            callback._audit()
+        else:
+            await getattr(callback, method)()
+    assert caught.value is failure
+    assert callback.refusal_code is (None if cancelled else Code.READ_ERROR)

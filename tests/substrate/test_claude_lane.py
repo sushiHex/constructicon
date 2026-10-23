@@ -25,6 +25,7 @@ from constructicon.substrate.executors.claude_maintenance_mode import (
     ClaudeMaintenanceLifecycle,
     ClaudeMaintenanceObservation,
     ClaudeMaintenancePhase,
+    ClaudeMaintenanceRefusalCode,
 )
 from constructicon.substrate.executors.claude_maintenance_session import (
     ClaudeMaintenanceSessionFacts,
@@ -566,7 +567,7 @@ def test_every_published_field_has_a_declared_finite_bound(tmp_path, phase):
         "launch_revision", "egress", "completed",
     } | ({"qualification_revision"} if phase is ClaudeMaintenanceSessionPhase.QUALIFY else set())
     assert record["completed"] is True
-    assert type(record["schema_version"]) is int and record["schema_version"] == 2
+    assert type(record["schema_version"]) is int and record["schema_version"] == 3
     assert record["subscription_qualified"] is record["production_available"] is False
     for key in ("runtime_digest", "vendor_digest", "launch_revision", *(
         ("qualification_revision",) if phase is ClaudeMaintenanceSessionPhase.QUALIFY else ()
@@ -627,6 +628,7 @@ def test_every_published_field_has_a_declared_finite_bound(tmp_path, phase):
         mode = public["mode"]
         assert set(mode) == {
             "phase", "mode_verdict", "mode_mismatch_reason", "classified_responses",
+            "refusal_code",
             "lifecycle", "request_writes", "ui_records",
             "stdin_closed", "eof",
         }
@@ -636,6 +638,9 @@ def test_every_published_field_has_a_declared_finite_bound(tmp_path, phase):
             item.value for item in ClaudeModeMismatchReason
         } | {None}
         count = mode["classified_responses"]
+        assert mode["refusal_code"] in {
+            code.value for code in ClaudeMaintenanceRefusalCode
+        } | {None}
         assert count is None or (type(count) is int and 0 <= count <= mode["request_writes"])
         assert mode["lifecycle"] in {"observed", "refused", "incomplete", "process-refused"}
         for key in ("stdin_closed", "eof"):
@@ -658,10 +663,28 @@ def test_public_mode_reason_is_only_closed_diagnostic_evidence(reason):
     assert public["mode"]["mode_mismatch_reason"] == (None if reason is None else reason.value)
     assert set(public["mode"]) == {
         "phase", "mode_verdict", "mode_mismatch_reason", "classified_responses", "lifecycle",
+        "refusal_code",
         "request_writes", "ui_records", "stdin_closed", "eof",
     }
     assert len(json.dumps(public)) < 1024
     assert all(len(item.value.encode()) <= 32 for item in ClaudeModeMismatchReason)
+    assert "private" not in json.dumps(public)
+
+
+@pytest.mark.parametrize("code", [None, *ClaudeMaintenanceRefusalCode])
+def test_public_refusal_code_is_only_a_closed_first_guard_not_raw_data(code):
+    original = facts(ClaudeMaintenanceSessionPhase.OBSERVE)
+    mode = replace(original.mode_observation, lifecycle=ClaudeMaintenanceLifecycle.REFUSED,
+                   refusal_code=code)
+    public = claude_lane._public_facts(replace(
+        original, lifecycle=ClaudeMaintenanceSessionLifecycle.REFUSED, mode_observation=mode,
+    ))
+    assert public["mode"]["refusal_code"] == (None if code is None else code.value)
+    assert set(public["mode"]) == {
+        "phase", "mode_verdict", "mode_mismatch_reason", "classified_responses", "refusal_code",
+        "lifecycle", "request_writes", "ui_records", "stdin_closed", "eof",
+    }
+    assert len(json.dumps(public)) < 1024
     assert "private" not in json.dumps(public)
 
 
