@@ -658,6 +658,20 @@ jobs:
                 -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
           ' sh "$PWD" "$M8_EVIDENCE"
           uv run python scripts/check_native_codex_probe_mutations.py
+      - name: Prove common-runtime capture and gate lifecycles
+        if: matrix.lane == 'mediation'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # These proofs own their Git/journal roots and need only the common
+          # runtime/profile, not foundation's provisioned store or relay.
+          sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
+            M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
+            M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
+            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_contained_capture.py \
+              tests/substrate/test_capture_lifecycle.py \
+              tests/substrate/test_contained_gates.py tests/substrate/test_gate_lifecycle.py \
+              -v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider
       - name: Prove containment as the non-sudo service user
         if: matrix.lane == 'foundation'
         shell: bash
@@ -676,15 +690,13 @@ jobs:
               tests/substrate/test_linux_duplex.py tests/substrate/test_process_io.py \
               tests/substrate/test_claude_read_worker.py \
               tests/substrate/test_lifetime.py \
-              tests/substrate/test_contained_capture.py tests/substrate/test_git_pack.py \
-              tests/substrate/test_capture_lifecycle.py \
+              tests/substrate/test_git_pack.py \
               tests/substrate/test_codex_write_capture.py \
               tests/substrate/test_codex_write_restart.py \
               tests/substrate/test_codex_write_recovery.py \
               tests/substrate/test_git_process.py \
               tests/substrate/test_git_executable.py \
               tests/runtime/test_async_workspace.py tests/api/test_capture_assembly.py \
-              tests/substrate/test_contained_gates.py tests/substrate/test_gate_lifecycle.py \
               tests/runtime/test_async_gates.py \
               tests/test_m8_host_runtime.py::test_the_host_writer_reproduces_the_ci_runtime \
               tests/test_m8_host_runtime.py::test_the_loader_list_resolves_as_ldd_does \

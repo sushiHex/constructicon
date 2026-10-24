@@ -112,6 +112,11 @@ PROOFS = {
         "tests/substrate/test_native_codex_mediation.py "
         "scripts/check_native_codex_probe_mutations.py",
     ),
+    "Prove common-runtime capture and gate lifecycles": (
+        "mediation",
+        "tests/substrate/test_contained_capture.py tests/substrate/test_capture_lifecycle.py "
+        "tests/substrate/test_contained_gates.py tests/substrate/test_gate_lifecycle.py",
+    ),
     "Prove containment as the non-sudo service user": (
         "foundation",
         "tests/substrate/test_linux_containment.py tests/substrate/test_contained_workspace.py "
@@ -119,13 +124,11 @@ PROOFS = {
         "tests/substrate/test_recorded_executor.py "
         "tests/substrate/test_linux_duplex.py tests/substrate/test_process_io.py "
         "tests/substrate/test_claude_read_worker.py "
-        "tests/substrate/test_lifetime.py tests/substrate/test_contained_capture.py "
-        "tests/substrate/test_git_pack.py tests/substrate/test_capture_lifecycle.py "
+        "tests/substrate/test_lifetime.py tests/substrate/test_git_pack.py "
         "tests/substrate/test_codex_write_capture.py tests/substrate/test_codex_write_restart.py "
         "tests/substrate/test_codex_write_recovery.py "
         "tests/substrate/test_git_process.py tests/substrate/test_git_executable.py "
         "tests/runtime/test_async_workspace.py tests/api/test_capture_assembly.py "
-        "tests/substrate/test_contained_gates.py tests/substrate/test_gate_lifecycle.py "
         "tests/runtime/test_async_gates.py "
         # Two named parity tests from one file: the host writer and the loader.
         "tests/test_m8_host_runtime.py tests/test_m8_host_runtime.py",
@@ -213,6 +216,20 @@ def test_native_mutants_keep_the_common_runtime_and_unprivileged_context():
     assert "M8_OPERATOR_STORE" not in step and "M8_EGRESS" not in step
     proofs = text.split("\n  proofs:\n", 1)[1].split("\n  containment:\n", 1)[0]
     assert "timeout-minutes: 30" in proofs
+
+
+def test_capture_and_gate_proofs_keep_the_common_runtime_and_unprivileged_context():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    step, = re.findall(
+        r"      - name: Prove common-runtime capture and gate lifecycles\n"
+        r"(.*?)(?=\n      - )", text, re.S,
+    )
+    assert "if: matrix.lane == 'mediation'" in step
+    assert "sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8" in step
+    assert "M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch" in step
+    assert 'M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE"' in step
+    assert "M8_OPERATOR_STORE" not in step and "M8_EGRESS" not in step
+    assert "-v --tb=short --durations=10 --durations-min=0.1 -p no:cacheprovider" in step
 
 
 def test_gate_always_checks_the_selected_proof_set_without_bypass():

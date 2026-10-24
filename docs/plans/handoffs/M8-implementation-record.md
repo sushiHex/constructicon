@@ -9099,3 +9099,18 @@ publishes only the errors field's finite shape: absent, empty, nonempty or
 wrong-type. It never retains error messages or paths. The earlier result did
 not measure that field and receives no retrospective value. This refinement
 changes no request, budget, production predicate or launch setting.
+
+The refined hosted observation at `e75b26c` also reports the errors field
+absent. That is an omitted field, not a positive no-errors claim. Source
+inspection found no demonstrated correction: the inspected safe-mode and
+ownership paths do not suppress admin policy. Ordinary cache invalidation does
+not clear frozen repository tiers, correcting the earlier broad explanation;
+the traced freeze setters snapshot only project/local settings, not policy.
+
+CI at that revision passed all portable tests and all assertions in the final
+foundation group, but foundation exceeded its 30-minute job limit during
+finalization. That cancelled job is not a successful containment gate. Four
+common-runtime capture/gate test files move to the earlier-finishing mediation
+lane, retaining one invocation each and the same service/runtime/evidence
+inputs. Store-dependent recovery stays on foundation. No test, required lane
+or timeout is removed or weakened. Final-head CI must prove the redistribution.
