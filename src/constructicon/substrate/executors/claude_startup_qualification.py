@@ -27,10 +27,11 @@ from constructicon.substrate.executors.claude_protocol import (
     judge_initialize,
 )
 from constructicon.substrate.executors.claude_startup import (
+    ClaudeSettingsMismatchReason,
     ClaudeStartupVerdict,
+    classify_settings,
     hooks_request,
     judge_hooks,
-    judge_settings,
     settings_request,
 )
 
@@ -51,6 +52,7 @@ class ClaudeStartupQualificationFacts:
     ui_records: int
     stdin_closed: bool
     eof: bool
+    settings_mismatch_reason: ClaudeSettingsMismatchReason | None = None
 
     def __post_init__(self) -> None:
         if (type(self.lifecycle) is not ClaudeQualificationLifecycle
@@ -60,6 +62,12 @@ class ClaudeStartupQualificationFacts:
                     and type(self.settings_verdict) is not ClaudeStartupVerdict)
                 or (self.hooks_verdict is not None
                     and type(self.hooks_verdict) is not ClaudeStartupVerdict)
+                or (self.settings_mismatch_reason is not None
+                    and (type(self.settings_mismatch_reason) is not ClaudeSettingsMismatchReason
+                         or self.settings_verdict is not
+                         ClaudeStartupVerdict.CONFIGURATION_MISMATCH))
+                or ((self.settings_verdict is ClaudeStartupVerdict.CONFIGURATION_MISMATCH)
+                    != (self.settings_mismatch_reason is not None))
                 or type(self.request_writes) is not int or not 0 <= self.request_writes <= 3
                 or type(self.ui_records) is not int or not 0 <= self.ui_records <= 8
                 or type(self.stdin_closed) is not bool or type(self.eof) is not bool):
@@ -95,6 +103,7 @@ class ClaudeStartupQualification(ClaudeMaintenanceConversation):
         self._check_control = check_control
         self.initialize_verdict: ClaudeInitializeVerdict | None = None
         self.settings_verdict: ClaudeStartupVerdict | None = None
+        self.settings_mismatch_reason: ClaudeSettingsMismatchReason | None = None
         self.hooks_verdict: ClaudeStartupVerdict | None = None
 
     def _check(self) -> None:
@@ -110,7 +119,7 @@ class ClaudeStartupQualification(ClaudeMaintenanceConversation):
         return ClaudeStartupQualificationFacts(
             lifecycle, self.initialize_verdict, self.settings_verdict,
             self.hooks_verdict, self.request_writes, self.ui_records,
-            self.stdin_closed, self.eof,
+            self.stdin_closed, self.eof, self.settings_mismatch_reason,
         )
 
     async def _write_control(self, kind: str) -> str:
@@ -147,7 +156,7 @@ class ClaudeStartupQualification(ClaudeMaintenanceConversation):
                 if self.initialize_verdict is not ClaudeInitializeVerdict.MODE_MATCH:
                     raise _Refused()
             elif kind == "get_settings":
-                self.settings_verdict = judge_settings(
+                self.settings_verdict, self.settings_mismatch_reason = classify_settings(
                     record, expected_request_id=identifier,
                     model=self.model, effort=self.effort,
                 )

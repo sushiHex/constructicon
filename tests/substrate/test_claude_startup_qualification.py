@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 
 import pytest
 
 from constructicon.core.errors import ContractViolation
 from constructicon.substrate.executors.claude_maintenance_mode import _Refused as _ModeRefused
 from constructicon.substrate.executors.claude_protocol import ClaudePlan
+from constructicon.substrate.executors.claude_startup import (
+    ClaudeSettingsMismatchReason,
+    ClaudeStartupVerdict,
+)
 from constructicon.substrate.executors.claude_startup_qualification import (
     ClaudeQualificationLifecycle,
     ClaudeStartupQualification,
@@ -108,6 +113,7 @@ async def test_three_observations_accept_without_dispatch() -> None:
     assert channel.writes == ["initialize", "get_settings", "get_hooks_listing"]
     facts = conversation.facts
     assert facts.lifecycle is ClaudeQualificationLifecycle.QUALIFIED
+    assert facts.settings_mismatch_reason is None
     assert (facts.request_writes, facts.stdin_closed, facts.eof,
             facts.ui_records) == (3, True, True, 0)
     assert channel.max_readers == 1
@@ -143,6 +149,7 @@ async def test_mode_ambiguity_and_tail_refuse(mode: str, tail: bytes) -> None:
     with pytest.raises((_Refused, _ModeRefused)):
         await conversation(channel)
     assert conversation.facts.lifecycle is ClaudeQualificationLifecycle.REFUSED
+    assert conversation.facts.settings_mismatch_reason is None
     if mode == "Claude API":
         assert channel.writes == ["initialize"]
     else:
@@ -196,6 +203,30 @@ async def test_each_startup_judge_must_match(kind: str) -> None:
         ["get_hooks_listing"] if kind == "get_hooks_listing" else []
     )
     assert conversation.facts.lifecycle is ClaudeQualificationLifecycle.REFUSED
+    assert conversation.facts.settings_mismatch_reason is (
+        ClaudeSettingsMismatchReason.EFFORT_MISMATCH if kind == "get_settings" else None
+    )
+    assert channel.readers == 0
+
+
+def test_incomplete_and_mismatched_settings_reasons_are_truthful():
+    conversation = ClaudeStartupQualification(
+        selected_plan=ClaudePlan.PRO, model="claude-sonnet-4-6", effort="low",
+        input_limit=8192, output_limit=512 * 1024, deadline=10.0,
+    )
+    facts = conversation.facts
+    assert facts.lifecycle is ClaudeQualificationLifecycle.INCOMPLETE
+    assert facts.settings_verdict is facts.settings_mismatch_reason is None
+    refused = replace(
+        facts, lifecycle=ClaudeQualificationLifecycle.REFUSED,
+        settings_verdict=ClaudeStartupVerdict.CONFIGURATION_MISMATCH,
+        settings_mismatch_reason=ClaudeSettingsMismatchReason.EFFORT_MISMATCH,
+    )
+    for change in ({"settings_verdict": None}, {"settings_verdict": ClaudeStartupVerdict.MATCH},
+                   {"settings_mismatch_reason": "effort-mismatch"},
+                   {"settings_mismatch_reason": None}):
+        with pytest.raises(ValueError, match="invalid Claude qualification facts"):
+            replace(refused, **change)
 
 
 @pytest.mark.asyncio
@@ -248,3 +279,23 @@ async def test_reentry_aborts_silent_owner_and_joins_reader() -> None:
             owner.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await owner
+
+
+@pytest.mark.asyncio
+async def test_cleanup_failure_after_matching_settings_never_invents_a_reason():
+    class CloseFailure(Channel):
+        async def close_stdin(self):
+            raise OSError("private-sentinel")
+    channel = CloseFailure()
+    conversation = ClaudeStartupQualification(
+        selected_plan=ClaudePlan.PRO, model="claude-sonnet-4-6", effort="low",
+        input_limit=8192, output_limit=512 * 1024,
+        deadline=asyncio.get_running_loop().time() + 5,
+    )
+    with pytest.raises(OSError):
+        await conversation(channel)
+    assert conversation.facts.lifecycle is ClaudeQualificationLifecycle.REFUSED
+    assert conversation.facts.settings_verdict is ClaudeStartupVerdict.MATCH
+    assert conversation.facts.settings_mismatch_reason is None
+    assert conversation.facts.stdin_closed is False
+    assert channel.readers == 0

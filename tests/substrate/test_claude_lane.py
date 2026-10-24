@@ -38,7 +38,10 @@ from constructicon.substrate.executors.claude_protocol import (
     ClaudeModeMismatchReason,
     ClaudePlan,
 )
-from constructicon.substrate.executors.claude_startup import ClaudeStartupVerdict
+from constructicon.substrate.executors.claude_startup import (
+    ClaudeSettingsMismatchReason,
+    ClaudeStartupVerdict,
+)
 from constructicon.substrate.executors.claude_startup_qualification import (
     ClaudeQualificationLifecycle,
     ClaudeStartupQualificationFacts,
@@ -567,7 +570,7 @@ def test_every_published_field_has_a_declared_finite_bound(tmp_path, phase):
         "launch_revision", "egress", "completed",
     } | ({"qualification_revision"} if phase is ClaudeMaintenanceSessionPhase.QUALIFY else set())
     assert record["completed"] is True
-    assert type(record["schema_version"]) is int and record["schema_version"] == 3
+    assert type(record["schema_version"]) is int and record["schema_version"] == 4
     assert record["subscription_qualified"] is record["production_available"] is False
     for key in ("runtime_digest", "vendor_digest", "launch_revision", *(
         ("qualification_revision",) if phase is ClaudeMaintenanceSessionPhase.QUALIFY else ()
@@ -610,6 +613,7 @@ def test_every_published_field_has_a_declared_finite_bound(tmp_path, phase):
         assert public["login"] is public["mode"] is None
         qual = public["qualification"]
         assert set(qual) == {"lifecycle", "initialize_verdict", "settings_verdict",
+                             "settings_mismatch_reason",
                              "hooks_verdict", "request_writes", "ui_records",
                              "stdin_closed", "eof", "selected_plan", "model", "effort"}
         assert qual["lifecycle"] in {item.value for item in ClaudeQualificationLifecycle}
@@ -618,6 +622,9 @@ def test_every_published_field_has_a_declared_finite_bound(tmp_path, phase):
         } | {None}
         for key in ("settings_verdict", "hooks_verdict"):
             assert qual[key] in {item.value for item in ClaudeStartupVerdict} | {None}
+        assert qual["settings_mismatch_reason"] in {
+            item.value for item in ClaudeSettingsMismatchReason
+        } | {None}
         assert type(qual["request_writes"]) is int and 0 <= qual["request_writes"] <= 3
         assert type(qual["ui_records"]) is int and 0 <= qual["ui_records"] <= 8
         assert type(qual["stdin_closed"]) is type(qual["eof"]) is bool
@@ -717,3 +724,32 @@ async def test_wire_account_data_never_enters_published_mode_fields(account, exp
     assert public["mode"]["classified_responses"] == 1
     assert "private" not in json.dumps(public)
     assert len(json.dumps(public)) < 1024
+
+
+@pytest.mark.parametrize("reason", list(ClaudeSettingsMismatchReason))
+def test_public_qualification_reason_has_only_its_declared_finite_value(tmp_path, reason):
+    path = configuration(tmp_path)
+    config = claude_lane.read_configuration(
+        path, expected_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+    )
+    original = facts(ClaudeMaintenanceSessionPhase.QUALIFY)
+    qualification = replace(
+        original.qualification, lifecycle=ClaudeQualificationLifecycle.REFUSED,
+        settings_verdict=ClaudeStartupVerdict.CONFIGURATION_MISMATCH,
+        settings_mismatch_reason=reason, hooks_verdict=None,
+        request_writes=2, stdin_closed=False, eof=False,
+    )
+    record = claude_lane._record(
+        replace(original, lifecycle=ClaudeMaintenanceSessionLifecycle.REFUSED,
+                qualification=qualification),
+        config.launcher(ClaudeMaintenanceSessionPhase.QUALIFY), config.egress["observe"],
+        config, selected_plan=ClaudePlan.MAX,
+    )
+    public = record["facts"]["qualification"]
+    assert public["settings_mismatch_reason"] == reason.value
+    assert set(public) == {
+        "lifecycle", "initialize_verdict", "settings_verdict", "settings_mismatch_reason",
+        "hooks_verdict", "request_writes", "ui_records", "stdin_closed", "eof",
+        "selected_plan", "model", "effort",
+    }
+    assert len(public["settings_mismatch_reason"]) <= 24

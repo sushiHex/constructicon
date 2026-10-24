@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from constructicon.core.errors import ContractViolation
 from constructicon.core.identity import digest
 from constructicon.substrate.executors import claude_lane
 from constructicon.substrate.executors.claude_maintenance_mode import (
@@ -238,3 +239,118 @@ def test_cli_rejects_missing_or_wrong_selected_plan(tmp_path: Path):
             assert result.returncode == 0
         else:
             assert result.returncode == 1 and result.stdout == b""
+
+
+def refused_qualification(tmp_path, reason="effort-mismatch", process_clean=True):
+    config, evidence, loaded = sample(tmp_path, ClaudeMaintenanceSessionPhase.QUALIFY)
+    record = json.loads(evidence.read_bytes())
+    record["facts"].update(lifecycle="refused", process_clean=process_clean)
+    record["facts"]["qualification"].update(
+        lifecycle="refused", settings_verdict="configuration-mismatch",
+        settings_mismatch_reason=reason, hooks_verdict=None,
+        request_writes=2, stdin_closed=False, eof=False,
+    )
+    evidence.write_text(json.dumps(record), encoding="utf-8")
+    return config, evidence, loaded
+
+
+@pytest.mark.parametrize("reason", list(checker.ClaudeSettingsMismatchReason))
+@pytest.mark.parametrize("process_clean", [True, False])
+def test_refused_qualification_cli_is_finite_and_never_positive(tmp_path, reason, process_clean):
+    config, evidence, loaded = refused_qualification(tmp_path, reason.value, process_clean)
+    result = cli(config, evidence, "qualify", "--selected-plan", "max", "--diagnose-refusal")
+    assert result.returncode == 0 and result.stderr == b""
+    assert json.loads(result.stdout) == {
+        "settings_verdict": "configuration-mismatch", "reason": reason.value,
+        "process_clean": process_clean,
+        "evidence_digest": str(digest(claude_lane.EVIDENCE_DOMAIN, 1,
+                                      json.loads(evidence.read_bytes()))),
+    }
+    with pytest.raises(ContractViolation):
+        checker.validate_phase_evidence(
+            ClaudeMaintenanceSessionPhase.QUALIFY, evidence, loaded, ClaudePlan.MAX,
+        )
+    positive = cli(config, evidence, "qualify", "--selected-plan", "max")
+    assert positive.returncode == 1 and positive.stdout == b""
+
+
+@pytest.mark.parametrize("damage", [
+    "schema3", "missing-reason", "unknown-reason", "null-reason", "reason-with-match",
+    "unknown-verdict", "no-cleanup", "no-custody", "credential-open", "process-unknown",
+    "bad-source-revision", "bad-identity", "bad-count", "missing-initialize", "wrong-plan",
+    "extra", "positive",
+])
+def test_qualification_diagnostic_requires_closed_current_consistent_evidence(tmp_path, damage):
+    config, evidence, _ = refused_qualification(tmp_path)
+    record = json.loads(evidence.read_bytes())
+    facts = record["facts"]
+    qualification = facts["qualification"]
+    if damage == "schema3":
+        record["schema_version"] = 3
+    elif damage == "missing-reason":
+        del qualification["settings_mismatch_reason"]
+    elif damage == "unknown-reason":
+        qualification["settings_mismatch_reason"] = "private-sentinel"
+    elif damage == "null-reason":
+        qualification["settings_mismatch_reason"] = None
+    elif damage == "reason-with-match":
+        qualification["settings_verdict"] = "match"
+    elif damage == "unknown-verdict":
+        qualification["settings_verdict"] = "private-sentinel"
+    elif damage == "no-cleanup":
+        facts["relay_closed"] = False
+    elif damage == "no-custody":
+        facts["custody_current"] = False
+    elif damage == "credential-open":
+        facts["credential_closed"] = False
+    elif damage == "process-unknown":
+        facts["process_clean"] = None
+    elif damage == "bad-source-revision":
+        record["qualification_revision"] = "private-sentinel"
+    elif damage == "bad-identity":
+        record["runtime_digest"] = "private-sentinel"
+    elif damage == "bad-count":
+        qualification["request_writes"] = 0
+    elif damage == "missing-initialize":
+        qualification["initialize_verdict"] = None
+    elif damage == "wrong-plan":
+        qualification["selected_plan"] = "pro"
+    elif damage == "extra":
+        qualification["private-sentinel"] = "secret"
+    else:
+        facts["lifecycle"] = "joined-clean"
+        qualification["lifecycle"] = "qualified"
+    evidence.write_text(json.dumps(record), encoding="utf-8")
+    result = cli(config, evidence, "qualify", "--selected-plan", "max", "--diagnose-refusal")
+    assert result.returncode == 1 and result.stdout == b""
+    assert result.stderr.splitlines() == [b"Claude phase evidence refused"]
+    assert b"private-sentinel" not in result.stderr
+
+
+def test_qualification_diagnostic_keeps_unobserved_settings_absent(tmp_path):
+    config, evidence, _ = refused_qualification(tmp_path)
+    record = json.loads(evidence.read_bytes())
+    record["facts"]["qualification"].update(
+        initialize_verdict=None, settings_verdict=None, settings_mismatch_reason=None,
+        request_writes=1,
+    )
+    evidence.write_text(json.dumps(record), encoding="utf-8")
+    result = cli(config, evidence, "qualify", "--selected-plan", "max", "--diagnose-refusal")
+    assert result.returncode == 0 and result.stderr == b""
+    diagnostic = json.loads(result.stdout)
+    assert diagnostic["settings_verdict"] is diagnostic["reason"] is None
+
+
+
+def test_historical_schema3_qualification_is_preserved_without_invented_reason(tmp_path):
+    config, evidence, _ = refused_qualification(tmp_path)
+    record = json.loads(evidence.read_bytes())
+    record["schema_version"] = 3
+    del record["facts"]["qualification"]["settings_mismatch_reason"]
+    legacy = json.dumps(record, separators=(",", ":")).encode()
+    evidence.write_bytes(legacy)
+    for extra in ((), ("--diagnose-refusal",)):
+        result = cli(config, evidence, "qualify", "--selected-plan", "max", *extra)
+        assert result.returncode == 1 and result.stdout == b""
+        assert result.stderr.splitlines() == [b"Claude phase evidence refused"]
+        assert evidence.read_bytes() == legacy

@@ -301,22 +301,22 @@ STARTUP_MUTANTS = (
     ("startup settings environment values are strings", STARTUP + "_configuration",
      "or any(type(item) is not str for item in env.values())", "or False",
      STARTUP_TEST + "test_policy_mismatches_never_coerce_or_widen"),
-    ("startup sealed model type is exact", STARTUP + "judge_settings",
+    ("startup sealed model type is exact", STARTUP + "_classify_settings",
      "type(model) is not str", "not isinstance(model, str)",
      STARTUP_TEST + "test_sealed_strings_are_exact_types"),
-    ("startup sealed effort type is exact", STARTUP + "judge_settings",
+    ("startup sealed effort type is exact", STARTUP + "_classify_settings",
      "type(effort) is not str", "not isinstance(effort, str)",
      STARTUP_TEST + "test_sealed_strings_are_exact_types"),
-    ("startup applied model is sealed", STARTUP + "judge_settings",
+    ("startup applied model is sealed", STARTUP + "_classify_settings",
      'or applied["model"] != model', "or False",
      STARTUP_TEST + "test_applied_session_state_matches_sealed_expectations"),
-    ("startup applied effort is sealed", STARTUP + "judge_settings",
+    ("startup applied effort is sealed", STARTUP + "_classify_settings",
      'or applied["effort"] != effort', "or False",
      STARTUP_TEST + "test_applied_session_state_matches_sealed_expectations"),
-    ("startup requires actual policy source", STARTUP + "judge_settings",
+    ("startup requires actual policy source", STARTUP + "_classify_settings",
      'if "policySettings" not in seen:', "if False:",
      STARTUP_TEST + "test_sources_cannot_be_invented_or_omitted"),
-    ("startup source names cannot repeat", STARTUP + "judge_settings",
+    ("startup source names cannot repeat", STARTUP + "_classify_settings",
      "or name in seen", "or False",
      STARTUP_TEST + "test_sources_cannot_be_invented_or_omitted"),
     ("startup hooks absence is affirmative", STARTUP + "judge_hooks",
@@ -1825,16 +1825,16 @@ QUALIFIED_READ_MUTANTS = (
      + "test_both_sealed_revisions_name_exact_evidence[store_conformance_revision]"),
     ("startup evidence requires every affirmative fact",
      "constructicon.substrate.executors.claude_host:validate_startup_evidence",
-     "if not all(checks) or type(plan) is not str", "if False or type(plan) is not str",
+     "if not all(checks):", "if False:",
      "tests/substrate/test_claude_host.py::"
      + "test_each_affirmative_fact_is_required_even_when_record_is_sealed"),
     ("startup evidence names current installed inputs",
-     "constructicon.substrate.executors.claude_host:validate_startup_evidence",
+     "constructicon.substrate.executors.claude_host:checked_startup_evidence",
      "if any(record[name] != value for name, value in expected.items()):", "if False:",
      "tests/substrate/test_claude_host.py::"
      + "test_each_affirmative_fact_is_required_even_when_record_is_sealed"),
     ("startup evidence is closed at every depth",
-     "constructicon.substrate.executors.claude_host:validate_startup_evidence",
+     "constructicon.substrate.executors.claude_host:checked_startup_evidence",
      "or set(qualification) != _QUALIFICATION_FIELDS", "or False",
      "tests/substrate/test_claude_host.py::test_new_or_missing_evidence_fields_refuse[qualification]"),
     ("READ fixture binds shared Git configuration",
@@ -1868,6 +1868,17 @@ QUALIFIED_READ_MUTANTS = (
      + "test_a_completed_callback_still_requires_the_fixed_answer"),
 )
 MUTANTS += QUALIFIED_READ_MUTANTS
+
+SETTINGS_REASON_MUTANTS = (
+    ("settings classification retains its finite reason", STARTUP + "classify_settings",
+     "return ClaudeStartupVerdict.CONFIGURATION_MISMATCH, result",
+     "return ClaudeStartupVerdict.CONFIGURATION_MISMATCH, None",
+     STARTUP_TEST + "test_settings_reasons_are_finite_and_keep_the_original_refusal"),
+    ("settings source and effective policy reasons stay distinct", STARTUP + "_classify_settings",
+     "return reason.SOURCE_SETTINGS", "return reason.EFFECTIVE_SETTINGS",
+     STARTUP_TEST + "test_settings_reasons_are_finite_and_keep_the_original_refusal"),
+)
+MUTANTS += SETTINGS_REASON_MUTANTS
 
 if __name__ == "__main__":
     raise SystemExit(run(MUTANTS))

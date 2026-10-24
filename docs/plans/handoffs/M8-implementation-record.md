@@ -8950,3 +8950,51 @@ and [connector review](https://github.com/sushiHex/constructicon/pull/289#issuec
 PR #288 recorded actual unprivileged staging only; it did not perform root
 installation or login. Neither PR establishes live authentication, private
 host installation or a model result.
+
+## Claude settings refusal diagnostics (Refs #40)
+
+The later private-host session independently verified the replaced launch
+runtime and current controller, then passed subscription-mode observation and
+a separate fresh-process reload. Qualification accepted initialization but
+refused the settings response with `configuration-mismatch`. Two requests were
+written; hooks were not reached. The retained schema-3 evidence affirmed closed
+credentials, relay, custody and clean process teardown. No model task or READ
+ran. The outcome is recorded in [#40's session evidence](https://github.com/sushiHex/constructicon/issues/40#issuecomment-6372443223).
+
+A fresh read-only audit verified the official pinned archive SHA-256
+`eef5a2e2b09a5e7d2ce784d1b3ba335ae7fc6c7f6256c802a0ebf2c21e4fd0e1`
+and native member SHA-256
+`24972e3bc859fab2b46ed4c1e51f7d6130f06d3bd550811a114640de3370d0de`.
+The native member was never executed during this audit. At byte offset
+233738416 the settings producer can emit a non-null
+`remote_control_policy_lock_reason`, and can report null applied effort when
+the resolved effort is not a string. Both can be refused by the existing
+recipe; neither proves what occurred live. The six applied-state keys match
+the judge. The effective/source producer at offset 209450024 establishes no
+unconditional extra-key injection. No acceptance change follows this audit.
+
+The diagnostic change follows the existing initialize classifier: one decision
+path produces the unchanged verdict and an optional finite mismatch reason.
+The public verdict-only function remains a projection of that decision. The
+qualification conversation records the reason at classification, before its
+refusal unwinds; cleanup cannot invent or overwrite it. No native values,
+unknown key names or raw settings leave that boundary.
+
+Current evidence and its closed readers advance together to schema 4. The
+positive qualification path requires no mismatch reason. Historical schema-3
+bytes stay historical and are not upgraded or assigned a retrospective cause.
+The existing phase-checker diagnostic path can describe a refused qualification
+without printing a positive receipt or publishing/activating a store.
+
+This is consequential evidence work. Verification is limited locally to the
+affected classifiers, conversation, serialization, readers and mutation guards;
+the selected final-head CI supplies the broad gate. It does not establish a
+new live qualification, identify the old refusal's exact cause, or qualify READ.
+
+Focused local verification passed 332 tests with two platform skips, targeted
+lint and strict typing of the changed source files. All eleven affected or new
+mutants failed by assertion against passing baselines with unchanged source
+snapshots. Independent boundary review found no actionable defect: 127 synthetic
+cases preserved the previous judge's verdicts, and actual CLI checks separated
+positive qualification from refusal diagnostics. These are credential-free
+checks; neither skips nor synthetic evidence count as a live qualification.

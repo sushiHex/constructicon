@@ -16,6 +16,21 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Claude settings refusal is not an observed model mismatch
+
+The private launch replacement passed independent verification, and both
+subscription-mode observation and fresh-process reload passed. Startup
+qualification then accepted initialization but refused the settings response.
+The recorded model and effort were the requested configuration, not observed
+applied settings; they did not identify the failed predicate.
+
+The pinned native response builder has conditional fields that the strict
+recipe can refuse, but source inspection did not prove which condition occurred
+live. Keep the acceptance law unchanged. Settings diagnostics must come from
+the same classifier, use only finite reasons, and never retain native values or
+unknown key names. New evidence is schema 4; schema-3 records remain historical
+and receive no invented explanation. A diagnostic receipt is not qualification.
+
 ## A process read is not a complete Claude UI record
 
 The schema-3 live diagnostic identified `partial-record` after one ambiguous

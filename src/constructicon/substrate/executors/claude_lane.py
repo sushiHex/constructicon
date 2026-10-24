@@ -67,7 +67,7 @@ from constructicon.substrate.executors.linux import BWRAP_SHA256, LinuxLauncher,
 from constructicon.substrate.executors.operator_store import inherit_maintenance
 
 EVIDENCE_DOMAIN = "claude-maintenance-entry-evidence"
-EVIDENCE_SCHEMA = 3
+EVIDENCE_SCHEMA = 4
 CONFIG_BYTES = 8 * 1024
 _HEX = re.compile(r"[0-9a-f]{64}\Z")
 _PHASE_HOSTS = {
@@ -305,6 +305,9 @@ def _public_facts(
             "settings_verdict": (None if qualification is None
                                  or qualification.settings_verdict is None
                                  else qualification.settings_verdict.value),
+            "settings_mismatch_reason": (None if qualification is None
+                                         or qualification.settings_mismatch_reason is None
+                                         else qualification.settings_mismatch_reason.value),
             "hooks_verdict": (None if qualification is None
                               or qualification.hooks_verdict is None
                               else qualification.hooks_verdict.value),
