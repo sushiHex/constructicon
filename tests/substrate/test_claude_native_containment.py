@@ -168,7 +168,7 @@ async def test_final_transition_noexec_bootstrap_protection_and_fake_persistence
         # The launcher admits this callback only after its trusted PID 1's
         # private observation of the exact final label and no_new_privs.
         admitted.append(True)
-        await io.write(b"ping\n")
+        await io.write(b"ping\n" + json.dumps(recipe.policy, sort_keys=True).encode() + b"\n")
         await io.close_stdin()
         while chunk := await io.read():
             output.extend(chunk)
@@ -206,7 +206,8 @@ async def test_final_transition_noexec_bootstrap_protection_and_fake_persistence
             "credential-initial": "fake-initial",
             "credential-rename": str(errno.EBUSY),
             "credential-fallback": "written-synced-chmod",
-            "policy-write": str(errno.EROFS), "direct-network": str(errno.ENETUNREACH),
+            "policy-content": "exact", "policy-write": str(errno.EROFS),
+            "direct-network": str(errno.ENETUNREACH),
             "bridge-exchange": "pong",
         }
         assert facts == expected

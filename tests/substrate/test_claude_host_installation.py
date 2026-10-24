@@ -175,7 +175,8 @@ async def test_verified_install_launches_joined_fake_peer(
     async def conversation(io: object) -> None:
         nonlocal admitted
         admitted = True
-        await io.write(b"ping\n")
+        policy = ClaudeNativeRecipe.STREAM_JSON.policy
+        await io.write(b"ping\n" + json.dumps(policy, sort_keys=True).encode() + b"\n")
         await io.close_stdin()
         while chunk := await io.read():
             output.extend(chunk)
@@ -193,6 +194,7 @@ async def test_verified_install_launches_joined_fake_peer(
         assert received == [b"bridge-ping\n"]
         assert admitted and result.returncode == result.payload_returncode == 0
         assert result.stderr == b"" and bytes(output) == result.stdout
+        assert b"policy-content:exact\n" in result.stdout
         assert f"final-label:{CLAUDE_PROFILE}\n".encode() in result.stdout
         assert credential.read_bytes() == b"fake-refreshed\n"
     # The installed artifact and proof scope are physical; the archive member
