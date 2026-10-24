@@ -570,7 +570,7 @@ def test_every_published_field_has_a_declared_finite_bound(tmp_path, phase):
         "launch_revision", "egress", "completed",
     } | ({"qualification_revision"} if phase is ClaudeMaintenanceSessionPhase.QUALIFY else set())
     assert record["completed"] is True
-    assert type(record["schema_version"]) is int and record["schema_version"] == 4
+    assert type(record["schema_version"]) is int and record["schema_version"] == 5
     assert record["subscription_qualified"] is record["production_available"] is False
     for key in ("runtime_digest", "vendor_digest", "launch_revision", *(
         ("qualification_revision",) if phase is ClaudeMaintenanceSessionPhase.QUALIFY else ()

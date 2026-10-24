@@ -18,6 +18,18 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ## Claude settings refusal is not an observed model mismatch
 
+The subsequent controller installation and one qualification acquisition
+identified `effective-settings`, with initialization mode accepted and cleanup
+affirmed. Independent pinned-source checks found no demonstrated loader-path,
+settings-override or required-key-filtering defect. The prepared policy passing
+the judge does not prove the native process emitted that same effective policy.
+
+Predicate-level diagnostics therefore refine the existing decision path without
+relaxing it. Current evidence advances to schema 5; schema-4 records keep their
+coarse historical meaning. New reasons contain only fixed categories, never
+native values or unknown key names. A diagnostic refusal still cannot qualify
+or activate a store, and this change alone establishes no live READ.
+
 The private launch replacement passed independent verification, and both
 subscription-mode observation and fresh-process reload passed. Startup
 qualification then accepted initialization but refused the settings response.
@@ -28,8 +40,9 @@ The pinned native response builder has conditional fields that the strict
 recipe can refuse, but source inspection did not prove which condition occurred
 live. Keep the acceptance law unchanged. Settings diagnostics must come from
 the same classifier, use only finite reasons, and never retain native values or
-unknown key names. New evidence is schema 4; schema-3 records remain historical
-and receive no invented explanation. A diagnostic receipt is not qualification.
+unknown key names. That first diagnostic introduced schema 4; schema-3 records
+remain historical and receive no invented explanation. A diagnostic receipt is
+not qualification.
 
 ## A process read is not a complete Claude UI record
 
