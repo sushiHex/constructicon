@@ -1,4 +1,4 @@
-"""Closed schema-3 Claude phase evidence checker; no login or dispatch authority.
+"""Closed schema-4 Claude phase evidence checker; no login or dispatch authority.
 
 Positive phase validation and observer-refusal diagnosis are separate CLI actions.
 The selected plan for observe/reload remains a reviewed-command input, not an
@@ -16,7 +16,10 @@ from typing import NoReturn
 
 from constructicon.core.identity import Digest, digest
 from constructicon.substrate.executors import claude_lane
-from constructicon.substrate.executors.claude_host import validate_startup_evidence
+from constructicon.substrate.executors.claude_host import (
+    checked_startup_evidence,
+    validate_startup_evidence,
+)
 from constructicon.substrate.executors.claude_lane import LaneConfiguration
 from constructicon.substrate.executors.claude_maintenance_mode import (
     ClaudeMaintenanceRefusalCode,
@@ -29,10 +32,14 @@ from constructicon.substrate.executors.claude_protocol import (
     ClaudeModeMismatchReason,
     ClaudePlan,
 )
+from constructicon.substrate.executors.claude_startup import (
+    ClaudeSettingsMismatchReason,
+    ClaudeStartupVerdict,
+)
 from constructicon.substrate.executors.codex_host import _evidence
 from constructicon.substrate.executors.egress import identity_digests
 
-CHECKER_SCHEMA = 3
+CHECKER_SCHEMA = 4
 _RECORD_FIELDS = frozenset({
     "schema_version", "subscription_qualified", "production_available", "facts",
     "runtime_digest", "vendor_digest", "launch_policy_sha256", "launch_config_sha256",
@@ -177,6 +184,40 @@ class RefusedModeDiagnostic:
     evidence_digest: Digest
 
 
+@dataclass(frozen=True, slots=True)
+class RefusedQualificationDiagnostic:
+    settings_verdict: ClaudeStartupVerdict | None
+    reason: ClaudeSettingsMismatchReason | None
+    process_clean: bool
+    evidence_digest: Digest
+
+
+def diagnose_refused_qualification(
+    evidence: Path, configuration: LaneConfiguration, selected_plan: ClaudePlan,
+) -> RefusedQualificationDiagnostic:
+    """Expose only a checked finite refusal, never a positive phase receipt."""
+    try:
+        _arguments(ClaudeMaintenanceSessionPhase.QUALIFY, evidence, configuration, selected_plan)
+        record, revision = checked_startup_evidence(evidence, configuration)
+        facts = record["facts"]
+        qualification = facts["qualification"]
+        _require(facts["lifecycle"] == "refused"
+                 and qualification["lifecycle"] == "refused"
+                 and qualification["selected_plan"] == (
+                     "pro" if selected_plan is ClaudePlan.PRO else "max"
+                 ))
+        verdict = qualification["settings_verdict"]
+        reason = qualification["settings_mismatch_reason"]
+        return RefusedQualificationDiagnostic(
+            None if verdict is None else ClaudeStartupVerdict(verdict),
+            None if reason is None else ClaudeSettingsMismatchReason(reason),
+            facts["process_clean"], revision,
+        )
+    except Exception:
+        pass
+    raise _Refused()
+
+
 def diagnose_refused_mode(
     phase: ClaudeMaintenanceSessionPhase, evidence: Path,
     configuration: LaneConfiguration, selected_plan: ClaudePlan,
@@ -231,6 +272,16 @@ def main(argv: list[str] | None = None) -> int:
             options.config, expected_sha256=options.config_sha256,
         )
         if options.diagnose_refusal:
+            if phase is ClaudeMaintenanceSessionPhase.QUALIFY:
+                startup = diagnose_refused_qualification(options.evidence, configuration, plan)
+                print(json.dumps({
+                    "settings_verdict": (None if startup.settings_verdict is None
+                                         else startup.settings_verdict.value),
+                    "reason": None if startup.reason is None else startup.reason.value,
+                    "process_clean": startup.process_clean,
+                    "evidence_digest": str(startup.evidence_digest),
+                }, sort_keys=True, separators=(",", ":")))
+                return 0
             diagnostic = diagnose_refused_mode(phase, options.evidence, configuration, plan)
             print(json.dumps({
                 "mode_verdict": (None if diagnostic.mode_verdict is None

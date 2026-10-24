@@ -51,6 +51,21 @@ class ClaudeStartupVerdict(StrEnum):
     CONFIGURATION_MISMATCH = "configuration-mismatch"
 
 
+class ClaudeSettingsMismatchReason(StrEnum):
+    BODY_FIELDS = "body-fields"
+    REPORTED_ERRORS = "reported-errors"
+    EFFECTIVE_SETTINGS = "effective-settings"
+    SOURCE_LIST = "source-list"
+    SOURCE_ENTRY = "source-entry"
+    SOURCE_NAME = "source-name"
+    SOURCE_SETTINGS = "source-settings"
+    POLICY_SOURCE_MISSING = "policy-source-missing"
+    APPLIED_FIELDS = "applied-fields"
+    MODEL_MISMATCH = "model-mismatch"
+    EFFORT_MISMATCH = "effort-mismatch"
+    APPLIED_OPTIONS = "applied-options"
+
+
 def fixed_environment() -> dict[str, str]:
     """Fresh nonlocator controls; assembly separately seals locators and argv."""
     return {**dict.fromkeys(_EMPTY_ENV, ""),
@@ -140,9 +155,9 @@ def _configuration(value: object, *, require_policy: bool) -> bool:
     return True
 
 
-def judge_settings(
+def _classify_settings(
     record: bytes, *, expected_request_id: str, model: str, effort: str,
-) -> ClaudeStartupVerdict:
+) -> ClaudeStartupVerdict | ClaudeSettingsMismatchReason:
     """Judge emitted current settings, not effective process env or hook caches."""
     if (type(model) is not str or _MODEL.fullmatch(model) is None
             or type(effort) is not str or effort not in _EFFORTS):
@@ -150,37 +165,64 @@ def judge_settings(
     body = _body(record, expected_request_id)
     if isinstance(body, ClaudeStartupVerdict):
         return body
-    mismatch = ClaudeStartupVerdict.CONFIGURATION_MISMATCH
+    reason = ClaudeSettingsMismatchReason
     if (not {"effective", "sources", "applied"} <= set(body)
-            or not set(body) <= {"effective", "sources", "applied", "errors"}
-            or ("errors" in body and body["errors"] != [])
-            or not _configuration(body["effective"], require_policy=True)):
-        return mismatch
+            or not set(body) <= {"effective", "sources", "applied", "errors"}):
+        return reason.BODY_FIELDS
+    if "errors" in body and body["errors"] != []:
+        return reason.REPORTED_ERRORS
+    if not _configuration(body["effective"], require_policy=True):
+        return reason.EFFECTIVE_SETTINGS
     sources = body["sources"]
     if type(sources) is not list or not 1 <= len(sources) <= len(_SOURCES):
-        return mismatch
+        return reason.SOURCE_LIST
     seen: set[str] = set()
     for source in sources:
         if type(source) is not dict or set(source) != {"source", "settings"}:
-            return mismatch
+            return reason.SOURCE_ENTRY
         name = source["source"]
         if type(name) is not str or name not in _SOURCES or name in seen:
-            return mismatch
+            return reason.SOURCE_NAME
         seen.add(name)
         if not _configuration(source["settings"], require_policy=name == "policySettings"):
-            return mismatch
+            return reason.SOURCE_SETTINGS
     if "policySettings" not in seen:
-        return mismatch
+        return reason.POLICY_SOURCE_MISSING
     applied = body["applied"]
     if (type(applied) is not dict or set(applied) != {
-            "model", "effort", "advisor", "ultracode", "ultracodeRequested", "ultracodeAvailable"}
-            or type(applied["model"]) is not str or applied["model"] != model
-            or type(applied["effort"]) is not str or applied["effort"] != effort
-            or applied["advisor"] is not None or applied["ultracode"] is not False
+            "model", "effort", "advisor", "ultracode", "ultracodeRequested", "ultracodeAvailable"}):
+        return reason.APPLIED_FIELDS
+    if type(applied["model"]) is not str or applied["model"] != model:
+        return reason.MODEL_MISMATCH
+    if type(applied["effort"]) is not str or applied["effort"] != effort:
+        return reason.EFFORT_MISMATCH
+    if (applied["advisor"] is not None or applied["ultracode"] is not False
             or applied["ultracodeRequested"] is not False
             or type(applied["ultracodeAvailable"]) is not bool):
-        return mismatch
+        return reason.APPLIED_OPTIONS
     return ClaudeStartupVerdict.MATCH
+
+
+def classify_settings(
+    record: bytes, *, expected_request_id: str, model: str, effort: str,
+) -> tuple[ClaudeStartupVerdict, ClaudeSettingsMismatchReason | None]:
+    """Classify once, retaining only a finite settings mismatch reason."""
+    result = _classify_settings(
+        record, expected_request_id=expected_request_id, model=model, effort=effort,
+    )
+    if isinstance(result, ClaudeSettingsMismatchReason):
+        return ClaudeStartupVerdict.CONFIGURATION_MISMATCH, result
+    return result, None
+
+
+def judge_settings(
+    record: bytes, *, expected_request_id: str, model: str, effort: str,
+) -> ClaudeStartupVerdict:
+    """Preserve the original finite verdict projection without settings data."""
+    verdict, _ = classify_settings(
+        record, expected_request_id=expected_request_id, model=model, effort=effort,
+    )
+    return verdict
 
 
 def judge_hooks(record: bytes, *, expected_request_id: str) -> ClaudeStartupVerdict:

@@ -30,11 +30,15 @@ from constructicon.substrate.executors.claude_lane import LaneConfiguration
 from constructicon.substrate.executors.claude_maintenance_session import (
     ClaudeMaintenanceSessionPhase,
 )
-from constructicon.substrate.executors.claude_protocol import ClaudePlan
+from constructicon.substrate.executors.claude_protocol import ClaudeInitializeVerdict, ClaudePlan
 from constructicon.substrate.executors.claude_provider import (
     READ_CATALOG,
     ClaudeOperatorProvider,
     identity_fields,
+)
+from constructicon.substrate.executors.claude_startup import (
+    ClaudeSettingsMismatchReason,
+    ClaudeStartupVerdict,
 )
 from constructicon.substrate.executors.codex_host import _evidence
 from constructicon.substrate.executors.egress import identity_digests
@@ -54,7 +58,8 @@ _FACT_FIELDS = frozenset({
     "credential_closed", "process_clean", "qualification",
 })
 _QUALIFICATION_FIELDS = frozenset({
-    "lifecycle", "initialize_verdict", "settings_verdict", "hooks_verdict",
+    "lifecycle", "initialize_verdict", "settings_verdict", "settings_mismatch_reason",
+    "hooks_verdict",
     "request_writes", "ui_records", "stdin_closed", "eof", "selected_plan", "model", "effort",
 })
 
@@ -70,10 +75,10 @@ def sealed_plan(
     return plan
 
 
-def validate_startup_evidence(
+def checked_startup_evidence(
     evidence: Path, configuration: LaneConfiguration,
-) -> tuple[ClaudePlan, Digest]:
-    """Validate before publication, without inventing an already-sealed store."""
+) -> tuple[dict[str, Any], Digest]:
+    """Check one closed current snapshot, without claiming qualification."""
     # Reuse the existing bounded regular-file/duplicate-key reader. It does no
     # Codex operation and never reads an operator credential.
     record = _evidence(evidence)
@@ -91,25 +96,54 @@ def validate_startup_evidence(
         record["subscription_qualified"] is False,
         record["production_available"] is False,
         record["qualification_revision"] == str(claude_lane.qualification_revision()),
-        facts["phase"] == "qualify", facts["lifecycle"] == "joined-clean",
+        facts["phase"] == "qualify",
+        facts["lifecycle"] in ("joined-clean", "refused", "incomplete"),
         facts["login"] is None, facts["mode"] is None,
         all(facts[name] is True for name in (
-            "relay_closed", "custody_current", "credential_closed", "process_clean",
+            "relay_closed", "custody_current", "credential_closed",
         )),
-        qualification["lifecycle"] == "qualified",
-        qualification["initialize_verdict"] == "mode-match",
-        qualification["settings_verdict"] == "match",
-        qualification["hooks_verdict"] == "match",
-        type(qualification["request_writes"]) is int and qualification["request_writes"] == 3,
+        type(facts["process_clean"]) is bool,
+        qualification["lifecycle"] in ("qualified", "refused", "incomplete"),
+        qualification["initialize_verdict"] is None or (
+            type(qualification["initialize_verdict"]) is str
+            and qualification["initialize_verdict"] in {v.value for v in ClaudeInitializeVerdict}
+        ),
+        all(qualification[name] is None or (
+            type(qualification[name]) is str
+            and qualification[name] in {v.value for v in ClaudeStartupVerdict}
+        ) for name in ("settings_verdict", "hooks_verdict")),
+        ((qualification["settings_verdict"] == "configuration-mismatch")
+         == (qualification["settings_mismatch_reason"] is not None)),
+        qualification["settings_mismatch_reason"] is None or (
+            type(qualification["settings_mismatch_reason"]) is str
+            and qualification["settings_mismatch_reason"] in {
+                reason.value for reason in ClaudeSettingsMismatchReason
+            }
+        ),
+        type(qualification["request_writes"]) is int
+        and 0 <= qualification["request_writes"] <= 3,
+        qualification["initialize_verdict"] is None or (
+            type(qualification["request_writes"]) is int and qualification["request_writes"] >= 1
+        ),
+        qualification["settings_verdict"] is None or (
+            type(qualification["request_writes"]) is int and qualification["request_writes"] >= 2
+            and qualification["initialize_verdict"] == "mode-match"
+        ),
+        qualification["hooks_verdict"] is None or (
+            qualification["request_writes"] == 3 and qualification["settings_verdict"] == "match"
+        ),
+        qualification["request_writes"] in (0, 1)
+        or qualification["initialize_verdict"] == "mode-match",
+        qualification["request_writes"] != 3 or qualification["settings_verdict"] == "match",
         type(qualification["ui_records"]) is int and 0 <= qualification["ui_records"] <= 8,
-        qualification["stdin_closed"] is True, qualification["eof"] is True,
+        type(qualification["stdin_closed"]) is bool, type(qualification["eof"]) is bool,
         qualification["model"] == configuration.model,
         qualification["effort"] == configuration.effort,
     )
     plans = {"pro": ClaudePlan.PRO, "max": ClaudePlan.MAX}
     plan = qualification["selected_plan"]
     if not all(checks) or type(plan) is not str or plan not in plans:
-        raise ContractViolation("Claude startup evidence does not affirm complete qualification")
+        raise ContractViolation("Claude startup evidence has invalid current facts")
     launcher = configuration.launcher(ClaudeMaintenanceSessionPhase.OBSERVE)
     expected: dict[str, Any] = {
         "runtime_digest": str(configuration.runtime_digest),
@@ -122,7 +156,29 @@ def validate_startup_evidence(
     }
     if any(record[name] != value for name, value in expected.items()):
         raise ContractViolation("Claude startup evidence names different installed inputs")
-    return plans[plan], revision
+    return record, revision
+
+
+def validate_startup_evidence(
+    evidence: Path, configuration: LaneConfiguration,
+) -> tuple[ClaudePlan, Digest]:
+    """Require positive qualification from the same checked current snapshot."""
+    record, revision = checked_startup_evidence(evidence, configuration)
+    facts = record["facts"]
+    qualification = facts["qualification"]
+    checks = (
+        facts["lifecycle"] == "joined-clean", facts["process_clean"] is True,
+        qualification["lifecycle"] == "qualified",
+        qualification["initialize_verdict"] == "mode-match",
+        qualification["settings_verdict"] == "match",
+        qualification["settings_mismatch_reason"] is None,
+        qualification["hooks_verdict"] == "match",
+        qualification["request_writes"] == 3,
+        qualification["stdin_closed"] is True, qualification["eof"] is True,
+    )
+    if not all(checks):
+        raise ContractViolation("Claude startup evidence does not affirm complete qualification")
+    return {"pro": ClaudePlan.PRO, "max": ClaudePlan.MAX}[qualification["selected_plan"]], revision
 
 
 def read_grants(configuration: LaneConfiguration) -> EffectiveGrants:

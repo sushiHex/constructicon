@@ -101,6 +101,53 @@ def test_authentic_minimal_settings_and_hooks_accept():
     assert judge_settings(body) is startup.ClaudeStartupVerdict.MATCH
 
 
+@pytest.mark.parametrize("reason", list(startup.ClaudeSettingsMismatchReason))
+def test_settings_reasons_are_finite_and_keep_the_original_refusal(reason):
+    body = settings()
+    reasons = startup.ClaudeSettingsMismatchReason
+    if reason is reasons.BODY_FIELDS:
+        body["remote_control_policy_lock_reason"] = "private-sentinel"
+    elif reason is reasons.REPORTED_ERRORS:
+        body["errors"] = [{"private-sentinel": "private-value"}]
+    elif reason is reasons.EFFECTIVE_SETTINGS:
+        body["effective"]["private-sentinel"] = "private-value"
+    elif reason is reasons.SOURCE_LIST:
+        body["sources"] = []
+    elif reason is reasons.SOURCE_ENTRY:
+        body["sources"][0]["private-sentinel"] = "private-value"
+    elif reason is reasons.SOURCE_NAME:
+        body["sources"][0]["source"] = "private-sentinel"
+    elif reason is reasons.SOURCE_SETTINGS:
+        body["sources"][0]["settings"]["forceRemoteSettingsRefresh"] = False
+    elif reason is reasons.POLICY_SOURCE_MISSING:
+        body["sources"][0]["source"] = "flagSettings"
+    elif reason is reasons.APPLIED_FIELDS:
+        body["applied"]["private-sentinel"] = "private-value"
+    elif reason is reasons.MODEL_MISMATCH:
+        body["applied"]["model"] = "private-sentinel"
+    elif reason is reasons.EFFORT_MISMATCH:
+        body["applied"]["effort"] = None
+    else:
+        body["applied"]["advisor"] = "private-sentinel"
+    verdict, observed = startup.classify_settings(
+        wire(body), expected_request_id="observe-1", model=MODEL, effort=EFFORT,
+    )
+    assert verdict is judge_settings(body) is startup.ClaudeStartupVerdict.CONFIGURATION_MISMATCH
+    assert observed is reason
+    assert "private" not in repr((verdict, observed)) and len(reason.value) <= 24
+
+
+@pytest.mark.parametrize("raw,expected", [
+    (wire(settings()), startup.ClaudeStartupVerdict.MATCH),
+    (b"{}", startup.ClaudeStartupVerdict.RECORD_INVALID),
+    (wire(settings(), "other"), startup.ClaudeStartupVerdict.REQUEST_MISMATCH),
+])
+def test_settings_reason_is_absent_without_a_configuration_mismatch(raw, expected):
+    assert startup.classify_settings(
+        raw, expected_request_id="observe-1", model=MODEL, effort=EFFORT,
+    ) == (expected, None)
+
+
 def test_requests_are_exact_bounded_controls_and_do_not_add_initialize_fields():
     for build, subtype in [(startup.settings_request, "get_settings"),
                            (startup.hooks_request, "get_hooks_listing")]:

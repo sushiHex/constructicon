@@ -36,7 +36,8 @@ def case(tmp_path):
             "credential_closed": True, "process_clean": True,
             "qualification": {
                 "lifecycle": "qualified", "initialize_verdict": "mode-match",
-                "settings_verdict": "match", "hooks_verdict": "match",
+                "settings_verdict": "match", "settings_mismatch_reason": None,
+                "hooks_verdict": "match",
                 "request_writes": 3, "ui_records": 0, "stdin_closed": True, "eof": True,
                 "selected_plan": "max", "model": config.model, "effort": config.effort,
             },
@@ -88,6 +89,8 @@ def test_complete_sealed_startup_permits_compatible_subscription(case, name, exp
     ("qualification", "lifecycle", "incomplete"),
     ("qualification", "initialize_verdict", "mode-mismatch"),
     ("qualification", "settings_verdict", "configuration-mismatch"),
+    ("qualification", "settings_mismatch_reason", "effort-mismatch"),
+    ("qualification", "settings_mismatch_reason", "private-sentinel"),
     ("qualification", "hooks_verdict", "configuration-mismatch"),
     *(('qualification', 'request_writes', value) for value in (0, 2, 4, 3.0, True)),
     *(('qualification', 'ui_records', value) for value in (-1, 9, False, 0.0)),
