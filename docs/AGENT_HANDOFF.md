@@ -16,6 +16,23 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Claude policy delivery and native projection are separate observations
+
+The controller at `bea321d` identified `effective-refresh-absent` in one
+checked qualification refusal. That means the effective response omitted the
+key; it does not mean the value was false or the policy file was unread. The
+host was parked with cleanup affirmed. Offline inspection found no demonstrated
+delivery or parser correction, so the qualification guard remains unchanged.
+
+A separate credential-free CI diagnostic asks for settings after exact no-auth
+initialization. It preserves the earlier single-request observer and records
+only finite policy-presence facts under shared bounds. The physical fake also
+compares the actual mounted policy content. These answer different questions:
+the fake proves its mount, while the native observation describes the vendor's
+projection. Neither is authenticated qualification or permission to run READ.
+Final-head results belong to the delivery PR; missing native evidence is never
+inferred from a portable fake passing.
+
 ## Claude settings refusal is not an observed model mismatch
 
 The subsequent controller installation and one qualification acquisition

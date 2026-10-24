@@ -9038,3 +9038,53 @@ This is consequential evidence work: focused accepting/refusing classifier,
 conversation and reader tests, relevant mutation checks and independent boundary
 review precede final-head CI. Verification receipts belong to the delivery PR;
 this entry makes no claim of a new positive live qualification or READ.
+
+## Claude mounted-policy and native settings diagnostic (Refs #40)
+
+One authorized acquisition at controller `bea321d` accepted initialization and
+refused with `configuration-mismatch / effective-refresh-absent`. The checked
+evidence digest is
+`sha256:a150bd85c836b78cba70dcfa2d19d276c69229db2ad143e6dcd03329a5039325`.
+Native stdout and stderr were empty, cleanup was affirmed, and the host was
+parked with custody released. The
+[session record](https://github.com/sushiHex/constructicon/issues/40#issuecomment-6381782458)
+does not establish the value of an absent key, whether the vendor read the
+policy file, or the presence of the sibling MCP-policy key.
+
+Offline inspection found that the pinned parser recognizes the refresh boolean
+and normal policy merging preserves supplied true. Our fake FD seam reads the
+expected sealed bytes, but cannot prove a physical mount or the native parser's
+result. Neither inspection justified changing the qualification predicate.
+
+The owner approved the
+[bounded successor scope](https://github.com/sushiHex/constructicon/issues/40#issuecomment-6381853582):
+preserve the existing single-initialize native observer and add a separate
+credential-free settings diagnostic in the same hosted lane. It sends exact
+no-auth initialization followed by one correlated settings request. One reader,
+one absolute deadline and cumulative byte/UI limits cover both responses and
+joined EOF. Unsolicited replies, duplicates, callbacks and partial terminal
+frames cannot become successful evidence. Only closed policy-presence and
+lifecycle facts leave the diagnostic; raw settings and unknown field names do
+not. A complete diagnostic can observe missing policy without qualifying it.
+
+The existing physical fake additionally compares its actual mounted managed
+policy with the recipe's canonical bytes before testing write denial. The
+trusted callback supplies that expectation; C does not define a second policy.
+This proves the fake's mount, not that the vendor consumed it. The original
+single-request observer, production qualification and accepted plan bytes stay
+unchanged. No credentials, login, provider connection, model task or private-host
+operation is introduced by this delivery.
+
+The implementation is consequential evidence work. Focused portable accepting
+and refusing checks precede one independent boundary review and required
+final-head CI. Physical and pinned-native results are recorded in the delivery
+PR, not inferred from Windows skips or source inspection. No new live
+qualification or READ is claimed.
+
+The independent review reproduced an unsolicited response hidden behind a full
+UI chunk before a request. The new diagnostic now lets its owned reader expose
+each immediately available chunk before reserving the next write, consuming only
+exact UI records there. A fragmented UI must finish under the existing deadline;
+it is not treated as malformed merely because a read ended. Regression cases
+cover the queued response and the accepting fragmented transition. This does
+not assert knowledge of bytes that have not reached the reader.

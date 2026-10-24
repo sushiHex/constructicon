@@ -108,6 +108,22 @@ static void absence(void) {
     printf("private-fds:%d\n", private_count);
 }
 
+static void policy_content(void) {
+    /* The trusted fixture sends the recipe's canonical sealed bytes, avoiding
+     * a second policy definition in this peer. Both reads are strictly bounded. */
+    char expected[4096], actual[4096];
+    require(fgets(expected, sizeof(expected), stdin) != NULL);
+    size_t expected_size = strlen(expected);
+    require(expected_size > 1 && expected[expected_size - 1] == '\n');
+    FILE *stream = fopen(POLICY, "rb");
+    require(stream != NULL);
+    size_t size = fread(actual, 1, sizeof(actual), stream);
+    require(!ferror(stream) && feof(stream) && size < sizeof(actual));
+    require(!fclose(stream));
+    require(size == expected_size && !memcmp(actual, expected, size));
+    puts("policy-content:exact");
+}
+
 static void persistence(void) {
     int existing = open(CREDENTIAL, O_RDONLY | O_NOFOLLOW);
     char initial[32];
@@ -129,6 +145,7 @@ static void persistence(void) {
     fd = open(sibling, O_WRONLY | O_CREAT | O_EXCL, 0600);
     require(fd >= 0 && write(fd, "disposable\n", 11) == 11 && !close(fd));
     puts("credential-fallback:written-synced-chmod");
+    policy_content();
     errno = 0;
     fd = open(POLICY, O_WRONLY | O_TRUNC);
     failure = errno;

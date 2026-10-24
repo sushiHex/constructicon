@@ -282,6 +282,23 @@ jobs:
             "$PWD/.venv/bin/python" -m pytest \
               tests/substrate/test_claude_native_startup.py::test_pinned_credential_free_startup_has_only_a_noauth_observation \
               -v --tb=short --durations=10 -p no:cacheprovider </dev/null
+      - name: Observe separate pinned Claude settings policy presence without credentials
+        if: matrix.lane == 'foundation'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Separate invocation: preserve the existing single-initialize observer.
+          # No user message, credentials, provider connection or model call.
+          sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
+            "$PWD/.venv/bin/python" -m pytest tests/substrate/test_claude_native_settings.py \
+              -k 'not test_pinned_credential_free_settings_diagnostic_has_closed_output' \
+              -v --tb=short --durations=10 -p no:cacheprovider </dev/null
+          sudo -u m8-service env -i HOME=/home/m8-service PATH=/usr/bin:/bin LANG=C.UTF-8 \
+            RUNNER_ENVIRONMENT=github-hosted M8_CLAUDE_SETTINGS_REQUIRED=1 \
+            M8_EVIDENCE_DIRECTORY="$M8_EVIDENCE" \
+            "$PWD/.venv/bin/python" -m pytest \
+              tests/substrate/test_claude_native_settings.py::test_pinned_credential_free_settings_diagnostic_has_closed_output \
+              -v --tb=short --durations=10 -p no:cacheprovider </dev/null
       - name: Observe frozen P2 stock-utility diagnostics on Ubuntu 24.04
         if: matrix.lane == 'foundation'
         shell: bash
