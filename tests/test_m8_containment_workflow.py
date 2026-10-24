@@ -46,6 +46,10 @@ PROOFS = {
         "foundation", "tests/substrate/test_claude_native_startup.py "
         "tests/substrate/test_claude_native_startup.py",
     ),
+    "Observe separate pinned Claude settings policy presence without credentials": (
+        "foundation", "tests/substrate/test_claude_native_settings.py "
+        "tests/substrate/test_claude_native_settings.py",
+    ),
     "Observe frozen P2 stock-utility diagnostics on Ubuntu 24.04": (
         "foundation", "tests/test_m8_stock_utility_diagnostics.py",
     ),
