@@ -9088,3 +9088,14 @@ exact UI records there. A fragmented UI must finish under the existing deadline;
 it is not treated as malformed merely because a read ended. Regression cases
 cover the queued response and the accepting fragmented transition. This does
 not assert knowledge of bytes that have not reached the reader.
+
+The first hosted diagnostic at `ef5a479` completed with both effective policy
+keys absent and no projected source entries. The physical fake independently
+passed the mounted-content check. Source tracing then refuted disabling admin
+policy under safe mode: the inspected source selectors retain `policySettings`.
+The loader can omit settings after a caught read or parse failure, so source
+absence alone does not identify that failure. The diagnostic therefore also
+publishes only the errors field's finite shape: absent, empty, nonempty or
+wrong-type. It never retains error messages or paths. The earlier result did
+not measure that field and receives no retrospective value. This refinement
+changes no request, budget, production predicate or launch setting.

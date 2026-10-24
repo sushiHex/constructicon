@@ -68,8 +68,12 @@ def policy_presence(value: object, *, present: bool = True) -> dict[str, str]:
 
 def settings_presence(body: dict[str, object]) -> dict[str, object]:
     sources = body.get("sources")
+    errors = body.get("errors")
     projected: dict[str, object] = {
         "effective": policy_presence(body.get("effective"), present="effective" in body),
+        "errors_shape": ("absent" if "errors" not in body else
+                         "wrong-type" if type(errors) is not list else
+                         "nonempty" if errors else "empty"),
         "sources_shape": ("absent" if "sources" not in body else
                           "list" if type(sources) is list else "wrong-type"),
         "source_entry_invalid": False, "source_unknown": False, "source_duplicate": False,

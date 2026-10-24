@@ -122,8 +122,11 @@ def assert_report(report, *, hosted=False):
         assert report[key] is False
     projection = report["policy_presence"]
     if projection is not None:
-        assert set(projection) == {"effective", "sources_shape", "source_entry_invalid",
-                                   "source_unknown", "source_duplicate", "sources"}
+        assert set(projection) == {
+            "effective", "errors_shape", "sources_shape", "source_entry_invalid",
+            "source_unknown", "source_duplicate", "sources",
+        }
+        assert projection["errors_shape"] in {"absent", "empty", "nonempty", "wrong-type"}
         assert projection["sources_shape"] in {"absent", "list", "wrong-type"}
         for key in ("source_entry_invalid", "source_unknown", "source_duplicate"):
             assert type(projection[key]) is bool
@@ -174,6 +177,20 @@ async def test_source_shape_and_presence_are_observations(body):
     report = await observe(Channel(body=body))
     assert diagnostic.successful(report)
     assert report["policy_presence"] == diagnostic.settings_presence(body)
+
+
+@pytest.mark.parametrize("body,state", [
+    ({}, "absent"),
+    ({"errors": []}, "empty"),
+    ({"errors": [{"file": "private-path", "message": "private-message",
+                  "private-field": "private-value"}]}, "nonempty"),
+    ({"errors": {"private-field": "private-value"}}, "wrong-type"),
+])
+async def test_errors_have_only_a_finite_shape_observation(body, state):
+    report = await observe(Channel(body=body))
+    assert diagnostic.successful(report)
+    assert report["policy_presence"]["errors_shape"] == state
+    assert "private" not in json.dumps(report)
 
 
 @pytest.mark.parametrize("fragment", [1, 8192])
