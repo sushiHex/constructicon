@@ -5,14 +5,21 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from contextlib import asynccontextmanager
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 from scripts.ci import observe_m8_claude_settings as diagnostic
 
 from constructicon.core.identity import digest
-from constructicon.substrate.executors.claude_native import ClaudeNativeStoreMount
+from constructicon.substrate.executors.claude_native import (
+    POLICY_MOUNT,
+    ClaudeNativeStoreMount,
+    ClaudeNativeVendor,
+)
 from constructicon.substrate.executors.claude_protocol import RECORD_BYTES
+from constructicon.substrate.executors.operator_store import BindingCheck
 from tests.substrate.test_claude_native_startup import Launcher, response, ui_record
 from tests.substrate.test_native_codex_mediation import write_evidence
 
@@ -337,12 +344,122 @@ async def test_incomplete_transition_ui_at_eof_cannot_allow_settings_write():
     assert report["request_writes"] == 1 and not diagnostic.successful(report)
 
 
-async def test_pinned_credential_free_settings_diagnostic_has_closed_output():
+@pytest.mark.parametrize("settings_file_control", [False, True])
+async def test_pinned_credential_free_settings_diagnostic_has_closed_output(settings_file_control):
     if not os.environ.get("M8_CLAUDE_SETTINGS_REQUIRED"):
         pytest.skip("settings diagnostic requires the disposable hosted fixture")
-    report = await diagnostic.hosted_observation()
+    report = await diagnostic.hosted_observation(settings_file_control=settings_file_control)
     # Persist the finite result before asserting so a refusal is evidence too.
     assert_report(report, hosted=True)
-    write_evidence("n6-claude-pinned-settings.json", report)
+    artifact = ("n6-claude-pinned-settings-file-control.json" if settings_file_control else
+                "n6-claude-pinned-settings.json")
+    write_evidence(artifact, report)
     assert diagnostic.successful(report), report
     assert report["proxy_joined"] is True and report["proxy_bound_exceeded"] is False
+    if settings_file_control:
+        assert diagnostic.settings_file_control_successful(report), report
+
+
+@pytest.mark.parametrize("settings_file_control", [None, False, True])
+async def test_hosted_control_selects_only_fixed_command_and_keeps_closed_report(
+    settings_file_control, monkeypatch, tmp_path,
+):
+    from scripts.ci import build_m8_claude_startup_fixture as builder
+
+    pins = {
+        "schema_version": 1, "scope": "credential_free_native_startup_fixture",
+        "version": builder.VERSION, "member_sha256": builder.MEMBER_SHA256,
+        "member_size": builder.MEMBER_SIZE, "archive_sha256": builder.ARCHIVE_SHA256,
+        "vendor_digest": str(digest("diagnostic-test", 1, "vendor")),
+        "runtime_digest": str(digest("diagnostic-test", 1, "pinned-runtime")),
+        "production_available": False, "subscription_qualified": False, "claude_qualified": False,
+    }
+    (tmp_path / "pinned-startup.json").write_text(json.dumps(pins))
+    (tmp_path / "fixture.json").write_text(json.dumps({"policy_sha256": "1" * 64}))
+    monkeypatch.setattr(diagnostic.startup, "ROOT", tmp_path)
+    monkeypatch.setattr(diagnostic.sys, "platform", "linux")
+    monkeypatch.setattr(diagnostic.os, "getuid", lambda: 1000, raising=False)
+    monkeypatch.setenv("RUNNER_ENVIRONMENT", "github-hosted")
+    policy = {"forceRemoteSettingsRefresh": True, "deniedMcpServers": [{"serverUrl": "*"}]}
+    channel = Channel(body={"sources": [{"source": "flagSettings", "settings": policy}]})
+    launches = []
+
+    def launcher(**arguments):
+        native = arguments["claude"]
+        ordinary = ClaudeNativeVendor(native.tree, native.model, native.effort,
+                                      native.expected_tree)
+        assert native.command == ordinary.command + (
+            ("--settings", POLICY_MOUNT) if settings_file_control else ())
+        assert type(native) is (diagnostic._SettingsFileControlVendor if settings_file_control else
+                                ClaudeNativeVendor)
+        value = Launcher(channel)
+        value.claude = native
+        launches.append(value)
+        return value
+
+    @asynccontextmanager
+    async def store(_deadline):
+        peer = SimpleNamespace(attempts=0, bound_exceeded=False, joined=False)
+        try:
+            yield ClaudeNativeStoreMount(
+                42, 43, lambda: BindingCheck(digest("diagnostic-test", 1, "binding")),
+            ), peer
+        finally:
+            peer.joined = True
+
+    monkeypatch.setattr(diagnostic, "LinuxLauncher", launcher)
+    monkeypatch.setattr(diagnostic.startup, "fake_store", store)
+    report = await (diagnostic.hosted_observation() if settings_file_control is None else
+                    diagnostic.hosted_observation(settings_file_control=settings_file_control))
+    assert len(launches) == 1 and launches[0].joined
+    assert_report(report, hosted=True)
+    assert diagnostic.successful(report) and diagnostic.settings_file_control_successful(report)
+    assert report["proxy_joined"] is True and report["proxy_bound_exceeded"] is False
+
+
+@pytest.mark.parametrize("selection", [None, 0, 1, "private-path", object()])
+async def test_hosted_control_never_accepts_a_caller_path_or_nonbool_selection(selection):
+    with pytest.raises(diagnostic._Refused):
+        await diagnostic.hosted_observation(settings_file_control=selection)
+
+
+@pytest.mark.parametrize("errors_present", [False, True])
+async def test_file_control_accepts_absent_or_empty_errors_without_managed_policy(errors_present):
+    body = {"sources": [{"source": "flagSettings", "settings": {
+        "forceRemoteSettingsRefresh": True, "deniedMcpServers": [{"serverUrl": "*"}],
+    }}]}
+    if errors_present:
+        body["errors"] = []
+    report = await observe(Channel(body=body))
+    assert diagnostic.settings_file_control_successful(report)
+    assert report["policy_presence"]["sources"]["policySettings"]["shape"] == "absent"
+
+
+@pytest.mark.parametrize("case", ["absent", "refresh", "mcp", "duplicate", "invalid", "unknown",
+                                  "errors", "error-shape", "exchange"])
+async def test_file_control_requires_affirmative_unambiguous_flag_policy(case):
+    policy = {"forceRemoteSettingsRefresh": True, "deniedMcpServers": [{"serverUrl": "*"}]}
+    body = {"sources": [{"source": "flagSettings", "settings": policy}]}
+    if case == "absent":
+        body["sources"] = []
+    elif case == "refresh":
+        policy["forceRemoteSettingsRefresh"] = False
+    elif case == "mcp":
+        policy["deniedMcpServers"] = []
+    elif case == "duplicate":
+        body["sources"] *= 2
+    elif case == "invalid":
+        body["sources"].append({"private": "private"})
+    elif case == "unknown":
+        body["sources"].append({"source": "private", "settings": policy})
+    elif case == "errors":
+        body["errors"] = [{"private": "private"}]
+    elif case == "error-shape":
+        body["errors"] = {"private": "private"}
+    channel = Channel(body=body)
+    if case == "exchange":
+        channel.transform = lambda kind, raw: settings("wrong") if kind == "get_settings" else raw
+    report = await observe(channel)
+    assert not diagnostic.settings_file_control_successful(report)
+    if case != "exchange":
+        assert diagnostic.successful(report)  # Ordinary observation remains unchanged.

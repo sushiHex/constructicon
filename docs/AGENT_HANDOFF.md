@@ -16,6 +16,20 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## A flag-settings control cannot stand in for managed-policy qualification
+
+The ordinary credential-free diagnostic reproduced missing effective policy
+without explaining the authenticated failure. Pinned-source tracing found the
+same response emitter and envelope, not a separate no-auth settings protocol.
+Its errors field is optional when the filtered error list is empty.
+
+A CI-only control points the supported `--settings` option at the same mounted
+policy file. Exact keys under `flagSettings` would establish native readability
+and normal parsing, not managed-policy selection. Production argv and the
+required managed-policy qualification are unchanged. The delivery PR holds the
+actual hosted outcome; the existence of the control does not qualify Claude or
+establish a live READ. No private-host retry follows from an absent field alone.
+
 ## Claude policy delivery and native projection are separate observations
 
 The controller at `bea321d` identified `effective-refresh-absent` in one
