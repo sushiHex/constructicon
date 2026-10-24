@@ -20,6 +20,7 @@ from constructicon.substrate.executors.claude_startup_qualification import (
     ClaudeStartupQualification,
     _Refused,
 )
+from tests.substrate.test_claude_startup import _EFFECTIVE_REFUSALS
 
 
 def _wire(value: object) -> bytes:
@@ -207,6 +208,36 @@ async def test_each_startup_judge_must_match(kind: str) -> None:
         ClaudeSettingsMismatchReason.EFFORT_MISMATCH if kind == "get_settings" else None
     )
     assert channel.readers == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason_name,configuration", _EFFECTIVE_REFUSALS)
+async def test_effective_predicate_reason_survives_the_fake_conversation(
+    reason_name, configuration,
+):
+    class Mismatch(Channel):
+        async def write(self, raw: bytes) -> None:
+            await super().write(raw)
+            if self.writes[-1] == "get_settings":
+                record = json.loads(self.output)
+                record["response"]["response"]["effective"] = configuration
+                self.output[:] = _wire(record)
+
+    channel = Mismatch()
+    conversation = ClaudeStartupQualification(
+        selected_plan=ClaudePlan.PRO, model="claude-sonnet-4-6", effort="low",
+        input_limit=8192, output_limit=512 * 1024,
+        deadline=asyncio.get_running_loop().time() + 5,
+    )
+    with pytest.raises(_Refused):
+        await conversation(channel)
+    facts = conversation.facts
+    assert facts.lifecycle is ClaudeQualificationLifecycle.REFUSED
+    assert facts.settings_verdict is ClaudeStartupVerdict.CONFIGURATION_MISMATCH
+    assert facts.settings_mismatch_reason is ClaudeSettingsMismatchReason[reason_name]
+    assert facts.hooks_verdict is None
+    assert channel.writes == ["initialize", "get_settings"] and channel.readers == 0
+    assert "private" not in repr(facts)
 
 
 def test_incomplete_and_mismatched_settings_reasons_are_truthful():

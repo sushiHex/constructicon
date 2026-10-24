@@ -8998,3 +8998,43 @@ snapshots. Independent boundary review found no actionable defect: 127 synthetic
 cases preserved the previous judge's verdicts, and actual CLI checks separated
 positive qualification from refusal diagnostics. These are credential-free
 checks; neither skips nor synthetic evidence count as a live qualification.
+
+## Claude effective-settings predicate diagnostics (Refs #40)
+
+The controller-only session at `63a2cbb` installed and independently verified
+the reviewed controller while preserving the Claude launch and operator store.
+One acquisition accepted initialization mode and refused with
+`configuration-mismatch / effective-settings`. Its checked evidence digest is
+`sha256:006dbc3ff866d694821ca868ebd817146704bfa56f66b6fc6f8bfb943ad705c3`.
+Native stdout and stderr were empty. Process cleanup, relay closure, credential
+closure and current custody were affirmed; explicit park and an independent
+off/idle observation passed. No login, model, READ, publication, activation,
+checkpoint, re-baseline or retry occurred. The
+[session result](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6380248117)
+records the operational evidence.
+
+Independent offline checks found no demonstrated implementation correction.
+The exact prepared stream-JSON policy passes the unchanged configuration judge.
+The pinned native loader reads the mounted managed-policy path, launch arguments
+contain no settings-source overrides, and inspected merge filters preserve the
+two required policy keys. These facts do not prove which effective settings the
+live process emitted. Raw settings were not retained.
+
+The next diagnostic refines the effective-settings group into fixed predicate
+categories. The classifier preserves the original acceptance conditions and
+short-circuit order; the verdict-only API remains its projection. Required-key
+absence, refresh value, each denied-MCP shape check and environment checks are
+distinguished without exposing values or unknown names. If both required keys
+are absent, refresh absence is reported first. Source-settings diagnostics
+remain at their existing granularity.
+
+Current evidence and its strict checker advance to schema 5. Historical
+schema-4 bytes remain unchanged and receive no invented subreason. The old
+coarse enum value remains interpretable as historical vocabulary; new
+classification emits the more precise effective predicate instead. The
+diagnostic path retains its separation from positive qualification.
+
+This is consequential evidence work: focused accepting/refusing classifier,
+conversation and reader tests, relevant mutation checks and independent boundary
+review precede final-head CI. Verification receipts belong to the delivery PR;
+this entry makes no claim of a new positive live qualification or READ.

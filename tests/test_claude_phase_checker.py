@@ -342,11 +342,15 @@ def test_qualification_diagnostic_keeps_unobserved_settings_absent(tmp_path):
 
 
 
-def test_historical_schema3_qualification_is_preserved_without_invented_reason(tmp_path):
+@pytest.mark.parametrize("schema", [3, 4])
+def test_historical_qualification_is_preserved_without_invented_reason(tmp_path, schema):
     config, evidence, _ = refused_qualification(tmp_path)
     record = json.loads(evidence.read_bytes())
-    record["schema_version"] = 3
-    del record["facts"]["qualification"]["settings_mismatch_reason"]
+    record["schema_version"] = schema
+    if schema == 3:
+        del record["facts"]["qualification"]["settings_mismatch_reason"]
+    else:
+        record["facts"]["qualification"]["settings_mismatch_reason"] = "effective-settings"
     legacy = json.dumps(record, separators=(",", ":")).encode()
     evidence.write_bytes(legacy)
     for extra in ((), ("--diagnose-refusal",)):

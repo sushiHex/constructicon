@@ -55,6 +55,20 @@ class ClaudeSettingsMismatchReason(StrEnum):
     BODY_FIELDS = "body-fields"
     REPORTED_ERRORS = "reported-errors"
     EFFECTIVE_SETTINGS = "effective-settings"
+    EFFECTIVE_OBJECT = "effective-object"
+    EFFECTIVE_EXTRA_KEYS = "effective-extra-keys"
+    EFFECTIVE_REFRESH_ABSENT = "effective-refresh-absent"
+    EFFECTIVE_MCP_ABSENT = "effective-mcp-absent"
+    EFFECTIVE_REFRESH = "effective-refresh"
+    EFFECTIVE_MCP_LIST = "effective-mcp-list"
+    EFFECTIVE_MCP_COUNT = "effective-mcp-count"
+    EFFECTIVE_MCP_ENTRY = "effective-mcp-entry"
+    EFFECTIVE_MCP_KEYS = "effective-mcp-keys"
+    EFFECTIVE_MCP_VALUE_TYPE = "effective-mcp-value-type"
+    EFFECTIVE_MCP_VALUE = "effective-mcp-value"
+    EFFECTIVE_ENV_OBJECT = "effective-env-object"
+    EFFECTIVE_ENV_KEYS = "effective-env-keys"
+    EFFECTIVE_ENV_VALUE = "effective-env-value"
     SOURCE_LIST = "source-list"
     SOURCE_ENTRY = "source-entry"
     SOURCE_NAME = "source-name"
@@ -134,25 +148,46 @@ def _body(record: bytes, expected_request_id: str) -> dict[str, object] | Claude
     return envelope["response"]
 
 
-def _configuration(value: object, *, require_policy: bool) -> bool:
-    if type(value) is not dict or not set(value) <= {"env", *fixed_policy()}:
-        return False
+def _configuration(
+    value: object, *, require_policy: bool,
+) -> ClaudeSettingsMismatchReason | None:
+    """Classify in policy predicate order; never retain a native key or value."""
+    reason = ClaudeSettingsMismatchReason
+    if type(value) is not dict:
+        return reason.EFFECTIVE_OBJECT
+    if not set(value) <= {"env", *fixed_policy()}:
+        return reason.EFFECTIVE_EXTRA_KEYS
     if require_policy and not set(fixed_policy()) <= set(value):
-        return False
+        # Both absent is deterministically refresh-first, without claiming
+        # which key the original combined presence check evaluated first.
+        if "forceRemoteSettingsRefresh" not in value:
+            return reason.EFFECTIVE_REFRESH_ABSENT
+        return reason.EFFECTIVE_MCP_ABSENT
     if "forceRemoteSettingsRefresh" in value and value["forceRemoteSettingsRefresh"] is not True:
-        return False
+        return reason.EFFECTIVE_REFRESH
     if "deniedMcpServers" in value:
         denied = value["deniedMcpServers"]
-        if (type(denied) is not list or len(denied) != 1 or type(denied[0]) is not dict
-                or set(denied[0]) != {"serverUrl"}
-                or type(denied[0]["serverUrl"]) is not str or denied[0]["serverUrl"] != "*"):
-            return False
+        if type(denied) is not list:
+            return reason.EFFECTIVE_MCP_LIST
+        if len(denied) != 1:
+            return reason.EFFECTIVE_MCP_COUNT
+        if type(denied[0]) is not dict:
+            return reason.EFFECTIVE_MCP_ENTRY
+        if set(denied[0]) != {"serverUrl"}:
+            return reason.EFFECTIVE_MCP_KEYS
+        if type(denied[0]["serverUrl"]) is not str:
+            return reason.EFFECTIVE_MCP_VALUE_TYPE
+        if denied[0]["serverUrl"] != "*":
+            return reason.EFFECTIVE_MCP_VALUE
     if "env" in value:
         env = value["env"]
-        if (type(env) is not dict or not set(env) <= set(fixed_environment())
-                or any(type(item) is not str for item in env.values())):
-            return False
-    return True
+        if type(env) is not dict:
+            return reason.EFFECTIVE_ENV_OBJECT
+        if not set(env) <= set(fixed_environment()):
+            return reason.EFFECTIVE_ENV_KEYS
+        if any(type(item) is not str for item in env.values()):
+            return reason.EFFECTIVE_ENV_VALUE
+    return None
 
 
 def _classify_settings(
@@ -171,8 +206,9 @@ def _classify_settings(
         return reason.BODY_FIELDS
     if "errors" in body and body["errors"] != []:
         return reason.REPORTED_ERRORS
-    if not _configuration(body["effective"], require_policy=True):
-        return reason.EFFECTIVE_SETTINGS
+    configuration_reason = _configuration(body["effective"], require_policy=True)
+    if configuration_reason is not None:
+        return configuration_reason
     sources = body["sources"]
     if type(sources) is not list or not 1 <= len(sources) <= len(_SOURCES):
         return reason.SOURCE_LIST
@@ -184,7 +220,7 @@ def _classify_settings(
         if type(name) is not str or name not in _SOURCES or name in seen:
             return reason.SOURCE_NAME
         seen.add(name)
-        if not _configuration(source["settings"], require_policy=name == "policySettings"):
+        if _configuration(source["settings"], require_policy=name == "policySettings") is not None:
             return reason.SOURCE_SETTINGS
     if "policySettings" not in seen:
         return reason.POLICY_SOURCE_MISSING

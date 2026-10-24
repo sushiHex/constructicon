@@ -1,4 +1,4 @@
-"""Closed schema-4 Claude phase evidence checker; no login or dispatch authority.
+"""Closed schema-5 Claude phase evidence checker; no login or dispatch authority.
 
 Positive phase validation and observer-refusal diagnosis are separate CLI actions.
 The selected plan for observe/reload remains a reviewed-command input, not an
@@ -39,7 +39,7 @@ from constructicon.substrate.executors.claude_startup import (
 from constructicon.substrate.executors.codex_host import _evidence
 from constructicon.substrate.executors.egress import identity_digests
 
-CHECKER_SCHEMA = 4
+CHECKER_SCHEMA = 5
 _RECORD_FIELDS = frozenset({
     "schema_version", "subscription_qualified", "production_available", "facts",
     "runtime_digest", "vendor_digest", "launch_policy_sha256", "launch_config_sha256",

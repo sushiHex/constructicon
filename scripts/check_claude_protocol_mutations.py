@@ -299,7 +299,7 @@ STARTUP_MUTANTS = (
      "not set(env) <= set(fixed_environment())", "False",
      STARTUP_TEST + "test_policy_mismatches_never_coerce_or_widen"),
     ("startup settings environment values are strings", STARTUP + "_configuration",
-     "or any(type(item) is not str for item in env.values())", "or False",
+     "if any(type(item) is not str for item in env.values()):", "if False:",
      STARTUP_TEST + "test_policy_mismatches_never_coerce_or_widen"),
     ("startup sealed model type is exact", STARTUP + "_classify_settings",
      "type(model) is not str", "not isinstance(model, str)",
@@ -1870,6 +1870,15 @@ QUALIFIED_READ_MUTANTS = (
 MUTANTS += QUALIFIED_READ_MUTANTS
 
 SETTINGS_REASON_MUTANTS = (
+    ("effective missing controls retain the failed presence predicate", STARTUP + "_configuration",
+     "return reason.EFFECTIVE_REFRESH_ABSENT", "return reason.EFFECTIVE_MCP_ABSENT",
+     STARTUP_TEST + "test_effective_predicates_keep_exact_acceptance_and_first_failure"),
+    ("effective MCP type differs from its value predicate", STARTUP + "_configuration",
+     "return reason.EFFECTIVE_MCP_VALUE_TYPE", "return reason.EFFECTIVE_MCP_VALUE",
+     STARTUP_TEST + "test_effective_predicates_keep_exact_acceptance_and_first_failure"),
+    ("effective env keys precede their values", STARTUP + "_configuration",
+     "return reason.EFFECTIVE_ENV_KEYS", "return reason.EFFECTIVE_ENV_VALUE",
+     STARTUP_TEST + "test_effective_predicates_keep_exact_acceptance_and_first_failure"),
     ("settings classification retains its finite reason", STARTUP + "classify_settings",
      "return ClaudeStartupVerdict.CONFIGURATION_MISMATCH, result",
      "return ClaudeStartupVerdict.CONFIGURATION_MISMATCH, None",

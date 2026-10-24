@@ -101,7 +101,10 @@ def test_authentic_minimal_settings_and_hooks_accept():
     assert judge_settings(body) is startup.ClaudeStartupVerdict.MATCH
 
 
-@pytest.mark.parametrize("reason", list(startup.ClaudeSettingsMismatchReason))
+@pytest.mark.parametrize("reason", [
+    item for item in startup.ClaudeSettingsMismatchReason
+    if not item.value.startswith("effective-")
+])
 def test_settings_reasons_are_finite_and_keep_the_original_refusal(reason):
     body = settings()
     reasons = startup.ClaudeSettingsMismatchReason
@@ -109,8 +112,6 @@ def test_settings_reasons_are_finite_and_keep_the_original_refusal(reason):
         body["remote_control_policy_lock_reason"] = "private-sentinel"
     elif reason is reasons.REPORTED_ERRORS:
         body["errors"] = [{"private-sentinel": "private-value"}]
-    elif reason is reasons.EFFECTIVE_SETTINGS:
-        body["effective"]["private-sentinel"] = "private-value"
     elif reason is reasons.SOURCE_LIST:
         body["sources"] = []
     elif reason is reasons.SOURCE_ENTRY:
@@ -135,6 +136,82 @@ def test_settings_reasons_are_finite_and_keep_the_original_refusal(reason):
     assert verdict is judge_settings(body) is startup.ClaudeStartupVerdict.CONFIGURATION_MISMATCH
     assert observed is reason
     assert "private" not in repr((verdict, observed)) and len(reason.value) <= 24
+
+
+_EFFECTIVE_REFUSALS = [
+    ("EFFECTIVE_OBJECT", "private-sentinel"),
+    ("EFFECTIVE_EXTRA_KEYS", {"private-sentinel": "private-value"}),
+    ("EFFECTIVE_REFRESH_ABSENT", {}),
+    ("EFFECTIVE_REFRESH_ABSENT", {"deniedMcpServers": []}),
+    ("EFFECTIVE_MCP_ABSENT", {"forceRemoteSettingsRefresh": False}),
+    ("EFFECTIVE_REFRESH", {**startup.fixed_policy(), "forceRemoteSettingsRefresh": 1}),
+    ("EFFECTIVE_REFRESH", {**startup.fixed_policy(), "forceRemoteSettingsRefresh": False}),
+    ("EFFECTIVE_MCP_LIST", {**startup.fixed_policy(), "deniedMcpServers": None}),
+    ("EFFECTIVE_MCP_COUNT", {**startup.fixed_policy(), "deniedMcpServers": []}),
+    ("EFFECTIVE_MCP_COUNT", {**startup.fixed_policy(), "deniedMcpServers": [None, None]}),
+    ("EFFECTIVE_MCP_ENTRY", {**startup.fixed_policy(), "deniedMcpServers": [None]}),
+    ("EFFECTIVE_MCP_KEYS", {**startup.fixed_policy(), "deniedMcpServers": [{}]}),
+    ("EFFECTIVE_MCP_KEYS", {**startup.fixed_policy(), "deniedMcpServers": [
+        {"serverUrl": 1, "private-sentinel": "private-value"},
+    ]}),
+    ("EFFECTIVE_MCP_VALUE_TYPE", {**startup.fixed_policy(), "deniedMcpServers": [
+        {"serverUrl": 1},
+    ]}),
+    ("EFFECTIVE_MCP_VALUE", {**startup.fixed_policy(), "deniedMcpServers": [
+        {"serverUrl": "private-sentinel"},
+    ]}),
+    ("EFFECTIVE_ENV_OBJECT", {**startup.fixed_policy(), "env": []}),
+    ("EFFECTIVE_ENV_KEYS", {**startup.fixed_policy(), "env": {"private-sentinel": 1}}),
+    ("EFFECTIVE_ENV_VALUE", {**startup.fixed_policy(), "env": {"DISABLE_GROWTHBOOK": 1}}),
+]
+
+
+def test_effective_predicate_cases_exhaust_the_current_finite_vocabulary():
+    assert {name for name, _ in _EFFECTIVE_REFUSALS} == {
+        reason.name for reason in startup.ClaudeSettingsMismatchReason
+        if reason.value.startswith("effective-")
+        and reason is not startup.ClaudeSettingsMismatchReason.EFFECTIVE_SETTINGS
+    }
+
+
+@pytest.mark.parametrize("reason_name,configuration", _EFFECTIVE_REFUSALS)
+def test_effective_predicates_keep_exact_acceptance_and_first_failure(reason_name, configuration):
+    body = settings()
+    body["effective"] = deepcopy(configuration)
+    # A later defect must not mask the effective predicate. Within effective,
+    # env follows MCP and refresh; key refusal follows the required-key check.
+    body["sources"] = []
+    if type(body["effective"]) is dict and not reason_name.startswith("EFFECTIVE_ENV"):
+        body["effective"]["env"] = {"private-sentinel": "private-value"}
+    verdict, reason = startup.classify_settings(
+        wire(body), expected_request_id="observe-1", model=MODEL, effort=EFFORT,
+    )
+    assert verdict is judge_settings(body) is startup.ClaudeStartupVerdict.CONFIGURATION_MISMATCH
+    assert reason is startup.ClaudeSettingsMismatchReason[reason_name]
+    assert "private" not in repr((verdict, reason)) and len(reason.value.encode()) <= 24
+    # The shared predicate classifier preserves source's existing coarse result.
+    body = settings()
+    body["sources"][0]["settings"] = deepcopy(configuration)
+    assert startup.classify_settings(
+        wire(body), expected_request_id="observe-1", model=MODEL, effort=EFFORT,
+    ) == (startup.ClaudeStartupVerdict.CONFIGURATION_MISMATCH,
+          startup.ClaudeSettingsMismatchReason.SOURCE_SETTINGS)
+
+
+@pytest.mark.parametrize("configuration", [
+    startup.fixed_policy(),
+    {**startup.fixed_policy(), "env": {}},
+    {**startup.fixed_policy(), "env": startup.fixed_environment()},
+    {**startup.fixed_policy(), "env": {"DISABLE_GROWTHBOOK": "private-value"}},
+])
+def test_effective_predicate_classifier_accepts_original_permitted_shapes(configuration):
+    body = settings()
+    body["effective"] = configuration
+    body["sources"].append({"source": "flagSettings", "settings": {}})
+    assert startup.classify_settings(
+        wire(body), expected_request_id="observe-1", model=MODEL, effort=EFFORT,
+    ) == (startup.ClaudeStartupVerdict.MATCH, None)
+    assert judge_settings(body) is startup.ClaudeStartupVerdict.MATCH
 
 
 @pytest.mark.parametrize("raw,expected", [

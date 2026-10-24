@@ -67,7 +67,7 @@ from constructicon.substrate.executors.linux import BWRAP_SHA256, LinuxLauncher,
 from constructicon.substrate.executors.operator_store import inherit_maintenance
 
 EVIDENCE_DOMAIN = "claude-maintenance-entry-evidence"
-EVIDENCE_SCHEMA = 4
+EVIDENCE_SCHEMA = 5
 CONFIG_BYTES = 8 * 1024
 _HEX = re.compile(r"[0-9a-f]{64}\Z")
 _PHASE_HOSTS = {
