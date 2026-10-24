@@ -31,6 +31,7 @@ from constructicon.substrate.executors.claude_maintenance_mode import (
     ClaudeMaintenanceRefusalCode as Refusal,
 )
 from constructicon.substrate.executors.claude_native import (
+    POLICY_MOUNT,
     ClaudeNativeStoreMount,
     ClaudeNativeVendor,
 )
@@ -49,6 +50,15 @@ from scripts.ci import observe_m8_claude_startup as startup
 
 SCOPE = "credential_free_native_settings_diagnostic"
 SOURCES = ("userSettings", "projectSettings", "localSettings", "flagSettings", "policySettings")
+
+
+class _SettingsFileControlVendor(ClaudeNativeVendor):
+    """CI-only read of the same immutable policy through the explicit file flag."""
+
+    @property
+    def command(self) -> tuple[str, ...]:
+        # Pinned 2.1.296: yNs B@220409963 reads and pins the file for flagSettings.
+        return (*super().command, "--settings", POLICY_MOUNT)
 
 
 def policy_presence(value: object, *, present: bool = True) -> dict[str, str]:
@@ -287,7 +297,27 @@ def successful(report: dict[str, object]) -> bool:
             and report["binding_checks"] == 3 and report["refusal_code"] is None)
 
 
-async def hosted_observation() -> dict[str, object]:
+def settings_file_control_successful(report: dict[str, object]) -> bool:
+    """Prove explicit-file visibility, never managed-tier or session admission."""
+    if not successful(report):
+        return False
+    presence = report["policy_presence"]
+    if not isinstance(presence, dict):
+        return False
+    sources = presence.get("sources")
+    return (presence.get("sources_shape") == "list"
+            and presence.get("source_entry_invalid") is False
+            and presence.get("source_unknown") is False
+            and presence.get("source_duplicate") is False
+            and presence.get("errors_shape") in {"absent", "empty"}
+            and isinstance(sources, dict)
+            and sources.get("flagSettings") == {
+                "shape": "object", "refresh": "true", "mcp": "deny-all"})
+
+
+async def hosted_observation(*, settings_file_control: bool = False) -> dict[str, object]:
+    if type(settings_file_control) is not bool:
+        raise _Refused()
     if (sys.platform != "linux" or os.getuid() == 0
             or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted"):
         raise _Refused()
@@ -307,13 +337,14 @@ async def hosted_observation() -> dict[str, object]:
             or any(pins.get(key) is not False for key in (
                 "production_available", "subscription_qualified", "claude_qualified"))):
         raise _Refused()
+    vendor = _SettingsFileControlVendor if settings_file_control else ClaudeNativeVendor
     launcher = LinuxLauncher(
         runtime_root=startup.ROOT / "pinned-runtime",
         expected_runtime=Digest(pins["runtime_digest"]),
         bubblewrap=startup.ROOT / "bwrap", policy=startup.POLICY,
         expected_policy_sha256=fixture["policy_sha256"],
-        claude=ClaudeNativeVendor(startup.ROOT / "pinned-vendor", startup.MODEL, startup.EFFORT,
-                                  Digest(pins["vendor_digest"])),
+        claude=vendor(startup.ROOT / "pinned-vendor", startup.MODEL, startup.EFFORT,
+                      Digest(pins["vendor_digest"])),
     )
     deadline = asyncio.get_running_loop().time() + 20
     async with startup.fake_store(deadline) as (mount, peer):

@@ -9114,3 +9114,41 @@ common-runtime capture/gate test files move to the earlier-finishing mediation
 lane, retaining one invocation each and the same service/runtime/evidence
 inputs. Store-dependent recovery stays on foundation. No test, required lane
 or timeout is removed or weakened. Final-head CI must prove the redistribution.
+
+
+## Claude explicit-settings control over the same mount (Refs #40)
+
+PR #301 completed the credential-free ordinary projection with exact physical
+fake policy bytes but no effective policy keys or source entries. Its final
+head passed all four containment lanes after the proof redistribution. That
+result alone does not explain the authenticated qualification refusal.
+
+A second source pass found one successful `get_settings` emitter, not a
+separate degraded no-auth emitter. At pinned CLI 2.1.296 byte offset 233738387,
+the handler combines `NTr()` with applied settings and includes `errors` only
+when its filtered error list is nonempty. The response wrapper at 213966695
+matches the repository parser. Absence of the field remains the measured fact;
+it is not a new observation of loader execution. Both fixed policy keys are
+schema-valid, and the normal settings refresh clears parsed-file caches.
+
+The next control appends only the supported `--settings` option naming the
+already-mounted immutable policy file, within the CI diagnostic. The option
+at 225733560 accepts a file or JSON; the path loader at 220409963 eagerly reads
+through the same `qF` filesystem reader and pins its content for `flagSettings`.
+This tests native readability and normal-settings parsing while keeping the
+managed mount, environment, network denial, bounds and two-request exchange.
+The source artifact remains the pinned binary inspected as data, never run
+locally. No vendor binary or credential is added to portable tests.
+
+A positive control must expose both exact keys under `flagSettings`; a clean
+exchange without them is insufficient. This does not prove the managed parser
+or authorize flag settings as a production substitute. A missing/unreadable
+file can fail before initialization, so an incomplete exchange is recorded and
+refused rather than diagnosed from a missing errors field. Each variant has
+its own existing absolute deadline and closed finite evidence artifact.
+
+The control is confined to a script-private vendor subclass. Production source,
+argv, qualification predicates and accepted plan bytes remain unchanged. Fake
+checks cover exact command selection, unchanged default behavior, bounded
+published fields and false qualification flags. Hosted observations belong to
+the delivery PR after execution; written tests are not native evidence.
