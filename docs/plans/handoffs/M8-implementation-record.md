@@ -9200,3 +9200,44 @@ qualification, installation authority or a live READ. The changed launcher
 revision requires its own reviewed installation and fresh qualification before
 use with the operator store. Accepted plans and production predicates remain
 unchanged.
+
+
+### Claude authenticated startup passed; first READ remains separately authorized
+
+The owner-authorized session at controller
+`8085b6af19dfaa31c8194b878d418a8e00b0ae73` completed all twelve reviewed
+controller-only replacement phases, including initial and fresh affirmative
+mismatch, exact installed equality and R19/Claude imports. The schema-5 checker
+and unchanged launch configuration were independently verified. See the
+[installation/session receipt](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6392574546)
+and [N6 result](https://github.com/sushiHex/constructicon/issues/40#issuecomment-6392574752).
+
+Exactly one authenticated qualification acquisition returned native status 0.
+The exact-C positive checker accepted mode-match for selected Max, settings
+match and hooks match, exactly three request writes, stdin close and EOF.
+Lifecycle was joined-clean; process cleanliness, relay closure, credential
+closure and current custody were all affirmatively true. The checker digest
+matched an independent recomputation over the retained parsed evidence:
+`sha256:d8000f87ffdcb36a995188d798d440ff27c06c2ecc66e61b093289524a170a6c`.
+The separate raw evidence SHA-256 was
+`44a0ed6a648ba22351a948224ff7150c59d7d5434fb30c95201062dd962fc3aa`.
+These two digest meanings are not interchangeable.
+
+The reviewed source manifest was
+`6ddc462227b7b7889f0f9cff7ed85e4b6bf30bfc348650a18287707e47e738e0`;
+the fresh controller and qualification package manifests were respectively
+`b045a71ed5f433aaae31b6646df7e87a2a54678ecaa814d48669a893824d0d77`
+and `d1bcc365c29996708a0dad307494f9b8fc2b7241b8b4906b7c77b85b5d544ee6`.
+Both generated packages were independently compared with reviewed source before
+execution. Explicit park and independent off/idle observation passed; custody
+was released and the runtime/configuration/store were preserved.
+
+No login, explicit refresh, model call, READ, publication, activation,
+checkpoint, re-baseline or retry occurred. The finite evidence retains
+`subscription_qualified: false` and `production_available: false`. This closes
+the measured authenticated-startup obstruction, not the whole N6 acceptance
+scope. The [first admitted READ procedure](M8-N6-first-read-session.md) proposes
+one fixed fixture/model attempt through the existing implementation. It needs
+fresh next-boot qualification, publication/activation of the exact checked
+identity, a concrete one-attempt authorization and explicit owner call approval.
+The parked session's digest is historical evidence, not the next boot's seal.

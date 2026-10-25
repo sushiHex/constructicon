@@ -16,6 +16,26 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Claude authenticated startup passed before its first model READ
+
+The owner-authorized session at `8085b6a` completed all twelve controller-only
+replacement phases, exact installed/controller/launch checks and one authenticated
+schema-5 startup qualification. Mode, settings and hooks matched; three writes,
+closed stdin, EOF, joined-clean teardown and current custody were affirmative.
+The exact checker and independent local digest agreed. Public finite receipts
+are on [#77](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6392574546)
+and [#40](https://github.com/sushiHex/constructicon/issues/40#issuecomment-6392574752).
+The VM was explicitly parked and independently observed off/idle; custody ended.
+
+No model call, READ, publication, activation or checkpoint ran. The evidence
+still reports subscription/production qualification false. Its semantic digest
+is not its raw-file SHA and cannot become a new boot's seal. The
+[first READ procedure](plans/handoffs/M8-N6-first-read-session.md) uses the existing
+fixed fixture/graph/lease path and needs fresh current-boot evidence plus an
+exact owner-approved one-attempt authorization. It states the real time/I/O
+bounds and the unenforced token/backend-request/money limits; historical Codex
+attempt/billing decisions supply no Claude authority. Accepted plans are unchanged.
+
 ## Claude admin inputs need stable names as well as immutable bytes
 
 A mounted file can be readable through its original path while a runtime's
