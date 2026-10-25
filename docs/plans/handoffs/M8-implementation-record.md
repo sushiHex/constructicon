@@ -58,6 +58,12 @@ replacement was restored and proved against a passing baseline and an assertion
 failure. All remaining helper substitutions target the parser that defines it.
 The correction changes no production code or acceptance predicate.
 
+Full CI also exposed a legacy positive-report mutation witness masked by the new
+coherence law. A coherent nonmatching-mode report now exercises that guard
+independently, with both refusing and permitting constructor cases. Its baseline
+passes and its mutant assertion fails; nearby constructor witnesses were checked
+for the same masking. Only the witness and its inventory selection changed.
+
 ## Claude spacing preserves incremental framing (Refs #40)
 
 Controller `0e52d702fab854825cb5bd747c2d020f4e5003b9` was installed and

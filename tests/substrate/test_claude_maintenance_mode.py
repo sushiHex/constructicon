@@ -1073,6 +1073,30 @@ def test_report_constructor_refuses_unbounded_or_coerced_fields(change):
         maintenance.ClaudeMaintenanceObservation(**values)
 
 
+def test_observed_report_requires_mode_match_even_when_failure_diagnostics_are_coherent():
+    values = {
+        "phase": maintenance.ClaudeMaintenancePhase.OBSERVE,
+        "mode_verdict": ClaudeInitializeVerdict.INITIALIZE_ERROR,
+        "lifecycle": maintenance.ClaudeMaintenanceLifecycle.REFUSED,
+        "request_writes": 1, "ui_records": 0, "stdin_closed": True, "eof": True,
+        "classified_responses": 1,
+    }
+    # This failure is a valid classified observation, with no account/source
+    # classification reached. Only the positive lifecycle changes below.
+    failure = maintenance.ClaudeMaintenanceObservation(**values)
+    assert failure.mode_verdict is ClaudeInitializeVerdict.INITIALIZE_ERROR
+    assert failure.mode_mismatch_reason is None
+    assert failure.token_source_category is failure.api_key_source_category is None
+    values["lifecycle"] = maintenance.ClaudeMaintenanceLifecycle.OBSERVED
+    with pytest.raises(ValueError, match=r"^observed maintenance requires joined mode evidence$"):
+        maintenance.ClaudeMaintenanceObservation(**values)
+    values.update(mode_verdict=ClaudeInitializeVerdict.MODE_MATCH,
+                  token_source_category=ClaudeTokenSourceCategory.ABSENT,
+                  api_key_source_category=ClaudeApiKeySourceCategory.ABSENT)
+    accepted = maintenance.ClaudeMaintenanceObservation(**values)
+    assert accepted.lifecycle is maintenance.ClaudeMaintenanceLifecycle.OBSERVED
+
+
 async def test_read_failure_after_first_ambiguous_reply_is_not_a_second_reply():
     failure = OSError("private-read-failure")
 

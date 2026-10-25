@@ -1233,7 +1233,8 @@ MAINTENANCE_MUTANTS = (
     ("maintenance positive report requires selected mode",
      MAINTENANCE + "ClaudeMaintenanceObservation.__post_init__",
      "self.mode_verdict is not ClaudeInitializeVerdict.MODE_MATCH", "False",
-     MAINTENANCE_TEST + "test_report_constructor_refuses_unbounded_or_coerced_fields"),
+     MAINTENANCE_TEST
+     + "test_observed_report_requires_mode_match_even_when_failure_diagnostics_are_coherent"),
     ("maintenance positive report requires closed stdin",
      MAINTENANCE + "ClaudeMaintenanceObservation.__post_init__",
      "or not self.stdin_closed", "or False",
