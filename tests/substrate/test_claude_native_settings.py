@@ -358,6 +358,8 @@ async def test_pinned_credential_free_settings_diagnostic_has_closed_output(sett
     assert report["proxy_joined"] is True and report["proxy_bound_exceeded"] is False
     if settings_file_control:
         assert diagnostic.settings_file_control_successful(report), report
+    else:
+        assert diagnostic.managed_policy_observed(report), report
 
 
 @pytest.mark.parametrize("settings_file_control", [None, False, True])
@@ -463,3 +465,27 @@ async def test_file_control_requires_affirmative_unambiguous_flag_policy(case):
     assert not diagnostic.settings_file_control_successful(report)
     if case != "exchange":
         assert diagnostic.successful(report)  # Ordinary observation remains unchanged.
+
+
+@pytest.mark.parametrize("case", ["match", "flag-only", "effective-absent", "source-absent",
+                                  "effective-drift", "source-drift", "errors"])
+async def test_managed_projection_requires_effective_and_managed_source(case):
+    policy = {"forceRemoteSettingsRefresh": True, "deniedMcpServers": [{"serverUrl": "*"}]}
+    body = {"effective": dict(policy), "sources": [
+        {"source": "policySettings", "settings": dict(policy)},
+    ]}
+    if case == "flag-only":
+        body["sources"][0]["source"] = "flagSettings"
+    elif case == "effective-absent":
+        del body["effective"]
+    elif case == "source-absent":
+        body["sources"] = []
+    elif case == "effective-drift":
+        body["effective"]["forceRemoteSettingsRefresh"] = False
+    elif case == "source-drift":
+        body["sources"][0]["settings"]["forceRemoteSettingsRefresh"] = False
+    elif case == "errors":
+        body["errors"] = [{"private": "not published"}]
+    report = await observe(Channel(body=body))
+    assert diagnostic.successful(report)
+    assert diagnostic.managed_policy_observed(report) is (case == "match")

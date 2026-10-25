@@ -24,6 +24,7 @@ from constructicon.core.grants import Posture
 from constructicon.core.identity import Digest
 from constructicon.substrate.executors.claude_native import (
     CLAUDE_PROFILE,
+    MANAGED_MCP,
     ClaudeNativeRecipe,
 )
 from tests.substrate.test_claude_native_containment import fake_mount
@@ -176,7 +177,8 @@ async def test_verified_install_launches_joined_fake_peer(
         nonlocal admitted
         admitted = True
         policy = ClaudeNativeRecipe.STREAM_JSON.policy
-        await io.write(b"ping\n" + json.dumps(policy, sort_keys=True).encode() + b"\n")
+        await io.write(b"ping\n" + json.dumps(policy, sort_keys=True).encode()
+                       + b"\n" + MANAGED_MCP)
         await io.close_stdin()
         while chunk := await io.read():
             output.extend(chunk)
@@ -195,6 +197,11 @@ async def test_verified_install_launches_joined_fake_peer(
         assert admitted and result.returncode == result.payload_returncode == 0
         assert result.stderr == b"" and bytes(output) == result.stdout
         assert b"policy-content:exact\n" in result.stdout
+        assert b"mcp-content:exact\n" in result.stdout
+        assert b"policy-canonical:linked-0600-reopened\n" in result.stdout
+        assert b"mcp-canonical:linked-0600-reopened\n" in result.stdout
+        assert b"policy-canonical-path:exact\n" in result.stdout
+        assert b"mcp-canonical-path:exact\n" in result.stdout
         assert f"final-label:{CLAUDE_PROFILE}\n".encode() in result.stdout
         assert credential.read_bytes() == b"fake-refreshed\n"
     # The installed artifact and proof scope are physical; the archive member

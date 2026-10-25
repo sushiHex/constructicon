@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from constructicon.substrate.executors.claude_native import ClaudeNativeRecipe
+from constructicon.substrate.executors.claude_native import MANAGED_MCP, ClaudeNativeRecipe
 
 
 @pytest.fixture(scope="module")
@@ -23,17 +23,18 @@ def policy_peer(tmp_path_factory):
     # Compile the actual comparator, substituting only the Linux mount path and
     # fixture input file. The full native peer remains a hosted physical proof.
     comparator = peer.read_text(encoding="utf-8").split(
-        "static void policy_content(void) {", 1,
+        "static void file_content(const char *path, const char *fact) {", 1,
     )[1].split("static void persistence(void) {", 1)[0]
     source = directory / "policy.c"
     source.write_text(
         '#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n'
-        'static const char *policy_path;\n#define POLICY policy_path\n'
+        'static const char *policy_path, *mcp_path;\n'
+        '#define POLICY policy_path\n#define MCP mcp_path\n'
         'static void require(int condition) { if (!condition) exit(90); }\n'
-        'static void policy_content(void) {' + comparator
+        'static void file_content(const char *path, const char *fact) {' + comparator
         + 'int main(int argc, char **argv) {\n'
-        'require(argc == 3); policy_path = argv[1];\n'
-        'require(freopen(argv[2], "rb", stdin) != NULL);\n'
+        'require(argc == 4); policy_path = argv[1]; mcp_path = argv[2];\n'
+        'require(freopen(argv[3], "rb", stdin) != NULL);\n'
         'policy_content(); return 0; }\n',
         encoding="utf-8",
     )
@@ -48,19 +49,22 @@ def policy_peer(tmp_path_factory):
 
 
 @pytest.mark.parametrize("recipe", list(ClaudeNativeRecipe))
+@pytest.mark.parametrize("target", ["policy", "mcp"])
 @pytest.mark.parametrize("case", [
     "exact", "changed", "empty", "missing", "trailing", "oversized",
     "empty-expectation", "long-expectation", "unterminated-expectation",
 ])
 def test_actual_policy_comparator_requires_exact_bounded_file(
-    policy_peer, tmp_path, recipe, case,
+    policy_peer, tmp_path, recipe, case, target,
 ):
-    canonical = json.dumps(recipe.policy, sort_keys=True).encode() + b"\n"
+    policy_bytes = json.dumps(recipe.policy, sort_keys=True).encode() + b"\n"
+    canonical = policy_bytes if target == "policy" else MANAGED_MCP
     assert 1 < len(canonical) < 4096
     expected = canonical
     observed = canonical
     if case == "changed":
-        observed = canonical.replace(b"true", b"null", 1)
+        observed = canonical.replace(b"true", b"null", 1) if target == "policy" else (
+            canonical.replace(b"mcpServers", b"mcpServerx", 1))
         assert observed != canonical and len(observed) == len(canonical)
     elif case == "empty":
         observed = b""
@@ -75,14 +79,21 @@ def test_actual_policy_comparator_requires_exact_bounded_file(
     elif case == "unterminated-expectation":
         expected = observed = canonical.rstrip(b"\n")
     policy = tmp_path / "managed-settings.json"
+    mcp = tmp_path / "managed-mcp.json"
+    paths = {"policy": policy, "mcp": mcp}
+    other = mcp if target == "policy" else policy
+    other.write_bytes(MANAGED_MCP if target == "policy" else policy_bytes)
     if case != "missing":
-        policy.write_bytes(observed)
+        paths[target].write_bytes(observed)
     expectation = tmp_path / "expected.json"
-    expectation.write_bytes(expected)
+    expectation.write_bytes(
+        expected + MANAGED_MCP if target == "policy" else policy_bytes + expected)
     result = subprocess.run(
-        [str(policy_peer), str(policy), str(expectation)],
+        [str(policy_peer), str(policy), str(mcp), str(expectation)],
         stdin=subprocess.DEVNULL, capture_output=True, check=False, timeout=5,
     )
     assert result.stderr == b""
     assert result.returncode == (0 if case == "exact" else 90)
-    assert result.stdout.splitlines() == ([b"policy-content:exact"] if case == "exact" else [])
+    prefix = [b"policy-content:exact"] if target == "mcp" else []
+    assert result.stdout.splitlines() == (
+        [b"policy-content:exact", b"mcp-content:exact"] if case == "exact" else prefix)

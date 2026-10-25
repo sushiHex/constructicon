@@ -18,7 +18,12 @@ import pytest
 from constructicon.core.grants import Posture
 from constructicon.core.identity import Digest, digest
 from constructicon.substrate.executors.claude_native import (
+    ADMIN_ROOT,
     CLAUDE_PROFILE,
+    MANAGED_MCP,
+    MCP_MOUNT,
+    POLICY_MOUNT,
+    ClaudeNativeLayout,
     ClaudeNativeRecipe,
     ClaudeNativeStoreMount,
     ClaudeNativeVendor,
@@ -168,7 +173,8 @@ async def test_final_transition_noexec_bootstrap_protection_and_fake_persistence
         # The launcher admits this callback only after its trusted PID 1's
         # private observation of the exact final label and no_new_privs.
         admitted.append(True)
-        await io.write(b"ping\n" + json.dumps(recipe.policy, sort_keys=True).encode() + b"\n")
+        await io.write(b"ping\n" + json.dumps(recipe.policy, sort_keys=True).encode()
+                       + b"\n" + MANAGED_MCP)
         await io.close_stdin()
         while chunk := await io.read():
             output.extend(chunk)
@@ -206,7 +212,13 @@ async def test_final_transition_noexec_bootstrap_protection_and_fake_persistence
             "credential-initial": "fake-initial",
             "credential-rename": str(errno.EBUSY),
             "credential-fallback": "written-synced-chmod",
-            "policy-content": "exact", "policy-write": str(errno.EROFS),
+            "policy-content": "exact", "mcp-content": "exact",
+            "policy-canonical-path": "exact", "mcp-canonical-path": "exact",
+            "policy-canonical": "linked-0600-reopened", "mcp-canonical": "linked-0600-reopened",
+            **{name: str(errno.EROFS) for name in (
+                "policy-write", "mcp-write", "admin-create", "admin-rename",
+                "policy-unlink", "mcp-unlink",
+            )},
             "direct-network": str(errno.ENETUNREACH),
             "bridge-exchange": "pong",
         }
@@ -248,6 +260,51 @@ async def test_final_transition_noexec_bootstrap_protection_and_fake_persistence
             "forbidden_sibling_not_persisted": True, "bridge_peer_joined": True,
             "full_read_transaction_proven": False,
         })
+
+
+def unlinked_admin_control_argv(actual_argv):
+    def old_admin(self, command, **arguments):
+        args = actual_argv(self, command, **arguments)
+        layout = arguments.get("layout")
+        if not isinstance(layout, ClaudeNativeLayout):
+            return args
+        start = args.index(ADMIN_ROOT) - 1
+        end = args.index("--bind-fd")
+        args[start:end] = [
+            "--dir", ADMIN_ROOT,
+            "--ro-bind-data", str(layout.policy_fd), POLICY_MOUNT,
+            "--ro-bind-data", str(layout.mcp_fd), MCP_MOUNT,
+        ]
+        return args
+
+    return old_admin
+
+
+async def test_unlinked_bind_data_control_reports_deleted_canonical_path(
+    claude_launcher, tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(LinuxLauncher, "argv", unlinked_admin_control_argv(LinuxLauncher.argv))
+    output = bytearray()
+
+    async def conversation(io):
+        await io.write(b"ping\n")
+        await io.close_stdin()
+        while chunk := await io.read():
+            output.extend(chunk)
+
+    with fake_mount(tmp_path) as (mount, _credential, received, failures, _peer):
+        result = await claude_launcher.exchange(
+            claude_launcher.claude.command, workspace=None, posture=Posture.READ,
+            guard_fds=(mount.lock_fd,), conversation=conversation, timeout_s=20,
+            native_store=mount,
+        )
+        assert result.returncode == result.payload_returncode == 90
+        assert result.stderr == b"" and bytes(output) == result.stdout
+        assert received == [] and failures == []
+        facts = dict(line.split(":", 1) for line in output.decode().splitlines())
+        assert facts["policy-canonical-path"] == "deleted"
+        assert "policy-canonical" not in facts and "policy-content" not in facts
+        assert facts["private-fds"] == "0"
 
 
 async def test_missing_native_profile_refuses_before_conversation(claude_launcher, tmp_path):

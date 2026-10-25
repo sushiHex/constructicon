@@ -18,7 +18,9 @@
 
 #define SELF "/opt/claude/claude"
 #define CREDENTIAL "/tmp/claude-storage/secure/.credentials.json"
+#define ADMIN "/etc/claude-code"
 #define POLICY "/etc/claude-code/managed-settings.json"
+#define MCP "/etc/claude-code/managed-mcp.json"
 extern char **environ;
 
 static void require(int condition) { if (!condition) exit(90); }
@@ -108,20 +110,54 @@ static void absence(void) {
     printf("private-fds:%d\n", private_count);
 }
 
-static void policy_content(void) {
+static void canonical_file(const char *path, const char *fact) {
+    int fd = open(path, O_PATH | O_NOFOLLOW | O_CLOEXEC);
+    struct stat original, reopened;
+    require(fd >= 0 && !fstat(fd, &original));
+    char descriptor[64], target[512], first[4096], second[4096];
+    require(snprintf(descriptor, sizeof(descriptor), "/proc/self/fd/%d", fd) > 0);
+    ssize_t length = readlink(descriptor, target, sizeof(target) - 1);
+    require(length > 0 && length < (ssize_t)sizeof(target) - 1);
+    target[length] = 0;
+    const char *classification = !strcmp(target, path) ? "exact" :
+        (length >= 10 && !strcmp(target + length - 10, " (deleted)")) ? "deleted" : "unexpected";
+    printf("%s-canonical-path:%s\n", fact, classification);
+    require(!strcmp(target, path));
+    require(S_ISREG(original.st_mode) && (original.st_mode & 07777) == 0600 &&
+            original.st_nlink == 1);
+    /* Reopen both the actual O_PATH descriptor and the returned pathname.
+     * This is the fd-to-path primitive Bun realpath uses on Linux. */
+    FILE *from_fd = fopen(descriptor, "rb"), *from_name = fopen(target, "rb");
+    require(from_fd && from_name && !fstat(fileno(from_name), &reopened));
+    require(original.st_dev == reopened.st_dev && original.st_ino == reopened.st_ino);
+    size_t size = fread(first, 1, sizeof(first), from_fd);
+    size_t named_size = fread(second, 1, sizeof(second), from_name);
+    require(size > 0 && size < sizeof(first) && named_size == size &&
+            feof(from_fd) && feof(from_name) && !ferror(from_fd) && !ferror(from_name) &&
+            !memcmp(first, second, size));
+    require(!fclose(from_fd) && !fclose(from_name) && !close(fd));
+    printf("%s-canonical:linked-0600-reopened\n", fact);
+}
+
+static void file_content(const char *path, const char *fact) {
     /* The trusted fixture sends the recipe's canonical sealed bytes, avoiding
      * a second policy definition in this peer. Both reads are strictly bounded. */
     char expected[4096], actual[4096];
     require(fgets(expected, sizeof(expected), stdin) != NULL);
     size_t expected_size = strlen(expected);
     require(expected_size > 1 && expected[expected_size - 1] == '\n');
-    FILE *stream = fopen(POLICY, "rb");
+    FILE *stream = fopen(path, "rb");
     require(stream != NULL);
     size_t size = fread(actual, 1, sizeof(actual), stream);
     require(!ferror(stream) && feof(stream) && size < sizeof(actual));
     require(!fclose(stream));
     require(size == expected_size && !memcmp(actual, expected, size));
-    puts("policy-content:exact");
+    printf("%s:exact\n", fact);
+}
+
+static void policy_content(void) {
+    file_content(POLICY, "policy-content");
+    file_content(MCP, "mcp-content");
 }
 
 static void persistence(void) {
@@ -145,12 +181,42 @@ static void persistence(void) {
     fd = open(sibling, O_WRONLY | O_CREAT | O_EXCL, 0600);
     require(fd >= 0 && write(fd, "disposable\n", 11) == 11 && !close(fd));
     puts("credential-fallback:written-synced-chmod");
+    canonical_file(POLICY, "policy");
+    canonical_file(MCP, "mcp");
     policy_content();
     errno = 0;
     fd = open(POLICY, O_WRONLY | O_TRUNC);
     failure = errno;
     if (fd >= 0) close(fd);
     printf("policy-write:%d\n", fd < 0 ? failure : 0);
+    require(fd < 0 && failure == EROFS);
+    errno = 0;
+    fd = open(MCP, O_WRONLY | O_TRUNC);
+    failure = errno;
+    if (fd >= 0) close(fd);
+    printf("mcp-write:%d\n", fd < 0 ? failure : 0);
+    require(fd < 0 && failure == EROFS);
+    errno = 0;
+    fd = open(ADMIN "/unexpected", O_WRONLY | O_CREAT | O_EXCL, 0600);
+    failure = errno;
+    if (fd >= 0) close(fd);
+    printf("admin-create:%d\n", fd < 0 ? failure : 0);
+    require(fd < 0 && failure == EROFS);
+    errno = 0;
+    int changed = rename(POLICY, ADMIN "/renamed");
+    failure = errno;
+    printf("admin-rename:%d\n", changed < 0 ? failure : 0);
+    require(changed < 0 && failure == EROFS);
+    errno = 0;
+    changed = unlink(POLICY);
+    failure = errno;
+    printf("policy-unlink:%d\n", changed < 0 ? failure : 0);
+    require(changed < 0 && failure == EROFS);
+    errno = 0;
+    changed = unlink(MCP);
+    failure = errno;
+    printf("mcp-unlink:%d\n", changed < 0 ? failure : 0);
+    require(changed < 0 && failure == EROFS);
 }
 
 static void network(void) {

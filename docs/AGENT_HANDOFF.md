@@ -16,6 +16,21 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Claude admin inputs need stable names as well as immutable bytes
+
+A mounted file can be readable through its original path while a runtime's
+resolved pathname is not reopenable. The credential-free flag-settings control
+proved bytes and normal parsing, not the managed reader's path. Bubblewrap's
+unlinked backing files and the native realpath route supplied a concrete
+mechanism to test instead of relaxing the managed-policy requirement.
+
+Claude's admin inputs now use named files copied from the same sealed FDs into
+one private tmpfs, remounted read-only before payload execution. No host-side
+state or new authority is added. Physical name/mutation proofs and the ordinary
+native managed-policy assertion accompany the change; final observed results
+are recorded in its delivery PR. The new launcher revision still requires
+reviewed installation and authenticated qualification before live use.
+
 ## A flag-settings control cannot stand in for managed-policy qualification
 
 The ordinary credential-free diagnostic reproduced missing effective policy

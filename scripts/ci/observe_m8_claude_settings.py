@@ -297,8 +297,8 @@ def successful(report: dict[str, object]) -> bool:
             and report["binding_checks"] == 3 and report["refusal_code"] is None)
 
 
-def settings_file_control_successful(report: dict[str, object]) -> bool:
-    """Prove explicit-file visibility, never managed-tier or session admission."""
+def _source_policy_observed(report: dict[str, object], source: str) -> bool:
+    """Require affirmative policy bytes in one unambiguous source projection."""
     if not successful(report):
         return False
     presence = report["policy_presence"]
@@ -311,7 +311,19 @@ def settings_file_control_successful(report: dict[str, object]) -> bool:
             and presence.get("source_duplicate") is False
             and presence.get("errors_shape") in {"absent", "empty"}
             and isinstance(sources, dict)
-            and sources.get("flagSettings") == {
+            and sources.get(source) == {
+                "shape": "object", "refresh": "true", "mcp": "deny-all"})
+
+
+def settings_file_control_successful(report: dict[str, object]) -> bool:
+    """Prove explicit-file visibility, never managed-tier or session admission."""
+    return _source_policy_observed(report, "flagSettings")
+
+
+def managed_policy_observed(report: dict[str, object]) -> bool:
+    """Prove the ordinary managed projection, not authenticated qualification."""
+    return (_source_policy_observed(report, "policySettings")
+            and report["policy_presence"]["effective"] == {
                 "shape": "object", "refresh": "true", "mcp": "deny-all"})
 
 
