@@ -636,9 +636,12 @@ class LinuxLauncher:
                 "--perms", "0700", "--dir", STORAGE_PARENT,
                 "--perms", "0700", "--dir", SECURE_ROOT,
                 "--perms", "0700", "--dir", ANTHROPIC_ROOT,
-                "--dir", ADMIN_ROOT,
-                "--ro-bind-data", str(layout.policy_fd), POLICY_MOUNT,
-                "--ro-bind-data", str(layout.mcp_fd), MCP_MOUNT,
+                # Keep linked file names: Bun realpath uses /proc/self/fd,
+                # which appends " (deleted)" to --ro-bind-data's unlinked inode.
+                "--tmpfs", ADMIN_ROOT,
+                "--perms", "0600", "--file", str(layout.policy_fd), POLICY_MOUNT,
+                "--perms", "0600", "--file", str(layout.mcp_fd), MCP_MOUNT,
+                "--remount-ro", ADMIN_ROOT,
                 "--bind-fd", str(native_store.credential_fd), CREDENTIAL_MOUNT,
                 "--ro-bind", str(self.claude.tree), CLAUDE_VENDOR_MOUNT,
             ]

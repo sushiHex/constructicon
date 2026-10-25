@@ -9152,3 +9152,51 @@ argv, qualification predicates and accepted plan bytes remain unchanged. Fake
 checks cover exact command selection, unchanged default behavior, bounded
 published fields and false qualification flags. Hosted observations belong to
 the delivery PR after execution; written tests are not native evidence.
+
+
+## Claude canonical admin mount (Refs #40)
+
+The prior credential-free control proved native readability and ordinary
+parsing of the immutable policy: `--settings` exposed both exact keys in
+`flagSettings` and effective settings, while `policySettings` remained absent.
+It was not a production workaround. Source tracing then ruled out an ordinary
+empty remote tier shadowing a valid file: the managed composition retains file
+tiers and restores true refresh from any retained tier. Import-aware tracing
+confirmed the actual Linux locator, selectors and response emitter.
+
+A narrower source-supported mechanism explains the different read paths.
+Bubblewrap's `--ro-bind-data` copies a descriptor to a temporary file, mounts
+it and unlinks its original name. Linux proc-fd path reporting adds a deleted
+suffix to an unlinked dentry. Public Bun 1.4.3 uses open plus proc-fd lookup for
+Linux `realpath`. The pinned Claude managed reader at byte 209114326 reopens
+`yo(...).resolvedPath`; the flag loader at 220409963 reads the original path.
+The pinned binary identifies Bun 1.4.3 but its embedded build hash is not the
+public tag commit, so source comparison alone does not establish its runtime
+behavior. The ordinary native projection and physical path control must decide.
+
+Primary implementation references:
+
+- [Bubblewrap 0.9.0 file operations](https://github.com/containers/bubblewrap/blob/v0.9.0/bubblewrap.c#L1307-L1360)
+- [Bun 1.4.3 realpath](https://github.com/oven-sh/bun/blob/c6da4a4d3010e5553438c60f6bd76d981976867c/src/runtime/node/node_fs.rs#L7645-L7669)
+- [Linux 6.8 deleted-path suffix](https://github.com/torvalds/linux/blob/v6.8/fs/d_path.c#L287-L291)
+
+The correction is confined to Claude's existing admin directory: mount a
+private tmpfs, copy the two existing sealed descriptors to named files with
+explicit mode 0600, then remount the directory read-only before starting the
+payload. No host-side file, new policy, credential, environment, argv or egress
+route is introduced. Original descriptor custody and cleanup are unchanged.
+The named files have no writable subtree or replacement route after launch.
+
+This is consequential mount-authority work. Physical proofs require exact
+contents, canonical reopenable names and denied admin mutations; portable
+recipe tests and affected mutants pin the fixed assembly. The existing native
+settings test now requires both effective and managed-source policy, rather
+than accepting a clean observation of absence. The explicit-file control stays
+separate. Generic diagnostic completion retains its historical meaning.
+Final-head CI and independent review provide the actual result in the PR.
+
+A successful credential-free projection is not authenticated startup
+qualification, installation authority or a live READ. The changed launcher
+revision requires its own reviewed installation and fresh qualification before
+use with the operator store. Accepted plans and production predicates remain
+unchanged.

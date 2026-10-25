@@ -402,15 +402,40 @@ def egress(tmp_path, events):
     return SimpleNamespace(path=tmp_path / "leaf", require_current=lambda: events.append("leaf"))
 
 
+def test_unlinked_admin_control_preserves_the_mandatory_probe(tmp_path, on_linux):
+    from tests.substrate.test_claude_native_containment import unlinked_admin_control_argv
+
+    subject = launcher(tmp_path)
+    command = ("/usr/bin/python3", "-I", "-c", "pass")
+    arguments = {"workspace": None, "posture": Posture.READ,
+                 "native_store": None, "layout": None}
+    control = unlinked_admin_control_argv(linux.LinuxLauncher.argv)
+    assert control(subject, command, **arguments) == subject.argv(command, **arguments)
+    native = recipe_module()
+    arguments.update(native_store=native.ClaudeNativeStoreMount(
+        731, 732, lambda: None, egress(tmp_path, [])),
+        layout=native.ClaudeNativeLayout(733, 734))
+    original = subject.argv(subject.claude.command, **arguments)
+    changed = control(subject, subject.claude.command, **arguments)
+    start, end = original.index(native.ADMIN_ROOT) - 1, original.index("--bind-fd")
+    old_segment = ["--dir", native.ADMIN_ROOT,
+                   "--ro-bind-data", "733", native.POLICY_MOUNT,
+                   "--ro-bind-data", "734", native.MCP_MOUNT]
+    assert changed == original[:start] + old_segment + original[end:]
+
+
+@pytest.mark.parametrize("login", [False, True])
 def test_accepting_mount_recipe_has_one_persistent_file_and_disjoint_admin_ancestors(
-    tmp_path, on_linux,
+    tmp_path, on_linux, login,
 ):
     native = recipe_module()
-    subject = launcher(tmp_path)
+    selection = native.ClaudeNativeRecipe.LOGIN if login else native.ClaudeNativeRecipe.STREAM_JSON
+    subject = replace(launcher(tmp_path), claude_recipe=selection)
     events = []
     store = native.ClaudeNativeStoreMount(731, 732, lambda: None, egress(tmp_path, events))
-    args = subject.argv(subject.claude.command, workspace=None, posture=Posture.READ,
-                        native_store=store, layout=native.ClaudeNativeLayout(733, 734))
+    command = selection.command(subject.claude)
+    args = subject.argv(command, workspace=None, posture=Posture.READ,
+                        native_store=store, layout=native.ClaudeNativeLayout(733, 734, selection))
     assert args.count("--bind-fd") == 1 and "--bind" not in args
     assert args[args.index("--bind-fd"):args.index("--bind-fd") + 3] == [
         "--bind-fd", "732", native.CREDENTIAL_MOUNT]
@@ -419,9 +444,19 @@ def test_accepting_mount_recipe_has_one_persistent_file_and_disjoint_admin_ances
         index = args.index(directory)
         assert args[index - 3:index] == ["--perms", "0700", "--dir"]
         assert not native.ADMIN_ROOT.startswith(directory + "/")
-    assert args.count("--ro-bind-data") == 2
+    assert args.count("--file") == 2 and "--ro-bind-data" not in args
+    admin = args.index(native.ADMIN_ROOT)
+    credential = args.index("--bind-fd")
+    assert args[admin - 1:credential] == [
+        "--tmpfs", native.ADMIN_ROOT,
+        "--perms", "0600", "--file", "733", native.POLICY_MOUNT,
+        "--perms", "0600", "--file", "734", native.MCP_MOUNT,
+        "--remount-ro", native.ADMIN_ROOT,
+    ]
+    assert args.count("--remount-ro") == 1
+    assert credential < args.index(str(subject.claude.tree)) < args.index("--")
     assert args[args.index("--"):][1:] == [
-        "/usr/bin/python3", "-I", linux.BRIDGE_SCRIPT, *subject.claude.command]
+        "/usr/bin/python3", "-I", linux.BRIDGE_SCRIPT, *command]
     assert "/workspace" not in args and "CODEX_HOME" not in args
     actual_env = {args[index + 1]: args[index + 2]
                   for index, item in enumerate(args) if item == "--setenv"}
