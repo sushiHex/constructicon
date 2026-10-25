@@ -34,9 +34,11 @@ from constructicon.substrate.executors.claude_maintenance_session import (
 )
 from constructicon.substrate.executors.claude_native import ClaudeNativeRecipe
 from constructicon.substrate.executors.claude_protocol import (
+    ClaudeApiKeySourceCategory,
     ClaudeInitializeVerdict,
     ClaudeModeMismatchReason,
     ClaudePlan,
+    ClaudeTokenSourceCategory,
 )
 from constructicon.substrate.executors.claude_startup import (
     ClaudeSettingsMismatchReason,
@@ -107,6 +109,8 @@ def facts(phase: ClaudeMaintenanceSessionPhase) -> ClaudeMaintenanceSessionFacts
             else ClaudeMaintenancePhase.RELOAD,
             ClaudeInitializeVerdict.MODE_MATCH,
             ClaudeMaintenanceLifecycle.OBSERVED, 1, 0, True, True,
+            token_source_category=ClaudeTokenSourceCategory.ABSENT,
+            api_key_source_category=ClaudeApiKeySourceCategory.ABSENT,
         )
         process_clean = None
     return ClaudeMaintenanceSessionFacts(
@@ -116,6 +120,8 @@ def facts(phase: ClaudeMaintenanceSessionPhase) -> ClaudeMaintenanceSessionFacts
         qualification=(ClaudeStartupQualificationFacts(
             ClaudeQualificationLifecycle.QUALIFIED, ClaudeInitializeVerdict.MODE_MATCH,
             ClaudeStartupVerdict.MATCH, ClaudeStartupVerdict.MATCH, 3, 0, True, True,
+            token_source_category=ClaudeTokenSourceCategory.ABSENT,
+            api_key_source_category=ClaudeApiKeySourceCategory.ABSENT,
         ) if phase is ClaudeMaintenanceSessionPhase.QUALIFY else None),
     )
 
@@ -570,7 +576,7 @@ def test_every_published_field_has_a_declared_finite_bound(tmp_path, phase):
         "launch_revision", "egress", "completed",
     } | ({"qualification_revision"} if phase is ClaudeMaintenanceSessionPhase.QUALIFY else set())
     assert record["completed"] is True
-    assert type(record["schema_version"]) is int and record["schema_version"] == 5
+    assert type(record["schema_version"]) is int and record["schema_version"] == 6
     assert record["subscription_qualified"] is record["production_available"] is False
     for key in ("runtime_digest", "vendor_digest", "launch_revision", *(
         ("qualification_revision",) if phase is ClaudeMaintenanceSessionPhase.QUALIFY else ()
@@ -613,7 +619,8 @@ def test_every_published_field_has_a_declared_finite_bound(tmp_path, phase):
         assert public["login"] is public["mode"] is None
         qual = public["qualification"]
         assert set(qual) == {"lifecycle", "initialize_verdict", "settings_verdict",
-                             "settings_mismatch_reason",
+                             "settings_mismatch_reason", "mode_mismatch_reason",
+                             "token_source_category", "api_key_source_category",
                              "hooks_verdict", "request_writes", "ui_records",
                              "stdin_closed", "eof", "selected_plan", "model", "effort"}
         assert qual["lifecycle"] in {item.value for item in ClaudeQualificationLifecycle}
@@ -625,6 +632,9 @@ def test_every_published_field_has_a_declared_finite_bound(tmp_path, phase):
         assert qual["settings_mismatch_reason"] in {
             item.value for item in ClaudeSettingsMismatchReason
         } | {None}
+        assert qual["mode_mismatch_reason"] in {
+            item.value for item in ClaudeModeMismatchReason
+        } | {None}
         assert type(qual["request_writes"]) is int and 0 <= qual["request_writes"] <= 3
         assert type(qual["ui_records"]) is int and 0 <= qual["ui_records"] <= 8
         assert type(qual["stdin_closed"]) is type(qual["eof"]) is bool
@@ -635,6 +645,7 @@ def test_every_published_field_has_a_declared_finite_bound(tmp_path, phase):
         mode = public["mode"]
         assert set(mode) == {
             "phase", "mode_verdict", "mode_mismatch_reason", "classified_responses",
+            "token_source_category", "api_key_source_category",
             "refusal_code",
             "lifecycle", "request_writes", "ui_records",
             "stdin_closed", "eof",
@@ -654,14 +665,29 @@ def test_every_published_field_has_a_declared_finite_bound(tmp_path, phase):
             assert type(mode[key]) is bool
         assert type(mode["request_writes"]) is int and 0 <= mode["request_writes"] <= 2
         assert type(mode["ui_records"]) is int and 0 <= mode["ui_records"] <= 8
+    if phase is not ClaudeMaintenanceSessionPhase.LOGIN:
+        diagnostic = (public["qualification"] if phase is ClaudeMaintenanceSessionPhase.QUALIFY
+                      else public["mode"])
+        for key, enum in (("token_source_category", ClaudeTokenSourceCategory),
+                          ("api_key_source_category", ClaudeApiKeySourceCategory)):
+            assert diagnostic[key] in {item.value for item in enum} | {None}
+            assert all(len(item.value.encode()) <= 32 for item in enum)
 
 
 @pytest.mark.parametrize("reason", [None, *ClaudeModeMismatchReason])
 def test_public_mode_reason_is_only_closed_diagnostic_evidence(reason):
     original = facts(ClaudeMaintenanceSessionPhase.OBSERVE)
     mode = replace(
-        original.mode_observation, mode_verdict=ClaudeInitializeVerdict.MODE_MISMATCH,
+        original.mode_observation,
+        mode_verdict=(ClaudeInitializeVerdict.MODE_MATCH if reason is None
+                      else ClaudeInitializeVerdict.MODE_MISMATCH),
         lifecycle=ClaudeMaintenanceLifecycle.REFUSED, mode_mismatch_reason=reason,
+        token_source_category=(None if reason is ClaudeModeMismatchReason.ACCOUNT_SHAPE
+                               else ClaudeTokenSourceCategory.NULL if reason is
+                               ClaudeModeMismatchReason.CREDENTIAL_SOURCE_PRESENT
+                               else ClaudeTokenSourceCategory.ABSENT),
+        api_key_source_category=(None if reason is ClaudeModeMismatchReason.ACCOUNT_SHAPE
+                                 else ClaudeApiKeySourceCategory.ABSENT),
         classified_responses=1,
     )
     public = claude_lane._public_facts(replace(
@@ -670,6 +696,7 @@ def test_public_mode_reason_is_only_closed_diagnostic_evidence(reason):
     assert public["mode"]["mode_mismatch_reason"] == (None if reason is None else reason.value)
     assert set(public["mode"]) == {
         "phase", "mode_verdict", "mode_mismatch_reason", "classified_responses", "lifecycle",
+        "token_source_category", "api_key_source_category",
         "refusal_code",
         "request_writes", "ui_records", "stdin_closed", "eof",
     }
@@ -689,6 +716,7 @@ def test_public_refusal_code_is_only_a_closed_first_guard_not_raw_data(code):
     assert public["mode"]["refusal_code"] == (None if code is None else code.value)
     assert set(public["mode"]) == {
         "phase", "mode_verdict", "mode_mismatch_reason", "classified_responses", "refusal_code",
+        "token_source_category", "api_key_source_category",
         "lifecycle", "request_writes", "ui_records", "stdin_closed", "eof",
     }
     assert len(json.dumps(public)) < 1024
@@ -749,6 +777,7 @@ def test_public_qualification_reason_has_only_its_declared_finite_value(tmp_path
     assert public["settings_mismatch_reason"] == reason.value
     assert set(public) == {
         "lifecycle", "initialize_verdict", "settings_verdict", "settings_mismatch_reason",
+        "mode_mismatch_reason", "token_source_category", "api_key_source_category",
         "hooks_verdict", "request_writes", "ui_records", "stdin_closed", "eof",
         "selected_plan", "model", "effort",
     }

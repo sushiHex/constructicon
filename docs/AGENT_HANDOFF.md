@@ -16,6 +16,21 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Claude initialization diagnostics retain observations without changing admission
+
+Refs #305 adds one shared finite initialization observation to mode,
+qualification and READ refusal diagnostics. Qualification retains the mode reason;
+per-key source labels are closed reported categories, with unobserved null
+distinct from observed absence. READ uses its existing bounded error detail only
+for the initialization failure, preserving generic later-error handling.
+
+Both credential-source keys must still be absent. Historical schema-5 evidence
+is preserved and rejected by the current schema-6 profile; source/adapter
+revision domains advance to 2. No source category is inferred for old evidence.
+The living [M8 record](plans/handoffs/M8-implementation-record.md) pins the vendor
+source labels and focused fake proofs. No new installation or live run occurred;
+fresh qualification remains separate.
+
 ## Claude authenticated startup passed before its first model READ
 
 The owner-authorized session at `8085b6a` completed all twelve controller-only

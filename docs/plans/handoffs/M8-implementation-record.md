@@ -13,6 +13,44 @@ From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-
 and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
 subscription route; see the dated section at the end of this record.
 
+## Claude initialization retains finite source diagnostics (Refs #305)
+
+The shared initialization codec now records a closed mode reason and separate
+reported token/API-key source categories before a mode or qualification refusal.
+Unreached classification remains null; an observed missing key is `absent`.
+Explicit null, non-string and unknown labels stay distinct. Qualification now
+publishes the previously dropped mode reason. READ adds the same finite observed
+metadata to its existing refusal detail only for the actual initialization
+failure; later timeout, cleanup or changed-custody failures keep the generic
+detail. This metadata is an observation, not a claim of the sole root cause.
+
+Admission is unchanged: both credential-source keys must be absent, even when
+their value would be null or token-source `none`. Guard precedence, tuple/judge
+APIs, the OBSERVE second-initialize rule and the qualification three-write
+conversation remain unchanged. Evidence schema 6 and source/adapter revision
+domain 2 require current strict readers; historical schema-5 records are neither
+rewritten nor qualified under this profile. The earlier positive qualification
+and later `credential-source-present` observation remain historical facts.
+Neither source key nor value can be backfilled into those records.
+
+The finite label allowlists were checked against public artifact
+`@anthropic-ai/claude-code-linux-x64@2.1.296`, `package/claude`,
+257068216 bytes, SHA256
+`24972e3bc859fab2b46ed4c1e51f7d6130f06d3bd550811a114640de3370d0de`.
+Zero-based byte offsets are xRe 210449537 (emission), vl 210395964 (token
+selection), FE 210399144 (API-key selection), I$ 210418242 (managed-key label)
+and Vg 233772534 (initialize projection). Token `profile` and API-key `none`
+are suppressed at emission and remain unknown wire labels. The reported
+`ANTHROPIC_API_KEY` label combines several underlying paths; its category does
+not assert an environment origin. No credential values are retained.
+
+Focused fake conversation, strict reader/checker and READ tests cover acceptance,
+refusal equivalence, capture before throw, closed public bounds and historical
+schema rejection. Selected mutation witnesses exercise privacy, capture and
+retained cleanup behavior; the complete inventory remains a CI proof. No vendor,
+VM, installation, qualification or model operation was performed for this change.
+A new reviewed installation and fresh qualification are separate work.
+
 ## Claude spacing preserves incremental framing (Refs #40)
 
 Controller `0e52d702fab854825cb5bd747c2d020f4e5003b9` was installed and

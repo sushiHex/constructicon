@@ -1,4 +1,4 @@
-"""Closed schema-5 Claude phase evidence checker; no login or dispatch authority.
+"""Closed schema-6 Claude phase evidence checker; no login or dispatch authority.
 
 Positive phase validation and observer-refusal diagnosis are separate CLI actions.
 The selected plan for observe/reload remains a reviewed-command input, not an
@@ -28,9 +28,12 @@ from constructicon.substrate.executors.claude_maintenance_session import (
     ClaudeMaintenanceSessionPhase,
 )
 from constructicon.substrate.executors.claude_protocol import (
+    ClaudeApiKeySourceCategory,
     ClaudeInitializeVerdict,
     ClaudeModeMismatchReason,
     ClaudePlan,
+    ClaudeTokenSourceCategory,
+    initialize_diagnostic_fields_valid,
 )
 from constructicon.substrate.executors.claude_startup import (
     ClaudeSettingsMismatchReason,
@@ -39,7 +42,7 @@ from constructicon.substrate.executors.claude_startup import (
 from constructicon.substrate.executors.codex_host import _evidence
 from constructicon.substrate.executors.egress import identity_digests
 
-CHECKER_SCHEMA = 5
+CHECKER_SCHEMA = 6
 _RECORD_FIELDS = frozenset({
     "schema_version", "subscription_qualified", "production_available", "facts",
     "runtime_digest", "vendor_digest", "launch_policy_sha256", "launch_config_sha256",
@@ -55,6 +58,7 @@ _LOGIN_FIELDS = frozenset({
 _MODE_FIELDS = frozenset({
     "phase", "mode_verdict", "mode_mismatch_reason", "classified_responses", "lifecycle",
     "request_writes", "ui_records", "stdin_closed", "eof", "refusal_code",
+    "token_source_category", "api_key_source_category",
 })
 _REASONS = frozenset(reason.value for reason in ClaudeModeMismatchReason)
 _VERDICTS = frozenset(verdict.value for verdict in ClaudeInitializeVerdict)
@@ -115,6 +119,10 @@ def _mode(facts, phase):
     _require(type(mode) is dict and set(mode) == _MODE_FIELDS
              and facts["login"] is None and facts["process_clean"] is None)
     _require(mode["phase"] == phase.value
+             and initialize_diagnostic_fields_valid(
+                 mode["mode_verdict"], mode["mode_mismatch_reason"],
+                 mode["token_source_category"], mode["api_key_source_category"],
+             )
              and type(mode["request_writes"]) is int
              and 0 <= mode["request_writes"] <= (
                  2 if phase is ClaudeMaintenanceSessionPhase.OBSERVE else 1
@@ -182,6 +190,8 @@ class RefusedModeDiagnostic:
     request_writes: int
     ui_records: int
     evidence_digest: Digest
+    token_source_category: ClaudeTokenSourceCategory | None
+    api_key_source_category: ClaudeApiKeySourceCategory | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,6 +200,10 @@ class RefusedQualificationDiagnostic:
     reason: ClaudeSettingsMismatchReason | None
     process_clean: bool
     evidence_digest: Digest
+    initialize_verdict: ClaudeInitializeVerdict | None
+    mode_mismatch_reason: ClaudeModeMismatchReason | None
+    token_source_category: ClaudeTokenSourceCategory | None
+    api_key_source_category: ClaudeApiKeySourceCategory | None
 
 
 def diagnose_refused_qualification(
@@ -212,6 +226,14 @@ def diagnose_refused_qualification(
             None if verdict is None else ClaudeStartupVerdict(verdict),
             None if reason is None else ClaudeSettingsMismatchReason(reason),
             facts["process_clean"], revision,
+            (None if qualification["initialize_verdict"] is None
+             else ClaudeInitializeVerdict(qualification["initialize_verdict"])),
+            (None if qualification["mode_mismatch_reason"] is None
+             else ClaudeModeMismatchReason(qualification["mode_mismatch_reason"])),
+            (None if qualification["token_source_category"] is None
+             else ClaudeTokenSourceCategory(qualification["token_source_category"])),
+            (None if qualification["api_key_source_category"] is None
+             else ClaudeApiKeySourceCategory(qualification["api_key_source_category"])),
         )
     except Exception:
         pass
@@ -243,6 +265,10 @@ def diagnose_refused_mode(
             None if code is None else ClaudeMaintenanceRefusalCode(code),
             mode["classified_responses"], mode["request_writes"], mode["ui_records"],
             digest(claude_lane.EVIDENCE_DOMAIN, 1, record),
+            (None if mode["token_source_category"] is None
+             else ClaudeTokenSourceCategory(mode["token_source_category"])),
+            (None if mode["api_key_source_category"] is None
+             else ClaudeApiKeySourceCategory(mode["api_key_source_category"])),
         )
     except Exception:
         pass
@@ -277,6 +303,14 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps({
                     "settings_verdict": (None if startup.settings_verdict is None
                                          else startup.settings_verdict.value),
+                    "initialize_verdict": (None if startup.initialize_verdict is None
+                                           else startup.initialize_verdict.value),
+                    "mode_mismatch_reason": (None if startup.mode_mismatch_reason is None
+                                             else startup.mode_mismatch_reason.value),
+                    "token_source_category": (None if startup.token_source_category is None
+                                              else startup.token_source_category.value),
+                    "api_key_source_category": (None if startup.api_key_source_category is None
+                                                else startup.api_key_source_category.value),
                     "reason": None if startup.reason is None else startup.reason.value,
                     "process_clean": startup.process_clean,
                     "evidence_digest": str(startup.evidence_digest),
@@ -286,6 +320,10 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({
                 "mode_verdict": (None if diagnostic.mode_verdict is None
                                  else diagnostic.mode_verdict.value),
+                "token_source_category": (None if diagnostic.token_source_category is None
+                                          else diagnostic.token_source_category.value),
+                "api_key_source_category": (None if diagnostic.api_key_source_category is None
+                                            else diagnostic.api_key_source_category.value),
                 "reason": None if diagnostic.reason is None else diagnostic.reason.value,
                 "refusal_code": (None if diagnostic.refusal_code is None
                                  else diagnostic.refusal_code.value),

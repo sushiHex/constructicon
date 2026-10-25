@@ -27,11 +27,15 @@ from constructicon.substrate.executors.claude_native import (
 from constructicon.substrate.executors.claude_native_events import exact_ui_invalidate
 from constructicon.substrate.executors.claude_protocol import (
     RECORD_BYTES,
+    ClaudeApiKeySourceCategory,
     ClaudeInitializeVerdict,
     ClaudeModeMismatchReason,
     ClaudePlan,
+    ClaudeTokenSourceCategory,
     classify_initialize,
+    initialize_diagnostics_valid,
     initialize_request,
+    observe_initialize,
 )
 from constructicon.substrate.executors.linux import LinuxLauncher
 from constructicon.substrate.executors.operator_store import BindingCheck
@@ -88,14 +92,14 @@ class ClaudeMaintenanceObservation:
     mode_mismatch_reason: ClaudeModeMismatchReason | None = None
     classified_responses: int | None = None
     refusal_code: ClaudeMaintenanceRefusalCode | None = None
+    token_source_category: ClaudeTokenSourceCategory | None = None
+    api_key_source_category: ClaudeApiKeySourceCategory | None = None
 
     def __post_init__(self) -> None:
-        if (type(self.phase) is not ClaudeMaintenancePhase
-                or (self.mode_verdict is not None
-                    and type(self.mode_verdict) is not ClaudeInitializeVerdict)
-                or (self.mode_mismatch_reason is not None
-                    and (type(self.mode_mismatch_reason) is not ClaudeModeMismatchReason
-                         or self.mode_verdict is not ClaudeInitializeVerdict.MODE_MISMATCH))
+        if (not initialize_diagnostics_valid(
+                self.mode_verdict, self.mode_mismatch_reason,
+                self.token_source_category, self.api_key_source_category,
+            ) or type(self.phase) is not ClaudeMaintenancePhase
                 or type(self.lifecycle) is not ClaudeMaintenanceLifecycle
                 or type(self.request_writes) is not int
                 or not 0 <= self.request_writes <= (
@@ -161,6 +165,8 @@ class ClaudeMaintenanceConversation:
         self._state: Literal["new", "running", "completed", "refused"] = "new"
         self.mode_verdict: ClaudeInitializeVerdict | None = None
         self.mode_mismatch_reason: ClaudeModeMismatchReason | None = None
+        self.token_source_category: ClaudeTokenSourceCategory | None = None
+        self.api_key_source_category: ClaudeApiKeySourceCategory | None = None
         self.classified_responses = 0
         self.refusal_code: ClaudeMaintenanceRefusalCode | None = None
         self.request_writes = self.ui_records = self.input_bytes = self.output_bytes = 0
@@ -271,9 +277,12 @@ class ClaudeMaintenanceConversation:
             record = await self._next()
             if self._ui(record):
                 continue
-            self.mode_verdict, self.mode_mismatch_reason = classify_initialize(
+            observation = observe_initialize(
                 record, expected_request_id=identifier, selected_plan=self.plan,
             )
+            self.mode_verdict, self.mode_mismatch_reason = observation.verdict, observation.reason
+            self.token_source_category = observation.token_source_category
+            self.api_key_source_category = observation.api_key_source_category
             self.classified_responses += 1
             received_at = _monotonic()
             if self.mode_verdict is ClaudeInitializeVerdict.MODE_MATCH:
@@ -480,4 +489,6 @@ async def observe_maintenance_mode(
         conversation.mode_mismatch_reason,
         conversation.classified_responses,
         conversation.refusal_code,
+        conversation.token_source_category,
+        conversation.api_key_source_category,
     )

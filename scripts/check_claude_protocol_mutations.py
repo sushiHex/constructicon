@@ -36,14 +36,14 @@ MUTANTS = (
      'parse_json_value(record[:-1].decode("utf-8"))', 'json.loads(record[:-1].decode("utf-8"))',
      TEST + "test_valid_looking_duplicate_key_is_not_last_value_wins"),
     ("invalid JSON is not an affirmative mode", JUDGE,
-     "except (ValueError, UnicodeError, RecursionError):\n        return verdict.RECORD_INVALID",
-     "except (ValueError, UnicodeError, RecursionError):\n        return verdict.MODE_MATCH",
+     "except (ValueError, UnicodeError, RecursionError):\n        return observed(verdict.RECORD_INVALID)",
+     "except (ValueError, UnicodeError, RecursionError):\n        return observed(verdict.MODE_MATCH)",
      TEST + "test_malformed_records_have_static_invalid_verdict"),
     ("outer shape is not an affirmative mode", JUDGE,
      'if type(value) is not dict or set(value) != {"type", "response"}:\n'
-     '        return verdict.RESPONSE_INVALID',
+     '        return observed(verdict.RESPONSE_INVALID)',
      'if type(value) is not dict or set(value) != {"type", "response"}:\n'
-     '        return verdict.MODE_MATCH', TEST + "test_wrong_outer_shapes_refuse"),
+     '        return observed(verdict.MODE_MATCH)', TEST + "test_wrong_outer_shapes_refuse"),
     ("outer envelope rejects extension keys", JUDGE,
      'or set(value) != {"type", "response"}', "or False",
      TEST + "test_unknown_envelope_keys_refuse[outer]"),
@@ -51,8 +51,8 @@ MUTANTS = (
      'if value.get("type") != "control_response":', "if False:",
      TEST + "test_wrong_response_tags_refuse[type]"),
     ("response envelope shape is not affirmative", JUDGE,
-     "if type(envelope) is not dict:\n        return verdict.RESPONSE_INVALID",
-     "if type(envelope) is not dict:\n        return verdict.MODE_MATCH",
+     "if type(envelope) is not dict:\n        return observed(verdict.RESPONSE_INVALID)",
+     "if type(envelope) is not dict:\n        return observed(verdict.MODE_MATCH)",
      TEST + "test_wrong_nested_shapes_refuse"),
     ("unknown response subtype refuses", JUDGE,
      'if subtype not in ("success", "error"):', "if False:",
@@ -84,14 +84,14 @@ MUTANTS = (
      "if any(envelope[key] for key in pending):", "if False:",
      TEST + "test_pending_requests_refuse_without_publishing_prompt"),
     ("initialize body shape is not affirmative", JUDGE,
-     "if type(body) is not dict:\n        return verdict.RESPONSE_INVALID",
-     "if type(body) is not dict:\n        return verdict.MODE_MATCH",
+     "if type(body) is not dict:\n        return observed(verdict.RESPONSE_INVALID)",
+     "if type(body) is not dict:\n        return observed(verdict.MODE_MATCH)",
      TEST + "test_wrong_nested_shapes_refuse"),
     ("current initialize facts must be present", JUDGE,
      'if not {"claude_code_version", "session_state", "account"} <= set(body):\n'
-     '        return verdict.RESPONSE_INVALID',
+     '        return observed(verdict.RESPONSE_INVALID)',
      'if not {"claude_code_version", "session_state", "account"} <= set(body):\n'
-     '        return verdict.MODE_MATCH',
+     '        return observed(verdict.MODE_MATCH)',
      TEST + "test_current_initialize_required_fields_cannot_be_omitted"),
     ("reported version is pinned", JUDGE,
      'if body["claude_code_version"] != CLAUDE_CODE_VERSION:', "if False:",
@@ -103,8 +103,8 @@ MUTANTS = (
      'if body["session_state"] != "idle":', "if False:",
      TEST + "test_nonidle_state_refuses_without_startup_claim"),
     ("account shape is not affirmative", JUDGE,
-     "if type(account) is not dict:\n        return reason.ACCOUNT_SHAPE",
-     "if type(account) is not dict:\n        return verdict.MODE_MATCH",
+     "if type(account) is not dict:\n        return observed(reason.ACCOUNT_SHAPE)",
+     "if type(account) is not dict:\n        return observed(verdict.MODE_MATCH)",
      TEST + "test_wrong_nested_shapes_refuse"),
     ("account has only the pinned projection fields", JUDGE,
      "if not set(account) <= fields:", "if False:", TEST + "test_unknown_account_field_refuses"),
@@ -280,7 +280,7 @@ STARTUP_MUTANTS = (
      'set(envelope) != {"subtype", "request_id", "response"}', "False",
      STARTUP_TEST + "test_record_bounds_correlation_and_strict_json"),
     ("startup errors retain finite failure", STARTUP + "_body",
-     "return verdict.CONTROL_ERROR", "return verdict.RESPONSE_INVALID",
+     "return verdict.CONTROL_ERROR", "return observed(verdict.RESPONSE_INVALID)",
      STARTUP_TEST + "test_error_and_private_metadata_never_escape_finite_verdict"),
     ("startup unknown configuration cannot widen authority", STARTUP + "_configuration",
      'not set(value) <= {"env", *fixed_policy()}', "False",
@@ -739,13 +739,13 @@ MUTANTS += (
      "[spawn-changed]"),
     ("native READ rechecks retained custody after joined cancellation",
      READ + "run_read_transaction",
-     'with suppress(BaseException):\n                    launch_store.before_spawn()',
-     'with suppress(BaseException):\n                    pass',
+     'try:\n                    launch_store.before_spawn()',
+     'try:\n                    pass',
      READ_TEST + "test_joined_exchange_failure_still_checks_binding_and_preserves_control_flow"
      "[valid-explicit-cancel]"),
     ("native READ terminal refusal cannot mask the primary cancellation",
      READ + "run_read_transaction",
-     'with suppress(BaseException):', 'if True:',
+     'diagnostic_custody_current = False', 'raise',
      READ_TEST + "test_joined_exchange_failure_still_checks_binding_and_preserves_control_flow"
      "[raises-explicit-cancel]"),
     ("READ worker cannot carry Claude native authority", WORKER + "ClaudeReadWorker._owned",
@@ -1258,40 +1258,37 @@ DIAGNOSTIC_CONSTRUCTOR = (
 )
 DIAGNOSTIC_MUTANTS = (
     *(("mode mismatch reason preserves " + member, JUDGE,
-       "return reason." + member, "return reason.SUBSCRIPTION_MISMATCH", DIAGNOSTIC_TEST)
+       "return observed(reason." + member + ")", "return observed(reason.SUBSCRIPTION_MISMATCH)", DIAGNOSTIC_TEST)
       for member in ("ACCOUNT_SHAPE", "UNSUPPORTED_ACCOUNT_FIELD", "CREDENTIAL_SOURCE_PRESENT",
                      "ACCOUNT_VALUE_TYPE", "PROVIDER_MISMATCH", "AMBIGUOUS_API")),
     ("other subscription mismatch is not ambiguous API", JUDGE,
-     "return reason.SUBSCRIPTION_MISMATCH", "return reason.AMBIGUOUS_API", DIAGNOSTIC_TEST),
+     "return observed(reason.SUBSCRIPTION_MISMATCH)", "return observed(reason.AMBIGUOUS_API)", DIAGNOSTIC_TEST),
     ("API ambiguity is the exact existing literal", JUDGE,
      'if account.get("subscriptionType") == "Claude API":', "if True:", DIAGNOSTIC_TEST),
     ("diagnostic projection preserves the old mode mismatch verdict", MODULE + "classify_initialize",
-     "return ClaudeInitializeVerdict.MODE_MISMATCH, result",
-     "return ClaudeInitializeVerdict.MODE_MATCH, result", DIAGNOSTIC_TEST),
+     "return result.verdict, result.reason",
+     "return ClaudeInitializeVerdict.MODE_MATCH, result.reason", DIAGNOSTIC_TEST),
     ("diagnostic projection retains its finite mismatch reason", MODULE + "classify_initialize",
-     "return ClaudeInitializeVerdict.MODE_MISMATCH, result",
-     "return ClaudeInitializeVerdict.MODE_MISMATCH, None", DIAGNOSTIC_TEST),
+     "return result.verdict, result.reason",
+     "return result.verdict, None", DIAGNOSTIC_TEST),
     ("public judge keeps the original refusal projection", MODULE + "judge_initialize",
      "return verdict", "return ClaudeInitializeVerdict.MODE_MATCH", DIAGNOSTIC_TEST),
     ("maintenance replaces the last reason on non-mode replies",
      MAINTENANCE + "ClaudeMaintenanceConversation._response",
-     "self.mode_verdict, self.mode_mismatch_reason = classify_initialize(\n"
-     "            record, expected_request_id=identifier, selected_plan=self.plan,\n"
-     "        )",
-     "self.mode_verdict, reason = classify_initialize(\n"
-     "            record, expected_request_id=identifier, selected_plan=self.plan,\n"
-     "        )\n"
-     "        self.mode_mismatch_reason = reason or self.mode_mismatch_reason",
+     "self.mode_verdict, self.mode_mismatch_reason = observation.verdict, observation.reason",
+     "self.mode_verdict = observation.verdict\n"
+     "        self.mode_mismatch_reason = observation.reason or self.mode_mismatch_reason",
      MAINTENANCE_TEST + "test_response_state_clears_prior_reason_before_report_validation"),
     ("maintenance counts classified responses affirmatively",
      MAINTENANCE + "ClaudeMaintenanceConversation._response",
      "self.classified_responses += 1", "pass",
      MAINTENANCE_TEST + "test_response_state_clears_prior_reason_before_report_validation"),
-    ("maintenance diagnostic reason is a closed enum", DIAGNOSTIC_OBSERVATION,
-     "type(self.mode_mismatch_reason) is not ClaudeModeMismatchReason", "False",
+    ("maintenance diagnostic reason is a closed enum", MODULE + "initialize_diagnostics_valid",
+     "type(reason) is not ClaudeModeMismatchReason", "False",
      DIAGNOSTIC_CONSTRUCTOR),
-    ("maintenance diagnostic reason requires mismatch", DIAGNOSTIC_OBSERVATION,
-     "self.mode_verdict is not ClaudeInitializeVerdict.MODE_MISMATCH", "False",
+    ("maintenance diagnostic reason requires mismatch", MODULE + "initialize_diagnostics_valid",
+     "return reason is None and token is None and api_key is None",
+     "return token is None and api_key is None",
      MAINTENANCE_TEST + "test_reason_requires_a_mode_mismatch"),
     ("maintenance classified response count is an exact integer", DIAGNOSTIC_OBSERVATION,
      "type(self.classified_responses) is not int", "False", DIAGNOSTIC_CONSTRUCTOR),
@@ -1894,6 +1891,29 @@ SETTINGS_REASON_MUTANTS = (
      STARTUP_TEST + "test_settings_reasons_are_finite_and_keep_the_original_refusal"),
 )
 MUTANTS += SETTINGS_REASON_MUTANTS
+
+# Schema6 capture/privacy witnesses: one parser, two conversation projections.
+SOURCE_DIAGNOSTIC_TEST = (
+    "tests/substrate/test_claude_initialize_diagnostics.py::"
+    "test_both_owned_conversations_capture_the_actual_observation_before_refusal"
+)
+MUTANTS += (
+    ("unknown reported token source never becomes public raw text", JUDGE,
+     'account["tokenSource"], ClaudeTokenSourceCategory.UNKNOWN,',
+     'account["tokenSource"], account["tokenSource"],',
+     "tests/substrate/test_claude_initialize_diagnostics.py::"
+     "test_all_initialization_public_fields_have_closed_types_and_finite_bounds"),
+    ("qualification captures the mode reason before refusal", "constructicon.substrate.executors.claude_startup_qualification:ClaudeStartupQualification._judge_control",
+     "self.mode_mismatch_reason = observation.reason", "self.mode_mismatch_reason = None",
+     SOURCE_DIAGNOSTIC_TEST),
+    ("maintenance captures source diagnostics before refusal", MAINTENANCE + "ClaudeMaintenanceConversation._response",
+     "self.token_source_category = observation.token_source_category", "self.token_source_category = None",
+     SOURCE_DIAGNOSTIC_TEST),
+    ("READ retains safe actual initialization diagnostics", READ + "_initialization_detail",
+     'return observed if len(observed.encode("utf-8")) <= 256 else detail',
+     'return "Claude READ refused"',
+     READ_TEST + "test_initialization_refusal_retains_only_finite_source_tags_before_user"),
+)
 
 if __name__ == "__main__":
     raise SystemExit(run(MUTANTS))

@@ -18,9 +18,11 @@ from constructicon.substrate.executors.claude_native import (
 )
 from constructicon.substrate.executors.claude_native_events import exact_ui_invalidate
 from constructicon.substrate.executors.claude_protocol import (
+    ClaudeApiKeySourceCategory,
     ClaudeInitializeVerdict,
     ClaudeModeMismatchReason,
     ClaudePlan,
+    ClaudeTokenSourceCategory,
     initialize_request,
 )
 from constructicon.substrate.executors.linux import DEFAULT_PROCESS_LIMITS, ProcessResult
@@ -430,13 +432,12 @@ async def test_reason_describes_last_classified_reply_after_second_write(
     assert "private" not in repr(report)
 
 
-def test_legacy_mismatch_constructor_preserves_unknown_reason():
-    report = maintenance.ClaudeMaintenanceObservation(
-        maintenance.ClaudeMaintenancePhase.OBSERVE, ClaudeInitializeVerdict.MODE_MISMATCH,
-        maintenance.ClaudeMaintenanceLifecycle.REFUSED, 1, 0, False, False,
-    )
-    assert report.mode_mismatch_reason is None
-    assert report.classified_responses is None
+def test_legacy_mismatch_without_diagnostics_is_not_a_schema6_observation():
+    with pytest.raises(ValueError, match="invalid Claude maintenance observation"):
+        maintenance.ClaudeMaintenanceObservation(
+            maintenance.ClaudeMaintenancePhase.OBSERVE, ClaudeInitializeVerdict.MODE_MISMATCH,
+            maintenance.ClaudeMaintenanceLifecycle.REFUSED, 1, 0, False, False,
+        )
 
 
 @pytest.mark.parametrize("raw,expected", [(response("id"), "MODE_MATCH"),
@@ -504,6 +505,8 @@ def test_diagnostic_constructor_requires_closed_reason_and_affirmative_count(cha
         "lifecycle": maintenance.ClaudeMaintenanceLifecycle.REFUSED,
         "request_writes": 1, "ui_records": 0, "stdin_closed": False, "eof": False,
         "mode_mismatch_reason": ClaudeModeMismatchReason.AMBIGUOUS_API,
+        "token_source_category": ClaudeTokenSourceCategory.ABSENT,
+        "api_key_source_category": ClaudeApiKeySourceCategory.ABSENT,
         "classified_responses": 1,
     }
     values.update(change)
@@ -1023,13 +1026,16 @@ async def test_public_report_is_finite_and_contains_no_private_values():
     report, _, _ = await observe(Channel([response("@ID@")]))
     values = asdict(report)
     assert {field.name for field in fields(report)} == set(values)
-    assert set(values) == {"phase", "mode_verdict", "mode_mismatch_reason", "classified_responses",
+    assert set(values) == {"phase", "mode_verdict", "mode_mismatch_reason",
+                           "token_source_category", "api_key_source_category",
+                           "classified_responses",
                            "refusal_code",
                            "lifecycle", "request_writes",
                            "ui_records", "stdin_closed", "eof"}
     assert all(type(value) in (maintenance.ClaudeMaintenancePhase,
                                ClaudeInitializeVerdict, maintenance.ClaudeMaintenanceLifecycle,
                                ClaudeModeMismatchReason,
+                               ClaudeTokenSourceCategory, ClaudeApiKeySourceCategory,
                                Code,
                                bool, int, type(None)) for value in values.values())
     assert 0 <= values["request_writes"] <= 2 and 0 <= values["ui_records"] <= 8
@@ -1058,6 +1064,8 @@ async def test_public_report_is_finite_and_contains_no_private_values():
 def test_report_constructor_refuses_unbounded_or_coerced_fields(change):
     values = {"phase": maintenance.ClaudeMaintenancePhase.OBSERVE,
               "mode_verdict": ClaudeInitializeVerdict.MODE_MATCH,
+              "token_source_category": ClaudeTokenSourceCategory.ABSENT,
+              "api_key_source_category": ClaudeApiKeySourceCategory.ABSENT,
               "lifecycle": maintenance.ClaudeMaintenanceLifecycle.OBSERVED,
               "request_writes": 1, "ui_records": 8, "stdin_closed": True, "eof": True}
     values.update(change)

@@ -36,6 +36,8 @@ def case(tmp_path):
             "credential_closed": True, "process_clean": True,
             "qualification": {
                 "lifecycle": "qualified", "initialize_verdict": "mode-match",
+                "mode_mismatch_reason": None,
+                "token_source_category": "absent", "api_key_source_category": "absent",
                 "settings_verdict": "match", "settings_mismatch_reason": None,
                 "hooks_verdict": "match",
                 "request_writes": 3, "ui_records": 0, "stdin_closed": True, "eof": True,

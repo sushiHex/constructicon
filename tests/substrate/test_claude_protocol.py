@@ -33,10 +33,22 @@ def wire(value):
 
 
 def judge(record, plan=None):
-    return protocol.judge_initialize(
-        record, expected_request_id="initialize-1",
-        selected_plan=protocol.ClaudePlan.PRO if plan is None else plan,
-    )
+    try:
+        return protocol.judge_initialize(
+            record, expected_request_id="initialize-1",
+            selected_plan=protocol.ClaudePlan.PRO if plan is None else plan,
+        )
+    except Exception:
+        if plan is not None and type(plan) is not protocol.ClaudePlan:
+            raise
+        raise AssertionError("valid codec arguments must return a finite verdict") from None
+
+
+def classify(record, **kwargs):
+    try:
+        return protocol.classify_initialize(record, **kwargs)
+    except Exception:
+        raise AssertionError("valid codec arguments must return finite diagnostics") from None
 
 
 @pytest.mark.parametrize("plan", ["PRO", "MAX"])
@@ -44,7 +56,7 @@ def test_selected_plan_permits_exact_current_initialize(plan):
     selected = protocol.ClaudePlan[plan]
     result = judge(wire(reply(selected.value)), selected)
     assert result is protocol.ClaudeInitializeVerdict.MODE_MATCH
-    assert protocol.classify_initialize(
+    assert classify(
         wire(reply(selected.value)), expected_request_id="initialize-1", selected_plan=selected,
     ) == (result, None)
 
@@ -68,7 +80,7 @@ def test_shared_classifier_preserves_refusal_categories_and_precedence(plan, acc
     value = reply()
     value["response"]["response"]["account"] = account
     raw = wire(value)
-    result = protocol.classify_initialize(
+    result = classify(
         raw, expected_request_id="initialize-1", selected_plan=plan,
     )
     assert result == (protocol.ClaudeInitializeVerdict.MODE_MISMATCH,
@@ -104,7 +116,7 @@ def test_non_mode_refusals_never_publish_account_reason(damage, expected):
         raw = raw[:-1]
     elif damage == "bound":
         raw = b" " * protocol.RECORD_BYTES + raw
-    result = protocol.classify_initialize(
+    result = classify(
         raw, expected_request_id="initialize-1", selected_plan=protocol.ClaudePlan.PRO,
     )
     assert result == (protocol.ClaudeInitializeVerdict[expected], None)
