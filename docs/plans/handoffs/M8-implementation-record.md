@@ -51,6 +51,13 @@ retained cleanup behavior; the complete inventory remains a CI proof. No vendor,
 VM, installation, qualification or model operation was performed for this change.
 A new reviewed installation and fresh qualification are separate work.
 
+Independent review found one introduced mutation-inventory error: a startup
+mutant used the initialization parser's private helper in a different target,
+causing a NameError rather than an assertion kill. Its original wrong-verdict
+replacement was restored and proved against a passing baseline and an assertion
+failure. All remaining helper substitutions target the parser that defines it.
+The correction changes no production code or acceptance predicate.
+
 ## Claude spacing preserves incremental framing (Refs #40)
 
 Controller `0e52d702fab854825cb5bd747c2d020f4e5003b9` was installed and

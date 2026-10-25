@@ -280,7 +280,7 @@ STARTUP_MUTANTS = (
      'set(envelope) != {"subtype", "request_id", "response"}', "False",
      STARTUP_TEST + "test_record_bounds_correlation_and_strict_json"),
     ("startup errors retain finite failure", STARTUP + "_body",
-     "return verdict.CONTROL_ERROR", "return observed(verdict.RESPONSE_INVALID)",
+     "return verdict.CONTROL_ERROR", "return verdict.RESPONSE_INVALID",
      STARTUP_TEST + "test_error_and_private_metadata_never_escape_finite_verdict"),
     ("startup unknown configuration cannot widen authority", STARTUP + "_configuration",
      'not set(value) <= {"env", *fixed_policy()}', "False",
