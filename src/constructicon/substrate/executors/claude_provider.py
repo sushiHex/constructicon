@@ -758,12 +758,12 @@ class ClaudeOperatorHandle:
             raise BaseExceptionGroup("Claude READ custody release failed", errors)
 
 
-PROTOCOL_REVISION = digest("claude-read-protocol", 1, {
+PROTOCOL_REVISION = digest("claude-read-protocol", 2, {
     module.__name__: inspect.getsource(module)
     for module in (claude_protocol, claude_startup, claude_read,
                    claude_initialize, claude_native_events)
 })
-ADAPTER_REVISION = digest("claude-read-owned-adapter", 1, {
+ADAPTER_REVISION = digest("claude-read-owned-adapter", 2, {
     module.__name__: inspect.getsource(module)
     for module in (sys.modules[__name__], claude_read_worker, claude_native,
                    attempt_record, qualification_law)

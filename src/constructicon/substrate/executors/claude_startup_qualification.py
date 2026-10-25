@@ -21,10 +21,14 @@ from constructicon.substrate.executors.claude_maintenance_mode import (
 )
 from constructicon.substrate.executors.claude_protocol import (
     RECORD_BYTES,
+    ClaudeApiKeySourceCategory,
     ClaudeInitializeVerdict,
+    ClaudeModeMismatchReason,
     ClaudePlan,
+    ClaudeTokenSourceCategory,
+    initialize_diagnostics_valid,
     initialize_request,
-    judge_initialize,
+    observe_initialize,
 )
 from constructicon.substrate.executors.claude_startup import (
     ClaudeSettingsMismatchReason,
@@ -53,9 +57,15 @@ class ClaudeStartupQualificationFacts:
     stdin_closed: bool
     eof: bool
     settings_mismatch_reason: ClaudeSettingsMismatchReason | None = None
+    mode_mismatch_reason: ClaudeModeMismatchReason | None = None
+    token_source_category: ClaudeTokenSourceCategory | None = None
+    api_key_source_category: ClaudeApiKeySourceCategory | None = None
 
     def __post_init__(self) -> None:
-        if (type(self.lifecycle) is not ClaudeQualificationLifecycle
+        if (not initialize_diagnostics_valid(
+                self.initialize_verdict, self.mode_mismatch_reason,
+                self.token_source_category, self.api_key_source_category,
+            ) or type(self.lifecycle) is not ClaudeQualificationLifecycle
                 or (self.initialize_verdict is not None
                     and type(self.initialize_verdict) is not ClaudeInitializeVerdict)
                 or (self.settings_verdict is not None
@@ -120,6 +130,7 @@ class ClaudeStartupQualification(ClaudeMaintenanceConversation):
             lifecycle, self.initialize_verdict, self.settings_verdict,
             self.hooks_verdict, self.request_writes, self.ui_records,
             self.stdin_closed, self.eof, self.settings_mismatch_reason,
+            self.mode_mismatch_reason, self.token_source_category, self.api_key_source_category,
         )
 
     async def _write_control(self, kind: str) -> str:
@@ -150,9 +161,13 @@ class ClaudeStartupQualification(ClaudeMaintenanceConversation):
             if self._ui(record):
                 continue
             if kind == "initialize":
-                self.initialize_verdict = judge_initialize(
+                observation = observe_initialize(
                     record, expected_request_id=identifier, selected_plan=self.plan,
                 )
+                self.initialize_verdict = observation.verdict
+                self.mode_mismatch_reason = observation.reason
+                self.token_source_category = observation.token_source_category
+                self.api_key_source_category = observation.api_key_source_category
                 if self.initialize_verdict is not ClaudeInitializeVerdict.MODE_MATCH:
                     raise _Refused()
             elif kind == "get_settings":

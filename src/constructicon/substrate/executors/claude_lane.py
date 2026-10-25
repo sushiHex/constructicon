@@ -67,7 +67,7 @@ from constructicon.substrate.executors.linux import BWRAP_SHA256, LinuxLauncher,
 from constructicon.substrate.executors.operator_store import inherit_maintenance
 
 EVIDENCE_DOMAIN = "claude-maintenance-entry-evidence"
-EVIDENCE_SCHEMA = 5
+EVIDENCE_SCHEMA = 6
 CONFIG_BYTES = 8 * 1024
 _HEX = re.compile(r"[0-9a-f]{64}\Z")
 _PHASE_HOSTS = {
@@ -113,7 +113,7 @@ def qualification_revision() -> Digest:
     source_hashes["codex._fsync_directory"] = hashlib.sha256(
         inspect.getsource(_fsync_directory).encode("utf-8")
     ).hexdigest()
-    return digest("claude-startup-qualification-source", 1, source_hashes)
+    return digest("claude-startup-qualification-source", 2, source_hashes)
 
 
 class _Parser(argparse.ArgumentParser):
@@ -280,6 +280,10 @@ def _public_facts(
             "mode_verdict": None if mode.mode_verdict is None else mode.mode_verdict.value,
             "mode_mismatch_reason": (None if mode.mode_mismatch_reason is None
                                      else mode.mode_mismatch_reason.value),
+            "token_source_category": (None if mode.token_source_category is None
+                                      else mode.token_source_category.value),
+            "api_key_source_category": (None if mode.api_key_source_category is None
+                                        else mode.api_key_source_category.value),
             "classified_responses": mode.classified_responses,
             "refusal_code": None if mode.refusal_code is None else mode.refusal_code.value,
             "lifecycle": mode.lifecycle.value,
@@ -302,6 +306,15 @@ def _public_facts(
             "initialize_verdict": (None if qualification is None
                                    or qualification.initialize_verdict is None
                                    else qualification.initialize_verdict.value),
+            "mode_mismatch_reason": (None if qualification is None
+                                     or qualification.mode_mismatch_reason is None
+                                     else qualification.mode_mismatch_reason.value),
+            "token_source_category": (None if qualification is None
+                                      or qualification.token_source_category is None
+                                      else qualification.token_source_category.value),
+            "api_key_source_category": (None if qualification is None
+                                        or qualification.api_key_source_category is None
+                                        else qualification.api_key_source_category.value),
             "settings_verdict": (None if qualification is None
                                  or qualification.settings_verdict is None
                                  else qualification.settings_verdict.value),

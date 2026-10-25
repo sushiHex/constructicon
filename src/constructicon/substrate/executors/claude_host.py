@@ -30,7 +30,11 @@ from constructicon.substrate.executors.claude_lane import LaneConfiguration
 from constructicon.substrate.executors.claude_maintenance_session import (
     ClaudeMaintenanceSessionPhase,
 )
-from constructicon.substrate.executors.claude_protocol import ClaudeInitializeVerdict, ClaudePlan
+from constructicon.substrate.executors.claude_protocol import (
+    ClaudeInitializeVerdict,
+    ClaudePlan,
+    initialize_diagnostic_fields_valid,
+)
 from constructicon.substrate.executors.claude_provider import (
     READ_CATALOG,
     ClaudeOperatorProvider,
@@ -59,7 +63,7 @@ _FACT_FIELDS = frozenset({
 })
 _QUALIFICATION_FIELDS = frozenset({
     "lifecycle", "initialize_verdict", "settings_verdict", "settings_mismatch_reason",
-    "hooks_verdict",
+    "hooks_verdict", "mode_mismatch_reason", "token_source_category", "api_key_source_category",
     "request_writes", "ui_records", "stdin_closed", "eof", "selected_plan", "model", "effort",
 })
 
@@ -107,6 +111,10 @@ def checked_startup_evidence(
         qualification["initialize_verdict"] is None or (
             type(qualification["initialize_verdict"]) is str
             and qualification["initialize_verdict"] in {v.value for v in ClaudeInitializeVerdict}
+        ),
+        initialize_diagnostic_fields_valid(
+            qualification["initialize_verdict"], qualification["mode_mismatch_reason"],
+            qualification["token_source_category"], qualification["api_key_source_category"],
         ),
         all(qualification[name] is None or (
             type(qualification[name]) is str

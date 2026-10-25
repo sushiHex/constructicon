@@ -19,7 +19,11 @@ from constructicon.substrate.executors.claude_native import (
     ClaudeNativeVendor,
 )
 from constructicon.substrate.executors.claude_protocol import ClaudePlan
-from constructicon.substrate.executors.linux import DEFAULT_PROCESS_LIMITS, ProcessResult
+from constructicon.substrate.executors.linux import (
+    DEFAULT_PROCESS_LIMITS,
+    ProcessExchangeError,
+    ProcessResult,
+)
 from constructicon.substrate.executors.operator_store import BindingCheck
 from tests.substrate._claude_wire import hooks_body, settings_body
 
@@ -242,6 +246,71 @@ async def run(launcher, *, worker=None, plan=ClaudePlan.PRO, timeout=5):
         guard_fds=(), timeout_s=timeout,
     )
     return outcome, calls
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+async def test_initialization_refusal_retains_only_finite_source_tags_before_user(wrapped):
+    class SourcePeer(Peer):
+        def success(self, request_id, body, *, initialize=False):
+            if initialize:
+                body["account"].update(tokenSource="none", apiKeySource="private-source-sentinel")
+            super().success(request_id, body, initialize=initialize)
+
+    class JoinedLauncher(Launcher):
+        async def exchange(self, command, **kwargs):
+            try:
+                return await super().exchange(command, **kwargs)
+            except claude_read._InitializeRefused as error:
+                if wrapped:
+                    raise ProcessExchangeError(self.result) from error
+                raise
+
+    launcher = JoinedLauncher(SourcePeer())
+    outcome, calls = await run(launcher)
+    assert isinstance(outcome, ExecutorFailure) and outcome.error.kind == "exit"
+    assert outcome.error.detail == (
+        "Claude READ refused [initialize observed: verdict=mode-mismatch; "
+        "reason=credential-source-present; token_source=none; api_key_source=unknown]"
+    )
+    assert len(outcome.error.detail.encode()) <= 256
+    assert "private" not in outcome.error.detail
+    assert launcher.joined and not calls and not launcher.peer.users
+    assert len(launcher.peer.writes) == 1
+
+
+@pytest.mark.parametrize("later", ["timeout", "cleanup", "group"])
+async def test_later_failure_does_not_misattribute_initialization_observation(later):
+    class SourcePeer(Peer):
+        def success(self, request_id, body, *, initialize=False):
+            if initialize:
+                body["account"]["tokenSource"] = "none"
+            super().success(request_id, body, initialize=initialize)
+
+    class FailedLauncher(Launcher):
+        async def exchange(self, command, **kwargs):
+            try:
+                return await super().exchange(command, **kwargs)
+            except claude_read._InitializeRefused as error:
+                if later == "timeout":
+                    raise TimeoutError("private later timeout") from error
+                if later == "cleanup":
+                    raise OSError("private cleanup failure") from error
+                raise BaseExceptionGroup(
+                    "private joined failures", [error, OSError("private")],
+                ) from None
+
+    outcome, calls = await run(FailedLauncher(SourcePeer()))
+    assert isinstance(outcome, ExecutorFailure)
+    assert outcome.error.kind == ("timeout" if later == "timeout" else "exit")
+    assert outcome.error.detail == "Claude READ refused" and not calls
+
+
+async def test_non_initialization_refusal_keeps_generic_detail():
+    launcher = Launcher(Peer(defect="user-write"))
+    outcome, _ = await run(launcher)
+    assert isinstance(outcome, ExecutorFailure)
+    assert outcome.error.detail == "Claude READ refused"
+    assert launcher.conversation.initialize_observation.verdict.value == "mode-match"
 
 
 @pytest.mark.parametrize("refuse", [False, True])

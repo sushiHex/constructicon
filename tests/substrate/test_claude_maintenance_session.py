@@ -23,7 +23,12 @@ from constructicon.substrate.executors.claude_maintenance_session import (
     run_maintenance_session,
 )
 from constructicon.substrate.executors.claude_native import ClaudeNativeRecipe
-from constructicon.substrate.executors.claude_protocol import ClaudeInitializeVerdict, ClaudePlan
+from constructicon.substrate.executors.claude_protocol import (
+    ClaudeApiKeySourceCategory,
+    ClaudeInitializeVerdict,
+    ClaudePlan,
+    ClaudeTokenSourceCategory,
+)
 from constructicon.substrate.executors.egress import EgressDestination, EgressPolicy, EgressSocket
 from constructicon.substrate.executors.linux import ProcessLimits, ProcessResult
 from constructicon.substrate.executors.operator_store import BindingCheck
@@ -362,6 +367,8 @@ async def test_mode_observation_is_one_separate_process(
         return ClaudeMaintenanceObservation(
             phase, ClaudeInitializeVerdict.MODE_MATCH,
             ClaudeMaintenanceLifecycle.OBSERVED, 1, 0, True, True,
+            token_source_category=ClaudeTokenSourceCategory.ABSENT,
+            api_key_source_category=ClaudeApiKeySourceCategory.ABSENT,
         )
 
     monkeypatch.setattr(session, "EgressRelay", Relay)

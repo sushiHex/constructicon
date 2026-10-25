@@ -13,7 +13,6 @@ import math
 import secrets
 import uuid
 from collections.abc import Awaitable, Callable
-from contextlib import suppress
 from dataclasses import replace
 from typing import Literal
 
@@ -34,10 +33,11 @@ from constructicon.substrate.executors.claude_native import ClaudeNativeStoreMou
 from constructicon.substrate.executors.claude_native_events import exact_ui_invalidate
 from constructicon.substrate.executors.claude_protocol import (
     RECORD_BYTES,
+    ClaudeInitializeObservation,
     ClaudeInitializeVerdict,
     ClaudePlan,
     initialize_request,
-    judge_initialize,
+    observe_initialize,
 )
 from constructicon.substrate.executors.claude_read_worker import validate_read_path
 from constructicon.substrate.executors.claude_startup import (
@@ -47,7 +47,7 @@ from constructicon.substrate.executors.claude_startup import (
     judge_settings,
     settings_request,
 )
-from constructicon.substrate.executors.linux import LinuxLauncher
+from constructicon.substrate.executors.linux import LinuxLauncher, ProcessExchangeError
 from constructicon.substrate.executors.operator_store import BindingCheck
 
 TEXT_BYTES = 64 * 1024
@@ -64,6 +64,24 @@ ReadWorker = Callable[[str, float], Awaitable[str]]
 
 class _Refused(Exception):
     """Private static refusal; no wire value is included."""
+
+
+class _InitializeRefused(_Refused):
+    """The joined exchange's primary refusal was this initialization verdict."""
+
+
+def _initialization_detail(observation: ClaudeInitializeObservation | None) -> str:
+    detail = "Claude READ refused"
+    if observation is None or observation.verdict is ClaudeInitializeVerdict.MODE_MATCH:
+        return detail
+    reason = "unobserved" if observation.reason is None else observation.reason.value
+    token = ("unobserved" if observation.token_source_category is None
+             else observation.token_source_category.value)
+    api_key = ("unobserved" if observation.api_key_source_category is None
+               else observation.api_key_source_category.value)
+    observed = (f"{detail} [initialize observed: verdict={observation.verdict.value}; "
+                f"reason={reason}; token_source={token}; api_key_source={api_key}]")
+    return observed if len(observed.encode("utf-8")) <= 256 else detail
 
 
 def _wire(value: object) -> bytes:
@@ -171,6 +189,7 @@ class ClaudeReadTransaction:
         self._records: list[bytes] = []
         self._pending: asyncio.Task[bytes] | None = None
         self._io: ProcessIO | None = None
+        self.initialize_observation: ClaudeInitializeObservation | None = None
         self._eof = False
         self._user_uuid = str(uuid.uuid4())
         self._session: str | None = None
@@ -294,10 +313,12 @@ class ClaudeReadTransaction:
                 await self._mcp(value, handshake=True)
                 continue
             if kind == "initialize":
-                verdict = judge_initialize(response, expected_request_id=identifier,
-                                           selected_plan=self._plan)
+                observation = observe_initialize(response, expected_request_id=identifier,
+                                                 selected_plan=self._plan)
+                self.initialize_observation = observation
+                verdict = observation.verdict
                 if verdict is not ClaudeInitializeVerdict.MODE_MATCH:
-                    raise _Refused()
+                    raise _InitializeRefused()
             elif kind == "get_settings":
                 if judge_settings(response, expected_request_id=identifier, model=self._model,
                                   effort=self._effort) is not ClaudeStartupVerdict.MATCH:
@@ -607,6 +628,8 @@ async def run_read_transaction(
     cancelled = False
     success = False
     timed_out = False
+    initialization_refused = False
+    diagnostic_custody_current = True
     loop = asyncio.get_running_loop()
     started_at = loop.time()
     conversation = ClaudeReadTransaction(
@@ -645,8 +668,10 @@ async def run_read_transaction(
             if launch_store is not None:
                 # exchange has joined; check retained custody on every outcome.
                 # Its primary cancellation/fatal failure must remain primary.
-                with suppress(BaseException):
+                try:
                     launch_store.before_spawn()
+                except BaseException:
+                    diagnostic_custody_current = False
             raise
         if launch_store is not None:
             launch_store.before_spawn()
@@ -658,6 +683,12 @@ async def run_read_transaction(
         current = asyncio.current_task()
         cancelled = _cancelled(error) or (current is not None and current.cancelling() > 0)
         timed_out = isinstance(error, TimeoutError)
+        initialization_refused = (
+            type(error) is _InitializeRefused
+            or (type(error) is ProcessExchangeError
+                and type(error.__cause__) is _InitializeRefused
+                and error.result.timed_out is False)
+        )
         if not cancelled and not isinstance(error, Exception):
             raise
     if cancelled:
@@ -671,4 +702,8 @@ async def run_read_transaction(
                            usage=conversation._usage, elapsed_s=elapsed_s,
                            rate_limit=conversation._rate_limit,
                            error=ExecutorError(kind="timeout" if timed_out else "exit",
-                                               detail="Claude READ refused"))
+                                               detail=(_initialization_detail(
+                                                   conversation.initialize_observation,
+                                               ) if initialization_refused
+                                               and diagnostic_custody_current and not timed_out
+                                               else "Claude READ refused")))

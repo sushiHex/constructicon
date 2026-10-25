@@ -10,7 +10,11 @@ import pytest
 
 from constructicon.core.errors import ContractViolation
 from constructicon.substrate.executors.claude_maintenance_mode import _Refused as _ModeRefused
-from constructicon.substrate.executors.claude_protocol import ClaudePlan
+from constructicon.substrate.executors.claude_protocol import (
+    ClaudeApiKeySourceCategory,
+    ClaudePlan,
+    ClaudeTokenSourceCategory,
+)
 from constructicon.substrate.executors.claude_startup import (
     ClaudeSettingsMismatchReason,
     ClaudeStartupVerdict,
@@ -115,6 +119,9 @@ async def test_three_observations_accept_without_dispatch() -> None:
     facts = conversation.facts
     assert facts.lifecycle is ClaudeQualificationLifecycle.QUALIFIED
     assert facts.settings_mismatch_reason is None
+    assert facts.mode_mismatch_reason is None
+    assert facts.token_source_category is ClaudeTokenSourceCategory.ABSENT
+    assert facts.api_key_source_category is ClaudeApiKeySourceCategory.ABSENT
     assert (facts.request_writes, facts.stdin_closed, facts.eof,
             facts.ui_records) == (3, True, True, 0)
     assert channel.max_readers == 1

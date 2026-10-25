@@ -101,7 +101,8 @@ def test_refusal_cli_is_bounded_diagnostic_never_positive(tmp_path: Path, code):
     assert result.returncode == 0 and result.stderr == b""
     diagnostic = json.loads(result.stdout)
     assert set(diagnostic) == {"mode_verdict", "reason", "refusal_code", "classified_responses",
-                               "request_writes", "ui_records", "evidence_digest"}
+                               "request_writes", "ui_records", "evidence_digest",
+                               "token_source_category", "api_key_source_category"}
     assert diagnostic["mode_verdict"] == "mode-mismatch"
     assert diagnostic["reason"] == "ambiguous-api" and diagnostic["refusal_code"] == code
     assert diagnostic["classified_responses"] == diagnostic["request_writes"] == 1
@@ -133,7 +134,9 @@ def test_generic_observer_refusal_before_or_after_classification(
     mode = record["facts"]["mode"]
     mode.update(mode_verdict=verdict, mode_mismatch_reason=reason,
                 classified_responses=classified, request_writes=writes,
-                refusal_code=code)
+                refusal_code=code,
+                token_source_category=("absent" if verdict == "mode-match" else None),
+                api_key_source_category=("absent" if verdict == "mode-match" else None))
     evidence.write_text(json.dumps(record), encoding="utf-8")
     diagnostic = checker.diagnose_refused_mode(
         ClaudeMaintenanceSessionPhase.OBSERVE, evidence, loaded, ClaudePlan.MAX,
@@ -262,6 +265,8 @@ def test_refused_qualification_cli_is_finite_and_never_positive(tmp_path, reason
     assert result.returncode == 0 and result.stderr == b""
     assert json.loads(result.stdout) == {
         "settings_verdict": "configuration-mismatch", "reason": reason.value,
+        "initialize_verdict": "mode-match", "mode_mismatch_reason": None,
+        "token_source_category": "absent", "api_key_source_category": "absent",
         "process_clean": process_clean,
         "evidence_digest": str(digest(claude_lane.EVIDENCE_DOMAIN, 1,
                                       json.loads(evidence.read_bytes()))),
@@ -332,6 +337,7 @@ def test_qualification_diagnostic_keeps_unobserved_settings_absent(tmp_path):
     record = json.loads(evidence.read_bytes())
     record["facts"]["qualification"].update(
         initialize_verdict=None, settings_verdict=None, settings_mismatch_reason=None,
+        mode_mismatch_reason=None, token_source_category=None, api_key_source_category=None,
         request_writes=1,
     )
     evidence.write_text(json.dumps(record), encoding="utf-8")
@@ -342,11 +348,13 @@ def test_qualification_diagnostic_keeps_unobserved_settings_absent(tmp_path):
 
 
 
-@pytest.mark.parametrize("schema", [3, 4])
+@pytest.mark.parametrize("schema", [3, 4, 5])
 def test_historical_qualification_is_preserved_without_invented_reason(tmp_path, schema):
     config, evidence, _ = refused_qualification(tmp_path)
     record = json.loads(evidence.read_bytes())
     record["schema_version"] = schema
+    for name in ("mode_mismatch_reason", "token_source_category", "api_key_source_category"):
+        del record["facts"]["qualification"][name]
     if schema == 3:
         del record["facts"]["qualification"]["settings_mismatch_reason"]
     else:
@@ -358,3 +366,71 @@ def test_historical_qualification_is_preserved_without_invented_reason(tmp_path,
         assert result.returncode == 1 and result.stdout == b""
         assert result.stderr.splitlines() == [b"Claude phase evidence refused"]
         assert evidence.read_bytes() == legacy
+
+
+def test_qualification_initialize_refusal_has_exact_closed_reason_and_source_categories(tmp_path):
+    config, evidence, loaded = sample(tmp_path, ClaudeMaintenanceSessionPhase.QUALIFY)
+    record = json.loads(evidence.read_bytes())
+    record["facts"]["lifecycle"] = "refused"
+    record["facts"]["qualification"].update(
+        lifecycle="refused", initialize_verdict="mode-mismatch",
+        mode_mismatch_reason="credential-source-present",
+        token_source_category="none", api_key_source_category="unknown",
+        settings_verdict=None, settings_mismatch_reason=None, hooks_verdict=None,
+        request_writes=1, stdin_closed=False, eof=False,
+    )
+    evidence.write_text(json.dumps(record), encoding="utf-8")
+    result = cli(config, evidence, "qualify", "--selected-plan", "max", "--diagnose-refusal")
+    assert result.returncode == 0 and result.stderr == b""
+    published = json.loads(result.stdout)
+    assert published == {
+        "initialize_verdict": "mode-mismatch", "mode_mismatch_reason": "credential-source-present",
+        "token_source_category": "none", "api_key_source_category": "unknown",
+        "settings_verdict": None, "reason": None, "process_clean": True,
+        "evidence_digest": str(digest(claude_lane.EVIDENCE_DOMAIN, 1, record)),
+    }
+    observed = checker.diagnose_refused_qualification(evidence, loaded, ClaudePlan.MAX)
+    assert observed.mode_mismatch_reason.value == "credential-source-present"
+    assert observed.token_source_category.value == "none"
+    with pytest.raises(ContractViolation):
+        checker.validate_phase_evidence(
+            ClaudeMaintenanceSessionPhase.QUALIFY, evidence, loaded, ClaudePlan.MAX,
+        )
+
+
+@pytest.mark.parametrize("phase", ["observe", "qualify"])
+@pytest.mark.parametrize("field,value", [
+    ("token_source_category", None), ("api_key_source_category", None),
+    ("token_source_category", "private-source-sentinel"), ("api_key_source_category", True),
+    ("token_source_category", "login-managed-key"), ("api_key_source_category", "none"),
+    ("token_source_category", "null"),
+])
+def test_strict_current_diagnostics_reject_unknown_cross_key_or_incoherent_tags(
+    tmp_path, phase, field, value,
+):
+    selected = ClaudeMaintenanceSessionPhase(phase)
+    config, evidence, loaded = sample(tmp_path, selected)
+    record = json.loads(evidence.read_bytes())
+    branch = record["facts"]["mode" if phase == "observe" else "qualification"]
+    branch[field] = value
+    evidence.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises((checker._Refused, ContractViolation)):
+        checker.validate_phase_evidence(selected, evidence, loaded, ClaudePlan.MAX)
+    result = cli(config, evidence, phase, "--selected-plan", "max")
+    assert result.returncode == 1 and result.stdout == b""
+    assert b"private-source-sentinel" not in result.stderr
+
+
+def test_historical_mode_schema5_is_not_silently_upgraded(tmp_path):
+    _config, evidence, loaded = sample(tmp_path, ClaudeMaintenanceSessionPhase.OBSERVE)
+    record = json.loads(evidence.read_bytes())
+    record["schema_version"] = 5
+    for name in ("token_source_category", "api_key_source_category"):
+        del record["facts"]["mode"][name]
+    raw = json.dumps(record, separators=(",", ":")).encode()
+    evidence.write_bytes(raw)
+    with pytest.raises(checker._Refused):
+        checker.validate_phase_evidence(
+            ClaudeMaintenanceSessionPhase.OBSERVE, evidence, loaded, ClaudePlan.MAX,
+        )
+    assert evidence.read_bytes() == raw
