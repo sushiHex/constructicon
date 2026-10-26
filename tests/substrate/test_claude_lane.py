@@ -33,6 +33,7 @@ from constructicon.substrate.executors.claude_maintenance_session import (
     ClaudeMaintenanceSessionPhase,
 )
 from constructicon.substrate.executors.claude_native import ClaudeNativeRecipe
+from constructicon.substrate.executors.claude_native_events import ClaudeSystemRecordCategory
 from constructicon.substrate.executors.claude_protocol import (
     ClaudeApiKeySourceCategory,
     ClaudeInitializeVerdict,
@@ -576,7 +577,7 @@ def test_every_published_field_has_a_declared_finite_bound(tmp_path, phase):
         "launch_revision", "egress", "completed",
     } | ({"qualification_revision"} if phase is ClaudeMaintenanceSessionPhase.QUALIFY else set())
     assert record["completed"] is True
-    assert type(record["schema_version"]) is int and record["schema_version"] == 6
+    assert type(record["schema_version"]) is int and record["schema_version"] == 7
     assert record["subscription_qualified"] is record["production_available"] is False
     for key in ("runtime_digest", "vendor_digest", "launch_revision", *(
         ("qualification_revision",) if phase is ClaudeMaintenanceSessionPhase.QUALIFY else ()
@@ -646,7 +647,7 @@ def test_every_published_field_has_a_declared_finite_bound(tmp_path, phase):
         assert set(mode) == {
             "phase", "mode_verdict", "mode_mismatch_reason", "classified_responses",
             "token_source_category", "api_key_source_category",
-            "refusal_code",
+            "refusal_code", "rejected_system_category",
             "lifecycle", "request_writes", "ui_records",
             "stdin_closed", "eof",
         }
@@ -659,6 +660,11 @@ def test_every_published_field_has_a_declared_finite_bound(tmp_path, phase):
         assert mode["refusal_code"] in {
             code.value for code in ClaudeMaintenanceRefusalCode
         } | {None}
+        assert mode["rejected_system_category"] in {
+            category.value for category in ClaudeSystemRecordCategory
+        } | {None}
+        assert all(len(category.value.encode()) <= 32 for category in ClaudeSystemRecordCategory)
+        assert mode["rejected_system_category"] is None  # This fixture is an observed phase.
         assert count is None or (type(count) is int and 0 <= count <= mode["request_writes"])
         assert mode["lifecycle"] in {"observed", "refused", "incomplete", "process-refused"}
         for key in ("stdin_closed", "eof"):
@@ -697,7 +703,7 @@ def test_public_mode_reason_is_only_closed_diagnostic_evidence(reason):
     assert set(public["mode"]) == {
         "phase", "mode_verdict", "mode_mismatch_reason", "classified_responses", "lifecycle",
         "token_source_category", "api_key_source_category",
-        "refusal_code",
+        "refusal_code", "rejected_system_category",
         "request_writes", "ui_records", "stdin_closed", "eof",
     }
     assert len(json.dumps(public)) < 1024
@@ -709,7 +715,8 @@ def test_public_mode_reason_is_only_closed_diagnostic_evidence(reason):
 def test_public_refusal_code_is_only_a_closed_first_guard_not_raw_data(code):
     original = facts(ClaudeMaintenanceSessionPhase.OBSERVE)
     mode = replace(original.mode_observation, lifecycle=ClaudeMaintenanceLifecycle.REFUSED,
-                   refusal_code=code)
+                   refusal_code=code, rejected_system_category=(ClaudeSystemRecordCategory.OTHER
+                   if code is ClaudeMaintenanceRefusalCode.UI_RECORD else None))
     public = claude_lane._public_facts(replace(
         original, lifecycle=ClaudeMaintenanceSessionLifecycle.REFUSED, mode_observation=mode,
     ))
@@ -717,8 +724,24 @@ def test_public_refusal_code_is_only_a_closed_first_guard_not_raw_data(code):
     assert set(public["mode"]) == {
         "phase", "mode_verdict", "mode_mismatch_reason", "classified_responses", "refusal_code",
         "token_source_category", "api_key_source_category",
+        "rejected_system_category",
         "lifecycle", "request_writes", "ui_records", "stdin_closed", "eof",
     }
+    assert len(json.dumps(public)) < 1024
+    assert "private" not in json.dumps(public)
+
+
+@pytest.mark.parametrize("category", list(ClaudeSystemRecordCategory))
+def test_public_rejected_system_category_is_only_a_closed_first_fault(category):
+    original = facts(ClaudeMaintenanceSessionPhase.OBSERVE)
+    mode = replace(original.mode_observation, lifecycle=ClaudeMaintenanceLifecycle.REFUSED,
+                   refusal_code=ClaudeMaintenanceRefusalCode.UI_RECORD,
+                   rejected_system_category=category)
+    public = claude_lane._public_facts(replace(
+        original, lifecycle=ClaudeMaintenanceSessionLifecycle.REFUSED, mode_observation=mode,
+    ))
+    assert public["mode"]["rejected_system_category"] == category.value
+    assert public["mode"]["refusal_code"] == "ui-record"
     assert len(json.dumps(public)) < 1024
     assert "private" not in json.dumps(public)
 

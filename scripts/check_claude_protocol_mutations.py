@@ -1916,5 +1916,35 @@ MUTANTS += (
      READ_TEST + "test_initialization_refusal_retains_only_finite_source_tags_before_user"),
 )
 
+SYSTEM_CATEGORY_MUTANTS = (
+    ("rejected system subtype fallback is closed",
+     NATIVE_EVENTS + "system_record_category",
+     "_SYSTEM_CATEGORIES.get(subtype, ClaudeSystemRecordCategory.OTHER)",
+     "_SYSTEM_CATEGORIES.get(subtype, ClaudeSystemRecordCategory.STATUS)",
+     MAINTENANCE_TEST + "test_rejected_system_category_is_closed_before_second_write"),
+    ("rejected system category captures the actual first frame",
+     MAINTENANCE + "ClaudeMaintenanceConversation._ui",
+     "rejected_system_category=system_record_category(value)",
+     "rejected_system_category=ClaudeSystemRecordCategory.OTHER",
+     MAINTENANCE_TEST + "test_rejected_system_category_is_closed_before_second_write"),
+    ("rejected system category remains paired with the first fault",
+     MAINTENANCE + "ClaudeMaintenanceConversation._latch",
+     "if self.refusal_code is None:", "if True:",
+     MAINTENANCE_TEST + "test_system_category_is_atomic_with_first_refusal_and_survives_reentry"),
+    ("rejected system category survives public projection",
+     "constructicon.substrate.executors.claude_lane:_public_facts",
+     "else mode.rejected_system_category.value", "else None",
+     CLAUDE_LANE_TEST + "test_public_rejected_system_category_is_only_a_closed_first_fault"),
+    ("strict rejected system category belongs to the same UI fault",
+     "scripts.check_claude_phase:_mode",
+     '((mode["refusal_code"] == "ui-record")\n'
+     '                  == (mode["rejected_system_category"] is not None))',
+     "True",
+     "tests/test_claude_phase_checker.py::"
+     "test_rejected_category_requires_closed_current_same_fault_evidence"),
+)
+MUTANTS += SYSTEM_CATEGORY_MUTANTS
+
+
 if __name__ == "__main__":
     raise SystemExit(run(MUTANTS))

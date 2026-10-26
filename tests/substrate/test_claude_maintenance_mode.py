@@ -16,7 +16,11 @@ from constructicon.substrate.executors.claude_native import (
     ClaudeNativeRecipe,
     ClaudeNativeStoreMount,
 )
-from constructicon.substrate.executors.claude_native_events import exact_ui_invalidate
+from constructicon.substrate.executors.claude_native_events import (
+    ClaudeSystemRecordCategory,
+    exact_ui_invalidate,
+    system_record_category,
+)
 from constructicon.substrate.executors.claude_protocol import (
     ClaudeApiKeySourceCategory,
     ClaudeInitializeVerdict,
@@ -58,6 +62,118 @@ def test_shared_ui_discriminators_are_exact_before_consumer_validation():
     assert not exact_ui_invalidate(DictSubclass(valid))
     assert not exact_ui_invalidate({**valid, "type": "not-system"})
     assert not exact_ui_invalidate({**valid, "subtype": "not-ui"})
+
+
+@pytest.mark.parametrize("subtype,category", [
+    ("ui_invalidate", ClaudeSystemRecordCategory.UI_INVALIDATE),
+    ("commands_changed", ClaudeSystemRecordCategory.COMMANDS_CHANGED),
+    ("ui_panes", ClaudeSystemRecordCategory.UI_PANES),
+    ("status", ClaudeSystemRecordCategory.STATUS),
+    ("background_tasks_changed", ClaudeSystemRecordCategory.BACKGROUND_TASKS_CHANGED),
+    ("private-subtype", ClaudeSystemRecordCategory.OTHER),
+    (..., ClaudeSystemRecordCategory.OTHER),
+    (None, ClaudeSystemRecordCategory.OTHER),
+    (True, ClaudeSystemRecordCategory.OTHER),
+    (["private-value"], ClaudeSystemRecordCategory.OTHER),
+    ({"private-key": "private-value"}, ClaudeSystemRecordCategory.OTHER),
+])
+async def test_rejected_system_category_is_closed_before_second_write(subtype, category):
+    value = {"type": "system", "private-key": {"private-value": ["private-content"]}}
+    if subtype is not Ellipsis:
+        value["subtype"] = subtype
+    assert system_record_category(value) is category
+    raw = json.dumps(value).encode() + b"\n"
+    channel = Channel([response("@ID@", "Claude API") + raw])
+    report, launcher, checked = await observe(channel, plan=ClaudePlan.MAX)
+    assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.REFUSED
+    assert report.mode_verdict is ClaudeInitializeVerdict.MODE_MISMATCH
+    assert report.mode_mismatch_reason is ClaudeModeMismatchReason.AMBIGUOUS_API
+    assert report.token_source_category is ClaudeTokenSourceCategory.ABSENT
+    assert report.api_key_source_category is ClaudeApiKeySourceCategory.ABSENT
+    assert report.refusal_code is Code.UI_RECORD
+    assert report.rejected_system_category is category
+    assert report.request_writes == report.classified_responses == len(channel.writes) == 1
+    assert report.ui_records == 0 and not report.stdin_closed and not report.eof
+    assert launcher.joined and channel.active_readers == 0 and checked[-1] is True
+    assert "private" not in json.dumps(asdict(report))
+    assert len(category.value.encode()) <= 32
+
+
+def test_system_category_discards_missing_subtypes_and_non_system_objects():
+    class StringSubclass(str):
+        pass
+
+    class DictSubclass(dict):
+        pass
+
+    for value in (None, [], {}, {"type": "system"},
+                  {"type": "system", "subtype": StringSubclass("status")},
+                  DictSubclass(type="system", subtype="status"),
+                  {"type": "private-type", "subtype": "status"}):
+        assert system_record_category(value) is ClaudeSystemRecordCategory.OTHER
+
+
+@pytest.mark.parametrize("damage", ["event", "extra", "instances"])
+async def test_recognized_ui_category_does_not_relax_ui_admission(damage):
+    value = json.loads(ui())
+    if damage == "event":
+        value["event"] = "private-event"
+    elif damage == "extra":
+        value["private-key"] = "private-value"
+    else:
+        value["instances"] = [{"private-key": "private-value"}]
+    raw = json.dumps(value).encode() + b"\n"
+    channel = Channel([response("@ID@", "Claude API") + raw])
+    report, _, _ = await observe(channel)
+    assert report.refusal_code is Code.UI_RECORD
+    assert report.rejected_system_category is ClaudeSystemRecordCategory.UI_INVALIDATE
+    assert report.ui_records == 0 and report.request_writes == len(channel.writes) == 1
+
+
+async def test_system_category_is_atomic_with_first_refusal_and_survives_reentry():
+    callback = maintenance.ClaudeMaintenanceConversation(
+        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, selected_plan=ClaudePlan.MAX,
+        input_limit=8192, output_limit=512 * 1024, deadline=maintenance._monotonic() + 5,
+    )
+    channel = Channel([response("@ID@", "Claude API") + b'{"type":"system","subtype":"status"}\n'])
+    with pytest.raises(maintenance._Refused):
+        await callback(channel)
+    assert callback.refusal_code is Code.UI_RECORD
+    assert callback.rejected_system_category is ClaudeSystemRecordCategory.STATUS
+    with pytest.raises(ContractViolation):
+        await callback(channel)
+    with pytest.raises(maintenance._Refused):
+        callback._ui(b'{"type":"system","subtype":"private-value"}\n')
+    assert callback.refusal_code is Code.UI_RECORD
+    assert callback.rejected_system_category is ClaudeSystemRecordCategory.STATUS
+    assert len(channel.writes) == 1 and channel.active_readers == 0
+
+    other = maintenance.ClaudeMaintenanceConversation(
+        phase=maintenance.ClaudeMaintenancePhase.OBSERVE, selected_plan=ClaudePlan.MAX,
+        input_limit=8192, output_limit=512 * 1024, deadline=maintenance._monotonic() + 5,
+    )
+    with pytest.raises(maintenance._Refused):
+        other._receive(bytearray(b"private-value"))
+    with pytest.raises(maintenance._Refused):
+        other._ui(b'{"type":"system","subtype":"status"}\n')
+    assert other.refusal_code is Code.READ_CONTRACT
+    assert other.rejected_system_category is None
+
+
+@pytest.mark.parametrize("category,code", [
+    (None, Code.UI_RECORD),
+    ("status", Code.UI_RECORD),
+    (True, Code.UI_RECORD),
+    (ClaudeSystemRecordCategory.STATUS, Code.READ_ERROR),
+    (ClaudeSystemRecordCategory.STATUS, None),
+])
+def test_rejected_category_constructor_requires_the_same_typed_first_ui_fault(category, code):
+    with pytest.raises(ValueError):
+        maintenance.ClaudeMaintenanceObservation(
+            maintenance.ClaudeMaintenancePhase.OBSERVE, None,
+            maintenance.ClaudeMaintenanceLifecycle.REFUSED, 1, 0, False, False,
+            refusal_code=code, rejected_system_category=category,
+        )
 
 
 class Channel:
@@ -193,6 +309,7 @@ async def test_first_positive_mode_closes_drains_and_joins_without_second_write(
     assert report.mode_mismatch_reason is None
     assert report.classified_responses == 1
     assert report.refusal_code is None
+    assert report.rejected_system_category is None
     assert report.request_writes == 1 and report.ui_records == 8
     assert report.stdin_closed and report.eof and launcher.joined
     assert channel.max_readers == 1 and len(channel.writes) < count + 1
@@ -249,6 +366,7 @@ async def test_ambiguous_first_observation_can_reach_second_after_real_spacing(m
     assert report.request_writes == 2 and report.ui_records == 2
     assert report.mode_mismatch_reason is None
     assert report.classified_responses == 2
+    assert report.rejected_system_category is None
     assert launcher.joined and channel.max_readers == 1
 
 
@@ -578,6 +696,9 @@ async def test_duplicate_callback_or_malformed_during_spacing_defeats_second_wri
     assert report.request_writes == 1
     assert report.refusal_code is code
     assert report.classified_responses == 1
+    assert report.rejected_system_category is (
+        ClaudeSystemRecordCategory.OTHER if code is Code.UI_RECORD else None
+    )
 
 
 @pytest.mark.parametrize("extra", [response("@ID@"), b'{"type":"control_request"}\n',
@@ -598,6 +719,7 @@ async def test_ninth_ui_record_refuses_across_prefix_and_tail():
     assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.REFUSED
     assert report.ui_records == 8 and report.request_writes == 1
     assert report.refusal_code is Code.UI_RECORD
+    assert report.rejected_system_category is ClaudeSystemRecordCategory.UI_INVALIDATE
 
 
 async def test_ninth_ui_record_refuses_inside_conversation_before_report_validation():
@@ -1029,14 +1151,14 @@ async def test_public_report_is_finite_and_contains_no_private_values():
     assert set(values) == {"phase", "mode_verdict", "mode_mismatch_reason",
                            "token_source_category", "api_key_source_category",
                            "classified_responses",
-                           "refusal_code",
+                           "refusal_code", "rejected_system_category",
                            "lifecycle", "request_writes",
                            "ui_records", "stdin_closed", "eof"}
     assert all(type(value) in (maintenance.ClaudeMaintenancePhase,
                                ClaudeInitializeVerdict, maintenance.ClaudeMaintenanceLifecycle,
                                ClaudeModeMismatchReason,
                                ClaudeTokenSourceCategory, ClaudeApiKeySourceCategory,
-                               Code,
+                               Code, ClaudeSystemRecordCategory,
                                bool, int, type(None)) for value in values.values())
     assert 0 <= values["request_writes"] <= 2 and 0 <= values["ui_records"] <= 8
     assert all(len(value.value.encode()) <= 32 for value in values.values()
@@ -1054,6 +1176,8 @@ async def test_public_report_is_finite_and_contains_no_private_values():
     {"classified_responses": True}, {"classified_responses": -1},
     {"classified_responses": 2}, {"classified_responses": 0},
     {"refusal_code": "private-raw"}, {"refusal_code": True},
+    {"rejected_system_category": "private-raw"},
+    {"rejected_system_category": ClaudeSystemRecordCategory.STATUS},
     {"refusal_code": Code.PARTIAL_RECORD},
     {"lifecycle": maintenance.ClaudeMaintenanceLifecycle.REFUSED, "refusal_code": "private"},
     {"lifecycle": maintenance.ClaudeMaintenanceLifecycle.REFUSED, "refusal_code": True},
@@ -1171,6 +1295,8 @@ def test_refusal_constructor_keeps_legacy_unknown_or_exact_closed_code(code):
         maintenance.ClaudeMaintenancePhase.OBSERVE, None,
         maintenance.ClaudeMaintenanceLifecycle.REFUSED, 0, 0, False, False,
         refusal_code=code,
+        rejected_system_category=(ClaudeSystemRecordCategory.OTHER
+                                  if code is Code.UI_RECORD else None),
     )
     assert report.refusal_code is code
     assert all(len(item.value.encode()) <= 32 for item in Code)

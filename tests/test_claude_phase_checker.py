@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import json
 import subprocess
 import sys
@@ -11,6 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from scripts import check_claude_phase as checker
 
 from constructicon.core.errors import ContractViolation
 from constructicon.core.identity import digest
@@ -21,15 +21,11 @@ from constructicon.substrate.executors.claude_maintenance_mode import (
 from constructicon.substrate.executors.claude_maintenance_session import (
     ClaudeMaintenanceSessionPhase,
 )
+from constructicon.substrate.executors.claude_native_events import ClaudeSystemRecordCategory
 from constructicon.substrate.executors.claude_protocol import ClaudePlan
 from tests.substrate.test_claude_lane import configuration, facts
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/check_claude_phase.py"
-SPEC = importlib.util.spec_from_file_location("check_claude_phase", SCRIPT)
-assert SPEC is not None and SPEC.loader is not None
-checker = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = checker
-SPEC.loader.exec_module(checker)
 
 
 def sample(tmp_path: Path, phase: ClaudeMaintenanceSessionPhase) -> tuple[Path, Path, object]:
@@ -62,7 +58,8 @@ def refused(tmp_path: Path, code: str | None = "partial-record") -> tuple[Path, 
     mode = record["facts"]["mode"]
     mode.update(mode_verdict="mode-mismatch", mode_mismatch_reason="ambiguous-api",
                 classified_responses=1, request_writes=1, ui_records=0,
-                lifecycle="refused", stdin_closed=False, eof=False, refusal_code=code)
+                lifecycle="refused", stdin_closed=False, eof=False, refusal_code=code,
+                rejected_system_category="other" if code == "ui-record" else None)
     evidence.write_text(json.dumps(record, separators=(",", ":")), encoding="utf-8")
     return config, evidence, loaded
 
@@ -102,11 +99,13 @@ def test_refusal_cli_is_bounded_diagnostic_never_positive(tmp_path: Path, code):
     diagnostic = json.loads(result.stdout)
     assert set(diagnostic) == {"mode_verdict", "reason", "refusal_code", "classified_responses",
                                "request_writes", "ui_records", "evidence_digest",
-                               "token_source_category", "api_key_source_category"}
+                               "token_source_category", "api_key_source_category",
+                               "rejected_system_category"}
     assert diagnostic["mode_verdict"] == "mode-mismatch"
     assert diagnostic["reason"] == "ambiguous-api" and diagnostic["refusal_code"] == code
     assert diagnostic["classified_responses"] == diagnostic["request_writes"] == 1
     assert diagnostic["ui_records"] == 0
+    assert diagnostic["rejected_system_category"] is None
     assert diagnostic["evidence_digest"] == str(digest(
         claude_lane.EVIDENCE_DOMAIN, 1, json.loads(evidence.read_text()),
     ))
@@ -348,7 +347,7 @@ def test_qualification_diagnostic_keeps_unobserved_settings_absent(tmp_path):
 
 
 
-@pytest.mark.parametrize("schema", [3, 4, 5])
+@pytest.mark.parametrize("schema", [3, 4, 5, 6])
 def test_historical_qualification_is_preserved_without_invented_reason(tmp_path, schema):
     config, evidence, _ = refused_qualification(tmp_path)
     record = json.loads(evidence.read_bytes())
@@ -433,4 +432,75 @@ def test_historical_mode_schema5_is_not_silently_upgraded(tmp_path):
         checker.validate_phase_evidence(
             ClaudeMaintenanceSessionPhase.OBSERVE, evidence, loaded, ClaudePlan.MAX,
         )
+    assert evidence.read_bytes() == raw
+
+
+@pytest.mark.parametrize("category", list(ClaudeSystemRecordCategory))
+def test_rejected_system_category_survives_strict_mode_checker_and_cli(tmp_path, category):
+    config, evidence, loaded = refused(tmp_path, "ui-record")
+    record = json.loads(evidence.read_bytes())
+    record["facts"]["mode"]["rejected_system_category"] = category.value
+    evidence.write_text(json.dumps(record), encoding="utf-8")
+    diagnostic = checker.diagnose_refused_mode(
+        ClaudeMaintenanceSessionPhase.OBSERVE, evidence, loaded, ClaudePlan.MAX,
+    )
+    assert diagnostic.rejected_system_category is category
+    result = cli(config, evidence, "observe", "--selected-plan", "max", "--diagnose-refusal")
+    assert result.returncode == 0 and result.stderr == b""
+    public = json.loads(result.stdout)
+    assert public["rejected_system_category"] == category.value
+    assert public["refusal_code"] == "ui-record"
+    assert public["request_writes"] == public["classified_responses"] == 1
+    assert public["ui_records"] == 0 and len(result.stdout) < 1024
+    assert "private" not in result.stdout.decode()
+    with pytest.raises(checker._Refused):
+        checker.validate_phase_evidence(
+            ClaudeMaintenanceSessionPhase.OBSERVE, evidence, loaded, ClaudePlan.MAX,
+        )
+
+
+@pytest.mark.parametrize("damage", ["missing", "unknown", "bool", "dict", "list", "null",
+                                    "wrong-code", "positive"])
+def test_rejected_category_requires_closed_current_same_fault_evidence(tmp_path, damage):
+    config, evidence, loaded = refused(tmp_path, "ui-record")
+    record = json.loads(evidence.read_bytes())
+    mode = record["facts"]["mode"]
+    if damage == "missing":
+        del mode["rejected_system_category"]
+    elif damage == "wrong-code":
+        mode["refusal_code"] = "read-error"
+    elif damage == "positive":
+        record["facts"]["lifecycle"] = "joined-clean"
+        mode.update(lifecycle="observed", mode_verdict="mode-match", mode_mismatch_reason=None,
+                    refusal_code=None, stdin_closed=True, eof=True)
+    else:
+        mode["rejected_system_category"] = {
+            "unknown": "private-subtype", "bool": True, "dict": {"private-key": "private-value"},
+            "list": ["private-value"], "null": None,
+        }[damage]
+    evidence.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(checker._Refused):
+        checker.diagnose_refused_mode(
+            ClaudeMaintenanceSessionPhase.OBSERVE, evidence, loaded, ClaudePlan.MAX,
+        )
+    for extra in ((), ("--diagnose-refusal",)):
+        result = cli(config, evidence, "observe", "--selected-plan", "max", *extra)
+        assert result.returncode == 1 and result.stdout == b""
+        assert result.stderr.splitlines() == [b"Claude phase evidence refused"]
+
+
+@pytest.mark.parametrize("phase", list(ClaudeMaintenanceSessionPhase))
+def test_schema6_is_preserved_and_refused_without_inventing_system_category(tmp_path, phase):
+    config, evidence, _ = sample(tmp_path, phase)
+    record = json.loads(evidence.read_bytes())
+    record["schema_version"] = 6
+    if record["facts"]["mode"] is not None:
+        del record["facts"]["mode"]["rejected_system_category"]
+    raw = json.dumps(record, separators=(",", ":")).encode()
+    evidence.write_bytes(raw)
+    selection = () if phase is ClaudeMaintenanceSessionPhase.LOGIN else ("--selected-plan", "max")
+    for extra in ((), ("--diagnose-refusal",)):
+        result = cli(config, evidence, phase.value, *selection, *extra)
+        assert result.returncode == 1 and result.stdout == b""
+        assert result.stderr.splitlines() == [b"Claude phase evidence refused"]
     assert evidence.read_bytes() == raw
