@@ -29,6 +29,7 @@ LAUNCH = WORK / "launch"
 INSTALLED = Path("/var/lib/constructicon-m8-claude")
 CONTROLLER_ROOT = Path("/opt/constructicon-m8-controller")
 QUALIFICATION_ROOT = Path("/opt/constructicon-m8-qualification")
+OPT = Path("/opt")
 STORES = Path("/var/lib/constructicon-m8-claude-stores")
 CHECKERS = Path("/opt/constructicon-m8-claude-read-checker")
 CHECKER = CHECKERS / "check_claude_phase.py"
@@ -56,23 +57,36 @@ def file_sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def diagnostic(raw: bytes, limit: int = 4096) -> str:
+    text = raw[:limit].decode("utf-8", errors="replace")
+    return text + (f" [truncated; {len(raw)} bytes total]" if len(raw) > limit else "")
+
+
 def command(argv: list[str], *, user: str | None = None, data: bytes = b"",
-            cwd: Path = Path("/"), timeout: int = 120) -> bytes:
+            cwd: Path = Path("/"), timeout: int = 120,
+            operation: str = "fixed provisioning command") -> bytes:
+    requested = list(argv)
     if user:
         argv = ["/usr/bin/sudo", "-n", "-u", user, "/usr/bin/env", "-i",
                 *(key + "=" + value for key, value in ENV.items()), *argv]
     result = subprocess.run(argv, input=data, capture_output=True, check=False,
                             timeout=timeout, cwd=cwd, env=ENV)
-    require(result.returncode == 0,
-            "fixture command failed: " + repr(argv[:8]) + " "
-            + result.stderr.decode(errors="replace")[:2000])
-    require(not result.stderr, "fixture command emitted stderr")
+    if result.returncode != 0 or result.stderr:
+        raise ValueError(
+            f"fixture command failed: operation={operation!r} user={user or 'root'!r} "
+            f"cwd={str(cwd)!r} returncode={result.returncode} "
+            f"argv={diagnostic(json.dumps(requested).encode())}\n"
+            f"stdout ({len(result.stdout)} bytes): {diagnostic(result.stdout)}\n"
+            f"stderr ({len(result.stderr)} bytes): {diagnostic(result.stderr)}"
+        )
     return result.stdout
 
 
 def write(path: Path, raw: bytes, mode: int = 0o444, owner: str = "root") -> None:
     with path.open("xb") as stream:
         stream.write(raw)
+        stream.flush()
+        os.fsync(stream.fileno())
     command(["/usr/bin/chown", owner + ":" + owner, str(path)])
     path.chmod(mode)
 
@@ -100,7 +114,41 @@ def helper(workspace: Path, commit: str, operation: str, *, claude: bool = False
             commit, str(workspace)]
     if config is not None:
         argv += ["--launch-config-sha256", config]
-    return json.loads(command(argv, user="runner", data=profiles() if listing else b""))
+    return json.loads(command(argv, user="runner", data=profiles() if listing else b"",
+                              operation=f"{operation} workspace={workspace}"))
+
+
+def _sync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def protect_opt() -> None:
+    """The hosted image makes /opt 0777; satisfy the unchanged root-custody law.
+
+    This changes only the disposable runner after other foundation consumers
+    finish. Save the exact original mode before tightening, and restore it only
+    after every rehearsal installation beneath /opt has been removed.
+    """
+    info = OPT.lstat()
+    require(stat.S_ISDIR(info.st_mode) and info.st_uid == info.st_gid == 0
+            and OPT.resolve(strict=True) == OPT, "hosted /opt custody refused")
+    original = stat.S_IMODE(info.st_mode)
+    identity = {"original_mode": original, "device": info.st_dev, "inode": info.st_ino,
+                "uid": info.st_uid, "gid": info.st_gid}
+    write(ROOT / "opt-custody.json", json.dumps(identity, sort_keys=True).encode())
+    _sync_directory(ROOT)
+    OPT.chmod(0o755)
+    after = OPT.lstat()
+    require(stat.S_IMODE(after.st_mode) == 0o755
+            and (after.st_dev, after.st_ino, after.st_uid, after.st_gid)
+            == (info.st_dev, info.st_ino, 0, 0), "hosted /opt hardening failed")
+    print(json.dumps({"operation": "hosted-opt-custody", "before_mode": oct(original),
+                      "after_mode": oct(stat.S_IMODE(after.st_mode)),
+                      "root_owned": True, "same_directory": True}, sort_keys=True), flush=True)
 
 
 def fixture_repository(archive: Path, member: bytes) -> str:
@@ -325,6 +373,7 @@ def provision() -> None:
     directory(ROOT)
     # Created first so cleanup can identify exactly this invocation's custody.
     write(ROOT / "owned.json", b'{"schema_version":1,"scope":"fake-read-rehearsal"}\n')
+    protect_opt()
     directory(WORK, "runner", 0o700)
     peer = ROOT / "fake-claude"
     command(["/usr/bin/cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-O2",
@@ -411,6 +460,26 @@ def cleanup() -> None:
                 "cleanup probe account custody refused")
         command(["/usr/sbin/userdel", "m8-probe"])
         shutil.rmtree(probe_home)
+    custody = ROOT / "opt-custody.json"
+    if custody.exists():
+        recorded = json.loads(custody.read_bytes())
+        original = recorded.get("original_mode")
+        info = OPT.lstat()
+        require(set(recorded) == {"original_mode", "device", "inode", "uid", "gid"}
+                and all(type(value) is int and value >= 0 for value in recorded.values())
+                and 0 <= original <= 0o7777 and stat.S_ISDIR(info.st_mode)
+                and recorded["uid"] == recorded["gid"] == 0
+                and (info.st_dev, info.st_ino, info.st_uid, info.st_gid)
+                == (recorded["device"], recorded["inode"], recorded["uid"], recorded["gid"])
+                and OPT.resolve(strict=True) == OPT
+                and stat.S_IMODE(info.st_mode) in (0o755, original),
+                "cleanup hosted /opt custody refused")
+        OPT.chmod(original)
+        after = OPT.lstat()
+        require(stat.S_IMODE(after.st_mode) == original
+                and (after.st_dev, after.st_ino, after.st_uid, after.st_gid)
+                == (recorded["device"], recorded["inode"], 0, 0),
+                "cleanup hosted /opt restoration failed")
     shutil.rmtree(ROOT)
 
 
