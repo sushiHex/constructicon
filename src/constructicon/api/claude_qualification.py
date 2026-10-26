@@ -46,7 +46,7 @@ from constructicon.substrate.executors.claude_provider import (
     ClaudeOperatorProvider,
 )
 from constructicon.substrate.executors.claude_read_worker import READ_WORKER_LIMITS
-from constructicon.substrate.executors.linux import LinuxLauncher
+from constructicon.substrate.executors.linux import LinuxLauncher, LinuxLaunchProfile
 from constructicon.substrate.executors.qualification import read_authorization
 from constructicon.substrate.git.contained import ContainedWorkspace
 from constructicon.substrate.journal.sqlite import SqliteJournal
@@ -186,6 +186,7 @@ def assemble(options: argparse.Namespace,
         expected_runtime=configuration.runtime_digest,
         bubblewrap=configuration.launch_root / "bwrap", policy=configuration.launch_policy,
         expected_policy_sha256=configuration.launch_policy_sha256, limits=READ_WORKER_LIMITS,
+        launch_profile=LinuxLaunchProfile.CLAUDE_BOOTSTRAP,
     )
     workspace = fixture.workspace_provider(options.fixture, worker)
     host = ClaudeHostSession(

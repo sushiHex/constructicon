@@ -9426,7 +9426,9 @@ remain valid historical evidence; neither establishes an admitted READ.
 `scripts/ops/claude_read_session.py` now owns the compile, transport, readback
 and check entry points for one explicit phase. Each phase selects its command
 and exact output contract together. The existing procedure extractor is reused;
-accepted procedure bytes and controller source are unchanged. The operator
+accepted procedure bytes are unchanged. The initial tooling extraction did not
+change controller source; executing its real accepting path then exposed the
+pre-existing production assembly mismatch described below. The operator
 content revision and installed controller commit are bound separately, with
 private boot, target, owner decisions, grants and measured identities supplied
 as external data. An operator-only revision does not imply controller replacement.
@@ -9456,3 +9458,32 @@ by Windows skips; their actual hosted result and exact revision belong in the
 delivery PR before merge. This work does not enable a production provider,
 authorize an account operation or complete N6/M8. The next live task still uses
 its fixed one-attempt authorization, fresh facts and explicit stop/recovery law.
+
+
+The real generated accepting path exposed a pre-existing READ assembly defect:
+the API built its vendor-free worker with the Claude launch policy, while
+`LinuxLauncher.probe()` chose its expected AppArmor label from vendor presence.
+The measured failure was a contradictory containment probe before dispatch,
+with zero callbacks; the old run did not retain a per-launcher label observation.
+Source inspection identifies the mismatch: that policy selects Claude bootstrap
+for Python, while the vendor-free worker expected the generic workload label.
+Earlier physical provider tests supplied a separate generic worker and missed
+the production combination.
+
+The correction separates the closed launch-profile selection from vendor
+selection and binds the resolved profile into the launcher revision. The fixed
+READ assembly explicitly selects Claude bootstrap for its vendor-free worker;
+its materialization copy retains that selection. Legacy constructor defaults
+remain compatible, and a probe still requires exactly the selected enforcing
+label and every existing namespace, privilege and nested-namespace predicate.
+No policy, mount, egress, credential, native transition or protocol rule is
+widened. READ extraction does not execute Git in that profile; WRITE remains
+outside this change.
+
+This source correction changes the controller and launcher identities. The old
+controller pin and historical qualification cannot authorize the corrected live
+run: installation and fresh qualification must use their reviewed new pins.
+The bounded hosted failure reader retains declared outputs and fake attempt/
+journal facts before cleanup, so a failed rehearsal remains a failure and is
+diagnosable without a private-host retry. Final physical results and the narrow
+review of this correction belong in the delivery PR.

@@ -20,6 +20,7 @@ import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import asdict, dataclass, replace
+from enum import Enum
 from pathlib import Path
 from typing import Literal
 
@@ -521,6 +522,21 @@ class _ProcessIO:
         self._writer.close()
 
 
+class LinuxLaunchProfile(Enum):
+    """The closed enforcing profile of Python under a pinned launch policy."""
+
+    GENERIC_WORKLOAD = "generic-workload"
+    CLAUDE_BOOTSTRAP = "claude-bootstrap"
+
+    @property
+    def label(self) -> str:
+        return {
+            LinuxLaunchProfile.GENERIC_WORKLOAD:
+                "constructicon-m8-launch//&constructicon-m8-workload (enforce)",
+            LinuxLaunchProfile.CLAUDE_BOOTSTRAP: CLAUDE_BOOTSTRAP_LABEL,
+        }[self]
+
+
 @dataclass(frozen=True, kw_only=True)
 class LinuxLauncher:
     """A trusted assembly binds exact artifacts before any acquired call."""
@@ -534,6 +550,7 @@ class LinuxLauncher:
     vendor: NativeVendor | None = None
     claude: ClaudeNativeVendor | None = None
     claude_recipe: ClaudeNativeRecipe = ClaudeNativeRecipe.STREAM_JSON
+    launch_profile: LinuxLaunchProfile | None = None
 
     def __post_init__(self) -> None:
         if type(self.claude_recipe) is not ClaudeNativeRecipe:
@@ -542,6 +559,21 @@ class LinuxLauncher:
             raise ContractViolation("the login recipe requires a Claude vendor")
         if self.vendor is not None and self.claude is not None:
             raise ContractViolation("a launcher selects exactly one fixed native recipe")
+        if self.launch_profile is not None and type(self.launch_profile) is not LinuxLaunchProfile:
+            raise ContractViolation("a launcher requires a closed launch profile selection")
+        if self.claude is not None and self.launch_profile is LinuxLaunchProfile.GENERIC_WORKLOAD:
+            raise ContractViolation("a Claude native launcher requires its bootstrap profile")
+        if self.vendor is not None and self.launch_profile is LinuxLaunchProfile.CLAUDE_BOOTSTRAP:
+            raise ContractViolation("a Codex native launcher requires its generic workload profile")
+
+    @property
+    def effective_profile(self) -> LinuxLaunchProfile:
+        # Keep legacy constructors and dataclasses.replace vendor changes intact;
+        # an assembly can explicitly select the policy for a vendor-free worker.
+        if self.launch_profile is not None:
+            return self.launch_profile
+        return (LinuxLaunchProfile.CLAUDE_BOOTSTRAP if self.claude is not None
+                else LinuxLaunchProfile.GENERIC_WORKLOAD)
 
     @property
     def root(self) -> Path:
@@ -577,6 +609,7 @@ class LinuxLauncher:
             "io_contract": digest("process-io-contract", 1, inspect.getsource(ProcessIO)),
             "lifetime": digest("owned-lifetime", 1, inspect.getsource(finish_owned)),
             "policy": self.expected_policy_sha256,
+            "launch_profile": self.effective_profile.value,
             "limits": asdict(self.limits),
             "vendor": None if self.vendor is None else [
                 str(self.vendor.tree), str(self.vendor.catalog),
@@ -768,10 +801,7 @@ class LinuxLauncher:
         try:
             facts = json.loads(result.stdout)
             correct = (
-                facts["profile"] == (
-                    "constructicon-m8-launch//&constructicon-m8-workload (enforce)"
-                    if self.claude is None else CLAUDE_BOOTSTRAP_LABEL
-                )
+                facts["profile"] == self.effective_profile.label
                 and facts["nested_denied"] and facts["sys_absent"]
                 and "NoNewPrivs:\t1" in facts["status"]
                 and "CapEff:\t0000000000000000" in facts["status"]

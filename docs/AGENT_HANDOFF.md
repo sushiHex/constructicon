@@ -25,6 +25,14 @@ an operator-only change does not imply controller replacement. Private boot,
 target, custody, owner and account data stay outside the repository. Failed
 native transport now also produces a nonzero CLI exit, while retaining evidence.
 
+Executing the real accepting chain also exposed a pre-existing READ assembly
+mismatch: the vendor-free worker used Claude's launch policy while its probe
+expected the generic workload label. Launch-profile identity is now selected
+separately from vendor identity, revision-bound and checked as one exact label.
+The worker remains vendor-free and networkless; no policy permissions changed.
+This controller-source correction requires new installation and qualification
+pins. The operator-only continuity claim does not apply to that correction.
+
 The motivating failures were operator composition defects, not repeated vendor
 authentication failures. Handcrafted successful receipts and Bash syntax checks
 had not proved the actual producers agreed with their consumers. The hosted

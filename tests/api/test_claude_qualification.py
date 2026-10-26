@@ -19,7 +19,7 @@ from constructicon.core.qualification import QualificationAuthorization
 from constructicon.core.run import RunStatus
 from constructicon.substrate.executors import claude_provider as native
 from constructicon.substrate.executors.claude_read_worker import READ_WORKER_LIMITS
-from constructicon.substrate.executors.linux import LinuxLauncher, ProcessResult
+from constructicon.substrate.executors.linux import LinuxLauncher, LinuxLaunchProfile, ProcessResult
 from constructicon.substrate.git import contained
 from constructicon.substrate.journal.sqlite import SqliteJournal
 from tests.substrate.test_claude_lane import configuration
@@ -204,6 +204,7 @@ def test_assemble_threads_exact_config_pin_and_separate_worker_limits(
     assert root == options.fixture and isinstance(worker, LinuxLauncher)
     assert worker.limits == READ_WORKER_LIMITS
     assert worker.claude is None and worker.vendor is None
+    assert worker.effective_profile is LinuxLaunchProfile.CLAUDE_BOOTSTRAP
     assert worker.expected_runtime == entry.read_configuration(
         path, expected_sha256=config_sha,
     ).runtime_digest
@@ -215,6 +216,7 @@ def test_assemble_threads_exact_config_pin_and_separate_worker_limits(
     )
     assert kwargs["worker_launcher"] is worker
     assert kwargs["workspace"].launcher.limits == fixture.MATERIALIZATION_LIMITS
+    assert kwargs["workspace"].launcher.effective_profile is LinuxLaunchProfile.CLAUDE_BOOTSTRAP
     assert kwargs["workspace_capability_id"] == entry.WORKSPACE_CAPABILITY
     assert kwargs["workspace_revision"] == fixture.REVISION
     assert kwargs["expected_base"] == fixture.BASE

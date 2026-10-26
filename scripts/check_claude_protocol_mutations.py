@@ -1983,6 +1983,31 @@ COMMAND_NOTIFICATION_MUTANTS = (
 )
 MUTANTS += COMMAND_NOTIFICATION_MUTANTS
 
+PROFILE_TEST = NATIVE_TEST + "test_launch_profile_selection_is_closed_and_revision_bound"
+PROFILE_MUTANTS = (
+    ("launch profile is a closed enum", LINUX + "__post_init__",
+     "if self.launch_profile is not None and type(self.launch_profile) is not LinuxLaunchProfile:",
+     "if False:", PROFILE_TEST),
+    ("Claude native cannot select the generic workload profile", LINUX + "__post_init__",
+     "if self.claude is not None and self.launch_profile is LinuxLaunchProfile.GENERIC_WORKLOAD:",
+     "if False:", PROFILE_TEST),
+    ("Codex native cannot select the Claude bootstrap profile", LINUX + "__post_init__",
+     "if self.vendor is not None and self.launch_profile is LinuxLaunchProfile.CLAUDE_BOOTSTRAP:",
+     "if False:", PROFILE_TEST),
+    ("resolved launch profile is bound to its revision", LINUX + "revision",
+     '"launch_profile": self.effective_profile.value,', '"launch_profile": "not-bound",',
+     PROFILE_TEST),
+    ("physical probe requires the selected exact profile", LINUX + "probe",
+     'facts["profile"] == self.effective_profile.label', "True",
+     NATIVE_TEST + "test_probe_requires_the_selected_exact_profile[bootstrap]"),
+    ("fixed READ assembly selects the bootstrap profile for its worker",
+     "constructicon.api.claude_qualification:assemble",
+     "launch_profile=LinuxLaunchProfile.CLAUDE_BOOTSTRAP,", "launch_profile=None,",
+     "tests/api/test_claude_qualification.py::"
+     "test_assemble_threads_exact_config_pin_and_separate_worker_limits"),
+)
+MUTANTS += PROFILE_MUTANTS
+
 
 if __name__ == "__main__":
     raise SystemExit(run(MUTANTS))
