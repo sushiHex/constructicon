@@ -1,6 +1,6 @@
-"""Exact pinned native framing exception shared by maintenance and diagnostics.
+"""Exact pinned inert native notifications shared by maintenance and READ.
 
-UI notifications are inert byte framing. They never constitute mode, refresh,
+Notifications are inert byte framing. They never constitute mode, refresh,
 startup or completion evidence. Callers own complete-record parsing and count.
 """
 
@@ -61,3 +61,35 @@ def exact_ui_invalidate(value: object) -> bool:
         ):
             return False
     return True
+
+
+def exact_commands_changed(value: object) -> bool:
+    """Validate 2.1.296 mF/Vt framing, discarding its entire command catalog."""
+    if type(value) is not dict:
+        return False
+    if (set(value) != {"type", "subtype", "commands", "uuid", "session_id"}
+            or any(type(key) is not str for key in value)
+            or any(type(value[key]) is not str for key in ("type", "subtype", "uuid", "session_id"))
+            or value["type"] != "system" or value["subtype"] != "commands_changed"):
+        return False
+    commands = value["commands"]
+    if type(commands) is not list:
+        return False
+    required = {"name", "description", "argumentHint"}
+    for row in commands:
+        if (type(row) is not dict
+                or any(type(key) is not str for key in row)
+                or not required <= set(row) or set(row) - required - {"aliases", "builtin"}
+                or any(type(row[key]) is not str for key in required)):
+            return False
+        if "aliases" in row and (type(row["aliases"]) is not list
+                                 or any(type(alias) is not str for alias in row["aliases"])):
+            return False
+        if "builtin" in row and type(row["builtin"]) is not bool:
+            return False
+    return True
+
+
+def exact_inert_notification(value: object) -> bool:
+    """One closed framing exception; validated metadata supplies no authority."""
+    return exact_ui_invalidate(value) or exact_commands_changed(value)

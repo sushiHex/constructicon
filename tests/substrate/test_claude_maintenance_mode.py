@@ -31,6 +31,7 @@ from constructicon.substrate.executors.claude_protocol import (
 )
 from constructicon.substrate.executors.linux import DEFAULT_PROCESS_LIMITS, ProcessResult
 from constructicon.substrate.executors.operator_store import BindingCheck
+from tests.substrate._claude_wire import commands_changed
 
 CLEAN = ProcessResult(0, b"private-output", b"private-error", 0.1, payload_returncode=0)
 Code = maintenance.ClaudeMaintenanceRefusalCode
@@ -340,7 +341,11 @@ async def test_only_exact_ambiguous_api_shape_may_wait_for_another_request(raw):
     assert report.request_writes == 1 and len(channel.writes) == 1
 
 
-async def test_ambiguous_first_observation_can_reach_second_after_real_spacing(monkeypatch):
+@pytest.mark.parametrize("notification", [ui(), json.dumps(commands_changed()).encode() + b"\n"],
+                         ids=["ui", "commands"])
+async def test_ambiguous_first_observation_can_reach_second_after_real_spacing(
+    monkeypatch, notification,
+):
     clock = [0.0]
     monkeypatch.setattr(maintenance, "_monotonic", lambda: clock[0])
     channel = Channel([response("@ID@", "Claude API"), response("@ID@")])
@@ -351,7 +356,7 @@ async def test_ambiguous_first_observation_can_reach_second_after_real_spacing(m
         await asyncio.sleep(0)
     assert len(channel.writes) == 1 and channel.active_readers == 1
     clock[0] = 29.0
-    channel.output.extend(ui())
+    channel.output.extend(notification)
     channel.changed.set()
     for _ in range(100):
         if channel.reads >= 3:
@@ -359,7 +364,7 @@ async def test_ambiguous_first_observation_can_reach_second_after_real_spacing(m
         await asyncio.sleep(0)
     assert len(channel.writes) == 1 and not task.done()
     clock[0] = 30.0
-    channel.output.extend(ui())
+    channel.output.extend(notification)
     channel.changed.set()
     report, launcher, _ = await asyncio.wait_for(task, 1)
     assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.OBSERVED
@@ -368,6 +373,53 @@ async def test_ambiguous_first_observation_can_reach_second_after_real_spacing(m
     assert report.classified_responses == 2
     assert report.rejected_system_category is None
     assert launcher.joined and channel.max_readers == 1
+
+
+@pytest.mark.parametrize("extra", [0, 1])
+async def test_commands_notifications_are_discarded_under_the_shared_maintenance_quota(extra):
+    command = json.dumps(commands_changed()).encode() + b"\n"
+    channel = Channel([command * 2 + ui() * 2 + response("@ID@")
+                       + command * 2 + ui() * (2 + extra)], fragment=1)
+    report, launcher, _ = await observe(channel)
+    assert report.lifecycle is (maintenance.ClaudeMaintenanceLifecycle.OBSERVED if not extra
+                                else maintenance.ClaudeMaintenanceLifecycle.REFUSED)
+    assert report.ui_records == 8 and report.classified_responses == 1
+    assert report.request_writes == len(channel.writes) == 1
+    assert report.mode_verdict is ClaudeInitializeVerdict.MODE_MATCH
+    assert report.refusal_code is (Code.UI_RECORD if extra else None)
+    assert launcher.joined and channel.max_readers == 1
+    assert "private" not in json.dumps(asdict(report), default=str)
+    assert all(b"private" not in raw for raw in channel.writes)
+
+
+@pytest.mark.parametrize("after", [False, True])
+async def test_malformed_commands_notification_refuses_before_any_second_write(after):
+    value = commands_changed()
+    value["commands"][0]["builtin"] = 1
+    malformed = json.dumps(value).encode() + b"\n"
+    channel = Channel([(response("@ID@") + malformed) if after
+                       else (malformed + response("@ID@"))])
+    report, launcher, _ = await observe(channel)
+    assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.REFUSED
+    assert report.refusal_code is Code.UI_RECORD and report.ui_records == 0
+    assert report.rejected_system_category is ClaudeSystemRecordCategory.COMMANDS_CHANGED
+    assert report.request_writes == len(channel.writes) == 1 and launcher.joined
+    assert report.classified_responses == int(after)
+    assert "private" not in json.dumps(asdict(report), default=str)
+
+
+async def test_commands_notification_alone_cannot_supply_a_mode_response():
+    class EOFChannel(Channel):
+        async def read(self, maximum=8192):
+            return await super().read(maximum) if self.output else b""
+
+    channel = EOFChannel([json.dumps(commands_changed()).encode() + b"\n"])
+    report, launcher, _ = await observe(channel)
+    assert report.lifecycle is maintenance.ClaudeMaintenanceLifecycle.REFUSED
+    assert report.ui_records == 1 and report.classified_responses == 0
+    assert report.mode_verdict is None and report.eof
+    assert report.request_writes == len(channel.writes) == 1 and launcher.joined
+    assert json.loads(channel.writes[0])["request"] == {"subtype": "initialize"}
 
 
 @pytest.mark.parametrize("fragment_at", [29.0, 30.0])

@@ -16,6 +16,28 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Claude command-list pushes are bounded framing, not authority
+
+The first schema-7 OBSERVE identified a rejected `commands-changed` category.
+Pinned-source inspection proves that such a push can follow initialization
+without a user or model turn. Maintenance and READ now recognize only its
+exact source-derived envelope and row schema, discard its metadata, and charge
+it to their existing shared eight-notification limit. Unknown/malformed frames
+still refuse. No command list grants execution, catalog or mode authority.
+
+The existing UI-invalidate predicate, one-shot initialization protocol, old
+credential-free diagnostic, positive mode checks and byte/deadline bounds stay
+unchanged. Fake acceptance proves framing compatibility, not subscription
+qualification or a completed READ. The live session stopped after its single
+refusal and affirmative park; new adapter bytes require fresh installation
+and qualification before any live use.
+
+The category identifies only a discriminator, not a valid payload. A peer's
+initial stronger interpretation was withdrawn after checking the classifier.
+Separately, actual-input auditing caught a builder-TOML/install-JSON hash mix-up
+before any installation; their distinct artifact domains are now explicitly
+checked. Do not infer the meaning of a generic `values_sha256` across artifacts.
+
 ## Claude startup-system refusals identify a closed record family
 
 Maintenance evidence now retains a finite rejected-system category paired with
