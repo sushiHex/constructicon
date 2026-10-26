@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 import subprocess
 import sys
@@ -15,6 +16,7 @@ from constructicon.core.executor import ExecutorSuccess, TaskSpec, Usage
 from constructicon.substrate.executors.claude_protocol import ClaudePlan
 from constructicon.substrate.executors.claude_read import (
     ClaudeReadTransaction,
+    _Refused,
     run_read_transaction,
 )
 from constructicon.substrate.executors.claude_read_worker import (
@@ -57,7 +59,7 @@ def wire_peer(tmp_path_factory):
     return binary
 
 
-@pytest.mark.parametrize("model", MODELS)
+@pytest.mark.parametrize("model", (*MODELS, "fixture-ready"))
 async def test_compiled_fake_peer_completes_the_actual_bounded_read_protocol(wire_peer, model):
     """Portable wire/transaction evidence only; no isolation is claimed here."""
     command = (str(wire_peer), "--print", "--input-format", "stream-json", "--output-format",
@@ -71,7 +73,7 @@ async def test_compiled_fake_peer_completes_the_actual_bounded_read_protocol(wir
 
     async def worker(path, remaining):
         calls.append((path, remaining))
-        return SEED_CALC
+        return "ready\n" if model == "fixture-ready" else SEED_CALC
 
     class Channel:
         async def read(self, maximum=8192):
@@ -100,11 +102,77 @@ async def test_compiled_fake_peer_completes_the_actual_bounded_read_protocol(wir
             child.kill()
         await child.wait()
     assert transaction._state == "drained" and transaction._handshake == 3
-    assert transaction._calls_completed == (1 if model == "fixture-read" else 0)
-    assert transaction._reply == (SEED_CALC if model == "fixture-read" else "zero-callback")
-    assert len(calls) == (1 if model == "fixture-read" else 0)
+    assert transaction._calls_completed == (0 if model == "fixture-zero" else 1)
+    assert transaction._reply == {"fixture-read": SEED_CALC, "fixture-ready": "ready\n",
+                                  "fixture-zero": "zero-callback"}[model]
+    assert len(calls) == (0 if model == "fixture-zero" else 1)
     if calls:
-        assert calls[0][0] == "calc.py" and 0 < calls[0][1] <= 10
+        assert calls[0][0] == ("ready.txt" if model == "fixture-ready" else "calc.py")
+        assert 0 < calls[0][1] <= 10
+
+
+@pytest.mark.parametrize("kinds", [("initialize",),
+                                  ("initialize", "get_settings", "get_hooks_listing")])
+def test_compiled_fake_peer_closes_after_maintenance_observations(wire_peer, kinds):
+    command = (str(wire_peer), "--print", "--input-format", "stream-json", "--output-format",
+               "stream-json", "--verbose", "--safe-mode", "--tools", "", "--model",
+               "fixture-ready", "--effort", "low")
+    frames = b"".join((json.dumps({"type": "control_request", "request_id": str(index),
+                                   "request": {"subtype": kind}}, separators=(",", ":"))
+                       + "\n").encode() for index, kind in enumerate(kinds))
+    result = subprocess.run(command, input=frames, capture_output=True, check=False, timeout=10)
+    assert result.returncode == 0 and result.stderr == b""
+    records = [json.loads(line) for line in result.stdout.splitlines()]
+    assert [row["response"]["request_id"] for row in records] == [
+        str(index) for index in range(len(kinds))
+    ]
+
+
+async def test_maintenance_eof_cannot_complete_a_read(wire_peer):
+    command = (str(wire_peer), "--print", "--input-format", "stream-json", "--output-format",
+               "stream-json", "--verbose", "--safe-mode", "--tools", "", "--model",
+               "fixture-ready", "--effort", "low")
+    child = await asyncio.create_subprocess_exec(
+        *command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    calls = []
+
+    async def worker(path, remaining):
+        calls.append((path, remaining))
+        return "ready\n"
+
+    class EarlyClose:
+        async def read(self, maximum=8192):
+            return await child.stdout.read(maximum)
+
+        async def write(self, data):
+            if child.stdin.is_closing():
+                return
+            child.stdin.write(data)
+            await child.stdin.drain()
+            child.stdin.close()
+            await child.stdin.wait_closed()
+
+        async def close_stdin(self):
+            child.stdin.close()
+
+    transaction = ClaudeReadTransaction(
+        TaskSpec(instruction="Read ready.txt."), selected_plan=ClaudePlan.PRO,
+        model="fixture-ready", effort="low", worker=worker, input_limit=1024 * 1024,
+        output_limit=1024 * 1024, deadline=asyncio.get_running_loop().time() + 10,
+    )
+    try:
+        async with asyncio.timeout(10):
+            with pytest.raises(_Refused):
+                await transaction(EarlyClose())
+            assert await child.wait() == 0
+            assert await child.stderr.read() == b""
+    finally:
+        if child.returncode is None:
+            child.kill()
+        await child.wait()
+    assert transaction._state == "refused" and not calls and transaction._reply is None
 
 
 @pytest.mark.parametrize("model", MODELS)

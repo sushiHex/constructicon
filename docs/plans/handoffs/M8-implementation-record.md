@@ -9410,3 +9410,49 @@ one fixed fixture/model attempt through the existing implementation. It needs
 fresh next-boot qualification, publication/activation of the exact checked
 identity, a concrete one-attempt authorization and explicit owner call approval.
 The parked session's digest is historical evidence, not the next boot's seal.
+
+### Versioned Claude READ operator composition
+
+The [stopped first-READ session](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6427533499)
+passed current-boot controller and launch verification but stopped before any
+vendor acquisition: an ad hoc local wrapper applied a drift-only receipt
+contract to the controller's correct two-line success output. Earlier private
+preparation also confused build-TOML/install-JSON identities and reused a
+staging namespace. These were operator-tooling defects, not additional measured
+Claude authentication failures. The real subscription observation and
+[startup qualification](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6426224615)
+remain valid historical evidence; neither establishes an admitted READ.
+
+`scripts/ops/claude_read_session.py` now owns the compile, transport, readback
+and check entry points for one explicit phase. Each phase selects its command
+and exact output contract together. The existing procedure extractor is reused;
+accepted procedure bytes and controller source are unchanged. The operator
+content revision and installed controller commit are bound separately, with
+private boot, target, owner decisions, grants and measured identities supplied
+as external data. An operator-only revision does not imply controller replacement.
+
+Transport keeps exclusive intent/captures, closed stdin, exact argv and bounded
+readbacks. Native nonzero is retained and also becomes a nonzero CLI result;
+printing a failed status is not successful execution. No successor or retry is
+scheduled. The activation duty precedes possible dispatch, and cleanup remains
+independent of later qualification, fixture, mint or authority-placement success.
+Selected Pro/Max compatibility follows the existing contract; the separately
+approved live Max/model/configuration inputs are not silently changed.
+
+Portable evidence covers the actual isolated compiler/transport entry point
+and the accepting/refusing receipt/package boundaries. Synthetic receipt unit
+fixtures and Bash syntax checks are explicitly narrower than command execution.
+The hosted rehearsal executes generated commands with a real installed test
+controller, lane and store, using the compiled harmless peer for the vendor
+effect. Actual outputs feed the next preparation step. The hosted tests require
+successful fixed READ and withdrawal, and require withdrawal after a corrupted
+actual post-activation receipt, using the cleanup package prepared before
+activation. Their execution is not inferred from the portable tests.
+
+SSH/SCP are process-boundary local execution/copy doubles, not an SSH-network
+proof. Test vendor pins and a measured test-scoped drift baseline are not
+private-host drift or real subscription conformance. Linux cases are not credited
+by Windows skips; their actual hosted result and exact revision belong in the
+delivery PR before merge. This work does not enable a production provider,
+authorize an account operation or complete N6/M8. The next live task still uses
+its fixed one-attempt authorization, fresh facts and explicit stop/recovery law.

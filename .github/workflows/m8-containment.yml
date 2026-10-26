@@ -724,6 +724,27 @@ jobs:
             M8_CONTAINMENT_REQUIRED=1 M8_LINUX_ROOT=/var/lib/constructicon-m8-launch \
             PYTEST_ADDOPTS=-pno:cacheprovider \
             "$PWD/.venv/bin/python" scripts/check_m8_duplex_mutations.py
+      - name: Rehearse the generated Claude READ chain
+        if: matrix.lane == 'foundation'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cleanup() {
+            status=$?
+            trap - EXIT
+            sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" \
+              -m tests.substrate._claude_read_rehearsal_host cleanup || {
+                if [ "$status" -eq 0 ]; then status=1; fi
+              }
+            exit "$status"
+          }
+          trap cleanup EXIT
+          sudo env RUNNER_ENVIRONMENT=github-hosted "$PWD/.venv/bin/python" \
+            -m tests.substrate._claude_read_rehearsal_host provision
+          M8_CLAUDE_REHEARSAL_REQUIRED=1 \
+            M8_CLAUDE_REHEARSAL_BINDINGS=/var/lib/constructicon-m8-claude-read-rehearsal/bindings.json \
+            "$PWD/.venv/bin/python" -m pytest tests/test_claude_read_linux_rehearsal.py \
+            -v --tb=short --durations=10 -p no:cacheprovider
       - name: Preserve exact runtime and observed boundary evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

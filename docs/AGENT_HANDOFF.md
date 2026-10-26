@@ -16,6 +16,24 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Claude READ commands and receipts share a versioned operator boundary
+
+The one-phase entry point in `scripts/ops/claude_read_session.py` selects each
+generated command and its exact receipt contract together. Bindings and grants
+keep the operator-tool revision separate from the installed controller commit;
+an operator-only change does not imply controller replacement. Private boot,
+target, custody, owner and account data stay outside the repository. Failed
+native transport now also produces a nonzero CLI exit, while retaining evidence.
+
+The motivating failures were operator composition defects, not repeated vendor
+authentication failures. Handcrafted successful receipts and Bash syntax checks
+had not proved the actual producers agreed with their consumers. The hosted
+rehearsal therefore executes generated scripts and consumes their actual outputs,
+including withdrawal after a post-activation refusal. Its compiled peer and
+platform doubles prove the fake operating path, not private-host drift, an SSH
+network, vendor conformance or subscription availability. Live use retains its
+separate authorization, qualification, attempt and recovery requirements.
+
 ## Claude command-list pushes are bounded framing, not authority
 
 The first schema-7 OBSERVE identified a rejected `commands-changed` category.
