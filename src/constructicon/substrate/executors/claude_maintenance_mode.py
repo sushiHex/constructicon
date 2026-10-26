@@ -24,7 +24,11 @@ from constructicon.substrate.executors.claude_native import (
     ClaudeNativeRecipe,
     ClaudeNativeStoreMount,
 )
-from constructicon.substrate.executors.claude_native_events import exact_ui_invalidate
+from constructicon.substrate.executors.claude_native_events import (
+    ClaudeSystemRecordCategory,
+    exact_ui_invalidate,
+    system_record_category,
+)
 from constructicon.substrate.executors.claude_protocol import (
     RECORD_BYTES,
     ClaudeApiKeySourceCategory,
@@ -94,6 +98,7 @@ class ClaudeMaintenanceObservation:
     refusal_code: ClaudeMaintenanceRefusalCode | None = None
     token_source_category: ClaudeTokenSourceCategory | None = None
     api_key_source_category: ClaudeApiKeySourceCategory | None = None
+    rejected_system_category: ClaudeSystemRecordCategory | None = None
 
     def __post_init__(self) -> None:
         if (not initialize_diagnostics_valid(
@@ -113,6 +118,10 @@ class ClaudeMaintenanceObservation:
                     and self.classified_responses is None)
                 or (self.refusal_code is not None
                     and type(self.refusal_code) is not ClaudeMaintenanceRefusalCode)
+                or (self.rejected_system_category is not None
+                    and type(self.rejected_system_category) is not ClaudeSystemRecordCategory)
+                or ((self.refusal_code is ClaudeMaintenanceRefusalCode.UI_RECORD)
+                    != (self.rejected_system_category is not None))
                 or type(self.ui_records) is not int or not 0 <= self.ui_records <= UI_RECORDS
                 or type(self.stdin_closed) is not bool or type(self.eof) is not bool):
             raise ValueError("invalid Claude maintenance observation")
@@ -169,6 +178,7 @@ class ClaudeMaintenanceConversation:
         self.api_key_source_category: ClaudeApiKeySourceCategory | None = None
         self.classified_responses = 0
         self.refusal_code: ClaudeMaintenanceRefusalCode | None = None
+        self.rejected_system_category: ClaudeSystemRecordCategory | None = None
         self.request_writes = self.ui_records = self.input_bytes = self.output_bytes = 0
         self.stdin_closed = self.eof = False
         self._buffer = bytearray()
@@ -178,9 +188,13 @@ class ClaudeMaintenanceConversation:
         self._owner: asyncio.Task[None] | None = None
         self._io: ProcessIO | None = None
 
-    def _latch(self, code: ClaudeMaintenanceRefusalCode) -> None:
+    def _latch(
+        self, code: ClaudeMaintenanceRefusalCode, *,
+        rejected_system_category: ClaudeSystemRecordCategory | None = None,
+    ) -> None:
         if self.refusal_code is None:
             self.refusal_code = code
+            self.rejected_system_category = rejected_system_category
 
     def _check(self) -> None:
         current = asyncio.current_task()
@@ -260,7 +274,8 @@ class ClaudeMaintenanceConversation:
             raise _Refused() from None
         if type(value) is dict and value.get("type") == "system":
             if not exact_ui_invalidate(value) or self.ui_records >= UI_RECORDS:
-                self._latch(ClaudeMaintenanceRefusalCode.UI_RECORD)
+                self._latch(ClaudeMaintenanceRefusalCode.UI_RECORD,
+                            rejected_system_category=system_record_category(value))
                 raise _Refused()
             self.ui_records += 1
             return True
@@ -491,4 +506,5 @@ async def observe_maintenance_mode(
         conversation.refusal_code,
         conversation.token_source_category,
         conversation.api_key_source_category,
+        conversation.rejected_system_category,
     )

@@ -16,6 +16,27 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Claude startup-system refusals identify a closed record family
+
+Maintenance evidence now retains a finite rejected-system category paired with
+its first UI refusal. Unknown or unusable subtypes become `other`; raw subtype
+strings, field names and values never become diagnostics. Allowed UI framing,
+spacing and mode acceptance are unchanged. Current schema-7 evidence rejects
+historical schema 6 rather than inventing a missing category.
+
+The motivating attended login passed its lifecycle checks, then OBSERVE stopped
+on a rejected system frame after an ambiguous first initialize response. Zero
+accepted UI frames ruled out the UI count cap. Pinned-source inspection found
+several possible publishers and no justified UI-shape relaxation. The precise
+rejected subtype remains unobserved until a fresh diagnostic acquisition; no
+new model call or production availability is established here.
+
+Two distinctions matter: absent source fields describe the initialization
+response, not repaired stored credentials; and an older local worktree is not
+the installed controller's source. The diagnosis used verified exact-commit
+objects. Current installation, qualification and live-operation authority stay
+separate from these fake evidence proofs.
+
 ## Claude initialization diagnostics retain observations without changing admission
 
 Refs #305 adds one shared finite initialization observation to mode,

@@ -1,4 +1,4 @@
-"""Closed schema-6 Claude phase evidence checker; no login or dispatch authority.
+"""Closed schema-7 Claude phase evidence checker; no login or dispatch authority.
 
 Positive phase validation and observer-refusal diagnosis are separate CLI actions.
 The selected plan for observe/reload remains a reviewed-command input, not an
@@ -27,6 +27,7 @@ from constructicon.substrate.executors.claude_maintenance_mode import (
 from constructicon.substrate.executors.claude_maintenance_session import (
     ClaudeMaintenanceSessionPhase,
 )
+from constructicon.substrate.executors.claude_native_events import ClaudeSystemRecordCategory
 from constructicon.substrate.executors.claude_protocol import (
     ClaudeApiKeySourceCategory,
     ClaudeInitializeVerdict,
@@ -42,7 +43,7 @@ from constructicon.substrate.executors.claude_startup import (
 from constructicon.substrate.executors.codex_host import _evidence
 from constructicon.substrate.executors.egress import identity_digests
 
-CHECKER_SCHEMA = 6
+CHECKER_SCHEMA = 7
 _RECORD_FIELDS = frozenset({
     "schema_version", "subscription_qualified", "production_available", "facts",
     "runtime_digest", "vendor_digest", "launch_policy_sha256", "launch_config_sha256",
@@ -59,10 +60,12 @@ _MODE_FIELDS = frozenset({
     "phase", "mode_verdict", "mode_mismatch_reason", "classified_responses", "lifecycle",
     "request_writes", "ui_records", "stdin_closed", "eof", "refusal_code",
     "token_source_category", "api_key_source_category",
+    "rejected_system_category",
 })
 _REASONS = frozenset(reason.value for reason in ClaudeModeMismatchReason)
 _VERDICTS = frozenset(verdict.value for verdict in ClaudeInitializeVerdict)
 _REFUSALS = frozenset(code.value for code in ClaudeMaintenanceRefusalCode)
+_SYSTEM_CATEGORIES = frozenset(category.value for category in ClaudeSystemRecordCategory)
 
 
 class _Refused(Exception):
@@ -144,7 +147,12 @@ def _mode(facts, phase):
              and type(mode["stdin_closed"]) is bool and type(mode["eof"]) is bool
              and (mode["refusal_code"] is None
                   or (type(mode["refusal_code"]) is str
-                      and mode["refusal_code"] in _REFUSALS)))
+                      and mode["refusal_code"] in _REFUSALS))
+             and (mode["rejected_system_category"] is None
+                  or (type(mode["rejected_system_category"]) is str
+                      and mode["rejected_system_category"] in _SYSTEM_CATEGORIES))
+             and ((mode["refusal_code"] == "ui-record")
+                  == (mode["rejected_system_category"] is not None)))
     return mode
 
 
@@ -192,6 +200,7 @@ class RefusedModeDiagnostic:
     evidence_digest: Digest
     token_source_category: ClaudeTokenSourceCategory | None
     api_key_source_category: ClaudeApiKeySourceCategory | None
+    rejected_system_category: ClaudeSystemRecordCategory | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,6 +278,8 @@ def diagnose_refused_mode(
              else ClaudeTokenSourceCategory(mode["token_source_category"])),
             (None if mode["api_key_source_category"] is None
              else ClaudeApiKeySourceCategory(mode["api_key_source_category"])),
+            (None if mode["rejected_system_category"] is None
+             else ClaudeSystemRecordCategory(mode["rejected_system_category"])),
         )
     except Exception:
         pass
@@ -327,6 +338,8 @@ def main(argv: list[str] | None = None) -> int:
                 "reason": None if diagnostic.reason is None else diagnostic.reason.value,
                 "refusal_code": (None if diagnostic.refusal_code is None
                                  else diagnostic.refusal_code.value),
+                "rejected_system_category": (None if diagnostic.rejected_system_category is None
+                                             else diagnostic.rejected_system_category.value),
                 "classified_responses": diagnostic.classified_responses,
                 "request_writes": diagnostic.request_writes,
                 "ui_records": diagnostic.ui_records,

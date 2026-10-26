@@ -13,6 +13,53 @@ From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-
 and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
 subscription route; see the dated section at the end of this record.
 
+## Claude rejected startup frames retain closed categories (Refs #40)
+
+The attended Python login completed and its strict lifecycle evidence passed,
+then one separately acquired OBSERVE refused before its second initialize.
+The [checked receipt](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6408485211)
+reports one classified ambiguous-API response, zero accepted UI records and
+`ui-record`. Both credential-source fields were absent. These facts do not
+establish subscription mode, API-key use or a repaired credential store.
+The VM was parked; no RELOAD, qualification or model turn followed.
+
+The exact pinned native member remains 257068216 bytes, SHA-256
+`24972e3bc859fab2b46ed4c1e51f7d6130f06d3bd550811a114640de3370d0de`.
+Static inspection as data found the UI schema at byte 208350300, emitter at
+233650357 and queue stamping at 210010505 consistent with the existing exact
+`ui_invalidate` predicate. Conditional command, pane and status publishers
+provide several possible non-turn system frames; the direct background-task
+publication at 233769292 belongs to reinitialize, not first initialization.
+None identifies the refused frame. Broadening system-record acceptance was
+therefore rejected as unsupported by evidence.
+
+Maintenance now retains one closed rejected-system category at the existing
+UI refusal boundary. Known inspected subtype families map to fixed enum values;
+unrecognized, missing and non-string subtypes map to `other`. Arbitrary subtype
+strings, field names and payload values are discarded, not copied or hashed into
+public evidence. A category describes the rejected record family, not a safe
+record, a successful account operation or the cause of API ambiguity.
+
+The first refusal code and its category latch together. Later failures cannot
+replace either; accepted UI frames and other refusal families retain null.
+The strict current evidence contract requires the category exactly for a UI
+refusal. Public maintenance evidence and the separate refusal diagnostic carry
+the same closed value. Current evidence advances to schema 7; preserved schema-6
+records are not upgraded or supplied an inferred observation.
+
+The UI acceptance predicate, record/count/byte/deadline bounds, spacing, second
+initialize eligibility and positive mode requirements remain unchanged. The
+focused proof set covers the observed ambiguous-response/refused-system route,
+permitted UI and spacing, malformed and private subtype inputs, first-fault
+preservation, strict schema/type validation and privacy on both accepting and
+refusing projections. Final-head checks and independent boundary review belong
+to the delivery PR; no live observation is inferred from those fake proofs.
+
+This closes an evidence gap, not the startup obstruction. A new controller and
+checker need reviewed installation before a fresh bounded acquisition can use
+the diagnostic. Qualification, publication, activation and the first admitted
+READ remain separately gated. No frozen plan or accepted ADR bytes change.
+
 ## Claude initialization retains finite source diagnostics (Refs #305)
 
 The shared initialization codec now records a closed mode reason and separate
