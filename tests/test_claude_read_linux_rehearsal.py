@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -35,6 +37,79 @@ def _cli(*args: str) -> dict:
     return json.loads(result.stdout)
 
 
+def _failure_observation(run: str, run_process) -> dict:
+    """Bounded fake-run metadata, with no native transcript or credential bytes."""
+    code = r'''
+import json, os, pathlib, re, sqlite3, stat, sys
+root = pathlib.Path(sys.argv[1])
+report = {"attempt": None, "journal_present": False, "event_kinds": [], "node_failures": []}
+attempt = root / "read-attempt.json"
+if os.path.lexists(attempt):
+    info = attempt.lstat()
+    assert stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_size <= 8192
+    fd = os.open(attempt, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    with os.fdopen(fd, "rb") as stream:
+        value = json.loads(stream.read(8193))
+    facts = value.get("facts") or {}
+    report["attempt"] = {"phase": value.get("phase"), "dispatch": value.get("dispatch"),
+        "facts": {key: facts.get(key) for key in ("status", "callback_started",
+            "callback_completed", "initial_binding_checked", "terminal_binding_checked",
+            "relay_closed")}}
+database = root / "read.sqlite"
+if os.path.lexists(database):
+    info = database.lstat()
+    assert stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+    report["journal_present"] = True
+    with sqlite3.connect("file:" + str(database) + "?mode=ro", uri=True) as db:
+        report["event_kinds"] = [str(kind)[:80] for kind, in
+            db.execute("SELECT kind FROM events ORDER BY seq LIMIT 128")]
+        for payload, in db.execute("SELECT payload FROM events WHERE kind='NodeFailed' LIMIT 16"):
+            data = json.loads(payload)
+            message = str(data.get("error", ""))[:512]
+            message = re.sub(r"/[^\s:'\"]+", "<path>", message)
+            report["node_failures"].append({"error_type": str(data.get("error_type", ""))[:80],
+                                            "error": message})
+print(json.dumps(report, sort_keys=True))
+'''
+    result = run_process(
+        ["sudo", "-n", "-u", "m8-service", "/usr/bin/python3", "-I", "-S", "-B", "-c",
+         code, run], stdin=subprocess.DEVNULL, capture_output=True, check=False, timeout=30,
+    )
+    if result.returncode != 0 or len(result.stdout) > 16384:
+        return {"observation_failed": result.returncode, "output_bytes": len(result.stdout)}
+    try:
+        return json.loads(result.stdout)
+    except (ValueError, UnicodeDecodeError):
+        return {"observation_failed": "invalid output"}
+
+
+def test_failure_observation_keeps_bounded_facts_and_redacts_paths(tmp_path):
+    _json(tmp_path / "read-attempt.json", {
+        "phase": "outcome", "dispatch": "possibly dispatched",
+        "facts": {"status": "failure", "callback_started": 1, "callback_completed": 0,
+                  "initial_binding_checked": True, "terminal_binding_checked": True,
+                  "relay_closed": True, "unrelated": "not emitted"},
+    })
+    with sqlite3.connect(tmp_path / "read.sqlite") as db:
+        db.execute("CREATE TABLE events (seq INTEGER, kind TEXT, payload TEXT)")
+        db.execute("INSERT INTO events VALUES (1, ?, ?)",
+                   ("NodeFailed", json.dumps({"error_type": "ContractViolation",
+                                              "error": "failed at /synthetic/private/file"})))
+        db.execute("INSERT INTO events VALUES (2, ?, ?)", ("RunFailed", "not emitted"))
+
+    def local_python(argv, **kwargs):
+        return subprocess.run([sys.executable, "-I", "-S", "-B", "-c", argv[-2], argv[-1]],
+                              **kwargs)
+
+    observed = _failure_observation(str(tmp_path), local_python)
+    assert observed["attempt"]["dispatch"] == "possibly dispatched"
+    assert observed["attempt"]["facts"]["callback_completed"] == 0
+    assert observed["event_kinds"] == ["NodeFailed", "RunFailed"]
+    assert observed["node_failures"] == [{"error_type": "ContractViolation",
+                                          "error": "failed at <path>"}]
+    assert "not emitted" not in json.dumps(observed)
+
+
 @pytest.mark.skipif(sys.platform != "linux", reason="requires the disposable Linux foundation")
 @pytest.mark.parametrize("abort_after_activation", [False, True], ids=["accept", "abort"])
 def test_generated_phases_carry_actual_receipts_through_withdrawal(
@@ -53,6 +128,7 @@ def test_generated_phases_carry_actual_receipts_through_withdrawal(
     record["values"]["QUAL"] = record["values"]["RUN"] + "/qualify.json"
     for key in ("READ_KEY", "AUTHORIZATION_ID"):
         record["values"][key] += "-" + case
+    assert record["values"]["RUN"] == "/var/lib/m8-cr-run-" + case
     bindings = commands.Bindings.from_dict(record)
     assert bindings.values["EXPECTED_BOOT"] == (
         Path("/proc/sys/kernel/random/boot_id").read_text().strip()
@@ -115,8 +191,39 @@ def test_generated_phases_carry_actual_receipts_through_withdrawal(
         _json(grant_path, grant)
         status = session.one_phase(package, manifest, revision, evidence, grant_path, captures,
                                    TARGET, ALIAS, commands.sha(grant_path.read_bytes()))
-        assert commands.completed_zero(status), (
-            phase, (evidence / (phase + ".stderr")).read_bytes())
+        if not commands.completed_zero(status):
+            observations = {}
+            if status["completed"] and status["returncode"] in (0, 1) and not status["timed_out"]:
+                parts = commands.PHASES[phase].outputs
+                for part in ("stderr", "stdout", "result"):
+                    if part not in parts:
+                        continue
+                    try:
+                        readback_status = session.readback(
+                            package, manifest, revision, evidence, part, captures, TARGET, ALIAS,
+                        )
+                        _, _, _, slot = commands.readback_spec(actual, phase, part, manifest)
+                        raw = commands.bounded(evidence / slot, parts[part][2], empty=True)
+                        safe = re.sub(r"/[^\s:'\"]+", "<path>", raw.decode(errors="replace"))
+                        observations[part] = {"status": readback_status, "bytes": safe[:2048]}
+                    except Exception as error:
+                        name = phase + "-readback-" + part
+                        details = {"readback_error": type(error).__name__}
+                        for suffix in ("status.json", "stderr"):
+                            capture_path = captures / (name + "." + suffix)
+                            if capture_path.is_file():
+                                with capture_path.open("rb") as stream:
+                                    raw = stream.read(1024)
+                                safe = re.sub(r"/[^\s:'\"]+", "<path>",
+                                              raw.decode(errors="replace"))
+                                details[suffix] = safe[:1024]
+                        observations[part] = details
+            if phase == "read":
+                observations["fake_run"] = _failure_observation(actual.values["RUN"], original_run)
+            outer = (evidence / (phase + ".stderr")).read_bytes().decode(errors="replace")
+            outer = re.sub(r"/[^\s:'\"]+", "<path>", outer)[:2048]
+            pytest.fail(f"phase={phase} status={status} outer_stderr={outer!r} "
+                        f"readbacks={observations!r}")
         for part in commands.PHASES[phase].outputs:
             assert commands.completed_zero(session.readback(package, manifest, revision, evidence,
                                                              part, captures, TARGET, ALIAS))
