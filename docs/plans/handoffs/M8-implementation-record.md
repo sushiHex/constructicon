@@ -66,6 +66,12 @@ Ten selected mutants had passing baselines and assertion-failure kills; affected
 Ruff, strict mypy and inventory-target checks passed. Independent boundary review
 compared both consumers with the pinned source. The delivery PR carries the
 final-head CI evidence rather than a duplicated full local gate.
+The first hosted full inventory found four existing mutant references whose
+test parameter IDs became stale when notification kinds were added. They were
+not counted as kills. All four references were corrected together, each had a
+passing baseline and assertion-failure kill, and collection of every killing
+test in the affected inventory passed. No production source changed in that
+correction.
 A merged revision still requires
 fresh installation, qualification and separately reviewed live authority.
 Subscription mode and the first admitted READ remain unproved by this slice.

@@ -1423,16 +1423,16 @@ READ_UI_MUTANTS = (
      READ_TEST + "test_ui_during_worker_is_inert_without_weakening_pending_record_checks"),
     ("READ consumes UI before a control response", READ + "ClaudeReadTransaction._control",
      "if self._ui(value) or self._background(value):", "if self._background(value):",
-     READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[0]"),
+     READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[ui-0]"),
     ("READ consumes UI before a required control snapshot", READ + "ClaudeReadTransaction._control",
      "if self._ui(snapshot):", "if False:",
-     READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[0]"),
+     READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[ui-0]"),
     ("READ consumes UI before dispatched body records", READ + "ClaudeReadTransaction._body",
      "if self._ui(value):", "if False:",
-     READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[0]"),
+     READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[ui-0]"),
     ("READ consumes UI in the terminal tail", READ + "ClaudeReadTransaction._body",
      "self._ui(value) or self._background(value)", "self._background(value)",
-     READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[0]"),
+     READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[ui-0]"),
 )
 MUTANTS += READ_UI_MUTANTS
 
