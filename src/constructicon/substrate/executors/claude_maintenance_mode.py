@@ -26,7 +26,7 @@ from constructicon.substrate.executors.claude_native import (
 )
 from constructicon.substrate.executors.claude_native_events import (
     ClaudeSystemRecordCategory,
-    exact_ui_invalidate,
+    exact_inert_notification,
     system_record_category,
 )
 from constructicon.substrate.executors.claude_protocol import (
@@ -273,7 +273,7 @@ class ClaudeMaintenanceConversation:
             self._latch(ClaudeMaintenanceRefusalCode.RECORD_FORMAT)
             raise _Refused() from None
         if type(value) is dict and value.get("type") == "system":
-            if not exact_ui_invalidate(value) or self.ui_records >= UI_RECORDS:
+            if not exact_inert_notification(value) or self.ui_records >= UI_RECORDS:
                 self._latch(ClaudeMaintenanceRefusalCode.UI_RECORD,
                             rejected_system_category=system_record_category(value))
                 raise _Refused()

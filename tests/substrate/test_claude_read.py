@@ -25,7 +25,7 @@ from constructicon.substrate.executors.linux import (
     ProcessResult,
 )
 from constructicon.substrate.executors.operator_store import BindingCheck
-from tests.substrate._claude_wire import hooks_body, settings_body
+from tests.substrate._claude_wire import commands_changed, hooks_body, settings_body
 
 SESSION = "00000000-0000-4000-8000-000000000001"
 NATIVE_UUID = "00000000-0000-4000-8000-000000000002"
@@ -538,39 +538,50 @@ async def test_zero_callback_is_a_real_permitting_path():
 
 
 @pytest.mark.parametrize("extra_tail", [0, 1])
-async def test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime(extra_tail):
+@pytest.mark.parametrize("notification_kind", ["ui", "commands", "mixed"])
+async def test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime(
+    extra_tail, notification_kind,
+):
     peer = Peer()
     original_emit = peer.emit
+    notifications = 0
+
+    def notification():
+        nonlocal notifications
+        notifications += 1
+        return (commands_changed() if notification_kind == "commands"
+                or (notification_kind == "mixed" and notifications % 2) else ui_invalidate())
+
     inserted = {"initial": False, "registration": False, "body": False,
                 "result": False, "terminal": False}
 
     def emit(value):
         if (value.get("type") == "control_response" and not inserted["initial"]):
             inserted["initial"] = True
-            original_emit(ui_invalidate())
-            original_emit(ui_invalidate())
+            original_emit(notification())
+            original_emit(notification())
         elif (value.get("subtype") == "background_tasks_changed"
               and peer.registration and not peer.post and not inserted["registration"]):
             inserted["registration"] = True
-            original_emit(ui_invalidate())
-            original_emit(ui_invalidate())
+            original_emit(notification())
+            original_emit(notification())
         elif value.get("subtype") == "init" and not inserted["body"]:
             inserted["body"] = True
-            original_emit(ui_invalidate())
+            original_emit(notification())
         elif value.get("type") == "result" and not inserted["result"]:
             inserted["result"] = True
-            original_emit(ui_invalidate())
+            original_emit(notification())
         elif (value.get("subtype") == "background_tasks_changed"
               and peer.post and not inserted["terminal"]):
             inserted["terminal"] = True
-            original_emit(ui_invalidate())
+            original_emit(notification())
         original_emit(value)
 
     peer.emit = emit
     original_close = peer.close_stdin
 
     async def close():
-        peer.output.extend(wire(ui_invalidate()) * (1 + extra_tail))
+        peer.output.extend(b"".join(wire(notification()) for _ in range(1 + extra_tail)))
         await original_close()
 
     peer.close_stdin = close
@@ -580,6 +591,38 @@ async def test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime
     assert launcher.conversation._ui_records == 8
     assert len(peer.users) == 1 and len(calls) == 1 and launcher.joined
     assert isinstance(outcome, ExecutorSuccess if extra_tail == 0 else ExecutorFailure)
+    assert "private" not in outcome.model_dump_json()
+    assert all(b"private-command" not in raw and b"private-alias" not in raw
+               for raw in peer.writes)
+
+
+@pytest.mark.parametrize("stage", ["initialize", "body", "worker", "terminal"])
+async def test_malformed_commands_notification_is_never_inert_at_any_read_stage(stage):
+    peer = Peer()
+    original_emit = peer.emit
+    malformed = commands_changed()
+    malformed["commands"][0]["builtin"] = 1
+
+    def emit(value):
+        if ((stage == "initialize" and value.get("type") == "control_response"
+             and not peer.users)
+                or (stage == "body" and value.get("subtype") == "init")
+                or (stage == "terminal" and value.get("type") == "result")):
+            original_emit(malformed)
+        original_emit(value)
+
+    async def worker(path, remaining):
+        if stage == "worker":
+            original_emit(malformed)
+        return "file text"
+
+    peer.emit = emit
+    launcher = Launcher(peer)
+    outcome, _ = await run(launcher, worker=worker)
+    assert isinstance(outcome, ExecutorFailure) and launcher.joined
+    assert launcher.conversation._ui_records == 0
+    assert "private" not in outcome.model_dump_json()
+    assert len(peer.users) == (0 if stage == "initialize" else 1)
 
 
 @pytest.mark.parametrize("damage", ["missing-snapshot", "missing-terminal-snapshot",

@@ -1409,30 +1409,30 @@ OPERATOR_IO_MUTANTS = (
 MUTANTS += OPERATOR_IO_MUTANTS
 
 READ_UI_MUTANTS = (
-    ("READ accepts only exact UI invalidation records", READ + "ClaudeReadTransaction._ui",
-     "not exact_ui_invalidate(value)", "False",
+    ("READ accepts only exact inert notification records", READ + "ClaudeReadTransaction._ui",
+     "not exact_inert_notification(value)", "False",
      READ_TEST + "test_ui_cannot_replace_snapshot_or_admit_malformed_system_record[extension]"),
     ("READ UI count binds across the whole conversation", READ + "ClaudeReadTransaction._ui",
      "self._ui_records >= UI_RECORDS", "False",
-     READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[1]"),
+     READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[ui-1]"),
     ("READ counts each accepted UI record", READ + "ClaudeReadTransaction._ui",
      "self._ui_records += 1", "self._ui_records += 0",
-     READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[0]"),
+     READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[ui-0]"),
     ("READ consumes UI while a worker owns the callback", READ + "ClaudeReadTransaction._quiet",
      "self._background(value) or self._ui(value)", "self._background(value)",
      READ_TEST + "test_ui_during_worker_is_inert_without_weakening_pending_record_checks"),
     ("READ consumes UI before a control response", READ + "ClaudeReadTransaction._control",
      "if self._ui(value) or self._background(value):", "if self._background(value):",
-     READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[0]"),
+     READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[ui-0]"),
     ("READ consumes UI before a required control snapshot", READ + "ClaudeReadTransaction._control",
      "if self._ui(snapshot):", "if False:",
-     READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[0]"),
+     READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[ui-0]"),
     ("READ consumes UI before dispatched body records", READ + "ClaudeReadTransaction._body",
      "if self._ui(value):", "if False:",
-     READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[0]"),
+     READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[ui-0]"),
     ("READ consumes UI in the terminal tail", READ + "ClaudeReadTransaction._body",
      "self._ui(value) or self._background(value)", "self._background(value)",
-     READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[0]"),
+     READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[ui-0]"),
 )
 MUTANTS += READ_UI_MUTANTS
 
@@ -1944,6 +1944,44 @@ SYSTEM_CATEGORY_MUTANTS = (
      "test_rejected_category_requires_closed_current_same_fault_evidence"),
 )
 MUTANTS += SYSTEM_CATEGORY_MUTANTS
+
+COMMAND_NOTIFICATION_TEST = "tests/substrate/test_claude_native_events.py::"
+COMMAND_NOTIFICATION_MUTANTS = (
+    ("command notification envelope has no extension fields",
+     NATIVE_EVENTS + "exact_commands_changed",
+     'set(value) != {"type", "subtype", "commands", "uuid", "session_id"}', "False",
+     COMMAND_NOTIFICATION_TEST + "test_commands_notification_refuses_malformed_closed_shape[envelope-extension]"),
+    ("command notification envelope is a plain object",
+     NATIVE_EVENTS + "exact_commands_changed",
+     "type(value) is not dict", "not isinstance(value, dict)",
+     COMMAND_NOTIFICATION_TEST + "test_commands_notification_refuses_malformed_closed_shape[object-subclass]"),
+    ("command rows have no extension fields", NATIVE_EVENTS + "exact_commands_changed",
+     'set(row) - required - {"aliases", "builtin"}', "False",
+     COMMAND_NOTIFICATION_TEST + "test_commands_notification_refuses_malformed_closed_shape[row-extension]"),
+    ("command row values remain strings", NATIVE_EVENTS + "exact_commands_changed",
+     "any(type(row[key]) is not str for key in required)", "False",
+     COMMAND_NOTIFICATION_TEST + "test_commands_notification_strings_are_exact[None-description]"),
+    ("command aliases contain only plain strings", NATIVE_EVENTS + "exact_commands_changed",
+     'any(type(alias) is not str for alias in row["aliases"])', "False",
+     COMMAND_NOTIFICATION_TEST + "test_commands_notification_refuses_malformed_closed_shape[alias-subclass]"),
+    ("command builtin is a boolean, never an integer", NATIVE_EVENTS + "exact_commands_changed",
+     'type(row["builtin"]) is not bool', "False",
+     COMMAND_NOTIFICATION_TEST + "test_commands_notification_refuses_malformed_closed_shape[builtin-int]"),
+    ("both consumers use the shared commands classifier", NATIVE_EVENTS + "exact_inert_notification",
+     "exact_ui_invalidate(value) or exact_commands_changed(value)", "exact_ui_invalidate(value)",
+     MAINTENANCE_TEST + "test_commands_notifications_are_discarded_under_the_shared_maintenance_quota[0]"),
+    ("READ dispatches the exact commands discriminator", READ + "ClaudeReadTransaction._ui",
+     '("ui_invalidate", "commands_changed")', '("ui_invalidate",)',
+     READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[commands-0]"),
+    ("commands cannot bypass the shared maintenance quota",
+     MAINTENANCE + "ClaudeMaintenanceConversation._ui",
+     "self.ui_records += 1", 'self.ui_records += int(value.get("subtype") == "ui_invalidate")',
+     MAINTENANCE_TEST + "test_commands_notifications_are_discarded_under_the_shared_maintenance_quota[1]"),
+    ("commands cannot bypass the shared READ quota", READ + "ClaudeReadTransaction._ui",
+     "self._ui_records += 1", 'self._ui_records += int(value.get("subtype") == "ui_invalidate")',
+     READ_TEST + "test_exact_ui_notifications_are_inert_but_counted_across_read_lifetime[mixed-1]"),
+)
+MUTANTS += COMMAND_NOTIFICATION_MUTANTS
 
 
 if __name__ == "__main__":

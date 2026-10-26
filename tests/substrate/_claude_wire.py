@@ -65,3 +65,11 @@ def hooks_body():
                    "pluginOnly": False, "allDisabled": False, "policyHookCount": 0},
         "safeMode": {"managedHooksStillApply": True,
                      "exitHint": "restart without --safe-mode"}}
+
+
+def commands_changed():
+    """Pinned source mF/Vt notification; metadata is deliberately private."""
+    return {"type": "system", "subtype": "commands_changed", "commands": [
+        {"name": "private-command", "description": "private-description",
+         "argumentHint": "private-argument", "aliases": ["private-alias"],
+         "builtin": True}], "uuid": "private-uuid", "session_id": "private-session"}

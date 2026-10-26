@@ -30,7 +30,7 @@ from constructicon.core.identity import parse_json_value
 from constructicon.core.process import ProcessIO
 from constructicon.substrate.executors.claude_initialize import _cancelled, _clean
 from constructicon.substrate.executors.claude_native import ClaudeNativeStoreMount
-from constructicon.substrate.executors.claude_native_events import exact_ui_invalidate
+from constructicon.substrate.executors.claude_native_events import exact_inert_notification
 from constructicon.substrate.executors.claude_protocol import (
     RECORD_BYTES,
     ClaudeInitializeObservation,
@@ -262,9 +262,10 @@ class ClaudeReadTransaction:
                 and _uuid(value.get("uuid")))
 
     def _ui(self, value: dict[str, object]) -> bool:
-        if value.get("type") != "system" or value.get("subtype") != "ui_invalidate":
+        if (value.get("type") != "system"
+                or value.get("subtype") not in ("ui_invalidate", "commands_changed")):
             return False
-        if not exact_ui_invalidate(value) or self._ui_records >= UI_RECORDS:
+        if not exact_inert_notification(value) or self._ui_records >= UI_RECORDS:
             raise _Refused()
         self._ui_records += 1
         return True

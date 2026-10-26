@@ -13,6 +13,77 @@ From 2026-09-13, accepted [ADR 0021](../../adr/0021-subscription-executors-bind-
 and [frozen rev 3](../milestones/M8-live-executors-rev3.md) govern the
 subscription route; see the dated section at the end of this record.
 
+## Claude command-list pushes are exact bounded framing (Refs #175)
+
+The [corrected bounded session](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6412033137)
+installed controller `ce8659d` and the schema-7 checker, then ran one OBSERVE.
+The strict diagnostic identified `commands-changed` after one initialize write
+and one classified ambiguous-API response. It did not establish the raw frame
+shape, subscription mode or credential state. The VM was affirmatively parked
+and custody released. No login, refresh, qualification or model turn followed.
+
+Root and an independent source reviewer inspected the unchanged pinned native
+member as data: 257068216 bytes, SHA-256
+`24972e3bc859fab2b46ed4c1e51f7d6130f06d3bd550811a114640de3370d0de`.
+Zero-based byte anchors:
+
+| Fact | Anchor |
+| --- | --- |
+| `commands_changed` envelope schema | 208358600 |
+| Command-row schema `Vt` | 208183559 |
+| Sole explicit publication in `ca` | 233648662 |
+| Queue adds `uuid` and `session_id` | 210010505 |
+| Row renderer `R3` / `VAn` | 217266281 |
+| Post-initialize command-list comparison can invoke `ca` | 233681180 |
+
+The last route requires no user message or model turn: after initialization,
+the current rendered list may differ from the list in that response. This is
+a source-backed possibility, not proof of which producer path the live process
+took. A subtype label alone never establishes a well-formed record.
+
+This explicit framing revision follows the maintenance design's
+[native-framing clause](M8-N6-subscription-maintenance-state-review.md#native-framing-and-bounded-private-io).
+The only added recognized frame has exactly `type`, `subtype`, `commands`,
+`uuid` and `session_id`; tags are `system` and `commands_changed`, both IDs are
+strings, and `commands` is a list. Each row has exactly string `name`,
+`description` and `argumentHint`, optionally a list of string `aliases` and a
+Boolean `builtin`. Additional keys, incorrect types and unknown frames refuse.
+The original exact UI-invalidate predicate is preserved.
+
+Maintenance and READ share that classification. Both discard the command
+metadata under their existing record/byte and process-wide eight-notification
+limits. It is not a catalog update, registration, capability, mode observation,
+refresh fact or completion. No advertised command becomes executable or enters
+public evidence. The sole reader, spacing and positive correlated-response
+requirements remain in force. The frozen one-shot initialization protocol and
+original credential-free diagnostic are unchanged; accepted plans are not
+edited to retroactively grant this revision.
+
+Focused native-event, maintenance, READ and qualification tests passed locally.
+They prove both permitted data shapes and refusals, mixed notification quotas,
+spacing, private metadata discard and notification-only EOF without mode proof.
+Ten selected mutants had passing baselines and assertion-failure kills; affected
+Ruff, strict mypy and inventory-target checks passed. Independent boundary review
+compared both consumers with the pinned source. The delivery PR carries the
+final-head CI evidence rather than a duplicated full local gate.
+The first hosted full inventory found four existing mutant references whose
+test parameter IDs became stale when notification kinds were added. They were
+not counted as kills. All four references were corrected together, each had a
+passing baseline and assertion-failure kill, and collection of every killing
+test in the affected inventory passed. No production source changed in that
+correction.
+A merged revision still requires
+fresh installation, qualification and separately reviewed live authority.
+Subscription mode and the first admitted READ remain unproved by this slice.
+
+The live preparation also corrected an introduced artifact-kind error: a
+predecessor builder-TOML hash had been used where installation JSON was required.
+The stopped capsule is preserved; its correction passed the real retained-history
+chain before VM start and concrete twelve-script binding review before removal.
+This was not host drift or vendor authentication failure. A peer's initial
+claim that the observed subtype excluded an emitter-shape defect was withdrawn:
+the diagnostic reads only the discriminator, never the rest of the frame.
+
 ## Claude rejected startup frames retain closed categories (Refs #40)
 
 The attended Python login completed and its strict lifecycle evidence passed,
