@@ -2011,6 +2011,12 @@ MUTANTS += PROFILE_MUTANTS
 EVIDENCE = "scripts.ops.read_attempt_evidence:"
 EVIDENCE_TEST = "tests/test_read_attempt_evidence.py::"
 EVIDENCE_MUTANTS = (
+    ("WAL timestamp changes do not invalidate byte-stable evidence", EVIDENCE + "_finish",
+     "metadata_only = shm or wal_digest is not None", "metadata_only = shm",
+     EVIDENCE_TEST + "test_wal_timestamp_only_change_accepts_but_changed_content_refuses[timestamps]"),
+    ("WAL content must remain stable across inspection", EVIDENCE + "_finish",
+     "require(_wal_digest(fd, before.st_size) == wal_digest)", "require(True)",
+     EVIDENCE_TEST + "test_wal_timestamp_only_change_accepts_but_changed_content_refuses[content]"),
     ("evidence retains run directory identity", EVIDENCE + "collect",
      "require((directory.st_dev, directory.st_ino) == (after.st_dev, after.st_ino))",
      "require(True)", EVIDENCE_TEST + "test_root_directory_identity_cannot_change_between_observations"),

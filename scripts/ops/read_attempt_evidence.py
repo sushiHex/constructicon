@@ -9,6 +9,7 @@ The two retained artifacts are independent observations, not an atomic snapshot.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -91,8 +92,16 @@ def _same(before, after, *, shm=False):
     require(all(getattr(before, key) == getattr(after, key) for key in fields))
 
 
+def _canonical(path):
+    try:
+        return path.resolve(strict=True) == path
+    except RuntimeError:
+        # Python 3.11/3.12 expose symlink loops as RuntimeError containing paths.
+        raise ValueError("invalid retained evidence") from None
+
+
 def _root(root, uid):
-    require(root.is_absolute() and root.resolve(strict=True) == root)
+    require(root.is_absolute() and _canonical(root))
     for path in (root, *root.parents):
         info = path.lstat()
         owner, mode = _permissions(info)
@@ -100,13 +109,13 @@ def _root(root, uid):
             stat.S_ISDIR(info.st_mode)
             and owner in (0, uid)
             and not mode & 0o22
-            and path.resolve(strict=True) == path
+            and _canonical(path)
         )
     require(_permissions(root.lstat()) == (uid, 0o700))
 
 
 def _open(path, uid, bound):
-    require(path.resolve(strict=True) == path)
+    require(_canonical(path))
     before = path.lstat()
     require(
         stat.S_ISREG(before.st_mode)
@@ -123,10 +132,28 @@ def _open(path, uid, bound):
     return fd, before
 
 
-def _finish(path, fd, before, *, shm=False):
-    require(path.resolve(strict=True) == path)
-    _same(before, os.fstat(fd), shm=shm)
-    _same(before, path.lstat(), shm=shm)
+def _wal_digest(fd, size):
+    os.lseek(fd, 0, os.SEEK_SET)
+    digest, total = hashlib.sha256(), 0
+    while block := os.read(fd, min(65536, size + 1 - total)):
+        total += len(block)
+        require(total <= size)
+        digest.update(block)
+    require(total == size)
+    return digest.digest()
+
+
+def _finish(path, fd, before, *, shm=False, wal_digest=None):
+    require(_canonical(path))
+    metadata_only = shm or wal_digest is not None
+    _same(before, os.fstat(fd), shm=metadata_only)
+    _same(before, path.lstat(), shm=metadata_only)
+    if wal_digest is not None:
+        # SQLite can touch WAL timestamps during a read. Identity, custody,
+        # size and bounded byte snapshots must still agree; shm contains locks.
+        require(_wal_digest(fd, before.st_size) == wal_digest)
+        _same(before, os.fstat(fd), shm=True)
+        _same(before, path.lstat(), shm=True)
 
 
 def _unique(pairs):
@@ -266,7 +293,7 @@ def _attempt(root, uid, authorization, run, maximum):
 
 def _journal(root, uid, authorization, run, maximum):
     result = dict(state="invalid", partial=True, run_status=None, event_count=None, events=None)
-    opened, connection = [], None
+    opened, connection, wal_digests = [], None, {}
     try:
         path = root / "read.sqlite"
         fd, before = _open(path, uid, DB_BYTES)
@@ -277,6 +304,8 @@ def _journal(root, uid, authorization, run, maximum):
             if auxiliary.exists() or auxiliary.is_symlink():
                 aux_fd, info = _open(auxiliary, uid, bound)
                 opened.append((auxiliary, aux_fd, info, suffix == "-shm"))
+                if suffix == "-wal":
+                    wal_digests[aux_fd] = _wal_digest(aux_fd, info.st_size)
             else:
                 absent.append((auxiliary, bound, suffix == "-shm"))
         connection = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=0)
@@ -336,8 +365,10 @@ def _journal(root, uid, authorization, run, maximum):
             if item.exists() or item.is_symlink():
                 descriptor, info = _open(item, uid, bound)
                 opened.append((item, descriptor, info, shm))
+                if not shm:
+                    wal_digests[descriptor] = _wal_digest(descriptor, info.st_size)
         for item, descriptor, info, shm in opened:
-            _finish(item, descriptor, info, shm=shm)
+            _finish(item, descriptor, info, shm=shm, wal_digest=wal_digests.get(descriptor))
         result.update(
             state="valid",
             partial=len(rows) > EVENT_LIMIT,

@@ -285,6 +285,142 @@ def test_actual_uncheckpointed_wal_is_read_and_not_checkpointed(files):
         writer.close()
 
 
+@pytest.mark.parametrize("change", ["timestamps", "content"])
+def test_wal_timestamp_only_change_accepts_but_changed_content_refuses(files, monkeypatch, change):
+    writer = sqlite3.connect(files / "read.sqlite")
+    writer.execute("PRAGMA journal_mode=WAL")
+    writer.execute(
+        "INSERT INTO events VALUES(?,?,?,?,?,?)", (RUN, 1, "RunFailed", None, "{}", "fixture")
+    )
+    writer.commit()
+    wal = files / "read.sqlite-wal"
+    original = wal.read_bytes()
+    try:
+        if change == "timestamps":
+            connect = sqlite3.connect
+
+            def timestamp_changed(*args, **kwargs):
+                connection = connect(*args, **kwargs)
+                info = wal.stat()
+                os.utime(wal, ns=(info.st_atime_ns, info.st_mtime_ns + 1000000))
+                return connection
+
+            monkeypatch.setattr(reader.sqlite3, "connect", timestamp_changed)
+        else:
+            finish = reader._finish
+
+            def content_changed(item, fd, before, **kwargs):
+                if item == wal:
+                    with wal.open("r+b") as stream:
+                        stream.seek(-1, os.SEEK_END)
+                        stream.write(bytes([original[-1] ^ 1]))
+                return finish(item, fd, before, **kwargs)
+
+            monkeypatch.setattr(reader, "_finish", content_changed)
+        result = collect(files)["journal"]
+        assert result["state"] == ("valid" if change == "timestamps" else "invalid")
+        if change == "timestamps":
+            assert result["event_count"] == 2 and wal.read_bytes() == original
+        else:
+            assert result["event_count"] is None and wal.stat().st_size == len(original)
+    finally:
+        wal.write_bytes(original)
+        writer.close()
+
+
+@pytest.mark.parametrize(
+    "target_name",
+    ["root", "read-attempt.json", "read.sqlite", "read.sqlite-wal", "read.sqlite-shm"],
+)
+def test_symlink_resolution_loops_never_echo_private_tracebacks(
+    files, monkeypatch, capsys, target_name
+):
+    is_root = target_name == "root"
+    target = files if is_root else files / target_name
+    if not is_root and not target.exists():
+        target.write_bytes(b"")
+        target.chmod(0o600)
+    saved = target.with_name("saved-loop-target")
+    target.rename(saved)
+    try:
+        target.symlink_to(target, target_is_directory=is_root)
+    except OSError:
+        saved.rename(target)
+        resolve = Path.resolve
+
+        def loop(path, *args, **kwargs):
+            if path == target:
+                raise RuntimeError(PRIVATE)
+            return resolve(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "resolve", loop)
+    argv = [
+        "--run-root",
+        str(files),
+        "--authorization-id",
+        AUTH,
+        "--run-id",
+        RUN,
+        "--max-epoch",
+        "1",
+    ]
+    assert reader.main(argv) == 1
+    captured = capsys.readouterr()
+    assert PRIVATE not in captured.out + captured.err
+    assert str(files) not in captured.out + captured.err
+    if is_root:
+        assert captured.out == "" and captured.err == "read evidence collection refused\n"
+    else:
+        result = json.loads(captured.out)
+        artifact = "attempt" if target_name == "read-attempt.json" else "journal"
+        assert result[artifact]["state"] == "invalid" and result[artifact]["partial"] is True
+
+
+@pytest.mark.parametrize("preexisting", [False, True])
+def test_wal_digest_failure_closes_registered_descriptors(files, monkeypatch, preexisting):
+    writer = None
+    if preexisting:
+        writer = sqlite3.connect(files / "read.sqlite")
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute(
+            "INSERT INTO events VALUES(?,?,?,?,?,?)", (RUN, 1, "RunFailed", None, "{}", "fixture")
+        )
+        writer.commit()
+    else:
+        connect = sqlite3.connect
+
+        def appeared(*args, **kwargs):
+            connection = connect(*args, **kwargs)
+            wal = files / "read.sqlite-wal"
+            wal.write_bytes(b"")
+            wal.chmod(0o600)
+            return connection
+
+        monkeypatch.setattr(reader.sqlite3, "connect", appeared)
+    opened, actual_open = [], reader._open
+
+    def tracked(*args):
+        descriptor, info = actual_open(*args)
+        opened.append((args[0].name, descriptor))
+        return descriptor, info
+
+    def failed_digest(*_):
+        raise ValueError(PRIVATE)
+
+    monkeypatch.setattr(reader, "_open", tracked)
+    monkeypatch.setattr(reader, "_wal_digest", failed_digest)
+    try:
+        result = collect(files)["journal"]
+        assert result["state"] == "invalid" and result["events"] is None
+        assert any(name == "read.sqlite-wal" for name, _ in opened)
+        for _, descriptor in opened:
+            with pytest.raises(OSError):
+                os.fstat(descriptor)
+    finally:
+        if writer is not None:
+            writer.close()
+
+
 def test_fd_identity_swap_is_refused(files, monkeypatch):
     path = files / "read-attempt.json"
     real_open = os.open

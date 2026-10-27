@@ -9529,3 +9529,15 @@ source-bound metadata-only transport and fresh custody/boot facts are required
 before retrieving the retained private artifacts. Pinned SDK source inspection
 also identified a possible optional MCP-server source-field compatibility gap;
 without the retained attempt facts, it is not attributed to this failure.
+
+The connector identified two introduced collector defects before merge. SQLite
+can change an existing WAL's timestamps without changing its bytes; treating
+that as journal damage rejected a supported observation. The correction permits
+WAL timestamp changes only with bounded before/after byte equality, retaining
+identity, private custody, link and size checks. Attempt and database guards stay
+strict. Python 3.11/3.12 path resolution can also raise a path-bearing RuntimeError
+for symlink loops; a single resolution boundary now converts that case to the
+closed refusal used by artifact readers and the CLI. Tests cover both artifact
+and root refusal without private traceback output. Narrow review also required
+FD cleanup when a WAL snapshot itself fails. These findings were adopted as
+introduced defects; neither establishes the cause of the earlier live READ.
