@@ -16,6 +16,26 @@ a second PR just to record the merge. Nothing here authorizes work.
 
 ---
 
+## Retained READ facts are inspected before another live attempt
+
+The corrected-controller session passed fresh startup qualification and exact
+authority placement, but its single fixed READ failed without a cause in the
+existing declared readbacks. Withdrawal and park were affirmatively checked;
+empty stderr did not establish zero dispatch. The spent attempt is not reusable.
+
+The standalone `scripts/ops/read_attempt_evidence.py` inspects the fixed private
+attempt and same-run SQLite artifacts without controller initialization or
+recovery. Its closed output preserves missing/partial facts and separates
+settlement counts from optional callback observations. File/root identity and
+private-mode checks bound the collection; the observations are not an atomic
+snapshot or a journal-integrity attestation. Read-only SQLite can touch guarded
+shared memory. No raw failure text, model data or private identity is published.
+
+This reader neither diagnoses the uncollected live evidence nor authorizes
+another model call. A later host retrieval needs its own source-bound command
+package and fresh custody checks. Source-backed vendor compatibility concerns
+remain hypotheses about this failure until retained facts locate its stage.
+
 ## Claude READ commands and receipts share a versioned operator boundary
 
 The one-phase entry point in `scripts/ops/claude_read_session.py` selects each

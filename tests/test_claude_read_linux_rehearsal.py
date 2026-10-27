@@ -83,6 +83,64 @@ print(json.dumps(report, sort_keys=True))
         return {"observation_failed": "invalid output"}
 
 
+def _collector_diagnostic(collector: str, arguments: list[str], run_process) -> dict:
+    """Locate caught failures in the fake fixture without publishing exception text."""
+    code = r'''
+import json, os, stat, sys
+source, arguments = sys.argv[1], sys.argv[2:]
+namespace = {"__name__": "fixture_collector"}
+exec(compile(source, "<fixture-collector>", "exec"), namespace)
+events = []
+allowed = {"ValueError", "TypeError", "KeyError", "OSError", "FileNotFoundError",
+           "RuntimeError", "OperationalError", "DatabaseError", "RecursionError"}
+def trace(frame, event, arg):
+    if event == "exception" and frame.f_code.co_filename == "<fixture-collector>":
+        kind = type(arg[1]).__name__
+        events.append([frame.f_code.co_name, frame.f_lineno, kind if kind in allowed else "other"])
+        del events[:-32]
+    return trace
+sys.settrace(trace)
+try:
+    status = namespace["main"](arguments)
+except BaseException:
+    status = -1
+finally:
+    sys.settrace(None)
+files = {}
+if len(arguments) >= 2 and arguments[0] == "--run-root":
+    for name, bound in (("read.sqlite", 16 * 1024 * 1024),
+                        ("read.sqlite-wal", 16 * 1024 * 1024),
+                        ("read.sqlite-shm", 1024 * 1024)):
+        facts = {"exists": None, "regular": None, "singlelink": None,
+                 "service_owned": None, "mode_0600": None, "size_within_bound": None}
+        try:
+            info = os.lstat(os.path.join(arguments[1], name))
+            facts.update(exists=True, regular=stat.S_ISREG(info.st_mode),
+                         singlelink=info.st_nlink == 1,
+                         service_owned=info.st_uid == getattr(os, "geteuid", lambda: -1)(),
+                         mode_0600=stat.S_IMODE(info.st_mode) == 0o600,
+                         size_within_bound=0 <= info.st_size <= bound)
+        except FileNotFoundError:
+            facts["exists"] = False
+        except OSError:
+            pass
+        files[name] = facts
+print(json.dumps({"status": status, "exceptions": events, "files": files}, sort_keys=True),
+      file=sys.stderr)
+'''
+    result = run_process(
+        ["sudo", "-n", "-u", "m8-service", "/usr/bin/python3", "-I", "-S", "-B",
+         "-c", code, collector, *arguments], stdin=subprocess.DEVNULL,
+        capture_output=True, check=False, timeout=30,
+    )
+    if result.returncode != 0 or len(result.stderr) > 8192:
+        return {"observation_failed": result.returncode}
+    try:
+        return json.loads(result.stderr)
+    except (ValueError, UnicodeDecodeError):
+        return {"observation_failed": "invalid output"}
+
+
 def test_failure_observation_keeps_bounded_facts_and_redacts_paths(tmp_path):
     _json(tmp_path / "read-attempt.json", {
         "phase": "outcome", "dispatch": "possibly dispatched",
@@ -108,6 +166,33 @@ def test_failure_observation_keeps_bounded_facts_and_redacts_paths(tmp_path):
     assert observed["node_failures"] == [{"error_type": "ContractViolation",
                                           "error": "failed at <path>"}]
     assert "not emitted" not in json.dumps(observed)
+
+
+def test_collector_diagnostic_reports_caught_location_without_exception_text():
+    def local_python(argv, **kwargs):
+        return subprocess.run([sys.executable, "-I", "-S", "-B", "-c", *argv[9:]], **kwargs)
+
+    source = ('def main(argv):\n    try:\n        raise ValueError("PRIVATE")\n'
+              '    except ValueError:\n        return 1\n')
+    observed = _collector_diagnostic(source, [], local_python)
+    assert observed == {"status": 1, "exceptions": [["main", 3, "ValueError"]], "files": {}}
+    assert "PRIVATE" not in json.dumps(observed)
+
+
+def test_collector_diagnostic_reports_only_fixed_file_custody_booleans(tmp_path):
+    def local_python(argv, **kwargs):
+        return subprocess.run([sys.executable, "-I", "-S", "-B", "-c", *argv[9:]], **kwargs)
+
+    (tmp_path / "read.sqlite").write_bytes(b"fixture")
+    observed = _collector_diagnostic("def main(argv): return 1\n",
+                                     ["--run-root", str(tmp_path)], local_python)
+    assert observed["files"]["read.sqlite"]["exists"] is True
+    assert observed["files"]["read.sqlite"]["regular"] is True
+    assert observed["files"]["read.sqlite"]["singlelink"] is True
+    assert observed["files"]["read.sqlite"]["size_within_bound"] is True
+    assert observed["files"]["read.sqlite-wal"]["exists"] is False
+    assert observed["files"]["read.sqlite-wal"]["regular"] is None
+    assert str(tmp_path) not in json.dumps(observed)
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="requires the disposable Linux foundation")
@@ -295,3 +380,39 @@ def test_generated_phases_carry_actual_receipts_through_withdrawal(
     if not abort_after_activation:
         assert (evidence / "read-status.json").read_bytes() == b'{"status": "succeeded"}\n'
     assert (evidence / "withdraw-after.command.stdout").read_bytes() == b"withdrawn-checked\n"
+    if not abort_after_activation:
+        from constructicon.core.qualification import QualificationAuthorization
+
+        authorization = QualificationAuthorization.model_validate_json(
+            (evidence / "authorization-candidate.json").read_bytes()
+        )
+        assert authorization.authorization_id == values["AUTHORIZATION_ID"]
+        collector = (ROOT / "scripts/ops/read_attempt_evidence.py").read_text(encoding="utf-8")
+        collector_arguments = ["--run-root", values["RUN"], "--authorization-id",
+                               authorization.authorization_id, "--run-id",
+                               str(authorization.run_id), "--max-epoch", "1"]
+        result = original_run(
+            ["sudo", "-n", "-u", "m8-service", "/usr/bin/python3", "-I", "-S", "-B",
+             "-c", collector, *collector_arguments],
+            stdin=subprocess.DEVNULL, capture_output=True, check=False, timeout=30,
+        )
+        if result.returncode != 0:
+            diagnostic = _collector_diagnostic(collector, collector_arguments, original_run)
+            print("COLLECTOR_DIAGNOSTIC " + json.dumps(diagnostic, sort_keys=True))
+            pytest.fail(f"collector returned {result.returncode}: "
+                        f"{result.stdout[:32768]!r} {result.stderr[:4096]!r}")
+        assert result.stderr == b""
+        assert len(result.stdout) <= 32768
+        report = json.loads(result.stdout)
+        assert report["schema_version"] == 1
+        assert report["attempt"]["state"] == "valid"
+        assert report["attempt"]["partial"] is False
+        assert report["attempt"]["phase"] == "outcome"
+        assert report["attempt"]["dispatch"] == "completed"
+        assert report["attempt"]["status"] == "success"
+        assert report["attempt"]["callback_started"] == 1
+        assert report["attempt"]["callback_completed"] == 1
+        assert report["attempt"]["callback_observation"] is None
+        assert report["journal"]["state"] == "valid"
+        assert report["journal"]["partial"] is False
+        assert report["journal"]["run_status"] == "succeeded"

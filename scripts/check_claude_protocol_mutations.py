@@ -2008,6 +2008,33 @@ PROFILE_MUTANTS = (
 )
 MUTANTS += PROFILE_MUTANTS
 
+EVIDENCE = "scripts.ops.read_attempt_evidence:"
+EVIDENCE_TEST = "tests/test_read_attempt_evidence.py::"
+EVIDENCE_MUTANTS = (
+    ("SQLite evidence refuses group and other write bits", EVIDENCE + "_open",
+     "mode & ~0o644 == 0", "mode & ~0o666 == 0",
+     EVIDENCE_TEST + "test_sqlite_only_read_bit_allowance_does_not_allow_writes_or_exec"),
+    ("WAL timestamp changes do not invalidate byte-stable evidence", EVIDENCE + "_finish",
+     "metadata_only = shm or wal_digest is not None", "metadata_only = shm",
+     EVIDENCE_TEST + "test_wal_timestamp_only_change_accepts_but_changed_content_refuses[timestamps]"),
+    ("WAL content must remain stable across inspection", EVIDENCE + "_finish",
+     "require(_wal_digest(fd, before.st_size) == wal_digest)", "require(True)",
+     EVIDENCE_TEST + "test_wal_timestamp_only_change_accepts_but_changed_content_refuses[content]"),
+    ("evidence retains run directory identity", EVIDENCE + "collect",
+     "require((directory.st_dev, directory.st_ino) == (after.st_dev, after.st_ino))",
+     "require(True)", EVIDENCE_TEST + "test_root_directory_identity_cannot_change_between_observations"),
+    ("evidence guards newly appeared SQLite sidecars", EVIDENCE + "_journal",
+     "for item, bound, shm in absent:", "for item, bound, shm in ():",
+     EVIDENCE_TEST + "test_sqlite_file_and_auxiliary_guard_refuse[appeared-unsafe]"),
+    ("evidence binds journal inputs to the authorization", EVIDENCE + "_journal",
+     'and _json(row[2]) == {"request": {"authorization": authorization}}', "and True",
+     EVIDENCE_TEST + "test_journal_identity_or_type_mismatch_is_unknown"),
+    ("evidence flags bounded event truncation", EVIDENCE + "_journal",
+     "partial=len(rows) > EVENT_LIMIT,", "partial=False,",
+     EVIDENCE_TEST + "test_event_limit_binds_and_private_strings_are_closed"),
+)
+MUTANTS += EVIDENCE_MUTANTS
+
 
 if __name__ == "__main__":
     raise SystemExit(run(MUTANTS))
