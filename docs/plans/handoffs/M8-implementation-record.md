@@ -9487,3 +9487,45 @@ The bounded hosted failure reader retains declared outputs and fake attempt/
 journal facts before cleanup, so a failed rehearsal remains a failure and is
 diagnosable without a private-host retry. Final physical results and the narrow
 review of this correction belong in the delivery PR.
+
+
+### Corrected-controller READ stopped; retained evidence precedes another attempt
+
+The [bounded session receipt](https://github.com/sushiHex/constructicon/issues/77#issuecomment-6432332138)
+records installation of controller `14349e6`, including affirmative import and
+installed-source checks. Fresh startup qualification, generation-2 publication,
+activation, fixture mint and exact authority placement passed. The one authorized
+fixed READ returned failure, with a failed status and empty stderr. These facts
+do not identify its cause, establish vendor dispatch or measure backend requests.
+The authorized attempt is spent; no retry followed. Generation-2 withdrawal was
+affirmatively checked, the VM was parked, fresh off/idle checks passed and custody
+was released. No new login, WRITE, checkpoint or re-baseline occurred.
+
+`scripts/ops/read_attempt_evidence.py` projects only the retained fixed attempt
+and same-run journal artifacts. Its standard-library entry has no controller,
+vendor, credential, migration or recovery imports. It checks service identity,
+private file modes, stable file/root identities, authorization/run binding and
+fixed bounds before publishing a closed vocabulary. Missing or partial evidence
+remains unknown; callback settlement counts do not invent worker observations.
+Two exact source error literals are classified only with their declared exception
+type, and classification is not proof of an underlying cause.
+
+SQLite uses read-only/query-only mode and an actual transaction, including WAL
+visibility. Guarded shared-memory access can change filesystem metadata; the
+reader does not promise zero filesystem writes. Its two artifact observations
+are not atomic and do not attest cryptographic journal integrity. The portable
+tests cover actual files, schema, WAL, refusals and bounded publication. The
+existing hosted generated-chain accepting case exercises the isolated reader
+against actual fake READ artifacts; Windows skips are not Linux evidence.
+
+A local summary lookup after the successful controller verification used the
+wrong JSON nesting and raised. The typed phase checker had already accepted
+the actual nested fields; this inert reporting error did not repeat or change
+a host phase. The durable session receipt preserves that distinction.
+
+This delivery adds an offline diagnostic interface, not a resumed host session,
+new model authority or completed Claude integration. A separately reviewed,
+source-bound metadata-only transport and fresh custody/boot facts are required
+before retrieving the retained private artifacts. Pinned SDK source inspection
+also identified a possible optional MCP-server source-field compatibility gap;
+without the retained attempt facts, it is not attributed to this failure.

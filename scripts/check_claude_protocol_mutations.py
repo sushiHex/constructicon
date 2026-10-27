@@ -2008,6 +2008,24 @@ PROFILE_MUTANTS = (
 )
 MUTANTS += PROFILE_MUTANTS
 
+EVIDENCE = "scripts.ops.read_attempt_evidence:"
+EVIDENCE_TEST = "tests/test_read_attempt_evidence.py::"
+EVIDENCE_MUTANTS = (
+    ("evidence retains run directory identity", EVIDENCE + "collect",
+     "require((directory.st_dev, directory.st_ino) == (after.st_dev, after.st_ino))",
+     "require(True)", EVIDENCE_TEST + "test_root_directory_identity_cannot_change_between_observations"),
+    ("evidence guards newly appeared SQLite sidecars", EVIDENCE + "_journal",
+     "for item, bound, shm in absent:", "for item, bound, shm in ():",
+     EVIDENCE_TEST + "test_sqlite_file_and_auxiliary_guard_refuse[appeared-unsafe]"),
+    ("evidence binds journal inputs to the authorization", EVIDENCE + "_journal",
+     'and _json(row[2]) == {"request": {"authorization": authorization}}', "and True",
+     EVIDENCE_TEST + "test_journal_identity_or_type_mismatch_is_unknown"),
+    ("evidence flags bounded event truncation", EVIDENCE + "_journal",
+     "partial=len(rows) > EVENT_LIMIT,", "partial=False,",
+     EVIDENCE_TEST + "test_event_limit_binds_and_private_strings_are_closed"),
+)
+MUTANTS += EVIDENCE_MUTANTS
+
 
 if __name__ == "__main__":
     raise SystemExit(run(MUTANTS))

@@ -295,3 +295,36 @@ def test_generated_phases_carry_actual_receipts_through_withdrawal(
     if not abort_after_activation:
         assert (evidence / "read-status.json").read_bytes() == b'{"status": "succeeded"}\n'
     assert (evidence / "withdraw-after.command.stdout").read_bytes() == b"withdrawn-checked\n"
+    if not abort_after_activation:
+        from constructicon.core.qualification import QualificationAuthorization
+
+        authorization = QualificationAuthorization.model_validate_json(
+            (evidence / "authorization-candidate.json").read_bytes()
+        )
+        assert authorization.authorization_id == values["AUTHORIZATION_ID"]
+        collector = (ROOT / "scripts/ops/read_attempt_evidence.py").read_text(encoding="utf-8")
+        result = original_run(
+            ["sudo", "-n", "-u", "m8-service", "/usr/bin/python3", "-I", "-S", "-B",
+             "-c", collector, "--run-root", values["RUN"], "--authorization-id",
+             authorization.authorization_id, "--run-id", str(authorization.run_id),
+             "--max-epoch", "1"],
+            stdin=subprocess.DEVNULL, capture_output=True, check=False, timeout=30,
+        )
+        assert result.returncode == 0, (
+            result.returncode, result.stdout[:32768], result.stderr[:4096]
+        )
+        assert result.stderr == b""
+        assert len(result.stdout) <= 32768
+        report = json.loads(result.stdout)
+        assert report["schema_version"] == 1
+        assert report["attempt"]["state"] == "valid"
+        assert report["attempt"]["partial"] is False
+        assert report["attempt"]["phase"] == "outcome"
+        assert report["attempt"]["dispatch"] == "completed"
+        assert report["attempt"]["status"] == "success"
+        assert report["attempt"]["callback_started"] == 1
+        assert report["attempt"]["callback_completed"] == 1
+        assert report["attempt"]["callback_observation"] is None
+        assert report["journal"]["state"] == "valid"
+        assert report["journal"]["partial"] is False
+        assert report["journal"]["run_status"] == "succeeded"
